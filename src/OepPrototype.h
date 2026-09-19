@@ -35,6 +35,12 @@ enum FixtureGpioOperation : uint8_t {
   FixtureReadDigital = 0x01,
 };
 
+enum FixtureUartOperation : uint8_t {
+  FixtureUartConfigure = 0x01,
+  FixtureUartWrite = 0x02,
+  FixtureUartReadAvailable = 0x03,
+};
+
 enum class BackendResult : uint8_t {
   Success,
   Failed,
@@ -75,14 +81,26 @@ class FixtureGpioBackend {
   virtual BackendResult readDigital(uint8_t pin, uint8_t& value) = 0;
 };
 
+class FixtureUartBackend {
+ public:
+  virtual ~FixtureUartBackend() = default;
+  virtual BackendResult configure(uint32_t requested_baud,
+                                  uint32_t& actual_baud) = 0;
+  virtual BackendResult writeBytes(const uint8_t* data, size_t length,
+                                   size_t& written) = 0;
+  virtual BackendResult readAvailable(uint8_t* output, size_t capacity,
+                                      size_t& length) = 0;
+};
+
 class Endpoint {
  public:
   explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr,
                     TargetMemoryBackend* memory = nullptr,
                     TargetFlashBackend* flash = nullptr,
-                    FixtureGpioBackend* gpio = nullptr)
+                    FixtureGpioBackend* gpio = nullptr,
+                    FixtureUartBackend* uart = nullptr)
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
-        gpio_(gpio) {}
+        gpio_(gpio), uart_(uart) {}
   void poll();
 
  private:
@@ -91,6 +109,7 @@ class Endpoint {
   TargetMemoryBackend* memory_;
   TargetFlashBackend* flash_;
   FixtureGpioBackend* gpio_;
+  FixtureUartBackend* uart_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;

@@ -65,6 +65,13 @@ uint32_t get32(const uint8_t* input) {
       static_cast<uint32_t>(input[3]) << 24;
 }
 
+void put32(uint8_t* output, uint32_t value) {
+  output[0] = value;
+  output[1] = value >> 8;
+  output[2] = value >> 16;
+  output[3] = value >> 24;
+}
+
 constexpr uint8_t kRoleCoreRequest = 0x01;
 constexpr uint8_t kRoleCoreResult = 0x81;
 constexpr uint8_t kRoleFunctionRequest = 0x10;
@@ -150,6 +157,7 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       response[4] = 0;
       response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) +
           (flash_ ? 1 : 0) + (gpio_ ? 1 : 0);
+      if (uart_) ++response[5];
       response_length = 6;
       if (target_) {
         put16(response + response_length, TargetControl);
@@ -171,6 +179,12 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       }
       if (gpio_) {
         put16(response + response_length, FixtureGpio);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (uart_) {
+        put16(response + response_length, FixtureUart);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -258,6 +272,64 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
           response_length = 8;
         }
       }
+    }
+    sendMessage(response, response_length);
+    return;
+  }
+  if (target == FixtureUart) {
+    if (!uart_) {
+      response[6] = kRejectUnavailable;
+      sendMessage(response, response_length);
+      return;
+    }
+    BackendResult result = BackendResult::Unavailable;
+    if (operation == FixtureUartConfigure) {
+      if (length != 10) {
+        response[6] = kRejectPayload;
+        sendMessage(response, response_length);
+        return;
+      }
+      uint32_t actual = 0;
+      result = uart_->configure(get32(message + 6), actual);
+      if (result == BackendResult::Success) {
+        put32(response + 7, actual);
+        response_length = 11;
+      }
+    } else if (operation == FixtureUartWrite) {
+      if (length < 7 || length > 70) {
+        response[6] = kRejectPayload;
+        sendMessage(response, response_length);
+        return;
+      }
+      size_t written = 0;
+      result = uart_->writeBytes(message + 6, length - 6, written);
+      if (result == BackendResult::Success) {
+        response[7] = written;
+        response_length = 8;
+      }
+    } else if (operation == FixtureUartReadAvailable) {
+      if (length != 7 || !message[6] || message[6] > 80) {
+        response[6] = kRejectPayload;
+        sendMessage(response, response_length);
+        return;
+      }
+      size_t received = 0;
+      result = uart_->readAvailable(response + 8, message[6], received);
+      if (result == BackendResult::Success) {
+        response[7] = received;
+        response_length = 8 + received;
+      }
+    } else {
+      response[6] = kRejectOperation;
+      sendMessage(response, response_length);
+      return;
+    }
+    if (result == BackendResult::Unavailable) {
+      response[6] = kRejectUnavailable;
+    } else {
+      response[1] = kResolutionCompleted;
+      response[6] = result == BackendResult::Success ?
+          kOutcomeSuccess : kOutcomeFailed;
     }
     sendMessage(response, response_length);
     return;

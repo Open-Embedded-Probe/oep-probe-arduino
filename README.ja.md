@@ -50,3 +50,9 @@ request 2回によるread-backの両方を通した。最初の独立readではS
 入力として読み、strap pinやSWDIO/RESETは対象にしない。実機で全14 pinを20秒観測し、GPIO14の
 LOW/HIGH変化とI2C/UARTのidle HIGHをOEP resultとして取得した。V003上の現imageはpin-map専用の
 周期波形ではなかったため、既知のDOUT commandと組み合わせたcontrolled testは次段とする。
+
+同日、FixtureUart `0x0202`へ`configure`、`write bytes`、`read available`を追加した。UART instanceは
+ESP32 RX=22/TX=21に固定し、baudrateだけをhostが要求してprobeがactual値を返す。実機で
+115200 bpsを構成し、OEP write/readだけでV003の`PING`へ`PONG`を取得した。現在のV003 imageは
+`DOUT`等を`ERROR command`として返したため、UART機能の成功とpeer applicationのoperation
+非対応を区別して観測できた。
