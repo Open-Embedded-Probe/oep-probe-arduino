@@ -149,7 +149,7 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
     } else {
       response[4] = 0;
       response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) +
-          (flash_ ? 1 : 0);
+          (flash_ ? 1 : 0) + (gpio_ ? 1 : 0);
       response_length = 6;
       if (target_) {
         put16(response + response_length, TargetControl);
@@ -165,6 +165,12 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       }
       if (flash_) {
         put16(response + response_length, TargetFlash);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (gpio_) {
+        put16(response + response_length, FixtureGpio);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -226,6 +232,31 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
         response[1] = kResolutionCompleted;
         response[6] = result == BackendResult::Success ?
             kOutcomeSuccess : kOutcomeFailed;
+      }
+    }
+    sendMessage(response, response_length);
+    return;
+  }
+  if (target == FixtureGpio) {
+    if (!gpio_) {
+      response[6] = kRejectUnavailable;
+    } else if (operation != FixtureReadDigital) {
+      response[6] = kRejectOperation;
+    } else if (length != 7) {
+      response[6] = kRejectPayload;
+    } else {
+      uint8_t value = 0;
+      const BackendResult result = gpio_->readDigital(message[6], value);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          response[7] = value;
+          response_length = 8;
+        }
       }
     }
     sendMessage(response, response_length);

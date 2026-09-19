@@ -31,6 +31,10 @@ enum TargetFlashOperation : uint8_t {
   TargetProgramPage64 = 0x01,
 };
 
+enum FixtureGpioOperation : uint8_t {
+  FixtureReadDigital = 0x01,
+};
+
 enum class BackendResult : uint8_t {
   Success,
   Failed,
@@ -65,12 +69,20 @@ class TargetFlashBackend {
                                       const uint8_t* data) = 0;
 };
 
+class FixtureGpioBackend {
+ public:
+  virtual ~FixtureGpioBackend() = default;
+  virtual BackendResult readDigital(uint8_t pin, uint8_t& value) = 0;
+};
+
 class Endpoint {
  public:
   explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr,
                     TargetMemoryBackend* memory = nullptr,
-                    TargetFlashBackend* flash = nullptr)
-      : stream_(stream), target_(target), memory_(memory), flash_(flash) {}
+                    TargetFlashBackend* flash = nullptr,
+                    FixtureGpioBackend* gpio = nullptr)
+      : stream_(stream), target_(target), memory_(memory), flash_(flash),
+        gpio_(gpio) {}
   void poll();
 
  private:
@@ -78,6 +90,7 @@ class Endpoint {
   TargetControlBackend* target_;
   TargetMemoryBackend* memory_;
   TargetFlashBackend* flash_;
+  FixtureGpioBackend* gpio_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;

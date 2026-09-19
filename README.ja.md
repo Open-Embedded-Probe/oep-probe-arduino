@@ -45,3 +45,8 @@ bindingが分割・再結合し、共通protocolへ一つの論理messageとし�
 request 2回によるread-backの両方を通した。最初の独立readではSWDIOがerrorを返さず古い
 `DATA0`を返す場合が見つかったため、memory readは同じ値が2回連続するまで確定しないようにした。
 範囲外`0x07000000`への要求はflash操作を開始せずrejectedとなることも確認した。
+
+同日、FixtureGpio `0x0201`のread-only prototypeを追加した。board wiringで許可した14 pinだけを
+入力として読み、strap pinやSWDIO/RESETは対象にしない。実機で全14 pinを20秒観測し、GPIO14の
+LOW/HIGH変化とI2C/UARTのidle HIGHをOEP resultとして取得した。V003上の現imageはpin-map専用の
+周期波形ではなかったため、既知のDOUT commandと組み合わせたcontrolled testは次段とする。
