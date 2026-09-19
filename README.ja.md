@@ -61,3 +61,7 @@ ESP32 RX=22/TX=21に固定し、baudrateだけをhostが要求してprobeがactu
 生じた。failure resultへ非規定の段階診断byteを追加し、既にpage全体が一致する場合はeraseを省略
 するようにした。offset `0x700`のpageでは複数回の再実行後も一部wordが`FF`のまま残る事象があり、
 全image復旧は未完了である。E131との差分を解消するまで自動retryだけで成功扱いにしない。
+
+製品HIDで最新版fixtureを復旧した後、FixtureUartの`DOUT`とFixtureGpioを組み合わせ、target pin
+7→GPIO27とtarget pin 9→GPIO14のLOW/HIGH/LOWを確認した。初回には以前のHIGHが入力へ残る場合が
+あったため、試験はLOWへ正規化してからHIGH/LOWを判定する。
