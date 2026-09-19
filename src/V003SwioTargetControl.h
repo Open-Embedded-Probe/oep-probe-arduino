@@ -19,8 +19,8 @@ class V003SwioTargetControl : public TargetControlBackend,
   BackendResult enterProductBootloader() override;
   BackendResult readMemory(uint32_t address, uint8_t* output,
                            size_t length) override;
-  BackendResult programPage64(uint32_t address,
-                              const uint8_t* data) override;
+  BackendResult programPage64(uint32_t address, const uint8_t* data,
+                              uint8_t& diagnostic) override;
 
  private:
   uint8_t swdio_pin_;

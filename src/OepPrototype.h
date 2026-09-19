@@ -71,8 +71,8 @@ class TargetMemoryBackend {
 class TargetFlashBackend {
  public:
   virtual ~TargetFlashBackend() = default;
-  virtual BackendResult programPage64(uint32_t address,
-                                      const uint8_t* data) = 0;
+  virtual BackendResult programPage64(uint32_t address, const uint8_t* data,
+                                      uint8_t& diagnostic) = 0;
 };
 
 class FixtureGpioBackend {
