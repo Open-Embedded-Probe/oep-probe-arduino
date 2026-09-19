@@ -292,6 +292,20 @@ BackendResult V003SwioTargetControl::enterProductBootloader() {
       ? BackendResult::Success : BackendResult::Failed;
 }
 
+BackendResult V003SwioTargetControl::readMemory(
+    uint32_t address, uint8_t* output, size_t length) {
+  if (!attachAndHalt() || prepareWordWriter()) return BackendResult::Failed;
+  for (size_t offset = 0; offset < length; offset += 4) {
+    uint32_t value = 0;
+    if (readMemoryWord(address + offset, &value)) return BackendResult::Failed;
+    output[offset] = value;
+    output[offset + 1] = value >> 8;
+    output[offset + 2] = value >> 16;
+    output[offset + 3] = value >> 24;
+  }
+  return BackendResult::Success;
+}
+
 }  // namespace oep::prototype
 
 #else
@@ -305,6 +319,10 @@ BackendResult V003SwioTargetControl::normalizeUser() {
   return BackendResult::Unavailable;
 }
 BackendResult V003SwioTargetControl::enterProductBootloader() {
+  return BackendResult::Unavailable;
+}
+BackendResult V003SwioTargetControl::readMemory(
+    uint32_t, uint8_t*, size_t) {
   return BackendResult::Unavailable;
 }
 bool V003SwioTargetControl::runPayload(const uint32_t*, size_t) { return false; }

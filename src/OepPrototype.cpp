@@ -59,6 +59,12 @@ void put16(uint8_t* output, uint16_t value) {
   output[1] = static_cast<uint8_t>(value >> 8);
 }
 
+uint32_t get32(const uint8_t* input) {
+  return input[0] | static_cast<uint32_t>(input[1]) << 8 |
+      static_cast<uint32_t>(input[2]) << 16 |
+      static_cast<uint32_t>(input[3]) << 24;
+}
+
 constexpr uint8_t kRoleCoreRequest = 0x01;
 constexpr uint8_t kRoleCoreResult = 0x81;
 constexpr uint8_t kRoleFunctionRequest = 0x10;
@@ -142,10 +148,16 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       response[4] = 2;
     } else {
       response[4] = 0;
-      response[5] = target_ ? 1 : 0;
+      response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0);
       response_length = 6;
       if (target_) {
         put16(response + response_length, TargetControl);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (memory_) {
+        put16(response + response_length, TargetMemory);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -167,6 +179,30 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
       message[4], message[5], kRejectTarget};
   size_t response_length = 7;
 
+  if (target == TargetMemory) {
+    if (!memory_) {
+      response[6] = kRejectUnavailable;
+    } else if (operation != TargetReadMemory) {
+      response[6] = kRejectOperation;
+    } else if (length != 11 || (message[6] & 3) || !message[10] ||
+               (message[10] & 3) || message[10] > 32) {
+      response[6] = kRejectPayload;
+    } else {
+      const size_t requested = message[10];
+      const BackendResult result = memory_->readMemory(
+          get32(message + 6), response + 7, requested);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) response_length += requested;
+      }
+    }
+    sendMessage(response, response_length);
+    return;
+  }
   if (target != TargetControl) {
     sendMessage(response, response_length);
     return;
