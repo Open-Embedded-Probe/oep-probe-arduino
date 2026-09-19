@@ -3,8 +3,8 @@
 破壊的変更を前提とするArduino向けOEP probe実験です。公開protocol、互換libraryまたは製品用
 firmwareではありません。
 
-現在のP0は仮UART frame、endpoint confirmation、offered function一覧だけを実装します。
-V003 SWIO handlerとUIAPduino fixtureは次段で接続します。
+現在のP1は仮UART frame、endpoint confirmation、offered function一覧とV003 TargetControlを
+実装します。SWDIOで状態取得、user mode正規化、製品bootloader移行を行います。
 
 `examples/Esp32V003Prototype`は無印ESP32向けです。hostとのUARTは`Serial`を使用し、起動時の
 ASCII bannerを出さずbinary frameだけを送受信します。
@@ -22,3 +22,12 @@ strapでもあり、この配線を接続した状態ではesptoolが`boot mode 
 `PC5/SCK→GPIO27`、`PC6/MOSI→GPIO4`、`PC7/MISO→GPIO14`である。現在のSPI fixtureは
 CSにGPIO19を使用する。
 GPIO2、GPIO12、GPIO15は使用しない。
+
+2026-09-20、E129で検証したSWDIO PHYとCPU payload方式を縮約してTargetControl backendへ
+接続した。GPIO16のSWDIOだけを使用し、GPIO23の外部RESETは使用しない。OEP clientから
+状態取得、user mode正規化、状態再取得、製品bootloader移行を順に実行でき、移行後に
+Windows側で`1209:b803`が再列挙した。提供一覧は実装済みのTargetControl 1件だけに変更した。
+
+状態取得は現在attachとhaltを伴う。`flags=3`はこの操作によってattachedかつhaltedになったことを
+示す仮値であり、観測だけの操作ではない。この副作用と、操作後にresumeすべきかは今後の
+service意味を決めるための検討事項である。
