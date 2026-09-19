@@ -148,7 +148,8 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       response[4] = 2;
     } else {
       response[4] = 0;
-      response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0);
+      response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) +
+          (flash_ ? 1 : 0);
       response_length = 6;
       if (target_) {
         put16(response + response_length, TargetControl);
@@ -158,6 +159,12 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       }
       if (memory_) {
         put16(response + response_length, TargetMemory);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (flash_) {
+        put16(response + response_length, TargetFlash);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -198,6 +205,27 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
         response[6] = result == BackendResult::Success ?
             kOutcomeSuccess : kOutcomeFailed;
         if (result == BackendResult::Success) response_length += requested;
+      }
+    }
+    sendMessage(response, response_length);
+    return;
+  }
+  if (target == TargetFlash) {
+    if (!flash_) {
+      response[6] = kRejectUnavailable;
+    } else if (operation != TargetProgramPage64) {
+      response[6] = kRejectOperation;
+    } else if (length != 74 || (message[6] & 63)) {
+      response[6] = kRejectPayload;
+    } else {
+      const BackendResult result = flash_->programPage64(
+          get32(message + 6), message + 10);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
       }
     }
     sendMessage(response, response_length);

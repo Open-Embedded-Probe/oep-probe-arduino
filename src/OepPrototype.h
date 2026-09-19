@@ -4,7 +4,7 @@
 
 namespace oep::prototype {
 
-constexpr size_t kMaximumMessage = 64;
+constexpr size_t kMaximumMessage = 96;
 constexpr size_t kMaximumWire = kMaximumMessage + 5;
 
 enum FunctionReference : uint16_t {
@@ -25,6 +25,10 @@ enum TargetControlOperation : uint8_t {
 
 enum TargetMemoryOperation : uint8_t {
   TargetReadMemory = 0x01,
+};
+
+enum TargetFlashOperation : uint8_t {
+  TargetProgramPage64 = 0x01,
 };
 
 enum class BackendResult : uint8_t {
@@ -54,17 +58,26 @@ class TargetMemoryBackend {
                                    size_t length) = 0;
 };
 
+class TargetFlashBackend {
+ public:
+  virtual ~TargetFlashBackend() = default;
+  virtual BackendResult programPage64(uint32_t address,
+                                      const uint8_t* data) = 0;
+};
+
 class Endpoint {
  public:
   explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr,
-                    TargetMemoryBackend* memory = nullptr)
-      : stream_(stream), target_(target), memory_(memory) {}
+                    TargetMemoryBackend* memory = nullptr,
+                    TargetFlashBackend* flash = nullptr)
+      : stream_(stream), target_(target), memory_(memory), flash_(flash) {}
   void poll();
 
  private:
   Stream& stream_;
   TargetControlBackend* target_;
   TargetMemoryBackend* memory_;
+  TargetFlashBackend* flash_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;

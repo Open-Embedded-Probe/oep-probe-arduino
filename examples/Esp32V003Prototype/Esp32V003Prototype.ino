@@ -2,7 +2,7 @@
 #include <V003SwioTargetControl.h>
 
 oep::prototype::V003SwioTargetControl target(16);
-oep::prototype::Endpoint endpoint(Serial, &target, &target);
+oep::prototype::Endpoint endpoint(Serial, &target, &target, &target);
 
 void setup() {
   // Prototype transport only. Do not print an ASCII banner on this stream.
