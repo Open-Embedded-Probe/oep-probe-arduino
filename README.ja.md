@@ -35,3 +35,13 @@ service意味を決めるための検討事項である。
 同日、TargetMemory `0x0102`を追加し、4 byte aligned、4～32 byteのbounded readを実装した。
 V003 flash `0x08000000`から16 byteをOEP request/resultだけで取得できた。このalignmentと長さは
 prototype実装の制約であり、仕様上の上限ではない。
+
+同日、TargetFlash `0x0103`へV003の64-byte page erase/program/verifyを追加した。論理messageへ
+addressと64-byte dataを一度に載せるため、prototypeのmaximum messageを64から96 byteへ変更した。
+これは将来のHID report sizeを96 byteにする決定ではない。64-byte以下のtransport packetでは
+bindingが分割・再結合し、共通protocolへ一つの論理messageとして渡す前提を検証する値である。
+
+実機の`0x08003fc0`へ64-byte patternを書き、flash backend内verifyと、独立したTargetMemory
+request 2回によるread-backの両方を通した。最初の独立readではSWDIOがerrorを返さず古い
+`DATA0`を返す場合が見つかったため、memory readは同じ値が2回連続するまで確定しないようにした。
+範囲外`0x07000000`への要求はflash操作を開始せずrejectedとなることも確認した。
