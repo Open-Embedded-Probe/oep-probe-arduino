@@ -31,3 +31,7 @@ Windows側で`1209:b803`が再列挙した。提供一覧は実装済みのTarge
 状態取得は現在attachとhaltを伴う。`flags=3`はこの操作によってattachedかつhaltedになったことを
 示す仮値であり、観測だけの操作ではない。この副作用と、操作後にresumeすべきかは今後の
 service意味を決めるための検討事項である。
+
+同日、TargetMemory `0x0102`を追加し、4 byte aligned、4～32 byteのbounded readを実装した。
+V003 flash `0x08000000`から16 byteをOEP request/resultだけで取得できた。このalignmentと長さは
+prototype実装の制約であり、仕様上の上限ではない。

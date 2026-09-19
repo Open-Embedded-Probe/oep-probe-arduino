@@ -23,6 +23,10 @@ enum TargetControlOperation : uint8_t {
   TargetEnterProductBootloader = 0x03,
 };
 
+enum TargetMemoryOperation : uint8_t {
+  TargetReadMemory = 0x01,
+};
+
 enum class BackendResult : uint8_t {
   Success,
   Failed,
@@ -43,15 +47,24 @@ class TargetControlBackend {
   virtual BackendResult enterProductBootloader() = 0;
 };
 
+class TargetMemoryBackend {
+ public:
+  virtual ~TargetMemoryBackend() = default;
+  virtual BackendResult readMemory(uint32_t address, uint8_t* output,
+                                   size_t length) = 0;
+};
+
 class Endpoint {
  public:
-  explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr)
-      : stream_(stream), target_(target) {}
+  explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr,
+                    TargetMemoryBackend* memory = nullptr)
+      : stream_(stream), target_(target), memory_(memory) {}
   void poll();
 
  private:
   Stream& stream_;
   TargetControlBackend* target_;
+  TargetMemoryBackend* memory_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;
