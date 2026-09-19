@@ -59,6 +59,20 @@ void put16(uint8_t* output, uint16_t value) {
   output[1] = static_cast<uint8_t>(value >> 8);
 }
 
+constexpr uint8_t kRoleCoreRequest = 0x01;
+constexpr uint8_t kRoleCoreResult = 0x81;
+constexpr uint8_t kRoleFunctionRequest = 0x10;
+constexpr uint8_t kRoleFunctionResult = 0x90;
+
+constexpr uint8_t kResolutionRejected = 0;
+constexpr uint8_t kResolutionCompleted = 1;
+constexpr uint8_t kRejectTarget = 1;
+constexpr uint8_t kRejectOperation = 2;
+constexpr uint8_t kRejectPayload = 3;
+constexpr uint8_t kRejectUnavailable = 4;
+constexpr uint8_t kOutcomeSuccess = 0;
+constexpr uint8_t kOutcomeFailed = 1;
+
 }  // namespace
 
 void Endpoint::poll() {
@@ -94,11 +108,19 @@ void Endpoint::consumeFrame() {
 }
 
 void Endpoint::handleMessage(uint8_t* message, size_t length) {
-  if (length < 4 || message[0] != 0x01) return;
+  if (length < 4) return;
+  if (message[0] == kRoleCoreRequest) {
+    handleCoreRequest(message, length);
+  } else if (message[0] == kRoleFunctionRequest) {
+    handleFunctionRequest(message, length);
+  }
+}
+
+void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
   const uint8_t operation = message[1];
   const uint8_t correlation_low = message[2];
   const uint8_t correlation_high = message[3];
-  uint8_t response[kMaximumMessage] = {0x81, operation,
+  uint8_t response[kMaximumMessage] = {kRoleCoreResult, operation,
                                        correlation_low, correlation_high};
   size_t response_length = 5;
 
@@ -119,14 +141,11 @@ void Endpoint::handleMessage(uint8_t* message, size_t length) {
     if (length != 5 || message[4] != 0) {
       response[4] = 2;
     } else {
-      static const uint16_t functions[] = {
-          TargetControl, TargetMemory, TargetFlash, FixtureGpio,
-          FixtureUart, FixtureI2c, FixtureSpi};
       response[4] = 0;
-      response[5] = sizeof(functions) / sizeof(functions[0]);
+      response[5] = target_ ? 1 : 0;
       response_length = 6;
-      for (uint16_t reference : functions) {
-        put16(response + response_length, reference);
+      if (target_) {
+        put16(response + response_length, TargetControl);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -134,6 +153,65 @@ void Endpoint::handleMessage(uint8_t* message, size_t length) {
     }
   } else {
     response[4] = 1;
+  }
+  sendMessage(response, response_length);
+}
+
+void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
+  if (length < 6) return;
+  const uint8_t operation = message[1];
+  const uint16_t target = message[4] |
+      static_cast<uint16_t>(message[5]) << 8;
+  uint8_t response[kMaximumMessage] = {
+      kRoleFunctionResult, kResolutionRejected, message[2], message[3],
+      message[4], message[5], kRejectTarget};
+  size_t response_length = 7;
+
+  if (target != TargetControl) {
+    sendMessage(response, response_length);
+    return;
+  }
+  if (!target_) {
+    response[6] = kRejectUnavailable;
+    sendMessage(response, response_length);
+    return;
+  }
+  if (length != 6) {
+    response[6] = kRejectPayload;
+    sendMessage(response, response_length);
+    return;
+  }
+
+  BackendResult result;
+  TargetStatus status;
+  switch (operation) {
+    case TargetGetStatus:
+      result = target_->getStatus(status);
+      break;
+    case TargetNormalizeUser:
+      result = target_->normalizeUser();
+      break;
+    case TargetEnterProductBootloader:
+      result = target_->enterProductBootloader();
+      break;
+    default:
+      response[6] = kRejectOperation;
+      sendMessage(response, response_length);
+      return;
+  }
+
+  if (result == BackendResult::Unavailable) {
+    response[6] = kRejectUnavailable;
+  } else {
+    response[1] = kResolutionCompleted;
+    response[6] = result == BackendResult::Success ?
+        kOutcomeSuccess : kOutcomeFailed;
+    if (operation == TargetGetStatus && result == BackendResult::Success) {
+      response[7] = status.flags;
+      response[8] = status.start_mode;
+      response[9] = status.boot_status;
+      response_length = 10;
+    }
   }
   sendMessage(response, response_length);
 }

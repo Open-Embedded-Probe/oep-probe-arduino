@@ -17,19 +17,49 @@ enum FunctionReference : uint16_t {
   FixtureSpi = 0x0204,
 };
 
+enum TargetControlOperation : uint8_t {
+  TargetGetStatus = 0x01,
+  TargetNormalizeUser = 0x02,
+  TargetEnterProductBootloader = 0x03,
+};
+
+enum class BackendResult : uint8_t {
+  Success,
+  Failed,
+  Unavailable,
+};
+
+struct TargetStatus {
+  uint8_t flags = 0;
+  uint8_t start_mode = 0;
+  uint8_t boot_status = 0;
+};
+
+class TargetControlBackend {
+ public:
+  virtual ~TargetControlBackend() = default;
+  virtual BackendResult getStatus(TargetStatus& status) = 0;
+  virtual BackendResult normalizeUser() = 0;
+  virtual BackendResult enterProductBootloader() = 0;
+};
+
 class Endpoint {
  public:
-  explicit Endpoint(Stream& stream) : stream_(stream) {}
+  explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr)
+      : stream_(stream), target_(target) {}
   void poll();
 
  private:
   Stream& stream_;
+  TargetControlBackend* target_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;
 
   void consumeFrame();
   void handleMessage(uint8_t* message, size_t length);
+  void handleCoreRequest(uint8_t* message, size_t length);
+  void handleFunctionRequest(uint8_t* message, size_t length);
   void sendMessage(const uint8_t* message, size_t length);
 };
 
