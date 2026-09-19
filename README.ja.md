@@ -56,3 +56,8 @@ ESP32 RX=22/TX=21に固定し、baudrateだけをhostが要求してprobeがactu
 115200 bpsを構成し、OEP write/readだけでV003の`PING`へ`PONG`を取得した。現在のV003 imageは
 `DOUT`等を`ERROR command`として返したため、UART機能の成功とpeer applicationのoperation
 非対応を区別して観測できた。
+
+全13,780 byte imageのdirect flashでは、backend内verifyの偽陰性と真の部分書込みを区別する必要が
+生じた。failure resultへ非規定の段階診断byteを追加し、既にpage全体が一致する場合はeraseを省略
+するようにした。offset `0x700`のpageでは複数回の再実行後も一部wordが`FF`のまま残る事象があり、
+全image復旧は未完了である。E131との差分を解消するまで自動retryだけで成功扱いにしない。

@@ -364,17 +364,38 @@ BackendResult V003SwioTargetControl::readMemory(
 }
 
 BackendResult V003SwioTargetControl::programPage64(
-    uint32_t address, const uint8_t* data) {
+    uint32_t address, const uint8_t* data, uint8_t& diagnostic) {
+  diagnostic = 0;
   if ((address & 63u) || address < 0x08000000u ||
       address >= 0x08004000u) return BackendResult::Unavailable;
-  if (!attachAndHalt() || prepareWordWriter()) return BackendResult::Failed;
+  if (!attachAndHalt() || prepareWordWriter()) {
+    diagnostic = 1;
+    return BackendResult::Failed;
+  }
+
+  bool already_matches = true;
+  for (uint32_t offset = 0; offset < 64; offset += 4) {
+    const uint32_t expected = data[offset] |
+        static_cast<uint32_t>(data[offset + 1]) << 8 |
+        static_cast<uint32_t>(data[offset + 2]) << 16 |
+        static_cast<uint32_t>(data[offset + 3]) << 24;
+    uint32_t actual = 0;
+    if (readMemoryWordStable(address + offset, &actual) || actual != expected) {
+      already_matches = false;
+      break;
+    }
+  }
+  if (already_matches) return BackendResult::Success;
 
   const uint32_t unlock[][2] = {
       {0x40022004u, 0x45670123u}, {0x40022004u, 0xcdef89abu},
       {0x40022024u, 0x45670123u}, {0x40022024u, 0xcdef89abu},
   };
   for (const auto& item : unlock)
-    if (!flashWriteWord(item[0], item[1])) return BackendResult::Failed;
+    if (!flashWriteWord(item[0], item[1])) {
+      diagnostic = 2;
+      return BackendResult::Failed;
+    }
 
   uint32_t status = 0;
   if (!waitFlashIdle(&status) ||
@@ -384,7 +405,10 @@ BackendResult V003SwioTargetControl::programPage64(
       !waitFlashIdle(&status) ||
       !flashWriteWord(0x40022010u, 0x00010000u) ||
       !flashWriteWord(0x40022010u, 0x00090000u) ||
-      !waitFlashIdle(&status)) return BackendResult::Failed;
+      !waitFlashIdle(&status)) {
+    diagnostic = 3;
+    return BackendResult::Failed;
+  }
 
   for (uint32_t offset = 0; offset < 64; offset += 4) {
     const uint32_t word = data[offset] |
@@ -393,12 +417,18 @@ BackendResult V003SwioTargetControl::programPage64(
         static_cast<uint32_t>(data[offset + 3]) << 24;
     if (!flashWriteWord(address + offset, word) ||
         !flashWriteWord(0x40022010u, 0x00050000u) ||
-        !waitFlashIdle(&status)) return BackendResult::Failed;
+        !waitFlashIdle(&status)) {
+      diagnostic = 5 + offset / 4;
+      return BackendResult::Failed;
+    }
   }
   if (!flashWriteWord(0x40022014u, address) ||
       !flashWriteWord(0x40022010u, 0x00010040u) ||
       !waitFlashIdle(&status) ||
-      !flashWriteWord(0x40022010u, 0)) return BackendResult::Failed;
+      !flashWriteWord(0x40022010u, 0)) {
+    diagnostic = 21;
+    return BackendResult::Failed;
+  }
 
   for (uint32_t offset = 0; offset < 64; offset += 4) {
     const uint32_t expected = data[offset] |
@@ -406,14 +436,10 @@ BackendResult V003SwioTargetControl::programPage64(
         static_cast<uint32_t>(data[offset + 2]) << 16 |
         static_cast<uint32_t>(data[offset + 3]) << 24;
     uint32_t actual = 0;
-    bool verified = false;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-      if (!readMemoryWord(address + offset, &actual) && actual == expected) {
-        verified = true;
-        break;
-      }
+    if (readMemoryWordStable(address + offset, &actual) || actual != expected) {
+      diagnostic = 22 + offset / 4;
+      return BackendResult::Failed;
     }
-    if (!verified) return BackendResult::Failed;
   }
   return BackendResult::Success;
 }
@@ -437,7 +463,8 @@ BackendResult V003SwioTargetControl::readMemory(
     uint32_t, uint8_t*, size_t) {
   return BackendResult::Unavailable;
 }
-BackendResult V003SwioTargetControl::programPage64(uint32_t, const uint8_t*) {
+BackendResult V003SwioTargetControl::programPage64(
+    uint32_t, const uint8_t*, uint8_t&) {
   return BackendResult::Unavailable;
 }
 bool V003SwioTargetControl::runPayload(const uint32_t*, size_t) { return false; }

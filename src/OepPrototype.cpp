@@ -238,14 +238,19 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
     } else if (length != 74 || (message[6] & 63)) {
       response[6] = kRejectPayload;
     } else {
+      uint8_t diagnostic = 0;
       const BackendResult result = flash_->programPage64(
-          get32(message + 6), message + 10);
+          get32(message + 6), message + 10, diagnostic);
       if (result == BackendResult::Unavailable) {
         response[6] = kRejectUnavailable;
       } else {
         response[1] = kResolutionCompleted;
         response[6] = result == BackendResult::Success ?
             kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Failed) {
+          response[7] = diagnostic;
+          response_length = 8;
+        }
       }
     }
     sendMessage(response, response_length);
