@@ -16,6 +16,23 @@ DUT エラー経路までは確認済みである。
 アドレスを認識していない」「電気的な立上りが遅い」を区別できない。次段階では、
 バスに影響を与えず波形と ACK を採取できる必要がある。
 
+2026-09-21 時点では P4 の `Wire.begin(0x42, 50, 52, 100000)` は成功し、OEP の
+`FixtureI2c.getStatus()` でも peer started と両線 High を返す。しかし X035 診断
+イメージの address write 後も P4 の receive/request callback 回数は 0 のままであり、
+DUT は `endTransmission()` で status `2`（address NACK）を返した。
+
+この仮説は 10 kHz で A/B 検証した。GPIO open-drain software target は matching write
+address を受信し、ESP-IDF の新しい `i2c_new_slave_device()` driver を I2C1/GPIO50/52 に
+直接設定した場合も receive callback が 1 回発生した。一方 Arduino-ESP32 3.3.11 の
+`Wire` slave は I2C0 と I2C1 の両方で callback 0 回だった。配線、X035 master、P4
+silicon ではなく、Arduino `Wire` が使用する legacy I2C slave HAL が address ACK/受信を
+成立させないことが現時点の原因である。
+
+最初の IDF 試験では callback 内で `i2c_slave_receive()` を再 arm して P4 の interrupt
+watchdog を発生させた。receive job の再 arm は ISR で行わず task 側で行う必要がある。
+現在の direct-driver target は一回だけ受信する安全な診断実装であり、継続運用にはまだ
+しない。RMT trace は HAL 回避後も波形・ACK・timing を記録する最優先実装である。
+
 ## 3 つの役割を混ぜない
 
 | 役割 | 実装 | 主用途 | 速度・保証 |
@@ -26,6 +43,10 @@ DUT エラー経路までは確認済みである。
 
 同時に有効にする場合も、**駆動する peer は一つだけ**とする。observer は常時併用
 できる。P4 には RMT RX 候補が 4 本あり、SCL と SDA を別チャネルで同時受信できる。
+
+P4 では Arduino `Wire` slave を hardware peer として採用しない。正式実装は ESP-IDF
+I2C slave driver を直接使い、ISR は event 通知だけ、receive queue の回収・次 job の arm・
+TX response の投入は high-priority task が行う構成とする。
 
 ## RMT observer
 

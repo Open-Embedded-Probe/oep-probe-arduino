@@ -160,7 +160,7 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
     } else {
       response[4] = 0;
       response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) +
-          (flash_ ? 1 : 0) + (gpio_ ? 1 : 0);
+          (flash_ ? 1 : 0) + (gpio_ ? 1 : 0) + (i2c_ ? 1 : 0);
       if (uart_) ++response[5];
       response_length = 6;
       if (target_) {
@@ -189,6 +189,12 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       }
       if (uart_) {
         put16(response + response_length, FixtureUart);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (i2c_) {
+        put16(response + response_length, FixtureI2c);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -359,6 +365,34 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
       response[1] = kResolutionCompleted;
       response[6] = result == BackendResult::Success ?
           kOutcomeSuccess : kOutcomeFailed;
+    }
+    sendMessage(response, response_length);
+    return;
+  }
+  if (target == FixtureI2c) {
+    if (!i2c_) {
+      response[6] = kRejectUnavailable;
+    } else if (operation != FixtureI2cGetStatus || length != 6) {
+      response[6] = operation == FixtureI2cGetStatus ? kRejectPayload :
+          kRejectOperation;
+    } else {
+      FixtureI2cStatus status;
+      const BackendResult result = i2c_->getStatus(status);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          response[7] = status.flags;
+          response[8] = status.last_rx_length;
+          put16(response + 9, status.rx_transactions);
+          put16(response + 11, status.request_transactions);
+          put32(response + 13, status.frequency_hz);
+          response_length = 17;
+        }
+      }
     }
     sendMessage(response, response_length);
     return;
