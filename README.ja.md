@@ -3,6 +3,10 @@
 破壊的変更を前提とするArduino向けOEP probe実験です。公開protocol、互換libraryまたは製品用
 firmwareではありません。
 
+`examples/Esp32P4X035Prototype`はESP32-P4とCH32X035の試作fixture向けである。既知の配線
+`GPIO2→PC18/SWDIO`、`GPIO54→PC19/SWCLK`を使い、TargetControl、TargetMemory、TargetFlashを
+RVSWD上へ実装する。
+
 現在のP1は仮UART frame、endpoint confirmation、offered function一覧とV003 TargetControlを
 実装します。SWDIOで状態取得、user mode正規化、製品bootloader移行を行います。
 
@@ -10,6 +14,19 @@ firmwareではありません。
 ASCII bannerを出さずbinary frameだけを送受信します。
 
 ## 現在の実機結果
+
+2026-09-20、ESP32-P4 revision 1.3 `30:ed:a0:e3:11:08`とCH32X035C8T6のfixtureで、OEP
+endpoint confirmation、3機能の列挙、target status、flash先頭readを確認した。X035の物理erase
+pageは256 byte、現在のOEP prototypeの論理program単位は64 byteなので、backendは256 byteを
+read-modify-erase-programし、同一物理page内の残り192 byteを保持する。
+
+62 KiB flashの末尾物理page `0x0800f700..0x0800f7ff`を退避し、論理page
+`0x0800f7c0`へOEP `TargetFlash.programPage64`だけでpatternを書いた。独立したTargetMemory readで
+pattern 64 byteの一致と隣接192 byteの不変を確認し、同じOEP経路で元の全FFへ戻した。退避前後の
+256 byte SHA-256はともに
+`3d6876a0146de8576eb2395a858de1213d1b92c65b779df3a331cfd5a4584546`だった。その後software reset、
+再attach、先頭word readも成功した。これは一台・低速bit-bangの破壊前提試験であり、性能、電源断、
+複数個体および全image書込みの保証ではない。
 
 2026-09-19、ESP32-D0WD-V3 `00:70:07:0d:93:94`へ書き込み、Python prototype clientから
 endpoint confirmationと7個のoffered function取得に成功しました。
