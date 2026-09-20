@@ -5,6 +5,10 @@
 #include "driver/gpio.h"
 #include "soc/gpio_struct.h"
 
+#ifndef OEP_V003_FORCE_SEQUENTIAL_FLASH
+#define OEP_V003_FORCE_SEQUENTIAL_FLASH 0
+#endif
+
 namespace oep::prototype {
 namespace {
 
@@ -293,6 +297,91 @@ int readRegister(uint16_t regno, uint32_t* value) {
   return result;
 }
 
+bool sequentialWriteWord(uint32_t address, uint32_t value) {
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    writeDmi(kData1, address);
+    writeDmi(kData0, value);
+    uint32_t address_read = 0;
+    uint32_t value_read = 0;
+    if (readDmi(kData1, &address_read) || readDmi(kData0, &value_read) ||
+        address_read != address || value_read != value) continue;
+    writeDmi(kDmCommand, 0x00240000u);
+    if (!waitAbstract()) {
+      for (int poll = 0; poll < 5; ++poll) {
+        uint32_t next_address = 0;
+        if (!readDmi(kData1, &next_address) &&
+            next_address == address + 4u) return true;
+      }
+    }
+    if (prepareWordWriter()) return false;
+  }
+  return false;
+}
+
+bool sequentialWaitFlashIdle(uint32_t* final_status = nullptr) {
+  uint32_t status = 0;
+  // E136 measured erase <=3.3 ms and program <=2.9 ms. One abstract status
+  // read takes about 0.46 ms; 400 polls retain a very large diagnostic margin.
+  for (int poll = 0; poll < 400; ++poll) {
+    if (readMemoryWord(0x4002200cu, &status)) continue;
+    if (!(status & 1u)) {
+      if (final_status) *final_status = status;
+      return !prepareWordWriter();
+    }
+  }
+  if (final_status) *final_status = status;
+  return false;
+}
+
+bool sequentialProgramPage64(uint32_t address, const uint8_t* data,
+                             uint8_t& diagnostic) {
+  const uint32_t unlock[][2] = {
+    {0x40022004u, 0x45670123u}, {0x40022004u, 0xcdef89abu},
+    {0x40022024u, 0x45670123u}, {0x40022024u, 0xcdef89abu},
+  };
+  for (const auto& item : unlock) {
+    if (!sequentialWriteWord(item[0], item[1])) {
+      diagnostic = 0x80;
+      return false;
+    }
+  }
+
+  uint32_t status = 0;
+  if (!sequentialWriteWord(0x40022010u, 0x00020000u) ||
+      !sequentialWriteWord(0x40022014u, address) ||
+      !sequentialWriteWord(0x40022010u, 0x00020040u) ||
+      !sequentialWaitFlashIdle(&status)) {
+    diagnostic = 0x81;
+    return false;
+  }
+  if (!sequentialWriteWord(0x40022010u, 0x00010000u) ||
+      !sequentialWriteWord(0x40022010u, 0x00090000u) ||
+      !sequentialWaitFlashIdle(&status)) {
+    diagnostic = 0x82;
+    return false;
+  }
+  for (uint32_t offset = 0; offset < 64; offset += 4) {
+    const uint32_t word = data[offset] |
+        static_cast<uint32_t>(data[offset + 1]) << 8 |
+        static_cast<uint32_t>(data[offset + 2]) << 16 |
+        static_cast<uint32_t>(data[offset + 3]) << 24;
+    if (!sequentialWriteWord(address + offset, word) ||
+        !sequentialWriteWord(0x40022010u, 0x00050000u) ||
+        !sequentialWaitFlashIdle(&status)) {
+      diagnostic = 0x90 + offset / 4;
+      return false;
+    }
+  }
+  if (!sequentialWriteWord(0x40022014u, address) ||
+      !sequentialWriteWord(0x40022010u, 0x00010040u) ||
+      !sequentialWaitFlashIdle(&status) ||
+      !sequentialWriteWord(0x40022010u, 0)) {
+    diagnostic = 0x83;
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 void V003SwioTargetControl::begin() {
@@ -375,6 +464,10 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
   }
   if (already_matches) return BackendResult::Success;
 
+#if OEP_V003_FORCE_SEQUENTIAL_FLASH
+  if (!sequentialProgramPage64(address, data, diagnostic))
+    return BackendResult::Failed;
+#else
   if (injectWords(kV003FlashLoader,
                   sizeof(kV003FlashLoader) / sizeof(kV003FlashLoader[0]))) {
     diagnostic = 2;
@@ -421,6 +514,7 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
     diagnostic = halted ? 21 : 20;
     return BackendResult::Failed;
   }
+#endif
 
   // Re-attach before verification.  Success in the loader's debug session is
   // insufficient: earlier host-driven attempts sometimes failed after reset.
@@ -463,8 +557,19 @@ BackendResult V003SwioTargetControl::programPage64(
   // and accept it only after a fresh attach can read the whole page back.
   uint8_t last_diagnostic = 0;
   for (int page_attempt = 0; page_attempt < 3; ++page_attempt) {
-    const BackendResult result =
+    BackendResult result =
         programPage64Attempt(address, data, last_diagnostic);
+#if !OEP_V003_FORCE_SEQUENTIAL_FLASH
+    // Keep loader as the normal fast path, but retain the independently
+    // verified host-sequenced path. A complete sequential erase/program is
+    // safe after a partial loader attempt because it starts by erasing the
+    // whole 64-byte page again.
+    if (result == BackendResult::Failed && attachAndHalt() &&
+        !prepareWordWriter() &&
+        sequentialProgramPage64(address, data, last_diagnostic)) {
+      result = BackendResult::Success;
+    }
+#endif
     if (result == BackendResult::Unavailable) {
       diagnostic = last_diagnostic;
       return result;
