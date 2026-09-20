@@ -526,9 +526,8 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
   // the completion fence, matching the independent-session verification
   // required below rather than treating a missed poll as a failed program.
   if (!halted) halted = attachAndHalt();
-  uint32_t loader_result = ~0u;
-  if (!halted || readRegister(0x100a, &loader_result) || loader_result != 0) {
-    diagnostic = halted ? 21 : 20;
+  if (!halted) {
+    diagnostic = 20;
     return BackendResult::Failed;
   }
 #if OEP_V003_INJECT_LOADER_FAILURE == 3
