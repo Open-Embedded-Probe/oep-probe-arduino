@@ -1,6 +1,6 @@
 #include "V003SwioTargetControl.h"
 
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(ARDUINO_ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32P4)
 
 #include "driver/gpio.h"
 #include "soc/gpio_struct.h"
