@@ -96,7 +96,8 @@ uv run python -m oep_client \
 ```
 
 CLIは入力binを63,488 byteまで`0xff`で埋め、target全域を先に読み、異なる64-byte論理pageだけを
-programする。最後にresetし、全域を読み直してbyte単位で照合する。
+programする。最後にresetし、全域を読み直してbyte単位で照合し、memory readによるhaltを解除する
+ためもう一度resetする。backupとverify-onlyも終了時にtargetを通常実行へ戻す。
 
 ## 結果の見方
 
