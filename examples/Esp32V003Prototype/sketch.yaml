@@ -2,7 +2,7 @@ profiles:
   esp32:
     fqbn: esp32:esp32:esp32
     platforms:
-      - platform: esp32:esp32 (3.3.11)
+      - platform: esp32:esp32 (3.3.12)
     libraries:
       - dir: ../..
 default_profile: esp32
