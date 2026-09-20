@@ -98,3 +98,10 @@ E133でread 100/100だった係数8（実測262.5/862.5 ns）へPHYを変更し�
 TargetMemory request 2件で64 byte完全一致した。これに先行する1 patternを含め6回連続成功したため、
 ESP32 prototypeはTargetFlashを再びoffered functionへ含める。ただしこれはV003一台の破壊前提試験で、
 電源再投入、全image、複数個体による安定性確認は未完了である。
+
+E136ではhostがFLASH register操作を逐次実行する経路も係数8で再測定した。追加quiet time 0でも
+pattern/全FF復元が成功し、eraseは約3.3 ms、programは約2.9 ms、STATR poll 1回は約0.46 msだった。
+backendへこの経路を戻し、`OEP_V003_FORCE_SEQUENTIAL_FLASH=1`でloaderを使わないbuildを作れる。
+強制逐次buildで末尾4 pageへpatternを書いて全FFへ戻す計8回がすべて成功し、software reset後も
+4 page全体が一致した。通常buildはRAM loaderを優先し、失敗時だけpage全消去から逐次経路を
+fallbackとして実行する。固定delayではなくSTATR.BUSY clearを確認し、通信read失敗とは区別する。
