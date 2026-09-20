@@ -343,7 +343,7 @@ BackendResult V003SwioTargetControl::readMemory(
   return BackendResult::Success;
 }
 
-BackendResult V003SwioTargetControl::programPage64(
+BackendResult V003SwioTargetControl::programPage64Attempt(
     uint32_t address, const uint8_t* data, uint8_t& diagnostic) {
   diagnostic = 0;
   if ((address & 63u) || address < 0x08000000u ||
@@ -429,6 +429,52 @@ BackendResult V003SwioTargetControl::programPage64(
     }
   }
   return BackendResult::Success;
+}
+
+BackendResult V003SwioTargetControl::programPage64(
+    uint32_t address, const uint8_t* data, uint8_t& diagnostic) {
+  if ((address & 63u) || address < 0x08000000u ||
+      address >= 0x08004000u) {
+    diagnostic = 0;
+    return BackendResult::Unavailable;
+  }
+
+  // A DMI error may leave an otherwise valid page only partly programmed.
+  // Retry the complete erase/program sequence, as the proven E131 fixture did,
+  // and accept it only after a fresh attach can read the whole page back.
+  uint8_t last_diagnostic = 0;
+  for (int page_attempt = 0; page_attempt < 3; ++page_attempt) {
+    const BackendResult result =
+        programPage64Attempt(address, data, last_diagnostic);
+    if (result == BackendResult::Unavailable) {
+      diagnostic = last_diagnostic;
+      return result;
+    }
+    if (result != BackendResult::Success || !attachAndHalt() ||
+        prepareWordWriter()) {
+      continue;
+    }
+
+    bool verified = true;
+    for (uint32_t offset = 0; offset < 64; offset += 4) {
+      const uint32_t expected = data[offset] |
+          static_cast<uint32_t>(data[offset + 1]) << 8 |
+          static_cast<uint32_t>(data[offset + 2]) << 16 |
+          static_cast<uint32_t>(data[offset + 3]) << 24;
+      uint32_t actual = 0;
+      if (readMemoryWord(address + offset, &actual) || actual != expected) {
+        verified = false;
+        last_diagnostic = 0x40 + page_attempt;
+        break;
+      }
+    }
+    if (verified) {
+      diagnostic = 0;
+      return BackendResult::Success;
+    }
+  }
+  diagnostic = last_diagnostic ? last_diagnostic : 0x43;
+  return BackendResult::Failed;
 }
 
 }  // namespace oep::prototype

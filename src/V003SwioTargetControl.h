@@ -23,6 +23,8 @@ class V003SwioTargetControl : public TargetControlBackend,
 
  private:
   bool runPayload(const uint32_t* words, size_t count);
+  BackendResult programPage64Attempt(uint32_t address, const uint8_t* data,
+                                     uint8_t& diagnostic);
 };
 
 }  // namespace oep::prototype
