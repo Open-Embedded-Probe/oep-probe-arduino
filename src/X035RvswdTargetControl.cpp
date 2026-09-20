@@ -68,7 +68,8 @@ void X035RvswdTargetControl::initializeBus() {
 }
 
 static void clockBit(uint8_t dio, uint8_t clk, unsigned delay_us, bool value) {
-  pinMode(dio, OUTPUT_OPEN_DRAIN | PULLUP);
+  // SWDIO remains open-drain throughout a transaction. HIGH releases it, so
+  // changing direction for every bit only adds substantial GPIO API overhead.
   digitalWrite(clk, LOW); digitalWrite(dio, value ? HIGH : LOW);
   if (delay_us) delayMicroseconds(delay_us);
   digitalWrite(clk, HIGH);
@@ -76,7 +77,7 @@ static void clockBit(uint8_t dio, uint8_t clk, unsigned delay_us, bool value) {
 }
 
 static bool sampleBit(uint8_t dio, uint8_t clk, unsigned delay_us) {
-  digitalWrite(clk, LOW); pinMode(dio, INPUT);
+  digitalWrite(clk, LOW); digitalWrite(dio, HIGH);
   if (delay_us) delayMicroseconds(delay_us);
   const bool value = digitalRead(dio);
   digitalWrite(clk, HIGH);
@@ -85,7 +86,6 @@ static bool sampleBit(uint8_t dio, uint8_t clk, unsigned delay_us) {
 }
 
 static void startFrame(uint8_t dio, uint8_t clk, unsigned delay_us) {
-  pinMode(clk, OUTPUT); pinMode(dio, OUTPUT_OPEN_DRAIN | PULLUP);
   digitalWrite(clk, HIGH); digitalWrite(dio, HIGH);
   if (delay_us) delayMicroseconds(delay_us);
   digitalWrite(dio, LOW);
@@ -238,10 +238,15 @@ BackendResult X035RvswdTargetControl::getStatus(TargetStatus& status) {
 
 BackendResult X035RvswdTargetControl::normalizeUser() {
   if (!attachAndHalt()) { releaseBus(); return BackendResult::Unavailable; }
-  writeDmi(kDmControl, 0x40000001);
-  writeDmi(kDmControl, 1);
-  writeDmi(kDmControl, 0);
+  // resumereq alone continues at the old image's halted PC. Assert the Debug
+  // Module's non-debug-module reset, then deactivate the DM after releasing
+  // reset so execution starts from the target reset vector.
+  writeDmi(kDmControl, 0x00000003u);  // dmactive | ndmreset
+  delayMicroseconds(100);
+  writeDmi(kDmControl, 0x00000001u);  // release ndmreset
+  writeDmi(kDmControl, 0x00000000u);  // detach debug module
   releaseBus();
+  delay(2);
   return BackendResult::Success;
 }
 

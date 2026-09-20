@@ -32,13 +32,13 @@ arduino-cli compile \
   examples/Esp32P4X035Prototype
 
 arduino-cli upload \
-  --port /dev/ttyACM8 \
+  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
   --fqbn 'esp32:esp32:esp32p4:USBMode=hwcdc,CDCOnBoot=cdc' \
   --input-dir /tmp/oep-p4-x035 \
   examples/Esp32P4X035Prototype
 ```
 
-実機名が利用できる環境では`/dev/ttyACM8`の代わりに次を使用できる。
+この環境では列挙順で変化する`/dev/ttyACM*`を直接使わず、次の固定名を使用する。
 
 ```text
 /run/board-identify/by-id/esp32-series-30eda0e31108
@@ -114,14 +114,38 @@ program-image pages=109 attempts=109 sha256=<63,488-byte image hash>
 ## 制約と復旧
 
 - X035の物理erase単位256 byteをprobe内部のread-modify-erase-programで吸収する。
+- 書込み後の`normalize-user`は単なるdebug resumeではなく、RAM上の短いpayloadからPFIC system resetを
+  発行する。これにより旧imageの停止PCではなく、新imageのreset vectorから開始する。
 - operation途中で失敗した場合、probe RAMのerase前imageを使って同じ64-byte要求の再送から回復する。
 - 未回復中の別物理page要求は診断`0xe0`で拒否する。
 - erase後にprobeもresetまたは電源断すると回復cacheは失われる。この場合、退避済みの完全imageを
   `--program-image`で再送する。部分imageや別pageから書込みを続行しない。
 - targetのflash/option保護、型番、容量を自動識別していない。CH32X035以外へ既定値のまま使わない。
-- 全域readまたはverifyは約240秒、109 pageの差分書込みは約298秒を実測した。
+- 2026-09-20の初期実装では全域read/verify約240秒、109 pageの差分書込み約298秒だった。
+  SWDIOの不要な方向切替を除去し、追加half-periodを0にし、1要求を32から88 byteへ拡張した後は、
+  全域read 24.80秒、109 pageの比較・書込み・全域verifyを含む復元全体80.00秒を実測した。
+- `half_period_us=0`は今回の短いfixture配線で全域hash一致を確認した設定である。配線条件が変わる
+  汎用probeでは設定可能なままにし、エラー時は遅い設定へ戻せるようにする。
 - target USBはOEP transportではない。USB deviceのbind状態はRVSWD書込みには関係しない。
 
 正式なArduinoCore upload toolへ組み込む段階では、CLI出力文字列ではなくPython APIまたは安定した
 machine-readable resultを使用する必要がある。現時点ではcore側の標準upload手段へ登録せず、manual
 prototypeとして呼び出す。
+
+## 現時点の使い勝手評価
+
+- 固定alias、書込み前の全域backup、差分書込み、reset、全域verify、hash表示まで一連で行え、
+  破壊的prototypeとしての最低限の復旧性はある。
+- 高速化後は約80秒で別imageへ更新して全域検証できる。core開発の反復には使えるが、通常の
+  Arduino uploadとしてはまだ遅い。今後は256-byte物理page単位の転送・処理が改善候補となる。
+- 現在のP4 exampleはTargetControl / TargetMemory / TargetFlashに加え、FixtureGpioとFixtureUartを
+  公開する。FixtureUartはUSART4（PB0→P4 GPIO12、PB1←P4 GPIO6）を115200 bpsで使え、`core_api`の
+  command/response自己試験を完走した。FixtureGpioは安全なallowed pinのread、input pull、push-pull、
+  open-drainを構成できる。target outputとの競合を避け、終了時はfloating inputへ戻す。
+- ADC端点はPA5/P4 GPIO4で0 V相当（ADC=2）と3.3 V相当（ADC=1001）を実測した。一方、P4の両pullは
+  ADC=345（約1.1 V）であり、1.65 V基準には使えない。中点のrelease検証には校正済みDACまたは外付け
+  分圧が必要である。
+- I2C/SPI peerとPWM波形計測は未実装である。GPIOのopen-drainはI2C bit-bangの基礎にはなるが、
+  速度・clock stretch・SPI slaveの時刻保証を持つ専用capabilityへ発展させる必要がある。
+- target型番・flash容量・保護状態を自動確認しないため、別targetへ誤って書くことを防げない。
+  capabilityだけでなくtarget identityを返す機能が正式probeには必要である。
