@@ -8,6 +8,9 @@
 #ifndef OEP_V003_FORCE_SEQUENTIAL_FLASH
 #define OEP_V003_FORCE_SEQUENTIAL_FLASH 0
 #endif
+#ifndef OEP_V003_INJECT_LOADER_FAILURE
+#define OEP_V003_INJECT_LOADER_FAILURE 0
+#endif
 
 namespace oep::prototype {
 namespace {
@@ -468,6 +471,10 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
   if (!sequentialProgramPage64(address, data, diagnostic))
     return BackendResult::Failed;
 #else
+#if OEP_V003_INJECT_LOADER_FAILURE == 1
+  diagnostic = 0x7f;
+  return BackendResult::Failed;
+#endif
   if (injectWords(kV003FlashLoader,
                   sizeof(kV003FlashLoader) / sizeof(kV003FlashLoader[0]))) {
     diagnostic = 2;
@@ -483,6 +490,10 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
       return BackendResult::Failed;
     }
   }
+#if OEP_V003_INJECT_LOADER_FAILURE == 2
+  diagnostic = 0x7e;
+  return BackendResult::Failed;
+#endif
 
   writeDmi(kDmAbstractAuto, 0);
   if (writeRegister(0x100a, 0x1du) ||       // unlock, erase, program, verify
@@ -514,6 +525,10 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
     diagnostic = halted ? 21 : 20;
     return BackendResult::Failed;
   }
+#if OEP_V003_INJECT_LOADER_FAILURE == 3
+  diagnostic = 0x7d;
+  return BackendResult::Failed;
+#endif
 #endif
 
   // Re-attach before verification.  Success in the loader's debug session is

@@ -105,3 +105,8 @@ backendへこの経路を戻し、`OEP_V003_FORCE_SEQUENTIAL_FLASH=1`でloader�
 強制逐次buildで末尾4 pageへpatternを書いて全FFへ戻す計8回がすべて成功し、software reset後も
 4 page全体が一致した。通常buildはRAM loaderを優先し、失敗時だけpage全消去から逐次経路を
 fallbackとして実行する。固定delayではなくSTATR.BUSY clearを確認し、通信read失敗とは区別する。
+
+loader fallbackには3段階の故障注入も行った。loader転送前、loader/dataのRAM転送後、loaderが
+flash書込みを完了した後のすべてで、逐次fallbackによるpattern書込み、全FF復元、software reset後
+read-backが成功した。最後の条件では同じpageを再度erase/programするため、部分完了状態からの
+回復も確認している。成功resultから使用経路を識別するtelemetryはProtocolへ混ぜず今後の課題とする。
