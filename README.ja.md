@@ -72,3 +72,9 @@ E129との重大な差だと判明した。GPIO16 maskを定数へ戻すと大�
 caseと、flash操作後にsoftware/external resetでbootへ移行できない状態を観測した。電源再投入前の
 安全な回復条件が未確定なため、ESP32 exampleはTargetFlashをoffered functionから一時的に外した。
 backend実験コードは比較用に残すが、現在は利用可能な機能として公開しない。
+
+TargetFlash停止後のfirmwareをESP32へ戻し、offered functionがTargetControl、TargetMemory、
+FixtureGpio、FixtureUartの4件だけであることを実機確認した。TargetMemoryの連続readでは一部要求が
+`completed/failed`となり、再試行で取得できた。失敗を成功へ変換してはいないが、SWDIO backendは
+まだ連続操作の安定性を保証しない。またstatus/readはtargetをhaltするため、試験終了時は
+`normalize-user`で通常実行へ戻す必要がある。
