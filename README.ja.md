@@ -110,3 +110,8 @@ loader fallbackには3段階の故障注入も行った。loader転送前、load
 flash書込みを完了した後のすべてで、逐次fallbackによるpattern書込み、全FF復元、software reset後
 read-backが成功した。最後の条件では同じpageを再度erase/programするため、部分完了状態からの
 回復も確認している。成功resultから使用経路を識別するtelemetryはProtocolへ混ぜず今後の課題とする。
+
+通常loader経路の短期反復はpattern/全FFを50周期、合計100回実行して100/100成功した。10周期ごとの
+software reset後照合も5/5一致した。完了pollを20 ms/128回で打ち切ってfresh attachへ移ることで、
+1 page中央値は422 msから約296 msへ短縮した。64 byteごとのloader再転送が支配的であり、暗黙の
+RAM常駐cacheは採用しない。将来の高速化は明示的な複数page operationで償却する。
