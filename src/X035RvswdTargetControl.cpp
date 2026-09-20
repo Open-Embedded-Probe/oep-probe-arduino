@@ -6,6 +6,10 @@
 
 #include <driver/gpio.h>
 
+#ifndef OEP_X035_INJECT_FLASH_FAILURE
+#define OEP_X035_INJECT_FLASH_FAILURE 0
+#endif
+
 namespace oep::prototype {
 namespace {
 constexpr uint8_t kData0 = 0x04;
@@ -23,6 +27,7 @@ constexpr uint32_t kFlashObkeyr = 0x40022008;
 constexpr uint32_t kFlashCtlr = 0x40022010;
 constexpr uint32_t kFlashAddr = 0x40022014;
 constexpr uint32_t kFlashModekeyr = 0x40022024;
+bool gFlashFailureInjected = false;
 
 uint32_t get32(const uint8_t* p) {
   return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 |
@@ -268,10 +273,21 @@ BackendResult X035RvswdTargetControl::programPage64(uint32_t address,
   // page. Preserve the other three logical units inside that page.
   const uint32_t physical_page = address & ~uint32_t(255);
   uint8_t image[256];
-  for (size_t i = 0; i < sizeof(image); i += 4) {
-    uint32_t value;
-    if (!readWord(physical_page + i, value)) goto failed;
-    put32(image + i, value);
+  if (recovery_valid_) {
+    if (recovery_page_ != physical_page) {
+      diagnostic = 0xe0;
+      goto failed;
+    }
+    memcpy(image, recovery_image_, sizeof(image));
+  } else {
+    for (size_t i = 0; i < sizeof(image); i += 4) {
+      uint32_t value;
+      if (!readWord(physical_page + i, value)) goto failed;
+      put32(image + i, value);
+    }
+    memcpy(recovery_image_, image, sizeof(image));
+    recovery_page_ = physical_page;
+    recovery_valid_ = true;
   }
   memcpy(image + (address - physical_page), data, 64);
   uint32_t ctlr;
@@ -289,6 +305,13 @@ BackendResult X035RvswdTargetControl::programPage64(uint32_t address,
       !writeWord(kFlashAddr, physical_page) ||
       !writeWord(kFlashCtlr, 0x00020040) || !waitFlash() ||
       !writeWord(kFlashCtlr, 0)) goto failed;
+#if OEP_X035_INJECT_FLASH_FAILURE == 1
+  if (!gFlashFailureInjected) {
+    gFlashFailureInjected = true;
+    diagnostic = 0xe1;
+    goto failed;
+  }
+#endif
   diagnostic = 3;
   for (size_t group = 0; group < sizeof(image); group += 64) {
     if (!writeWord(kFlashCtlr, 0x00010000) ||
@@ -304,6 +327,13 @@ BackendResult X035RvswdTargetControl::programPage64(uint32_t address,
     if (!writeWord(kFlashAddr, physical_page + group) ||
         !writeWord(kFlashCtlr, 0x00010040) || !waitFlash() ||
         !writeWord(kFlashCtlr, 0)) goto failed;
+#if OEP_X035_INJECT_FLASH_FAILURE == 2
+    if (!group && !gFlashFailureInjected) {
+      gFlashFailureInjected = true;
+      diagnostic = 0xe2;
+      goto failed;
+    }
+#endif
   }
   for (size_t i = 0; i < sizeof(image); i += 4) {
     uint32_t value;
@@ -312,6 +342,7 @@ BackendResult X035RvswdTargetControl::programPage64(uint32_t address,
     }
   }
   releaseBus();
+  recovery_valid_ = false;
   diagnostic = 0;
   return BackendResult::Success;
 failed:

@@ -28,6 +28,25 @@ pattern 64 byteの一致と隣接192 byteの不変を確認し、同じOEP経路
 再attach、先頭word readも成功した。これは一台・低速bit-bangの破壊前提試験であり、性能、電源断、
 複数個体および全image書込みの保証ではない。
 
+同じfixtureで64-byte pattern書込みと全FF復元を10周期、合計20操作実行し、2周期ごとのsoftware
+reset後照合を含め全件成功した。現在の62 KiB imageをOEP TargetMemoryだけで退避した後、1,032
+byteのPA0 HIGHテストアプリへ差分109論理pageを書換えた。reset後に`GPIOA_OUTDR=1`で実行を確認し、
+OEPで62 KiB全域を読み直した結果、期待imageとの不一致は0、SHA-256は
+`9f472e4b9d2f12634e90eb0d5861eb7addca1d2f5ff5f755dc3e42fb20eb04a5`だった。退避imageへ同じ109
+pageを復元し、reset後の全域SHA-256が退避時と同じ
+`17ad3777ba42af0bd8d61ae5521ab5a4d5f10057e148d22b3fae5b8fbc235988`であることも確認した。
+全域readは約240秒、109 pageの差分programは約298秒だった。
+
+X035 backendはerase前の256 byteをprobe RAMへ保持する。同一物理pageの再要求はその退避像を使い、
+未回復中の別page要求は診断`0xe0`で失敗させる。試験buildの
+`OEP_X035_INJECT_FLASH_FAILURE=1/2`により、物理erase直後（`0xe1`）と最初の64-byte commit直後
+（`0xe2`）を一度だけ中断した。targetが全消去または部分書込みになったことを独立readで確認後、
+同一要求の再送で隣接192 byteを含む256 byte全体を回復できた。
+
+この回復cacheはprobeのresetや電源断を跨がない。probeも同時に状態を失う障害から確実に回復する
+には、hostが256 byte物理page全体を再送できる複数page/streaming操作、または永続journalが必要で
+あり、現在の64-byte操作だけで原子的保持を保証してはならない。
+
 2026-09-19、ESP32-D0WD-V3 `00:70:07:0d:93:94`へ書き込み、Python prototype clientから
 endpoint confirmationと7個のoffered function取得に成功しました。
 
