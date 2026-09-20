@@ -33,6 +33,19 @@ enum TargetFlashOperation : uint8_t {
 
 enum FixtureGpioOperation : uint8_t {
   FixtureReadDigital = 0x01,
+  FixtureReadDigitalBank = 0x02,
+  FixtureConfigureDigital = 0x03,
+};
+
+enum FixtureGpioMode : uint8_t {
+  FixtureInputFloating = 0x00,
+  FixtureInputPullUp = 0x01,
+  FixtureInputPullDown = 0x02,
+  FixtureInputPullUpDown = 0x03,
+  FixtureOutputLow = 0x04,
+  FixtureOutputHigh = 0x05,
+  FixtureOpenDrainLow = 0x06,
+  FixtureOpenDrainRelease = 0x07,
 };
 
 enum FixtureUartOperation : uint8_t {
@@ -79,6 +92,8 @@ class FixtureGpioBackend {
  public:
   virtual ~FixtureGpioBackend() = default;
   virtual BackendResult readDigital(uint8_t pin, uint8_t& value) = 0;
+  virtual BackendResult readDigitalBank(uint64_t& available, uint64_t& values);
+  virtual BackendResult configureDigital(uint8_t pin, uint8_t mode) = 0;
 };
 
 class FixtureUartBackend {

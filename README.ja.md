@@ -38,7 +38,8 @@ OEPで62 KiB全域を読み直した結果、期待imageとの不一致は0、SH
 `9f472e4b9d2f12634e90eb0d5861eb7addca1d2f5ff5f755dc3e42fb20eb04a5`だった。退避imageへ同じ109
 pageを復元し、reset後の全域SHA-256が退避時と同じ
 `17ad3777ba42af0bd8d61ae5521ab5a4d5f10057e148d22b3fae5b8fbc235988`であることも確認した。
-全域readは約240秒、109 pageの差分programは約298秒だった。
+初期実装では全域read約240秒、109 pageの差分program約298秒だった。P4 GPIO処理とread chunkを
+改善した2026-09-20実測では全域read 24.80秒、比較・109 page program・全域verifyの合計80.00秒。
 
 X035 backendはerase前の256 byteをprobe RAMへ保持する。同一物理pageの再要求はその退避像を使い、
 未回復中の別page要求は診断`0xe0`で失敗させる。試験buildの
@@ -71,7 +72,7 @@ Windows側で`1209:b803`が再列挙した。提供一覧は実装済みのTarge
 示す仮値であり、観測だけの操作ではない。この副作用と、操作後にresumeすべきかは今後の
 service意味を決めるための検討事項である。
 
-同日、TargetMemory `0x0102`を追加し、4 byte aligned、4～32 byteのbounded readを実装した。
+同日、TargetMemory `0x0102`を追加した。現在は4 byte aligned、4～88 byteのbounded readである。
 V003 flash `0x08000000`から16 byteをOEP request/resultだけで取得できた。このalignmentと長さは
 prototype実装の制約であり、仕様上の上限ではない。
 
