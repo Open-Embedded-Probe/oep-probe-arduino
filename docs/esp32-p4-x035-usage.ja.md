@@ -147,5 +147,14 @@ prototypeとして呼び出す。
   分圧が必要である。
 - I2C/SPI peerとPWM波形計測は未実装である。GPIOのopen-drainはI2C bit-bangの基礎にはなるが、
   速度・clock stretch・SPI slaveの時刻保証を持つ専用capabilityへ発展させる必要がある。
+
+- `FixtureI2c` revision 1 は P4 の一時的な hardware I2C target の状態取得だけを公開する。
+  `getStatus()` は peer started、SCL/SDA の現在 level、最後の受信長、受信 transaction 回数、
+  read request 回数、設定周波数を返す。I2C の成否をこの値だけで判定せず、RMT observer を
+  追加した後は trace と対にして判定する。詳細な段階設計は
+  [`esp32-p4-i2c-observation-design.ja.md`](esp32-p4-i2c-observation-design.ja.md) に記録する。
+  Arduino-ESP32 3.3.11 の `Wire` slave は本治具で address ACK しなかったため、正式実装の
+  基盤には使わない。ESP-IDF I2C slave driver の direct path は同じ10 kHz試験で受信できたが、
+  現在は一回受信の診断用である。
 - target型番・flash容量・保護状態を自動確認しないため、別targetへ誤って書くことを防げない。
   capabilityだけでなくtarget identityを返す機能が正式probeには必要である。

@@ -1,9 +1,0 @@
-{
-  "additionalFiles": "",
-  "compiler.optimization_flags": "-Os",
-  "customBuildProperties": "",
-  "fqbn": "esp32:esp32:esp32p4:USBMode=hwcdc,CDCOnBoot=cdc",
-  "hardwareFolders": "/home/mt/.arduino15/packages",
-  "otherLibrariesFolders": "/home/mt/Arduino/libraries",
-  "sketchLocation": "/home/mt/dev_oep/oep-probe-arduino/examples/Esp32P4X035Prototype"
-}

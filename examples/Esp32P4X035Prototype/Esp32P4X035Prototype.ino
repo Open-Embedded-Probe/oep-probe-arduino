@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <driver/gpio.h>
 #include <Esp32FixtureGpio.h>
+#include <Esp32FixtureIdfI2c.h>
 #include <Esp32FixtureUart.h>
 #include <X035RvswdTargetControl.h>
 
@@ -23,24 +24,20 @@ oep::prototype::Esp32FixtureGpio fixtureGpio(
 // because both board header signals are mapped; USART2 is retained for
 // diagnosing its independent long-TX issue.
 oep::prototype::Esp32FixtureUart fixtureUart(Serial1, 12, 6);
+// X035 route-2 pair: PC16(SCL)->GPIO52, PC17(SDA)->GPIO50. The software
+// target is retained as a 10 kHz fault-isolation backend. This image bypasses
+// Arduino Wire and uses the ESP-IDF I2C1 slave driver directly.
+oep::prototype::Esp32FixtureIdfI2c fixtureI2c(
+    I2C_NUM_1, 0x42, 50, 52, 10000);
 oep::prototype::Endpoint endpoint(
-    Serial, &target, &target, &target, &fixtureGpio, &fixtureUart);
-
-// Temporary I2C peer for X035 HIL. PC16(SCL)->GPIO52 and
-// PC17(SDA)->GPIO50 are the X035 route-2 pair. Keep this separate from the
-// OEP protocol until request/result buffering and error reporting are defined.
-constexpr uint8_t kI2cPeerAddress = 0x42;
-void onI2cRequest() { Wire.write(0xA5); Wire.write(0x5A); }
-void onI2cReceive(int) { while (Wire.available()) (void)Wire.read(); }
+    Serial, &target, &target, &target, &fixtureGpio, &fixtureUart, &fixtureI2c);
 
 void setup() {
   Serial.begin(115200);
   target.begin();
-  Wire.begin(kI2cPeerAddress, 50, 52, 100000);
-  gpio_set_pull_mode(GPIO_NUM_50, GPIO_PULLUP_ONLY);
-  gpio_set_pull_mode(GPIO_NUM_52, GPIO_PULLUP_ONLY);
-  Wire.onRequest(onI2cRequest);
-  Wire.onReceive(onI2cReceive);
+  fixtureI2c.begin();
 }
 
-void loop() { endpoint.poll(); }
+void loop() {
+  endpoint.poll();
+}

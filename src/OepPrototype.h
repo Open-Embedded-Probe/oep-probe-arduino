@@ -54,6 +54,10 @@ enum FixtureUartOperation : uint8_t {
   FixtureUartReadAvailable = 0x03,
 };
 
+enum FixtureI2cOperation : uint8_t {
+  FixtureI2cGetStatus = 0x01,
+};
+
 enum class BackendResult : uint8_t {
   Success,
   Failed,
@@ -107,15 +111,34 @@ class FixtureUartBackend {
                                       size_t& length) = 0;
 };
 
+// This intentionally reports peer state only. I2C configuration and capture
+// operations are added once their timing and trace format are fixed.
+struct FixtureI2cStatus {
+  // bit 0: peer started, bit 1: SCL high, bit 2: SDA high,
+  // bit 3: software peer (rather than a hardware I2C peripheral).
+  uint8_t flags = 0;
+  uint8_t last_rx_length = 0;
+  uint16_t rx_transactions = 0;
+  uint16_t request_transactions = 0;
+  uint32_t frequency_hz = 0;
+};
+
+class FixtureI2cBackend {
+ public:
+  virtual ~FixtureI2cBackend() = default;
+  virtual BackendResult getStatus(FixtureI2cStatus& status) = 0;
+};
+
 class Endpoint {
  public:
   explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr,
                     TargetMemoryBackend* memory = nullptr,
                     TargetFlashBackend* flash = nullptr,
                     FixtureGpioBackend* gpio = nullptr,
-                    FixtureUartBackend* uart = nullptr)
+                    FixtureUartBackend* uart = nullptr,
+                    FixtureI2cBackend* i2c = nullptr)
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
-        gpio_(gpio), uart_(uart) {}
+        gpio_(gpio), uart_(uart), i2c_(i2c) {}
   void poll();
 
  private:
@@ -125,6 +148,7 @@ class Endpoint {
   TargetFlashBackend* flash_;
   FixtureGpioBackend* gpio_;
   FixtureUartBackend* uart_;
+  FixtureI2cBackend* i2c_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;
