@@ -11,6 +11,9 @@
 #ifndef OEP_V003_INJECT_LOADER_FAILURE
 #define OEP_V003_INJECT_LOADER_FAILURE 0
 #endif
+#ifndef OEP_V003_DISABLE_SEQUENTIAL_FALLBACK
+#define OEP_V003_DISABLE_SEQUENTIAL_FALLBACK 0
+#endif
 
 namespace oep::prototype {
 namespace {
@@ -404,6 +407,8 @@ BackendResult V003SwioTargetControl::getStatus(TargetStatus& status) {
 }
 
 bool V003SwioTargetControl::runPayload(const uint32_t* words, size_t count) {
+  // Every control payload overwrites the loader at 0x20000000, and reset may
+  // let the application reuse RAM. Never carry loader residency across it.
   if (!attachAndHalt() || prepareWordWriter() || injectWords(words, count))
     return false;
   writeDmi(kDmAbstractAuto, 0);
@@ -507,7 +512,8 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
   }
   writeDmi(kDmControl, 0x40000001u);
   bool halted = false;
-  for (int poll = 0; poll < 2000; ++poll) {
+  const uint32_t poll_started = micros();
+  for (int poll = 0; poll < 128 && micros() - poll_started < 20000u; ++poll) {
     uint32_t status = 0;
     if (!readDmi(kDmStatus, &status) &&
         (status & 0x00000300u) == 0x00000300u) {
@@ -531,31 +537,9 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
 #endif
 #endif
 
-  // Re-attach before verification.  Success in the loader's debug session is
-  // insufficient: earlier host-driven attempts sometimes failed after reset.
-  if (!attachAndHalt() || prepareWordWriter()) {
-    diagnostic = 22;
-    return BackendResult::Failed;
-  }
-
-  for (uint32_t offset = 0; offset < 64; offset += 4) {
-    const uint32_t expected = data[offset] |
-        static_cast<uint32_t>(data[offset + 1]) << 8 |
-        static_cast<uint32_t>(data[offset + 2]) << 16 |
-        static_cast<uint32_t>(data[offset + 3]) << 24;
-    uint32_t actual = 0;
-    bool verified = false;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-      if (!readMemoryWord(address + offset, &actual) && actual == expected) {
-        verified = true;
-        break;
-      }
-    }
-    if (!verified) {
-      diagnostic = 23 + offset / 4;
-      return BackendResult::Failed;
-    }
-  }
+  // programPage64() owns the single authoritative fresh-attach read-back.
+  // Do not duplicate all 16 abstract reads here; the loader already verifies
+  // internally and the outer check also covers the sequential path.
   return BackendResult::Success;
 }
 
@@ -574,7 +558,7 @@ BackendResult V003SwioTargetControl::programPage64(
   for (int page_attempt = 0; page_attempt < 3; ++page_attempt) {
     BackendResult result =
         programPage64Attempt(address, data, last_diagnostic);
-#if !OEP_V003_FORCE_SEQUENTIAL_FLASH
+#if !OEP_V003_FORCE_SEQUENTIAL_FLASH && !OEP_V003_DISABLE_SEQUENTIAL_FALLBACK
     // Keep loader as the normal fast path, but retain the independently
     // verified host-sequenced path. A complete sequential erase/program is
     // safe after a partial loader attempt because it starts by erasing the
