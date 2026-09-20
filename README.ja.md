@@ -65,3 +65,10 @@ ESP32 RX=22/TX=21に固定し、baudrateだけをhostが要求してprobeがactu
 製品HIDで最新版fixtureを復旧した後、FixtureUartの`DOUT`とFixtureGpioを組み合わせ、target pin
 7→GPIO27とtarget pin 9→GPIO14のLOW/HIGH/LOWを確認した。初回には以前のHIGHが入力へ残る場合が
 あったため、試験はLOWへ正規化してからHIGH/LOWを判定する。
+
+追加のmulti-page試験で、cycle-sensitiveなPHY hot pathのGPIO maskをruntime変数にしたことが
+E129との重大な差だと判明した。GPIO16 maskを定数へ戻すと大量のDMI read failureは解消した。
+一方、flash書込み直後の同一debug sessionでは成功に見え、後のrequestで部分書込みが判明する
+caseと、flash操作後にsoftware/external resetでbootへ移行できない状態を観測した。電源再投入前の
+安全な回復条件が未確定なため、ESP32 exampleはTargetFlashをoffered functionから一時的に外した。
+backend実験コードは比較用に残すが、現在は利用可能な機能として公開しない。

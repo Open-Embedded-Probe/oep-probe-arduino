@@ -10,8 +10,7 @@ class V003SwioTargetControl : public TargetControlBackend,
                               public TargetMemoryBackend,
                               public TargetFlashBackend {
  public:
-  explicit V003SwioTargetControl(uint8_t swdio_pin = 16)
-      : swdio_pin_(swdio_pin) {}
+  V003SwioTargetControl() = default;
 
   void begin();
   BackendResult getStatus(TargetStatus& status) override;
@@ -23,7 +22,6 @@ class V003SwioTargetControl : public TargetControlBackend,
                               uint8_t& diagnostic) override;
 
  private:
-  uint8_t swdio_pin_;
   bool runPayload(const uint32_t* words, size_t count);
 };
 
