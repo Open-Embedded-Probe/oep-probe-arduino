@@ -8,7 +8,10 @@
 namespace oep::prototype {
 namespace {
 
-constexpr int kCoefficient = 10;
+// E133 measured 262.5/862.5 ns at coefficient 8, closest to the real LinkE
+// capture's 240/860 ns.  It also gave 100/100 DATA1 reads; the former
+// host-driven flash sequence was the operation that failed at this setting.
+constexpr int kCoefficient = 8;
 constexpr uint8_t kSwioPin = 16;
 constexpr uint32_t kSwioMask = 1u << kSwioPin;
 constexpr uint8_t kData0 = 0x04;
@@ -205,42 +208,6 @@ int readMemoryWord(uint32_t address, uint32_t* value) {
   return result;
 }
 
-bool waitFlashIdle(uint32_t* last_status = nullptr) {
-  uint32_t status = 0;
-  for (int attempt = 0; attempt < 400; ++attempt) {
-    if (readMemoryWord(0x4002200c, &status)) continue;
-    if (!(status & 1u)) {
-      if (last_status) *last_status = status;
-      for (int restore = 0; restore < 5; ++restore)
-        if (!prepareWordWriter()) return true;
-      return false;
-    }
-  }
-  if (last_status) *last_status = status;
-  return false;
-}
-
-bool flashWriteWord(uint32_t address, uint32_t value) {
-  for (int attempt = 0; attempt < 5; ++attempt) {
-    writeDmi(kData1, address);
-    writeDmi(kData0, value);
-    uint32_t address_read = 0;
-    uint32_t value_read = 0;
-    if (readDmi(kData1, &address_read) || readDmi(kData0, &value_read) ||
-        address_read != address || value_read != value) continue;
-    writeDmi(kDmCommand, 0x00240000);
-    if (!waitAbstract()) {
-      for (int poll = 0; poll < 5; ++poll) {
-        uint32_t next_address = 0;
-        if (!readDmi(kData1, &next_address) &&
-            next_address == address + 4u) return true;
-      }
-    }
-    prepareWordWriter();
-  }
-  return false;
-}
-
 int injectWords(const uint32_t* words, size_t count) {
   for (size_t index = 0; index < count; ++index) {
     const uint32_t address = 0x20000000u + index * 4u;
@@ -284,6 +251,47 @@ const uint32_t kPrepareBootAndReset[] = {
   0xe000e2b7, 0x04828293, 0xbeef0337, 0x08030313, 0x0062a023,
   0x0000006f,
 };
+
+// RV32EC CH32V003 flash loader from ch32-rs/wlink (MIT/Apache-2.0), built
+// from the WCH EVT flash routine.  It executes on the target, takes
+// a0=operation flags, a1=flash address, a2=length, and reads input at
+// 0x20000200.  The real LinkE capture uses the same load/run arrangement.
+const uint32_t kV003FlashLoader[] = {
+  0xcc221111u, 0xc802ca26u, 0x00157793u, 0x06b7cf99u, 0x27b74567u, 0x86934002u,
+  0x97371236u, 0xc3d4cdefu, 0x9ab70713u, 0xd3d4c3d8u, 0x7793d3d8u, 0xc79d0025u,
+  0x400227b7u, 0x66ad4b98u, 0x40003337u, 0x00476713u, 0x4b98cb98u, 0xaaa68693u,
+  0x04076713u, 0x47d8cb98u, 0x16638b05u, 0x4b981007u, 0xcb989b6du, 0x00457793u,
+  0x0793cba9u, 0x839903f6u, 0x632dc02eu, 0xc43e7681u, 0x400032b7u, 0x400227b7u,
+  0xaaa30313u, 0x4b9816fdu, 0x000203b7u, 0x00776733u, 0x4702cb98u, 0x4b98cbd8u,
+  0x04076713u, 0x47d8cb98u, 0xe7698b05u, 0x8f754b98u, 0x4702cb98u, 0x04070713u,
+  0x4722c03au, 0xc43a177du, 0x7793f779u, 0xcff10085u, 0x03f60793u, 0x8399c02eu,
+  0x40022737u, 0x4b1cc43eu, 0x632d66c1u, 0xcb1c8fd5u, 0x20000737u, 0x20070713u,
+  0x400227b7u, 0x000803b7u, 0x400032b7u, 0xaaa30313u, 0xe6b34b94u, 0xcb940076u,
+  0x8a8547d4u, 0x4682fef5u, 0x043784bau, 0xc2360004u, 0xc63646c1u, 0x40844692u,
+  0xc2840711u, 0x8ec14b94u, 0x47d4cb94u, 0xeab18a85u, 0x84ba4692u, 0xc2360691u,
+  0x16fd46b2u, 0xfef9c636u, 0xcbd44682u, 0xe6934b94u, 0xcb940406u, 0x8a8547d4u,
+  0x47d4ee85u, 0xce858ac1u, 0x06b747d8u, 0x16fdfff3u, 0x01076713u, 0x4b98c7d8u,
+  0x8f754521u, 0x4462cb98u, 0x017144d2u, 0x20239002u, 0xb5f500d3u, 0x0062a023u,
+  0xa023b73du, 0xb7550062u, 0x0062a023u, 0x4682b7c1u, 0x04068693u, 0x46a2c036u,
+  0xc43616fdu, 0x4b98f2b5u, 0xfff306b7u, 0x8f7516fdu, 0x8941cb98u, 0x4501e119u,
+  0xc02ebf7du, 0xc402060du, 0x07b78209u, 0xc6322000u, 0x20078793u, 0x87134394u,
+  0x47a20047u, 0x078a4602u, 0x439c97b2u, 0x02f69963u, 0x468247a2u, 0x97b6078au,
+  0x47c24394u, 0xc83e97b6u, 0x078547a2u, 0x4622c43eu, 0x87ba46b2u, 0xfcd668e3u,
+  0x200007b7u, 0x6107a703u, 0x06e347c2u, 0x4541faf7u, 0xffffb79du,
+};
+
+int writeRegister(uint16_t regno, uint32_t value) {
+  writeDmi(kData0, value);
+  writeDmi(kDmCommand, 0x00230000u | regno);
+  return waitAbstract();
+}
+
+int readRegister(uint16_t regno, uint32_t* value) {
+  writeDmi(kDmCommand, 0x00220000u | regno);
+  int result = waitAbstract();
+  if (!result) result = readDmi(kData0, value);
+  return result;
+}
 
 }  // namespace
 
@@ -367,46 +375,57 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
   }
   if (already_matches) return BackendResult::Success;
 
-  const uint32_t unlock[][2] = {
-      {0x40022004u, 0x45670123u}, {0x40022004u, 0xcdef89abu},
-      {0x40022024u, 0x45670123u}, {0x40022024u, 0xcdef89abu},
-  };
-  for (const auto& item : unlock)
-    if (!flashWriteWord(item[0], item[1])) {
-      diagnostic = 2;
-      return BackendResult::Failed;
-    }
-
-  uint32_t status = 0;
-  if (!waitFlashIdle(&status) ||
-      !flashWriteWord(0x40022010u, 0x00020000u) ||
-      !flashWriteWord(0x40022014u, address) ||
-      !flashWriteWord(0x40022010u, 0x00020040u) ||
-      !waitFlashIdle(&status) ||
-      !flashWriteWord(0x40022010u, 0x00010000u) ||
-      !flashWriteWord(0x40022010u, 0x00090000u) ||
-      !waitFlashIdle(&status)) {
-    diagnostic = 3;
+  if (injectWords(kV003FlashLoader,
+                  sizeof(kV003FlashLoader) / sizeof(kV003FlashLoader[0]))) {
+    diagnostic = 2;
     return BackendResult::Failed;
   }
-
   for (uint32_t offset = 0; offset < 64; offset += 4) {
     const uint32_t word = data[offset] |
         static_cast<uint32_t>(data[offset + 1]) << 8 |
         static_cast<uint32_t>(data[offset + 2]) << 16 |
         static_cast<uint32_t>(data[offset + 3]) << 24;
-    if (!flashWriteWord(address + offset, word) ||
-        !flashWriteWord(0x40022010u, 0x00050000u) ||
-        !waitFlashIdle(&status)) {
-      diagnostic = 5 + offset / 4;
+    if (writeMemoryWord(0x20000200u + offset, word)) {
+      diagnostic = 3 + offset / 4;
       return BackendResult::Failed;
     }
   }
-  if (!flashWriteWord(0x40022014u, address) ||
-      !flashWriteWord(0x40022010u, 0x00010040u) ||
-      !waitFlashIdle(&status) ||
-      !flashWriteWord(0x40022010u, 0)) {
-    diagnostic = 21;
+
+  writeDmi(kDmAbstractAuto, 0);
+  if (writeRegister(0x100a, 0x1du) ||       // unlock, erase, program, verify
+      writeRegister(0x100b, address) ||
+      writeRegister(0x100c, 64) ||
+      writeRegister(0x0300, 0) ||           // dcsr
+      writeRegister(0x1002, 0x20000800u) || // sp: top of 2 KiB RAM
+      writeRegister(0x07b1, 0x20000000u)) { // dpc: loader entry
+    diagnostic = 19;
+    return BackendResult::Failed;
+  }
+  writeDmi(kDmControl, 0x40000001u);
+  bool halted = false;
+  for (int poll = 0; poll < 2000; ++poll) {
+    uint32_t status = 0;
+    if (!readDmi(kDmStatus, &status) &&
+        (status & 0x00000300u) == 0x00000300u) {
+      halted = true;
+      break;
+    }
+  }
+  // A complete 64-byte write has been observed even when every completion
+  // status read was lost by software SWIO.  Re-attach/halt is therefore also
+  // the completion fence, matching the independent-session verification
+  // required below rather than treating a missed poll as a failed program.
+  if (!halted) halted = attachAndHalt();
+  uint32_t loader_result = ~0u;
+  if (!halted || readRegister(0x100a, &loader_result) || loader_result != 0) {
+    diagnostic = halted ? 21 : 20;
+    return BackendResult::Failed;
+  }
+
+  // Re-attach before verification.  Success in the loader's debug session is
+  // insufficient: earlier host-driven attempts sometimes failed after reset.
+  if (!attachAndHalt() || prepareWordWriter()) {
+    diagnostic = 22;
     return BackendResult::Failed;
   }
 
@@ -424,7 +443,7 @@ BackendResult V003SwioTargetControl::programPage64Attempt(
       }
     }
     if (!verified) {
-      diagnostic = 22 + offset / 4;
+      diagnostic = 23 + offset / 4;
       return BackendResult::Failed;
     }
   }

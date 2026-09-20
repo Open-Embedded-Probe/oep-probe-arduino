@@ -84,3 +84,17 @@ DMCFGR readは各10/10、DATA1 writeも係数8による独立検証で各100/100
 abstract memory/flash sequenceが成立しなかった。単発DMI成功率や「遅いtiming」だけではflash用
 PHY条件を決められない。page全体再試行とfresh attach後verifyをbackendへ追加したが、reset後の
 永続一致は未確立なのでTargetFlashのoffered function停止は維持する。
+
+その後、LinkEの50 MHz実波形とUSB記録を再解析したE134で、LinkEはflash controllerをhostから
+逐次操作せず、498 byteのV003用loaderをtarget RAMへ置いて実行していることを確認した。通常の
+DMI frame間隔は中央値6.70 us、95%点7.44 us、DMSTATUS poll間隔は中央値9.20 usだった。
+backendも同じくloaderを`0x20000000`、dataを`0x20000200`へ配置し、a0/a1/a2、sp、dpcを設定して
+target CPUへerase/program/verifyを実行させる方式へ変更した。
+
+最初の実行では書込み自体は64 byte完全一致したものの、完了pollを取りこぼしてfailureとなった。
+fresh attachを完了fenceとして追加するとsuccessとなった。さらにLinkEの240/860 nsへ最も近く、
+E133でread 100/100だった係数8（実測262.5/862.5 ns）へPHYを変更した。異なるpattern 5個を
+`0x08003fc0`へ連続してerase/programし、各回`normalize-user`によるsoftware reset後、別々の
+TargetMemory request 2件で64 byte完全一致した。これに先行する1 patternを含め6回連続成功したため、
+ESP32 prototypeはTargetFlashを再びoffered functionへ含める。ただしこれはV003一台の破壊前提試験で、
+電源再投入、全image、複数個体による安定性確認は未完了である。

@@ -10,7 +10,7 @@ oep::prototype::Esp32FixtureGpio fixtureGpio(
     fixturePins, sizeof(fixturePins));
 oep::prototype::Esp32FixtureUart fixtureUart(Serial2, 22, 21);
 oep::prototype::Endpoint endpoint(
-    Serial, &target, &target, nullptr, &fixtureGpio, &fixtureUart);
+    Serial, &target, &target, &target, &fixtureGpio, &fixtureUart);
 
 void setup() {
   // Prototype transport only. Do not print an ASCII banner on this stream.
