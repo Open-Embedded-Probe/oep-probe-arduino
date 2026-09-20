@@ -78,3 +78,9 @@ FixtureGpio、FixtureUartの4件だけであることを実機確認した。Tar
 `completed/failed`となり、再試行で取得できた。失敗を成功へ変換してはいないが、SWDIO backendは
 まだ連続操作の安定性を保証しない。またstatus/readはtargetをhaltするため、試験終了時は
 `normalize-user`で通常実行へ戻す必要がある。
+
+RMTをGPIO16へ重ねたE133では、12.5 ns単位でsoftware SWIOの実波形を取得できた。係数8〜10の
+DMCFGR readは各10/10、DATA1 writeも係数8による独立検証で各100/100だったが、係数8では
+abstract memory/flash sequenceが成立しなかった。単発DMI成功率や「遅いtiming」だけではflash用
+PHY条件を決められない。page全体再試行とfresh attach後verifyをbackendへ追加したが、reset後の
+永続一致は未確立なのでTargetFlashのoffered function停止は維持する。
