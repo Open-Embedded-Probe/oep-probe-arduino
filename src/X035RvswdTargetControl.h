@@ -27,6 +27,9 @@ class X035RvswdTargetControl : public TargetControlBackend,
   uint8_t swdio_;
   uint8_t swclk_;
   unsigned half_period_us_;
+  uint32_t recovery_page_ = 0;
+  bool recovery_valid_ = false;
+  uint8_t recovery_image_[256]{};
 
   void initializeBus();
   void releaseBus();
