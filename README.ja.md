@@ -7,6 +7,9 @@ firmwareではありません。
 `GPIO2→PC18/SWDIO`、`GPIO54→PC19/SWCLK`を使い、TargetControl、TargetMemory、TargetFlashを
 RVSWD上へ実装する。
 
+ArduinoCore-CH32からbinを書き込むための配線、probe build、全flash退避、差分program、verify、
+復旧手順は[`docs/esp32-p4-x035-usage.ja.md`](docs/esp32-p4-x035-usage.ja.md)にまとめた。
+
 現在のP1は仮UART frame、endpoint confirmation、offered function一覧とV003 TargetControlを
 実装します。SWDIOで状態取得、user mode正規化、製品bootloader移行を行います。
 
