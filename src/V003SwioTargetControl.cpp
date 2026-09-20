@@ -9,6 +9,8 @@ namespace oep::prototype {
 namespace {
 
 constexpr int kCoefficient = 10;
+constexpr uint8_t kSwioPin = 16;
+constexpr uint32_t kSwioMask = 1u << kSwioPin;
 constexpr uint8_t kData0 = 0x04;
 constexpr uint8_t kData1 = 0x05;
 constexpr uint8_t kDmControl = 0x10;
@@ -22,18 +24,16 @@ constexpr uint8_t kDmCfgr = 0x7d;
 constexpr uint8_t kDmShadowCfgr = 0x7e;
 constexpr uint32_t kCfgr = 0x5aa50400;
 
-uint8_t gPin = 16;
-uint32_t gMask = 1u << 16;
 portMUX_TYPE gMux = portMUX_INITIALIZER_UNLOCKED;
 
 inline void IRAM_ATTR waitCycles(int count) {
   asm volatile("1: addi %[n], %[n], -1\n   bbci %[n], 31, 1b\n"
                : [n] "+r"(count));
 }
-inline void IRAM_ATTR low() { GPIO.out_w1tc = gMask; }
-inline void IRAM_ATTR high() { GPIO.out_w1ts = gMask; }
-inline void IRAM_ATTR outputOn() { GPIO.enable_w1ts = gMask; }
-inline void IRAM_ATTR outputOff() { GPIO.enable_w1tc = gMask; }
+inline void IRAM_ATTR low() { GPIO.out_w1tc = kSwioMask; }
+inline void IRAM_ATTR high() { GPIO.out_w1ts = kSwioMask; }
+inline void IRAM_ATTR outputOn() { GPIO.enable_w1ts = kSwioMask; }
+inline void IRAM_ATTR outputOff() { GPIO.enable_w1tc = kSwioMask; }
 
 inline void IRAM_ATTR sendOne(int coefficient) {
   low(); waitCycles(coefficient); high(); waitCycles(coefficient);
@@ -52,14 +52,14 @@ inline int IRAM_ATTR readBit(int coefficient) {
   outputOn();
   outputOff();
   waitCycles(coefficient / 2);
-  const int sampled = (GPIO.in & gMask) != 0;
+  const int sampled = (GPIO.in & kSwioMask) != 0;
   if (!sampled) {
     waitCycles(coefficient * 2);
     outputOn();
     outputOff();
   }
   for (int timeout = 0; timeout < 1000; ++timeout) {
-    if (GPIO.in & gMask) {
+    if (GPIO.in & kSwioMask) {
       outputOn();
       waitCycles(coefficient / 2);
       return sampled;
@@ -109,7 +109,7 @@ int IRAM_ATTR readDmi(uint8_t address, uint32_t* value) {
 
 void configureIo() {
   gpio_config_t config = {};
-  config.pin_bit_mask = uint64_t{1} << gPin;
+  config.pin_bit_mask = uint64_t{1} << kSwioPin;
   config.mode = GPIO_MODE_INPUT_OUTPUT;
   config.pull_up_en = GPIO_PULLUP_ENABLE;
   config.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -137,9 +137,9 @@ int waitAbstract() {
 }
 
 bool attachAndHalt() {
-  pinMode(gPin, INPUT_PULLUP);
+  pinMode(kSwioPin, INPUT_PULLUP);
   delay(2);
-  if (!digitalRead(gPin)) return false;
+  if (!digitalRead(kSwioPin)) return false;
   configureIo();
   writeDmi(kDmShadowCfgr, kCfgr);
   writeDmi(kDmCfgr, kCfgr);
@@ -203,26 +203,6 @@ int readMemoryWord(uint32_t address, uint32_t* value) {
   if (!result) result = readDmi(kData0, value);
   if (!result) result = prepareWordWriter();
   return result;
-}
-
-int readMemoryWordStable(uint32_t address, uint32_t* value) {
-  bool have_previous = false;
-  uint32_t previous = 0;
-  for (int attempt = 0; attempt < 6; ++attempt) {
-    uint32_t current = 0;
-    const int result = readMemoryWord(address, &current);
-    if (result) {
-      have_previous = false;
-      continue;
-    }
-    if (have_previous && current == previous) {
-      *value = current;
-      return 0;
-    }
-    previous = current;
-    have_previous = true;
-  }
-  return -1;
 }
 
 bool waitFlashIdle(uint32_t* last_status = nullptr) {
@@ -308,9 +288,9 @@ const uint32_t kPrepareBootAndReset[] = {
 }  // namespace
 
 void V003SwioTargetControl::begin() {
-  gPin = swdio_pin_;
-  gMask = 1u << swdio_pin_;
-  pinMode(gPin, INPUT_PULLUP);
+  // The proven classic-ESP32 PHY depends on GPIO16 being constant-folded in
+  // the cycle-sensitive hot path. Other pins need separately measured timing.
+  pinMode(kSwioPin, INPUT_PULLUP);
 }
 
 BackendResult V003SwioTargetControl::getStatus(TargetStatus& status) {
@@ -353,7 +333,7 @@ BackendResult V003SwioTargetControl::readMemory(
   if (!attachAndHalt() || prepareWordWriter()) return BackendResult::Failed;
   for (size_t offset = 0; offset < length; offset += 4) {
     uint32_t value = 0;
-    if (readMemoryWordStable(address + offset, &value))
+    if (readMemoryWord(address + offset, &value))
       return BackendResult::Failed;
     output[offset] = value;
     output[offset + 1] = value >> 8;
@@ -380,7 +360,7 @@ BackendResult V003SwioTargetControl::programPage64(
         static_cast<uint32_t>(data[offset + 2]) << 16 |
         static_cast<uint32_t>(data[offset + 3]) << 24;
     uint32_t actual = 0;
-    if (readMemoryWordStable(address + offset, &actual) || actual != expected) {
+    if (readMemoryWord(address + offset, &actual) || actual != expected) {
       already_matches = false;
       break;
     }
@@ -436,7 +416,14 @@ BackendResult V003SwioTargetControl::programPage64(
         static_cast<uint32_t>(data[offset + 2]) << 16 |
         static_cast<uint32_t>(data[offset + 3]) << 24;
     uint32_t actual = 0;
-    if (readMemoryWordStable(address + offset, &actual) || actual != expected) {
+    bool verified = false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+      if (!readMemoryWord(address + offset, &actual) && actual == expected) {
+        verified = true;
+        break;
+      }
+    }
+    if (!verified) {
       diagnostic = 22 + offset / 4;
       return BackendResult::Failed;
     }
