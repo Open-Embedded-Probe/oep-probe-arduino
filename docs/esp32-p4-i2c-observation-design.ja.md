@@ -65,11 +65,29 @@ overflow、最初の level を必ず添える。100 kHz I2C の bit 幅は約 10
 100 ns の分解能はデバッグには十分であるが、絶対的な setup/hold 認証には外部
 ロジックアナライザを用いる。
 
-現行OEP Caps revision 1のgroup roleはfunction名だけであるため、SCL/SDAのように両方が`capture`となる
-二本のroleを区別できない。このobserverをP4 firmwareの固定GPIO50/52機能として追加してはならない。
-Caps/Configure revision 2で`clock`/`data`というrole IDをwireへ含め、host manifestが選んだ二つのprobe
-channelを受動RMTへ割り当てる形にしてから実装する。それまでRMT APIがP4 SDKにあっても capabilityとして
-公開しない。
+Caps/Configure revision 2は実装済みで、group roleをstable wire IDで返す。`capture` groupは
+`clock=1`と`data=2`を使用し、host manifestが選んだ二つのprobe channelを受動RMTへ割り当てる。
+このobserverをP4 firmwareの固定GPIO50/52機能として追加してはならない。
+
+### lease と trace の確定 contract
+
+RMT observerは単独の`capture` peripheral groupとしてleaseする。`clock`/`data`はともに
+`capture` functionであり、どちらもinput-onlyとして構成する。次の不変条件を実装・試験する。
+
+1. reservation済みpin、同一pinの二重指定、同一lease内のUART/I2C roleと重なるpinはrejectする。
+2. `apply`成功時だけRMT RX channelを二本作成・enable・armする。`release`、watchdog、失敗途中では
+   channelをdisable/deleteし、GPIOをfloating inputへ戻す。
+3. `FixtureCapture`はlease中だけ操作できる。既存`FixtureGpio.configure`がcapture pinを変更することも
+   rejectする。これは観測そのものを変化させないための必須排他である。
+4. 一回のcaptureは同一host monotonic timestamp、resolution、両入力の開始levelをheaderに入れる。
+   RMT callbackは固定長ringへcopyするだけにし、decode・再arm・USB送信はtask/`loop()`側で行う。
+5. `readTrace(offset,length)`はraw RMT symbol（level/duration）とoverflow/partialを返す。I2C eventへの
+   decodeはhostでまず実装し、probe内decoderはraw traceとの一致試験を通してから追加する。
+
+ESP-IDF 5系のP4 driverでは`rmt_new_rx_channel()`、`rmt_enable()`、非同期`rmt_receive()`、
+`rmt_rx_register_event_callbacks()`を用いる。`signal_range_max_ns`をcapture終端として使うが、SCL/SDAの
+callback完了時刻は一致しない。このため「同時受信」は同一arm設定による二本の独立traceであり、完全な
+同期サンプルを主張しない。
 
 ### まず確認できること
 
@@ -144,7 +162,7 @@ PWM は 1 本の RMT RX で high/low duration、周波数、duty、jitter、停�
 
 ## 実装順序と合格条件
 
-1. `i2c-observer-rmt` を先に実装し、現行 `0x42` NACK の trace を採取する。
+1. `capture` groupのlease、RMT二入力、raw trace取得、GPIO排他を実装し、現行 `0x42` NACK の trace を採取する。
 2. P4 hardware I2C target の開始結果、アドレス一致、RX/TX callback 回数を
    `getStatus()` で公開する。
 3. 10 kHz と 100 kHz で write/read、repeated START、NACK、stuck bus recovery を
