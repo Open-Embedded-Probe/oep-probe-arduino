@@ -65,13 +65,16 @@ hashを確認した。従ってhost processを強制終了する中断5回の基
 `OEP transport is already in use: /run/board-identify/by-id/esp32-series-30eda0e31108`で拒否された。
 leaseはaliasの解決先をhashしたlock fileとpyserialのexclusive openを併用している。
 
-identity gateの候補をread-onlyで調べた。既存のLinkE/stub資料でX03xのchip-id候補とされる
-`0x1ffff7c4`は、このfixtureでは`0xffffffff`を返した。FLASH `OBR=0x4002201c`は
-`0x03fffffc`、`WPR=0x40022020`は`0xffffffff`であり、保護状態の観測候補にはなるが、これだけで
-型番または63,488-byteの有効容量を証明できない。従って現在のP4 OEP backendへこのchip-idを
-決め打ちする拒否gateは追加しない。次はWCH-LinkE ChipInfoとの同一電源・同一target比較captureで、
-X035のESIG/容量/保護を読めるaddressとbitを確定してから、read-only preflight APIとclientの
-`--program-image`必須gateを実装する。この調査ではflash/option byteを書き換えていない。
+identity gateの候補をread-onlyで調べた。初回に参照した`0x1ffff7c4`はV003向けの番地であり、
+X035向けではないため`0xffffffff`だった。X03xの正しいESIG chip-id番地`0x1ffff704`は
+`01 06 5e 03`（little-endian `0x035e0601`）を返し、これはP4接続先のCH32X035F8U6と一致する。
+F8U6は63,488-byte flash/20 KiB RAMである。FLASH `OBR=0x4002201c`は`0x03fffffc`
+（read-protection bit1=0）、`WPR=0x40022020`は`0xffffffff`だった。hostの`--program-image`は
+このF8U6 ID、base `0x08000000`、size 63,488、read-protection off、WPR全bit解除をread-onlyで
+確認してからだけ書込みを開始する。不一致・保護状態・読出し失敗はfail-closedで拒否する。
+同一PWM imageへの実機更新でpreflight 6.039 ms、差分0 page、全域verify 5.109 s、hash一致を確認した。
+この調査とpreflightはflash/option byteを書き換えていない。別packageや別familyを扱う将来のprofileは、
+ESIG ID/geometry/protection ruleを個別に宣言してから追加する。
 
 ### P0.2 速度の計測と改善
 
