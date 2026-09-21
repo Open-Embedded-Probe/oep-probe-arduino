@@ -47,6 +47,15 @@ programは平均11.888387 s・中央値11.886405 s・p95 11.925864 s・最大11.
 平均5.161236 s・中央値5.158991 s・p95 5.243148 s・最大5.250146 sだった。残るP0.1の必須項目は
 host/client中断試験各5回である。
 
+同日、差分programの7秒後にhost processを強制終了する中断を実施した。旧firmwareではtargetが
+halt状態で残ることを確認したため、endpointが最後の有効requestから1.5秒無通信で、かつRVSWD
+sessionがactiveなら`normalizeUser()`を発行するwatchdogを追加した。watchdog版P4 firmwareで同じ
+中断後に2秒待機し、別clientから残り20 physical pageを更新して全域hash
+`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`まで一致させた。これは
+中断後のtarget reset/re-attach/recoveryが可能なことを示す初回のHIL evidenceであり、各5回の
+gateは未完了である。watchdogの発火自体はOEP endpointのsession状態で判定しており、PWM波形を
+同時captureするobserverはまだないため、実行中applicationの波形による独立証明はP1で追加する。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
