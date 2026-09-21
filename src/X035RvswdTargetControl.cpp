@@ -333,9 +333,18 @@ BackendResult X035RvswdTargetControl::readMemory(uint32_t address,
                                                 uint8_t* output,
                                                 size_t length) {
   if (!attachAndHalt()) { releaseBus(); return BackendResult::Unavailable; }
+  // The autoexec reader is performance-critical for contiguous code flash.
+  // ESIG and peripheral registers are sparse/non-code regions and must use
+  // the scalar sequence: this also keeps identity/protection preflight
+  // independent from the speculative final autoexec read.
+  const bool code_flash = address >= 0x08000000u &&
+      address + length <= 0x0800f800u;
   for (size_t i = 0; i < length; i += 4) {
     uint32_t value;
-    if (!readSequentialWord(address + i, value)) {
+    const bool ok = code_flash
+        ? readSequentialWord(address + i, value)
+        : readWord(address + i, value);
+    if (!ok) {
       attached_ = false;
       releaseBus();
       return BackendResult::Failed;
