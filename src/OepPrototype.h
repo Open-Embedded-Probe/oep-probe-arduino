@@ -8,6 +8,7 @@ constexpr size_t kMaximumMessage = 96;
 constexpr size_t kMaximumWire = kMaximumMessage + 5;
 
 enum FunctionReference : uint16_t {
+  ProbeInfo = 0x0001,
   TargetControl = 0x0101,
   TargetMemory = 0x0102,
   TargetFlash = 0x0103,
@@ -15,6 +16,29 @@ enum FunctionReference : uint16_t {
   FixtureUart = 0x0202,
   FixtureI2c = 0x0203,
   FixtureSpi = 0x0204,
+};
+
+enum ProbeInfoOperation : uint8_t { ProbeInfoGet = 0x01 };
+
+enum class BackendResult : uint8_t {
+  Success,
+  Failed,
+  Unavailable,
+};
+
+// Deliberately compact: fixed width makes this safe inside the prototype's
+// 96-byte envelope. Pin-level details remain a separate, paged capability.
+struct ProbeInfoStatus {
+  uint32_t profile_id = 0;
+  uint32_t firmware_revision = 0;
+  uint64_t reserved_pin_mask = 0;
+  uint64_t fixture_pin_mask = 0;
+};
+
+class ProbeInfoBackend {
+ public:
+  virtual ~ProbeInfoBackend() = default;
+  virtual BackendResult getInfo(ProbeInfoStatus& status) = 0;
 };
 
 enum TargetControlOperation : uint8_t {
@@ -60,12 +84,6 @@ enum FixtureUartOperation : uint8_t {
 
 enum FixtureI2cOperation : uint8_t {
   FixtureI2cGetStatus = 0x01,
-};
-
-enum class BackendResult : uint8_t {
-  Success,
-  Failed,
-  Unavailable,
 };
 
 struct TargetStatus {
@@ -146,9 +164,10 @@ class Endpoint {
                     TargetFlashBackend* flash = nullptr,
                     FixtureGpioBackend* gpio = nullptr,
                     FixtureUartBackend* uart = nullptr,
-                    FixtureI2cBackend* i2c = nullptr)
+                    FixtureI2cBackend* i2c = nullptr,
+                    ProbeInfoBackend* info = nullptr)
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
-        gpio_(gpio), uart_(uart), i2c_(i2c) {}
+        gpio_(gpio), uart_(uart), i2c_(i2c), info_(info) {}
   void poll();
   bool idleFor(uint32_t milliseconds) const;
 
@@ -160,6 +179,7 @@ class Endpoint {
   FixtureGpioBackend* gpio_;
   FixtureUartBackend* uart_;
   FixtureI2cBackend* i2c_;
+  ProbeInfoBackend* info_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;
