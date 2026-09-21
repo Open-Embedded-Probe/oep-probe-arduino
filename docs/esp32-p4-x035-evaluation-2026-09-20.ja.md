@@ -2,10 +2,11 @@
 
 ## 結論
 
-現状のP4 prototypeは、X035の保全、書込み、全域照合と、RAMを介した最小限の実行確認には使用できる。
-高速化後の別imageへの更新は全工程80.00秒で、初期実装の約13分から約9.7倍短縮した。一方、UARTと
-fixture GPIOを公開していないため、ArduinoCore-CH32の既存selftestをこのprobeだけで完走する段階には
-まだない。
+現状のP4 prototypeは、X035の保全、書込み、全域照合、UART command/response、GPIO入力観測と、
+RAMを介した最小限の実行確認に使用できる。高速化後の別imageへの更新は全工程80.00秒で、初期実装の
+約13分から約9.7倍短縮した。F8U6固有の`core_api`もFixtureUartで完走した。一方、capability discovery、
+resource lease、RMT波形観測、校正済みADC source、SPI peerは未実装であり、全周辺機能をrelease判定する
+段階ではない。
 
 ## 実機確認
 
@@ -41,11 +42,12 @@ compareも47,999（48 MHz / 1,000 - 1）だった。X035 coreの時刻基盤は�
 
 ## 残る使い勝手と機能の不足
 
-1. P4 X035 exampleはTargetControl / TargetMemory / TargetFlashだけを宣言する。UART出力を読めないため、
-   `serial_println`やtest command方式の既存suiteを判定できない。
-2. PC15の1信号だけでは双方向UARTにならない。既定Serial1のPB10(TX) / PB11(RX)をP4のUARTへ配線し、
-   FixtureUart capabilityとして公開する必要がある。
-3. GPIO、ADC電圧印加、SPI/I2C slave、波形計測機能がないため、周辺機能の電気的検証はできない。
+1. function listはTargetControl / TargetMemory / TargetFlashに加えてFixtureGpio / FixtureUart /
+   FixtureI2cを固定IDで返すだけである。probe profile、pin matrix、resource conflictをhostが発見できない。
+2. PB0/PB1のUSART4はFixtureUartとして使用できるが、UART自身のbaud/error/long-stream試験と
+   control channelを分離する二本目のpeerはない。
+3. GPIO入力観測と限定的なI2C target statusはあるが、校正ADC電圧印加、SPI peer、RMT波形計測はないため、
+   周辺機能の電気的release検証はできない。
 4. 型番、flash容量、保護状態を自動識別しない。誤targetへの破壊的操作を防ぐpreflightが必要である。
 5. 64-byte要求ごとに256-byte物理pageを更新するため、同一物理pageを最大4回erase/programする。
    256-byte transactionまたはprobe内batch化が次の速度改善候補である。
