@@ -24,6 +24,8 @@
 | E151 GPIO edge cost | P4 の GPIO register は 1 access 300 ns。`digitalWrite` 570 ns/edge、`gpio_ll` 300、dedicated GPIO **52.8**（read 25.0）。RVSWD 1 bit: 1,770 / 800 / **94.5 ns** |
 | E152 `gpio_ll` RVSWD | half 0 ns でも 1 DMI read 53 µs（pp）。P4 コスト律速で target 上限は見えない。od は half 0 で崩れる |
 | E153 dedicated GPIO RVSWD | **pp + half 0 ns で X035F8U6 が全数一致、1 DMI read 10.1 µs（現行の約 1/12）**。od は half 300 ns 以下で崩れる |
+| E154 8 本リンク | GPIO 33,32,26〜31 同番号が両方向 1 対 1。`peers` fixture で二台同時 pytest が通る |
+| E155 USB-Serial/JTAG | 往復 min 0.36 / median 1.3 / p95 11.7 ms（usbipd/WSL）。512 B × in-flight ≥4 で ≈320〜345 kB/s 飽和。outstanding > ring 8 KiB で HWCDC がデータを落とす。port open/close で P4 が reset |
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
@@ -56,8 +58,8 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
 
 | ID | 問い | 用途 |
 |---|---|---|
-| E154 | P4 二台の 8 本 GPIO 直結の pin 対応は何か（E003 方式の探索） | 以後の peer 実験の前提 |
-| E155 | USB-Serial/JTAG の request 往復時間と帯域は message 64 / 512 / 4 KiB、in-flight 1 / 4 / 16 でいくらか | S1 の frame 上限と window |
+| E154 | （完了）8 本リンクの pin 対応 | GPIO 33,32,26〜31 同番号 |
+| E155 | （完了）USB-Serial/JTAG の往復・帯域・window | S1: frame 512 B〜1 KiB、window は byte 数で 4 KiB |
 | E156 | dedicated GPIO PHY 上で、autoexec 連続 read の word ごと poll 省略、RAM loader による 256-byte page program は何 µs か | 実験時間の圧迫解消（予備実験の例外）。flash service の transaction 単位 |
 | E157〜 | peer P4 を相手にした fixture 能力の HIL: UART peer、I2C target 3 mode（E147〜E150 の OEP 経由移植）、GPIO drive / sample、RMT capture、SPI peer | S3 の各 service の受入試験 |
 
