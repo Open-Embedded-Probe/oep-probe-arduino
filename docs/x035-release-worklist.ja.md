@@ -65,6 +65,14 @@ hashを確認した。従ってhost processを強制終了する中断5回の基
 `OEP transport is already in use: /run/board-identify/by-id/esp32-series-30eda0e31108`で拒否された。
 leaseはaliasの解決先をhashしたlock fileとpyserialのexclusive openを併用している。
 
+identity gateの候補をread-onlyで調べた。既存のLinkE/stub資料でX03xのchip-id候補とされる
+`0x1ffff7c4`は、このfixtureでは`0xffffffff`を返した。FLASH `OBR=0x4002201c`は
+`0x03fffffc`、`WPR=0x40022020`は`0xffffffff`であり、保護状態の観測候補にはなるが、これだけで
+型番または63,488-byteの有効容量を証明できない。従って現在のP4 OEP backendへこのchip-idを
+決め打ちする拒否gateは追加しない。次はWCH-LinkE ChipInfoとの同一電源・同一target比較captureで、
+X035のESIG/容量/保護を読めるaddressとbitを確定してから、read-only preflight APIとclientの
+`--program-image`必須gateを実装する。この調査ではflash/option byteを書き換えていない。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
