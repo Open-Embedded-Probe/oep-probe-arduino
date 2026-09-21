@@ -15,6 +15,10 @@ class Esp32FixtureIdfI2c : public FixtureI2cBackend {
       : port_(port), address_(address), sda_pin_(sda_pin), scl_pin_(scl_pin),
         frequency_hz_(frequency_hz) {}
   bool begin();
+  // Safe lifecycle used by ProbeConfiguration.  `end` releases the IDF
+  // device and returns both bus pins to neutral GPIO inputs.
+  bool setPins(int sda_pin, int scl_pin);
+  void end();
   BackendResult getStatus(FixtureI2cStatus& status) override;
 
  private:

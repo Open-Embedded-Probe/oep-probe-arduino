@@ -215,7 +215,8 @@ prototypeとして呼び出す。
   Arduino-ESP32 3.3.11 の `Wire` slave は本治具で address ACK しなかったため、正式実装の
   基盤には使わない。ESP-IDF I2C slave driver の direct path は同じ10 kHz試験で受信できたが、
   現在は一回受信の診断用である。
-  このbackendはまだstop/reconfigureを安全に実装していないため、generic Caps/Configurationには宣言しない。
-  固定配線を暗黙に再利用しないことが、target差し替え可能なprobeの前提である。
+  2026-09-21に`stop → pin設定 → start` lifecycleを`ProbeConfiguration`へ追加し、generic Capsにも
+  I2C target groupとして再掲した。ただし再構成後の実機ACK/trace試験は未実施である。固定配線を暗黙に
+  再利用せず、hostが明示的にleaseを取得してから実行することが、target差し替え可能なprobeの前提である。
 - target型番・flash容量・保護状態を自動確認しないため、別targetへ誤って書くことを防げない。
   capabilityだけでなくtarget identityを返す機能が正式probeには必要である。
