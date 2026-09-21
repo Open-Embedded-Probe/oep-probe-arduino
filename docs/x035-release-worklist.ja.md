@@ -154,6 +154,9 @@ SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22be
   I2C SDA50/SCL52の4-role単一planのlease取得、UART 115200設定、I2C target 10 kHz started、
   release後の両backend再拒否まで確認した。これはlifecycle確認であり、DUT側I2C transaction/traceの
   成否を示すものではない。
+  同日にX035F8U6 route 2からP4 address `0x42`への4-byte writeを10 kHz/1 kHzで試したが、
+  P4 receive callbackは各回増える一方、X035はaddress NACK（status 2）だった。I2C peerの
+  release gateは未達であり、callback countだけをACK成功の根拠にしない。
 - [ ] `disable`、host disconnect、watchdog timeout で pin を input/release、peripheral を停止、
   trace を凍結する。
 - [ ] `getStatus` は設定値、実効設定、開始結果、overflow、error、最後の timestamp を返す。
