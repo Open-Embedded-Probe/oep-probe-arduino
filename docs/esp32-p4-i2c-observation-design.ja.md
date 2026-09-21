@@ -21,17 +21,17 @@ DUT エラー経路までは確認済みである。
 イメージの address write 後も P4 の receive/request callback 回数は 0 のままであり、
 DUT は `endTransmission()` で status `2`（address NACK）を返した。
 
-この仮説は 10 kHz で A/B 検証した。GPIO open-drain software target は matching write
-address を受信し、ESP-IDF の新しい `i2c_new_slave_device()` driver を I2C1/GPIO50/52 に
-直接設定した場合も receive callback が 1 回発生した。一方 Arduino-ESP32 3.3.11 の
-`Wire` slave は I2C0 と I2C1 の両方で callback 0 回だった。配線、X035 master、P4
-silicon ではなく、Arduino `Wire` が使用する legacy I2C slave HAL が address ACK/受信を
-成立させないことが現時点の原因である。
+2026-09-21にgeneric configuration leaseからESP-IDF の新しい`i2c_new_slave_device()` driverを
+I2C1/GPIO50/52へ開始し、F8U6 X035のroute 2（PC16/PC17）から4-byte writeを実施した。10 kHzと
+1 kHzの両方でP4 receive callbackは増えたが、X035の`endTransmission()`はstatus 2（address NACK）を
+返した。clock stretchの有無も結果を変えなかった。従って「callback発生=ACK成功」ではない。配線と
+master出力が到達していることまでは示すが、P4が9 bit目をLowへ駆動していない原因は未確定である。
+Arduino-ESP32 3.3.11 の`Wire` slaveはI2C0/I2C1ともcallback 0回で、こちらも採用しない。
 
 最初の IDF 試験では callback 内で `i2c_slave_receive()` を再 arm して P4 の interrupt
 watchdog を発生させた。receive job の再 arm は ISR で行わず task 側で行う必要がある。
 現在の direct-driver target は一回だけ受信する安全な診断実装であり、継続運用にはまだ
-しない。RMT trace は HAL 回避後も波形・ACK・timing を記録する最優先実装である。
+しない。RMT trace はHAL回避後も9 bit目の実際のlevel・ACK・timingを記録する最優先実装である。
 
 ## 3 つの役割を混ぜない
 
