@@ -58,6 +58,9 @@ void setup() {
 
 void loop() {
   endpoint.poll();
+  // Configuration leases are independent of the target debug session.  A
+  // vanished host must not leave a UART peripheral driving the next DUT.
+  if (endpoint.idleFor(1500)) probeConfiguration.abandon();
   // A killed host process cannot send normalize-user.  Do not leave the DUT
   // halted indefinitely: after a deliberately conservative idle interval,
   // reset/release the RVSWD session.  Normal full-image requests arrive much

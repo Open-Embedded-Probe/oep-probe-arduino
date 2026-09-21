@@ -15,6 +15,7 @@ class Esp32P4ProbeConfiguration final : public ProbeConfigurationBackend {
   BackendResult apply(const ProbeConfigurationRole* roles, uint8_t count,
                       uint32_t& lease_id) override;
   BackendResult release(uint32_t lease_id) override;
+  void abandon() override;
 
  private:
   Esp32FixtureUart& uart_;

@@ -150,6 +150,9 @@ class ProbeConfigurationBackend {
   virtual BackendResult apply(const ProbeConfigurationRole* roles,
                               uint8_t count, uint32_t& lease_id) = 0;
   virtual BackendResult release(uint32_t lease_id) = 0;
+  // Called by the transport watchdog when the host disappears.  It must be
+  // idempotent and leave every configured resource in its safe idle state.
+  virtual void abandon() = 0;
 };
 
 enum TargetControlOperation : uint8_t {
