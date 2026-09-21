@@ -7,11 +7,13 @@ namespace oep::prototype {
 class Esp32FixtureUart : public FixtureUartBackend {
  public:
   Esp32FixtureUart(HardwareSerial& serial, int8_t rx_pin, int8_t tx_pin)
-      : serial_(serial), rx_pin_(rx_pin), tx_pin_(tx_pin) {}
+      : serial_(serial), rx_pin_(rx_pin), tx_pin_(tx_pin), enabled_(true) {}
   explicit Esp32FixtureUart(HardwareSerial& serial) : serial_(serial) {}
-  // Called only after a probe configuration has atomically reserved the UART
-  // group.  A subsequent FixtureUartConfigure applies the requested baud.
+  // Pin assignment alone never permits I/O.  ProbeConfiguration must enable
+  // it only after the whole peripheral plan is reserved.
   bool setPins(int8_t rx_pin, int8_t tx_pin);
+  bool enable();
+  void disable();
   BackendResult configure(uint32_t requested_baud,
                           uint32_t& actual_baud) override;
   BackendResult writeBytes(const uint8_t* data, size_t length,
@@ -23,6 +25,7 @@ class Esp32FixtureUart : public FixtureUartBackend {
   HardwareSerial& serial_;
   int8_t rx_pin_ = -1;
   int8_t tx_pin_ = -1;
+  bool enabled_ = false;
   bool configured_ = false;
 };
 
