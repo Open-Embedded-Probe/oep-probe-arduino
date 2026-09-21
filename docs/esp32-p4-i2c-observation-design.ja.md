@@ -100,6 +100,12 @@ releaseを確認した。P4 RMT hardware blockは最小64 symbolsであり、hos
 だった。capture leaseとUART leaseを同時に取得しても、RMT側は受動のままI2C transactionを記録できた。
 raw recordsのI2C decodeと9 bit目の確定は未実装であり、この時点でACK levelを断定してはならない。
 
+その後、host側のMCU非依存decoderで同じraw recordsを展開した。SCL high中央の9 sampleから
+`address=0x42`、write、`ack=false`を復元し、DUTの`endTransmission()` status 2 と一致した。
+したがって、現行P4 I2C targetのcallback回数とは独立に、9 bit目で実際にACKが成立していないことが
+確認できた。trace開始は二本のRMT channel間で完全同期ではないため、これは1 kHz fixtureの判定であり、
+100 kHz以上のtiming認証には使わない。
+
 ### まず確認できること
 
 `0x42` への一回の書込みで、以下を一つの取得結果として返す。
