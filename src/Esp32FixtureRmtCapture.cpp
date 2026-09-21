@@ -5,8 +5,10 @@ namespace {
 
 constexpr rmt_receive_config_t kReceiveConfig = {
     .signal_range_min_ns = 50,
-    // I2C 10 kHz has a 100 us period; terminate after a quiet half-period.
-    .signal_range_max_ns = 50'000,
+    // 10 MHz RMT uses a 15-bit duration field, so this must remain below
+    // about 3.27 ms. An explicit start operation will remove this arm-window
+    // constraint; 3 ms is enough for the present USB command round trip.
+    .signal_range_max_ns = 3'000'000,
     .flags = {},
 };
 
@@ -39,13 +41,21 @@ bool Esp32FixtureRmtCapture::configure(uint8_t clock_pin, uint8_t data_pin) {
   const rmt_rx_event_callbacks_t callbacks = {.on_recv_done = received};
   if (rmt_rx_register_event_callbacks(clock_.channel, &callbacks, this) != ESP_OK ||
       rmt_rx_register_event_callbacks(data_.channel, &callbacks, this) != ESP_OK ||
-      rmt_enable(clock_.channel) != ESP_OK || rmt_enable(data_.channel) != ESP_OK ||
-      !start(clock_) || !start(data_)) {
+      rmt_enable(clock_.channel) != ESP_OK || rmt_enable(data_.channel) != ESP_OK) {
     end();
     return false;
   }
   active_ = true;
   return true;
+}
+
+BackendResult Esp32FixtureRmtCapture::startCapture() {
+  if (!active_) return BackendResult::Unavailable;
+  // A completed receive must be re-armed only after the host has retrieved
+  // its records. The protocol makes that boundary explicit.
+  if (clock_.complete || data_.complete) return BackendResult::Unavailable;
+  return start(clock_) && start(data_) ? BackendResult::Success :
+      BackendResult::Failed;
 }
 
 bool Esp32FixtureRmtCapture::start(Slot& slot) {

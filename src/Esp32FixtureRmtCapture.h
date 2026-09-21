@@ -15,6 +15,7 @@ class Esp32FixtureRmtCapture final : public FixtureCaptureBackend {
   static constexpr uint32_t kResolutionHz = 10'000'000;
 
   bool configure(uint8_t clock_pin, uint8_t data_pin);
+  BackendResult startCapture() override;
   void end();
   BackendResult getStatus(FixtureCaptureStatus& status) override;
   BackendResult readSymbols(uint8_t role_id, uint8_t offset,

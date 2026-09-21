@@ -657,9 +657,18 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
           response_length = 8 + count * 4;
         }
       }
+    } else if (operation == FixtureCaptureStart && length == 6) {
+      const BackendResult result = capture_->startCapture();
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+      }
     } else {
       response[6] = operation == FixtureCaptureGetStatus ||
-          operation == FixtureCaptureReadSymbols ? kRejectPayload :
+          operation == FixtureCaptureReadSymbols || operation == FixtureCaptureStart ? kRejectPayload :
           kRejectOperation;
     }
     sendMessage(response, response_length);
