@@ -106,6 +106,11 @@ raw recordsのI2C decodeと9 bit目の確定は未実装であり、この時点
 確認できた。trace開始は二本のRMT channel間で完全同期ではないため、これは1 kHz fixtureの判定であり、
 100 kHz以上のtiming認証には使わない。
 
+ESP-IDF slave stretch callbackも同時に計測したが、同じ1 kHz writeでは`stretch_cause_mask=0`、
+RX callbackは1回だった。これはFIFO receive callbackがaddress ACKを保証しないことを補強する。
+次のpeer検証は、direct driverのACK駆動を合格条件にせず、software open-drain peerを10 kHz以下で
+実装して、同一trace decoderでACKを比較する。
+
 ### まず確認できること
 
 `0x42` への一回の書込みで、以下を一つの取得結果として返す。
