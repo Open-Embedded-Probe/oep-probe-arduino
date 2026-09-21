@@ -4,6 +4,10 @@
 「特定の診断 sketch が一度動く」ではなく、同じ常駐 probe firmware と公開された OEP
 capability だけを使い、再現可能な HIL 試験を実行できる状態を指す。
 
+2026-09-22時点の実測済み範囲、公開可否、依存順の要約は
+[progress-and-next-work-2026-09-22.ja.md](progress-and-next-work-2026-09-22.ja.md)を参照する。
+この文書はrelease gateごとの詳細証跡と未完了条件を維持する。
+
 ## 原則
 
 1. **書込み・退避・verify が全試験の前提**である。周辺機能試験を先行しない。
@@ -166,7 +170,11 @@ SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22be
 ### P1.3 P4 固有 backend を profile の内側へ閉じる
 
 - [ ] I2C hardware peer は Arduino `Wire` slave を使わず ESP-IDF direct slave driver を採用する。
-  ISR は event 通知だけにして、受信 queue 回収・次 receive job・TX response は task で行う。
+  P4-P4 peerではArduino-ESP32 3.3.12により、fixed write、header+payloadのframed write、
+  preload readを実証済みである。ただしv1 receive jobはtransactionと同じ正確な長さを要求し、
+  callback内の再armはwatchdogを起こす。OEPにはまだframe/slotを指定するprotocolがないため、
+  現在のdirect backendは4 byte固定・一回受信の診断に限定する。ISRはevent通知だけ、受信queue
+  回収・次receive job・TX responseはtaskで行う公開backendを次に実装する。
 - [ ] GPIO software I2C target は `i2c-target-software` capability として 10 kHz から公開し、
   deadline/jitter の実測値を返す。hardware target の代替として速度を主張しない。
 - [ ] RMT observer は SCL/SDA の 2 RX を同時 arm し、raw duration と decoded event を取得する。
