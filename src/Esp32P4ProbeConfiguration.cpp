@@ -4,9 +4,11 @@ namespace oep::prototype {
 namespace {
 
 bool hasRole(const ProbeConfigurationRole* roles, uint8_t count,
-             uint16_t group, uint8_t function, uint16_t channel) {
+             uint16_t group, uint8_t role_id, uint8_t function,
+             uint16_t channel) {
   for (uint8_t index = 0; index < count; ++index)
     if (roles[index].group_id == group && roles[index].function == function &&
+        (!roles[index].role_id || roles[index].role_id == role_id) &&
         roles[index].channel_id == channel) return true;
   return false;
 }
@@ -20,16 +22,16 @@ BackendResult Esp32P4ProbeConfiguration::apply(
   // GPIO50/SCL GPIO52.  Both may be one atomic plan, but partial groups and
   // duplicate/unknown entries fail closed.
   if (active_lease_ || count < 2 || count > 4) return BackendResult::Unavailable;
-  const bool wants_uart = hasRole(roles, count, 1, ProbeUartRx, 12) ||
-      hasRole(roles, count, 1, ProbeUartTx, 6);
-  const bool wants_i2c = hasRole(roles, count, 2, ProbeI2cSda, 50) ||
-      hasRole(roles, count, 2, ProbeI2cScl, 52);
+  const bool wants_uart = hasRole(roles, count, 1, 1, ProbeUartRx, 12) ||
+      hasRole(roles, count, 1, 2, ProbeUartTx, 6);
+  const bool wants_i2c = hasRole(roles, count, 2, 1, ProbeI2cSda, 50) ||
+      hasRole(roles, count, 2, 2, ProbeI2cScl, 52);
   const uint8_t expected = (wants_uart ? 2 : 0) + (wants_i2c ? 2 : 0);
   if (count != expected ||
-      (wants_uart && (!hasRole(roles, count, 1, ProbeUartRx, 12) ||
-                      !hasRole(roles, count, 1, ProbeUartTx, 6))) ||
-      (wants_i2c && (!hasRole(roles, count, 2, ProbeI2cSda, 50) ||
-                     !hasRole(roles, count, 2, ProbeI2cScl, 52))) ||
+      (wants_uart && (!hasRole(roles, count, 1, 1, ProbeUartRx, 12) ||
+                      !hasRole(roles, count, 1, 2, ProbeUartTx, 6))) ||
+      (wants_i2c && (!hasRole(roles, count, 2, 1, ProbeI2cSda, 50) ||
+                     !hasRole(roles, count, 2, 2, ProbeI2cScl, 52))) ||
       (!wants_uart && !wants_i2c)) return BackendResult::Unavailable;
 
   // An I2C startup failure occurs before UART state changes.  `begin` cleans
