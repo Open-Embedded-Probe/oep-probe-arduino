@@ -65,6 +65,12 @@ overflow、最初の level を必ず添える。100 kHz I2C の bit 幅は約 10
 100 ns の分解能はデバッグには十分であるが、絶対的な setup/hold 認証には外部
 ロジックアナライザを用いる。
 
+現行OEP Caps revision 1のgroup roleはfunction名だけであるため、SCL/SDAのように両方が`capture`となる
+二本のroleを区別できない。このobserverをP4 firmwareの固定GPIO50/52機能として追加してはならない。
+Caps/Configure revision 2で`clock`/`data`というrole IDをwireへ含め、host manifestが選んだ二つのprobe
+channelを受動RMTへ割り当てる形にしてから実装する。それまでRMT APIがP4 SDKにあっても capabilityとして
+公開しない。
+
 ### まず確認できること
 
 `0x42` への一回の書込みで、以下を一つの取得結果として返す。
