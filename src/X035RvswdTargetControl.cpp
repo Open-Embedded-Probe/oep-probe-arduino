@@ -38,7 +38,10 @@ void put32(uint8_t* p, uint32_t v) {
 }
 }  // namespace
 
-void X035RvswdTargetControl::begin() { releaseBus(); }
+void X035RvswdTargetControl::begin() {
+  attached_ = false;
+  releaseBus();
+}
 
 void X035RvswdTargetControl::releaseBus() {
   pinMode(swdio_, INPUT);
@@ -109,11 +112,12 @@ static void auxiliary(uint8_t dio, uint8_t clk, unsigned delay_us,
     clockBit(dio, clk, delay_us, (pattern >> bit) & 1);
 }
 
-static void stopFrame(uint8_t dio, uint8_t clk, unsigned delay_us) {
+static void stopFrame(uint8_t dio, uint8_t clk, unsigned delay_us,
+                      unsigned settle_us) {
   clockBit(dio, clk, delay_us, false);
   digitalWrite(clk, HIGH); digitalWrite(dio, HIGH);
   if (delay_us) delayMicroseconds(delay_us);
-  delayMicroseconds(20);
+  if (settle_us) delayMicroseconds(settle_us);
 }
 
 bool X035RvswdTargetControl::readDmi(uint8_t address, uint32_t& value) {
@@ -127,7 +131,7 @@ bool X035RvswdTargetControl::readDmi(uint8_t address, uint32_t& value) {
   }
   const bool valid = sampleBit(swdio_, swclk_, half_period_us_) == parity;
   auxiliary(swdio_, swclk_, half_period_us_, 0x17);
-  stopFrame(swdio_, swclk_, half_period_us_);
+  stopFrame(swdio_, swclk_, half_period_us_, frame_settle_us_);
   value = result;
   return valid;
 }
@@ -143,7 +147,7 @@ void X035RvswdTargetControl::writeDmi(uint8_t address, uint32_t value) {
   }
   clockBit(swdio_, swclk_, half_period_us_, parity);
   auxiliary(swdio_, swclk_, half_period_us_, 0x17);
-  stopFrame(swdio_, swclk_, half_period_us_);
+  stopFrame(swdio_, swclk_, half_period_us_, frame_settle_us_);
 }
 
 bool X035RvswdTargetControl::waitAbstract() {
@@ -159,18 +163,37 @@ bool X035RvswdTargetControl::waitAbstract() {
 }
 
 bool X035RvswdTargetControl::attachAndHalt() {
+  if (attached_) return true;
   initializeBus();
   writeDmi(kDmControl, 1);
   writeDmi(kDmControl, 0x80000001);
   for (int i = 0; i < 100; ++i) {
     uint32_t v;
-    if (readDmi(kDmStatus, v) && (v & (1u << 9))) return true;
+    if (readDmi(kDmStatus, v) && (v & (1u << 9))) {
+      attached_ = true;
+      return true;
+    }
   }
+  attached_ = false;
+  releaseBus();
   return false;
 }
 
 bool X035RvswdTargetControl::readWord(uint32_t address, uint32_t& value) {
+  // Any scalar access supersedes the DMDATA0 autoexec pipeline.
+  const bool had_sequential_read = sequential_read_valid_;
+  sequential_read_valid_ = false;
   writeDmi(kAbstractAuto, 0);
+  // A full-flash sequential read intentionally does not wait for its final
+  // look-ahead (it may point one word beyond flash).  Before a scalar flash
+  // operation, wait for that command and clear only its abstract cmderr.
+  // This keeps a subsequent program request independent of where the prior
+  // verify range ended.
+  if (had_sequential_read) {
+    uint32_t abstractcs;
+    if (!readDmi(kAbstractCs, abstractcs)) return false;
+    if ((abstractcs >> 8) & 7) writeDmi(kAbstractCs, 0x700);
+  }
   writeDmi(kProgBuf0, 0x0004a403);
   writeDmi(kProgBuf0 + 1, 0x00100073);
   writeDmi(kData0, address);
@@ -180,6 +203,51 @@ bool X035RvswdTargetControl::readWord(uint32_t address, uint32_t& value) {
   if (!waitAbstract()) return false;
   writeDmi(kCommand, 0x00221008);
   return waitAbstract() && readDmi(kData0, value);
+}
+
+bool X035RvswdTargetControl::prepareSequentialReader() {
+  uint32_t info;
+  if (!readDmi(kDmHartInfo, info)) return false;
+  const uint32_t data0_address = 0xe0000000u | (info & 0x7ff);
+
+  // This is the proven rvswdio ReadWord sequence, expressed with the X035
+  // backend's DMI helpers:
+  //   x8 = *(uint32_t *)x11; x9 = *(uint32_t *)x8; x8 += 4;
+  //   *(uint32_t *)x10 = x9; *(uint32_t *)x11 = x8; ebreak
+  // x10/x11 point at DMDATA0/DMDATA1.  Autoexec on DMDATA0 makes every host
+  // read return one completed word and launch the next one without another
+  // address/register/program-buffer setup.
+  writeDmi(kAbstractAuto, 0);
+  writeDmi(kData0, data0_address);
+  writeDmi(kCommand, 0x0023100a);  // x10 = &DMDATA0
+  if (!waitAbstract()) return false;
+  writeDmi(kData0, data0_address + 4);
+  writeDmi(kCommand, 0x0023100b);  // x11 = &DMDATA1
+  if (!waitAbstract()) return false;
+  writeDmi(kProgBuf0, 0x40044180);  // c.lw x8,0(x11); c.lw x9,0(x8)
+  writeDmi(kProgBuf0 + 1, 0xc1040411);  // c.addi x8,4; c.sw x9,0(x10)
+  writeDmi(kProgBuf0 + 2, 0x9002c180);  // c.sw x8,0(x11); c.ebreak
+  writeDmi(kAbstractAuto, 1);  // DMDATA0 autoexec, not a host-side increment.
+  sequential_read_valid_ = true;
+  return true;
+}
+
+bool X035RvswdTargetControl::readSequentialWord(uint32_t address,
+                                                 uint32_t& value) {
+  if (!sequential_read_valid_ || address != sequential_read_next_) {
+    if (!prepareSequentialReader()) {
+      sequential_read_valid_ = false;
+      return false;
+    }
+    writeDmi(kData1, address);
+    writeDmi(kCommand, 0x00240000);  // launch the first program-buffer run
+  }
+  if (!waitAbstract() || !readDmi(kData0, value)) {
+    sequential_read_valid_ = false;
+    return false;
+  }
+  sequential_read_next_ = address + 4;
+  return true;
 }
 
 bool X035RvswdTargetControl::writeWord(uint32_t address, uint32_t value) {
@@ -232,6 +300,9 @@ BackendResult X035RvswdTargetControl::getStatus(TargetStatus& status) {
   const bool ok = readDmi(kDmStatus, dmstatus);
   status.flags = ok ? 0x03 : 0;
   status.start_mode = 0; status.boot_status = uint8_t(dmstatus >> 8);
+  // Status is a standalone operation; unlike memory/flash it has no
+  // following chunk with which to share the halted session.
+  attached_ = false;
   releaseBus();
   return ok ? BackendResult::Success : BackendResult::Failed;
 }
@@ -241,10 +312,13 @@ BackendResult X035RvswdTargetControl::normalizeUser() {
   // resumereq alone continues at the old image's halted PC. Assert the Debug
   // Module's non-debug-module reset, then deactivate the DM after releasing
   // reset so execution starts from the target reset vector.
+  writeDmi(kAbstractAuto, 0);
+  sequential_read_valid_ = false;
   writeDmi(kDmControl, 0x00000003u);  // dmactive | ndmreset
   delayMicroseconds(100);
   writeDmi(kDmControl, 0x00000001u);  // release ndmreset
   writeDmi(kDmControl, 0x00000000u);  // detach debug module
+  attached_ = false;
   releaseBus();
   delay(2);
   return BackendResult::Success;
@@ -260,10 +334,20 @@ BackendResult X035RvswdTargetControl::readMemory(uint32_t address,
   if (!attachAndHalt()) { releaseBus(); return BackendResult::Unavailable; }
   for (size_t i = 0; i < length; i += 4) {
     uint32_t value;
-    if (!readWord(address + i, value)) { releaseBus(); return BackendResult::Failed; }
+    if (!readSequentialWord(address + i, value)) {
+      attached_ = false;
+      releaseBus();
+      return BackendResult::Failed;
+    }
     put32(output + i, value);
   }
-  releaseBus();
+  // Every DMDATA0 read launches one look-ahead command.  At the physical
+  // flash end that speculative address is out of range, even though the last
+  // returned word is valid.  Do not wait for that look-ahead here: the next
+  // adjacent read consumes it, while normalizeUser disables autoexec and
+  // resets the target at the end of the host transaction.
+  // Keep the halted session for the next adjacent OEP read request.  The
+  // client always issues normalizeUser on completion and on exceptions.
   return BackendResult::Success;
 }
 
@@ -346,11 +430,13 @@ BackendResult X035RvswdTargetControl::programPage64(uint32_t address,
       diagnostic = 5; goto failed;
     }
   }
-  releaseBus();
+  // program-image emits consecutive page requests.  Preserve the session so
+  // each one does not pay a fresh attach/halt sequence.
   recovery_valid_ = false;
   diagnostic = 0;
   return BackendResult::Success;
 failed:
+  attached_ = false;
   releaseBus();
   return BackendResult::Failed;
 }

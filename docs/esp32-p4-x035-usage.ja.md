@@ -124,6 +124,16 @@ program-image pages=109 attempts=109 sha256=<63,488-byte image hash>
 - 2026-09-20の初期実装では全域read/verify約240秒、109 pageの差分書込み約298秒だった。
   SWDIOの不要な方向切替を除去し、追加half-periodを0にし、1要求を32から88 byteへ拡張した後は、
   全域read 24.80秒、109 pageの比較・書込み・全域verifyを含む復元全体80.00秒を実測した。
+  続いて同一 OEP 接続の連続 read/program request 間でRVSWD attach/halt sessionを再利用し、
+  このX035 fixtureでのみ post-frame guardを0 µsにした結果、62 KiB full verifyは
+  20.972/21.005/21.044秒（平均21.007秒、全域hash一致3/3）となった。別配線では保守的な
+  20 µs defaultを使い、同等のfull-image検証が通るまで0 µsを選ばない。
+- さらに`DMABSTRACTAUTO`とDMDATA1に保持したtarget-side addressを使う連続readを導入した。
+  program buffer、register、addressを4 byteごとに再設定せず、DMDATA0 readで次wordを起動する。
+  62 KiB full verifyは4.896/4.959/4.961秒（平均4.939秒、全域hash一致3/3）となった。flash終端の
+  最後のlook-aheadは範囲外になるため待機せず、次のscalar flash操作前にabstract cmderrをclearする。
+  同じimageへの`--program-image --destructive`もpages=0、比較5.111秒、全域verify5.104秒、
+  reset成功を確認した。変更pageのerase/program性能は別途測る。
 - `half_period_us=0`は今回の短いfixture配線で全域hash一致を確認した設定である。配線条件が変わる
   汎用probeでは設定可能なままにし、エラー時は遅い設定へ戻せるようにする。
 - target USBはOEP transportではない。USB deviceのbind状態はRVSWD書込みには関係しない。
