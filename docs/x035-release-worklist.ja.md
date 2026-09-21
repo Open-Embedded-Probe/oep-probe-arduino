@@ -39,6 +39,8 @@ capability だけを使い、再現可能な HIL 試験を実行できる状態�
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
   machine-readable な result に含める。速さだけでなく再送を含む実効速度を基準にする。
+  現時点でclientはoperation全体のwall timeだけを返す。X035のrequest間session reuseと
+  post-frame guard 0 µsはfull verify 3/3で確認済みだが、内訳telemetryは未実装である。
 - [ ] 現行の 64-byte logical page と target flash の物理 page 境界を再確認し、OEP payload
   上限内の複数 page/burst、連続 read、不要な attach/halt の削減を設計する。
 - [ ] program 前の差分比較、program 後の該当範囲 verify、最後の full image verify を分離し、

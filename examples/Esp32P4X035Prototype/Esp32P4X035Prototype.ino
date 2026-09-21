@@ -9,7 +9,10 @@
 // ESP32-P4 GPIO calls are slow enough to satisfy the fixture wiring without
 // an additional microsecond delay. The backend remains configurable for
 // longer/noisier wiring.
-oep::prototype::X035RvswdTargetControl target(2, 54, 0);
+// The X035 fixture has passed full-image hash verification with no extra
+// post-frame guard.  Other wiring must retain the backend default (20 us)
+// until it has its own validation evidence.
+oep::prototype::X035RvswdTargetControl target(2, 54, 0, 0);
 // Read-only discovery surface. GPIO2 and GPIO54 are the RVSWD transport;
 // every other P4 GPIO is kept as an input and may be sampled by the host.
 const uint8_t fixturePins[] = {
