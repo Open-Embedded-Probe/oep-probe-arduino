@@ -24,7 +24,7 @@ capability だけを使い、再現可能な HIL 試験を実行できる状態�
 - [x] client が書込み、read、verify、target reset の全期間で board-identify 固定名
   `/run/board-identify/by-id/esp32-series-30eda0e31108` を排他的に保持する。並行 open を
   明示的に拒否する。
-- [ ] transaction を `attach → halt → 操作 → verify → reset/release` として記録し、
+- [x] transaction を `attach → halt → 操作 → verify → reset/release` として記録し、
   timeout・プロトコル破損・P4 reset の各ケースで target を通常実行へ戻す。
 - [ ] 書込み開始前に target identity、flash base/size、protection 状態を読み、X035 以外や
   容量不一致を拒否する。手元の original image は保全用であり、試験ごとに自動 restore
@@ -83,6 +83,13 @@ target先頭88 byteは全FFで、旧pageをcacheだけから復元できない�
 `pages=1, attempts=1`で復旧し、full-image SHA-256
 `b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`が一致した。従ってP4 reset/
 電源断後の正しい復旧単位は「retained recovery cache」ではなく、hostが保有する完全imageである。
+
+プロトコル破損経路も実機確認した。validな4-byte code-flash readでRVSWD sessionをactiveにした直後、
+CRCに届かない不正COBS frameを送った。endpointはframeを破棄し、最後のvalid requestから2秒待機して
+watchdogがnormalizationする。その後の別clientによるPWM image全域verifyはhash一致で完走した。これで
+host kill/timeout（5回）、protocol corruption（1回）、P4 firmware再書込み/reset（cache喪失+完全image
+復旧）の各経路を、targetをhaltで放置しないことまで確認した。電源を物理遮断する試験はP4再書込みresetと
+同じRAM cache消失を持つが、電源電圧/USB再列挙の別条件はP0 hardware-soakで独立に残す。
 
 ### P0.2 速度の計測と改善
 
