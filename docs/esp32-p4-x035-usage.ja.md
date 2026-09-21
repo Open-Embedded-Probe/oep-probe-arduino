@@ -25,15 +25,12 @@ PC15は開発board上でP4 GPIO15とGPIO45の2本へ出ているが、書込み�
 `oep-probe-arduino`のrootで実行する。
 
 ```sh
-arduino-cli compile \
-  --fqbn 'esp32:esp32:esp32p4:USBMode=hwcdc,CDCOnBoot=cdc' \
-  --library . \
+arduino-cli compile --clean --profile esp32p4 \
   --output-dir /tmp/oep-p4-x035 \
   examples/Esp32P4X035Prototype
 
-arduino-cli upload \
+arduino-cli upload --profile esp32p4 \
   --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
-  --fqbn 'esp32:esp32:esp32p4:USBMode=hwcdc,CDCOnBoot=cdc' \
   --input-dir /tmp/oep-p4-x035 \
   examples/Esp32P4X035Prototype
 ```
@@ -210,14 +207,17 @@ prototypeとして呼び出す。
 - I2C/SPI peerとPWM波形計測は未実装である。GPIOのopen-drainはI2C bit-bangの基礎にはなるが、
   速度・clock stretch・SPI slaveの時刻保証を持つ専用capabilityへ発展させる必要がある。
 
-- `FixtureI2c` revision 1 は P4 の一時的な hardware I2C target の状態取得だけを公開する。
+- `FixtureI2c` revision 1 は P4 の一時的な I2C target の状態取得だけを公開する。
   `getStatus()` は peer started、SCL/SDA の現在 level、最後の受信長、受信 transaction 回数、
   read request 回数、設定周波数を返す。I2C の成否をこの値だけで判定せず、RMT observer を
   追加した後は trace と対にして判定する。詳細な段階設計は
   [`esp32-p4-i2c-observation-design.ja.md`](esp32-p4-i2c-observation-design.ja.md) に記録する。
-  Arduino-ESP32 3.3.11 の `Wire` slave は本治具で address ACK しなかったため、正式実装の
-  基盤には使わない。ESP-IDF I2C slave driver の direct path は同じ10 kHz試験で受信できたが、
-  現在は一回受信の診断用である。
+  このimageで選んでいるのはsoftware targetであり、writeのみ・10 kHz以下の切り分け用である。
+  Arduino-ESP32 3.3.12 の `Wire` slave は正式実装の基盤には使わない。ESP-IDF I2C slave
+  driver のdirect pathは、別P4 peerで1/10/100/400 kHzと1 MHzの固定長write、および
+  preload済みreadを実測した。ただしOEP protocolにはまだframe長やresponse slotを指定する
+  操作がない。従ってdirect pathは4 byte固定・一回受信の診断だけであり、可変長write、
+  動的read応答、連続readをこのcapabilityから主張しない。
   2026-09-21に`stop → pin設定 → start` lifecycleを`ProbeConfiguration`へ追加し、generic Capsにも
   I2C target groupとして再掲した。ただし再構成後の実機ACK/trace試験は未実施である。固定配線を暗黙に
   再利用せず、hostが明示的にleaseを取得してから実行することが、target差し替え可能なprobeの前提である。

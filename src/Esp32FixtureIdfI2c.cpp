@@ -1,5 +1,7 @@
 #include "Esp32FixtureIdfI2c.h"
 
+#if CONFIG_IDF_TARGET_ESP32P4
+
 namespace oep::prototype {
 
 bool Esp32FixtureIdfI2c::begin() {
@@ -61,6 +63,7 @@ bool Esp32FixtureIdfI2c::received(
     i2c_slave_dev_handle_t device, const i2c_slave_rx_done_event_data_t*,
     void* arg) {
   auto* self = static_cast<Esp32FixtureIdfI2c*>(arg);
+  self->last_rx_length_ = kFixedWriteBytes;
   ++self->rx_transactions_;
   // Do not re-arm from the ISR: the IDF driver takes a mutex while installing
   // a receive job and this causes an interrupt watchdog reset. One bounded
@@ -75,14 +78,19 @@ BackendResult Esp32FixtureIdfI2c::getStatus(FixtureI2cStatus& status) {
   noInterrupts();
   const uint16_t received = rx_transactions_;
   const uint8_t stretched = stretch_cause_mask_;
+  const uint8_t last_rx_length = last_rx_length_;
   interrupts();
   status.flags = 0x01;
   if (digitalRead(scl_pin_)) status.flags |= 0x02;
   if (digitalRead(sda_pin_)) status.flags |= 0x04;
+  status.last_rx_length = last_rx_length;
   status.rx_transactions = received;
+  status.request_transactions = 0;
   status.frequency_hz = frequency_hz_;
   status.stretch_cause_mask = stretched;
   return BackendResult::Success;
 }
 
 }  // namespace oep::prototype
+
+#endif  // CONFIG_IDF_TARGET_ESP32P4

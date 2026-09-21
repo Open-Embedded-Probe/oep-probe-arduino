@@ -33,11 +33,31 @@ watchdog を発生させた。receive job の再 arm は ISR で行わず task �
 現在の direct-driver target は一回だけ受信する安全な診断実装であり、継続運用にはまだ
 しない。RMT trace はHAL回避後も9 bit目の実際のlevel・ACK・timingを記録する最優先実装である。
 
+## P4 peerによるdriver境界の再実証（2026-09-22）
+
+Arduino-ESP32 **3.3.12**（ESP-IDF I2C slave v1）で、GPIO32=SDA/GPIO33=SCLを
+同じ配線で結んだ二台のP4を用い、controller/targetを分離して実証した。これはX035の
+電気的NACKとは独立したdriverの基準試験である。
+
+- targetの`i2c_slave_receive()`は「最大長」ではなく**一つのwrite transactionの正確な長さ**を
+  armする。4 byteを送るなら4 byte、128 byteを送るなら128 byteで成功した。大きなbufferを
+  任意長受信用にarmしてはならない。
+- 可変長writeは、1 byte length header transactionとpayload transactionに分け、callbackは通知だけ、
+  次のarmはtask/`loop()`で行う。128 byteをgapなしで1000 frame、全byte照合まで通った。
+- readはv1に`on_request`がないため、master read前に`i2c_slave_transmit()`で固定responseをpreloadする。
+  連続128 byte readではread slotごとにpayloadの後へfiller 1 byteを置く必要があり、100 slotを
+  1 MHzで全byte一致した（payload約64 kB/s）。これはv1の実測上のslot contractであり、動的応答の
+  互換性を意味しない。
+
+よってOEPの現行`FixtureI2c`が公開するのはsoftware write診断だけである。direct IDF backendは
+4 byte固定・一回受信の内部診断に限定する。host protocolへframe長、二transaction framing、
+preload response slotを追加し、その各々をHIL試験してからhardware target capabilityとして公開する。
+
 ## 3 つの役割を混ぜない
 
 | 役割 | 実装 | 主用途 | 速度・保証 |
 | --- | --- | --- | --- |
-| hardware peer | P4 の hardware I2C target | 正常系の read/write、repeated START、clock stretching | 標準/fast mode を実装と電気仕様の範囲で試験する本命 |
+| hardware peer | P4 の hardware I2C target | fixed write、preload read、clock stretching | 現時点の実証範囲。可変長/動的readは未公開 |
 | passive observer | SCL/SDA 各 1 本の RMT RX | START/STOP、各 bit、ACK/NACK、周期、glitch、stuck bus の記録 | バスを駆動しない。判定の根拠を残せる |
 | software peer | GPIO ISR + open-drain | hardware target の代替、意図的な ACK/NACK/異常応答 | 初期は 10 kHz、計測後に 25 kHz まで。100 kHz を保証しない |
 
@@ -137,8 +157,12 @@ RX callbackは1回だった。これはFIFO receive callbackがaddress ACKを保
 | `configureTarget(...)` | hardware / software peer を選び、アドレス、周波数、応答 script を設定する |
 
 probe は capability 表で `i2c-observer-rmt`、`i2c-target-hardware`、
-`i2c-target-software` と各々を宣言する。利用側は「I2C がある」だけで性能を仮定
-してはならず、要求した mode と最大検証周波数を照合する。
+`i2c-target-software` と各々を宣言する。hardware targetには少なくとも`fixed-rx`、
+`framed-rx`、`preloaded-tx`を個別に、最大frame長・最大slot数・実証済み周波数と共に
+宣言する。利用側は「I2C がある」だけで性能を仮定してはならず、要求した mode と
+最大検証周波数を照合する。現行revision 2のcompact capability wire formatにはこの詳細を
+表せないため、P4 X035 imageはsoftware targetだけを実装済みとして扱い、revision 3の拡張まで
+hardware targetをrelease capabilityとしては公開しない。
 
 ## software I2C target の扱い
 
