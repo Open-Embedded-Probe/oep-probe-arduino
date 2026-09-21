@@ -84,6 +84,13 @@ target先頭88 byteは全FFで、旧pageをcacheだけから復元できない�
 `b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`が一致した。従ってP4 reset/
 電源断後の正しい復旧単位は「retained recovery cache」ではなく、hostが保有する完全imageである。
 
+F8U6向けCore自己試験の再開では、既存の`CH32_SERIAL_DEFAULT=4`付きC8T6 `core_api` binaryを
+F8U6へ書込み、P4 FixtureUart（GPIO12/6、115200）からREADYを8秒、RUN後を12秒観測したが、UART byteは
+0件だった。このbinaryはC8T6 variantであり、F8U6のHIL合格には使わない。環境のArduino CLIにはこの時点で
+`ch32-riscv-ug:ch32v` packageが登録されておらず、F8U6 FQBNの再buildもできなかった。UART route/bridge/
+F8U6 build profileを再構成してから再試験する。試験後はPWM完全imageへ39 physical page、39 attemptsで
+復帰し、全域hash一致を確認した。
+
 プロトコル破損経路も実機確認した。validな4-byte code-flash readでRVSWD sessionをactiveにした直後、
 CRCに届かない不正COBS frameを送った。endpointはframeを破棄し、最後のvalid requestから2秒待機して
 watchdogがnormalizationする。その後の別clientによるPWM image全域verifyはhash一致で完走した。これで
