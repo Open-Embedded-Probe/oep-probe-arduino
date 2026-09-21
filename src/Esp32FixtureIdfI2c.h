@@ -1,5 +1,7 @@
 #pragma once
 
+#if CONFIG_IDF_TARGET_ESP32P4
+
 #include <driver/i2c_slave.h>
 
 #include "OepPrototype.h"
@@ -32,9 +34,17 @@ class Esp32FixtureIdfI2c : public FixtureI2cLifecycle {
   int scl_pin_;
   uint32_t frequency_hz_;
   i2c_slave_dev_handle_t device_ = nullptr;
-  uint8_t rx_buffer_[32]{};
+  // IDF I2C slave v1 FIFO reception is not a variable-length stream: the
+  // receive job must match one whole write transaction.  This diagnostic
+  // contract is deliberately four bytes, matching the first X035 probe
+  // frame; do not widen it to make an "up to N bytes" API.
+  static constexpr size_t kFixedWriteBytes = 4;
+  uint8_t rx_buffer_[kFixedWriteBytes]{};
+  volatile uint8_t last_rx_length_ = 0;
   volatile uint16_t rx_transactions_ = 0;
   volatile uint8_t stretch_cause_mask_ = 0;
 };
 
 }  // namespace oep::prototype
+
+#endif  // CONFIG_IDF_TARGET_ESP32P4
