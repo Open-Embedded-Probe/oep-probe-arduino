@@ -294,6 +294,13 @@ class FixtureI2cBackend {
   virtual BackendResult getStatus(FixtureI2cStatus& status) = 0;
 };
 
+class FixtureI2cLifecycle : public FixtureI2cBackend {
+ public:
+  virtual bool setPins(int sda_pin, int scl_pin) = 0;
+  virtual bool begin() = 0;
+  virtual void end() = 0;
+};
+
 struct FixtureCaptureStatus {
   // bit 0 active, 1/2: clock/data idle level, 3/4: clock/data completed,
   // 5/6: clock/data partial/overflow.

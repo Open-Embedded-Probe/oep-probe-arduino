@@ -7,7 +7,7 @@ namespace oep::prototype {
 // Deliberately narrow diagnostic target. It ACKs a matching 7-bit write
 // address and following write bytes. It is for 10 kHz fault isolation, not a
 // replacement for a hardware I2C target or a general Wire-compatible slave.
-class Esp32FixtureSoftI2c : public FixtureI2cBackend {
+class Esp32FixtureSoftI2c : public FixtureI2cLifecycle {
  public:
   Esp32FixtureSoftI2c(uint8_t address, int sda_pin, int scl_pin,
                       uint32_t frequency_hz)
@@ -15,6 +15,8 @@ class Esp32FixtureSoftI2c : public FixtureI2cBackend {
         frequency_hz_(frequency_hz) {}
 
   bool begin();
+  bool setPins(int sda_pin, int scl_pin) override;
+  void end() override;
   void service();
   BackendResult getStatus(FixtureI2cStatus& status) override;
 

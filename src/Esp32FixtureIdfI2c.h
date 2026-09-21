@@ -8,7 +8,7 @@ namespace oep::prototype {
 
 // Direct ESP-IDF slave-driver diagnostic. This bypasses Arduino Wire and its
 // legacy slave HAL; it is not yet a portable fixture implementation.
-class Esp32FixtureIdfI2c : public FixtureI2cBackend {
+class Esp32FixtureIdfI2c : public FixtureI2cLifecycle {
  public:
   Esp32FixtureIdfI2c(i2c_port_num_t port, uint8_t address, int sda_pin,
                      int scl_pin, uint32_t frequency_hz)

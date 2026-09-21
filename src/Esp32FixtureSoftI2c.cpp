@@ -27,6 +27,21 @@ bool Esp32FixtureSoftI2c::begin() {
   return true;
 }
 
+bool Esp32FixtureSoftI2c::setPins(int sda_pin, int scl_pin) {
+  if (sda_pin < 0 || scl_pin < 0 || sda_pin == scl_pin) return false;
+  end();
+  sda_pin_ = sda_pin;
+  scl_pin_ = scl_pin;
+  return true;
+}
+
+void Esp32FixtureSoftI2c::end() {
+  if (sda_pin_ >= 0) pinMode(sda_pin_, INPUT);
+  if (scl_pin_ >= 0) pinMode(scl_pin_, INPUT);
+  started_ = false;
+  phase_ = Phase::Idle;
+}
+
 void Esp32FixtureSoftI2c::releaseSda() {
   gpio_set_level(static_cast<gpio_num_t>(sda_pin_), 1);
 }
