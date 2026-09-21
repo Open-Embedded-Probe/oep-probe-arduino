@@ -52,9 +52,13 @@ halt状態で残ることを確認したため、endpointが最後の有効reque
 sessionがactiveなら`normalizeUser()`を発行するwatchdogを追加した。watchdog版P4 firmwareで同じ
 中断後に2秒待機し、別clientから残り20 physical pageを更新して全域hash
 `b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`まで一致させた。これは
-中断後のtarget reset/re-attach/recoveryが可能なことを示す初回のHIL evidenceであり、各5回の
-gateは未完了である。watchdogの発火自体はOEP endpointのsession状態で判定しており、PWM波形を
-同時captureするobserverはまだないため、実行中applicationの波形による独立証明はP1で追加する。
+中断後のtarget reset/re-attach/recoveryが可能なことを示す初回のHIL evidenceである。続けてPWMと
+I2C imageを交互にした同じ試験を計5回実行し、全回timeout exit=124、2秒待機後の別clientのrecovery
+exit=0、`pages=20, attempts=20`で完走した。最後にPWM imageをverify-onlyで読み直し、同じfull-image
+hashを確認した。従ってhost processを強制終了する中断5回の基準は満たした。一方、probe自身のreset/
+電源断でrecovery cacheが失われる場合と、execution中applicationをPWM波形で独立確認する場合は別の
+未完了試験である。watchdogの発火はOEP endpointのsession状態で判定しており、PWM波形を同時capture
+するobserverはまだないため、実行中applicationの波形による独立証明はP1で追加する。
 
 ### P0.2 速度の計測と改善
 
