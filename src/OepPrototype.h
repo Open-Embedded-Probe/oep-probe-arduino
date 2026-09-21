@@ -219,6 +219,7 @@ enum FixtureCaptureOperation : uint8_t {
   // role id, symbol offset, maximum symbol count. Raw RMT words are returned
   // little endian; semantic I2C decoding stays on the host.
   FixtureCaptureReadSymbols = 0x02,
+  FixtureCaptureStart = 0x03,
 };
 
 struct TargetStatus {
@@ -308,6 +309,7 @@ class FixtureCaptureBackend {
   virtual BackendResult readSymbols(uint8_t role_id, uint8_t offset,
                                     uint8_t maximum, uint32_t* output,
                                     size_t& count) = 0;
+  virtual BackendResult startCapture() = 0;
 };
 
 class Endpoint {

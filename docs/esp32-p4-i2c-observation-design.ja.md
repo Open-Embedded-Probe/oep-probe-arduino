@@ -93,7 +93,12 @@ callback完了時刻は一致しない。このため「同時受信」は同一
 GPIO50を`data`としてleaseし、10 MHz RMT RXを二本armした後に、両入力idle High、raw symbol read、
 releaseを確認した。P4 RMT hardware blockは最小64 symbolsであり、host公開用の最初の16 recordsとは
 別に64をdriverへ指定する必要があった。I2C transactionを発生させるHIL trace/ACK decodeは次のgateであり、
-この結果はidle状態とlifecycleだけを示す。
+この最初の結果はidle状態とlifecycleだけを示す。
+
+同日にX035F8U6 peerを software reset してUART `READY`を確認後、`startCapture → RUN`の順で
+測定した。SCLは10 records、SDAは4 recordsを返し、UARTのDUT判定は従来どおり`peer_address_ack FAIL 2`
+だった。capture leaseとUART leaseを同時に取得しても、RMT側は受動のままI2C transactionを記録できた。
+raw recordsのI2C decodeと9 bit目の確定は未実装であり、この時点でACK levelを断定してはならない。
 
 ### まず確認できること
 
