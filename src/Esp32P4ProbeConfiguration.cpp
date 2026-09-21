@@ -36,4 +36,13 @@ BackendResult Esp32P4ProbeConfiguration::release(uint32_t lease_id) {
   return BackendResult::Success;
 }
 
+void Esp32P4ProbeConfiguration::abandon() {
+  if (!active_lease_) return;
+  // `setPins` ends a configured UART before making subsequent operations
+  // unavailable.  Ignore an impossible GPIO failure: either way the lease is
+  // no longer valid and a host cannot continue using it.
+  (void)uart_.setPins(12, 6);
+  active_lease_ = 0;
+}
+
 }  // namespace oep::prototype
