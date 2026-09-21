@@ -9,6 +9,7 @@ constexpr size_t kMaximumWire = kMaximumMessage + 5;
 
 enum FunctionReference : uint16_t {
   ProbeInfo = 0x0001,
+  ProbeCapabilities = 0x0002,
   TargetControl = 0x0101,
   TargetMemory = 0x0102,
   TargetFlash = 0x0103,
@@ -19,6 +20,44 @@ enum FunctionReference : uint16_t {
 };
 
 enum ProbeInfoOperation : uint8_t { ProbeInfoGet = 0x01 };
+enum ProbeCapabilitiesOperation : uint8_t {
+  ProbeCapabilitiesGetSummary = 0x01,
+  ProbeCapabilitiesGetChannel = 0x02,
+  ProbeCapabilitiesGetGroup = 0x03,
+  ProbeCapabilitiesGetVoltageDomain = 0x04,
+};
+
+enum ProbeChannelFunction : uint8_t {
+  ProbeGpioIn = 0,
+  ProbeGpioOut = 1,
+  ProbeOpenDrain = 2,
+  ProbePullUp = 3,
+  ProbePullDown = 4,
+  ProbeCapture = 5,
+  ProbeUartRx = 6,
+  ProbeUartTx = 7,
+  ProbeI2cSda = 8,
+  ProbeI2cScl = 9,
+  ProbeSpiRx = 10,
+  ProbeSpiTx = 11,
+  ProbeSpiSck = 12,
+  ProbeSpiCs = 13,
+  ProbePwmOut = 14,
+  ProbeAnalogIn = 15,
+  ProbeAnalogOut = 16,
+  ProbeEdgeOut = 17,
+};
+
+enum ProbeGroupKind : uint8_t {
+  ProbeGroupUart = 1,
+  ProbeGroupI2cController = 2,
+  ProbeGroupI2cTarget = 3,
+  ProbeGroupSpiController = 4,
+  ProbeGroupSpiTarget = 5,
+  ProbeGroupCapture = 6,
+  ProbeGroupPwm = 7,
+  ProbeGroupAnalog = 8,
+};
 
 enum class BackendResult : uint8_t {
   Success,
@@ -39,6 +78,52 @@ class ProbeInfoBackend {
  public:
   virtual ~ProbeInfoBackend() = default;
   virtual BackendResult getInfo(ProbeInfoStatus& status) = 0;
+};
+
+struct ProbeCapabilitiesSummary {
+  uint8_t revision = 1;
+  uint8_t channel_count = 0;
+  uint8_t group_count = 0;
+  uint8_t voltage_domain_count = 0;
+};
+
+struct ProbeChannelCapability {
+  uint16_t id = 0;
+  // bit 0: input-only, bit 1: reserved by the running probe firmware.
+  uint8_t flags = 0;
+  // Bit N references voltage-domain ordinal N.
+  uint8_t voltage_domain_mask = 0;
+  // Revision-1 function vocabulary; see docs/development-probe-functional-spec.ja.md.
+  uint64_t function_mask = 0;
+};
+
+struct ProbeGroupCapability {
+  uint16_t id = 0;
+  uint8_t kind = 0;
+  uint8_t instance = 0;
+  uint64_t role_mask = 0;
+  // Bit N excludes group ordinal N.
+  uint64_t exclusive_group_mask = 0;
+};
+
+struct ProbeVoltageDomainCapability {
+  uint8_t id = 0;
+  // bit 0: probe may actively drive this domain.
+  uint8_t flags = 0;
+  uint16_t nominal_mv = 0;
+  uint16_t input_max_mv = 0;
+};
+
+class ProbeCapabilitiesBackend {
+ public:
+  virtual ~ProbeCapabilitiesBackend() = default;
+  virtual BackendResult getSummary(ProbeCapabilitiesSummary& summary) = 0;
+  virtual BackendResult getChannel(uint8_t ordinal,
+                                   ProbeChannelCapability& channel) = 0;
+  virtual BackendResult getGroup(uint8_t ordinal,
+                                 ProbeGroupCapability& group) = 0;
+  virtual BackendResult getVoltageDomain(
+      uint8_t ordinal, ProbeVoltageDomainCapability& domain) = 0;
 };
 
 enum TargetControlOperation : uint8_t {
@@ -165,9 +250,11 @@ class Endpoint {
                     FixtureGpioBackend* gpio = nullptr,
                     FixtureUartBackend* uart = nullptr,
                     FixtureI2cBackend* i2c = nullptr,
-                    ProbeInfoBackend* info = nullptr)
+                    ProbeInfoBackend* info = nullptr,
+                    ProbeCapabilitiesBackend* capabilities = nullptr)
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
-        gpio_(gpio), uart_(uart), i2c_(i2c), info_(info) {}
+        gpio_(gpio), uart_(uart), i2c_(i2c), info_(info),
+        capabilities_(capabilities) {}
   void poll();
   bool idleFor(uint32_t milliseconds) const;
 
@@ -180,6 +267,7 @@ class Endpoint {
   FixtureUartBackend* uart_;
   FixtureI2cBackend* i2c_;
   ProbeInfoBackend* info_;
+  ProbeCapabilitiesBackend* capabilities_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;

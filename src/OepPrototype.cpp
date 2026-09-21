@@ -166,11 +166,18 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
     } else {
       response[4] = 0;
       response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) + (info_ ? 1 : 0) +
+          (capabilities_ ? 1 : 0) +
           (flash_ ? 1 : 0) + (gpio_ ? 1 : 0) + (i2c_ ? 1 : 0);
       if (uart_) ++response[5];
       response_length = 6;
       if (info_) {
         put16(response + response_length, ProbeInfo);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (capabilities_) {
+        put16(response + response_length, ProbeCapabilities);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -244,6 +251,84 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
         put64(response + 23, status.fixture_pin_mask);
         response_length = 31;
       }
+    }
+    sendMessage(response, response_length);
+    return;
+  }
+
+  if (target == ProbeCapabilities) {
+    if (!capabilities_) {
+      response[6] = kRejectUnavailable;
+    } else if (operation == ProbeCapabilitiesGetSummary && length == 6) {
+      ProbeCapabilitiesSummary summary;
+      const BackendResult result = capabilities_->getSummary(summary);
+      response[1] = kResolutionCompleted;
+      response[6] = result == BackendResult::Success ?
+          kOutcomeSuccess : kOutcomeFailed;
+      if (result == BackendResult::Success) {
+        response[7] = summary.revision;
+        response[8] = summary.channel_count;
+        response[9] = summary.group_count;
+        response[10] = summary.voltage_domain_count;
+        response_length = 11;
+      }
+    } else if (operation == ProbeCapabilitiesGetChannel && length == 7) {
+      ProbeChannelCapability channel;
+      const BackendResult result = capabilities_->getChannel(message[6], channel);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          put16(response + 7, channel.id);
+          response[9] = channel.flags;
+          response[10] = channel.voltage_domain_mask;
+          put64(response + 11, channel.function_mask);
+          response_length = 19;
+        }
+      }
+    } else if (operation == ProbeCapabilitiesGetGroup && length == 7) {
+      ProbeGroupCapability group;
+      const BackendResult result = capabilities_->getGroup(message[6], group);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          put16(response + 7, group.id);
+          response[9] = group.kind;
+          response[10] = group.instance;
+          put64(response + 11, group.role_mask);
+          put64(response + 19, group.exclusive_group_mask);
+          response_length = 27;
+        }
+      }
+    } else if (operation == ProbeCapabilitiesGetVoltageDomain && length == 7) {
+      ProbeVoltageDomainCapability domain;
+      const BackendResult result = capabilities_->getVoltageDomain(
+          message[6], domain);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          response[7] = domain.id;
+          response[8] = domain.flags;
+          put16(response + 9, domain.nominal_mv);
+          put16(response + 11, domain.input_max_mv);
+          response_length = 13;
+        }
+      }
+    } else {
+      const bool known = operation >= ProbeCapabilitiesGetSummary &&
+          operation <= ProbeCapabilitiesGetVoltageDomain;
+      response[6] = known ? kRejectPayload : kRejectOperation;
     }
     sendMessage(response, response_length);
     return;

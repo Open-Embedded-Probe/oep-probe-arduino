@@ -3,6 +3,7 @@
 #include <driver/gpio.h>
 #include <Esp32FixtureGpio.h>
 #include <Esp32FixtureIdfI2c.h>
+#include <Esp32P4ProbeCapabilities.h>
 #include <Esp32FixtureUart.h>
 #include <StaticProbeInfo.h>
 #include <X035RvswdTargetControl.h>
@@ -33,17 +34,19 @@ oep::prototype::Esp32FixtureUart fixtureUart(Serial1, 12, 6);
 // Arduino Wire and uses the ESP-IDF I2C1 slave driver directly.
 oep::prototype::Esp32FixtureIdfI2c fixtureI2c(
     I2C_NUM_1, 0x42, 50, 52, 10000);
-// `P4X3` and revision 1: GPIO2/54 are RVSWD; GPIO24--27 are USB PHY.
-// fixture mask is the same source as fixturePins above, kept explicit so the
-// profile is queryable without relying on an Arduino sketch's comments.
+// `P4DV` identifies the generic P4 development-probe hardware/firmware, not
+// the attached DUT. GPIO2/54 are used by this firmware's target transport;
+// GPIO24--27 are reserved by USB. ProbeCapabilities is the authoritative,
+// paged declaration used by new hosts.
 oep::prototype::StaticProbeInfo probeInfo({
-    0x50345833u, 1u,
+    0x50344456u, 2u,
     (uint64_t{1} << 2) | (uint64_t{1} << 24) | (uint64_t{1} << 25) |
         (uint64_t{1} << 26) | (uint64_t{1} << 27) | (uint64_t{1} << 54),
     0x003ffffffffffffbull});
+oep::prototype::Esp32P4ProbeCapabilities probeCapabilities;
 oep::prototype::Endpoint endpoint(
     Serial, &target, &target, &target, &fixtureGpio, &fixtureUart, &fixtureI2c,
-    &probeInfo);
+    &probeInfo, &probeCapabilities);
 
 void setup() {
   Serial.begin(115200);
