@@ -78,6 +78,11 @@ uv run python -m oep_client \
   --destructive
 ```
 
+このP4 fixtureはCH32X035F8U6専用である。`--program-image`は破壊的操作の前にESIG
+`0x1ffff704=0x035e0601`、flash base/size（`0x08000000`/63,488 byte）、FLASH OBRの
+read-protection無効、WPR全解除をread-onlyで確認する。どれかが不一致・保護中・読出し不能なら
+書込みは開始せずnonzeroで終了する。別package/familyへ`--flash-size`だけを変えて使うことはできない。
+
 書込み済みimageのverifyのみ:
 
 ```sh
