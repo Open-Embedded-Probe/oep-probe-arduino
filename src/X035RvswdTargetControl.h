@@ -17,6 +17,7 @@ class X035RvswdTargetControl : public TargetControlBackend,
         frame_settle_us_(frame_settle_us) {}
 
   void begin();
+  bool sessionActive() const { return attached_; }
   BackendResult getStatus(TargetStatus& status) override;
   BackendResult normalizeUser() override;
   BackendResult enterProductBootloader() override;

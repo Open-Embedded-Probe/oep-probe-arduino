@@ -150,6 +150,7 @@ class Endpoint {
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
         gpio_(gpio), uart_(uart), i2c_(i2c) {}
   void poll();
+  bool idleFor(uint32_t milliseconds) const;
 
  private:
   Stream& stream_;
@@ -162,6 +163,7 @@ class Endpoint {
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;
+  uint32_t last_request_millis_ = 0;
 
   void consumeFrame();
   void handleMessage(uint8_t* message, size_t length);

@@ -43,4 +43,11 @@ void setup() {
 
 void loop() {
   endpoint.poll();
+  // A killed host process cannot send normalize-user.  Do not leave the DUT
+  // halted indefinitely: after a deliberately conservative idle interval,
+  // reset/release the RVSWD session.  Normal full-image requests arrive much
+  // more frequently than this interval.
+  if (target.sessionActive() && endpoint.idleFor(1500)) {
+    target.normalizeUser();
+  }
 }
