@@ -35,6 +35,12 @@ capability だけを使い、再現可能な HIL 試験を実行できる状態�
 連続 20 回、途中で host/client を中断した場合を各 5 回実行して、誤書込み・target 未復帰・
 未報告の失敗がないこと。
 
+2026-09-21にPWM probe image（full-image SHA-256
+`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`）のfull verifyを
+20回連続実行した。失敗0、verifyは平均5.166509 s・中央値5.164288 s・p95 5.226030 s・
+最大5.249059 s、resetは平均3.376 ms・p95 3.868 ms・最大4.298 msだった。差分program 20回と
+host/client中断各5回は未実施のため、このP0.1 gate全体は未完了である。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
