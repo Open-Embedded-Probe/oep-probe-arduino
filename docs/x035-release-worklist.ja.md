@@ -148,8 +148,8 @@ SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22be
 
 - [ ] 全 capability を `configure(config) → enable → getStatus/readResult → disable` に統一する。
 - [x] `ProbeConfiguration` revision 1 の`apply`/`release`はUART groupのpin/resource leaseを原子的に
-  取得・解放し、すでにlease中または未知のrole/channelは変更なしで拒否する。I2C/GPIO/captureの競合は
-  backend実装時に同じcontractへ追加する。
+  取得・解放し、すでにlease中または未知のrole/channelは変更なしで拒否する。I2C targetも同一planへ
+  含められ、start失敗時はpinをinputへ戻す。I2C再構成の実機確認、GPIO/captureの競合は継続する。
 - [ ] `disable`、host disconnect、watchdog timeout で pin を input/release、peripheral を停止、
   trace を凍結する。
 - [ ] `getStatus` は設定値、実効設定、開始結果、overflow、error、最後の timestamp を返す。

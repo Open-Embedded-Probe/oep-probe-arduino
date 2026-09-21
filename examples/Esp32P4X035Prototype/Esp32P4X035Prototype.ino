@@ -45,7 +45,8 @@ oep::prototype::StaticProbeInfo probeInfo({
         (uint64_t{1} << 26) | (uint64_t{1} << 27) | (uint64_t{1} << 54),
     0x003ffffffffffffbull});
 oep::prototype::Esp32P4ProbeCapabilities probeCapabilities;
-oep::prototype::Esp32P4ProbeConfiguration probeConfiguration(fixtureUart);
+oep::prototype::Esp32P4ProbeConfiguration probeConfiguration(
+    fixtureUart, fixtureI2c);
 oep::prototype::Endpoint endpoint(
     Serial, &target, &target, &target, &fixtureGpio, &fixtureUart, &fixtureI2c,
     &probeInfo, &probeCapabilities, &probeConfiguration);
@@ -53,7 +54,6 @@ oep::prototype::Endpoint endpoint(
 void setup() {
   Serial.begin(115200);
   target.begin();
-  fixtureI2c.begin();
 }
 
 void loop() {
