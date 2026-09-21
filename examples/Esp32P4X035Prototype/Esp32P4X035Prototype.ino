@@ -2,7 +2,7 @@
 #include <Wire.h>
 #include <driver/gpio.h>
 #include <Esp32FixtureGpio.h>
-#include <Esp32FixtureIdfI2c.h>
+#include <Esp32FixtureSoftI2c.h>
 #include <Esp32FixtureRmtCapture.h>
 #include <Esp32P4ProbeCapabilities.h>
 #include <Esp32P4ProbeConfiguration.h>
@@ -34,8 +34,8 @@ oep::prototype::Esp32FixtureUart fixtureUart(Serial1);
 // X035 route-2 pair: PC16(SCL)->GPIO52, PC17(SDA)->GPIO50. The software
 // target is retained as a 10 kHz fault-isolation backend. This image bypasses
 // Arduino Wire and uses the ESP-IDF I2C1 slave driver directly.
-oep::prototype::Esp32FixtureIdfI2c fixtureI2c(
-    I2C_NUM_1, 0x42, 50, 52, 10000);
+oep::prototype::Esp32FixtureSoftI2c fixtureI2c(
+    0x42, 50, 52, 10000);
 oep::prototype::Esp32FixtureRmtCapture fixtureCapture;
 // `P4DV` identifies the generic P4 development-probe hardware/firmware, not
 // the attached DUT. GPIO2/54 are used by this firmware's target transport;
@@ -60,6 +60,7 @@ void setup() {
 
 void loop() {
   endpoint.poll();
+  fixtureI2c.service();
   // Configuration leases are independent of the target debug session.  A
   // vanished host must not leave a UART peripheral driving the next DUT.
   if (endpoint.idleFor(1500)) probeConfiguration.abandon();
