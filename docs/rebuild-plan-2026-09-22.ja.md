@@ -33,6 +33,8 @@
 
 - **Phase A: P4 二台 8 本 GPIO 直結**（現状）。fixture P4 `30eda0e31108`（X035F8U6 を RVSWD 接続）と peer P4 `30eda0e34a0e`。
   HS USB は cable が埋まっており使えない。**peer を使う実験・8 本リンクで済む実験をここで全部消化する。**
+  結線は **GPIO 33, 32, 26, 27, 28, 29, 30, 31 の同番号同士**（E154 で両方向 1 対 1 を確認、2026-09-22）。
+  fixture P4 の他 pin は X035 に繋がっているので peer 実験ではこの 8 本以外を駆動しない。
 - **Phase B: HS USB**（cable を差し替え。8 本リンクと排他）。vendor bulk / HS CDC の transport 実験と、
   streaming 系（capture download）はここへ集める。差し替えは Phase A の候補が尽きてから一度だけ行う。
 
