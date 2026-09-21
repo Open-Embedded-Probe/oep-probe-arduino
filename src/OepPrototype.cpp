@@ -166,7 +166,7 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
     } else {
       response[4] = 0;
       response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) + (info_ ? 1 : 0) +
-          (capabilities_ ? 1 : 0) +
+          (capabilities_ ? 1 : 0) + (configuration_ ? 1 : 0) +
           (flash_ ? 1 : 0) + (gpio_ ? 1 : 0) + (i2c_ ? 1 : 0);
       if (uart_) ++response[5];
       response_length = 6;
@@ -178,6 +178,12 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       }
       if (capabilities_) {
         put16(response + response_length, ProbeCapabilities);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (configuration_) {
+        put16(response + response_length, ProbeConfiguration);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -329,6 +335,58 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
       const bool known = operation >= ProbeCapabilitiesGetSummary &&
           operation <= ProbeCapabilitiesGetVoltageDomain;
       response[6] = known ? kRejectPayload : kRejectOperation;
+    }
+    sendMessage(response, response_length);
+    return;
+  }
+
+  if (target == ProbeConfiguration) {
+    if (!configuration_) {
+      response[6] = kRejectUnavailable;
+    } else if (operation == ProbeConfigurationApply) {
+      // revision, role count, then {group:u16, function:u8, channel:u16}.
+      if (length < 8 || message[6] != 1 || !message[7] ||
+          length != 8 + static_cast<size_t>(message[7]) * 5) {
+        response[6] = kRejectPayload;
+      } else {
+        constexpr size_t kMaximumConfigurationRoles =
+            (kMaximumMessage - 8) / 5;
+        ProbeConfigurationRole roles[kMaximumConfigurationRoles];
+        const uint8_t count = message[7];
+        for (uint8_t index = 0; index < count; ++index) {
+          const uint8_t* encoded = message + 8 + index * 5;
+          roles[index].group_id = encoded[0] |
+              static_cast<uint16_t>(encoded[1]) << 8;
+          roles[index].function = encoded[2];
+          roles[index].channel_id = encoded[3] |
+              static_cast<uint16_t>(encoded[4]) << 8;
+        }
+        uint32_t lease_id = 0;
+        const BackendResult result = configuration_->apply(roles, count, lease_id);
+        if (result == BackendResult::Unavailable) {
+          response[6] = kRejectUnavailable;
+        } else {
+          response[1] = kResolutionCompleted;
+          response[6] = result == BackendResult::Success ?
+              kOutcomeSuccess : kOutcomeFailed;
+          if (result == BackendResult::Success) {
+            put32(response + 7, lease_id);
+            response_length = 11;
+          }
+        }
+      }
+    } else if (operation == ProbeConfigurationRelease && length == 10) {
+      const BackendResult result = configuration_->release(get32(message + 6));
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+      }
+    } else {
+      response[6] = operation == ProbeConfigurationApply ||
+          operation == ProbeConfigurationRelease ? kRejectPayload : kRejectOperation;
     }
     sendMessage(response, response_length);
     return;

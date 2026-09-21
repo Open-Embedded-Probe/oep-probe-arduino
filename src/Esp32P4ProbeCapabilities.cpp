@@ -20,7 +20,7 @@ BackendResult Esp32P4ProbeCapabilities::getSummary(
     ProbeCapabilitiesSummary& summary) {
   summary.revision = 1;
   summary.channel_count = 55;
-  summary.group_count = 2;
+  summary.group_count = 1;
   summary.voltage_domain_count = 1;
   return BackendResult::Success;
 }
@@ -39,8 +39,6 @@ BackendResult Esp32P4ProbeCapabilities::getChannel(
   // mapping. Dynamic peripheral muxing may widen the candidates later.
   if (ordinal == 12) channel.function_mask |= function(ProbeUartRx);
   if (ordinal == 6) channel.function_mask |= function(ProbeUartTx);
-  if (ordinal == 50) channel.function_mask |= function(ProbeI2cSda);
-  if (ordinal == 52) channel.function_mask |= function(ProbeI2cScl);
   return BackendResult::Success;
 }
 
@@ -52,13 +50,6 @@ BackendResult Esp32P4ProbeCapabilities::getGroup(
     group.kind = ProbeGroupUart;
     group.instance = 1;
     group.role_mask = function(ProbeUartRx) | function(ProbeUartTx);
-    return BackendResult::Success;
-  }
-  if (ordinal == 1) {
-    group.id = 2;
-    group.kind = ProbeGroupI2cTarget;
-    group.instance = 1;
-    group.role_mask = function(ProbeI2cSda) | function(ProbeI2cScl);
     return BackendResult::Success;
   }
   return BackendResult::Unavailable;

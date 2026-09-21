@@ -10,6 +10,7 @@ constexpr size_t kMaximumWire = kMaximumMessage + 5;
 enum FunctionReference : uint16_t {
   ProbeInfo = 0x0001,
   ProbeCapabilities = 0x0002,
+  ProbeConfiguration = 0x0003,
   TargetControl = 0x0101,
   TargetMemory = 0x0102,
   TargetFlash = 0x0103,
@@ -25,6 +26,15 @@ enum ProbeCapabilitiesOperation : uint8_t {
   ProbeCapabilitiesGetChannel = 0x02,
   ProbeCapabilitiesGetGroup = 0x03,
   ProbeCapabilitiesGetVoltageDomain = 0x04,
+};
+
+// Configuration is deliberately separate from capability discovery.  A host
+// first resolves its own connection manifest against ProbeCapabilities, then
+// atomically supplies the resulting (group, function, probe-channel) roles.
+// No target-board name or pin number appears on this wire interface.
+enum ProbeConfigurationOperation : uint8_t {
+  ProbeConfigurationApply = 0x01,
+  ProbeConfigurationRelease = 0x02,
 };
 
 enum ProbeChannelFunction : uint8_t {
@@ -124,6 +134,22 @@ class ProbeCapabilitiesBackend {
                                  ProbeGroupCapability& group) = 0;
   virtual BackendResult getVoltageDomain(
       uint8_t ordinal, ProbeVoltageDomainCapability& domain) = 0;
+};
+
+struct ProbeConfigurationRole {
+  uint16_t group_id = 0;
+  uint8_t function = 0;
+  uint16_t channel_id = 0;
+};
+
+class ProbeConfigurationBackend {
+ public:
+  virtual ~ProbeConfigurationBackend() = default;
+  // The endpoint has already bounded the plan to kMaximumMessage.  The
+  // backend must validate every role before changing any peripheral state.
+  virtual BackendResult apply(const ProbeConfigurationRole* roles,
+                              uint8_t count, uint32_t& lease_id) = 0;
+  virtual BackendResult release(uint32_t lease_id) = 0;
 };
 
 enum TargetControlOperation : uint8_t {
@@ -251,10 +277,11 @@ class Endpoint {
                     FixtureUartBackend* uart = nullptr,
                     FixtureI2cBackend* i2c = nullptr,
                     ProbeInfoBackend* info = nullptr,
-                    ProbeCapabilitiesBackend* capabilities = nullptr)
+                    ProbeCapabilitiesBackend* capabilities = nullptr,
+                    ProbeConfigurationBackend* configuration = nullptr)
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
         gpio_(gpio), uart_(uart), i2c_(i2c), info_(info),
-        capabilities_(capabilities) {}
+        capabilities_(capabilities), configuration_(configuration) {}
   void poll();
   bool idleFor(uint32_t milliseconds) const;
 
@@ -268,6 +295,7 @@ class Endpoint {
   FixtureI2cBackend* i2c_;
   ProbeInfoBackend* info_;
   ProbeCapabilitiesBackend* capabilities_;
+  ProbeConfigurationBackend* configuration_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;
