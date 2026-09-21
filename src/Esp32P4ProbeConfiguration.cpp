@@ -36,7 +36,7 @@ BackendResult Esp32P4ProbeConfiguration::apply(
   // its IDF device on failure, so this preserves the all-or-nothing contract.
   if (wants_i2c && (!i2c_.setPins(50, 52) || !i2c_.begin()))
     return BackendResult::Failed;
-  if (wants_uart && !uart_.setPins(12, 6)) {
+  if (wants_uart && (!uart_.setPins(12, 6) || !uart_.enable())) {
     if (wants_i2c) i2c_.end();
     return BackendResult::Failed;
   }
@@ -53,7 +53,7 @@ BackendResult Esp32P4ProbeConfiguration::release(uint32_t lease_id) {
   // Keep all released probe pins benign.  FixtureUart operations are rejected
   // until a new configuration and baud request, preventing stale use.
   if (active_i2c_) i2c_.end();
-  if (active_uart_ && !uart_.setPins(12, 6)) return BackendResult::Failed;
+  if (active_uart_) uart_.disable();
   active_lease_ = 0;
   active_uart_ = false;
   active_i2c_ = false;
@@ -66,7 +66,7 @@ void Esp32P4ProbeConfiguration::abandon() {
   // unavailable.  Ignore an impossible GPIO failure: either way the lease is
   // no longer valid and a host cannot continue using it.
   if (active_i2c_) i2c_.end();
-  if (active_uart_) (void)uart_.setPins(12, 6);
+  if (active_uart_) uart_.disable();
   active_lease_ = 0;
   active_uart_ = false;
   active_i2c_ = false;
