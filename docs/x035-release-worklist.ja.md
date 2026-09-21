@@ -91,6 +91,12 @@ host kill/timeout（5回）、protocol corruption（1回）、P4 firmware再書�
 復旧）の各経路を、targetをhaltで放置しないことまで確認した。電源を物理遮断する試験はP4再書込みresetと
 同じRAM cache消失を持つが、電源電圧/USB再列挙の別条件はP0 hardware-soakで独立に残す。
 
+preflightを含む通常書込みのresult JSONもI2C↔PWMの1往復で確認した。両方向ともF8U6 ID、OBR、WPRを
+確認後、63,488 byte比較・27 physical page・27 attempts・63,488 byte全域verifyで成功した。I2C方向は
+preflight 9.683 ms、program 11.519804 s、verify 4.913288 s、PWM復帰方向はpreflight 6.152 ms、
+program 11.548080 s、verify 4.957561 sだった。最終targetはPWM image hash
+`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`である。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
