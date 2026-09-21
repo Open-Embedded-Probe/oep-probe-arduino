@@ -26,6 +26,8 @@
 | E153 dedicated GPIO RVSWD | **pp + half 0 ns で X035F8U6 が全数一致、1 DMI read 10.1 µs（現行の約 1/12）**。od は half 300 ns 以下で崩れる |
 | E154 8 本リンク | GPIO 33,32,26〜31 同番号が両方向 1 対 1。`peers` fixture で二台同時 pytest が通る |
 | E155 USB-Serial/JTAG | 往復 min 0.36 / median 1.3 / p95 11.7 ms（usbipd/WSL）。512 B × in-flight ≥4 で ≈320〜345 kB/s 飽和。outstanding > ring 8 KiB で HWCDC がデータを落とす。port open/close で P4 が reset |
+| E156 flash 読出し方式 | dedicated GPIO PHY で 62 KiB を **0.146 s（435 kB/s、現行の 34 倍）**。autoexec + poll なし + 末尾 cmderr 確認。halt 直後の不安定期間は未決（`x035-halt-settle`） |
+| S2 registry/codegen | `oep-spec/registry/oep-v0.yaml` → C library / Python module / vectors。host core で C と Python が全 vector 一致、`--check` で同期確認。Uno build は test sketch の vector 表が RAM 超過（codec 本体は未確認、task） |
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
@@ -60,7 +62,8 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
 |---|---|---|
 | E154 | （完了）8 本リンクの pin 対応 | GPIO 33,32,26〜31 同番号 |
 | E155 | （完了）USB-Serial/JTAG の往復・帯域・window | S1: frame 512 B〜1 KiB、window は byte 数で 4 KiB |
-| E156 | dedicated GPIO PHY 上で、autoexec 連続 read の word ごと poll 省略、RAM loader による 256-byte page program は何 µs か | 実験時間の圧迫解消（予備実験の例外）。flash service の transaction 単位 |
+| E156 | （完了）読出し方式。poll なし autoexec で 0.146 s | target.memory は poll なし + 上位 CRC で検証 |
+| E157 | 256-byte page program: word DMI（現行）対 RAM loader + BUFLOAD fast program。halt 直後の settle も同時に測る | 実験時間の圧迫解消。target.flash の transaction 単位 |
 | E157〜 | peer P4 を相手にした fixture 能力の HIL: UART peer、I2C target 3 mode（E147〜E150 の OEP 経由移植）、GPIO drive / sample、RMT capture、SPI peer | S3 の各 service の受入試験 |
 
 ### P2 Phase B（HS USB）
@@ -76,6 +79,8 @@ worklist の P3 表を、新 stack（S3 + S4）だけで上から実施する。
 ## 後回し task（速度のみ、または現時点で不要）
 
 - P0.2 の内訳 telemetry（attach / read / erase / program / verify の wall time、retry）。
+- 生成 codec の低スペック確認: test sketch の vector 表を PROGMEM に置くか、codec 単体の AVR / CH32V003 build で footprint を測る（Uno は現状 RAM 超過）。
+- registry から生成した C library を oep-probe-arduino へ取り込む経路（submodule / copy / `libraries: dir:`）を決める。
 - 256-byte commit の変更 page 反復と failure injection の自動化。
 - Python client の 1 byte read ループ。
 - LinkE 比の速度目標。**release 判定は速度ではなく reliability gate で行う。**
