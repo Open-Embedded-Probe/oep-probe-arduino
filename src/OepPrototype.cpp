@@ -165,7 +165,7 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       response[4] = 2;
     } else {
       response[4] = 0;
-      response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) + (info_ ? 1 : 0) +
+      response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) + (info_ ? 1 : 0) + (pins_ ? 1 : 0) +
           (flash_ ? 1 : 0) + (gpio_ ? 1 : 0) + (i2c_ ? 1 : 0);
       if (uart_) ++response[5];
       response_length = 6;
@@ -175,6 +175,7 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
         response[response_length + 3] = 0;
         response_length += 4;
       }
+      if (pins_) { put16(response + response_length, PinMatrix); response[response_length + 2] = 1; response[response_length + 3] = 0; response_length += 4; }
       if (target_) {
         put16(response + response_length, TargetControl);
         response[response_length + 2] = 1;
@@ -247,6 +248,12 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
     }
     sendMessage(response, response_length);
     return;
+  }
+  if (target == PinMatrix) {
+    if (!pins_) response[6] = kRejectUnavailable;
+    else if (operation != PinMatrixGet || length != 7) response[6] = operation == PinMatrixGet ? kRejectPayload : kRejectOperation;
+    else { PinMatrixEntry entry; const BackendResult result = pins_->getPin(message[6], entry); if (result == BackendResult::Unavailable) response[6] = kRejectUnavailable; else { response[1] = kResolutionCompleted; response[6] = result == BackendResult::Success ? kOutcomeSuccess : kOutcomeFailed; if (result == BackendResult::Success) { memcpy(response + 7, &entry, 6); response_length = 13; } } }
+    sendMessage(response, response_length); return;
   }
 
   if (target == TargetMemory) {

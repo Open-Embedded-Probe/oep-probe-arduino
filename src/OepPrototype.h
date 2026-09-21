@@ -9,6 +9,7 @@ constexpr size_t kMaximumWire = kMaximumMessage + 5;
 
 enum FunctionReference : uint16_t {
   ProbeInfo = 0x0001,
+  PinMatrix = 0x0002,
   TargetControl = 0x0101,
   TargetMemory = 0x0102,
   TargetFlash = 0x0103,
@@ -19,6 +20,7 @@ enum FunctionReference : uint16_t {
 };
 
 enum ProbeInfoOperation : uint8_t { ProbeInfoGet = 0x01 };
+enum PinMatrixOperation : uint8_t { PinMatrixGet = 0x01 };
 
 enum class BackendResult : uint8_t {
   Success,
@@ -39,6 +41,13 @@ class ProbeInfoBackend {
  public:
   virtual ~ProbeInfoBackend() = default;
   virtual BackendResult getInfo(ProbeInfoStatus& status) = 0;
+};
+
+struct PinMatrixEntry { uint8_t signal, dut_port, dut_pin, probe_pin, flags, resource; };
+class PinMatrixBackend {
+ public:
+  virtual ~PinMatrixBackend() = default;
+  virtual BackendResult getPin(uint8_t signal, PinMatrixEntry& entry) = 0;
 };
 
 enum TargetControlOperation : uint8_t {
@@ -165,9 +174,9 @@ class Endpoint {
                     FixtureGpioBackend* gpio = nullptr,
                     FixtureUartBackend* uart = nullptr,
                     FixtureI2cBackend* i2c = nullptr,
-                    ProbeInfoBackend* info = nullptr)
+                    ProbeInfoBackend* info = nullptr, PinMatrixBackend* pins = nullptr)
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
-        gpio_(gpio), uart_(uart), i2c_(i2c), info_(info) {}
+        gpio_(gpio), uart_(uart), i2c_(i2c), info_(info), pins_(pins) {}
   void poll();
   bool idleFor(uint32_t milliseconds) const;
 
@@ -180,6 +189,7 @@ class Endpoint {
   FixtureUartBackend* uart_;
   FixtureI2cBackend* i2c_;
   ProbeInfoBackend* info_;
+  PinMatrixBackend* pins_;
   uint8_t encoded_[kMaximumWire]{};
   size_t encoded_length_ = 0;
   bool discard_ = false;
