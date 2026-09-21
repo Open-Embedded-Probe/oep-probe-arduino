@@ -76,6 +76,14 @@ F8U6は63,488-byte flash/20 KiB RAMである。FLASH `OBR=0x4002201c`は`0x03fff
 この調査とpreflightはflash/option byteを書き換えていない。別packageや別familyを扱う将来のprofileは、
 ESIG ID/geometry/protection ruleを個別に宣言してから追加する。
 
+P4 resetによるrecovery cache喪失も実機で境界を確認した。故障注入版firmwareで先頭256-byte
+physical pageをerase直後に失敗させ、P4を通常firmwareへ再書込みしてprobe RAMを失わせた。その後の
+target先頭88 byteは全FFで、旧pageをcacheだけから復元できないことを確認した。この状態で部分fragmentを
+継続して書くことはせず、既知のPWM完全imageを`--program-image --destructive`で再送した。preflight後
+`pages=1, attempts=1`で復旧し、full-image SHA-256
+`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`が一致した。従ってP4 reset/
+電源断後の正しい復旧単位は「retained recovery cache」ではなく、hostが保有する完全imageである。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を

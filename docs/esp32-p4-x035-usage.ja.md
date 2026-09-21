@@ -137,6 +137,9 @@ program-image pages=109 attempts=109 sha256=<63,488-byte image hash>
 - 未回復中の別物理page要求は診断`0xe0`で拒否する。
 - erase後にprobeもresetまたは電源断すると回復cacheは失われる。この場合、退避済みの完全imageを
   `--program-image`で再送する。部分imageや別pageから書込みを続行しない。
+- このcache喪失境界は故障注入で実機確認済みである。erase直後に止めてP4 firmwareを再書込みした後、
+  対象page先頭88 byteは全FFだった。正常firmwareへ戻して完全PWM imageを再送すると差分1 physical page
+  とfull-image hash一致で復旧した。従ってP4 reset後にprobe RAMの内容を根拠として復旧成功と判断しない。
 - host processがkillされて`normalize-user`を送れない場合にも、P4 firmwareは最後の有効OEP request
   から1.5秒無通信でRVSWD sessionをsystem reset/releaseする。これはhost中断時の安全cleanupであり、
   1.5秒を超える一つのOEP requestを許容するタイムアウトではない。長時間のprobe operationを追加する
