@@ -41,6 +41,12 @@ capability だけを使い、再現可能な HIL 試験を実行できる状態�
 最大5.249059 s、resetは平均3.376 ms・p95 3.868 ms・最大4.298 msだった。差分program 20回と
 host/client中断各5回は未実施のため、このP0.1 gate全体は未完了である。
 
+同日、PWM probe imageとI2C probe imageを交互にして、27 physical page差分のprogram +
+full verifyを20回連続実行した。全回`pages=27, attempts=27`、retry 0、hash一致、両reset成功。
+programは平均11.888387 s・中央値11.886405 s・p95 11.925864 s・最大11.949021 s、続くverifyは
+平均5.161236 s・中央値5.158991 s・p95 5.243148 s・最大5.250146 sだった。残るP0.1の必須項目は
+host/client中断試験各5回である。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
