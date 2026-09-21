@@ -28,6 +28,10 @@ class Esp32FixtureSoftI2c : public FixtureI2cLifecycle {
   void start();
   void stop();
   void receiveBit(uint8_t bit);
+  static void IRAM_ATTR sdaEdge(void* arg);
+  static void IRAM_ATTR sclEdge(void* arg);
+  void IRAM_ATTR onSdaEdge();
+  void IRAM_ATTR onSclEdge();
 
   uint8_t address_;
   int sda_pin_;

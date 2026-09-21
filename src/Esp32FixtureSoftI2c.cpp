@@ -10,6 +10,7 @@ bool Esp32FixtureSoftI2c::begin() {
   gpio_config_t scl = {};
   scl.pin_bit_mask = uint64_t{1} << scl_pin_;
   scl.mode = GPIO_MODE_INPUT;
+  scl.intr_type = GPIO_INTR_ANYEDGE;
   if (gpio_config(&scl) != ESP_OK ||
       gpio_set_pull_mode(static_cast<gpio_num_t>(scl_pin_), GPIO_PULLUP_ONLY) != ESP_OK)
     return false;
@@ -17,12 +18,20 @@ bool Esp32FixtureSoftI2c::begin() {
   gpio_config_t sda = {};
   sda.pin_bit_mask = uint64_t{1} << sda_pin_;
   sda.mode = GPIO_MODE_INPUT_OUTPUT_OD;
+  sda.intr_type = GPIO_INTR_ANYEDGE;
   if (gpio_config(&sda) != ESP_OK ||
       gpio_set_pull_mode(static_cast<gpio_num_t>(sda_pin_), GPIO_PULLUP_ONLY) != ESP_OK)
     return false;
   releaseSda();
   last_sda_ = digitalRead(sda_pin_);
   last_scl_ = digitalRead(scl_pin_);
+  const esp_err_t service = gpio_install_isr_service(ESP_INTR_FLAG_IRAM);
+  if (service != ESP_OK && service != ESP_ERR_INVALID_STATE ||
+      gpio_isr_handler_add(static_cast<gpio_num_t>(sda_pin_), sdaEdge, this) != ESP_OK ||
+      gpio_isr_handler_add(static_cast<gpio_num_t>(scl_pin_), sclEdge, this) != ESP_OK) {
+    end();
+    return false;
+  }
   started_ = true;
   return true;
 }
@@ -36,10 +45,43 @@ bool Esp32FixtureSoftI2c::setPins(int sda_pin, int scl_pin) {
 }
 
 void Esp32FixtureSoftI2c::end() {
+  if (started_) {
+    gpio_isr_handler_remove(static_cast<gpio_num_t>(sda_pin_));
+    gpio_isr_handler_remove(static_cast<gpio_num_t>(scl_pin_));
+  }
   if (sda_pin_ >= 0) pinMode(sda_pin_, INPUT);
   if (scl_pin_ >= 0) pinMode(scl_pin_, INPUT);
   started_ = false;
   phase_ = Phase::Idle;
+}
+
+void IRAM_ATTR Esp32FixtureSoftI2c::sdaEdge(void* arg) {
+  static_cast<Esp32FixtureSoftI2c*>(arg)->onSdaEdge();
+}
+
+void IRAM_ATTR Esp32FixtureSoftI2c::sclEdge(void* arg) {
+  static_cast<Esp32FixtureSoftI2c*>(arg)->onSclEdge();
+}
+
+void IRAM_ATTR Esp32FixtureSoftI2c::onSdaEdge() {
+  const bool sda = gpio_get_level(static_cast<gpio_num_t>(sda_pin_));
+  const bool scl = gpio_get_level(static_cast<gpio_num_t>(scl_pin_));
+  if (last_sda_ && !sda && scl) start();
+  if (!last_sda_ && sda && scl) stop();
+  last_sda_ = sda;
+}
+
+void IRAM_ATTR Esp32FixtureSoftI2c::onSclEdge() {
+  const bool scl = gpio_get_level(static_cast<gpio_num_t>(scl_pin_));
+  const bool sda = gpio_get_level(static_cast<gpio_num_t>(sda_pin_));
+  if (!last_scl_ && scl && phase_ == Phase::Receive) receiveBit(sda);
+  if (last_scl_ && !scl && phase_ == Phase::AckPrepare) {
+    if (acknowledge_) pullSdaLow(); else releaseSda();
+    phase_ = Phase::AckHigh;
+  } else if (last_scl_ && !scl && phase_ == Phase::AckHigh) {
+    releaseSda(); phase_ = Phase::Receive; bit_count_ = 0; byte_ = 0;
+  }
+  last_scl_ = scl;
 }
 
 void Esp32FixtureSoftI2c::releaseSda() {
@@ -83,7 +125,10 @@ void Esp32FixtureSoftI2c::receiveBit(uint8_t bit) {
 }
 
 void Esp32FixtureSoftI2c::service() {
+  // Edge processing is ISR-backed. Keep this method for the shared fixture
+  // loop and future task-backed accounting, without duplicating transitions.
   if (!started_) return;
+  return;
   const bool sda = digitalRead(sda_pin_);
   const bool scl = digitalRead(scl_pin_);
 
