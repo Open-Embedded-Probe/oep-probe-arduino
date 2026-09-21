@@ -120,6 +120,10 @@ program-image pages=109 attempts=109 sha256=<63,488-byte image hash>
 - 未回復中の別物理page要求は診断`0xe0`で拒否する。
 - erase後にprobeもresetまたは電源断すると回復cacheは失われる。この場合、退避済みの完全imageを
   `--program-image`で再送する。部分imageや別pageから書込みを続行しない。
+- host processがkillされて`normalize-user`を送れない場合にも、P4 firmwareは最後の有効OEP request
+  から1.5秒無通信でRVSWD sessionをsystem reset/releaseする。これはhost中断時の安全cleanupであり、
+  1.5秒を超える一つのOEP requestを許容するタイムアウトではない。長時間のprobe operationを追加する
+  場合は、operation中のkeepaliveまたは明示的なbusy状態を先に設計する。
 - targetのflash/option保護、型番、容量を自動識別していない。CH32X035以外へ既定値のまま使わない。
 - 2026-09-20の初期実装では全域read/verify約240秒、109 pageの差分書込み約298秒だった。
   SWDIOの不要な方向切替を除去し、追加half-periodを0にし、1要求を32から88 byteへ拡張した後は、
