@@ -165,10 +165,16 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       response[4] = 2;
     } else {
       response[4] = 0;
-      response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) +
+      response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) + (info_ ? 1 : 0) +
           (flash_ ? 1 : 0) + (gpio_ ? 1 : 0) + (i2c_ ? 1 : 0);
       if (uart_) ++response[5];
       response_length = 6;
+      if (info_) {
+        put16(response + response_length, ProbeInfo);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
       if (target_) {
         put16(response + response_length, TargetControl);
         response[response_length + 2] = 1;
@@ -221,6 +227,27 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
       kRoleFunctionResult, kResolutionRejected, message[2], message[3],
       message[4], message[5], kRejectTarget};
   size_t response_length = 7;
+
+  if (target == ProbeInfo) {
+    if (!info_) response[6] = kRejectUnavailable;
+    else if (operation != ProbeInfoGet || length != 6) response[6] =
+        operation == ProbeInfoGet ? kRejectPayload : kRejectOperation;
+    else {
+      ProbeInfoStatus status;
+      const BackendResult result = info_->getInfo(status);
+      response[1] = kResolutionCompleted;
+      response[6] = result == BackendResult::Success ? kOutcomeSuccess : kOutcomeFailed;
+      if (result == BackendResult::Success) {
+        put32(response + 7, status.profile_id);
+        put32(response + 11, status.firmware_revision);
+        put64(response + 15, status.reserved_pin_mask);
+        put64(response + 23, status.fixture_pin_mask);
+        response_length = 31;
+      }
+    }
+    sendMessage(response, response_length);
+    return;
+  }
 
   if (target == TargetMemory) {
     if (!memory_) {
