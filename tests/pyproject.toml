@@ -1,0 +1,22 @@
+[project]
+name = "oep-probe-hil"
+version = "0.0.0"
+description = "Hardware-in-the-loop regression tests for the OEP probe firmware (flash, then test)"
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5",
+    "pytest>=8",
+    "pytest-embedded>=2.0",
+    "pytest-embedded-serial>=2.0",
+    "pytest-embedded-arduino-cli>=1.1",
+    "oep-client-prototype",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+oep-client-prototype = { path = "../../oep-client-python", editable = true }
+
+[tool.pytest.ini_options]
+addopts = "-s"
