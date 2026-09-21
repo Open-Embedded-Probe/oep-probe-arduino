@@ -97,6 +97,10 @@ preflight 9.683 ms、program 11.519804 s、verify 4.913288 s、PWM復帰方向�
 program 11.548080 s、verify 4.957561 sだった。最終targetはPWM image hash
 `b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`である。
 
+現行PWM imageの非破壊backupも実行した。63,488 byteを4.970510 sで読み、reset 3.876 ms後、backupの
+SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`であることを
+確認した。result JSONは`backup.bytes_read=63488`、`backup_read`、`backup_reset`を含む。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
