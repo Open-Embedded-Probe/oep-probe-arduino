@@ -64,6 +64,32 @@ modeを別能力として宣言してから実装する。
 この宣言はMCU固有のI2C番号やGPIO番号を含めない。P4/ESP32/RP2040は、同じmodeへ自分の
 候補pin、上限frame/slot、最大速度、排他resourceを報告する。
 
+## 設計判断: 全面作り直しではなくI2C境界を先に作り直す
+
+開発用probe全体の方針は維持する。すなわち、probe firmwareはtargetごとに焼き替えず、
+自身の能力を宣言し、hostが接続後にmanifestでroleとpinを対応付け、leaseを取得してから
+試験する。この分離はP4、ESP32、RP2040など異なるprobe MCUと、差し替えるDUTの双方に必要であり、
+SWIO/RVSWD書込み、固定alias、resource lease、実験を小さく実測してから公開する現在の流れも
+作り直さない。
+
+一方、I2Cだけはrevision 2の`ProbeGroupI2cTarget`が「targetが存在する」としか表せず、
+実証済みのfixed writeと、未実証の可変長write/動的readを区別できない。この曖昧な境界の上に
+peripheral試験を増やしてはいけない。次の二点を**先行して作り直す**。
+
+1. capability revision 3でI2C mode、最大frame/slot、最大clock、必要なfiller規則、排他resourceを
+   machine-readableに宣言する。mode不一致、上限超過、未知roleは副作用なしでrejectする。
+2. direct I2C backendを診断用の4 byte一回受信からtask-backed state machineへ置き換える。
+   ISR callbackは通知だけにし、receive再arm、TX preload、USB/OEP応答、cleanupをtask/`loop()`側で
+   実行する。
+
+この二つが済むまでは、P4-P4のE147〜E150はdriver境界を示す実験証拠であって、現OEP firmwareの
+一般I2C target能力ではない。完成後に同じ試験をOEP frame経由HILへ移植し、成功したmodeだけを
+capabilityとして公開する。
+
+timerについても同じ漸進方針を取る。基本は`loop()`/`millis()`/SysTickによる利用者側の時間管理で、
+hardware timerは必要な場合だけの明示的APIとする。I2Cのような能力契約とHIL根拠が揃う前に、
+timer管理を広範囲に作り直したり、未検証の排他規則を追加したりはしない。
+
 ## 次の作業（依存順）
 
 ### A. capability contractと回帰基盤
