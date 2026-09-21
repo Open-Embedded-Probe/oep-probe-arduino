@@ -125,12 +125,18 @@ void Endpoint::consumeFrame() {
 }
 
 void Endpoint::handleMessage(uint8_t* message, size_t length) {
+  last_request_millis_ = millis();
   if (length < 4) return;
   if (message[0] == kRoleCoreRequest) {
     handleCoreRequest(message, length);
   } else if (message[0] == kRoleFunctionRequest) {
     handleFunctionRequest(message, length);
   }
+}
+
+bool Endpoint::idleFor(uint32_t milliseconds) const {
+  return last_request_millis_ &&
+      static_cast<uint32_t>(millis() - last_request_millis_) >= milliseconds;
 }
 
 void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
