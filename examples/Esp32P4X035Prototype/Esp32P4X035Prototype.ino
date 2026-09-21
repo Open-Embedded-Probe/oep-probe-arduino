@@ -41,9 +41,15 @@ oep::prototype::StaticProbeInfo probeInfo({
     (uint64_t{1} << 2) | (uint64_t{1} << 24) | (uint64_t{1} << 25) |
         (uint64_t{1} << 26) | (uint64_t{1} << 27) | (uint64_t{1} << 54),
     0x003ffffffffffffbull});
+const oep::prototype::PinMatrixEntry pinMatrix[] = {
+    {1, 2, 18, 2, 1, 1}, {2, 2, 19, 54, 1, 1},
+    {3, 1, 0, 12, 2, 2}, {4, 1, 1, 6, 2, 2},
+    {5, 3, 16, 52, 2, 3}, {6, 3, 17, 50, 2, 3},
+};
+oep::prototype::StaticPinMatrix probePins(pinMatrix, sizeof(pinMatrix) / sizeof(pinMatrix[0]));
 oep::prototype::Endpoint endpoint(
     Serial, &target, &target, &target, &fixtureGpio, &fixtureUart, &fixtureI2c,
-    &probeInfo);
+    &probeInfo, &probePins);
 
 void setup() {
   Serial.begin(115200);
