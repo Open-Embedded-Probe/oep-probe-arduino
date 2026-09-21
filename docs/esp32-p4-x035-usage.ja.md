@@ -82,6 +82,8 @@ uv run python -m oep_client \
 `0x1ffff704=0x035e0601`、flash base/size（`0x08000000`/63,488 byte）、FLASH OBRの
 read-protection無効、WPR全解除をread-onlyで確認する。どれかが不一致・保護中・読出し不能なら
 書込みは開始せずnonzeroで終了する。別package/familyへ`--flash-size`だけを変えて使うことはできない。
+たとえば`--flash-size 63424`は実機でexit=2、明示的なcapacity errorとなり、flash requestを送らずに
+終了することを確認した。
 
 書込み済みimageのverifyのみ:
 
