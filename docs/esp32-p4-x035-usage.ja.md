@@ -148,6 +148,9 @@ program-image pages=109 attempts=109 sha256=<63,488-byte image hash>
   staged pageを再commitすると成功し、reset後の全62 KiB hashは元imageと一致した。これは
   probe RAMが生きている間の再送回復だけを示す。P4 reset/電源断後にerase前imageを再構成できない
   制約は変わらない。
+- `OEP_X035_INJECT_FLASH_FAILURE=2`では最初の64-byte program直後に一度だけ失敗を注入した。
+  最初のcommitは`0xe2`で失敗し、独立readで先頭64 byteだけが希望値、続く24 byteが全FFの部分状態を
+  確認した。同じsessionのretry commitは成功し、reset後の全62 KiB hashは元imageと一致した。
 - `half_period_us=0`は今回の短いfixture配線で全域hash一致を確認した設定である。配線条件が変わる
   汎用probeでは設定可能なままにし、エラー時は遅い設定へ戻せるようにする。
 - target USBはOEP transportではない。USB deviceのbind状態はRVSWD書込みには関係しない。
