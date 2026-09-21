@@ -93,8 +93,11 @@ uv run python -m oep_client \
 
 CI/soakでwall timeを機械可読に残すには`--result-json`を併用する。成功時だけ指定fileへ原子的でない
 JSONを書き、`verify`/`verify_reset`またはprogramの各phaseを秒で記録する。2026-09-21のPWM image
-実機verifyでは`{"verify": 5.025535, "verify_reset": 0.00343}`だった。転送byte数・attach・page別の
-詳細telemetryはまだP0.2の未実装項目である。
+実機verifyでは`{"verify": 5.025535, "verify_reset": 0.00343}`だった。program時は
+`program.bytes_compared`、`program.bytes_verified`、`pages_programmed`、`attempts`、および
+`target_preflight`（ESIG/OBR/WPR）も出す。PWM imageが既に同一の場合の実機結果は比較/verify各
+63,488 byte、page=0、attempt=0、preflight 6.174 ms、比較4.998319 s、verify4.987103 sだった。
+attach単独、request別転送量、page別の詳細telemetryはまだP0.2の未実装項目である。
 
 ```sh
 uv run python -m oep_client \
