@@ -379,7 +379,18 @@ BackendResult X035RvswdTargetControl::programPage64(uint32_t address,
     recovery_page_ = physical_page;
     recovery_valid_ = true;
   }
-  memcpy(image + (address - physical_page), data, 64);
+  // commitPage256 reaches this established physical-page writer after it has
+  // staged all four fragments.  Keep recovery_image_ as the erase-before
+  // snapshot in both modes; only the desired page differs.
+  if (staged_commit_active_) {
+    if (staged_page_ != physical_page || staged_mask_ != 0x0f) {
+      diagnostic = 0xe4;
+      goto failed;
+    }
+    memcpy(image, staged_image_, sizeof(image));
+  } else {
+    memcpy(image + (address - physical_page), data, 64);
+  }
   uint32_t ctlr;
   if (!readWord(kFlashCtlr, ctlr)) goto failed;
   if (ctlr & 0x8080) {
@@ -468,13 +479,13 @@ BackendResult X035RvswdTargetControl::commitPage256(uint32_t address,
     diagnostic = 0xe4;  // wrong page or incomplete four-fragment image
     return BackendResult::Failed;
   }
-  // Reuse the proven single-page implementation.  Its recovery image is set
-  // to the full staged desired page, so the one 64-byte call programs all
-  // 256 bytes exactly once rather than doing four read-modify-write cycles.
-  memcpy(recovery_image_, staged_image_, sizeof(staged_image_));
-  recovery_page_ = address;
-  recovery_valid_ = true;
+  // Reuse the proven single-page implementation.  It first retains the
+  // erase-before page in recovery_image_, then selects staged_image_ as its
+  // desired 256-byte content.  A failed commit can therefore be retried
+  // without silently redefining the recovery contract.
+  staged_commit_active_ = true;
   const BackendResult result = programPage64(address, staged_image_, diagnostic);
+  staged_commit_active_ = false;
   if (result == BackendResult::Success) staged_mask_ = 0;
   return result;
 }
