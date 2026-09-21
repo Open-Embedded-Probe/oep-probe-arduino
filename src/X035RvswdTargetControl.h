@@ -53,6 +53,7 @@ class X035RvswdTargetControl : public TargetControlBackend,
   uint32_t staged_page_ = 0;
   uint8_t staged_mask_ = 0;
   uint8_t staged_image_[256]{};
+  bool staged_commit_active_ = false;
 
   void initializeBus();
   void releaseBus();
