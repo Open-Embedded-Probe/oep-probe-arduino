@@ -86,6 +86,18 @@ uv run python -m oep_client \
   --verify-image /tmp/ch32x035-build/<sketch>.ino.bin
 ```
 
+CI/soakでwall timeを機械可読に残すには`--result-json`を併用する。成功時だけ指定fileへ原子的でない
+JSONを書き、`verify`/`verify_reset`またはprogramの各phaseを秒で記録する。2026-09-21のPWM image
+実機verifyでは`{"verify": 5.025535, "verify_reset": 0.00343}`だった。転送byte数・attach・page別の
+詳細telemetryはまだP0.2の未実装項目である。
+
+```sh
+uv run python -m oep_client \
+  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
+  --verify-image /tmp/ch32x035-build/<sketch>.ino.bin \
+  --result-json /tmp/x035-verify.json
+```
+
 元imageへ戻す場合、退避ファイルは既に63,488 byteなのでそのまま指定できる。
 
 ```sh
