@@ -89,6 +89,12 @@ ESP-IDF 5系のP4 driverでは`rmt_new_rx_channel()`、`rmt_enable()`、非同�
 callback完了時刻は一致しない。このため「同時受信」は同一arm設定による二本の独立traceであり、完全な
 同期サンプルを主張しない。
 
+2026-09-21にP4（`30:ed:a0:e3:11:08`）でこの最小実装を実機確認した。GPIO52を`clock`、
+GPIO50を`data`としてleaseし、10 MHz RMT RXを二本armした後に、両入力idle High、raw symbol read、
+releaseを確認した。P4 RMT hardware blockは最小64 symbolsであり、host公開用の最初の16 recordsとは
+別に64をdriverへ指定する必要があった。I2C transactionを発生させるHIL trace/ACK decodeは次のgateであり、
+この結果はidle状態とlifecycleだけを示す。
+
 ### まず確認できること
 
 `0x42` への一回の書込みで、以下を一つの取得結果として返す。

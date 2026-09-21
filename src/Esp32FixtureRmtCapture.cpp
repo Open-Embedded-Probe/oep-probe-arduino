@@ -20,7 +20,10 @@ bool Esp32FixtureRmtCapture::configure(uint8_t clock_pin, uint8_t data_pin) {
       .gpio_num = static_cast<gpio_num_t>(clock_pin),
       .clk_src = RMT_CLK_SRC_DEFAULT,
       .resolution_hz = kResolutionHz,
-      .mem_block_symbols = kMaximumSymbols,
+      // The P4 RMT driver requires a hardware block of at least 64 symbols.
+      // The host-facing first cut retains only 16 records per line; that is
+      // sufficient to classify START/address/ACK and avoids a large OEP read.
+      .mem_block_symbols = 64,
       .intr_priority = 0,
       .flags = {},
   };
