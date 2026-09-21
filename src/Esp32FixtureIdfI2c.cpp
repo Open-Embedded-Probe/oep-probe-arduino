@@ -12,7 +12,10 @@ bool Esp32FixtureIdfI2c::begin() {
   config.send_buf_depth = 32;
   config.slave_addr = address_;
   config.addr_bit_len = I2C_ADDR_BIT_LEN_7;
-  config.flags.stretch_en = 1;
+  // One-shot diagnostic reception never needs to hold SCL.  Keeping slave
+  // stretch disabled also makes the address ACK path independently testable;
+  // a task-backed streaming peer may opt in once its stretch handling exists.
+  config.flags.stretch_en = 0;
   if (i2c_new_slave_device(&config, &device_) != ESP_OK) {
     end();
     return false;
