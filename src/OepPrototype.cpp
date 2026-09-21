@@ -178,13 +178,13 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       }
       if (capabilities_) {
         put16(response + response_length, ProbeCapabilities);
-        response[response_length + 2] = 1;
+        response[response_length + 2] = 2;
         response[response_length + 3] = 0;
         response_length += 4;
       }
       if (configuration_) {
         put16(response + response_length, ProbeConfiguration);
-        response[response_length + 2] = 1;
+        response[response_length + 2] = 2;
         response[response_length + 3] = 0;
         response_length += 4;
       }
