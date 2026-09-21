@@ -21,7 +21,7 @@ capability だけを使い、再現可能な HIL 試験を実行できる状態�
 
 ### P0.1 単一接続と状態回復
 
-- [ ] client が書込み、read、verify、target reset の全期間で board-identify 固定名
+- [x] client が書込み、read、verify、target reset の全期間で board-identify 固定名
   `/run/board-identify/by-id/esp32-series-30eda0e31108` を排他的に保持する。並行 open を
   明示的に拒否する。
 - [ ] transaction を `attach → halt → 操作 → verify → reset/release` として記録し、
@@ -59,6 +59,11 @@ hashを確認した。従ってhost processを強制終了する中断5回の基
 電源断でrecovery cacheが失われる場合と、execution中applicationをPWM波形で独立確認する場合は別の
 未完了試験である。watchdogの発火はOEP endpointのsession状態で判定しており、PWM波形を同時capture
 するobserverはまだないため、実行中applicationの波形による独立証明はP1で追加する。
+
+同一aliasに対するPOSIX advisory leaseも実機で確認した。全域verifyを実行中の一つ目のclientはexit=0で
+完走し、その間に起動した二つ目のclientはOEP frameを送る前にexit=2および
+`OEP transport is already in use: /run/board-identify/by-id/esp32-series-30eda0e31108`で拒否された。
+leaseはaliasの解決先をhashしたlock fileとpyserialのexclusive openを併用している。
 
 ### P0.2 速度の計測と改善
 
