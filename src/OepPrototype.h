@@ -285,6 +285,7 @@ struct FixtureI2cStatus {
   uint16_t rx_transactions = 0;
   uint16_t request_transactions = 0;
   uint32_t frequency_hz = 0;
+  uint8_t stretch_cause_mask = 0;
 };
 
 class FixtureI2cBackend {

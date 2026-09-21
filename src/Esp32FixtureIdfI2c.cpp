@@ -17,7 +17,8 @@ bool Esp32FixtureIdfI2c::begin() {
     end();
     return false;
   }
-  const i2c_slave_event_callbacks_t callbacks = { .on_recv_done = received };
+  const i2c_slave_event_callbacks_t callbacks = {
+      .on_stretch_occur = stretched, .on_recv_done = received};
   if (i2c_slave_register_event_callbacks(device_, &callbacks, this) != ESP_OK ||
       i2c_slave_receive(device_, rx_buffer_, sizeof(rx_buffer_)) != ESP_OK) {
     i2c_del_slave_device(device_);
@@ -26,6 +27,15 @@ bool Esp32FixtureIdfI2c::begin() {
     return false;
   }
   return true;
+}
+
+bool Esp32FixtureIdfI2c::stretched(
+    i2c_slave_dev_handle_t, const i2c_slave_stretch_event_data_t* event,
+    void* arg) {
+  auto* self = static_cast<Esp32FixtureIdfI2c*>(arg);
+  const uint8_t cause = static_cast<uint8_t>(event->stretch_cause);
+  if (cause < 8) self->stretch_cause_mask_ |= uint8_t(1) << cause;
+  return false;
 }
 
 bool Esp32FixtureIdfI2c::setPins(int sda_pin, int scl_pin) {
@@ -64,12 +74,14 @@ BackendResult Esp32FixtureIdfI2c::getStatus(FixtureI2cStatus& status) {
   if (!device_) return BackendResult::Unavailable;
   noInterrupts();
   const uint16_t received = rx_transactions_;
+  const uint8_t stretched = stretch_cause_mask_;
   interrupts();
   status.flags = 0x01;
   if (digitalRead(scl_pin_)) status.flags |= 0x02;
   if (digitalRead(sda_pin_)) status.flags |= 0x04;
   status.rx_transactions = received;
   status.frequency_hz = frequency_hz_;
+  status.stretch_cause_mask = stretched;
   return BackendResult::Success;
 }
 

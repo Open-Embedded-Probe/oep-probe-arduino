@@ -24,6 +24,8 @@ class Esp32FixtureIdfI2c : public FixtureI2cBackend {
  private:
   static bool received(i2c_slave_dev_handle_t,
                        const i2c_slave_rx_done_event_data_t*, void* arg);
+  static bool stretched(i2c_slave_dev_handle_t,
+                        const i2c_slave_stretch_event_data_t*, void* arg);
   i2c_port_num_t port_;
   uint8_t address_;
   int sda_pin_;
@@ -32,6 +34,7 @@ class Esp32FixtureIdfI2c : public FixtureI2cBackend {
   i2c_slave_dev_handle_t device_ = nullptr;
   uint8_t rx_buffer_[32]{};
   volatile uint16_t rx_transactions_ = 0;
+  volatile uint8_t stretch_cause_mask_ = 0;
 };
 
 }  // namespace oep::prototype

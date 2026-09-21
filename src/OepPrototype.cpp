@@ -611,7 +611,8 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
           put16(response + 9, status.rx_transactions);
           put16(response + 11, status.request_transactions);
           put32(response + 13, status.frequency_hz);
-          response_length = 17;
+          response[17] = status.stretch_cause_mask;
+          response_length = 18;
         }
       }
     }
