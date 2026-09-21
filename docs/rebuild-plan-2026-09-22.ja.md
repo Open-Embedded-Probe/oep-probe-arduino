@@ -1,0 +1,84 @@
+# 開発用プローブ再構築の全体計画（2026-09-22）
+
+状態: **作業計画**。この文書が進行順の正であり、
+[x035-release-worklist.ja.md](x035-release-worklist.ja.md)（release gate の証跡）と
+[progress-and-next-work-2026-09-22.ja.md](progress-and-next-work-2026-09-22.ja.md)（棚卸し）は参照先として残す。
+個々の実測は wch-protocols `experiments/LEDGER.ja.md` が正。
+
+## 方針
+
+1. **既存実装の温存は前提にしない。** 現 prototype（96-byte COBS frame、stop-and-wait、function ごとの手書き if-chain、
+   `digitalWrite` bit-bang）はゼロベースで、単純で拡張性の高い仕様へ破壊的に作り替える。
+2. **優先度は仕様の拡張性が最上位。** 速度だけの改善は「後回し task」へ載せる。ただし**実験の所要時間を圧迫する機能**
+   （例: full image program 12 s、verify 5 s）は、予備実験で先に潰してよい。
+3. **firmware は使う前に必ず転送する。** pytest（pytest-embedded-arduino-cli）で build → upload → 試験を 1 セットにする。
+   `sketch.yaml` で platform/library を pin し、port・pin は `.env`。過去 flash の保全は不要。
+4. **実験は wch-protocols の規則**（README 計画先行、同名 `.py`、銘板、`_runs/` 退避、採番）に従う。
+   E142〜E150 は `.py` 無し・手動操作で逸脱していた。以後は逸脱しない。
+5. 機材はこの session が占有する。別 repo への書込みと commit も本 session では許可されている。
+
+## 現在地（土台の実測、2026-09-22）
+
+| 実験 | 結果 |
+|---|---|
+| E151 GPIO edge cost | P4 の GPIO register は 1 access 300 ns。`digitalWrite` 570 ns/edge、`gpio_ll` 300、dedicated GPIO **52.8**（read 25.0）。RVSWD 1 bit: 1,770 / 800 / **94.5 ns** |
+| E152 `gpio_ll` RVSWD | half 0 ns でも 1 DMI read 53 µs（pp）。P4 コスト律速で target 上限は見えない。od は half 0 で崩れる |
+| E153 dedicated GPIO RVSWD | **pp + half 0 ns で X035F8U6 が全数一致、1 DMI read 10.1 µs（現行の約 1/12）**。od は half 300 ns 以下で崩れる |
+| chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
+
+現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
+(d) Python の 1 byte read、に分解できた。(a) は E153 で解決策が確定した。
+
+## 機材フェーズ
+
+- **Phase A: P4 二台 8 本 GPIO 直結**（現状）。fixture P4 `30eda0e31108`（X035F8U6 を RVSWD 接続）と peer P4 `30eda0e34a0e`。
+  HS USB は cable が埋まっており使えない。**peer を使う実験・8 本リンクで済む実験をここで全部消化する。**
+- **Phase B: HS USB**（cable を差し替え。8 本リンクと排他）。vendor bulk / HS CDC の transport 実験と、
+  streaming 系（capture download）はここへ集める。差し替えは Phase A の候補が尽きてから一度だけ行う。
+
+## 作業項目（優先順）
+
+### P0 仕様の拡張性（最優先）
+
+| ID | 項目 | 成果物 | 依存 |
+|---|---|---|---|
+| S1 | **core wire model v0 draft**: frame（length16 + seq + type + payload + CRC）、pipelining window、request / response / event、chunked transfer（transfer id）、service id + revision + private namespace、TLV capability、reject / failure model、session / lease | oep-spec `docs/v0-*.ja.md` | E155（USB-Serial/JTAG 往復）の数値で window / frame を決める |
+| S2 | **registry と codegen**: message 定義を 1 つの YAML に置き、C++ pack/unpack と Python codec と test vector を生成 | oep-spec `registry/`、生成物は各実装 repo | S1 |
+| S3 | **firmware 骨格**（oep-probe-arduino を作り直し）: transport 抽象（stream / bulk）、dispatcher、service registry、RVSWD PHY（dedicated GPIO、pp、明示 turnaround）、Target service（memory / flash を physical page 単位の transaction に）、Probe service（info / caps / lease）、Fixture service（GPIO、UART、I2C target `fixed-rx` / `framed-rx` / `preloaded-tx`、capture） | oep-probe-arduino `src/` | S2、E153、E156、E157 |
+| S4 | **client と runner**: registry から生成した codec、CLI、pytest HIL fixture、ArduinoCore-CH32 sketch runner（compile → program → UART → assert） | oep-client-python、ArduinoCore-CH32 `tests/` | S2、S3 |
+
+拡張性の判定基準: 未知 service / operation / TLV を副作用なく reject または無視できる、service revision を独立に上げられる、
+probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry から 2 実装が生成される。
+
+### P1 P0 に数値を与える実験（Phase A で実施）
+
+| ID | 問い | 用途 |
+|---|---|---|
+| E154 | P4 二台の 8 本 GPIO 直結の pin 対応は何か（E003 方式の探索） | 以後の peer 実験の前提 |
+| E155 | USB-Serial/JTAG の request 往復時間と帯域は message 64 / 512 / 4 KiB、in-flight 1 / 4 / 16 でいくらか | S1 の frame 上限と window |
+| E156 | dedicated GPIO PHY 上で、autoexec 連続 read の word ごと poll 省略、RAM loader による 256-byte page program は何 µs か | 実験時間の圧迫解消（予備実験の例外）。flash service の transaction 単位 |
+| E157〜 | peer P4 を相手にした fixture 能力の HIL: UART peer、I2C target 3 mode（E147〜E150 の OEP 経由移植）、GPIO drive / sample、RMT capture、SPI peer | S3 の各 service の受入試験 |
+
+### P2 Phase B（HS USB）
+
+vendor bulk transport（WinUSB flat layout、E081）、HS CDC 往復、in-flight 深さ、capture streaming。
+S1 の transport 抽象がここで 2 つ目の実装を得る。
+
+### P3 X035 core 検証
+
+worklist の P3 表を、新 stack（S3 + S4）だけで上から実施する。X035 I2C NACK の trace（RMT 2ch）は E157 系の capture が
+使えるようになった時点で行う。
+
+## 後回し task（速度のみ、または現時点で不要）
+
+- P0.2 の内訳 telemetry（attach / read / erase / program / verify の wall time、retry）。
+- 256-byte commit の変更 page 反復と failure injection の自動化。
+- Python client の 1 byte read ループ。
+- LinkE 比の速度目標。**release 判定は速度ではなく reliability gate で行う。**
+- EEPROM、`HardwareTimer` 移植（worklist どおり gate 外）。
+
+## 完了の定義
+
+1. S1〜S4 が揃い、E157 系の peer HIL と worklist P0 の reliability gate（verify 20 回、差分 program 20 回、中断 5 回）が新 stack で通る。
+2. capability 宣言と実装と HIL 結果が一致し、未実証 mode を返さない。
+3. X035 の P3 表を常駐 firmware だけで再現できる。

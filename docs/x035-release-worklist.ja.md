@@ -8,6 +8,8 @@ capability だけを使い、再現可能な HIL 試験を実行できる状態�
 [progress-and-next-work-2026-09-22.ja.md](progress-and-next-work-2026-09-22.ja.md)を参照する。
 この文書はrelease gateごとの詳細証跡と未完了条件を維持する。
 
+進行順と優先度は[rebuild-plan-2026-09-22.ja.md](rebuild-plan-2026-09-22.ja.md)を正とする。
+
 ## 原則
 
 1. **書込み・退避・verify が全試験の前提**である。周辺機能試験を先行しない。
