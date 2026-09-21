@@ -24,6 +24,9 @@ class X035RvswdTargetControl : public TargetControlBackend,
                            size_t length) override;
   BackendResult programPage64(uint32_t address, const uint8_t* data,
                               uint8_t& diagnostic) override;
+  BackendResult stagePage64(uint32_t address, const uint8_t* data,
+                             uint8_t& diagnostic) override;
+  BackendResult commitPage256(uint32_t address, uint8_t& diagnostic) override;
 
  private:
   uint8_t swdio_;
@@ -47,6 +50,9 @@ class X035RvswdTargetControl : public TargetControlBackend,
   uint32_t recovery_page_ = 0;
   bool recovery_valid_ = false;
   uint8_t recovery_image_[256]{};
+  uint32_t staged_page_ = 0;
+  uint8_t staged_mask_ = 0;
+  uint8_t staged_image_[256]{};
 
   void initializeBus();
   void releaseBus();

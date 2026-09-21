@@ -134,6 +134,11 @@ program-image pages=109 attempts=109 sha256=<63,488-byte image hash>
   最後のlook-aheadは範囲外になるため待機せず、次のscalar flash操作前にabstract cmderrをclearする。
   同じimageへの`--program-image --destructive`もpages=0、比較5.111秒、全域verify5.104秒、
   reset成功を確認した。変更pageのerase/program性能は別途測る。
+- TargetFlash revision 2 は、image更新clientだけが使う`stage-page64`（4 fragment）と
+  `commit-page256`を追加した。OEP message上限を変えず、full physical pageをprobe RAMへ
+  完成させてから一回だけ消去・program・readbackする。既存の`--program-page64`は単発診断用の
+  互換操作として残る。現在のimageと同じ先頭256 byteをstage/commitし、reset後に全62 KiB hashが
+  一致することを実機で確認した。変更fragmentを含むimageの反復性能と故障注入は次のP0試験である。
 - `half_period_us=0`は今回の短いfixture配線で全域hash一致を確認した設定である。配線条件が変わる
   汎用probeでは設定可能なままにし、エラー時は遅い設定へ戻せるようにする。
 - target USBはOEP transportではない。USB deviceのbind状態はRVSWD書込みには関係しない。

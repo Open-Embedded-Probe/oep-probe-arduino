@@ -29,6 +29,10 @@ enum TargetMemoryOperation : uint8_t {
 
 enum TargetFlashOperation : uint8_t {
   TargetProgramPage64 = 0x01,
+  // Revision 2 streaming path: four aligned fragments are buffered in probe
+  // RAM, then one physical 256-byte erase/program transaction commits them.
+  TargetStagePage64 = 0x02,
+  TargetCommitPage256 = 0x03,
 };
 
 enum FixtureGpioOperation : uint8_t {
@@ -90,6 +94,12 @@ class TargetFlashBackend {
   virtual ~TargetFlashBackend() = default;
   virtual BackendResult programPage64(uint32_t address, const uint8_t* data,
                                       uint8_t& diagnostic) = 0;
+  virtual BackendResult stagePage64(uint32_t, const uint8_t*, uint8_t&) {
+    return BackendResult::Unavailable;
+  }
+  virtual BackendResult commitPage256(uint32_t, uint8_t&) {
+    return BackendResult::Unavailable;
+  }
 };
 
 class FixtureGpioBackend {

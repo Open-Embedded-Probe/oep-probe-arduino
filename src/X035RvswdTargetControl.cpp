@@ -314,6 +314,7 @@ BackendResult X035RvswdTargetControl::normalizeUser() {
   // reset so execution starts from the target reset vector.
   writeDmi(kAbstractAuto, 0);
   sequential_read_valid_ = false;
+  staged_mask_ = 0;
   writeDmi(kDmControl, 0x00000003u);  // dmactive | ndmreset
   delayMicroseconds(100);
   writeDmi(kDmControl, 0x00000001u);  // release ndmreset
@@ -441,6 +442,43 @@ failed:
   return BackendResult::Failed;
 }
 
+BackendResult X035RvswdTargetControl::stagePage64(uint32_t address,
+                                                   const uint8_t* data,
+                                                   uint8_t& diagnostic) {
+  diagnostic = 1;
+  if ((address & 63) || (address & 0xff000000u) != 0x08000000u)
+    return BackendResult::Failed;
+  const uint32_t physical_page = address & ~uint32_t(255);
+  if (staged_mask_ && staged_page_ != physical_page) {
+    diagnostic = 0xe3;  // commit or reset the prior physical page first
+    return BackendResult::Failed;
+  }
+  if (!staged_mask_) staged_page_ = physical_page;
+  const uint8_t fragment = (address - physical_page) / 64;
+  memcpy(staged_image_ + fragment * 64, data, 64);
+  staged_mask_ |= uint8_t(1u << fragment);
+  diagnostic = 0;
+  return BackendResult::Success;
+}
+
+BackendResult X035RvswdTargetControl::commitPage256(uint32_t address,
+                                                     uint8_t& diagnostic) {
+  diagnostic = 1;
+  if ((address & 255) || address != staged_page_ || staged_mask_ != 0x0f) {
+    diagnostic = 0xe4;  // wrong page or incomplete four-fragment image
+    return BackendResult::Failed;
+  }
+  // Reuse the proven single-page implementation.  Its recovery image is set
+  // to the full staged desired page, so the one 64-byte call programs all
+  // 256 bytes exactly once rather than doing four read-modify-write cycles.
+  memcpy(recovery_image_, staged_image_, sizeof(staged_image_));
+  recovery_page_ = address;
+  recovery_valid_ = true;
+  const BackendResult result = programPage64(address, staged_image_, diagnostic);
+  if (result == BackendResult::Success) staged_mask_ = 0;
+  return result;
+}
+
 }  // namespace oep::prototype
 
 #else
@@ -451,5 +489,7 @@ BackendResult X035RvswdTargetControl::normalizeUser() { return BackendResult::Un
 BackendResult X035RvswdTargetControl::enterProductBootloader() { return BackendResult::Unavailable; }
 BackendResult X035RvswdTargetControl::readMemory(uint32_t, uint8_t*, size_t) { return BackendResult::Unavailable; }
 BackendResult X035RvswdTargetControl::programPage64(uint32_t, const uint8_t*, uint8_t&) { return BackendResult::Unavailable; }
+BackendResult X035RvswdTargetControl::stagePage64(uint32_t, const uint8_t*, uint8_t&) { return BackendResult::Unavailable; }
+BackendResult X035RvswdTargetControl::commitPage256(uint32_t, uint8_t&) { return BackendResult::Unavailable; }
 }  // namespace oep::prototype
 #endif

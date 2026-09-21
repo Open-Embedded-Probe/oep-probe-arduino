@@ -43,6 +43,10 @@ capability だけを使い、再現可能な HIL 試験を実行できる状態�
   post-frame guard 0 µsはfull verify 3/3で確認済みだが、内訳telemetryは未実装である。
 - [ ] 現行の 64-byte logical page と target flash の物理 page 境界を再確認し、OEP payload
   上限内の複数 page/burst、連続 read、不要な attach/halt の削減を設計する。
+  TargetFlash revision 2 は `stage-page64` を4回受けた後の`commit-page256`で、X035の
+  256-byte physical erase pageを一度だけerase/programする。4 fragment未満のcommitは拒否し、
+  stageだけではtarget flashを書換えない。現imageと同一の先頭256 byteをstage/commitして
+  全域hash一致まで実機確認済み。変更pageを含む反復・failure injection・中断後のstage破棄は未完了。
 - [ ] program 前の差分比較、program 後の該当範囲 verify、最後の full image verify を分離し、
   利用者が安全性と時間のトレードオフを明示選択できるようにする。release HIL は full verify
   を必須とする。
