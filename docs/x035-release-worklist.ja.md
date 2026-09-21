@@ -136,20 +136,20 @@ SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22be
 
 ### P1.1 profile と discovery
 
-- [ ] `ProbeInfo` に probe firmware revision、board profile id、target transport、予約 pin、
-  電圧範囲、利用可能な capability revision を追加する。初期revisionはfunction `0x0001`で
-  profile `P4X3`、firmware revision、予約pin mask、fixture pin maskを返す。P4実機で
-  function 7件の列挙とこの応答を確認済み。transport、電圧範囲、capability revisionは次revision。
-- [ ] `PinMatrix` に各 fixture pin の target pin、方向、input-only、open-drain 可否、
-  ADC source/measurement 可否、予約理由を返す。現行 X035/P4 対応表を profile の初期値にする。
-- [ ] capability ごとに候補 pin set と相互排他 resource を返す。host は任意 GPIO 番号を
+- [x] `ProbeInfo` は generic profile `P4DV`、firmware revision、予約pin mask、fixture pin maskを返す。
+  `ProbeCapabilities` revision 1 はP4自身のchannel、電圧domain、UART groupだけをpage取得で返す。
+  2026-09-21にP4実機から取得を確認済み。transport、最大速度、較正値は個別capability追加時に返す。
+- [x] capabilityはP4のchannel候補、方向、input-only、open-drain可否、予約理由、相互排他resourceだけを返す。
+  target pin/board名/既知配線表を返す`PinMatrix`は廃止する。接続先はhostのConnectionManifestで扱う。
+- [x] capability ごとに候補 pin set と相互排他 resource を返す。host は任意 GPIO 番号を
   仮定せず discovery 結果だけで構成する。
 
 ### P1.2 共通の lifecycle
 
 - [ ] 全 capability を `configure(config) → enable → getStatus/readResult → disable` に統一する。
-- [ ] `configure` は pin/resource lease を原子的に取得し、競合（例: GPIO50/52 を I2C と
-  GPIO drive で同時使用）を structured error として返す。
+- [x] `ProbeConfiguration` revision 1 の`apply`/`release`はUART groupのpin/resource leaseを原子的に
+  取得・解放し、すでにlease中または未知のrole/channelは変更なしで拒否する。I2C/GPIO/captureの競合は
+  backend実装時に同じcontractへ追加する。
 - [ ] `disable`、host disconnect、watchdog timeout で pin を input/release、peripheral を停止、
   trace を凍結する。
 - [ ] `getStatus` は設定値、実効設定、開始結果、overflow、error、最後の timestamp を返す。

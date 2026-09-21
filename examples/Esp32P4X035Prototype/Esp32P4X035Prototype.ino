@@ -4,6 +4,7 @@
 #include <Esp32FixtureGpio.h>
 #include <Esp32FixtureIdfI2c.h>
 #include <Esp32P4ProbeCapabilities.h>
+#include <Esp32P4ProbeConfiguration.h>
 #include <Esp32FixtureUart.h>
 #include <StaticProbeInfo.h>
 #include <X035RvswdTargetControl.h>
@@ -28,7 +29,7 @@ oep::prototype::Esp32FixtureGpio fixtureGpio(
 // PB1 (DUT RX) <- GPIO6 (probe TX). USART4 is selected for fixture tests
 // because both board header signals are mapped; USART2 is retained for
 // diagnosing its independent long-TX issue.
-oep::prototype::Esp32FixtureUart fixtureUart(Serial1, 12, 6);
+oep::prototype::Esp32FixtureUart fixtureUart(Serial1);
 // X035 route-2 pair: PC16(SCL)->GPIO52, PC17(SDA)->GPIO50. The software
 // target is retained as a 10 kHz fault-isolation backend. This image bypasses
 // Arduino Wire and uses the ESP-IDF I2C1 slave driver directly.
@@ -44,9 +45,10 @@ oep::prototype::StaticProbeInfo probeInfo({
         (uint64_t{1} << 26) | (uint64_t{1} << 27) | (uint64_t{1} << 54),
     0x003ffffffffffffbull});
 oep::prototype::Esp32P4ProbeCapabilities probeCapabilities;
+oep::prototype::Esp32P4ProbeConfiguration probeConfiguration(fixtureUart);
 oep::prototype::Endpoint endpoint(
     Serial, &target, &target, &target, &fixtureGpio, &fixtureUart, &fixtureI2c,
-    &probeInfo, &probeCapabilities);
+    &probeInfo, &probeCapabilities, &probeConfiguration);
 
 void setup() {
   Serial.begin(115200);

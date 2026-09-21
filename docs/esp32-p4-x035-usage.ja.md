@@ -195,9 +195,12 @@ prototypeとして呼び出す。
 - 高速化後は約80秒で別imageへ更新して全域検証できる。core開発の反復には使えるが、通常の
   Arduino uploadとしてはまだ遅い。今後は256-byte物理page単位の転送・処理が改善候補となる。
 - 現在のP4 exampleはTargetControl / TargetMemory / TargetFlashに加え、FixtureGpioとFixtureUartを
-  公開する。FixtureUartはUSART4（PB0→P4 GPIO12、PB1←P4 GPIO6）を115200 bpsで使え、`core_api`の
-  command/response自己試験を完走した。FixtureGpioは安全なallowed pinのread、input pull、push-pull、
-  open-drainを構成できる。target outputとの競合を避け、終了時はfloating inputへ戻す。
+  公開する。genericな`ProbeCapabilities`と`ProbeConfiguration`も公開し、hostがConnectionManifestを
+  解決してUART groupを原子的に予約・解放してからbaudを設定する。capsはP4 firmwareの能力だけを返し、
+  CH32X035名・DUT pin名・今回の配線を含まない。revision 1で構成可能なのはSerial1のRX GPIO12/TX GPIO6
+  だけであり、`core_api`のcommand/response自己試験を完走した既知の経路である。FixtureGpioは安全な
+  allowed pinのread、input pull、push-pull、open-drainを構成できる。target outputとの競合を避け、終了時は
+  floating inputへ戻す。
 - ADC端点はPA5/P4 GPIO4で0 V相当（ADC=2）と3.3 V相当（ADC=1001）を実測した。一方、P4の両pullは
   ADC=345（約1.1 V）であり、1.65 V基準には使えない。中点のrelease検証には校正済みDACまたは外付け
   分圧が必要である。
@@ -212,5 +215,7 @@ prototypeとして呼び出す。
   Arduino-ESP32 3.3.11 の `Wire` slave は本治具で address ACK しなかったため、正式実装の
   基盤には使わない。ESP-IDF I2C slave driver の direct path は同じ10 kHz試験で受信できたが、
   現在は一回受信の診断用である。
+  このbackendはまだstop/reconfigureを安全に実装していないため、generic Caps/Configurationには宣言しない。
+  固定配線を暗黙に再利用しないことが、target差し替え可能なprobeの前提である。
 - target型番・flash容量・保護状態を自動確認しないため、別targetへ誤って書くことを防げない。
   capabilityだけでなくtarget identityを返す機能が正式probeには必要である。
