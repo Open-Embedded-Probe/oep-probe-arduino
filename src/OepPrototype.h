@@ -26,6 +26,7 @@ enum ProbeCapabilitiesOperation : uint8_t {
   ProbeCapabilitiesGetChannel = 0x02,
   ProbeCapabilitiesGetGroup = 0x03,
   ProbeCapabilitiesGetVoltageDomain = 0x04,
+  ProbeCapabilitiesGetGroupRole = 0x05,
 };
 
 // Configuration is deliberately separate from capability discovery.  A host
@@ -116,6 +117,12 @@ struct ProbeGroupCapability {
   uint64_t exclusive_group_mask = 0;
 };
 
+struct ProbeGroupRoleCapability {
+  uint16_t group_id = 0;
+  uint8_t role_id = 0;
+  uint8_t function = 0;
+};
+
 struct ProbeVoltageDomainCapability {
   uint8_t id = 0;
   // bit 0: probe may actively drive this domain.
@@ -134,10 +141,16 @@ class ProbeCapabilitiesBackend {
                                  ProbeGroupCapability& group) = 0;
   virtual BackendResult getVoltageDomain(
       uint8_t ordinal, ProbeVoltageDomainCapability& domain) = 0;
+  virtual BackendResult getGroupRole(uint8_t group_ordinal,
+                                     uint8_t role_ordinal,
+                                     ProbeGroupRoleCapability& role) = 0;
 };
 
 struct ProbeConfigurationRole {
   uint16_t group_id = 0;
+  // Zero is the revision-1 compatibility form, where function identifies a
+  // role.  Revision 2 carries the stable capability role identifier.
+  uint8_t role_id = 0;
   uint8_t function = 0;
   uint16_t channel_id = 0;
 };

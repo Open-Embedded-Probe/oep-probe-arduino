@@ -331,9 +331,26 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
           response_length = 13;
         }
       }
+    } else if (operation == ProbeCapabilitiesGetGroupRole && length == 8) {
+      ProbeGroupRoleCapability role;
+      const BackendResult result = capabilities_->getGroupRole(
+          message[6], message[7], role);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          put16(response + 7, role.group_id);
+          response[9] = role.role_id;
+          response[10] = role.function;
+          response_length = 11;
+        }
+      }
     } else {
       const bool known = operation >= ProbeCapabilitiesGetSummary &&
-          operation <= ProbeCapabilitiesGetVoltageDomain;
+          operation <= ProbeCapabilitiesGetGroupRole;
       response[6] = known ? kRejectPayload : kRejectOperation;
     }
     sendMessage(response, response_length);
@@ -344,9 +361,12 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
     if (!configuration_) {
       response[6] = kRejectUnavailable;
     } else if (operation == ProbeConfigurationApply) {
-      // revision, role count, then {group:u16, function:u8, channel:u16}.
-      if (length < 8 || message[6] != 1 || !message[7] ||
-          length != 8 + static_cast<size_t>(message[7]) * 5) {
+      // Revision 1: {group:u16, function:u8, channel:u16}; revision 2 adds
+      // the stable role id between group and function.
+      const uint8_t revision = length >= 7 ? message[6] : 0;
+      const size_t role_size = revision == 1 ? 5 : revision == 2 ? 6 : 0;
+      if (length < 8 || !role_size || !message[7] ||
+          length != 8 + static_cast<size_t>(message[7]) * role_size) {
         response[6] = kRejectPayload;
       } else {
         constexpr size_t kMaximumConfigurationRoles =
@@ -354,12 +374,14 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
         ProbeConfigurationRole roles[kMaximumConfigurationRoles];
         const uint8_t count = message[7];
         for (uint8_t index = 0; index < count; ++index) {
-          const uint8_t* encoded = message + 8 + index * 5;
+          const uint8_t* encoded = message + 8 + index * role_size;
           roles[index].group_id = encoded[0] |
               static_cast<uint16_t>(encoded[1]) << 8;
-          roles[index].function = encoded[2];
-          roles[index].channel_id = encoded[3] |
-              static_cast<uint16_t>(encoded[4]) << 8;
+          roles[index].role_id = revision == 2 ? encoded[2] : 0;
+          roles[index].function = encoded[revision == 2 ? 3 : 2];
+          const uint8_t channel_offset = revision == 2 ? 4 : 3;
+          roles[index].channel_id = encoded[channel_offset] |
+              static_cast<uint16_t>(encoded[channel_offset + 1]) << 8;
         }
         uint32_t lease_id = 0;
         const BackendResult result = configuration_->apply(roles, count, lease_id);

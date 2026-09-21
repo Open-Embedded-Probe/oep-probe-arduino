@@ -15,6 +15,8 @@ class Esp32P4ProbeCapabilities final : public ProbeCapabilitiesBackend {
                          ProbeGroupCapability& group) override;
   BackendResult getVoltageDomain(
       uint8_t ordinal, ProbeVoltageDomainCapability& domain) override;
+  BackendResult getGroupRole(uint8_t group_ordinal, uint8_t role_ordinal,
+                             ProbeGroupRoleCapability& role) override;
 };
 
 }  // namespace oep::prototype

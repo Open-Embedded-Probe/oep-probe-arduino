@@ -197,8 +197,11 @@ prototypeとして呼び出す。
 - 現在のP4 exampleはTargetControl / TargetMemory / TargetFlashに加え、FixtureGpioとFixtureUartを
   公開する。genericな`ProbeCapabilities`と`ProbeConfiguration`も公開し、hostがConnectionManifestを
   解決してUART groupを原子的に予約・解放してからbaudを設定する。capsはP4 firmwareの能力だけを返し、
-  CH32X035名・DUT pin名・今回の配線を含まない。revision 1で構成可能なのはSerial1のRX GPIO12/TX GPIO6
-  だけであり、`core_api`のcommand/response自己試験を完走した既知の経路である。FixtureGpioは安全な
+  CH32X035名・DUT pin名・今回の配線を含まない。Caps/Configuration revision 2はgroup内roleにも安定した
+  wire ID（UARTは`rx=1`/`tx=2`、I2Cは`sda=1`/`scl=2`）を持たせる。したがって、将来clock/dataのように
+  同じfunctionを使う複数roleも曖昧にせずplanへエンコードできる。revision 1 peerとの互換decodeは残すが、
+  新規capabilityはrevision 2を使う。現在構成可能なのはSerial1のRX GPIO12/TX GPIO6とI2C targetの
+  SDA GPIO50/SCL GPIO52であり、`core_api`のcommand/response自己試験を完走した既知の経路である。FixtureGpioは安全な
   allowed pinのread、input pull、push-pull、open-drainを構成できる。target outputとの競合を避け、終了時は
   floating inputへ戻す。
 - ADC端点はPA5/P4 GPIO4で0 V相当（ADC=2）と3.3 V相当（ADC=1001）を実測した。一方、P4の両pullは

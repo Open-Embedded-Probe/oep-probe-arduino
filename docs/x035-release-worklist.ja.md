@@ -137,8 +137,9 @@ SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22be
 ### P1.1 profile と discovery
 
 - [x] `ProbeInfo` は generic profile `P4DV`、firmware revision、予約pin mask、fixture pin maskを返す。
-  `ProbeCapabilities` revision 1 はP4自身のchannel、電圧domain、UART groupだけをpage取得で返す。
-  2026-09-21にP4実機から取得を確認済み。transport、最大速度、較正値は個別capability追加時に返す。
+  `ProbeCapabilities` revision 2 はP4自身のchannel、電圧domain、groupをpage取得で返し、group roleも
+  ordinal queryで安定wire IDとして返す。revision 1のfunction-only group roleではcapture二本を区別できない
+  ため、新規capabilityはrevision 2を必須とする。transport、最大速度、較正値は個別capability追加時に返す。
 - [x] capabilityはP4のchannel候補、方向、input-only、open-drain可否、予約理由、相互排他resourceだけを返す。
   target pin/board名/既知配線表を返す`PinMatrix`は廃止する。接続先はhostのConnectionManifestで扱う。
 - [x] capability ごとに候補 pin set と相互排他 resource を返す。host は任意 GPIO 番号を
@@ -147,7 +148,7 @@ SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22be
 ### P1.2 共通の lifecycle
 
 - [ ] 全 capability を `configure(config) → enable → getStatus/readResult → disable` に統一する。
-- [x] `ProbeConfiguration` revision 1 の`apply`/`release`はUART groupのpin/resource leaseを原子的に
+- [x] `ProbeConfiguration` revision 2 の`apply`/`release`はUART groupのpin/resource leaseを原子的に
   取得・解放し、すでにlease中または未知のrole/channelは変更なしで拒否する。I2C targetも同一planへ
   含められ、start失敗時はpinをinputへ戻す。I2C再構成の実機確認、GPIO/captureの競合は継続する。
   2026-09-21にP4（MAC `30:ed:a0:e3:11:08`）で、未予約UART/I2Cの拒否、UART RX12/TX6と

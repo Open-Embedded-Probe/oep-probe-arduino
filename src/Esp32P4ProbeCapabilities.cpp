@@ -18,7 +18,7 @@ bool reserved(uint8_t pin) {
 
 BackendResult Esp32P4ProbeCapabilities::getSummary(
     ProbeCapabilitiesSummary& summary) {
-  summary.revision = 1;
+  summary.revision = 2;
   summary.channel_count = 55;
   summary.group_count = 2;
   summary.voltage_domain_count = 1;
@@ -72,6 +72,26 @@ BackendResult Esp32P4ProbeCapabilities::getVoltageDomain(
   domain.nominal_mv = 3300;
   domain.input_max_mv = 3600;
   return BackendResult::Success;
+}
+
+BackendResult Esp32P4ProbeCapabilities::getGroupRole(
+    uint8_t group_ordinal, uint8_t role_ordinal,
+    ProbeGroupRoleCapability& role) {
+  // Role IDs are group-local and stable across probe MCUs: 1/2 identify the
+  // two terminals, while `function` states their electrical purpose.
+  if (group_ordinal == 0 && role_ordinal < 2) {
+    role.group_id = 1;
+    role.role_id = role_ordinal + 1;  // rx, tx
+    role.function = role_ordinal ? ProbeUartTx : ProbeUartRx;
+    return BackendResult::Success;
+  }
+  if (group_ordinal == 1 && role_ordinal < 2) {
+    role.group_id = 2;
+    role.role_id = role_ordinal + 1;  // sda, scl
+    role.function = role_ordinal ? ProbeI2cScl : ProbeI2cSda;
+    return BackendResult::Success;
+  }
+  return BackendResult::Unavailable;
 }
 
 }  // namespace oep::prototype
