@@ -137,7 +137,9 @@ SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22be
 ### P1.1 profile と discovery
 
 - [ ] `ProbeInfo` に probe firmware revision、board profile id、target transport、予約 pin、
-  電圧範囲、利用可能な capability revision を追加する。
+  電圧範囲、利用可能な capability revision を追加する。初期revisionはfunction `0x0001`で
+  profile `P4X3`、firmware revision、予約pin mask、fixture pin maskを返す。P4実機で
+  function 7件の列挙とこの応答を確認済み。transport、電圧範囲、capability revisionは次revision。
 - [ ] `PinMatrix` に各 fixture pin の target pin、方向、input-only、open-drain 可否、
   ADC source/measurement 可否、予約理由を返す。現行 X035/P4 対応表を profile の初期値にする。
 - [ ] capability ごとに候補 pin set と相互排他 resource を返す。host は任意 GPIO 番号を
