@@ -84,12 +84,15 @@ target先頭88 byteは全FFで、旧pageをcacheだけから復元できない�
 `b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`が一致した。従ってP4 reset/
 電源断後の正しい復旧単位は「retained recovery cache」ではなく、hostが保有する完全imageである。
 
-F8U6向けCore自己試験の再開では、既存の`CH32_SERIAL_DEFAULT=4`付きC8T6 `core_api` binaryを
-F8U6へ書込み、P4 FixtureUart（GPIO12/6、115200）からREADYを8秒、RUN後を12秒観測したが、UART byteは
-0件だった。このbinaryはC8T6 variantであり、F8U6のHIL合格には使わない。環境のArduino CLIにはこの時点で
-`ch32-riscv-ug:ch32v` packageが登録されておらず、F8U6 FQBNの再buildもできなかった。UART route/bridge/
-F8U6 build profileを再構成してから再試験する。試験後はPWM完全imageへ39 physical page、39 attemptsで
-復帰し、全域hash一致を確認した。
+F8U6向けCore自己試験は、`CH32_SERIAL_DEFAULT=4`付きのC8T6 binaryをF8U6へ書込んだ初回観測を
+合格扱いにしなかった。このbinaryではREADY/RUNを確認できなかったため、F8U6 HIL evidenceには使わない。
+続いてArduino CLIのuser/data/download directoryを完全隔離し、`sketch.yaml`の旧package profileを
+ビルド入力から外して、working treeの`CH32X035:pnum=CH32X035F8U6`をxPack toolchainでbuildした。
+compile commandに`ARDUINO_CH32X035F8U6`と`CH32_SERIAL_DEFAULT=4`があることを確認したF8U6固有の
+9,780-byte `core_api`をOEPでprogram（39 physical page、14.808338 s）し、63,488-byte full verify
+（5.108294 s）まで成功した。P4 FixtureUart（GPIO12/6、115200）でREADY後に`RUN`を送ると、19項目全てが
+PASSし`core_api done failures=0`を受信した。UART route/bridge/F8U6 build profileの基礎確認はこれで
+解消した。targetはこのF8U6 `core_api` imageを保持しており、image復帰は行わない。
 
 プロトコル破損経路も実機確認した。validな4-byte code-flash readでRVSWD sessionをactiveにした直後、
 CRCに届かない不正COBS frameを送った。endpointはframeを破棄し、最後のvalid requestから2秒待機して

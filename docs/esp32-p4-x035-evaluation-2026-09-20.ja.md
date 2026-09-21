@@ -10,7 +10,7 @@ fixture GPIOを公開していないため、ArduinoCore-CH32の既存selftest�
 ## 実機確認
 
 - probe固定名: `/run/board-identify/by-id/esp32-series-30eda0e31108`
-- target: CH32X035C8T6、flash 63,488 byte
+- target: CH32X035F8U6、flash 63,488 byte
 - 初期image保全SHA-256: `17ad3777ba42af0bd8d61ae5521ab5a4d5f10057e148d22b3fae5b8fbc235988`
 - 診断imageの書込み後SHA-256: `5449097718257fb15ebcf7deb17fe039b9e75eac8de39f23e62d7ee583bb8bac`
 - 全域read: 24.80秒、hash一致
@@ -91,6 +91,19 @@ USART2のPA2/PA3も物理対応は確認済みだが、長い連続出力時にX
 core headerと同様、U modeからアクセスできるQingKe CSR `0x800`の割込みenable bits `0x88`で
 保存・マスク・復帰するようCoreを修正した。Arduino APIの`interrupts()` / `noInterrupts()`も同じCSRを使う。
 RAM phase markerでPWMの0→128→255を連続完走してから、通常の自己試験で確認した。
+
+2026-09-21に、P4がESIG `0x1ffff704`から読んだchip-id
+`0x035e0601`（CH32X035F8U6）へ、同じF8U6 variantで新規にbuildした
+`core_api`を再書込みした。buildは隔離したArduino CLIのuser/data/download directory内で行い、
+`ARDUINO_CH32X035F8U6`と`CH32_SERIAL_DEFAULT=4`をcompile commandから確認した。imageは9,780 byte、
+OEPのF8U6 preflight（63,488 byte flash、OBR `0x03fffffc`、WPR `0xffffffff`）後に39 physical pageを
+programし、全域verifyまで成功した（program 14.808338 s、verify 5.108294 s）。
+
+FixtureUart（PB0 TX→P4 GPIO12 RX、PB1 RX←P4 GPIO6 TX、115200 baud）で起動bannerを待ち、
+`RUN\\n`を送った結果、`core_api done failures=0`を受信した。PASSした19項目は`millis`、`micros`、
+digital I/O、pin encoding、`analogRead`、ADC channel、`analogWrite`、attach/detach interrupt、
+`shiftOut`、`pulseIn_timeout`、乱数、`availableForWrite`、port API群である。従って、ここでの
+Core自己試験はC8T6 binaryの代用ではなく、実装対象CH32X035F8U6のHIL evidenceである。
 
 ## X035 core検証の次段階
 
