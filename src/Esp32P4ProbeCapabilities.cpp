@@ -20,7 +20,7 @@ BackendResult Esp32P4ProbeCapabilities::getSummary(
     ProbeCapabilitiesSummary& summary) {
   summary.revision = 2;
   summary.channel_count = 55;
-  summary.group_count = 2;
+  summary.group_count = 3;
   summary.voltage_domain_count = 1;
   return BackendResult::Success;
 }
@@ -34,6 +34,7 @@ BackendResult Esp32P4ProbeCapabilities::getChannel(
   channel.voltage_domain_mask = 0x01;
   channel.function_mask = kDigitalInput;
   if (ordinal != 46) channel.function_mask |= kDigitalOutput;
+  if (!reserved(ordinal)) channel.function_mask |= function(ProbeCapture);
 
   // These are capabilities of the currently compiled backends, not a DUT
   // mapping. Dynamic peripheral muxing may widen the candidates later.
@@ -59,6 +60,13 @@ BackendResult Esp32P4ProbeCapabilities::getGroup(
     group.kind = ProbeGroupI2cTarget;
     group.instance = 1;
     group.role_mask = function(ProbeI2cSda) | function(ProbeI2cScl);
+    return BackendResult::Success;
+  }
+  if (ordinal == 2) {
+    group.id = 3;
+    group.kind = ProbeGroupCapture;
+    group.instance = 1;
+    group.role_mask = function(ProbeCapture);
     return BackendResult::Success;
   }
   return BackendResult::Unavailable;
@@ -89,6 +97,12 @@ BackendResult Esp32P4ProbeCapabilities::getGroupRole(
     role.group_id = 2;
     role.role_id = role_ordinal + 1;  // sda, scl
     role.function = role_ordinal ? ProbeI2cScl : ProbeI2cSda;
+    return BackendResult::Success;
+  }
+  if (group_ordinal == 2 && role_ordinal < 2) {
+    role.group_id = 3;
+    role.role_id = role_ordinal + 1;  // clock, data
+    role.function = ProbeCapture;
     return BackendResult::Success;
   }
   return BackendResult::Unavailable;

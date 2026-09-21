@@ -10,15 +10,29 @@ bool Esp32FixtureGpio::allowed(uint8_t pin) const {
   return false;
 }
 
+bool Esp32FixtureGpio::locked(uint8_t pin) const {
+  return pin == capture_first_ || pin == capture_second_;
+}
+
+void Esp32FixtureGpio::lockCapturePins(uint8_t first, uint8_t second) {
+  capture_first_ = first;
+  capture_second_ = second;
+}
+
+void Esp32FixtureGpio::unlockCapturePins() {
+  capture_first_ = 0xff;
+  capture_second_ = 0xff;
+}
+
 BackendResult Esp32FixtureGpio::readDigital(uint8_t pin, uint8_t& value) {
-  if (!allowed(pin)) return BackendResult::Unavailable;
+  if (!allowed(pin) || locked(pin)) return BackendResult::Unavailable;
   pinMode(pin, INPUT);
   value = digitalRead(pin) ? 1 : 0;
   return BackendResult::Success;
 }
 
 BackendResult Esp32FixtureGpio::configureDigital(uint8_t pin, uint8_t mode) {
-  if (!allowed(pin)) return BackendResult::Unavailable;
+  if (!allowed(pin) || locked(pin)) return BackendResult::Unavailable;
 
   gpio_config_t config = {};
   config.pin_bit_mask = uint64_t{1} << pin;

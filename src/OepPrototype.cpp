@@ -167,7 +167,8 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       response[4] = 0;
       response[5] = (target_ ? 1 : 0) + (memory_ ? 1 : 0) + (info_ ? 1 : 0) +
           (capabilities_ ? 1 : 0) + (configuration_ ? 1 : 0) +
-          (flash_ ? 1 : 0) + (gpio_ ? 1 : 0) + (i2c_ ? 1 : 0);
+          (flash_ ? 1 : 0) + (gpio_ ? 1 : 0) + (i2c_ ? 1 : 0) +
+          (capture_ ? 1 : 0);
       if (uart_) ++response[5];
       response_length = 6;
       if (info_) {
@@ -220,6 +221,12 @@ void Endpoint::handleCoreRequest(uint8_t* message, size_t length) {
       }
       if (i2c_) {
         put16(response + response_length, FixtureI2c);
+        response[response_length + 2] = 1;
+        response[response_length + 3] = 0;
+        response_length += 4;
+      }
+      if (capture_) {
+        put16(response + response_length, FixtureCapture);
         response[response_length + 2] = 1;
         response[response_length + 3] = 0;
         response_length += 4;
@@ -607,6 +614,53 @@ void Endpoint::handleFunctionRequest(uint8_t* message, size_t length) {
           response_length = 17;
         }
       }
+    }
+    sendMessage(response, response_length);
+    return;
+  }
+  if (target == FixtureCapture) {
+    if (!capture_) {
+      response[6] = kRejectUnavailable;
+    } else if (operation == FixtureCaptureGetStatus && length == 6) {
+      FixtureCaptureStatus status;
+      const BackendResult result = capture_->getStatus(status);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          response[7] = status.flags;
+          response[8] = status.clock_symbols;
+          response[9] = status.data_symbols;
+          put32(response + 10, status.resolution_hz);
+          response_length = 14;
+        }
+      }
+    } else if (operation == FixtureCaptureReadSymbols && length == 9 &&
+               message[8] && message[8] <= 16) {
+      uint32_t symbols[16]{};
+      size_t count = 0;
+      const BackendResult result = capture_->readSymbols(
+          message[6], message[7], message[8], symbols, count);
+      if (result == BackendResult::Unavailable) {
+        response[6] = kRejectUnavailable;
+      } else {
+        response[1] = kResolutionCompleted;
+        response[6] = result == BackendResult::Success ?
+            kOutcomeSuccess : kOutcomeFailed;
+        if (result == BackendResult::Success) {
+          response[7] = count;
+          for (size_t index = 0; index < count; ++index)
+            put32(response + 8 + index * 4, symbols[index]);
+          response_length = 8 + count * 4;
+        }
+      }
+    } else {
+      response[6] = operation == FixtureCaptureGetStatus ||
+          operation == FixtureCaptureReadSymbols ? kRejectPayload :
+          kRejectOperation;
     }
     sendMessage(response, response_length);
     return;

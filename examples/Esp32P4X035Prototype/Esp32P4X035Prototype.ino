@@ -3,6 +3,7 @@
 #include <driver/gpio.h>
 #include <Esp32FixtureGpio.h>
 #include <Esp32FixtureIdfI2c.h>
+#include <Esp32FixtureRmtCapture.h>
 #include <Esp32P4ProbeCapabilities.h>
 #include <Esp32P4ProbeConfiguration.h>
 #include <Esp32FixtureUart.h>
@@ -35,6 +36,7 @@ oep::prototype::Esp32FixtureUart fixtureUart(Serial1);
 // Arduino Wire and uses the ESP-IDF I2C1 slave driver directly.
 oep::prototype::Esp32FixtureIdfI2c fixtureI2c(
     I2C_NUM_1, 0x42, 50, 52, 10000);
+oep::prototype::Esp32FixtureRmtCapture fixtureCapture;
 // `P4DV` identifies the generic P4 development-probe hardware/firmware, not
 // the attached DUT. GPIO2/54 are used by this firmware's target transport;
 // GPIO24--27 are reserved by USB. ProbeCapabilities is the authoritative,
@@ -46,9 +48,9 @@ oep::prototype::StaticProbeInfo probeInfo({
     0x003ffffffffffffbull});
 oep::prototype::Esp32P4ProbeCapabilities probeCapabilities;
 oep::prototype::Esp32P4ProbeConfiguration probeConfiguration(
-    fixtureUart, fixtureI2c);
+    fixtureUart, fixtureI2c, fixtureCapture, fixtureGpio);
 oep::prototype::Endpoint endpoint(
-    Serial, &target, &target, &target, &fixtureGpio, &fixtureUart, &fixtureI2c,
+    Serial, &target, &target, &target, &fixtureGpio, &fixtureUart, &fixtureI2c, &fixtureCapture,
     &probeInfo, &probeCapabilities, &probeConfiguration);
 
 void setup() {

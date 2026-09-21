@@ -18,6 +18,7 @@ enum FunctionReference : uint16_t {
   FixtureUart = 0x0202,
   FixtureI2c = 0x0203,
   FixtureSpi = 0x0204,
+  FixtureCapture = 0x0205,
 };
 
 enum ProbeInfoOperation : uint8_t { ProbeInfoGet = 0x01 };
@@ -213,6 +214,13 @@ enum FixtureI2cOperation : uint8_t {
   FixtureI2cGetStatus = 0x01,
 };
 
+enum FixtureCaptureOperation : uint8_t {
+  FixtureCaptureGetStatus = 0x01,
+  // role id, symbol offset, maximum symbol count. Raw RMT words are returned
+  // little endian; semantic I2C decoding stays on the host.
+  FixtureCaptureReadSymbols = 0x02,
+};
+
 struct TargetStatus {
   uint8_t flags = 0;
   uint8_t start_mode = 0;
@@ -284,6 +292,24 @@ class FixtureI2cBackend {
   virtual BackendResult getStatus(FixtureI2cStatus& status) = 0;
 };
 
+struct FixtureCaptureStatus {
+  // bit 0 active, 1/2: clock/data idle level, 3/4: clock/data completed,
+  // 5/6: clock/data partial/overflow.
+  uint8_t flags = 0;
+  uint8_t clock_symbols = 0;
+  uint8_t data_symbols = 0;
+  uint32_t resolution_hz = 0;
+};
+
+class FixtureCaptureBackend {
+ public:
+  virtual ~FixtureCaptureBackend() = default;
+  virtual BackendResult getStatus(FixtureCaptureStatus& status) = 0;
+  virtual BackendResult readSymbols(uint8_t role_id, uint8_t offset,
+                                    uint8_t maximum, uint32_t* output,
+                                    size_t& count) = 0;
+};
+
 class Endpoint {
  public:
   explicit Endpoint(Stream& stream, TargetControlBackend* target = nullptr,
@@ -292,11 +318,12 @@ class Endpoint {
                     FixtureGpioBackend* gpio = nullptr,
                     FixtureUartBackend* uart = nullptr,
                     FixtureI2cBackend* i2c = nullptr,
+                    FixtureCaptureBackend* capture = nullptr,
                     ProbeInfoBackend* info = nullptr,
                     ProbeCapabilitiesBackend* capabilities = nullptr,
                     ProbeConfigurationBackend* configuration = nullptr)
       : stream_(stream), target_(target), memory_(memory), flash_(flash),
-        gpio_(gpio), uart_(uart), i2c_(i2c), info_(info),
+        gpio_(gpio), uart_(uart), i2c_(i2c), capture_(capture), info_(info),
         capabilities_(capabilities), configuration_(configuration) {}
   void poll();
   bool idleFor(uint32_t milliseconds) const;
@@ -309,6 +336,7 @@ class Endpoint {
   FixtureGpioBackend* gpio_;
   FixtureUartBackend* uart_;
   FixtureI2cBackend* i2c_;
+  FixtureCaptureBackend* capture_;
   ProbeInfoBackend* info_;
   ProbeCapabilitiesBackend* capabilities_;
   ProbeConfigurationBackend* configuration_;
