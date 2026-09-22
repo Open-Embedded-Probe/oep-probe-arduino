@@ -3,6 +3,14 @@
 namespace oep {
 
 bool FrameReader::push(uint8_t byte) {
+  // Resync (2026-09-22, classic ESP32 UART): a single stray byte was taken as a length and the
+  // reader then waited for bytes that never came, or skipped a 64 KiB "frame", until a reset.
+  const uint32_t now = millis();
+  if (state_ != State::LengthLow && static_cast<uint32_t>(now - last_byte_ms_) > kIdleResyncMs) {
+    ++resyncs_;
+    state_ = State::LengthLow;
+  }
+  last_byte_ms_ = now;
   switch (state_) {
     case State::LengthLow:
       length_ = byte;
@@ -16,8 +24,11 @@ bool FrameReader::push(uint8_t byte) {
         return false;
       }
       if (length_ > max_frame_ || length_ > capacity_) {
+        // No legal frame is this long, so the two bytes were not a prefix: treat this byte as a
+        // new low byte instead of skipping up to 64 KiB (which wedged the probe).
         ++dropped_;
-        state_ = State::Discard;  // stay in sync by skipping the announced bytes
+        length_ = byte;
+        state_ = State::LengthHigh;
         return false;
       }
       state_ = State::Body;
