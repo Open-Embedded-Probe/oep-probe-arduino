@@ -119,12 +119,14 @@ void P4I2cTarget::service() {
   // read, TX empty, RX full) but never releases it - the raw flag stays set and SCL stays low until the
   // device is deleted (measured 2026-09-22: Wire timed out at 25 ms, SCL low for the whole capture).
   // So the hold is done here, from loop(): wait stretch_us after the stretch is seen, then release.
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
   if (stretch_us_ && started_ && I2C0.int_raw.slave_stretch_int_raw) {
     ++stretch_events_;
     esp_rom_delay_us(stretch_us_);
     I2C0.scl_stretch_conf.slave_scl_stretch_clr = 1;
     I2C0.int_clr.slave_stretch_int_clr = 1;
   }
+#endif
   if (!rx_done_) return;
   rx_done_ = false;
   const size_t got = armed_;
@@ -228,7 +230,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       struct oep_v0_p4_i2c_target_read_hw_request request;
       if (!oep_v0_p4_i2c_target_read_hw_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       struct oep_v0_p4_i2c_target_read_hw_result result = {0, 0, 0, 0, 0, 0, 0};
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)   // register images of the P4 I2C block only
       result.sr = I2C0.sr.val; result.int_raw = I2C0.int_raw.val; result.fifo_st = I2C0.fifo_st.val; result.ctr = I2C0.ctr.val;
       result.slave_addr = I2C0.slave_addr.val; result.filter_cfg = I2C0.filter_cfg.val; result.scl_stretch_conf = I2C0.scl_stretch_conf.val;
 #endif

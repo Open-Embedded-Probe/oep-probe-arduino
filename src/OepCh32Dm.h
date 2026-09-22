@@ -1,8 +1,12 @@
-// RISC-V debug module operations for WCH CH32 (QingKe V4, X035 first) over RvswdPhy.
-// Sequences are the ones measured in E156 (autoexec reader) and E157 (autoexec writer).
+// RISC-V debug module operations for WCH CH32 over a DmiPhy. QingKe V4 (X035):
+// E156 autoexec reader, E157 autoexec flash writer. QingKe V2 (CH32V003, RV32EC,
+// 64-byte pages): the same reader, and flash through the RAM loader of E135/E137
+// because host-driven flash-controller sequences left partial pages on that part.
 #pragma once
 
-#include "OepRvswdPhy.h"
+#include <Arduino.h>
+
+#include "OepDmiPhy.h"
 
 namespace oep {
 
@@ -10,12 +14,19 @@ struct FlashGeometry {
   uint32_t base;
   uint32_t size;
   uint16_t page;          // physical erase page
-  uint16_t program_unit;  // bytes per program transaction (== page for X035)
+  uint16_t program_unit;  // bytes per program transaction (== page for X035 and V003)
+};
+
+enum class DmProfile : uint8_t {
+  kQingKeV4 = 0,  // X035 and friends: flash controller driven from the probe (E157)
+  kQingKeV2 = 1,  // CH32V003: RV32EC, 2 KiB RAM, flash through the RAM loader (E135/E137)
 };
 
 class Ch32Dm {
  public:
-  explicit Ch32Dm(RvswdPhy &phy, FlashGeometry geometry) : phy_(phy), geometry_(geometry) {}
+  Ch32Dm(DmiPhy &phy, FlashGeometry geometry, DmProfile profile = DmProfile::kQingKeV4)
+      : phy_(phy), geometry_(geometry), profile_(profile) {}
+  DmProfile profile() const { return profile_; }
   const FlashGeometry &geometry() const { return geometry_; }
   bool attached() const { return phy_.attached(); }
   bool halted() const { return halted_; }
@@ -37,20 +48,23 @@ class Ch32Dm {
   bool readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr = nullptr);
   bool readWordScalar(uint32_t address, uint32_t &value);
   bool readRegister(uint16_t regno, uint32_t &value);
+  bool writeRegister(uint16_t regno, uint32_t value);
   bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
   bool writeWord(uint32_t address, uint32_t value);
   // Flash (hart halted, page aligned).
   bool flashUnlock();
-  bool flashErasePage(uint32_t page);
+  bool flashErasePage(uint32_t page);   // V2 profile: no-op (the loader erases inside flashProgramPage)
   bool flashProgramPage(uint32_t page, const uint8_t *data);  // geometry.page bytes, autoexec writer
   bool flashLock();
   uint8_t lastCmderr() const { return cmderr_; }
   uint8_t resetDiag() const { return reset_diag_; }  // DMSTATUS snapshot right after the last reset()
 
  private:
-  RvswdPhy &phy_;
+  DmiPhy &phy_;
   FlashGeometry geometry_;
+  DmProfile profile_;
   bool halted_ = false;
+  bool loader_resident_ = false;   // V2: the E135 loader sits at 0x20000000 until detach/reset
   uint8_t cmderr_ = 0;
   uint8_t reset_diag_ = 0;
   bool waitAbstract();
@@ -58,6 +72,8 @@ class Ch32Dm {
   bool resetOnce();                 // one ndmreset state machine, ends released; true = DM said running
   bool confirmExecution(uint32_t &pc, bool &halt_failed);  // attach, halt, sample dpc, resume, release
   bool waitFlash();
+  bool loaderLoad();                                          // V2: inject + verify the RAM loader
+  bool loaderProgramPage(uint32_t page, const uint8_t *data);  // V2: unlock/erase/program/verify on the target
 };
 
 }  // namespace oep
