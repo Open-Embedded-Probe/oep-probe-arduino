@@ -104,6 +104,12 @@ Result FixtureUart::handle(uint8_t operation, const uint8_t *payload, size_t len
       // A peer may echo while the probe is still writing; hold a full window of it.
       serial_.setRxBufferSize(4096);
       serial_.setTxBufferSize(1024);
+      // Park TX at the UART idle level before the peripheral takes the pin: begin()
+      // otherwise lets the line dip and the DUT receives a framing-error byte that
+      // sits in its line buffer until the next newline (2026-09-22, X035 testcmd).
+      pinMode(tx_, INPUT_PULLUP);   // high through the pull-up first: pinMode(OUTPUT) alone starts low
+      digitalWrite(tx_, HIGH);
+      pinMode(tx_, OUTPUT);
       serial_.begin(request.baud, SERIAL_8N1, rx_, tx_);
       configured_ = true;
       struct oep_v0_fixture_uart_configure_result result = {request.baud};
