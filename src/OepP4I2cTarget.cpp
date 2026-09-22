@@ -68,6 +68,7 @@ void P4I2cTarget::pushFrame(const uint8_t *data, size_t length) {
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <esp_rom_sys.h>
+#include <driver/gpio.h>
 
 bool P4I2cTarget::receiveDone(i2c_slave_dev_handle_t, const i2c_slave_rx_done_event_data_t *, void *context) {
   static_cast<P4I2cTarget *>(context)->rx_done_ = true;  // ISR: flag only (E147)
@@ -88,6 +89,12 @@ bool P4I2cTarget::start() {
   cfg.slave_addr = address_;
   cfg.addr_bit_len = I2C_ADDR_BIT_LEN_7;
   if (i2c_new_slave_device(&cfg, &slave_) != ESP_OK) { slave_ = nullptr; return false; }
+  // The slave driver enables no pull-ups and the fixture has none (2026-09-22: an X035 pin left as
+  // input read 0 on the wire), so a real bus needs them here: the GPIO matrix lets the pad keep its
+  // ~45 kOhm internal pull-up while the I2C peripheral owns it, as the IDF master driver does with
+  // enable_internal_pullup. Weak, but a bus for master tests at <= 400 kHz rather than no bus.
+  gpio_set_pull_mode(static_cast<gpio_num_t>(sda_), GPIO_PULLUP_ONLY);
+  gpio_set_pull_mode(static_cast<gpio_num_t>(scl_), GPIO_PULLUP_ONLY);
   i2c_slave_event_callbacks_t callbacks = {};
   callbacks.on_recv_done = receiveDone;
   if (i2c_slave_register_event_callbacks(slave_, &callbacks, this) != ESP_OK) { stop(); return false; }
