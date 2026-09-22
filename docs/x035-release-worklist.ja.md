@@ -126,6 +126,12 @@ p95 0.354 s・最大 0.453 s、失敗 0、続く full verify は平均 0.296 s�
 全域 CRC 一致。旧 prototype（verify 5.17 s、27 page program 11.9 s）比でそれぞれ約 18 倍・約 40 倍。verify 時間の振れ（0.24〜0.63 s）は
 attach ごとの half period margin check の選択差で、正否には影響しない。
 
+同日、v0 stack の runner（ArduinoCore-CH32 `tests/manual/oep_smoke/oep_smoke.py`）で `tests/sketches/basic` の 14 sketch を
+F8U6 へ順に program（各 0.6〜0.8 s、CRC verify 込み）し、fixture.uart（USART4 PB0/PB1 ↔ P4 GPIO12/6）で READY / PING /
+expectations を再生して **14/14 PASS**（core_api 19、pd_selftest 23、wire_selftest 15 項目など、failures=0）。LinkE も probe-rs も
+使っていない。これは P3 表の前提となる「常駐 probe firmware だけで Core 自己試験を回せる」ことの初回証拠であり、P3 の各行
+（波形・peer・電気条件）の判定はまだ含まない。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
