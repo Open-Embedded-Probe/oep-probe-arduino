@@ -38,6 +38,7 @@
 | E158 reset 証拠 | debug reset 後に hart が reset vector に駐留する回が約 3〜5 %（DMSTATUS は running）。haltreq→resumereq で 15/15 解放。reset は PC sample（dpc≠0）を完了条件にして 200/200、描述 TLV `max_clock_hz` = 6.3〜6.4 MHz |
 | fixture.capture | PARLIO RX 有限長（soft delimiter ≤ 65535 B、内部 DMA RAM 64 KiB）、1 byte/sample、observer lease（channel を claim しない）。1 MHz × 20,480 sample の回収 26〜40 ms。I2C decode は host（`oep_client.v0.decode`）。I2C slave と同じ GPIO32/33 を同じ plan で共有して動作 |
 | worklist B trace | X035 route 2 → P4 slave 0x42: 線上 `S 84N P`（address 正、slave 無 ACK）。peer IDF master → 同 slave は `S 84A …`。X035 側 SDA hold 0.2〜0.4 µs、立上り 4 µs（GPIO50/52 に外部 pull-up 無し）。route 3（SWD 線）は probe と衝突。`p4.i2c-target` v1 の fixed-rx は NACK transaction でも stale frame を返す（長さ情報無し） |
+| fixture.uart 再 lease | `begin()` 前に TX を INPUT_PULLUP → HIGH → OUTPUT で idle high に固定、release は INPUT_PULLUP。以前は begin の瞬間の low glitch で DUT の行バッファに framing error byte が残り、次の命令が `unknown cmd=�PING` になっていた（core 側も FE/NE/PE byte を捨てるよう修正）|
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
