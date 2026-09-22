@@ -155,6 +155,25 @@ millis（20.09 ms）/ `delayMicroseconds`（**+16 µs・jitter 9〜15 µs、X035
 `P4I2cTarget` の classic ESP32 filler 差を修正（SoC で filler 0/1）、`P4SpiTarget` は `max_clock_hz` を P4 24 MHz / classic 3 MHz と宣言。
 残り: ADC の絶対値（probe rail vs VDD、メータ 1 回）、V003 の `delayMicroseconds` overhead（core）、SPI 線上 decode は 2 MHz sampling では不可（記録のみ）。
 
+## リリースまでの残作業（2026-09-22 時点の棚卸し、OEP 側）
+
+今の機材（P4 + X035F8U6 fixture、classic ESP32 + UIAPduino V003、常設 USB bench）でできることは以下を除いて実施済み。
+
+| 区分 | 残作業 | 依存 / 備考 |
+|---|---|---|
+| 仕様（oep-spec） | S1 に「応答 backlog の上限」（`max_response_backlog`）を入れるか決める。bulk transport の deadlock は host 側 reader thread で回避中 | 設計判断 |
+| 仕様 | `p4_i2c_target` / `p4_spi_target` は vendor namespace のまま。共通 `fixture.i2c-target` / `fixture.spi-target` は 2 実装目（Pico 等）が出てから | guidelines §7 の方針どおり |
+| 仕様 | `target.control reset` mode 1〜3 の文書は registry コメントのみ。`docs/v0-core-wire-model.ja.md` への反映 | 文書 |
+| firmware | classic ESP32: capture は GPIO sampler（0.4〜2 MHz、1 byte/sample、window ≤ 164 ms）。SPI 線上 decode は不可、I2C 400 kHz の周期値は不正確 | 仕様上の限界として宣言済み（`max_clock_hz`） |
+| firmware | classic ESP32 SPI slave は 3 MHz まで（宣言済み）。上げるなら別 SoC | 機材 |
+| firmware | UART transport は frame 512 B・inflight 1（CP2102 の byte 落ち対策）。HWCDC / bulk の P4 は 1 KiB・8 のまま | 速度は後回し |
+| firmware | X035 の ndmreset 駐留（E158/E159、1〜8 %）は PC 確認で吸収。根本原因（clock 状態との相関）は未解明 | 台帳候補 `x035-ndmreset-hart-not-running` |
+| firmware | SWIO（V003）の CRC verify 偽陰性が 1 回（parity 無し）。不一致時の再読は未実装 | 小 |
+| client | `program_image` の `verified=False` が変更 0 page の時に 1 回出た（上と同件の可能性） | 小 |
+| HIL | `tests/hil/probe` は P4 固定。classic ESP32 probe の pytest HIL（build → upload → gate）は未整備、gate は scratch script で 20/20/5 | 整備 |
+| 機材 | ADC 絶対値（probe rail vs DUT VDD）はメータ 1 回。V003 の電源経路（USB 抜いても POR しない）は配線を外して確認（利用者） | 利用者 |
+| 次の段 | Pico（RP2040）probe への横展開、または WCH-LinkE → OEP 試作 probe の置換。dummyDevice（EmbedBench）は core 検証後 | 優先順どおり |
+
 ## 後回し task（速度のみ、または現時点で不要）
 
 - P0.2 の内訳 telemetry（attach / read / erase / program / verify の wall time、retry）。
