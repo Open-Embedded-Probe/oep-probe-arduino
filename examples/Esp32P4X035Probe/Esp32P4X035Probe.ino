@@ -3,6 +3,7 @@
 #include <OepCh32Dm.h>
 #include <OepEndpoint.h>
 #include <OepFixtureServices.h>
+#include <OepP4I2cTarget.h>
 #include <OepProbeIdentity.h>
 #include <OepRvswdPhy.h>
 #include <OepTargetServices.h>
@@ -28,6 +29,7 @@ static oep::TargetFlash targetFlash(dm);
 static oep::PinTable *pinTable = nullptr;
 static oep::FixtureGpio *fixtureGpio = nullptr;
 static oep::FixtureUart *fixtureUart = nullptr;
+static oep::P4I2cTarget *p4I2cTarget = nullptr;  // vendor tool (owner 0x0100)
 
 void setup() {
   Serial.setRxBufferSize(8192);
@@ -38,15 +40,18 @@ void setup() {
   pinTable = new oep::PinTable(fixturePins, fixturePinCount);
   fixtureGpio = new oep::FixtureGpio(*pinTable);
   fixtureUart = new oep::FixtureUart(*pinTable, Serial1);
+  p4I2cTarget = new oep::P4I2cTarget(*pinTable);
   endpoint.addService(identity);
   endpoint.addService(targetControl);
   endpoint.addService(targetMemory);
   endpoint.addService(targetFlash);
   endpoint.addService(*fixtureGpio);
   endpoint.addService(*fixtureUart);
+  endpoint.addService(*p4I2cTarget);
 }
 
 void loop() {
   endpoint.poll();
+  p4I2cTarget->service();
   if (endpoint.idleFor(1500)) endpoint.abandonAll();
 }
