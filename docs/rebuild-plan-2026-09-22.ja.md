@@ -31,6 +31,7 @@
 | S2 registry/codegen | `oep-spec/registry/oep-v0.yaml` → C library / Python module / vectors。host core で C と Python が全 vector 一致、`--check` で同期確認。Uno build は test sketch の vector 表が RAM 超過（codec 本体は未確認、task） |
 | S3 第 1〜2 段 | v0 endpoint + core + probe.identity + RVSWD PHY + Ch32Dm + target.control/memory/flash。HIL（build→upload→test）で **62 KiB read 0.154 s、page program 7.3 ms/page、host CRC = probe CRC**。旧 prototype src は削除 |
 | S4 第 1 段 | oep-client-python `oep_client.v0`（frame transport、byte window pipelining、core、target service wrapper、fake endpoint の unit test） |
+| S3 第 3 段 / S4 第 2 段 | lease（plan_apply / release、watchdog 解放）、fixture.gpio / fixture.uart、peer P4 との二台 HIL（GPIO mirror、UART echo 512 B）。host `program_image`（ESIG preflight、page 差分、CRC verify、result JSON）、CLI。**P0 reliability gate を新 stack で再取得**（verify ×20 0.28 s、32 page program ×20 0.29 s、中断 ×5 復旧） |
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
@@ -71,10 +72,11 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
 
 ### S3 / S4 の残り（次に着手）
 
-1. fixture service: GPIO（configure / read_bank）、UART peer、lease（plan_apply / release、watchdog で解放）。E154 の 8 本リンクで peer P4 を相手に HIL。
-2. host: `program_image`（差分 page、preflight ESIG、result JSON）、CLI。ArduinoCore-CH32 sketch runner（compile → program → UART → assert）。
-3. worklist P0 の reliability gate を新 stack で再取得（verify 20 回、差分 program 20 回、中断 5 回）。
+1. （完了）fixture.gpio / fixture.uart / lease、二台 HIL。
+2. （host 側完了）`program_image` と CLI。**残り: ArduinoCore-CH32 sketch runner**（compile → program → fixture.uart → assert）。
+3. （完了）P0 reliability gate を新 stack で再取得。
 4. I2C target の 3 mode を P4 独自 tool として service 化（E147〜E150 の OEP 経由移植）。RMT capture。
+5. capability の実測値公開: attach 時に選んだ half period / DMI rate を target.control の describe TLV（`max_clock_hz`）で返す。
 
 ### P2 Phase B（HS USB）
 
