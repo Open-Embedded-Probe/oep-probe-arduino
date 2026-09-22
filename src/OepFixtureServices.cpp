@@ -84,7 +84,10 @@ bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
 void FixtureUart::planRelease() {
   if (configured_) serial_.end();
   if (rx_ >= 0) pinMode(rx_, INPUT);
-  if (tx_ >= 0) pinMode(tx_, INPUT);
+  // The DUT's RX stays connected: leave the line at UART idle (high) instead of
+  // floating, or the DUT's command parser sees noise (2026-09-22, X035 USART4 stopped
+  // answering after 0.5 s of a floating PB1).
+  if (tx_ >= 0) pinMode(tx_, INPUT_PULLUP);
   pins_.release(kOwner);
   rx_ = tx_ = -1;
   configured_ = false;

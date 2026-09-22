@@ -182,7 +182,9 @@ expectations を再生して **14/14 PASS**（core_api 19、pd_selftest 23、wir
   **2026-09-22 追記（v0 stack、`fixture.capture` で線上確認）**: X035 の address byte は正しく 0x84 で、P4 slave が 9 clock 目に SDA を引かず NACK
   になっている。IDF master（peer P4、GPIO32/33）には同じ slave 設定で ACK が出る。役割交換（route 4）でも同じ、P4 pin の駆動は X035 側 INDR で確認済み、
   slave 生成順序・SDA filter・P4 pull-up 追加では変わらない。X035 側の差は SDA hold 0.2〜0.4 µs と立上り 4 µs（外部 pull-up 無し）。
-  hold と立上りを制御できる master での切り分けが次（台帳候補 `x035-p4-slave-no-ack`、ArduinoCore-CH32 `tests/manual/oep_i2c_trace/`）。
+  **解決（同日）**: 原因は X035 側。PC16/PC17 は USB PHY pad で、`AFIO_CTLR.USB_PHY_V33`（reset 値で 1）が立っている間は open-drain の release が
+  外部から引けない（X035 halt 中に P4 が GPIO50 を low 駆動しても X035 INDR は 1。bit を落とすと 0）。core `ch32_gpio_set_config()` が PC16/PC17 を
+  出力系に設定する時にこの bit を落とす修正で route 2 は `S 84A 10A 11A 12A 13A P` / rc=0（100 kHz、10 kHz）。errata `x035-usb-pads-open-drain`。
   v1 slave の callback は NACK で終わった transaction でも発火し長さを持たないので、callback count も frame も ACK の根拠にならない（既知として固定）。
 - [ ] `disable`、host disconnect、watchdog timeout で pin を input/release、peripheral を停止、
   trace を凍結する。
