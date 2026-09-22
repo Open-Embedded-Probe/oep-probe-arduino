@@ -66,8 +66,8 @@ bool Ch32Dm::resume() {
   return ok;
 }
 
-void Ch32Dm::reset() {
-  if (!attach()) return;
+bool Ch32Dm::resetOnce() {
+  if (!attach()) return false;
   // ndmreset applied to a running hart left it stopped in most cycles, while a
   // halted hart always restarted (2026-09-22, 20-cycle alternation). Halt first.
   if (!halted_) halt();
@@ -124,6 +124,54 @@ void Ch32Dm::reset() {
     phy_.release();
     delay(2);
   }
+  return running;
+}
+
+bool Ch32Dm::confirmExecution(uint32_t &pc, bool &halt_failed) {
+  pc = 0;
+  halt_failed = false;
+  if (!phy_.attach()) return false;
+  halted_ = false;
+  if (!halt()) { halt_failed = true; detach(); return false; }
+  const bool sampled = readRegister(0x7b1, pc);  // dpc
+  const bool resumed = resume();
+  detach();
+  return sampled && resumed;
+}
+
+Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
+  ResetReport report = {0, 0, 0};
+  if (!attach()) return report;
+  const bool running = resetOnce();
+  report.attempts = 1;
+  report.flags = running ? 1 : 0;
+  if (!confirm) return report;
+  // Evidence (E158, 2026-09-22): after ndmreset the X035 hart sits at the reset
+  // vector (dpc 0, CSRs at reset values) in about 4-5 % of cycles while DMSTATUS
+  // says allrunning; a haltreq/resumereq pair released it 9/9 times. So a
+  // sample at pc 0 is "parked, released by this resume", not execution: sample
+  // again and count only a nonzero pc. A failed halt means the DM is not usable
+  // at all; redo the reset sequence for that.
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    bool halt_failed = false;
+    uint32_t pc = 0;
+    const bool ok = confirmExecution(pc, halt_failed);
+    if (ok && pc != 0) {
+      report.flags = (report.flags & ~8) | 2;
+      report.pc = pc;
+      return report;
+    }
+    if (ok) {  // parked at the reset vector: the resume above released it; re-sample
+      report.flags |= 4;
+      delayMicroseconds(500);
+      continue;
+    }
+    report.flags = (report.flags & ~8) | (halt_failed ? 8 : 0) | 4;
+    if (!attach()) break;
+    resetOnce();
+    ++report.attempts;
+  }
+  return report;
 }
 
 void Ch32Dm::detach() {
