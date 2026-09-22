@@ -36,6 +36,7 @@
 | S4 runner | ArduinoCore-CH32 `tests/manual/oep_smoke/oep_smoke.py`（compile → OEP program_image → fixture.uart lease → READY/PING/expectations → 判定）。**basic 14 sketch が F8U6 で 14/14 PASS**（LinkE / probe-rs なし、1 sketch ≈ 30 s、書込み 0.7 s） |
 | vendor tool 初回 | registry に owner `0x0100`（oep-probe-arduino）と `p4_i2c_target`（fixed-rx / framed-rx / preloaded-tx）。firmware は IDF slave v1 を task 側で再 arm、peer P4 controller との二台 HIL で **4 B/32 B write、16 B@100 kHz/128 B@1 MHz framed、2 slot preload が全一致**（E147〜E150 の OEP 移植完了）。arm 長の変更は device 再作成（v1 に cancel が無い）。**2026-09-22 追記**: 一時 400 kHz に下げていた宣言を 1 MHz に戻した。「1 MHz で 128 B の末尾が欠ける」は peer の HWCDC RX ring（既定 256 B）が 269 文字の FRAME 行を切っていた test 側の artifact で、slave は header どおり 121 B を受けていた。peer に `setRxBufferSize(4096)`、framed 128 B@1 MHz 20/20 |
 | E158 reset 証拠 | debug reset 後に hart が reset vector に駐留する回が約 3〜5 %（DMSTATUS は running）。haltreq→resumereq で 15/15 解放。reset は PC sample（dpc≠0）を完了条件にして 200/200、描述 TLV `max_clock_hz` = 6.3〜6.4 MHz |
+| fixture.capture | PARLIO RX 有限長（soft delimiter ≤ 65535 B、内部 DMA RAM 64 KiB）、1 byte/sample、observer lease（channel を claim しない）。1 MHz × 20,480 sample の回収 26〜40 ms。I2C decode は host（`oep_client.v0.decode`）。I2C slave と同じ GPIO32/33 を同じ plan で共有して動作 |
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
@@ -79,7 +80,10 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
 1. （完了）fixture.gpio / fixture.uart / lease、二台 HIL。
 2. （完了）`program_image` と CLI、ArduinoCore-CH32 sketch runner（basic 14/14 PASS on F8U6）。runner は ArduinoCore-CH32 側で未 commit。
 3. （完了）P0 reliability gate を新 stack で再取得。
-4. （I2C 完了）P4 独自 tool `p4_i2c_target` を二台 HIL で実証。**残り: RMT capture の service 化、X035 I2C NACK の trace（worklist B）、共通 `fixture.i2c-target`（丸めた契約）の要否判断**。
+4. （I2C 完了、capture 完了）P4 独自 tool `p4_i2c_target` を二台 HIL で実証。共通 tool `fixture.capture`（sampled logic capture、observer 型: 他 function が使う channel を同じ plan で観測できる）を
+   PARLIO 有限長 RX で実装し、二台 HIL で 1 MHz × 20 ms を 26〜40 ms で回収、host 側 I2C decoder で `S 84N P`（無応答）と `S 84A 10A 11A 12A 13A P`（target 同席）を得た。
+   SCL 周期 10 sample = 100 kHz で sample rate の実測が取れる。RMT（duration 型）は 2 本の時間軸が揃わないので採らず、PARLIO の同時 sample を共通契約にした。
+   **残り: X035 I2C NACK の trace（worklist B、GPIO52/50 で DUT → P4 target を観測）、共通 `fixture.i2c-target`（丸めた契約）の要否判断**。
 5. （完了、E158）reset 契約の確定: DMSTATUS だけの reset は 96/100・98/100 で、欠落は全て hart が reset vector に駐留したもの（周辺 register 全て reset 値）。
    target.control reset は `confirm=1` で解放後に halt → dpc → resume を行い、dpc=0 は「駐留を解放した」として再 sample、dpc≠0 で完了（`flags` bit1、`pc`）。200/200。
    E159（7 列 × 550 cycle）: DMCONTROL の順序で駐留率は 1〜8 % の間で変わるがどの列でも 0 にならない。haltreq を reset 越しに保持する列は駐留は減るが、

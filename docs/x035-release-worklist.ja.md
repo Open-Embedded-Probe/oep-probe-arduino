@@ -194,8 +194,8 @@ expectations を再生して **14/14 PASS**（core_api 19、pd_selftest 23、wir
   回収・次receive job・TX responseはtaskで行う公開backendを次に実装する。
 - [ ] GPIO software I2C target は `i2c-target-software` capability として 10 kHz から公開し、
   deadline/jitter の実測値を返す。hardware target の代替として速度を主張しない。
-- [ ] RMT observer は SCL/SDA の 2 RX を同時 arm し、raw duration と decoded event を取得する。
-  これは peer と独立に有効化できる read-only capability とする。
+- [x] （2026-09-22、v0 stack）observer は RMT ではなく PARLIO の sampled capture（`fixture.capture`）にした。RMT は線ごとに時間軸の原点が
+  ずれて 2 本を揃えられない。read-only observer として同じ plan で I2C target と channel を共有でき、decode は host 側。二台 HIL で NACK / ACK trace 取得。
 - [ ] 同様に UART、GPIO drive/sample、PWM observer、SPI peer/observer を backend interface の
   実装として追加し、example sketch 固有の固定 `setup()` から除去する。
 

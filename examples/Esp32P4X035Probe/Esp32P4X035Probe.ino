@@ -2,6 +2,7 @@
 // Transport: USB-Serial/JTAG (HWCDC). Limits from E155: 1 KiB frames, 4 KiB window.
 #include <OepCh32Dm.h>
 #include <OepEndpoint.h>
+#include <OepFixtureCapture.h>
 #include <OepFixtureServices.h>
 #include <OepP4I2cTarget.h>
 #include <OepProbeIdentity.h>
@@ -29,6 +30,7 @@ static oep::TargetFlash targetFlash(dm);
 static oep::PinTable *pinTable = nullptr;
 static oep::FixtureGpio *fixtureGpio = nullptr;
 static oep::FixtureUart *fixtureUart = nullptr;
+static oep::FixtureCapture *fixtureCapture = nullptr;
 static oep::P4I2cTarget *p4I2cTarget = nullptr;  // vendor tool (owner 0x0100)
 
 void setup() {
@@ -41,6 +43,7 @@ void setup() {
   fixtureGpio = new oep::FixtureGpio(*pinTable);
   fixtureUart = new oep::FixtureUart(*pinTable, Serial1);
   p4I2cTarget = new oep::P4I2cTarget(*pinTable);
+  fixtureCapture = new oep::FixtureCapture(*pinTable);
   endpoint.addService(identity);
   endpoint.addService(targetControl);
   endpoint.addService(targetMemory);
@@ -48,6 +51,7 @@ void setup() {
   endpoint.addService(*fixtureGpio);
   endpoint.addService(*fixtureUart);
   endpoint.addService(*p4I2cTarget);
+  endpoint.addService(*fixtureCapture);
 }
 
 void loop() {
