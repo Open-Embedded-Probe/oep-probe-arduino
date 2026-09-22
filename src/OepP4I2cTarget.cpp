@@ -83,7 +83,6 @@ bool P4I2cTarget::start() {
   cfg.send_buf_depth = 4096;  // preloaded TX ring (E150: 129-byte slots)
   cfg.slave_addr = address_;
   cfg.addr_bit_len = I2C_ADDR_BIT_LEN_7;
-  cfg.flags.slave_unmatch_en = 1;  // raw flag only: lets read_hw tell an address mismatch from a refused ACK (worklist B)
   if (i2c_new_slave_device(&cfg, &slave_) != ESP_OK) { slave_ = nullptr; return false; }
   i2c_slave_event_callbacks_t callbacks = {};
   callbacks.on_recv_done = receiveDone;

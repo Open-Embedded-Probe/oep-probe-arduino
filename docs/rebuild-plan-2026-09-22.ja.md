@@ -87,7 +87,8 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
    capture の宣言上限は 20 MHz（HIL で 100 kHz SCL の周期 200 sample を確認、26 万 sample の回収 0.34 s）。
    **X035 I2C NACK の trace（worklist B）は完了**: ArduinoCore-CH32 `tests/manual/oep_i2c_trace/`。X035 の address byte は正しく（0x84）、P4 slave は
    address を受けているのに ACK を出さない。IDF master には ACK する。除外: pin（役割交換でも同じ、INDR で駆動確認）、生成順序、SDA filter、P4 pull-up。
-   残る容疑は X035 の SDA hold 0.2〜0.4 µs か立上り 4 µs（外部 pull-up 無し）への ESP32-P4 slave の感度。hold/立上りを制御できる master が要る（台帳候補 `x035-p4-slave-no-ack`）。
+   **解決**: 原因は X035 の `AFIO_CTLR.USB_PHY_V33`（PC16/PC17 = USB pad の open-drain が release されない）。core 修正で route 2 が ACK。errata `x035-usb-pads-open-drain`。
+   切り分けの決め手は X035 自身の bit-bang（ACK slot だけ INPUT_PULLUP → ACK、GPIO OD のまま → NACK）と、X035 halt 中の「P4 が引けるか」試験。
    **残り: 共通 `fixture.i2c-target`（丸めた契約）の要否判断**。
 5. （完了、E158）reset 契約の確定: DMSTATUS だけの reset は 96/100・98/100 で、欠落は全て hart が reset vector に駐留したもの（周辺 register 全て reset 値）。
    target.control reset は `confirm=1` で解放後に halt → dpc → resume を行い、dpc=0 は「駐留を解放した」として再 sample、dpc≠0 で完了（`flags` bit1、`pc`）。200/200。
