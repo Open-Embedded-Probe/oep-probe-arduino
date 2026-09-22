@@ -39,6 +39,7 @@
 | fixture.capture | PARLIO RX 有限長（soft delimiter ≤ 65535 B、内部 DMA RAM 64 KiB）、1 byte/sample、observer lease（channel を claim しない）。1 MHz × 20,480 sample の回収 26〜40 ms。I2C decode は host（`oep_client.v0.decode`）。I2C slave と同じ GPIO32/33 を同じ plan で共有して動作 |
 | worklist B trace | X035 route 2 → P4 slave 0x42: 線上 `S 84N P`（address 正、slave 無 ACK）。peer IDF master → 同 slave は `S 84A …`。X035 側 SDA hold 0.2〜0.4 µs、立上り 4 µs（GPIO50/52 に外部 pull-up 無し）。route 3（SWD 線）は probe と衝突。`p4.i2c-target` v1 の fixed-rx は NACK transaction でも stale frame を返す（長さ情報無し） |
 | fixture.uart 再 lease | `begin()` 前に TX を INPUT_PULLUP → HIGH → OUTPUT で idle high に固定、release は INPUT_PULLUP。以前は begin の瞬間の low glitch で DUT の行バッファに framing error byte が残り、次の命令が `unknown cmd=�PING` になっていた（core 側も FE/NE/PE byte を捨てるよう修正）|
+| capture 下限 | PARLIO RX は PLL 160 MHz の整数分周（≤ 256）なので 625 kHz 未満は追従できず constant を返す。`min_clock_hz` = 650 kHz を describe で宣言し未満は reject（HIL で 650 kHz の SCL 周期 6 sample を確認）。X035 P3 行 4/5/7（PWM / timing / SPI）は ArduinoCore-CH32 `tests/manual/oep_periph_trace/` で線上実測済み |
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
@@ -90,7 +91,7 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
    address を受けているのに ACK を出さない。IDF master には ACK する。除外: pin（役割交換でも同じ、INDR で駆動確認）、生成順序、SDA filter、P4 pull-up。
    **解決**: 原因は X035 の `AFIO_CTLR.USB_PHY_V33`（PC16/PC17 = USB pad の open-drain が release されない）。core 修正で route 2 が ACK。errata `x035-usb-pads-open-drain`。
    切り分けの決め手は X035 自身の bit-bang（ACK slot だけ INPUT_PULLUP → ACK、GPIO OD のまま → NACK）と、X035 halt 中の「P4 が引けるか」試験。
-   **残り: 共通 `fixture.i2c-target`（丸めた契約）の要否判断**。
+   共通 `fixture.i2c-target` は guidelines §7 に「2 実装目が出るまで作らない」と記録。X035 P3 行 4/5/7 は `oep_periph_trace` で実測完了（PWM / tone / millis / SPI 4 mode）。
 5. （完了、E158）reset 契約の確定: DMSTATUS だけの reset は 96/100・98/100 で、欠落は全て hart が reset vector に駐留したもの（周辺 register 全て reset 値）。
    target.control reset は `confirm=1` で解放後に halt → dpc → resume を行い、dpc=0 は「駐留を解放した」として再 sample、dpc≠0 で完了（`flags` bit1、`pc`）。200/200。
    E159（7 列 × 550 cycle）: DMCONTROL の順序で駐留率は 1〜8 % の間で変わるがどの列でも 0 にならない。haltreq を reset 越しに保持する列は駐留は減るが、

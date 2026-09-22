@@ -40,6 +40,7 @@ void FixtureCapture::planRelease() {
 size_t FixtureCapture::describe(uint8_t first, uint8_t *out, size_t capacity) {
   size_t used = 0, index = 0;
   if (index++ >= first) { used = tlvPutU32(out, capacity, used, OEP_V0_TLV_CORE_MAX_CLOCK_HZ, kMaxSampleRateHz); if (!used) return 0; }
+  if (index++ >= first) { const size_t n = tlvPutU32(out, capacity, used, OEP_V0_TLV_CORE_MIN_CLOCK_HZ, kMinSampleRateHz); if (!n) return used; used = n; }
   if (index++ >= first) { const size_t n = tlvPutU16(out, capacity, used, OEP_V0_TLV_CORE_MAX_LENGTH, kBufferBytes); if (!n) return used; used = n; }
   for (uint8_t c = 0; c < PinTable::kChannels; ++c) {
     if (!pins_.allowed(c)) continue;
@@ -62,7 +63,7 @@ Result FixtureCapture::handle(uint8_t operation, const uint8_t *payload, size_t 
       struct oep_v0_fixture_capture_configure_request request;
       if (!oep_v0_fixture_capture_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (!line_count_) return rejected(OEP_V0_REJECT_UNAVAILABLE);  // needs a plan first
-      if (!request.sample_rate_hz || request.sample_rate_hz > kMaxSampleRateHz || !request.samples) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (request.sample_rate_hz < kMinSampleRateHz || request.sample_rate_hz > kMaxSampleRateHz || !request.samples) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (!setup(request.sample_rate_hz, request.samples)) return failed();
       struct oep_v0_fixture_capture_configure_result result = {sample_rate_, samples_, line_count_};
       return completed(oep_v0_fixture_capture_configure_result_pack(&result, out, capacity));

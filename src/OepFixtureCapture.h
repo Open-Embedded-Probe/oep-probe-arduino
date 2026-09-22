@@ -21,6 +21,9 @@ class FixtureCapture final : public Service {
   static constexpr uint8_t kMaxLines = 8;
   static constexpr size_t kBufferBytes = 65408;  // 511 x 128-byte cache lines, below the 65535 delimiter limit
   static constexpr uint32_t kMaxSampleRateHz = 20000000;  // PARLIO ran 8 lines at 80 MHz (E022); 20 MHz keeps 3.2 ms in the 64 KiB buffer at 1 line
+  // PARLIO RX divides PLL_F160M by an integer <= 256: below 625 kHz the driver cannot follow and the
+  // capture returned constants (2026-09-22, 1 kHz PWM check: 650 kHz good, 625 kHz and below bad).
+  static constexpr uint32_t kMinSampleRateHz = 650000;
   explicit FixtureCapture(PinTable &pins) : pins_(pins) {}
   uint16_t owner() const override { return OEP_V0_DEF_FIXTURE_CAPTURE_OWNER; }
   uint16_t id() const override { return OEP_V0_DEF_FIXTURE_CAPTURE_ID; }

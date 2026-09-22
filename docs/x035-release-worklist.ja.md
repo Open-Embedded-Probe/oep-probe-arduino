@@ -228,10 +228,10 @@ P0--P2 が揃ってから、下表の順に戻る。各行は標準 Arduino API 
 | 1 | GPIO / `INPUT_PULLUP` / EXTI | GPIO drive + sample | 全接続 pin の 0/1、pull、edge、割込み回数、予約 pin 非干渉 |
 | 2 | UART（USART4、次に USART2） | UART peer | 9600/115200、binary payload、長連続 TX/RX、overflow/error、reset 後再開 |
 | 3 | ADC | 校正済み 0/Vref/2/Vref source | PA5 を含む接続 ADC pin の許容範囲、settling、repeatability。P4 内部 pull は基準電圧にしない |
-| 4 | PWM / `analogWrite` / `tone` | RMT PWM observer | 周波数、duty 0/50/100%、jitter、timer 資源競合、停止時 level |
-| 5 | 時刻 / delay / timer API | GPIO/RMT marker | `millis()`、`micros()`、delay、SysTick、公開 timer API の callback/解除と PWM 非干渉 |
+| 4 | PWM / `analogWrite` / `tone` | `fixture.capture`（PARLIO） | 周波数、duty 0/50/100%、jitter、timer 資源競合、停止時 level。**2026-09-22 実測**: 1003.5 Hz、duty ±0.3 %、255/0 で edge 無し、tone 誤差 < 0.1 %（ArduinoCore-CH32 `tests/manual/oep_periph_trace/`） |
+| 5 | 時刻 / delay / timer API | `fixture.capture` | `millis()`、`micros()`、delay、SysTick、公開 timer API の callback/解除と PWM 非干渉。**2026-09-22 実測**: millis 周期 20.005 ms / 20、`delayMicroseconds` は +3〜4 µs、`digitalWrite` ≈ 2 µs（todo） |
 | 6 | I2C master / `Wire` route 2 | IDF hardware peer + 2ch RMT observer | 10/100 kHz write/read、repeated START、NACK、clock stretch、stuck-bus recovery。400 kHz は trace 合格後 |
-| 7 | SPI master | hardware SPI peer + RMT observer | CPOL/CPHA、CS、MOSI/MISO、clock、連続 transfer、route、bus release |
+| 7 | SPI master | `fixture.capture`（peer slave は未） | CPOL/CPHA、CS、MOSI/MISO、clock、連続 transfer、route、bus release。**2026-09-22 実測**: mode 0〜3 とも CPOL と MOSI 遷移エッジが仕様どおり、data 一致、prescaler 64/16/256。MISO 応答（peer slave）は未 |
 | 8 | GPIO alternate/remap | PinMatrix + peer | 各 API の route 指定が予約/他 peripheral を壊さず、失敗を明示すること |
 | 9 | reset/startup/boot interaction | target transport + GPIO observation | normal reset、software reset、boot entry の範囲、probe disconnect 時の安全状態 |
 
