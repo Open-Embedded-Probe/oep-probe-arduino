@@ -125,6 +125,22 @@ open-drain、User mode の mstatus）と fixture 個体の事実 2 件（PC14/PC
 `x035-adc-ch-i2c-unavailable` の ADC 条項）を得た。同日中に I2C の clock stretch / stuck-bus と SPI の peer slave も実測済み。残り: ADC の中点（校正 source）、NRST pin reset（配線無し）、
 全 route × 全 peripheral の総当たり、SPI 10 MHz 級。
 
+### P4 CH32V003（classic ESP32 `esp32-d0wd-v3-0070070d9394` + UIAPduino Pro Micro V1.4、E132 ジグ）— 2026-09-22 着手
+
+利用者の優先順（X035 core+OEP → V003 → Pico / LinkE 置換）に従い、X035 の P3 表が埋まった時点で開始。配線は E132 のジグ
+（全 pin 接続: GPIO16 → PD1/SWIO、GPIO23 → RST（未使用）、console PD5/PD6 ↔ GPIO22/21、I2C PC1/PC2 ↔ GPIO19/18、SPI PC5/6/7 ↔ GPIO27/4/14）。
+
+| 項目 | 結果 |
+|---|---|
+| PHY 抽象化 | `DmiPhy` interface。`RvswdPhy`（2 線）と新 `SwioPhy`（1 線、E123〜E137 の係数 8 timing を IRAM で移植、GPIO16 固定）。`Ch32Dm` / `TargetControl` は interface だけを見る |
+| V2 profile | `Ch32Dm(…, DmProfile::kQingKeV2)`: flash は E135 の RAM loader（wlink 由来 500 B）を hart が halt している間 0x20000000 に常駐させて page ごとに実行。erase は loader 内なので `erase_page` は no-op |
+| loader の完了判定 | **E135 の「a0 = 0 で成功」は誤り**。dcsr.ebreakm が 0 のまま loader の ebreak が trap → mtvec 0 → app 再起動 → その a0 を読んでいた。`dcsr.ebreakm` を立てると loader の ebreak（offset 0x15c）で halt し、a0 は 0x10（処理 word 数）。判定は「dpc == loader の ebreak」+ 呼び出し側の read-back |
+| 実測 | 16 KiB read 1.34 s（2 回一致）、`program` 216 page 4.26 s・CRC 一致・reset は PC 確認付き（E137 の 288 ms/page → 約 20 ms/page）、console に `system_selftest READY`。basic sketch 一式は route_selftest 単独 PASS、`all` は 5 連続 PASS 後に host 側 framing lost（調査中） |
+| transport の穴 | UART transport では他 program の 1 byte（旧 client の frame、`\n`）で probe の frame reader が length 待ちに固着した。`FrameReader` に 200 ms idle 再同期と「不可能な length は stray byte」を入れ、client は confirm 失敗 3 回で DTR/RTS の hard reset を試す |
+| 同梱 tool | `P4I2cTarget` / `P4SpiTarget` は classic ESP32 でも build（名前は歴史的。P4 専用の register dump は guard） |
+
+残り: reliability gate（verify 20 / 差分 program 20 / 中断 5）、`all` の framing lost 原因、V003 の P3 相当表（GPIO / UART / ADC / PWM / I2C / SPI）を E132 配線で。
+
 ## 後回し task（速度のみ、または現時点で不要）
 
 - P0.2 の内訳 telemetry（attach / read / erase / program / verify の wall time、retry）。
