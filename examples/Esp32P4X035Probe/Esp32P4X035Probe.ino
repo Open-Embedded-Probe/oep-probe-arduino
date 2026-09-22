@@ -1,7 +1,10 @@
 // OEP v0 development probe on ESP32-P4 for the CH32X035 fixture.
 // Transport: USB-Serial/JTAG (HWCDC). Limits from E155: 1 KiB frames, 4 KiB window.
+#include <OepCh32Dm.h>
 #include <OepEndpoint.h>
 #include <OepProbeIdentity.h>
+#include <OepRvswdPhy.h>
+#include <OepTargetServices.h>
 
 static uint8_t rxBuffer[1024];
 static uint8_t txBuffer[1024];
@@ -12,11 +15,22 @@ static oep::ProbeIdentity identity({0x50344456u, 0x00030000u,
                                     (1ull << 2) | (1ull << 24) | (1ull << 25) | (1ull << 26) | (1ull << 27) | (1ull << 54),
                                     0x003ffffffffffffbull});
 
+// Fixture wiring: P4 GPIO2 -> X035 PC18 (SWDIO), GPIO54 -> PC19 (SWCLK). CH32X035F8U6: 62 KiB, 256-byte pages.
+static oep::RvswdPhy phy;
+static oep::Ch32Dm dm(phy, {0x08000000u, 63488u, 256u, 256u});
+static oep::TargetControl targetControl(dm);
+static oep::TargetMemory targetMemory(dm);
+static oep::TargetFlash targetFlash(dm);
+
 void setup() {
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
+  phy.begin(2, 54);
   endpoint.addService(identity);
+  endpoint.addService(targetControl);
+  endpoint.addService(targetMemory);
+  endpoint.addService(targetFlash);
 }
 
 void loop() {
