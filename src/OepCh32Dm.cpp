@@ -42,7 +42,8 @@ bool Ch32Dm::halt() {
   for (int i = 0; i < 100; ++i) {
     uint32_t status = 0;
     if (phy_.read(kDmStatus, status) && (status & (1u << 9))) {
-      // Keep haltreq asserted while halted (E156/E157 ran this way).
+      // Keep haltreq asserted while halted (E156/E157 ran this way); acknowledge any pending reset flag.
+      if (status & (3u << 18)) phy_.write(kDmControl, 0x90000001);  // haltreq | ackhavereset | dmactive
       phy_.write(kAbstractCs, 0x700);
       halted_ = true;
       return true;
@@ -67,14 +68,62 @@ bool Ch32Dm::resume() {
 
 void Ch32Dm::reset() {
   if (!attach()) return;
+  // ndmreset applied to a running hart left it stopped in most cycles, while a
+  // halted hart always restarted (2026-09-22, 20-cycle alternation). Halt first.
+  if (!halted_) halt();
   phy_.write(kAbstractAuto, 0);
   phy_.write(kDmControl, 0x00000003);  // dmactive | ndmreset
-  delayMicroseconds(100);
+  delay(1);
+  // The de-assert write issued 100 us after asserting ndmreset was lost every
+  // second time (2026-09-22, strict good/bad alternation): the DM does not take
+  // DMI writes for a while after ndmreset. Write, read back, repeat until the
+  // ndmreset bit is really clear.
+  bool released = false;
+  for (int i = 0; i < 50 && !released; ++i) {
+    phy_.write(kDmControl, 0x00000001);
+    uint32_t control = 0;
+    if (phy_.read(kDmControl, control) && (control & 0x3) == 0x1) released = true;
+    else delay(1);
+  }
+  // Re-activating the debug module (dmactive 0 -> 1) is what reliably let the
+  // hart out of reset on the next attach when a plain de-assert did not
+  // (2026-09-22). Do it here so the target runs before the probe lets go.
+  phy_.write(kDmControl, 0x00000000);
+  delayMicroseconds(200);
   phy_.write(kDmControl, 0x00000001);
+  delay(1);
+  // After ndmreset the hart may report unavailable for a while, or come out
+  // halted (2026-09-22: every second reset showed allhalted+anyunavail right
+  // after the release). Wait for a consistent running state, resuming a halted
+  // hart, before letting go of the debug module.
+  uint32_t status = 0;
+  int polls = 0;
+  bool running = false;
+  for (; polls < 200 && !running; ++polls) {
+    if (!phy_.read(kDmStatus, status)) { delayMicroseconds(500); continue; }
+    const bool unavail = status & (1u << 13), halted = status & (1u << 9), allrunning = status & (1u << 11);
+    if (unavail) { delayMicroseconds(500); continue; }
+    if (halted) { phy_.write(kDmControl, 0x40000001); delayMicroseconds(500); continue; }  // resumereq
+    if (allrunning) running = true; else delayMicroseconds(500);
+  }
+  // bit0 running (consistent), bit1 last allhalted, bit2 last anyunavail, bit3 allhavereset, bit4 ndmreset released, bits5-7 polls/32
+  reset_diag_ = (running ? 1 : 0) | (((status >> 9) & 1) << 1) | (((status >> 13) & 1) << 2) |
+                (((status >> 19) & 1) << 3) | ((released ? 1 : 0) << 4) | ((polls / 32 > 7 ? 7 : polls / 32) << 5);
+  phy_.write(kDmControl, 0x10000001);  // ackhavereset
+  phy_.write(kDmControl, 0x00000001);
+  delay(1);
   phy_.write(kDmControl, 0x00000000);
   halted_ = false;
   phy_.release();
   delay(2);
+  // A hart that ndmreset left stopped was released every time by a fresh
+  // attach (lines re-driven, init sequence, dmactive 0 -> 1) and a running hart
+  // is not disturbed by it (2026-09-22). Do that once here, then let go.
+  if (phy_.attach()) {
+    phy_.write(kDmControl, 0x00000000);
+    phy_.release();
+    delay(2);
+  }
 }
 
 void Ch32Dm::detach() {
@@ -135,6 +184,14 @@ bool Ch32Dm::readWordScalar(uint32_t address, uint32_t &value) {
   phy_.write(kCommand, 0x00241000);
   if (!waitAbstract()) return false;
   phy_.write(kCommand, 0x00221008);
+  if (!waitAbstract()) return false;
+  return phy_.read(kData0, value);
+}
+
+bool Ch32Dm::readRegister(uint16_t regno, uint32_t &value) {
+  if (!halted_) return false;
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kCommand, 0x00220000u | regno);  // aarsize=32, transfer, read
   if (!waitAbstract()) return false;
   return phy_.read(kData0, value);
 }

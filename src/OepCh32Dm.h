@@ -29,6 +29,8 @@ class Ch32Dm {
   // per-word poll; cmderr is checked once at the end.
   bool readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr = nullptr);
   bool readWordScalar(uint32_t address, uint32_t &value);
+  bool readRegister(uint16_t regno, uint32_t &value);
+  bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
   bool writeWord(uint32_t address, uint32_t value);
   // Flash (hart halted, page aligned).
   bool flashUnlock();
@@ -36,12 +38,14 @@ class Ch32Dm {
   bool flashProgramPage(uint32_t page, const uint8_t *data);  // geometry.page bytes, autoexec writer
   bool flashLock();
   uint8_t lastCmderr() const { return cmderr_; }
+  uint8_t resetDiag() const { return reset_diag_; }  // DMSTATUS snapshot right after the last reset()
 
  private:
   RvswdPhy &phy_;
   FlashGeometry geometry_;
   bool halted_ = false;
   uint8_t cmderr_ = 0;
+  uint8_t reset_diag_ = 0;
   bool waitAbstract();
   bool loadRegisters(uint32_t &data0_address);
   bool waitFlash();

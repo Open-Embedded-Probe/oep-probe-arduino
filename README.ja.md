@@ -44,5 +44,10 @@ worklist P0 の reliability gate（verify 20 回、差分 program 20 回、中�
 
 ## 既知の罠
 
+- **X035 の ndmreset 後に hart が走り出さない回がある**（2026-09-22）。DMSTATUS は allrunning を返すが sketch は動かず、
+  次に線を放して再 attach（初期化列 + dmactive 0→1）すると走る。halt してから多数の autoexec read を行った後の reset は
+  20/20 走った。`Ch32Dm::reset()` は halt → ndmreset → 解除の読み返し → dmactive 再有効化 → running 待ち → ack →
+  線解放 → 再 attach → 解放、の順で、20 + 24 サイクルで 43/44。残る 1 件は台帳候補 `x035-ndmreset-hart-not-running`。
+
 - Arduino.h は `word(...)` を `makeWord(...)` の macro にしている。lambda や関数を `word` と名付けると引数がそのまま返る。
 - pytest-embedded の port を close → 再 open すると P4 が reset する。
