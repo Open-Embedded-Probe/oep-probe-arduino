@@ -82,7 +82,9 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
 4. （I2C 完了）P4 独自 tool `p4_i2c_target` を二台 HIL で実証。**残り: RMT capture の service 化、X035 I2C NACK の trace（worklist B）、共通 `fixture.i2c-target`（丸めた契約）の要否判断**。
 5. （完了、E158）reset 契約の確定: DMSTATUS だけの reset は 96/100・98/100 で、欠落は全て hart が reset vector に駐留したもの（周辺 register 全て reset 値）。
    target.control reset は `confirm=1` で解放後に halt → dpc → resume を行い、dpc=0 は「駐留を解放した」として再 sample、dpc≠0 で完了（`flags` bit1、`pc`）。200/200。
-   残る問いは「なぜ駐留するか」（台帳候補 `x035-ndmreset-hart-not-running`、DMCONTROL 書込み順序の比較）。
+   E159（7 列 × 550 cycle）: DMCONTROL の順序で駐留率は 1〜8 % の間で変わるがどの列でも 0 にならない。haltreq を reset 越しに保持する列は駐留は減るが、
+   probe に入れて E158 を再測すると banner 150/300（走っているのに SysTick が止まる状態が 124）で不採用。`resetOnce` は baseline のまま、契約は PC sample + resume。
+   残る問いは「駐留・DMI 乱れ・割込み停止の共通原因」（台帳候補 `x035-ndmreset-hart-not-running`、clock 状態の相関）。
 6. （完了）capability の実測値公開: attach の margin check で 1000 read の wall time を測り、target.control の describe TLV `max_clock_hz` に SWCLK 実測（half 0 ns で 6.3〜6.4 MHz）を返す。
 
 ### P2 Phase B（HS USB）
