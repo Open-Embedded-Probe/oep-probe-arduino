@@ -5,6 +5,7 @@
 #include <OepFixtureCapture.h>
 #include <OepFixtureServices.h>
 #include <OepP4I2cTarget.h>
+#include <OepP4SpiTarget.h>
 #include <OepProbeIdentity.h>
 #include <OepRvswdPhy.h>
 #include <OepTargetServices.h>
@@ -33,6 +34,7 @@ static oep::FixtureUart *fixtureUart = nullptr;
 static oep::FixtureUart *fixtureUart2 = nullptr;  // second UART for DUT peripheral tests (X035 USART2 on GPIO48/49)
 static oep::FixtureCapture *fixtureCapture = nullptr;
 static oep::P4I2cTarget *p4I2cTarget = nullptr;  // vendor tool (owner 0x0100)
+static oep::P4SpiTarget *p4SpiTarget = nullptr;  // vendor tool (owner 0x0100), SPI2_HOST slave
 
 void setup() {
   Serial.setRxBufferSize(8192);
@@ -45,6 +47,7 @@ void setup() {
   fixtureUart = new oep::FixtureUart(*pinTable, Serial1, 2);
   fixtureUart2 = new oep::FixtureUart(*pinTable, Serial2, 5);
   p4I2cTarget = new oep::P4I2cTarget(*pinTable);
+  p4SpiTarget = new oep::P4SpiTarget(*pinTable);
   fixtureCapture = new oep::FixtureCapture(*pinTable);
   endpoint.addService(identity);
   endpoint.addService(targetControl);
@@ -54,11 +57,13 @@ void setup() {
   endpoint.addService(*fixtureUart);
   endpoint.addService(*fixtureUart2);
   endpoint.addService(*p4I2cTarget);
+  endpoint.addService(*p4SpiTarget);
   endpoint.addService(*fixtureCapture);
 }
 
 void loop() {
   endpoint.poll();
   p4I2cTarget->service();
+  p4SpiTarget->service();
   if (endpoint.idleFor(1500)) endpoint.abandonAll();
 }
