@@ -40,10 +40,16 @@ void P4SpiTarget::planRelease() {
 
 size_t P4SpiTarget::describe(uint8_t first, uint8_t *out, size_t capacity) {
   size_t used = 0, index = 0;
-  // 64-byte FIFO transactions without DMA. The clock limit is the master's: the IDF slave
-  // documents ~10 MHz for modes 1/3 and lower for 0/2 (the MISO setup time); measured values
-  // go here once the X035 runner has swept them.
+  // 64-byte FIFO transactions without DMA. Clock limit measured with the CH32 SPI1 masters on
+  // 2026-09-22: ESP32-P4 exchanged 4 bytes both ways at 24 MHz (X035, /2); the classic ESP32 was
+  // right up to 3 MHz and one bit late on MISO at 6 MHz (V003), so it declares 3 MHz.
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  constexpr uint32_t kMaxClockHz = 24000000u;
+#else
+  constexpr uint32_t kMaxClockHz = 3000000u;
+#endif
   if (index++ >= first) { used = tlvPutU16(out, capacity, used, OEP_V0_TLV_CORE_MAX_LENGTH, kMaxFrame); if (!used) return 0; }
+  if (index++ >= first) { const size_t n = tlvPutU32(out, capacity, used, OEP_V0_TLV_CORE_MAX_CLOCK_HZ, kMaxClockHz); if (!n) return used; used = n; }
   for (uint8_t c = 0; c < PinTable::kChannels; ++c) {
     if (!pins_.allowed(c)) continue;
     if (index++ < first) continue;
