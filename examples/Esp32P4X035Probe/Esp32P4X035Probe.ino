@@ -30,6 +30,7 @@ static oep::TargetFlash targetFlash(dm);
 static oep::PinTable *pinTable = nullptr;
 static oep::FixtureGpio *fixtureGpio = nullptr;
 static oep::FixtureUart *fixtureUart = nullptr;
+static oep::FixtureUart *fixtureUart2 = nullptr;  // second UART for DUT peripheral tests (X035 USART2 on GPIO48/49)
 static oep::FixtureCapture *fixtureCapture = nullptr;
 static oep::P4I2cTarget *p4I2cTarget = nullptr;  // vendor tool (owner 0x0100)
 
@@ -41,7 +42,8 @@ void setup() {
   for (uint8_t pin = 0; pin < 55; ++pin) if (!((kReserved >> pin) & 1)) fixturePins[fixturePinCount++] = pin;
   pinTable = new oep::PinTable(fixturePins, fixturePinCount);
   fixtureGpio = new oep::FixtureGpio(*pinTable);
-  fixtureUart = new oep::FixtureUart(*pinTable, Serial1);
+  fixtureUart = new oep::FixtureUart(*pinTable, Serial1, 2);
+  fixtureUart2 = new oep::FixtureUart(*pinTable, Serial2, 5);
   p4I2cTarget = new oep::P4I2cTarget(*pinTable);
   fixtureCapture = new oep::FixtureCapture(*pinTable);
   endpoint.addService(identity);
@@ -50,6 +52,7 @@ void setup() {
   endpoint.addService(targetFlash);
   endpoint.addService(*fixtureGpio);
   endpoint.addService(*fixtureUart);
+  endpoint.addService(*fixtureUart2);
   endpoint.addService(*p4I2cTarget);
   endpoint.addService(*fixtureCapture);
 }

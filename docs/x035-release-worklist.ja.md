@@ -226,7 +226,7 @@ P0--P2 が揃ってから、下表の順に戻る。各行は標準 Arduino API 
 | 優先 | 対象 | fixture capability / 測定 | 最低限の判定 |
 | --- | --- | --- | --- |
 | 1 | GPIO / `INPUT_PULLUP` / EXTI | `fixture.gpio`（両側駆動・観測） | 全接続 pin の 0/1、pull、edge、割込み回数、予約 pin 非干渉。**2026-09-22 実測**（ArduinoCore-CH32 `tests/manual/oep_gpio_matrix/`、13 pin）: core の 2 不具合を発見・修正 — (a) AFIO_EXTICR を F1 流 4 bit で書いていて port B/C の EXTI が来ない（X035 は 2 bit/line）、(b) X0 の GPIO に汎用 open-drain が無く `OUTPUT_OPENDRAIN` が high を駆動（errata `x035-no-gpio-open-drain`、core でエミュレート）。修正後 PA0〜7 / PB3 / PB11 / PB12 は全項目 OK。PC14/PC15（PD CC）は pull-up idle が 0 のまま（≈5 kΩ 級 pull-down、源は未決） |
-| 2 | UART（USART4、次に USART2） | UART peer | 9600/115200、binary payload、長連続 TX/RX、overflow/error、reset 後再開 |
+| 2 | UART（USART4、次に USART2） | `fixture.uart` × 2（console + 試験用） | 9600/115200、binary payload、長連続 TX/RX、overflow/error、reset 後再開。**2026-09-22 実測**（ArduinoCore-CH32 `tests/manual/oep_uart_trace/`、USART2）: 9600 / 115200 / 460800 で DUT→P4 4096 B・echo 2048 B 一致、64 KiB 連続一致、64 B ring の overflow は取りこぼすが hang せず回復、reset 後再開。USART4 は console として全 runner で常用（115200） |
 | 3 | ADC | 校正済み 0/Vref/2/Vref source | PA5 を含む接続 ADC pin の許容範囲、settling、repeatability。P4 内部 pull は基準電圧にしない |
 | 4 | PWM / `analogWrite` / `tone` | `fixture.capture`（PARLIO） | 周波数、duty 0/50/100%、jitter、timer 資源競合、停止時 level。**2026-09-22 実測**: 1003.5 Hz、duty ±0.3 %、255/0 で edge 無し、tone 誤差 < 0.1 %（ArduinoCore-CH32 `tests/manual/oep_periph_trace/`） |
 | 5 | 時刻 / delay / timer API | `fixture.capture` | `millis()`、`micros()`、delay、SysTick、公開 timer API の callback/解除と PWM 非干渉。**2026-09-22 実測**: millis 周期 20.005 ms / 20、`delayMicroseconds` は +3〜4 µs、`digitalWrite` ≈ 2 µs（todo） |
