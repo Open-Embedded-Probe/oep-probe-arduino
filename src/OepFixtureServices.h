@@ -54,9 +54,10 @@ class FixtureGpio final : public Service {
 
 class FixtureUart final : public Service {
  public:
-  static constexpr uint8_t kOwner = 2;
   enum Role : uint8_t { kRoleRx = 1, kRoleTx = 2 };
-  FixtureUart(PinTable &pins, HardwareSerial &serial) : pins_(pins), serial_(serial) {}
+  // `owner` is this instance's PinTable owner id (each UART instance needs its own so a
+  // release only returns its own pins); 2 keeps the historical value for the first one.
+  FixtureUart(PinTable &pins, HardwareSerial &serial, uint8_t owner = 2) : pins_(pins), serial_(serial), kOwner(owner) {}
   uint16_t owner() const override { return OEP_V0_DEF_FIXTURE_UART_OWNER; }
   uint16_t id() const override { return OEP_V0_DEF_FIXTURE_UART_ID; }
   uint8_t revision() const override { return OEP_V0_DEF_FIXTURE_UART_REVISION; }
@@ -69,6 +70,7 @@ class FixtureUart final : public Service {
  private:
   PinTable &pins_;
   HardwareSerial &serial_;
+  const uint8_t kOwner;
   int rx_ = -1, tx_ = -1;
   bool configured_ = false;
 };
