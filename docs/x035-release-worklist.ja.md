@@ -117,6 +117,15 @@ program 11.548080 s、verify 4.957561 sだった。最終targetはPWM image hash
 SHA-256がPWM imageと同じ`b6f5b99dab244417aee37c7cdc4459f3a7158ce55af63ba22bea9cb7bf1f93c4`であることを
 確認した。result JSONは`backup.bytes_read=63488`、`backup_read`、`backup_reset`を含む。
 
+2026-09-22、v0 stack（`examples/Esp32P4X035Probe` + oep-client-python `oep_client.v0`、dedicated GPIO PHY、autoexec
+reader/writer、1 KiB frame × 4 KiB window pipelining）で同じ gate を `tests/hil/probe/test_reliability.py` として再取得した。
+target は F8U6、対象は flash 末尾 8 KiB を 2 種の random image で交互に書換える。full verify（probe 内 CRC32、host 側 CRC と一致）
+20 回: 平均 0.281 s・中央値 0.312 s・p95 0.414 s・最大 0.415 s。32 physical page の差分 program 20 回: 平均 0.289 s・中央値 0.267 s・
+p95 0.354 s・最大 0.453 s、失敗 0、続く full verify は平均 0.296 s。host 無応答（6 page 送信後に 2.5 s 沈黙）5 回: 全回 endpoint の
+1.5 s watchdog で lease 解放と target reset（DMSTATUS allhalted=0 を確認）、再接続後の `program_image` が残り 26 page を書いて
+全域 CRC 一致。旧 prototype（verify 5.17 s、27 page program 11.9 s）比でそれぞれ約 18 倍・約 40 倍。verify 時間の振れ（0.24〜0.63 s）は
+attach ごとの half period margin check の選択差で、正否には影響しない。
+
 ### P0.2 速度の計測と改善
 
 - [ ] `attach`、read、erase/program、verify、reset の wall time、転送 byte 数、retry 数を
