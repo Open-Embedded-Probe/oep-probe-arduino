@@ -7,6 +7,10 @@
 #if OEP_CAPTURE_PARLIO
 #include <esp_cache.h>
 #include <esp_heap_caps.h>
+#elif OEP_CAPTURE_GPIO_SAMPLER
+#include <esp_cpu.h>
+#include <esp_heap_caps.h>
+#include <soc/gpio_struct.h>
 #endif
 
 namespace oep {
@@ -170,6 +174,70 @@ void FixtureCapture::teardown() {
   }
   if (delimiter_) { parlio_del_rx_delimiter(delimiter_); delimiter_ = nullptr; }
   if (unit_) { parlio_del_rx_unit(unit_); unit_ = nullptr; }
+  if (buffer_) { heap_caps_free(buffer_); buffer_ = nullptr; }
+  configured_ = armed_ = done_ = error_ = false;
+}
+
+#elif OEP_CAPTURE_GPIO_SAMPLER
+
+// Core 0 does nothing else on this probe (no Wi-Fi), so it can sample. Interrupts stay off for the
+// whole window (<= 164 ms at the 400 kHz floor), which is inside the 300 ms interrupt watchdog.
+void IRAM_ATTR FixtureCapture::samplerTask(void *context) {
+  FixtureCapture *self = static_cast<FixtureCapture *>(context);
+  uint8_t *out = self->buffer_;
+  const uint32_t n = self->samples_, step = self->cycles_per_sample_, lines = self->line_count_;
+  uint32_t m0[kMaxLines], m1[kMaxLines];
+  for (uint32_t l = 0; l < lines; ++l) { m0[l] = self->masks0_[l]; m1[l] = self->masks1_[l]; }
+  portDISABLE_INTERRUPTS();
+  uint32_t next = esp_cpu_get_cycle_count();
+  for (uint32_t i = 0; i < n; ++i) {
+    while (static_cast<int32_t>(esp_cpu_get_cycle_count() - next) < 0) {}
+    next += step;
+    const uint32_t in0 = GPIO.in, in1 = GPIO.in1.val;
+    uint8_t byte = 0;
+    for (uint32_t l = 0; l < lines; ++l) byte |= static_cast<uint8_t>(((in0 & m0[l]) | (in1 & m1[l])) != 0) << l;
+    out[i] = byte;
+  }
+  portENABLE_INTERRUPTS();
+  self->done_ = true;
+  self->sampler_ = nullptr;
+  vTaskDelete(nullptr);
+}
+
+bool FixtureCapture::setup(uint32_t sample_rate_hz, uint32_t samples) {
+  teardown();
+  width_ = 8;   // one byte per sample, whatever the line count: sampleAt() then reads it back as is
+  if (samples > kBufferBytes) samples = kBufferBytes;
+  bytes_ = samples_ = samples;
+  buffer_ = static_cast<uint8_t *>(heap_caps_malloc(bytes_, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!buffer_) return false;
+  for (uint8_t l = 0; l < line_count_; ++l) {
+    const int pin = lines_[l];
+    masks0_[l] = pin < 32 ? 1u << pin : 0;
+    masks1_[l] = pin >= 32 ? 1u << (pin - 32) : 0;
+  }
+  const uint32_t cpu_hz = getCpuFrequencyMhz() * 1000000u;
+  cycles_per_sample_ = cpu_hz / sample_rate_hz;
+  sample_rate_ = cpu_hz / cycles_per_sample_;   // the rate actually paced (integer cycles)
+  configured_ = true;
+  armed_ = false;
+  return true;
+}
+
+bool FixtureCapture::arm() {
+  if (sampler_) return false;   // a window is still running
+  done_ = false;
+  error_ = false;
+  memset(buffer_, 0, bytes_);
+  if (xTaskCreatePinnedToCore(samplerTask, "oep_capture", 4096, this, configMAX_PRIORITIES - 1, &sampler_, 0) != pdPASS) {
+    sampler_ = nullptr; error_ = true; return false;
+  }
+  armed_ = true;
+  return true;
+}
+
+void FixtureCapture::teardown() {
+  while (sampler_) delay(1);   // a running window ends by itself within one window
   if (buffer_) { heap_caps_free(buffer_); buffer_ = nullptr; }
   configured_ = armed_ = done_ = error_ = false;
 }
