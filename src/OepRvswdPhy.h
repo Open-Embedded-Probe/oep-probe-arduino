@@ -19,13 +19,17 @@ class RvswdPhy {
   bool read(uint8_t address, uint32_t &value);   // with bounded retry
   void write(uint8_t address, uint32_t value);
   uint32_t halfNs() const { return half_ns_; }
+  // Measured during attach: wall time of one DMI read at the selected half period,
+  // and the SWCLK rate it implies (53 clocked bits per transaction). 0 = not attached yet.
+  uint32_t dmiNs() const { return dmi_ns_; }
+  uint32_t clockHz() const { return dmi_ns_ ? uint32_t(53000000000ull / dmi_ns_) : 0; }
   uint32_t retries() const { return retries_; }
   uint32_t transactions() const { return transactions_; }
 
  private:
   int swdio_ = -1, swclk_ = -1;
   bool ready_ = false, attached_ = false;
-  uint32_t half_cycles_ = 0, half_ns_ = 0, retries_ = 0, transactions_ = 0;
+  uint32_t half_cycles_ = 0, half_ns_ = 0, retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   void setHalf(uint32_t half_ns);
   void configureBus();
   bool readRaw(uint8_t address, uint32_t &value);

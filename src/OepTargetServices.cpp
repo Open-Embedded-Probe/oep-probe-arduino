@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "OepTlv.h"
+
 namespace oep {
 
 uint32_t crc32Ieee(uint32_t crc, const uint8_t *data, size_t length) {
@@ -42,10 +44,15 @@ Result TargetControl::handle(uint8_t operation, const uint8_t *payload, size_t l
     case OEP_V0_TARGET_CONTROL_OP_RESET: {
       struct oep_v0_target_control_reset_request request;
       if (!oep_v0_target_control_reset_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (request.mode != 0) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);  // 0 = system reset, target runs
+      if (request.mode != 0 || request.confirm > 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);  // 0 = system reset, target runs
       if (!dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
-      dm_.reset();
-      return completed();
+      const Ch32Dm::ResetReport report = dm_.reset(request.confirm == 1);
+      struct oep_v0_target_control_reset_result result = {report.flags, report.attempts, report.pc};
+      const size_t n = oep_v0_target_control_reset_result_pack(&result, out, capacity);
+      // Completion means "the target runs": without confirmation the DM view is
+      // all there is; with it, only a PC sample counts.
+      const bool ok = request.confirm ? (report.flags & 2) != 0 : (report.flags & 1) != 0;
+      return ok ? completed(n) : failed(n);
     }
     case OEP_V0_TARGET_CONTROL_OP_READ_DMI: {
       struct oep_v0_target_control_read_dmi_request request;
@@ -69,7 +76,13 @@ Result TargetControl::handle(uint8_t operation, const uint8_t *payload, size_t l
 
 void TargetControl::abandon() {
   // The host vanished mid-session: never leave the DUT halted.
-  if (dm_.attached()) dm_.reset();
+  if (dm_.attached()) dm_.reset(true);
+}
+
+size_t TargetControl::describe(uint8_t first, uint8_t *out, size_t capacity) {
+  // The SWCLK rate the PHY settled on at the last attach (0 before the first attach).
+  if (first > 0) return 0;
+  return tlvPutU32(out, capacity, 0, OEP_V0_TLV_CORE_MAX_CLOCK_HZ, phy_.clockHz());
 }
 
 // ---- target.memory -------------------------------------------------------

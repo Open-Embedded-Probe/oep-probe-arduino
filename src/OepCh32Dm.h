@@ -23,7 +23,14 @@ class Ch32Dm {
   bool attach();
   bool halt();            // attach + haltreq, waits for allhalted
   bool resume();          // resumereq, waits for allresumeack
-  void reset();           // ndmreset then detach: target restarts from its reset vector
+  // ndmreset then detach: the target restarts from its reset vector. The report
+  // mirrors target.control reset: flags bit0 DM said running, bit1 execution
+  // confirmed by a nonzero PC sample (confirm = true: brief halt, dpc read,
+  // resume, re-sampled while the hart sits at the reset vector), bit2 the hart
+  // was found parked at the reset vector or the sequence was redone, bit3 the
+  // confirmation halt failed on the last attempt.
+  struct ResetReport { uint8_t flags; uint8_t attempts; uint32_t pc; };
+  ResetReport reset(bool confirm = true);
   void detach();          // dmactive = 0, lines Hi-Z (target keeps running or stays halted)
   // Memory (hart must be halted). readWords uses the autoexec reader with no
   // per-word poll; cmderr is checked once at the end.
@@ -48,6 +55,8 @@ class Ch32Dm {
   uint8_t reset_diag_ = 0;
   bool waitAbstract();
   bool loadRegisters(uint32_t &data0_address);
+  bool resetOnce();                 // one ndmreset state machine, ends released; true = DM said running
+  bool confirmExecution(uint32_t &pc, bool &halt_failed);  // attach, halt, sample dpc, resume, release
   bool waitFlash();
 };
 

@@ -4,6 +4,7 @@
 #include <driver/dedic_gpio.h>
 #include <driver/gpio.h>
 #include <esp_cpu.h>
+#include <esp_timer.h>
 #include <hal/dedic_gpio_cpu_ll.h>
 #include <hal/gpio_ll.h>
 #include <soc/gpio_struct.h>
@@ -136,11 +137,16 @@ bool RvswdPhy::attach() {
     setHalf(half);
     uint32_t first = 0, value = 0;
     bool clean = true;
+    const int64_t t0 = esp_timer_get_time();
     for (int i = 0; i < 1000 && clean; ++i) {
       if (!readRaw(0x11, value)) { clean = false; break; }
       if (i == 0) first = value; else if (value != first) clean = false;
     }
-    if (clean && ((first >> 8) & 0xf) != 0) { attached_ = true; return true; }  // DMSTATUS.version nonzero
+    if (clean && ((first >> 8) & 0xf) != 0) {  // DMSTATUS.version nonzero
+      dmi_ns_ = uint32_t((esp_timer_get_time() - t0) * 1000 / 1000);  // 1000 reads -> ns per read
+      attached_ = true;
+      return true;
+    }
   }
   release();
   return false;
