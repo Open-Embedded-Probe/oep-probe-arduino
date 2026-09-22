@@ -149,7 +149,11 @@ VREFINT ch8 の値も未解釈）、SPI peer mode 0〜3 ≤3 MHz 一致（6 MHz 
 400 kHz write 一致（**classic ESP32 の I2C slave では preloaded 2 slot 目が filler 込みでずれる** = `P4I2cTarget` の SoC 差、要修正）。
 UART は console 自身（basic 13/14 → runner 修正後 14/14）。PWM / tone / timing / 線上 decode は classic ESP32 に capture が無く未（RMT RX の capture backend が要る）。
 
-残り: classic ESP32 向け `fixture.capture`（RMT RX）、`P4I2cTarget` の classic ESP32 filler 差、SPI slave 上限の宣言（`max_clock_hz`）、ADC の絶対値（probe rail vs VDD）。
+**同日後半 2**: classic ESP32 に `fixture.capture` を GPIO sampler（core 0、0.4〜2 MHz、1 byte/sample、window ≤ 164 ms）で実装。RMT は ping-pong 無し・
+時間軸が線ごとにずれるので採らず、1 register read/sample の方式にした（多線でも同時刻）。これで V003 の PWM（1005.5 Hz、duty ±0.3 %）/ tone（−0.35 %）/
+millis（20.09 ms）/ `delayMicroseconds`（**+16 µs・jitter 9〜15 µs、X035 の +3 µs と違う、core 側 todo**）が取れ、I2C も線上 decode 付きで一致。
+`P4I2cTarget` の classic ESP32 filler 差を修正（SoC で filler 0/1）、`P4SpiTarget` は `max_clock_hz` を P4 24 MHz / classic 3 MHz と宣言。
+残り: ADC の絶対値（probe rail vs VDD、メータ 1 回）、V003 の `delayMicroseconds` overhead（core）、SPI 線上 decode は 2 MHz sampling では不可（記録のみ）。
 
 ## 後回し task（速度のみ、または現時点で不要）
 
