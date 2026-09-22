@@ -3,6 +3,7 @@
 // (single wire, SwioPhy). GPIO23 -> RST is wired but deliberately never driven.
 #include <OepCh32Dm.h>
 #include <OepEndpoint.h>
+#include <OepFixtureCapture.h>
 #include <OepFixtureServices.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
@@ -41,6 +42,7 @@ static oep::FixtureGpio *fixtureGpio = nullptr;
 static oep::FixtureUart *fixtureUart = nullptr;   // DUT console: V003 PD5/TX -> GPIO22, PD6/RX <- GPIO21 (E132)
 static oep::P4I2cTarget *i2cTarget = nullptr;     // ESP-IDF slave tools; the "P4" name is historical
 static oep::P4SpiTarget *spiTarget = nullptr;
+static oep::FixtureCapture *fixtureCapture = nullptr;   // GPIO sampler on core 0, 0.4..2 MHz, 1 byte/sample
 
 void setup() {
   Serial.setRxBufferSize(8192);
@@ -57,6 +59,7 @@ void setup() {
   fixtureUart = new oep::FixtureUart(*pinTable, Serial2, 2);
   i2cTarget = new oep::P4I2cTarget(*pinTable);
   spiTarget = new oep::P4SpiTarget(*pinTable);
+  fixtureCapture = new oep::FixtureCapture(*pinTable);
   endpoint.addService(identity);
   endpoint.addService(targetControl);
   endpoint.addService(targetMemory);
@@ -65,6 +68,7 @@ void setup() {
   endpoint.addService(*fixtureUart);
   endpoint.addService(*i2cTarget);
   endpoint.addService(*spiTarget);
+  endpoint.addService(*fixtureCapture);
 }
 
 void loop() {
