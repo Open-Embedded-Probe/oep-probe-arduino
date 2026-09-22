@@ -22,7 +22,7 @@ Result TargetControl::handle(uint8_t operation, const uint8_t *payload, size_t l
       // flags: bit0 attached, bit1 halted (probe bookkeeping), bit2 DMSTATUS.allhalted read live.
       struct oep_v0_target_control_status_result result = {
           static_cast<uint8_t>((dm_.attached() ? 1 : 0) | (dm_.halted() ? 2 : 0) | (dm_.readHalted() ? 4 : 0)),
-          0, dm_.lastCmderr()};
+          dm_.resetDiag(), dm_.lastCmderr()};
       return completed(oep_v0_target_control_status_result_pack(&result, out, capacity));
     }
     case OEP_V0_TARGET_CONTROL_OP_HALT: {
@@ -46,6 +46,21 @@ Result TargetControl::handle(uint8_t operation, const uint8_t *payload, size_t l
       if (!dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
       dm_.reset();
       return completed();
+    }
+    case OEP_V0_TARGET_CONTROL_OP_READ_DMI: {
+      struct oep_v0_target_control_read_dmi_request request;
+      if (!oep_v0_target_control_read_dmi_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      struct oep_v0_target_control_read_dmi_result result = {0};
+      if (!dm_.readDmi(request.address, result.value)) return failed();
+      return completed(oep_v0_target_control_read_dmi_result_pack(&result, out, capacity));
+    }
+    case OEP_V0_TARGET_CONTROL_OP_READ_REGISTER: {
+      struct oep_v0_target_control_read_register_request request;
+      if (!oep_v0_target_control_read_register_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (!dm_.halted()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      struct oep_v0_target_control_read_register_result result = {0};
+      if (!dm_.readRegister(request.regno, result.value)) return failed();
+      return completed(oep_v0_target_control_read_register_result_pack(&result, out, capacity));
     }
     default:
       return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
