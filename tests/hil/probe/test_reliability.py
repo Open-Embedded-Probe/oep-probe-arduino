@@ -39,7 +39,9 @@ def test_reliability_gate(probe):
     for i in range(20):
         image = image_b if i % 2 == 0 else image_a
         outcome = program_image(target, image)
-        assert outcome.verified and outcome.pages_changed == 32, outcome.as_dict()
+        detail = (f"pages_failed={outcome.pages_failed} image_crc=0x{outcome.image_crc32:08x} "
+                  f"verified_crc=0x{outcome.verified_crc32:08x} retries={outcome.timings.get('page_retries')}")
+        assert outcome.verified and outcome.pages_changed == 32, detail
         program_times.append(outcome.timings["program"])
         verify2.append(outcome.timings["verify"])
     print(f"HIL gate program x20 (32 pages): {_stats(program_times)}; verify after program: {_stats(verify2)}")
