@@ -67,6 +67,7 @@ void P4I2cTarget::pushFrame(const uint8_t *data, size_t length) {
 }
 
 #if defined(ARDUINO_ARCH_ESP32)
+#include <esp_rom_sys.h>
 
 bool P4I2cTarget::receiveDone(i2c_slave_dev_handle_t, const i2c_slave_rx_done_event_data_t *, void *context) {
   static_cast<P4I2cTarget *>(context)->rx_done_ = true;  // ISR: flag only (E147)
@@ -76,6 +77,9 @@ bool P4I2cTarget::receiveDone(i2c_slave_dev_handle_t, const i2c_slave_rx_done_ev
 bool P4I2cTarget::start() {
   if (started_) return true;
   i2c_slave_config_t cfg = {};
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+  cfg.flags.stretch_en = stretch_us_ ? 1 : 0;
+#endif
   cfg.i2c_port = I2C_NUM_0;
   cfg.sda_io_num = static_cast<gpio_num_t>(sda_);
   cfg.scl_io_num = static_cast<gpio_num_t>(scl_);
@@ -104,6 +108,16 @@ bool P4I2cTarget::arm(size_t length) {
 }
 
 void P4I2cTarget::service() {
+  // set_stretch: the ESP-IDF v1 slave driver enables the hardware stretch (address match on a master
+  // read, TX empty, RX full) but never releases it - the raw flag stays set and SCL stays low until the
+  // device is deleted (measured 2026-09-22: Wire timed out at 25 ms, SCL low for the whole capture).
+  // So the hold is done here, from loop(): wait stretch_us after the stretch is seen, then release.
+  if (stretch_us_ && started_ && I2C0.int_raw.slave_stretch_int_raw) {
+    ++stretch_events_;
+    esp_rom_delay_us(stretch_us_);
+    I2C0.scl_stretch_conf.slave_scl_stretch_clr = 1;
+    I2C0.int_clr.slave_stretch_int_clr = 1;
+  }
   if (!rx_done_) return;
   rx_done_ = false;
   const size_t got = armed_;
@@ -212,6 +226,14 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       result.slave_addr = I2C0.slave_addr.val; result.filter_cfg = I2C0.filter_cfg.val; result.scl_stretch_conf = I2C0.scl_stretch_conf.val;
 #endif
       return completed(oep_v0_p4_i2c_target_read_hw_result_pack(&result, out, capacity));
+    }
+    case OEP_V0_P4_I2C_TARGET_OP_SET_STRETCH: {
+      struct oep_v0_p4_i2c_target_set_stretch_request request;
+      if (!oep_v0_p4_i2c_target_set_stretch_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (request.stretch_us > 100000) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);  // spins in the ISR; keep under the interrupt watchdog
+      stretch_us_ = request.stretch_us;
+      stretch_events_ = 0;
+      return completed();
     }
     case OEP_V0_P4_I2C_TARGET_OP_RESET: {
       struct oep_v0_p4_i2c_target_reset_request request;
