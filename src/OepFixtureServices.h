@@ -1,0 +1,76 @@
+// fixture.gpio / fixture.uart (owner 0, ids 0x20 / 0x21) on ESP32 GPIO. Pins are probe
+// channels; the DUT wiring is the host's manifest. A shared pin table keeps GPIO and
+// UART from driving the same channel.
+#pragma once
+
+#include <Arduino.h>
+
+#include "OepService.h"
+
+namespace oep {
+
+class PinTable {
+ public:
+  static constexpr uint8_t kChannels = 64;
+  explicit PinTable(const uint8_t *allowed, size_t count) {
+    for (size_t i = 0; i < count && allowed[i] < kChannels; ++i) allowed_ |= uint64_t{1} << allowed[i];
+  }
+  bool allowed(uint16_t channel) const { return channel < kChannels && (allowed_ >> channel) & 1; }
+  bool free(uint16_t channel) const { return allowed(channel) && owner_[channel] == 0; }
+  bool claim(uint16_t channel, uint8_t owner) {
+    if (!free(channel)) return false;
+    owner_[channel] = owner;
+    return true;
+  }
+  void release(uint8_t owner) { for (uint8_t c = 0; c < kChannels; ++c) if (owner_[c] == owner) owner_[c] = 0; }
+  uint64_t allowedMask() const { return allowed_; }
+  uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
+
+ private:
+  uint64_t allowed_ = 0;
+  uint8_t owner_[kChannels] = {};
+};
+
+enum FixtureGpioMode : uint8_t {
+  kGpioInputFloating = 0, kGpioInputPullUp = 1, kGpioInputPullDown = 2, kGpioInputPullUpDown = 3,
+  kGpioOutputLow = 4, kGpioOutputHigh = 5, kGpioOpenDrainLow = 6, kGpioOpenDrainRelease = 7,
+};
+
+class FixtureGpio final : public Service {
+ public:
+  static constexpr uint8_t kOwner = 1;
+  explicit FixtureGpio(PinTable &pins) : pins_(pins) {}
+  uint16_t owner() const override { return OEP_V0_DEF_FIXTURE_GPIO_OWNER; }
+  uint16_t id() const override { return OEP_V0_DEF_FIXTURE_GPIO_ID; }
+  uint8_t revision() const override { return OEP_V0_DEF_FIXTURE_GPIO_REVISION; }
+  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  size_t describe(uint8_t first, uint8_t *out, size_t capacity) override;
+  void abandon() override;  // every configured channel back to floating input
+
+ private:
+  PinTable &pins_;
+  uint64_t configured_ = 0;
+};
+
+class FixtureUart final : public Service {
+ public:
+  static constexpr uint8_t kOwner = 2;
+  enum Role : uint8_t { kRoleRx = 1, kRoleTx = 2 };
+  FixtureUart(PinTable &pins, HardwareSerial &serial) : pins_(pins), serial_(serial) {}
+  uint16_t owner() const override { return OEP_V0_DEF_FIXTURE_UART_OWNER; }
+  uint16_t id() const override { return OEP_V0_DEF_FIXTURE_UART_ID; }
+  uint8_t revision() const override { return OEP_V0_DEF_FIXTURE_UART_REVISION; }
+  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  size_t describe(uint8_t first, uint8_t *out, size_t capacity) override;
+  uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
+  bool planApply(const RoleAssignment *roles, size_t count) override;
+  void planRelease() override;
+
+ private:
+  PinTable &pins_;
+  HardwareSerial &serial_;
+  int rx_ = -1, tx_ = -1;
+  bool configured_ = false;
+};
+
+}  // namespace oep

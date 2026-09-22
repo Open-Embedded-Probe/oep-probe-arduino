@@ -43,12 +43,17 @@ class Endpoint {
   Limits limits_;
   Service *services_[kMaxServices] = {};
   size_t service_count_ = 0;
+  uint16_t active_lease_ = 0;   // one lease per connection in v0
+  uint16_t next_lease_ = 1;
+  bool leased_[kMaxServices] = {};
   uint32_t last_request_millis_ = 0;
   uint32_t requests_ = 0;
 
   void handleMessage(const uint8_t *message, size_t length);
   Result handleCore(uint8_t operation, const uint8_t *payload, size_t length,
                     uint8_t *out, size_t capacity);
+  Result planApply(const uint8_t *tlv, size_t length, uint8_t *out, size_t capacity);
+  void releaseLease();
   void sendResult(uint16_t correlation, Result result);
 };
 

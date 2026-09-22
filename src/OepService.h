@@ -20,6 +20,13 @@ inline Result failed(size_t length = 0) { return {OEP_V0_RESOLUTION_COMPLETED, O
 inline Result partial(size_t length = 0) { return {OEP_V0_RESOLUTION_COMPLETED, OEP_V0_OUTCOME_PARTIAL, length}; }
 inline Result rejected(uint8_t reason) { return {OEP_V0_RESOLUTION_REJECTED, reason, 0}; }
 
+// One entry of a plan: this connection asks `function` to use probe `channel` in `role`.
+struct RoleAssignment {
+  uint16_t function;
+  uint8_t role;
+  uint16_t channel;
+};
+
 class Service {
  public:
   virtual ~Service() = default;
@@ -35,8 +42,16 @@ class Service {
     (void)first; (void)out; (void)capacity;
     return 0;
   }
+  // Plan (lease) lifecycle. planCheck validates without side effects and returns a
+  // reject reason (0 = acceptable); planApply configures; planRelease undoes it.
+  virtual uint8_t planCheck(const RoleAssignment *roles, size_t count) {
+    (void)roles;
+    return count ? OEP_V0_REJECT_UNAVAILABLE : 0;  // by default a service takes no roles
+  }
+  virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
+  virtual void planRelease() {}
   // The host vanished: release every lease and return pins to their idle state.
-  virtual void abandon() {}
+  virtual void abandon() { planRelease(); }
 
   uint16_t function = 0;  // assigned by Endpoint::addService
 };
