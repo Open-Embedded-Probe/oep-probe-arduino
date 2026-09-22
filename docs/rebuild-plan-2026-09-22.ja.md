@@ -91,7 +91,9 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
    address を受けているのに ACK を出さない。IDF master には ACK する。除外: pin（役割交換でも同じ、INDR で駆動確認）、生成順序、SDA filter、P4 pull-up。
    **解決**: 原因は X035 の `AFIO_CTLR.USB_PHY_V33`（PC16/PC17 = USB pad の open-drain が release されない）。core 修正で route 2 が ACK。errata `x035-usb-pads-open-drain`。
    切り分けの決め手は X035 自身の bit-bang（ACK slot だけ INPUT_PULLUP → ACK、GPIO OD のまま → NACK）と、X035 halt 中の「P4 が引けるか」試験。
-   共通 `fixture.i2c-target` は guidelines §7 に「2 実装目が出るまで作らない」と記録。X035 P3 行 4/5/7 は `oep_periph_trace` で実測完了（PWM / tone / millis / SPI 4 mode）。
+   共通 `fixture.i2c-target` は guidelines §7 に「2 実装目が出るまで作らない」と記録。
+   **SPI peer（2026-09-22）**: vendor tool `p4.spi-target`（ESP-IDF spi_slave、SPI2_HOST、DMA 無し 64 byte、arm → CS 後に read_rx）。X035 master と
+   7 条件で 3 者一致。`p4.i2c-target` は slave 生成後に P4 内部 pull-up を掛ける（fixture に bus pull-up が無かった）。X035 P3 行 4/5/7 は `oep_periph_trace` で実測完了（PWM / tone / millis / SPI 4 mode）。
 5. （完了、E158）reset 契約の確定: DMSTATUS だけの reset は 96/100・98/100 で、欠落は全て hart が reset vector に駐留したもの（周辺 register 全て reset 値）。
    target.control reset は `confirm=1` で解放後に halt → dpc → resume を行い、dpc=0 は「駐留を解放した」として再 sample、dpc≠0 で完了（`flags` bit1、`pc`）。200/200。
    E159（7 列 × 550 cycle）: DMCONTROL の順序で駐留率は 1〜8 % の間で変わるがどの列でも 0 にならない。haltreq を reset 越しに保持する列は駐留は減るが、
@@ -120,8 +122,8 @@ worklist の P3 表を、新 stack（S3 + S4）だけで上から実施する。
 **2026-09-22: 9 行すべてに常駐 firmware だけの実測が付いた**（ArduinoCore-CH32 `tests/manual/oep_*_trace/`、`oep_gpio_matrix/`）。
 証拠と残りは worklist の P3 表に行ごとに記録。この過程で core の不具合 4 件（EXTICR 2 bit、GPIO open-drain 無し、USB pad の
 open-drain、User mode の mstatus）と fixture 個体の事実 2 件（PC14/PC15 が pull-down、ADC ch3/7/15 が無い = errata
-`x035-adc-ch-i2c-unavailable` の ADC 条項）を得た。残り: I2C の clock stretch / stuck-bus、SPI の peer slave、ADC の中点（校正 source）、
-NRST pin reset（配線無し）、全 route × 全 peripheral の総当たり。
+`x035-adc-ch-i2c-unavailable` の ADC 条項）を得た。同日中に I2C の clock stretch / stuck-bus と SPI の peer slave も実測済み。残り: ADC の中点（校正 source）、NRST pin reset（配線無し）、
+全 route × 全 peripheral の総当たり、SPI 10 MHz 級。
 
 ## 後回し task（速度のみ、または現時点で不要）
 
