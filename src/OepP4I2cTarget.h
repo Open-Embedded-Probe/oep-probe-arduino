@@ -57,6 +57,9 @@ class P4I2cTarget final : public Service {
   i2c_slave_dev_handle_t slave_ = nullptr;
   static bool receiveDone(i2c_slave_dev_handle_t, const i2c_slave_rx_done_event_data_t *, void *context);
 #endif
+  // set_stretch: hold every hardware stretch (address match on read / TX empty / RX full) this long from service(), 0 = off
+  uint32_t stretch_us_ = 0;
+  volatile uint32_t stretch_events_ = 0;
   bool start();
   void stop();
   bool arm(size_t length);
