@@ -37,6 +37,14 @@ class Endpoint {
 
  private:
   Stream &stream_;
+  bool flush_after_burst_ = false;
+
+ public:
+  // Bulk transports arm an IN transfer only on a full packet or a flush (E160); the
+  // HWCDC path does not need it and Serial.flush() would block, so it is opt-in.
+  void setFlushAfterBurst(bool on) { flush_after_burst_ = on; }
+
+ private:
   FrameReader reader_;
   uint8_t *tx_;
   size_t tx_capacity_;

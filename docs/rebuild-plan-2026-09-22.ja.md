@@ -99,10 +99,18 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
    残る問いは「駐留・DMI 乱れ・割込み停止の共通原因」（台帳候補 `x035-ndmreset-hart-not-running`、clock 状態の相関）。
 6. （完了）capability の実測値公開: attach の margin check で 1000 read の wall time を測り、target.control の describe TLV `max_clock_hz` に SWCLK 実測（half 0 ns で 6.3〜6.4 MHz）を返す。
 
-### P2 Phase B（HS USB）
+### P2 Phase B（HS USB）— 常設 USB bench で開始（2026-09-22）
 
-vendor bulk transport（WinUSB flat layout、E081）、HS CDC 往復、in-flight 深さ、capture streaming。
-S1 の transport 抽象がここで 2 つ目の実装を得る。
+fixture の 8 本リンクを外さず、常設 USB bench の P4（`esp32-p4-80f1b2d0b261`、native HS bulk は usbipd に `303a:4021` / `e104-p4-windows-v1` で bind 済み）で進める。
+**識別子は bound 済みのものを名乗り続ける**（変えると管理者権限で再 bind）。
+
+| 項目 | 結果 |
+|---|---|
+| E160 frame echo（HS vendor bulk、usbip 経由） | 往復 median 0.9〜1.2 ms。frame 1 個/URB は 300〜900 µs/frame が天井（depth・device flush 方針とも無関係）。**host が frame を束ねて 1 URB にすると 512 B × 16 で 5.2 MB/s、1 KiB × 16 で 5.8 MB/s**（HWCDC の 15〜17 倍） |
+| OEP over bulk | `OepBulkStream`（EspUsbDeviceVendor → Stream）、`Endpoint::setFlushAfterBurst`、example `Esp32P4HsProbe`（identity + gpio + capture、limits 1024 / 16384 / 16）。client `BulkTransport`（pyusb、受信スレッド、`send_many`）と pipeline の束ね送信。HIL `tests/hil/hs/`: ping median 622 µs、pipeline 449 µs/request、capture 260 kB 読出し **1.81 MB/s**（HWCDC 0.77） |
+| 設計の穴 | window は **request byte 数**を数えるので応答の backlog を抑えない（9 B の read request が 1 KiB の応答を生む）。blocking write の transport（bulk）では device の TX FIFO（4 KiB）が埋まると deadlock した。host が受信を並走させることで解消。S1 に「応答 backlog の上限」を足すかは未決 |
+
+S1 の transport 抽象はここで 2 つ目の実装を得た。残り: direct（unbuffered）転送、capture streaming（1 sample/byte の展開が device 側の律速）、native host（usbip 無し）。
 
 ### P3 X035 core 検証
 

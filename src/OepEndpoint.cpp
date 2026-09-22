@@ -14,11 +14,14 @@ bool Endpoint::addService(Service &service) {
 }
 
 void Endpoint::poll() {
+  bool handled = false;
   while (stream_.available()) {
     if (!reader_.push(static_cast<uint8_t>(stream_.read()))) continue;
     handleMessage(reader_.message(), reader_.length());
     reader_.consume();
+    handled = true;
   }
+  if (handled && flush_after_burst_) stream_.flush();
 }
 
 bool Endpoint::idleFor(uint32_t milliseconds) const {
