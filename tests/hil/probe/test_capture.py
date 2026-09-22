@@ -71,7 +71,20 @@ def test_capture_i2c_nack_and_ack(probe, peers):
         assert trace.bytes() == [(0x42 << 1, True)] + [(b, True) for b in payload], trace.summary()
         assert got == payload
         # 3. the declared maximum sample rate must be real: at max_hz a 100 kHz SCL period is max_hz / 100 kHz samples
-        max_hz = int.from_bytes({t: v for t, v in tlv.decode(probe.describe(capture.function))}[codec.TLV_CORE_MAX_CLOCK_HZ], "little")
+        limits = {t: v for t, v in tlv.decode(probe.describe(capture.function))}
+        max_hz = int.from_bytes(limits[codec.TLV_CORE_MAX_CLOCK_HZ], "little")
+        min_hz = int.from_bytes(limits[codec.TLV_CORE_MIN_CLOCK_HZ], "little")
+        # below the declared minimum the PARLIO divider cannot follow: the probe must refuse, not return constants
+        from oep_client.v0.client import RequestError
+        try:
+            capture.configure(min_hz - 1, 1000)
+            assert False, "configure below min_clock_hz was accepted"
+        except RequestError:
+            pass
+        cfg = capture.configure(min_hz, 20000)
+        result, trace, period = _capture_write(probe, capture, peer, 100_000, payload)
+        print(f"HIL capture at declared min {min_hz} Hz: SCL period {period} samples (expected {min_hz / 100_000:.1f})")
+        assert result == 0 and abs(period - min_hz / 100_000) <= 1
         cfg = capture.configure(max_hz, 8 * 65000)
         result, trace, period = _capture_write(probe, capture, peer, 100_000, payload)
         expected = max_hz // 100_000
