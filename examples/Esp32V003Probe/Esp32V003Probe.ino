@@ -10,10 +10,13 @@
 #include <OepSwioPhy.h>
 #include <OepTargetServices.h>
 
+// UART0 runs through a CP2102 (576-byte buffer, no flow control) and usbip: a 16 KiB burst of
+// pipelined responses lost bytes three times on 2026-09-22 (framing lost / bad result header).
+// One 512-byte frame in flight keeps the outstanding data below the bridge's buffer.
 static uint8_t rxBuffer[1024];
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer,
-                              {1024, 4096, 8});
+                              {512, 512, 1});
 // 'E32V' classic ESP32 probe for V003; firmware 3.0.0. Reserved: GPIO16 (SWIO), GPIO23 (RST, never driven),
 // GPIO1/3 (UART0 transport), GPIO6-11 (SPI flash), GPIO0/2/12/15 (boot straps; 2 is the LED).
 static constexpr uint64_t kReserved = (1ull << 16) | (1ull << 23) | (1ull << 1) | (1ull << 3) | (0x3full << 6) |
