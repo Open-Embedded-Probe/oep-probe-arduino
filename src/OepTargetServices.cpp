@@ -44,8 +44,23 @@ Result TargetControl::handle(uint8_t operation, const uint8_t *payload, size_t l
     case OEP_V0_TARGET_CONTROL_OP_RESET: {
       struct oep_v0_target_control_reset_request request;
       if (!oep_v0_target_control_reset_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (request.mode != 0 || request.confirm > 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);  // 0 = system reset, target runs
+      if (request.mode > 3 || request.confirm > 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);  // 0 system, 1 boot payload, 2 user payload, 3 NRST pin
+      if (request.mode == 3) {   // hardware reset through the probe's NRST line: the only reset that sets RCC_RSTSCKR.PINRSTF
+        if (reset_pin_ < 0) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+        if (dm_.attached()) dm_.detach();
+        pinMode(reset_pin_, OUTPUT); digitalWrite(reset_pin_, LOW); delay(20); pinMode(reset_pin_, INPUT);   // release to Hi-Z, never drive high
+        delay(20);
+        struct oep_v0_target_control_reset_result result = {1, 1, 0};
+        return completed(oep_v0_target_control_reset_result_pack(&result, out, capacity));
+      }
       if (!dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (request.mode != 0) {   // 1 = product bootloader, 2 = normalise to user mode: CPU-executed payloads, V2 only
+        if (!dm_.hasPayloads()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+        const bool ran = dm_.runPayload(request.mode == 1 ? Ch32Dm::Payload::kPrepareBoot : Ch32Dm::Payload::kNormalizeUser);
+        struct oep_v0_target_control_reset_result result = {static_cast<uint8_t>(ran ? 1 : 0), 1, 0};
+        const size_t n = oep_v0_target_control_reset_result_pack(&result, out, capacity);
+        return ran ? completed(n) : failed(n);
+      }
       const Ch32Dm::ResetReport report = dm_.reset(request.confirm == 1);
       struct oep_v0_target_control_reset_result result = {report.flags, report.attempts, report.pc};
       const size_t n = oep_v0_target_control_reset_result_pack(&result, out, capacity);

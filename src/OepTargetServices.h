@@ -11,7 +11,8 @@ uint32_t crc32Ieee(uint32_t crc, const uint8_t *data, size_t length);
 
 class TargetControl final : public Service {
  public:
-  TargetControl(Ch32Dm &dm, DmiPhy &phy) : dm_(dm), phy_(phy) {}
+  // reset_pin: probe GPIO wired to the target's NRST (open-drain low pulse for reset mode 3), -1 = none.
+  TargetControl(Ch32Dm &dm, DmiPhy &phy, int reset_pin = -1) : dm_(dm), phy_(phy), reset_pin_(reset_pin) {}
   uint16_t owner() const override { return OEP_V0_DEF_TARGET_CONTROL_OWNER; }
   uint16_t id() const override { return OEP_V0_DEF_TARGET_CONTROL_ID; }
   uint8_t revision() const override { return OEP_V0_DEF_TARGET_CONTROL_REVISION; }
@@ -22,6 +23,7 @@ class TargetControl final : public Service {
  private:
   Ch32Dm &dm_;
   DmiPhy &phy_;
+  int reset_pin_;
 };
 
 class TargetMemory final : public Service {

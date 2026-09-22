@@ -42,6 +42,11 @@ class Ch32Dm {
   // confirmation halt failed on the last attempt.
   struct ResetReport { uint8_t flags; uint8_t attempts; uint32_t pc; };
   ResetReport reset(bool confirm = true);
+  // QingKe V2 only: run one of the E129/E130 RAM payloads on the target's own CPU. The payload
+  // ends in a PFIC software reset, so there is nothing to confirm; true = injected and resumed.
+  enum class Payload : uint8_t { kNormalizeUser, kPrepareBoot };
+  bool hasPayloads() const { return profile_ == DmProfile::kQingKeV2; }
+  bool runPayload(Payload which);
   void detach();          // dmactive = 0, lines Hi-Z (target keeps running or stays halted)
   // Memory (hart must be halted). readWords uses the autoexec reader with no
   // per-word poll; cmderr is checked once at the end.

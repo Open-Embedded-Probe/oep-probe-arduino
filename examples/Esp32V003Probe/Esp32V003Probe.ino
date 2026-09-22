@@ -30,7 +30,7 @@ static size_t fixturePinCount = 0;
 // CH32V003F4U6: 16 KiB, 64-byte pages, QingKe V2 (RAM loader flash path).
 static oep::SwioPhy phy;
 static oep::Ch32Dm dm(phy, {0x08000000u, 16384u, 64u, 64u}, oep::DmProfile::kQingKeV2);
-static oep::TargetControl targetControl(dm, phy);
+static oep::TargetControl targetControl(dm, phy, 23);   // GPIO23 -> PD7/NRST: reset mode 3 (pin reset, sets PINRSTF)
 static oep::TargetMemory targetMemory(dm);
 static oep::TargetFlash targetFlash(dm);
 static oep::PinTable *pinTable = nullptr;
@@ -45,6 +45,10 @@ void setup() {
   Serial.begin(115200);
   phy.begin(oep::SwioPhy::kPin);
   for (uint8_t pin = 0; pin < 40; ++pin) if ((kBonded >> pin) & 1 && !((kReserved >> pin) & 1)) fixturePins[fixturePinCount++] = pin;
+  // E132: every UIAP pin is wired here, including the software-USB pair (PD3/PD4); a permanent
+  // ESP32 pull on either USB line breaks enumeration. Idle must be genuinely high impedance.
+  for (size_t i = 0; i < fixturePinCount; ++i) pinMode(fixturePins[i], INPUT);
+  pinMode(23, INPUT);   // RST: wired, never driven
   pinTable = new oep::PinTable(fixturePins, fixturePinCount);
   fixtureGpio = new oep::FixtureGpio(*pinTable);
   fixtureUart = new oep::FixtureUart(*pinTable, Serial2, 2);

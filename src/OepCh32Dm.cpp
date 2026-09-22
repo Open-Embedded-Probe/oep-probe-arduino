@@ -41,7 +41,65 @@ constexpr uint32_t kV003FlashLoader[] = {
   0x47c24394u, 0xc83e97b6u, 0x078547a2u, 0x4622c43eu, 0x87ba46b2u, 0xfcd668e3u,
   0x200007b7u, 0x6107a703u, 0x06e347c2u, 0x4541faf7u, 0xffffb79du,
 };
+// E129/E130 payloads (wch-protocols, UIAP toolchain `riscv-none-embed-as -march=rv32imac`):
+// executed by the V003 CPU from 0x20000000 because the same registers written from a halted
+// debug session did not take (E127). kNormalizeUserReset: unlock FLASH, clear BOOT_MODE, PFIC
+// SYSRST. kPrepareBootAndReset: unlock, set BOOT_MODE, PD4 (software USB D-) low for a detach
+// window, PFIC SYSRST -> the UIAPduino bootloader enumerates as HID 1209:b803.
+constexpr uint32_t kNormalizeUserReset[] = {
+0x400222b7, 0x00428293, 0x45670337, 0x12330313, 0x0062a023,
+  0xcdef9337, 0x9ab30313, 0x0062a023, 0x400222b7, 0x02428293,
+  0x45670337, 0x12330313, 0x0062a023, 0xcdef9337, 0x9ab30313,
+  0x0062a023, 0x400222b7, 0x02828293, 0x45670337, 0x12330313,
+  0x0062a023, 0xcdef9337, 0x9ab30313, 0x0062a023, 0x400222b7,
+  0x00c28293, 0x0002a303, 0xffffc3b7, 0xfff38393, 0x00737333,
+  0x0062a023, 0xe000e2b7, 0x04828293, 0xbeef0337, 0x08030313,
+  0x0062a023, 0x0000006f,
+};
+constexpr uint32_t kPrepareBootAndReset[] = {
+0x400222b7, 0x00428293, 0x45670337, 0x12330313, 0x0062a023,
+  0xcdef9337, 0x9ab30313, 0x0062a023, 0x400222b7, 0x02428293,
+  0x45670337, 0x12330313, 0x0062a023, 0xcdef9337, 0x9ab30313,
+  0x0062a023, 0x400222b7, 0x02828293, 0x45670337, 0x12330313,
+  0x0062a023, 0xcdef9337, 0x9ab30313, 0x0062a023, 0x400222b7,
+  0x00c28293, 0x0002a303, 0xffffc3b7, 0xfff38393, 0x00737333,
+  0x000043b7, 0x00736333, 0x0062a023, 0x400212b7, 0x01828293,
+  0x0002a303, 0x02036313, 0x0062a023, 0x400112b7, 0x40028293,
+  0x0002a303, 0xfff103b7, 0xfff38393, 0x00737333, 0x000303b7,
+  0x00736333, 0x0062a023, 0x400112b7, 0x41428293, 0x01000313,
+  0x0062a023, 0x004c52b7, 0xb4028293, 0xfff28293, 0xfe029ee3,
+  0xe000e2b7, 0x04828293, 0xbeef0337, 0x08030313, 0x0062a023,
+  0x0000006f,
+};
 }  // namespace
+
+bool Ch32Dm::runPayload(Payload which) {
+  if (!hasPayloads() || !halt()) return false;
+  const uint32_t *words = which == Payload::kPrepareBoot ? kPrepareBootAndReset : kNormalizeUserReset;
+  const size_t count = which == Payload::kPrepareBoot ? sizeof kPrepareBootAndReset / 4 : sizeof kNormalizeUserReset / 4;
+  loader_resident_ = false;   // the payload lives where the loader does
+  for (size_t i = 0; i < count; ++i) {
+    bool ok = false;
+    for (int attempt = 0; attempt < 5 && !ok; ++attempt) {
+      uint32_t back = 0;
+      ok = writeWord(kLoaderBase + 4 * i, words[i]) && readWordScalar(kLoaderBase + 4 * i, back) && back == words[i];
+    }
+    if (!ok) return false;
+  }
+  // Interrupts stay armed while the application is halted; resumed into the payload with MIE set,
+  // the application's SysTick handler ran and rewrote its globals under the payload (2026-09-22:
+  // mcause 2 illegal instruction, dpc in the application). mstatus = 0 first, as the E135 loader
+  // path always did.
+  if (!writeRegister(0x0300, 0) || !writeRegister(0x07b1, kLoaderBase)) return false;   // mstatus, dpc
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kDmControl, 0x40000001);   // resumereq (E129: twice, then drop haltreq so the reset is not re-halted)
+  phy_.write(kDmControl, 0x40000001);
+  phy_.write(kDmControl, 0x00000001);
+  halted_ = false;
+  delay(20);
+  detach();
+  return true;
+}
 
 bool Ch32Dm::waitAbstract() {
   for (int i = 0; i < 1000; ++i) {
