@@ -139,7 +139,17 @@ open-drain、User mode の mstatus）と fixture 個体の事実 2 件（PC14/PC
 | transport の穴 | UART transport では他 program の 1 byte（旧 client の frame、`\n`）で probe の frame reader が length 待ちに固着した。`FrameReader` に 200 ms idle 再同期と「不可能な length は stray byte」を入れ、client は confirm 失敗 3 回で DTR/RTS の hard reset を試す |
 | 同梱 tool | `P4I2cTarget` / `P4SpiTarget` は classic ESP32 でも build（名前は歴史的。P4 専用の register dump は guard） |
 
-残り: reliability gate（verify 20 / 差分 program 20 / 中断 5）、`all` の framing lost 原因、V003 の P3 相当表（GPIO / UART / ADC / PWM / I2C / SPI）を E132 配線で。
+**同日後半**: reliability gate は verify 20/20・差分 program 20/20（median 3.08 s）・中断 5/5 回復。framing lost は CP2102 bridge（576 B、flow control 無し）
+で 16 KiB burst 中に bytes が落ちるもので、probe を frame 512 B・inflight 1 に、client を「壊れた/欠けた result は捨てて 1 回再送」にして以後再現なし。
+`target.control reset` に mode 1（E129 boot payload）/ 2（E130 normalize）/ 3（GPIO23 NRST pulse）を追加。UIAPduino bootloader は `RSTSCKR.PINRSTF`
+が無いと留まらない（E161）ので、client の `reset --mode boot` は pin reset → payload。RAM payload は `mstatus=0` で resume する。
+
+V003 の P3 相当（ArduinoCore-CH32 `tests/manual/*` を `--target v003` で）: GPIO matrix 12/12、ADC rail 0/915（probe の high と VDD の関係は未分離、
+VREFINT ch8 の値も未解釈）、SPI peer mode 0〜3 ≤3 MHz 一致（6 MHz 以上は **classic ESP32 slave が 1 bit 遅れ** = probe 側限界）、Wire read / repeated START /
+400 kHz write 一致（**classic ESP32 の I2C slave では preloaded 2 slot 目が filler 込みでずれる** = `P4I2cTarget` の SoC 差、要修正）。
+UART は console 自身（basic 13/14 → runner 修正後 14/14）。PWM / tone / timing / 線上 decode は classic ESP32 に capture が無く未（RMT RX の capture backend が要る）。
+
+残り: classic ESP32 向け `fixture.capture`（RMT RX）、`P4I2cTarget` の classic ESP32 filler 差、SPI slave 上限の宣言（`max_clock_hz`）、ADC の絶対値（probe rail vs VDD）。
 
 ## 後回し task（速度のみ、または現時点で不要）
 
