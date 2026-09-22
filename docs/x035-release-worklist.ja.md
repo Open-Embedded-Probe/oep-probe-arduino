@@ -179,6 +179,11 @@ expectations を再生して **14/14 PASS**（core_api 19、pd_selftest 23、wir
   同日にX035F8U6 route 2からP4 address `0x42`への4-byte writeを10 kHz/1 kHzで試したが、
   P4 receive callbackは各回増える一方、X035はaddress NACK（status 2）だった。I2C peerの
   release gateは未達であり、callback countだけをACK成功の根拠にしない。
+  **2026-09-22 追記（v0 stack、`fixture.capture` で線上確認）**: X035 の address byte は正しく 0x84 で、P4 slave が 9 clock 目に SDA を引かず NACK
+  になっている。IDF master（peer P4、GPIO32/33）には同じ slave 設定で ACK が出る。役割交換（route 4）でも同じ、P4 pin の駆動は X035 側 INDR で確認済み、
+  slave 生成順序・SDA filter・P4 pull-up 追加では変わらない。X035 側の差は SDA hold 0.2〜0.4 µs と立上り 4 µs（外部 pull-up 無し）。
+  hold と立上りを制御できる master での切り分けが次（台帳候補 `x035-p4-slave-no-ack`、ArduinoCore-CH32 `tests/manual/oep_i2c_trace/`）。
+  v1 slave の callback は NACK で終わった transaction でも発火し長さを持たないので、callback count も frame も ACK の根拠にならない（既知として固定）。
 - [ ] `disable`、host disconnect、watchdog timeout で pin を input/release、peripheral を停止、
   trace を凍結する。
 - [ ] `getStatus` は設定値、実効設定、開始結果、overflow、error、最後の timestamp を返す。

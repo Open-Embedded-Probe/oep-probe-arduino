@@ -37,6 +37,7 @@
 | vendor tool 初回 | registry に owner `0x0100`（oep-probe-arduino）と `p4_i2c_target`（fixed-rx / framed-rx / preloaded-tx）。firmware は IDF slave v1 を task 側で再 arm、peer P4 controller との二台 HIL で **4 B/32 B write、16 B@100 kHz/128 B@1 MHz framed、2 slot preload が全一致**（E147〜E150 の OEP 移植完了）。arm 長の変更は device 再作成（v1 に cancel が無い）。**2026-09-22 追記**: 一時 400 kHz に下げていた宣言を 1 MHz に戻した。「1 MHz で 128 B の末尾が欠ける」は peer の HWCDC RX ring（既定 256 B）が 269 文字の FRAME 行を切っていた test 側の artifact で、slave は header どおり 121 B を受けていた。peer に `setRxBufferSize(4096)`、framed 128 B@1 MHz 20/20 |
 | E158 reset 証拠 | debug reset 後に hart が reset vector に駐留する回が約 3〜5 %（DMSTATUS は running）。haltreq→resumereq で 15/15 解放。reset は PC sample（dpc≠0）を完了条件にして 200/200、描述 TLV `max_clock_hz` = 6.3〜6.4 MHz |
 | fixture.capture | PARLIO RX 有限長（soft delimiter ≤ 65535 B、内部 DMA RAM 64 KiB）、1 byte/sample、observer lease（channel を claim しない）。1 MHz × 20,480 sample の回収 26〜40 ms。I2C decode は host（`oep_client.v0.decode`）。I2C slave と同じ GPIO32/33 を同じ plan で共有して動作 |
+| worklist B trace | X035 route 2 → P4 slave 0x42: 線上 `S 84N P`（address 正、slave 無 ACK）。peer IDF master → 同 slave は `S 84A …`。X035 側 SDA hold 0.2〜0.4 µs、立上り 4 µs（GPIO50/52 に外部 pull-up 無し）。route 3（SWD 線）は probe と衝突。`p4.i2c-target` v1 の fixed-rx は NACK transaction でも stale frame を返す（長さ情報無し） |
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
@@ -83,7 +84,11 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
 4. （I2C 完了、capture 完了）P4 独自 tool `p4_i2c_target` を二台 HIL で実証。共通 tool `fixture.capture`（sampled logic capture、observer 型: 他 function が使う channel を同じ plan で観測できる）を
    PARLIO 有限長 RX で実装し、二台 HIL で 1 MHz × 20 ms を 26〜40 ms で回収、host 側 I2C decoder で `S 84N P`（無応答）と `S 84A 10A 11A 12A 13A P`（target 同席）を得た。
    SCL 周期 10 sample = 100 kHz で sample rate の実測が取れる。RMT（duration 型）は 2 本の時間軸が揃わないので採らず、PARLIO の同時 sample を共通契約にした。
-   **残り: X035 I2C NACK の trace（worklist B、GPIO52/50 で DUT → P4 target を観測）、共通 `fixture.i2c-target`（丸めた契約）の要否判断**。
+   capture の宣言上限は 20 MHz（HIL で 100 kHz SCL の周期 200 sample を確認、26 万 sample の回収 0.34 s）。
+   **X035 I2C NACK の trace（worklist B）は完了**: ArduinoCore-CH32 `tests/manual/oep_i2c_trace/`。X035 の address byte は正しく（0x84）、P4 slave は
+   address を受けているのに ACK を出さない。IDF master には ACK する。除外: pin（役割交換でも同じ、INDR で駆動確認）、生成順序、SDA filter、P4 pull-up。
+   残る容疑は X035 の SDA hold 0.2〜0.4 µs か立上り 4 µs（外部 pull-up 無し）への ESP32-P4 slave の感度。hold/立上りを制御できる master が要る（台帳候補 `x035-p4-slave-no-ack`）。
+   **残り: 共通 `fixture.i2c-target`（丸めた契約）の要否判断**。
 5. （完了、E158）reset 契約の確定: DMSTATUS だけの reset は 96/100・98/100 で、欠落は全て hart が reset vector に駐留したもの（周辺 register 全て reset 値）。
    target.control reset は `confirm=1` で解放後に halt → dpc → resume を行い、dpc=0 は「駐留を解放した」として再 sample、dpc≠0 で完了（`flags` bit1、`pc`）。200/200。
    E159（7 列 × 550 cycle）: DMCONTROL の順序で駐留率は 1〜8 % の間で変わるがどの列でも 0 にならない。haltreq を reset 越しに保持する列は駐留は減るが、

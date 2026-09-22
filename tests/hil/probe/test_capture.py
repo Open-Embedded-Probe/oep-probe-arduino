@@ -5,7 +5,7 @@ the same channels inside one plan."""
 import re
 import time
 
-from oep_client.v0 import codec
+from oep_client.v0 import codec, tlv
 from oep_client.v0.decode import decode_i2c
 from oep_client.v0.services import FixtureCapture, P4I2cTarget
 
@@ -70,5 +70,12 @@ def test_capture_i2c_nack_and_ack(probe, peers):
         assert result == 0
         assert trace.bytes() == [(0x42 << 1, True)] + [(b, True) for b in payload], trace.summary()
         assert got == payload
+        # 3. the declared maximum sample rate must be real: at max_hz a 100 kHz SCL period is max_hz / 100 kHz samples
+        max_hz = int.from_bytes({t: v for t, v in tlv.decode(probe.describe(capture.function))}[codec.TLV_CORE_MAX_CLOCK_HZ], "little")
+        cfg = capture.configure(max_hz, 8 * 65000)
+        result, trace, period = _capture_write(probe, capture, peer, 100_000, payload)
+        expected = max_hz // 100_000
+        print(f"HIL capture at declared max {max_hz} Hz: configured samples={cfg.samples} SCL period {period} samples (expected {expected})")
+        assert result == 0 and abs(period - expected) <= max(1, expected // 20), f"declared {max_hz} Hz not confirmed: period {period}"
     finally:
         probe.plan_release(lease)
