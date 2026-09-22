@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "OepTlv.h"
+
 namespace oep {
 
 bool Endpoint::addService(Service &service) {
@@ -25,8 +27,73 @@ bool Endpoint::idleFor(uint32_t milliseconds) const {
 }
 
 void Endpoint::abandonAll() {
+  releaseLease();
   for (size_t i = 0; i < service_count_; ++i) services_[i]->abandon();
   last_request_millis_ = 0;
+}
+
+void Endpoint::releaseLease() {
+  for (size_t i = 0; i < service_count_; ++i) {
+    if (leased_[i]) services_[i]->planRelease();
+    leased_[i] = false;
+  }
+  active_lease_ = 0;
+}
+
+Result Endpoint::planApply(const uint8_t *tlv, size_t length, uint8_t *out, size_t capacity) {
+  struct oep_v0_core_plan_apply_request request;
+  if (!oep_v0_core_plan_apply_request_unpack(tlv, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  TlvReader reader{request.tlv, request.tlv_length};
+  if (!reader.wellFormed()) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  if (active_lease_) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+  constexpr size_t kMaxRoles = 16;
+  RoleAssignment roles[kMaxRoles];
+  size_t count = 0;
+  uint8_t tag = 0, vlen = 0;
+  const uint8_t *value = nullptr;
+  while (reader.next(tag, value, vlen)) {
+    if (tag == OEP_V0_TLV_CORE_ROLE_ASSIGNMENT) {
+      if (vlen != 5 || count >= kMaxRoles) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      roles[count].function = value[0] | static_cast<uint16_t>(value[1]) << 8;
+      roles[count].role = value[2];
+      roles[count].channel = value[3] | static_cast<uint16_t>(value[4]) << 8;
+      if (roles[count].function == 0 || roles[count].function > service_count_) return rejected(OEP_V0_REJECT_UNKNOWN_FUNCTION);
+      ++count;
+    } else if (tag & OEP_V0_TLV_CRITICAL_MASK) {
+      return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);  // critical and unknown: refuse the whole plan
+    }
+  }
+  if (!count) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  // Phase 1: every service validates its own roles without side effects.
+  bool wants[kMaxServices] = {};
+  for (size_t i = 0; i < service_count_; ++i) {
+    RoleAssignment mine[kMaxRoles];
+    size_t n = 0;
+    for (size_t r = 0; r < count; ++r) if (roles[r].function == services_[i]->function) mine[n++] = roles[r];
+    if (!n) continue;
+    const uint8_t reason = services_[i]->planCheck(mine, n);
+    if (reason) return rejected(reason);
+    wants[i] = true;
+  }
+  // Phase 2: apply; undo everything on the first failure so nothing is half enabled.
+  for (size_t i = 0; i < service_count_; ++i) {
+    if (!wants[i]) continue;
+    RoleAssignment mine[kMaxRoles];
+    size_t n = 0;
+    for (size_t r = 0; r < count; ++r) if (roles[r].function == services_[i]->function) mine[n++] = roles[r];
+    if (!services_[i]->planApply(mine, n)) {
+      for (size_t j = 0; j < i; ++j) if (leased_[j]) { services_[j]->planRelease(); leased_[j] = false; }
+      return failed();
+    }
+    leased_[i] = true;
+  }
+  active_lease_ = next_lease_++;
+  if (!next_lease_) next_lease_ = 1;
+  struct oep_v0_core_plan_apply_result result;
+  result.lease = active_lease_;
+  result.tlv = request.tlv;  // effective == requested in v0
+  result.tlv_length = request.tlv_length;
+  return completed(oep_v0_core_plan_apply_result_pack(&result, out, capacity));
 }
 
 void Endpoint::handleMessage(const uint8_t *message, size_t length) {
@@ -117,9 +184,16 @@ Result Endpoint::handleCore(uint8_t operation, const uint8_t *payload, size_t le
       return completed(length);
     }
     case OEP_V0_CORE_OP_PLAN_APPLY:
-    case OEP_V0_CORE_OP_PLAN_RELEASE:
+      return planApply(payload, length, out, capacity);
+    case OEP_V0_CORE_OP_PLAN_RELEASE: {
+      struct oep_v0_core_plan_release_request request;
+      if (!oep_v0_core_plan_release_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (!request.lease || request.lease != active_lease_) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      releaseLease();
+      return completed();
+    }
     case OEP_V0_CORE_OP_STOP:
-      return rejected(OEP_V0_REJECT_UNAVAILABLE);  // leases and activities arrive with the fixture services
+      return rejected(OEP_V0_REJECT_UNAVAILABLE);  // no activities in this build
     default:
       return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
   }
