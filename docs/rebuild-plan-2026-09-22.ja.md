@@ -33,6 +33,7 @@
 | S4 第 1 段 | oep-client-python `oep_client.v0`（frame transport、byte window pipelining、core、target service wrapper、fake endpoint の unit test） |
 | S3 第 3 段 / S4 第 2 段 | lease（plan_apply / release、watchdog 解放）、fixture.gpio / fixture.uart、peer P4 との二台 HIL（GPIO mirror、UART echo 512 B）。host `program_image`（ESIG preflight、page 差分、CRC verify、result JSON）、CLI。**P0 reliability gate を新 stack で再取得**（verify ×20 0.28 s、32 page program ×20 0.29 s、中断 ×5 復旧） |
 | X035 reset 挙動 | ndmreset 後に hart が走らない回（約半分、走行中 hart への reset で顕著）。DM の状態読出しは当てにならず、線解放→再 attach で必ず走る。`Ch32Dm::reset()` を状態機械化して 43/44。旧 prototype は program → verify → reset の二重 reset で隠れていた可能性。候補 `x035-ndmreset-hart-not-running` |
+| S4 runner | ArduinoCore-CH32 `tests/manual/oep_smoke/oep_smoke.py`（compile → OEP program_image → fixture.uart lease → READY/PING/expectations → 判定）。**basic 14 sketch が F8U6 で 14/14 PASS**（LinkE / probe-rs なし、1 sketch ≈ 30 s、書込み 0.7 s） |
 | chip-id | device-data `evidence/device_ids.csv`: F8U6 `0x035E0601`、C8T6 `0x03510601`。fixture は **F8U6**（E144/E145 の C8T6 表記は誤り） |
 
 現 prototype の速度問題は (a) PHY の GPIO コスト、(b) word ごとの ABSTRACTCS poll、(c) 96-byte frame と stop-and-wait、
@@ -74,7 +75,7 @@ probe MCU 固有の pin 番号や API が wire に漏れない、同じ registry
 ### S3 / S4 の残り（次に着手）
 
 1. （完了）fixture.gpio / fixture.uart / lease、二台 HIL。
-2. （host 側完了）`program_image` と CLI。**残り: ArduinoCore-CH32 sketch runner**（compile → program → fixture.uart → assert）。
+2. （完了）`program_image` と CLI、ArduinoCore-CH32 sketch runner（basic 14/14 PASS on F8U6）。runner は ArduinoCore-CH32 側で未 commit。
 3. （完了）P0 reliability gate を新 stack で再取得。
 4. I2C target の 3 mode を P4 独自 tool として service 化（E147〜E150 の OEP 経由移植）。RMT capture。
 5. reset 契約の確定: 残る 1/40 の不良を再現・特定し（LA で SWCLK/SWDIO と PB0 を同時観測）、target.control reset の完了条件を「hart が user code を実行している証拠」（RAM marker か UART）を伴う形にする。
