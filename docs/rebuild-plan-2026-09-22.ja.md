@@ -117,6 +117,12 @@ S1 の transport 抽象はここで 2 つ目の実装を得た。残り: direct�
 worklist の P3 表を、新 stack（S3 + S4）だけで上から実施する。X035 I2C NACK の trace（RMT 2ch）は E157 系の capture が
 使えるようになった時点で行う。
 
+**2026-09-22: 9 行すべてに常駐 firmware だけの実測が付いた**（ArduinoCore-CH32 `tests/manual/oep_*_trace/`、`oep_gpio_matrix/`）。
+証拠と残りは worklist の P3 表に行ごとに記録。この過程で core の不具合 4 件（EXTICR 2 bit、GPIO open-drain 無し、USB pad の
+open-drain、User mode の mstatus）と fixture 個体の事実 2 件（PC14/PC15 が pull-down、ADC ch3/7/15 が無い = errata
+`x035-adc-ch-i2c-unavailable` の ADC 条項）を得た。残り: I2C の clock stretch / stuck-bus、SPI の peer slave、ADC の中点（校正 source）、
+NRST pin reset（配線無し）、全 route × 全 peripheral の総当たり。
+
 ## 後回し task（速度のみ、または現時点で不要）
 
 - P0.2 の内訳 telemetry（attach / read / erase / program / verify の wall time、retry）。
