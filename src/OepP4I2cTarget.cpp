@@ -4,8 +4,11 @@
 
 #include "OepTlv.h"
 
-namespace oep {
+#if defined(ARDUINO_ARCH_ESP32)
+#include <soc/i2c_struct.h>
+#endif
 
+namespace oep {
 uint8_t P4I2cTarget::planCheck(const RoleAssignment *roles, size_t count) {
   if (count != 2) return OEP_V0_REJECT_MALFORMED_PAYLOAD;
   int sda = -1, scl = -1;
@@ -80,6 +83,7 @@ bool P4I2cTarget::start() {
   cfg.send_buf_depth = 4096;  // preloaded TX ring (E150: 129-byte slots)
   cfg.slave_addr = address_;
   cfg.addr_bit_len = I2C_ADDR_BIT_LEN_7;
+  cfg.flags.slave_unmatch_en = 1;  // raw flag only: lets read_hw tell an address mismatch from a refused ACK (worklist B)
   if (i2c_new_slave_device(&cfg, &slave_) != ESP_OK) { slave_ = nullptr; return false; }
   i2c_slave_event_callbacks_t callbacks = {};
   callbacks.on_recv_done = receiveDone;
@@ -106,6 +110,9 @@ void P4I2cTarget::service() {
   const size_t got = armed_;
   armed_ = 0;
   if (mode_ == kModeFixedRx) {
+    // v1 driver limitation (2026-09-22, worklist B trace): rx_done also fires for a transaction that
+    // ended after the address byte (NACK, 0 data bytes) and the event carries no length, so the
+    // frame pushed here may be stale buffer content. Hosts must not treat a frame as proof of ACK.
     pushFrame(rx_buffer_, got);
     if (!arm(got)) ++errors_;                       // keep accepting the same length
   } else if (mode_ == kModeFramedRx) {
@@ -196,6 +203,16 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
           static_cast<uint8_t>((started_ ? 1 : 0) | (mode_ << 1) | (armed_ ? 0x10 : 0) | (queue_count_ << 5)),
           rx_frames_, tx_slots_, errors_};
       return completed(oep_v0_p4_i2c_target_status_result_pack(&result, out, capacity));
+    }
+    case OEP_V0_P4_I2C_TARGET_OP_READ_HW: {
+      struct oep_v0_p4_i2c_target_read_hw_request request;
+      if (!oep_v0_p4_i2c_target_read_hw_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      struct oep_v0_p4_i2c_target_read_hw_result result = {0, 0, 0, 0, 0, 0, 0};
+#if defined(ARDUINO_ARCH_ESP32)
+      result.sr = I2C0.sr.val; result.int_raw = I2C0.int_raw.val; result.fifo_st = I2C0.fifo_st.val; result.ctr = I2C0.ctr.val;
+      result.slave_addr = I2C0.slave_addr.val; result.filter_cfg = I2C0.filter_cfg.val; result.scl_stretch_conf = I2C0.scl_stretch_conf.val;
+#endif
+      return completed(oep_v0_p4_i2c_target_read_hw_result_pack(&result, out, capacity));
     }
     case OEP_V0_P4_I2C_TARGET_OP_RESET: {
       struct oep_v0_p4_i2c_target_reset_request request;
