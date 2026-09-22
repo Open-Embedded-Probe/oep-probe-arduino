@@ -132,6 +132,16 @@ NRST pin reset（配線無し）、全 route × 全 peripheral の総当たり�
 - Python client の 1 byte read ループ。
 - LinkE 比の速度目標。**release 判定は速度ではなく reliability gate で行う。**
 - EEPROM、`HardwareTimer` 移植（worklist どおり gate 外）。
+- **probe 側 I2C / SPI slave を「dummyDevice」として動かす**（利用者メモ 2026-09-22、優先度低、core 検証後のアプリ開発フェーズ）。
+  参照は `/home/mt/dev/EmbedBench/`（`src/embedbench_device.h` v1/rev004 で凍結した Device IF: `i2cWrite/i2cRead/spiTransfer/serialIn/
+  lineIn/advanceTo`、HostPort 経由の外向き効果、決定的な仮想時計、1 行 1 event の記録。`capture/` の CaptureWire/CaptureSPI が実機側の記録シム）。
+  事前調査の要点: (1) `p4.i2c-target` の mode（fixed-rx / framed-rx / preloaded-tx）は「host が事前に応答を積む」型で、Device 模型の
+  「address+register に応じて応答を計算する」型とは異なる。register-map 型の応答（`regtable`）を firmware 側に置く mode が 1 つ増えれば
+  EmbedBench の `trace2regtable.py` 出力を probe に流し込める。(2) ESP-IDF v1 slave driver は master read 時に TX FIFO を事前に埋める前提で、
+  address 一致後の stretch を自分で解放しないと止まる（`set_stretch` で判明）。Device 模型が読み要求ごとに応答を計算するには v2 driver
+  （`on_request` callback）か、stretch を使った「address 一致 → 計算 → FIFO 投入 → 解放」の列が要る。stretch の解放は loop 側で ~µs 級の遅延。
+  (3) OEP 側は service を足すだけで済むよう、Device 模型の event log を `fixture.capture` と同じ time base（P4 の µs）で出すこと。
+  この段階では spec を変えない。
 
 ## 完了の定義
 
