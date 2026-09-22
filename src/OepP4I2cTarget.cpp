@@ -211,8 +211,16 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
 #if defined(ARDUINO_ARCH_ESP32)
       uint8_t slot[kMaxFrame + 1];
       memcpy(slot, request.data, request.data_length);
-      slot[request.data_length] = 0x00;  // filler consumed at the master's NACK boundary (E150)
-      if (i2c_slave_transmit(slave_, slot, request.data_length + 1, 50) != ESP_OK) return failed();
+      // E150 (ESP32-P4): the slave's FIFO hands the master one byte more than the request at the NACK
+      // boundary, so each slot carries one filler byte. The classic ESP32 slave does not (2026-09-22:
+      // with the filler the second slot read back as 00 11 22 33), so it preloads the payload as is.
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+      constexpr size_t kFiller = 1;
+      slot[request.data_length] = 0x00;
+#else
+      constexpr size_t kFiller = 0;
+#endif
+      if (i2c_slave_transmit(slave_, slot, request.data_length + kFiller, 50) != ESP_OK) return failed();
       ++tx_slots_;
 #endif
       struct oep_v0_p4_i2c_target_preload_tx_result result = {tx_slots_};
