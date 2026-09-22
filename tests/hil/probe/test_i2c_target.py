@@ -41,9 +41,9 @@ def test_p4_i2c_target_modes(probe, peers):
             pending, data = target.read_rx()
             print(f"HIL fixed-rx {length} B @ {hz} Hz: got {len(data)} B match={data == payload} pending={pending}")
             assert data == payload
-        # framed-rx: header + payload transactions, 100 kHz and 1 MHz
+        # framed-rx: header + payload transactions, 100 kHz and the declared maximum clock
         target.configure(0x42, P4I2cTarget.MODE_FRAMED_RX)
-        for length, hz in ((16, 100000), (128, 400000)):
+        for length, hz in ((16, 100000), (128, max_hz)):
             payload = bytes((0x11 + i) & 0xFF for i in range(length))
             m = _peer(peer, f"FRAME {hz} {payload.hex()}", rb"FRAME header=0x([0-9a-f]+) payload=0x([0-9a-f]+) bytes=(\d+)")
             assert m.group(1) == b"0" and m.group(2) == b"0"

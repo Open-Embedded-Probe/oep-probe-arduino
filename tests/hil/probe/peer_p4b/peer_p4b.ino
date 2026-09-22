@@ -40,6 +40,9 @@ static size_t parseHex(const char *s, uint8_t *out, size_t cap) {
 }
 
 void setup() {
+  // A FRAME command for 128 bytes is 269 characters; the HWCDC RX ring defaults to
+  // 256 bytes and drops the excess (E155), which showed up as 121-123 byte payloads.
+  Serial.setRxBufferSize(4096);
   Serial.begin(115200);
   Serial1.begin(115200, SERIAL_8N1, 26, 27);
   pinMode(28, INPUT);

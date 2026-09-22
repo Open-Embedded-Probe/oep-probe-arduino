@@ -39,11 +39,12 @@ void P4I2cTarget::planRelease() {
 
 size_t P4I2cTarget::describe(uint8_t first, uint8_t *out, size_t capacity) {
   size_t used = 0, index = 0;
-  // Declared limits: 128-byte frames at 400 kHz (HIL with the peer P4 controller, 2026-09-22).
-  // E148 reached 1 MHz with a slave-only sketch; with USB CDC on the same core the
-  // 128-byte framed payload lost its last bytes at 1 MHz, so 1 MHz is not declared.
+  // Declared limits: 128-byte frames at 1 MHz (E148, and the two-board HIL with the
+  // peer P4 controller: framed 128 B at 1 MHz 20/20 on 2026-09-22). The "lost tail
+  // bytes at 1 MHz" seen earlier were the peer's 256-byte HWCDC RX ring truncating
+  // the 269-character FRAME command, not the slave.
   if (index++ >= first) { used = tlvPutU16(out, capacity, used, OEP_V0_TLV_CORE_MAX_LENGTH, kMaxFrame); if (!used) return 0; }
-  if (index++ >= first) { const size_t n = tlvPutU32(out, capacity, used, OEP_V0_TLV_CORE_MAX_CLOCK_HZ, 400000u); if (!n) return used; used = n; }
+  if (index++ >= first) { const size_t n = tlvPutU32(out, capacity, used, OEP_V0_TLV_CORE_MAX_CLOCK_HZ, 1000000u); if (!n) return used; used = n; }
   for (uint8_t c = 0; c < PinTable::kChannels; ++c) {
     if (!pins_.allowed(c)) continue;
     if (index++ < first) continue;
