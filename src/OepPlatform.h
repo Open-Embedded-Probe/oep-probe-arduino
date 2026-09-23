@@ -29,6 +29,13 @@ using OepUart = SerialUART;
 using OepUart = HardwareSerial;
 #endif
 
+// Park every pin the probe does not own as a floating input. A probe must not drag a
+// target's line anywhere it was not asked to: the RP2 pad comes out of reset with a
+// pull-down, and on the CH32L103 jig (2026-09-23) that was enough to leave the target's
+// debug module reachable but its hart unhaltable, because the half-wired header brings a
+// reset line to one of these pads. Called by the probe sketches before any service runs.
+inline void platformParkPins(const uint8_t *pins, size_t count);
+
 inline void platformGpio(int pin, uint8_t mode) {
 #if defined(ARDUINO_ARCH_RP2040)
   switch (mode) {
@@ -56,6 +63,10 @@ inline void platformGpio(int pin, uint8_t mode) {
     default: break;
   }
 #endif
+}
+
+inline void platformParkPins(const uint8_t *pins, size_t count) {
+  for (size_t i = 0; i < count; ++i) platformGpio(pins[i], kGpioInputFloating);
 }
 
 // Sizes are hints: a core that cannot resize its buffers keeps its default.

@@ -322,22 +322,27 @@ void loop() {
     if (h.attach()) {
       uint32_t v = 0;
       h.read(0x11, v);
-      Serial.printf("halt test: attached at %lu ns, DMSTATUS 0x%08lx\n", (unsigned long)h.halfNs(), (unsigned long)v);
-      h.write(0x10, 0x80000001);          // haltreq | dmactive
-      for (int i = 0; i < 12; ++i) {
-        delay(10);
-        uint32_t st = 0;
-        const bool ok = h.read(0x11, st);
-        Serial.printf("  +%3d ms DMSTATUS %s0x%08lx  allhalted=%lu anyrunning=%lu havereset=%lu\n",
-                      (i + 1) * 10, ok ? "" : "(read failed) ", (unsigned long)st,
-                      (unsigned long)((st >> 9) & 1), (unsigned long)((st >> 11) & 1), (unsigned long)((st >> 19) & 1));
-        if ((st >> 9) & 1) break;
-      }
-      h.write(0x10, 0x90000001);          // ackhavereset | haltreq | dmactive, then try again
-      delay(20);
-      uint32_t st2 = 0; h.read(0x11, st2);
-      Serial.printf("  after ackhavereset+haltreq: DMSTATUS 0x%08lx allhalted=%lu\n",
-                    (unsigned long)st2, (unsigned long)((st2 >> 9) & 1));
+      // DMSTATUS lies on this jig: reads taken after a state change come back mostly ones
+      // and their allhalted bit means nothing. The proof of a halt is an abstract register
+      // read, which only a halted hart can serve (cmderr 4 = still running). Repeat the
+      // request the way minichlink does; one is not enough (2026-09-23).
+      uint32_t chipid = 0, hartinfo = 0;
+      h.readOnce(0x7f, chipid);
+      h.readOnce(0x12, hartinfo);
+      Serial.printf("halt test: attached at %lu ns, DMSTATUS 0x%08lx, DMCHIPID 0x%08lx, HARTINFO 0x%08lx\n",
+                    (unsigned long)h.halfNs(), (unsigned long)v, (unsigned long)chipid,
+                    (unsigned long)hartinfo);
+      for (int k = 0; k < 40; ++k)
+        for (int j = 0; j < 4; ++j) h.write(0x10, 0x80000001);
+      uint32_t st = 0, acs = 0, hartid = 0;
+      h.readOnce(0x11, st);
+      h.write(0x16, 0x00000700);          // clear cmderr
+      h.write(0x17, 0x00220f14);          // access register: read CSR mhartid
+      h.readOnce(0x16, acs);
+      h.readOnce(0x04, hartid);
+      Serial.printf("  after 160 halt requests: DMSTATUS 0x%08lx, cmderr=%lu, mhartid 0x%08lx -> %s\n",
+                    (unsigned long)st, (unsigned long)((acs >> 8) & 7), (unsigned long)hartid,
+                    ((acs >> 8) & 7) == 0 ? "HALTED" : "still running");
       h.write(0x10, 0x00000001);          // leave it running
     } else {
       Serial.println("halt test: attach failed");

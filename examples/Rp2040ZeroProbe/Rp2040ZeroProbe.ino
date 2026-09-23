@@ -28,6 +28,10 @@ void setup() {
   for (uint8_t pin = 0; pin < 30; ++pin)
     if (((kBonded >> pin) & 1) && !((kReserved >> pin) & 1)) fixturePins[fixturePinCount++] = pin;
   pinTable = new oep::PinTable(fixturePins, fixturePinCount);
+  // Hi-Z everything the probe does not own. RP2 pads boot with a pull-down, and this jig
+  // is only half wired: on the CH32L103 that pull-down held a line the target cares about
+  // and the hart would not halt, though its debug module answered normally (2026-09-23).
+  oep::platformParkPins(fixturePins, fixturePinCount);
   fixtureGpio = new oep::FixtureGpio(*pinTable);
   fixtureUart = new oep::FixtureUart(*pinTable, Serial1, 2);
   endpoint.addService(identity);

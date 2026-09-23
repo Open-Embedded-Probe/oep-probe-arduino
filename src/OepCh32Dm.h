@@ -56,6 +56,7 @@ class Ch32Dm {
   bool writeRegister(uint16_t regno, uint32_t value);
   bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
   bool writeWord(uint32_t address, uint32_t value);
+  bool writeHalfWord(uint32_t address, uint16_t value);
   // Flash (hart halted, page aligned).
   bool flashUnlock();
   bool flashErasePage(uint32_t page);   // V2 profile: no-op (the loader erases inside flashProgramPage)

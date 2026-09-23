@@ -111,6 +111,11 @@ uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
 #if OEP_RVSWD_BACKEND
 
 namespace oep {
+namespace {
+constexpr uint8_t kDmData0 = 0x04, kDmControl = 0x10, kDmStatus = 0x11, kAbstractCs = 0x16, kDmAbstractAuto = 0x18;
+constexpr uint8_t kDmShadowCfgr = 0x7e, kDmCfgr = 0x7d;
+constexpr uint32_t kCfgr = 0x5aa50400;   // WCH key | (1 << 10) "allow output from slave"
+}  // namespace
 
 bool RvswdPhy::begin(int swdio, int swclk) {
   swdio_ = swdio;
@@ -132,12 +137,64 @@ void RvswdPhy::release() {
   attached_ = false;
 }
 
-void RvswdPhy::configureBus() {
+void RvswdPhy::park() {
+  if (swdio_ < 0) { attached_ = false; return; }
+  ioDrive(swdio_, swclk_);
+  gIo.clkLowDio(true);
+  attached_ = false;
+}
+
+// with_wake runs the hundred-clock wake burst. That burst resets the target, not just the
+// debug interface: with it on every re-sync, the CH32L103's application restarted each
+// time the probe halted it - its SysTick read the same 8 ms however long we had waited
+// (2026-09-23). So only a cold bring-up wakes; re-syncing just rewrites the config.
+void RvswdPhy::configureBus(bool with_wake) {
   gIo.bothHigh();
   ioDrive(swdio_, swclk_);
   delayMicroseconds(20);
-  rvswd::wake(gIo);
-  delayMicroseconds(20);
+  if (with_wake) {
+    rvswd::wake(gIo);
+    delayMicroseconds(20);
+  }
+  // DMSHDWCFGR then DMCFGR with the WCH key and "allow output from slave". minichlink writes
+  // this pair on every bring-up with the note that a part coming out of cold boot will not
+  // communicate without it, and writes each one twice because once is not always enough.
+  // The CH32X035 answered without it; the CH32L103 on the Pico's wiring did not halt
+  // (2026-09-23), which is what sent us looking at what a known-good host does.
+  for (int i = 0; i < 2; ++i) {
+    writeRaw(kDmShadowCfgr, kCfgr);
+    writeRaw(kDmCfgr, kCfgr);
+  }
+  // Leave the abstract-command block in a known state. A session that ended mid-sequence
+  // can leave autoexec armed on DATA0 or a sticky cmderr behind, and then the next
+  // attach's write check reads back something it never wrote (2026-09-23).
+  writeRaw(kDmAbstractAuto, 0);
+  writeRaw(kAbstractCs, 0x700);
+}
+
+// The CH32's two-wire debug interface drops the link when the bus goes quiet. Measured on
+// the CH32L103 (2026-09-23): idle for 500 us and everything still answers; 1 ms and every
+// read comes back all ones; 5 ms and one bring-up is no longer enough to get it back. A
+// host that talks over USB is always past that - halt and the read that follows it are
+// separate requests tens of ms apart - and the damage is silent, because the debug module
+// keeps answering DATA0 with whatever was left there and the abstract command never runs.
+// So bring the bus back before the first transaction after any pause.
+void RvswdPhy::reviveIfIdle() {
+  if (!ready_ || !attached_) return;
+  if (micros() - last_activity_us_ < kIdleUs) return;
+  uint32_t status = 0;
+  if (readRaw(kDmStatus, status) && (status & 0xf) == 2 && (status & 0x80)) return;   // still there
+  configureBus(false);                                                                // re-sync, no reset
+  if (readRaw(kDmStatus, status) && (status & 0xf) == 2 && (status & 0x80)) return;
+  // Parking the clock low keeps the link, so this is the path for a target that was left
+  // parked high by something else, or that lost the bus for its own reasons. It takes
+  // about a dozen bring-ups to come back, and the debug module resets on the way, so the
+  // hart will be running again: the caller finds out through cmderr, not through a lie.
+  for (int i = 0; i < 12; ++i) {
+    configureBus(true);
+    if (readRaw(kDmStatus, status) && (status & 0xf) == 2 && (status & 0x80)) break;
+  }
+  last_activity_us_ = micros();
 }
 
 bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
@@ -147,10 +204,12 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
     ok = rvswd::readWord(gIo, address, value);
   }
   ++transactions_;
+  last_activity_us_ = micros();
   return ok;
 }
 
 bool RvswdPhy::read(uint8_t address, uint32_t &value) {
+  reviveIfIdle();
   for (int attempt = 0; attempt < 200; ++attempt) {
     if (readRaw(address, value)) return true;
     ++retries_;
@@ -158,18 +217,24 @@ bool RvswdPhy::read(uint8_t address, uint32_t &value) {
   return false;
 }
 
-void RvswdPhy::write(uint8_t address, uint32_t data) {
+void RvswdPhy::writeRaw(uint8_t address, uint32_t data) {
   {
     Critical lock;
     rvswd::writeWord(gIo, address, data);
   }
   ++transactions_;
+  last_activity_us_ = micros();
+}
+
+void RvswdPhy::write(uint8_t address, uint32_t data) {
+  reviveIfIdle();
+  writeRaw(address, data);
 }
 
 bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
   setHalf(half_ns);
-  configureBus();
+  configureBus(true);
   write(0x10, 1);  // DMCONTROL.dmactive
   dmstatus = 0;
   const bool ok = readRaw(0x11, dmstatus);
@@ -187,7 +252,9 @@ bool RvswdPhy::attach() {
   // on the Pico's flying wires to a CH32L103, one probe with a fresh init answered while
   // this loop without one failed at every half period).
   static const uint32_t kHalfNs[] = {0, 25, 50, 100, 200, 500};
-  for (uint32_t half : kHalfNs) {
+  static const size_t kCount = sizeof kHalfNs / sizeof kHalfNs[0];
+  // One candidate: bring the bus up, then insist on 1000 identical DMSTATUS reads.
+  auto clean_at = [this](uint32_t half) {
     setHalf(half);
     // A cold debug module does not answer the first wake. Measured on a CH32L103 over the
     // Pico's flying wires (2026-09-23): the first clean read came on attempt 5 at a 500 ns
@@ -196,20 +263,63 @@ bool RvswdPhy::attach() {
     uint32_t first = 0;
     bool awake = false;
     for (int wake = 0; wake < 8 && !awake; ++wake) {
-      configureBus();
-      write(0x10, 1);  // DMCONTROL.dmactive
-      awake = readRaw(0x11, first);
+      configureBus(true);
+      // Only write dmactive if the module is not already up: that write clears haltreq, so
+      // attaching to a target somebody halted earlier would set it running again, and the
+      // stability check below would then be watching a hart change state under it.
+      uint32_t control = 0;
+      if (!readRaw(kDmControl, control) || !(control & 1)) writeRaw(kDmControl, 1);
+      awake = readRaw(kDmStatus, first);
     }
     // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
-    if (!awake || ((first >> 8) & 0xf) == 0) continue;
-    bool clean = true;
+    if (!awake || ((first >> 8) & 0xf) == 0) return false;
+    // Let anything the bring-up disturbed settle before the reference read, or a hart that
+    // is still coming to a stop makes a good half period look unstable.
+    for (int i = 0; i < 8; ++i) readRaw(kDmStatus, first);
     const uint32_t t0 = micros();
-    for (int i = 0; i < 1000 && clean; ++i) {
+    for (int i = 0; i < 1000; ++i) {
       uint32_t value = 0;
-      if (!readRaw(0x11, value) || value != first) clean = false;
+      if (!readRaw(kDmStatus, value) || value != first) return false;
     }
-    if (clean) {
-      dmi_ns_ = micros() - t0;   // 1000 reads -> ns per read
+    dmi_ns_ = micros() - t0;   // 1000 reads -> ns per read
+    return true;
+  };
+  // Reads can be clean at a half period whose writes are not. Measured on a CH32L103 over
+  // the Pico's flying wires (2026-09-23): DMSTATUS read the same 1000 times at 100 ns, yet
+  // the halt requests written at that speed were silently mangled - the hart kept running
+  // and abstract commands failed cmderr=4. So prove the write path at the same speed.
+  // DATA0 is the debug module's own scratch register while no abstract command runs.
+  // A handful of patterns is not enough: at 200 ns on that jig every pattern came back
+  // intact, and the multi-transaction sequences behind a memory read still broke. Match
+  // the read check's weight - a few hundred round trips - so a half period only survives
+  // if its writes land as reliably as its reads.
+  auto writes_land = [this] {
+    static const uint32_t kPatterns[] = {0xa5a5a5a5u, 0x5a5a5a5au, 0xffffffffu, 0x00000001u,
+                                         0x0f0f0f0fu, 0xf0f0f0f0u, 0x80000000u, 0x7fffffffu};
+    // DATA0 is only scratch while nothing is armed on it: a previous session that left
+    // ABSTRACTAUTO set would re-run its command on every access here and the readback
+    // would never match (2026-09-23: an aborted flash sequence did exactly that, and
+    // every later attach failed until the probe was power-cycled).
+    write(kDmAbstractAuto, 0);
+    bool ok = true;
+    for (int round = 0; round < 32 && ok; ++round) {
+      for (uint32_t pattern : kPatterns) {
+        write(kDmData0, pattern);
+        uint32_t read_back = 0;
+        if (!readRaw(kDmData0, read_back) || read_back != pattern) { ok = false; break; }
+      }
+    }
+    write(kDmData0, 0);
+    return ok;
+  };
+  // Two passes. A cold debug module can need more waking than one candidate's eight
+  // attempts, and the candidates that fail warm it up as a side effect: with a floor that
+  // leaves a single candidate, the first pass failed where the same period attached
+  // immediately on the second (2026-09-23).
+  for (int pass = 0; pass < 2; ++pass) {
+    for (size_t i = 0; i < kCount; ++i) {
+      if (kHalfNs[i] < min_half_ns_) continue;
+      if (!clean_at(kHalfNs[i]) || !writes_land()) continue;
       attached_ = true;
       return true;
     }
@@ -227,7 +337,7 @@ bool RvswdPhy::begin(int, int) { return false; }
 bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
   setHalf(half_ns);
-  configureBus();
+  configureBus(true);
   write(0x10, 1);  // DMCONTROL.dmactive
   dmstatus = 0;
   const bool ok = readRaw(0x11, dmstatus);
@@ -238,10 +348,13 @@ bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven)
 
 bool RvswdPhy::attach() { return false; }
 void RvswdPhy::release() { attached_ = false; }
+void RvswdPhy::park() { attached_ = false; }
 bool RvswdPhy::read(uint8_t, uint32_t &) { return false; }
 void RvswdPhy::write(uint8_t, uint32_t) {}
 void RvswdPhy::setHalf(uint32_t) {}
-void RvswdPhy::configureBus() {}
+void RvswdPhy::configureBus(bool) {}
+void RvswdPhy::writeRaw(uint8_t, uint32_t) {}
+void RvswdPhy::reviveIfIdle() {}
 bool RvswdPhy::readRaw(uint8_t, uint32_t &) { return false; }
 bool RvswdPhy::probeOnce(uint32_t, uint32_t &) { return false; }
 }  // namespace oep

@@ -124,15 +124,31 @@ bool Ch32Dm::readHalted() {
 bool Ch32Dm::halt() {
   if (!attach()) return false;
   if (halted_) return true;
-  phy_.write(kDmControl, 0x80000001);
-  for (int i = 0; i < 100; ++i) {
-    uint32_t status = 0;
-    if (phy_.read(kDmStatus, status) && (status & (1u << 9))) {
-      // Keep haltreq asserted while halted (E156/E157 ran this way); acknowledge any pending reset flag.
-      if (status & (3u << 18)) phy_.write(kDmControl, 0x90000001);  // haltreq | ackhavereset | dmactive
-      phy_.write(kAbstractCs, 0x700);
-      halted_ = true;
-      return true;
+  // One halt request is not always enough. Measured on a CH32L103 over the Pico's flying
+  // wires (2026-09-23): DMCONTROL reads the request back as set while the hart keeps
+  // running, and abstract commands fail cmderr=4; repeating it makes the halt land every
+  // time. minichlink writes it three or four times in a row for the same reason, so
+  // re-issue between polls instead of only polling.
+  for (int round = 0; round < 8; ++round) {
+    // A request that does not take leaves the bus out of step, and every attempt that
+    // worked on the bench had a fresh bring-up in front of it, so start each round from
+    // one (2026-09-23, CH32L103: without this, halt landed on every other attempt).
+    phy_.reinit();
+    for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x80000001);
+    for (int i = 0; i < 25; ++i) {
+      uint32_t status = 0;
+      if (phy_.read(kDmStatus, status) && (status & (1u << 9))) {
+        // Keep haltreq asserted while halted (E156/E157 ran this way); acknowledge any pending reset flag.
+        if (status & (3u << 18)) phy_.write(kDmControl, 0x90000001);  // haltreq | ackhavereset | dmactive
+        phy_.write(kAbstractCs, 0x700);
+        // The hart changing state drops the DMI link on this part, and the first
+        // transaction afterwards can be lost: the first word of the first memory read
+        // after a halt came back as the previous operation's leftover (2026-09-23).
+        // Start the caller from a freshly brought-up bus.
+        phy_.reinit();
+        halted_ = true;
+        return true;
+      }
     }
   }
   return false;
@@ -142,11 +158,20 @@ bool Ch32Dm::resume() {
   if (!attached()) return false;
   loader_resident_ = false;   // the application owns RAM once it runs
   phy_.write(kAbstractAuto, 0);
-  phy_.write(kDmControl, 0x40000001);
+  // Same story as halt(): one request is not always enough, and the CH32L103 never raises
+  // allresumeack at all (2026-09-23) - it just starts running. So repeat the request, and
+  // accept either the acknowledgement or the hart plainly being back on its feet.
   bool ok = false;
-  for (int i = 0; i < 100; ++i) {
-    uint32_t status = 0;
-    if (phy_.read(kDmStatus, status) && (status & (1u << 17))) { ok = true; break; }
+  for (int round = 0; round < 8 && !ok; ++round) {
+    phy_.reinit();
+    for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x40000001);
+    for (int i = 0; i < 25 && !ok; ++i) {
+      uint32_t status = 0;
+      if (!phy_.read(kDmStatus, status)) continue;
+      if (status & (1u << 17)) ok = true;                        // allresumeack
+      else if ((status & 0xf) == 2 && (status & (1u << 11)) && !(status & (1u << 9)))
+        ok = true;                                               // allrunning, not halted
+    }
   }
   phy_.write(kDmControl, 0x00000001);
   halted_ = !ok;
@@ -266,7 +291,7 @@ void Ch32Dm::detach() {
   if (attached()) { phy_.write(kAbstractAuto, 0); phy_.write(kDmControl, 0); }
   halted_ = false;
   loader_resident_ = false;
-  phy_.release();
+  phy_.park();   // floating both wires high is how this bus is told to reset
 }
 
 bool Ch32Dm::loadRegisters(uint32_t &data0_address) {
@@ -307,7 +332,10 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
   if (err) phy_.write(kAbstractCs, 0x700);
   cmderr_ = err;
   if (cmderr) *cmderr = err;
-  return ok;
+  // cmderr 3 is the look-ahead walking off the end of a region and says nothing about the
+  // words already read. Anything else means the program buffer did not run: the reads then
+  // returned whatever was left in DATA0, which looks like data and is not (2026-09-23).
+  return ok && (err == 0 || err == 3);
 }
 
 bool Ch32Dm::readWordScalar(uint32_t address, uint32_t &value) {
@@ -338,6 +366,21 @@ bool Ch32Dm::writeRegister(uint16_t regno, uint32_t value) {
   phy_.write(kAbstractAuto, 0);
   phy_.write(kData0, value);
   phy_.write(kCommand, 0x00230000u | regno);  // aarsize=32, transfer, write
+  return waitAbstract();
+}
+
+// Option bytes are programmed 16 bits at a time, so removing read protection needs a real
+// half-word store on the target - a word store writes the neighbouring option byte too.
+bool Ch32Dm::writeHalfWord(uint32_t address, uint16_t value) {
+  if (!halted_) return false;
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kProgBuf0, 0x00849023);      // sh s0, 0(s1)
+  phy_.write(kProgBuf0 + 1, 0x00100073);  // ebreak
+  phy_.write(kData0, address);
+  phy_.write(kCommand, 0x00231009);
+  if (!waitAbstract()) return false;
+  phy_.write(kData0, value);
+  phy_.write(kCommand, 0x00271008);
   return waitAbstract();
 }
 

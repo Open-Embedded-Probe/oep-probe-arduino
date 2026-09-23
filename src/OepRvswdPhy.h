@@ -17,6 +17,7 @@ class RvswdPhy final : public DmiPhy {
   // DMSTATUS reads are all parity-clean and consistent. false = no target.
   bool attach() override;
   void release() override;
+  void park() override;
   bool attached() const override { return attached_; }
   bool read(uint8_t address, uint32_t &value) override;   // with bounded retry
   // One cheap look for a debug module at this half period: drive the bus, set dmactive and
@@ -28,7 +29,15 @@ class RvswdPhy final : public DmiPhy {
   bool readOnce(uint8_t address, uint32_t &value) { return readRaw(address, value); }
   // Re-run the bus bring-up without touching any debug-module register. This part drops the
   // DMI link when its state changes, so a caller that has just written DMCONTROL may need it.
-  void wakeBus() { configureBus(); }
+  void wakeBus() { configureBus(true); }
+  void reinit() override { configureBus(false); }
+  void useHalf(uint32_t half_ns) { setHalf(half_ns); }
+  // Refuse to attach faster than this. attach() measures the link, but a marginal one
+  // (flying leads to a bench target) can pass both the read and the write check at a
+  // period whose longer abstract-command sequences still break, and the period it lands
+  // on then varies run to run. A jig that is known to be provisional says so here rather
+  // than leaving the probe to guess: 0 = no floor.
+  void setMinHalfNs(uint32_t half_ns) { min_half_ns_ = half_ns; }
   void write(uint8_t address, uint32_t value) override;
   uint32_t halfNs() const { return half_ns_; }
   // Measured during attach: wall time of one DMI read at the selected half period,
@@ -41,9 +50,16 @@ class RvswdPhy final : public DmiPhy {
  private:
   int swdio_ = -1, swclk_ = -1;
   bool ready_ = false, attached_ = false;
+  uint32_t min_half_ns_ = 0;
   uint32_t half_cycles_ = 0, half_ns_ = 0, retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
+  // Longest quiet spell the target's debug interface tolerates before the link has to be
+  // brought up again. It measured out at about 1 ms; this leaves margin.
+  static constexpr uint32_t kIdleUs = 300;
+  uint32_t last_activity_us_ = 0;
   void setHalf(uint32_t half_ns);
-  void configureBus();
+  void configureBus(bool with_wake);
+  void writeRaw(uint8_t address, uint32_t data);
+  void reviveIfIdle();
   bool readRaw(uint8_t address, uint32_t &value);
 };
 
