@@ -66,6 +66,7 @@ class Ch32Dm {
   uint8_t resetDiag() const { return reset_diag_; }  // DMSTATUS snapshot right after the last reset()
 
  private:
+  bool armFlash(uint32_t page, uint32_t mode);   // CTLR and ADDR written and read back before STRT
   DmiPhy &phy_;
   FlashGeometry geometry_;
   DmProfile profile_;

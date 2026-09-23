@@ -338,10 +338,20 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
     if (err) phy_.write(kAbstractCs, 0x700);
     cmderr_ = err;
     if (cmderr) *cmderr = err;
+    // The reader bumps DATA1 by 4 every run, so the address it left behind counts the runs:
+    // the first one plus one per DATA0 read, or one fewer when the last look-ahead faulted
+    // (cmderr 3) before its store. A mangled address write, a trigger the module missed or
+    // one it took twice all leave a count that is off - and all of them otherwise hand back
+    // plausible words with no error. Measured on the CH32L103 over the Pico's flying wires
+    // (2026-09-23): a whole-flash CRC came out different about one read in three, with
+    // every read reporting success.
+    uint32_t next = 0;
+    const uint32_t ran = address + 4u * static_cast<uint32_t>(words + (err == 3 ? 0 : 1));
+    const bool counted = phy_.read(kData1, next) && next == ran;
     // cmderr 3 is the look-ahead walking off the end of a region and says nothing about
     // the words already read. Anything else means the program buffer did not run: the
     // reads then returned whatever was left in DATA0, which looks like data and is not.
-    if (ok && (err == 0 || err == 3)) return true;
+    if (ok && counted && (err == 0 || err == 3)) return true;
     phy_.reinit();
   }
   return false;
@@ -426,11 +436,29 @@ bool Ch32Dm::flashUnlock() {
 
 bool Ch32Dm::flashLock() { return writeWord(kFlashCtlr, kLock | kFlock); }
 
+// Before a flash operation is started, make sure the controller will act on the page we
+// mean and in the mode we mean. Both registers are written through abstract commands, and a
+// DMI write that goes astray does not fail - it writes a different value, or to a different
+// place. On the CH32L103 over flying wires an erase landed on a page that had been programmed
+// and verified a moment earlier (2026-09-23); only the whole-flash CRC at the end noticed.
+// Reading both back before STRT also means no mode bit other than the one asked for - mass
+// erase least of all - is ever set when the operation starts.
+bool Ch32Dm::armFlash(uint32_t page, uint32_t mode) {
+  static constexpr uint32_t kModeMask = kFtpg | kFter | kBufload | kBufrst | kStrt | 0x7u;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    uint32_t ctlr = 0, addr = 0;
+    if (writeWord(kFlashCtlr, mode) && writeWord(kFlashAddr, page) &&
+        readWordScalar(kFlashCtlr, ctlr) && readWordScalar(kFlashAddr, addr) &&
+        (ctlr & kModeMask) == mode && addr == page) return true;
+  }
+  return false;
+}
+
 bool Ch32Dm::flashErasePage(uint32_t page) {
   if (page % geometry_.page) return false;
   if (profile_ == DmProfile::kQingKeV2) return halted_;  // the loader erases the page it programs
-  return writeWord(kFlashCtlr, kFter) && writeWord(kFlashAddr, page) &&
-         writeWord(kFlashCtlr, kFter | kStrt) && waitFlash() && writeWord(kFlashCtlr, 0);
+  return armFlash(page, kFter) && writeWord(kFlashCtlr, kFter | kStrt) && waitFlash() &&
+         writeWord(kFlashCtlr, 0);
 }
 
 bool Ch32Dm::loaderLoad() {
@@ -522,7 +550,7 @@ bool Ch32Dm::flashProgramPage(uint32_t page, const uint8_t *data) {
   const bool ok = waitAbstract();
   phy_.write(kAbstractAuto, 0);
   if (!ok) return false;
-  return writeWord(kFlashAddr, page) && writeWord(kFlashCtlr, kFtpg | kStrt) && waitFlash() &&
+  return armFlash(page, kFtpg) && writeWord(kFlashCtlr, kFtpg | kStrt) && waitFlash() &&
          writeWord(kFlashCtlr, 0);
 }
 
