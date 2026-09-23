@@ -166,6 +166,19 @@ void RvswdPhy::write(uint8_t address, uint32_t data) {
   ++transactions_;
 }
 
+bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus) {
+  if (!ready_) return false;
+  setHalf(half_ns);
+  configureBus();
+  write(0x10, 1);  // DMCONTROL.dmactive
+  dmstatus = 0;
+  const bool ok = readRaw(0x11, dmstatus);
+  ioRelease(swdio_, swclk_);
+  attached_ = false;
+  // A debug module reports a nonzero DMSTATUS.version; an idle bus reads all ones or zeros.
+  return ok && ((dmstatus >> 8) & 0xf) != 0 && dmstatus != 0xffffffffu;
+}
+
 bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
@@ -199,6 +212,19 @@ bool RvswdPhy::attach() {
 
 namespace oep {
 bool RvswdPhy::begin(int, int) { return false; }
+bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus) {
+  if (!ready_) return false;
+  setHalf(half_ns);
+  configureBus();
+  write(0x10, 1);  // DMCONTROL.dmactive
+  dmstatus = 0;
+  const bool ok = readRaw(0x11, dmstatus);
+  ioRelease(swdio_, swclk_);
+  attached_ = false;
+  // A debug module reports a nonzero DMSTATUS.version; an idle bus reads all ones or zeros.
+  return ok && ((dmstatus >> 8) & 0xf) != 0 && dmstatus != 0xffffffffu;
+}
+
 bool RvswdPhy::attach() { return false; }
 void RvswdPhy::release() { attached_ = false; }
 bool RvswdPhy::read(uint8_t, uint32_t &) { return false; }
@@ -206,6 +232,7 @@ void RvswdPhy::write(uint8_t, uint32_t) {}
 void RvswdPhy::setHalf(uint32_t) {}
 void RvswdPhy::configureBus() {}
 bool RvswdPhy::readRaw(uint8_t, uint32_t &) { return false; }
+bool RvswdPhy::probeOnce(uint32_t, uint32_t &) { return false; }
 }  // namespace oep
 
 #endif
