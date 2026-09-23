@@ -35,6 +35,23 @@ inline void lineReset(Io &io) {
   idle(io, 8);
 }
 
+// Leave the dormant state and select SWD (Arm IHI 0031F 6.2.2.1). A DP that implements
+// SWD v2 with dormant support - the RP2350's does - ignores the legacy JTAG-to-SWD
+// sequence below and only wakes for this one.
+template <typename Io>
+inline void dormantToSwd(Io &io) {
+  io.hostDrives(true);
+  for (int i = 0; i < 8; ++i) clockBit(io, true);
+  // 128-bit selection alert, in transmission order, each byte LSB first.
+  static const uint8_t kAlert[16] = {0x92, 0xf3, 0x09, 0x62, 0x95, 0x2d, 0x85, 0x86,
+                                     0xe9, 0xaf, 0xdd, 0xe3, 0xa2, 0x0e, 0xbc, 0x19};
+  for (uint8_t b : kAlert) writeBits(io, b, 8);
+  for (int i = 0; i < 4; ++i) clockBit(io, false);
+  writeBits(io, 0x1a, 8);        // SWD activation code
+  for (int i = 0; i < 52; ++i) clockBit(io, true);
+  idle(io, 8);
+}
+
 // Legacy JTAG-to-SWD select, harmless on an SWD-only port.
 template <typename Io>
 inline void jtagToSwd(Io &io) {

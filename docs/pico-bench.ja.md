@@ -41,8 +41,58 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 その後は WSL から `arduino-cli upload --profile <name> --input-dir <dir> <sketch>`。
 **VID/PID が変わる遷移（MicroPython → BOOTSEL → 自作 firmware）では usbipd の bind をやり直す**必要がある（管理者権限）。
 
+## 2026-09-23 の実測
+
+### ordinary ARM SWD は通った
+
+RP2040-Zero → Pro Micro RP2350 の SWD ヘッダ。**SWCLK = GP0、SWDIO = GP1**（利用者の記憶どおり「0 と 1」、向きはこの通り）。
+
+| 項目 | 値 |
+|---|---|
+| ACK | OK（`0b001`） |
+| DPIDR | **`0x4c013477`** = Arm designer、DP **version 3**（ADIv6）、RP2350 の SW-DP |
+| 起動系列 | `jtag->swd` / `dormant->swd` / line reset のいずれでも応答 |
+| multidrop TARGETSEL | **不要**。line reset 直後の DPIDR read に答える（RP2040 と違う） |
+| half period | 500 ns（bit-bang、SIO 直叩き） |
+
+同じ線で CH32 RVSWD を試すと無応答（正しい陰性対照）。
+
+### pin survey: 何が繋がっているか
+
+released input を読むだけでは RP2350 の**エラッタ E9（浮いた入力が high に張り付く）**で全 pin が「pull-up」に見える。
+pad 側の pull を当てて読むと切り分けられる。
+
+| board | 外部 pull-up | 外部 pull-down | それ以外 |
+|---|---|---|---|
+| RP2040-Zero | GP0, GP1（SWD の 2 本、≤10 kΩ 級） | なし | 18 本すべて free |
+| Pro Micro RP2350 | **GP24** | **GP23**, GP29 | 他は free |
+
+GP24 / GP23 は CH32 の SWDIO(PA13, pull-up) / SWCLK(PA14, pull-down) の signature と一致するので、L103 の RVSWD pair の
+**候補**として example の既定にした（未確認）。
+
+### L103 は応答しない = 無給電
+
+Pro Micro から ARM SWD 380 組・CH32 RVSWD 420 組を総当たりして、どれも無応答。**CH32L103 の WCH-LinkE
+（`0E028F0692F1`）が挿さっておらず**、あの基板に電源が来ていない。給電してから再測する。
+
+### 両機の GPIO は互いに繋がっていない
+
+両方を OEP probe にして片側を駆動・他側で bank read（E143 と同じ方法）→ 1 本も動かない。
+Zero の GP0/GP1 は Pro Micro の **GPIO ではなく SWD ヘッダ**に行っている、という配線の裏付け。
+
+## 書き込みと USB bind の実際
+
+- udev rule を入れた後は **picotool が WSL から使える**。ただし **複数の RP2 を同時に列挙すると picotool 2.3.0 は
+  segfault する**ので、`--bus N --address M` で必ず 1 台を指定する。
+- 再書き込みは `scratchpad/picoflash.sh <busid> <by-id node> <uf2> <BOOTSEL VID:PID>`（1200 bps touch → BOOTSEL →
+  picotool → アプリ復帰 → attach）。
+- **usbipd の bind は 4 つの identity すべてで取得済み**（各機のアプリ側と BOOTSEL 側）。bind は永続するので、
+  以後の書き換えに管理者権限は要らない（2026-09-23 実測）。attach は非管理者で可。
+
 ## 未了
 
-- RP2350 ↔ L103 の RVSWD pair 特定（`fixture.gpio` の pull 掃引で「何かに繋がっている pin」を出すところから）。
-- ordinary SWD の TARGETSEL 実測（RP2350 の multidrop instance id は datasheet 未確認のため候補掃引）。
-- V003 を決めた pinout で繋いだ後のフルテスト（GPIO / UART / I2C / SPI / ADC / reset）。
+- **L103 に給電して**（WCH-LinkE `0E028F0692F1` を挿す）RVSWD pair を確定する。候補は SWDIO=GP24 / SWCLK=GP23。
+- ordinary SWD を OEP の service にするか決める（今は frame + survey sketch まで。`target.control` は CH32 DM 専用）。
+- V003 を決めた pinout で繋いだ後のフルテスト（GPIO / UART / I2C / SPI / ADC / reset）。配線を決める際は、
+  PIO を使う日のために **SWD/UART/SPI の各組を連番ピンに**寄せておくと後が楽。
+- Pico の `fixture.capture`（PIO + DMA なら P4 級が狙えるが、配線確定まで着手しない）。

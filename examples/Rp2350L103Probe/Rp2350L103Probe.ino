@@ -12,13 +12,16 @@
 #include <OepRvswdPhy.h>
 #include <OepTargetServices.h>
 
-// Provisional until the jig's pin scan names the pair. GP2/GP3 are plain GPIOs here:
-// GP0/GP1 are Serial1, GP8/GP9 Serial2, GP16/GP17 the Qwiic I2C, GP20-23 SPI0.
+// Candidate, not yet confirmed. The pin survey (2026-09-23) found exactly one pin with a
+// real external pull-up (GP24) and two with a real pull-down (GP23, GP29) - the signature a
+// CH32's SWDIO and SWCLK leave - while every other pin follows whatever pull we apply. No
+// debug module answered on any pair, but the CH32L103's WCH-LinkE was unplugged at the time,
+// so that board had no power. Override with -DOEP_RVSWD_SWDIO= / -DOEP_RVSWD_SWCLK=.
 #ifndef OEP_RVSWD_SWDIO
-#define OEP_RVSWD_SWDIO 2
+#define OEP_RVSWD_SWDIO 24
 #endif
 #ifndef OEP_RVSWD_SWCLK
-#define OEP_RVSWD_SWCLK 3
+#define OEP_RVSWD_SWCLK 23
 #endif
 
 static uint8_t rxBuffer[1024];
