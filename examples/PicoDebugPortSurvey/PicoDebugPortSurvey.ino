@@ -49,6 +49,8 @@ static const uint8_t kCandidates[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 
 static constexpr size_t kCandidateCount = sizeof kCandidates / sizeof kCandidates[0];
 
 static BitBang io;
+// Mirrors the probe firmware's ordering: begin() once in setup(), attach() much later.
+static oep::RvswdPhy gEarlyPhy;
 
 static bool tryOne(int dio, int clk, uint32_t half_ns, uint8_t how, const uint32_t *target, const char *name) {
   if (!io.setup(dio, clk)) return false;
@@ -94,6 +96,9 @@ void setup() {
   Serial.println("pico debug port survey");
   Serial.printf("spin loop: %u ps per iteration, %u candidate pins\n",
                 (unsigned)oep::rp2::loopPicoseconds(), (unsigned)kCandidateCount);
+#if defined(ARDUINO_SPARKFUN_PROMICRO_RP2350)
+  Serial.printf("early begin(0,1) in setup(): %s\n", gEarlyPhy.begin(0, 1) ? "ok" : "failed");
+#endif
 }
 
 // Quiet pass over many ordered pairs: one half period and the two most likely TARGETSEL
@@ -157,9 +162,125 @@ static bool sweepRvswdPairs(const uint8_t *pins, size_t count) {
   return any;
 }
 
+// How good the link actually is on a known pair: how often a fresh bus init answers, and
+// how many retries steady-state reads need once it has.
+static void linkQuality(int dio, int clk) {
+  Serial.printf("RVSWD link quality on SWDIO=GP%d SWCLK=GP%d:\n", dio, clk);
+  oep::RvswdPhy phy;
+  if (!phy.begin(dio, clk)) { Serial.println("  begin failed"); return; }
+  for (uint32_t half : {0u, 25u, 50u, 100u, 200u, 500u, 1000u, 2000u}) {
+    uint32_t dm = 0;
+    int fresh = 0;
+    for (int i = 0; i < 50; ++i) if (phy.probeOnce(half, dm)) ++fresh;
+    int steady_ok = 0;
+    uint32_t retries_before = phy.retries(), first = 0;
+    bool stable = true;
+    if (phy.probeOnce(half, dm)) {
+      for (int i = 0; i < 200; ++i) {
+        uint32_t v = 0;
+        if (!phy.read(0x11, v)) break;
+        if (i == 0) first = v; else if (v != first) stable = false;
+        ++steady_ok;
+      }
+    }
+    Serial.printf("  half=%4u ns  fresh init %2d/50   steady reads %3d/200 retries %4lu %s dmstatus=0x%08lx\n",
+                  (unsigned)half, fresh, steady_ok, (unsigned long)(phy.retries() - retries_before),
+                  stable ? "stable" : "VARIED", (unsigned long)dm);
+  }
+  // The path the probe firmware actually takes: attach() picks a half period with its own
+  // margin check and leaves the bus driven, then the services read through it.
+  phy.release();
+  oep::RvswdPhy phy2;
+  phy2.begin(dio, clk);
+  const bool attached = phy2.attach();
+  Serial.printf("  attach() -> %s, half=%lu ns, one DMI read %lu ns\n", attached ? "yes" : "no",
+                (unsigned long)phy2.halfNs(), (unsigned long)phy2.dmiNs());
+  if (attached) {
+    uint32_t before = phy2.retries(), first = 0;
+    int ok = 0; bool stable = true;
+    for (int i = 0; i < 200; ++i) {
+      uint32_t v = 0;
+      if (!phy2.read(0x11, v)) break;
+      if (i == 0) first = v; else if (v != first) stable = false;
+      ++ok;
+    }
+    Serial.printf("  after attach(): %3d/200 reads, retries %lu, %s dmstatus=0x%08lx\n",
+                  ok, (unsigned long)(phy2.retries() - before), stable ? "stable" : "VARIED", (unsigned long)first);
+  }
+  phy2.release();
+  pinMode(dio, INPUT); pinMode(clk, INPUT);
+}
+
 void loop() {
   static uint32_t round = 0;
   Serial.printf("---- sweep %lu\n", (unsigned long)++round);
+#if defined(ARDUINO_SPARKFUN_PROMICRO_RP2350)
+  {   // why does a cold attach() fail? Run its own check by hand and count the outcomes.
+    oep::RvswdPhy d;
+    d.begin(0, 1);
+    Serial.println("cold bus: how many wake attempts before the debug module answers?");
+    for (uint32_t half : {500u, 200u, 100u}) {
+      int first_ok = -1, ok = 0;
+      for (int i = 0; i < 100; ++i) {
+        uint32_t dm = 0;
+        if (d.probeOnce(half, dm)) { if (first_ok < 0) first_ok = i; ++ok; }
+      }
+      Serial.printf("  half=%4u ns  first success at attempt %d, %d/100 total\n", (unsigned)half, first_ok, ok);
+    }
+    Serial.println("cold attach, counted per half period (what attach() requires: 1000 identical clean reads):");
+    for (uint32_t half : {0u, 25u, 50u, 100u, 200u, 500u}) {
+      uint32_t dm = 0;
+      if (!d.probeOnce(half, dm, true)) { Serial.printf("  half=%4u ns  first read failed\n", (unsigned)half); continue; }
+      int same = 0, differed = 0, dirty = 0;
+      const uint32_t first = dm;
+      for (int i = 0; i < 1000; ++i) {
+        uint32_t v = 0;
+        if (!d.readOnce(0x11, v)) ++dirty; else if (v != first) ++differed; else ++same;
+      }
+      Serial.printf("  half=%4u ns  first=0x%08lx  identical %4d  differed %4d  parity-fail %4d\n",
+                    (unsigned)half, (unsigned long)first, same, differed, dirty);
+    }
+    d.release();
+  }
+  {   // does the hart halt? write DMCONTROL.haltreq and watch DMSTATUS
+    oep::RvswdPhy h;
+    h.begin(0, 1);
+    if (h.attach()) {
+      uint32_t v = 0;
+      h.read(0x11, v);
+      Serial.printf("halt test: attached at %lu ns, DMSTATUS 0x%08lx\n", (unsigned long)h.halfNs(), (unsigned long)v);
+      h.write(0x10, 0x80000001);          // haltreq | dmactive
+      for (int i = 0; i < 12; ++i) {
+        delay(10);
+        uint32_t st = 0;
+        const bool ok = h.read(0x11, st);
+        Serial.printf("  +%3d ms DMSTATUS %s0x%08lx  allhalted=%lu anyrunning=%lu havereset=%lu\n",
+                      (i + 1) * 10, ok ? "" : "(read failed) ", (unsigned long)st,
+                      (unsigned long)((st >> 9) & 1), (unsigned long)((st >> 11) & 1), (unsigned long)((st >> 19) & 1));
+        if ((st >> 9) & 1) break;
+      }
+      h.write(0x10, 0x90000001);          // ackhavereset | haltreq | dmactive, then try again
+      delay(20);
+      uint32_t st2 = 0; h.read(0x11, st2);
+      Serial.printf("  after ackhavereset+haltreq: DMSTATUS 0x%08lx allhalted=%lu\n",
+                    (unsigned long)st2, (unsigned long)((st2 >> 9) & 1));
+      h.write(0x10, 0x00000001);          // leave it running
+    } else {
+      Serial.println("halt test: attach failed");
+    }
+    h.release();
+  }
+  {   // cold contact, before anything else has touched the bus this round
+    oep::RvswdPhy cold;
+    const bool b = cold.begin(0, 1);
+    const bool a = b && cold.attach();
+    uint32_t v = 0;
+    const bool r = a && cold.read(0x11, v);
+    Serial.printf("cold attach at the top of the round: begin=%s attach=%s half=%lu read=%s dmstatus=0x%08lx\n",
+                  b ? "ok" : "no", a ? "yes" : "no", (unsigned long)cold.halfNs(), r ? "ok" : "FAILED", (unsigned long)v);
+    cold.release();
+  }
+#endif
   pullSignature();
   bool any = sweepPairs();
   Serial.println("detail on GP0/GP1: both orientations x wake sequence x targetsel");
@@ -174,6 +295,17 @@ void loop() {
   Serial.println("CH32 RVSWD on the same wires:");
   for (int swap = 0; swap < 2; ++swap) any |= tryRvswd(swap ? 1 : 0, swap ? 0 : 1, true);
   any |= sweepRvswdPairs(kCandidates, kCandidateCount);
+#if defined(ARDUINO_SPARKFUN_PROMICRO_RP2350)
+  {   // the same object begun back in setup(): the global pin state it recorded may be stale
+    const bool a = gEarlyPhy.attach();
+    uint32_t v = 0;
+    const bool r = a && gEarlyPhy.read(0x11, v);
+    Serial.printf("phy begun in setup(): attach=%s half=%lu ns read=%s dmstatus=0x%08lx\n",
+                  a ? "yes" : "no", (unsigned long)gEarlyPhy.halfNs(), r ? "ok" : "FAILED", (unsigned long)v);
+    gEarlyPhy.release();
+  }
+  linkQuality(0, 1);   // the pair the sweep found for the CH32L103
+#endif
   Serial.println(any ? "swd_survey: a debug port answered" : "swd_survey: no answer on any combination");
   delay(8000);
 }

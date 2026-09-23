@@ -22,7 +22,10 @@ class RvswdPhy final : public DmiPhy {
   // One cheap look for a debug module at this half period: drive the bus, set dmactive and
   // read DMSTATUS once. For sweeping candidate pin pairs, where attach()'s margin check
   // (six half periods x 1000 reads) is far too slow to be a search step.
-  bool probeOnce(uint32_t half_ns, uint32_t &dmstatus);
+  // keep_driven leaves the bus driven so readOnce() can continue where this left off.
+  bool probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven = false);
+  // One read, no retry: for measuring how often the link is clean.
+  bool readOnce(uint8_t address, uint32_t &value) { return readRaw(address, value); }
   void write(uint8_t address, uint32_t value) override;
   uint32_t halfNs() const { return half_ns_; }
   // Measured during attach: wall time of one DMI read at the selected half period,

@@ -166,15 +166,14 @@ void RvswdPhy::write(uint8_t address, uint32_t data) {
   ++transactions_;
 }
 
-bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus) {
+bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
   setHalf(half_ns);
   configureBus();
   write(0x10, 1);  // DMCONTROL.dmactive
   dmstatus = 0;
   const bool ok = readRaw(0x11, dmstatus);
-  ioRelease(swdio_, swclk_);
-  attached_ = false;
+  if (!keep_driven) { ioRelease(swdio_, swclk_); attached_ = false; }
   // A debug module reports a nonzero DMSTATUS.version; an idle bus reads all ones or zeros.
   return ok && ((dmstatus >> 8) & 0xf) != 0 && dmstatus != 0xffffffffu;
 }
@@ -182,22 +181,35 @@ bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus) {
 bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
-  setHalf(500);
-  configureBus();
-  write(0x10, 1);  // DMCONTROL.dmactive
-  // Margin check (E156/E157): half 0 ns sometimes fails for a whole run.
+  // Margin check (E156/E157): half 0 ns sometimes fails for a whole run. The bus is brought
+  // up again for each candidate, because a half period the target cannot follow leaves its
+  // debug module out of step and the next, slower attempt would inherit that (2026-09-23:
+  // on the Pico's flying wires to a CH32L103, one probe with a fresh init answered while
+  // this loop without one failed at every half period).
   static const uint32_t kHalfNs[] = {0, 25, 50, 100, 200, 500};
   for (uint32_t half : kHalfNs) {
     setHalf(half);
-    uint32_t first = 0, value = 0;
+    // A cold debug module does not answer the first wake. Measured on a CH32L103 over the
+    // Pico's flying wires (2026-09-23): the first clean read came on attempt 5 at a 500 ns
+    // half period, and on attempt 0 once the module had answered. So give each candidate a
+    // few tries before judging it, or a cold target looks like no target at all.
+    uint32_t first = 0;
+    bool awake = false;
+    for (int wake = 0; wake < 8 && !awake; ++wake) {
+      configureBus();
+      write(0x10, 1);  // DMCONTROL.dmactive
+      awake = readRaw(0x11, first);
+    }
+    // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
+    if (!awake || ((first >> 8) & 0xf) == 0) continue;
     bool clean = true;
     const uint32_t t0 = micros();
     for (int i = 0; i < 1000 && clean; ++i) {
-      if (!readRaw(0x11, value)) { clean = false; break; }
-      if (i == 0) first = value; else if (value != first) clean = false;
+      uint32_t value = 0;
+      if (!readRaw(0x11, value) || value != first) clean = false;
     }
-    if (clean && ((first >> 8) & 0xf) != 0) {  // DMSTATUS.version nonzero
-      dmi_ns_ = micros() - t0;                 // 1000 reads -> ns per read
+    if (clean) {
+      dmi_ns_ = micros() - t0;   // 1000 reads -> ns per read
       attached_ = true;
       return true;
     }
@@ -212,15 +224,14 @@ bool RvswdPhy::attach() {
 
 namespace oep {
 bool RvswdPhy::begin(int, int) { return false; }
-bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus) {
+bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
   setHalf(half_ns);
   configureBus();
   write(0x10, 1);  // DMCONTROL.dmactive
   dmstatus = 0;
   const bool ok = readRaw(0x11, dmstatus);
-  ioRelease(swdio_, swclk_);
-  attached_ = false;
+  if (!keep_driven) { ioRelease(swdio_, swclk_); attached_ = false; }
   // A debug module reports a nonzero DMSTATUS.version; an idle bus reads all ones or zeros.
   return ok && ((dmstatus >> 8) & 0xf) != 0 && dmstatus != 0xffffffffu;
 }

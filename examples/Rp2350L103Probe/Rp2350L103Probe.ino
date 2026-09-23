@@ -12,16 +12,15 @@
 #include <OepRvswdPhy.h>
 #include <OepTargetServices.h>
 
-// Candidate, not yet confirmed. The pin survey (2026-09-23) found exactly one pin with a
-// real external pull-up (GP24) and two with a real pull-down (GP23, GP29) - the signature a
-// CH32's SWDIO and SWCLK leave - while every other pin follows whatever pull we apply. No
-// debug module answered on any pair, but the CH32L103's WCH-LinkE was unplugged at the time,
-// so that board had no power. Override with -DOEP_RVSWD_SWDIO= / -DOEP_RVSWD_SWCLK=.
+// Measured 2026-09-23 once the CH32L103 had power: the pair sweep found its debug module on
+// SWDIO=GP0, SWCLK=GP1 (DMSTATUS 0x00000c82) and on no other ordered pair. These are also
+// Serial1's default pins, so fixture.uart has to take a different pair from the plan.
+// Override with -DOEP_RVSWD_SWDIO= / -DOEP_RVSWD_SWCLK=.
 #ifndef OEP_RVSWD_SWDIO
-#define OEP_RVSWD_SWDIO 24
+#define OEP_RVSWD_SWDIO 0
 #endif
 #ifndef OEP_RVSWD_SWCLK
-#define OEP_RVSWD_SWCLK 23
+#define OEP_RVSWD_SWCLK 1
 #endif
 
 static uint8_t rxBuffer[1024];
