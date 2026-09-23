@@ -116,13 +116,27 @@ Pro Micro の **SWDIO = GP0、SWCLK = GP1**。全 420 組の総当たりでこ�
 
 修正後、OEP の `target.control.read_dmi` が probe 経由で DMSTATUS を返す。
 
-### 未解決: halt が効かない
+### 未解決: halt が効かない（原因は 2 候補まで絞り込み、特定は未）
 
-`DMCONTROL.haltreq`（0x80000001）を書いても hart は走り続ける（DMSTATUS は 30 ms 追跡しても allrunning のまま、
-ackhavereset を足しても同じ）。読みは 1000/1000 clean なので書きだけが落ちているのか、L103 側が低消費電力モードで
-halt を受け付けないのか（`DBGMCU` の stop/standby debug enable 未設定など）は未切り分け。L103 に何の firmware が
-入っているか不明なのも効いている。X035 では同じ `Ch32Dm::halt()` が通る。
+| 試したこと | 結果 |
+|---|---|
+| `DMCONTROL` へ 0x80000001 を書いて**読み戻す** | `0x80000001`（haltreq=1）。**書き込みは届いている** |
+| その直後の DMSTATUS | `0x00000c82` のまま = allrunning。halt しない |
+| haltreq のまま 10〜80 ms 追跡 | `0xfffffdbe` / `0xfffffffe` など**ほぼ全 1 の壊れた語**に劣化する |
+| 半周期ごとの bus 再初期化（`wakeBus()`）を挟んで再読 | 同じ。allrunning か壊れた語 |
+| haltreq + ndmreset → ndmreset だけ解除（reset 経由の halt） | 返る語がやはり全 1 系。`allhalted=1` に見える回も内容が壊れており**信用できない** |
 
+つまり **halt を要求した後だけリンクが壊れる**。hart が走り続けているのか、halt はしているが読めていないのかを
+区別できていない。候補は 2 つ:
+
+1. **DMCONTROL への書き込みが時々化ける**。RVSWD の write は ACK も検証も無いので、bit 0（dmactive）が落ちれば
+   DM 自体が寝てバスは全 1 になる。読みが 1000/1000 clean でも write が同じ品質とは限らない。
+   対策候補: 書き込みのたびに読み戻して検証する、write だけ遅い半周期にする。
+2. **L103 側が低消費電力モード**で core clock が止まっており halt を受け付けない（`DBGMCU` の stop/standby
+   debug enable 未設定）。この基板に何の firmware が入っているか不明なのが効いている。
+
+X035（PCB 治具）では同じ `Ch32Dm::halt()` が通るので、PHY や DM 手順そのものの誤りではない。
+**次の一手**: L103 に既知の firmware を入れてから再測する。L103 のフル結線検証を P4 で行う際に一緒に切り分けるのが早い。
 ## 書き込みと USB bind の実際
 
 - udev rule を入れた後は **picotool が WSL から使える**。ただし **複数の RP2 を同時に列挙すると picotool 2.3.0 は
