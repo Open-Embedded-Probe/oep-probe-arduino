@@ -62,6 +62,7 @@ class TargetConsole final : public Service {
   static constexpr size_t kTxCapacity = 256;
   bool enabled_ = false;
   uint8_t framing_ = 0;                 // 0 = SerialSDI (one way), 1 = SerialDMDATA (two way)
+  bool saw_empty_ = false;              // the target's empty frame was already there last poll
   uint16_t head_ = 0, tail_ = 0;
   uint16_t tx_head_ = 0, tx_tail_ = 0;
   uint32_t dropped_ = 0;

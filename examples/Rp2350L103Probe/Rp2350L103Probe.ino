@@ -70,6 +70,7 @@ void setup() {
   pinMode(kNrst, INPUT);
   phy.begin(kSwdio, kSwclk);
   phy.setMinHalfNs(OEP_RVSWD_MIN_HALF_NS);
+  phy.setIdleClockLow(true);   // a CH32L103 resets its debug link when the bus rests high
   for (uint8_t pin = 0; pin < 30; ++pin) if (!((kReserved >> pin) & 1)) fixturePins[fixturePinCount++] = pin;
   pinTable = new oep::PinTable(fixturePins, fixturePinCount);
   // Hi-Z everything the probe does not own. RP2 pads boot with a pull-down, and this jig

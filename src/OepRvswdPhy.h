@@ -38,6 +38,14 @@ class RvswdPhy final : public DmiPhy {
   // on then varies run to run. A jig that is known to be provisional says so here rather
   // than leaving the probe to guess: 0 = no floor.
   void setMinHalfNs(uint32_t half_ns) { min_half_ns_ = half_ns; }
+  // Rest the bus with SWCLK low between transactions instead of both lines high. Which one
+  // a target needs is a property of the target, and they disagree (2026-09-23): a CH32L103
+  // resting high drops the link after about 1 ms and its debug module resets, letting a
+  // halted hart run again, while resting low keeps both for seconds; a CH32X035 is the
+  // other way round - it keeps the link across any idle resting high, and resting low
+  // between frames stopped it attaching at all. Telling the two apart at run time means
+  // provoking the reset on the kind that has it, so a probe built for one says so instead.
+  void setIdleClockLow(bool low) { park_low_ = low; }
   void write(uint8_t address, uint32_t value) override;
   uint32_t halfNs() const { return half_ns_; }
   // Measured during attach: wall time of one DMI read at the selected half period,
@@ -56,6 +64,7 @@ class RvswdPhy final : public DmiPhy {
   // brought up again. It measured out at about 1 ms; this leaves margin.
   static constexpr uint32_t kIdleUs = 300;
   uint32_t last_activity_us_ = 0;
+  bool park_low_ = false;     // idle with SWCLK low instead of both lines high (setIdleClockLow)
   void setHalf(uint32_t half_ns);
   void configureBus(bool with_wake);
   void writeRaw(uint8_t address, uint32_t data);

@@ -28,13 +28,10 @@ template <typename Io> inline void startFrame(Io &io) { io.bothHigh(); io.spin()
 // down, because both lines held high is how this bus is told to reset. A CH32L103 left
 // parked high for 10 ms dropped the link and let its halted hart run again, while parking
 // the clock low held both across seconds of idle (2026-09-23).
-template <typename Io> inline void stopFrame(Io &io) {
-  clockBit(io, false);
-  io.bothHigh();
-  io.spin();
-  io.clkLowDio(true);
-  io.spin();
-}
+// The stop condition is SWDIO rising while SWCLK is high, and the frame ends there with
+// both lines high. What the bus should do while it then sits idle depends on the target,
+// so that is RvswdPhy's decision (see its idle policy), not the frame's.
+template <typename Io> inline void stopFrame(Io &io) { clockBit(io, false); io.bothHigh(); io.spin(); }
 
 template <typename Io>
 inline void header(Io &io, uint8_t address, bool write) {

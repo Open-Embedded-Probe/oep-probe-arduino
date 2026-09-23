@@ -190,15 +190,15 @@ void TargetConsole::pollSdi() {
 }
 
 // SerialDMDATA, minichlink's framing. The status byte is the low byte of DATA0: bit 7 says
-// the frame is the target's, the low six bits are a byte count biased by 4. Clearing bit 7
-// is how we say we took it, and a word with bit 7 clear and a count is our frame going the
-// other way - three bytes at a time, since only DATA0 carries host payload.
+// the word is the target's, the low bits are a byte count biased by 4. We answer each of its
+// words exactly once, and the answer is also our outgoing frame when there is one - three
+// bytes at a time, since only DATA0 carries host payload - or zero when there is not.
 void TargetConsole::pollDmdata() {
   uint32_t data0 = 0;
   if (!phy_.read(0x04, data0)) return;
   if (data0 & 0x80u) {                         // the target's word
     uint32_t count = data0 & 0x3fu;
-    if (count > 4u) {                          // count 4 is its empty frame: "the mailbox is yours"
+    if (count > 4u) {
       count -= 4u;
       if (count > 7u) count = 7u;
       uint32_t data1 = 0;
@@ -208,12 +208,30 @@ void TargetConsole::pollDmdata() {
           static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
           static_cast<uint8_t>(data1 >> 16), static_cast<uint8_t>(data1 >> 24)};
       for (uint32_t i = 0; i < count; ++i) push(bytes[i]);
+      saw_empty_ = false;
+      sendOrClear();
+      return;
     }
+    // Count 4 is the target's empty frame: "the mailbox is yours". But its write() leaves
+    // that word and then, a moment later, its own frame on top - so an empty frame may be
+    // the instant before real bytes land, and answering it then wipes them out. Measured on
+    // a CH32X035 at 48 MHz behind the P4's fast PHY: every other frame vanished, "core_ap"
+    // and " READY" gone and "i" and "\r\n" arriving (2026-09-23). A slow target hid it. So
+    // answer an empty frame only once it has stood still for a whole poll.
+    if (!saw_empty_) {
+      saw_empty_ = true;
+      return;
+    }
+    saw_empty_ = false;
     sendOrClear();
     return;
   }
-  if (data0 & 0x3fu) return;                   // our own frame, not collected yet
-  sendOrClear();
+  // Bit 7 clear: our own frame not yet collected, or the word we just left. Not ours to
+  // touch - the target owns the initiative, and a probe only ever answers the target's
+  // words, as minichlink's terminal does. Writing into a clear word races the target's own
+  // poll, which leaves its empty frame there at the same moment; on the CH32X035 that ate
+  // the host's frames and PING never came back (2026-09-23).
+  saw_empty_ = false;
 }
 
 // Clearing bit 7 is how the target learns its frame was taken - and our own frame clears
@@ -251,10 +269,14 @@ Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t l
       if (!oep_v0_target_console_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (request.enable && !dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
       if (request.framing > 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (request.enable && !enabled_) {
+      // Every enable is a fresh session, even over one that is still open: a runner that
+      // moves from one sketch to the next reprograms the target in between, and bytes
+      // queued for the last sketch must not be delivered to this one.
+      if (request.enable) {
         head_ = tail_ = 0;
         tx_head_ = tx_tail_ = 0;
         dropped_ = 0;
+        saw_empty_ = false;
         // Whatever an earlier session left in the mailbox would read as a frame - including
         // SerialDMDATA's latched timeout, which a host clears by taking the word. Claim it,
         // then let a couple of rounds go by and throw those away, so the first exchange the
