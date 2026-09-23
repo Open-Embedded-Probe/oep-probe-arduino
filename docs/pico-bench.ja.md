@@ -52,6 +52,7 @@ RP2040-Zero → Pro Micro RP2350 の SWD ヘッダ。**SWCLK = GP0、SWDIO = GP1
 | ACK | OK（`0b001`） |
 | DPIDR | **`0x4c013477`** = Arm designer、DP **version 3**（ADIv6）、RP2350 の SW-DP |
 | 起動系列 | `jtag->swd` / `dormant->swd` / line reset のいずれでも応答 |
+| **write 経路** | DP CTRL/STAT へ `0x50000000`（CDBGPWRUPREQ + CSYSPWRUPREQ）を書くと ack OK、読み戻し **`0xf0000000`** = **debug domain が power up**。read だけでなく write・ACK・turnaround・parity が揃って通る |
 | multidrop TARGETSEL | **不要**。line reset 直後の DPIDR read に答える（RP2040 と違う） |
 | half period | 500 ns（bit-bang、SIO 直叩き） |
 
@@ -140,9 +141,8 @@ X035（PCB 治具）では同じ `Ch32Dm::halt()` が通るので、PHY や DM �
 ### 現在の配線状態（2026-09-23 終了時点）
 
 - **Pro Micro ↔ CH32L103**: 生きている。GP0 = SWDIO / GP1 = SWCLK。
-- **Pico Zero ↔ Pro Micro の SWD ヘッダ**: **外れている**。Zero の GP0/GP1 は pull 判定で「何も付いていない」に戻り、
-  DPIDR も返らない。SWD が通った記録（DPIDR `0x4c013477`）は線が生きていた時点のもので、有効。
-  繋ぎ直せば `PicoDebugPortSurvey` の「ARM SWD write path」節（DP CTRL/STAT を書いて power-up ack を読む）まで進める。
+- **Pico Zero ↔ Pro Micro の SWD ヘッダ**: 生きている（利用者が戻した）。向きは変わらず **SWCLK = GP0 / SWDIO = GP1**。
+  DPIDR と CTRL/STAT power-up の両方を確認済み。
 
 ## 書き込みと USB bind の実際
 
