@@ -137,6 +137,13 @@ Pro Micro の **SWDIO = GP0、SWCLK = GP1**。全 420 組の総当たりでこ�
 
 X035（PCB 治具）では同じ `Ch32Dm::halt()` が通るので、PHY や DM 手順そのものの誤りではない。
 **次の一手**: L103 に既知の firmware を入れてから再測する。L103 のフル結線検証を P4 で行う際に一緒に切り分けるのが早い。
+### 現在の配線状態（2026-09-23 終了時点）
+
+- **Pro Micro ↔ CH32L103**: 生きている。GP0 = SWDIO / GP1 = SWCLK。
+- **Pico Zero ↔ Pro Micro の SWD ヘッダ**: **外れている**。Zero の GP0/GP1 は pull 判定で「何も付いていない」に戻り、
+  DPIDR も返らない。SWD が通った記録（DPIDR `0x4c013477`）は線が生きていた時点のもので、有効。
+  繋ぎ直せば `PicoDebugPortSurvey` の「ARM SWD write path」節（DP CTRL/STAT を書いて power-up ack を読む）まで進める。
+
 ## 書き込みと USB bind の実際
 
 - udev rule を入れた後は **picotool が WSL から使える**。ただし **複数の RP2 を同時に列挙すると picotool 2.3.0 は
