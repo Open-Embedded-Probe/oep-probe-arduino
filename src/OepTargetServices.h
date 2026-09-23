@@ -61,7 +61,7 @@ class TargetConsole final : public Service {
   DmiPhy &phy_;
   static constexpr size_t kTxCapacity = 256;
   bool enabled_ = false;
-  uint8_t framing_ = 0;                 // 0 = SerialSDI (one way), 1 = SerialDMDATA (two way)
+  uint8_t framing_ = 0;                 // 0 = SerialSDI (one way), 1 = SerialDMDATA, 2 = dmseq (two way)
   bool saw_empty_ = false;              // the target's empty frame was already there last poll
   uint16_t head_ = 0, tail_ = 0;
   uint16_t tx_head_ = 0, tx_tail_ = 0;
@@ -75,6 +75,17 @@ class TargetConsole final : public Service {
   void pollSdi();
   void pollDmdata();
   void sendOrClear();
+  // framing 2, dmseq (oep-spec docs/target-console-dmseq.ja.md)
+  void pollSeq();
+  void seqAnswer(uint8_t k, bool with_data);
+  bool seq_synced_ = false;             // a target frame has been accepted this session
+  uint8_t seq_last_s_ = 0;              // S of the last accepted target frame
+  bool seq_last_syn_ = false;           // the last accepted target frame had SYN set
+  uint8_t seq_h_ = 0;                   // H of the outstanding host payload
+  uint8_t seq_chunk_[2] = {0, 0};
+  uint8_t seq_chunk_len_ = 0;           // 0 = nothing outstanding
+  uint8_t seq_bad_run_ = 0;             // consecutive invalid words
+  uint8_t seq_syn_drops_ = 0;           // test hook OEP_CONSOLE_FAULT_SYN
 };
 
 class TargetFlash final : public Service {

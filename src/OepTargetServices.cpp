@@ -169,7 +169,9 @@ void TargetConsole::poll() {
     last_attach_ms_ = millis();
     if (!dm_.attach()) return;
   }
-  if (framing_ == 1) pollDmdata(); else pollSdi();
+  if (framing_ == 1) pollDmdata();
+  else if (framing_ == 2) pollSeq();
+  else pollSdi();
 }
 
 // SerialSDI: the target waits for DATA0 to read zero, writes DATA1 = bytes 3..6 and
@@ -254,6 +256,109 @@ void TargetConsole::sendOrClear() {
                        (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 24));
 }
 
+// dmseq (framing 2), oep-spec docs/target-console-dmseq.ja.md. SerialDMDATA's carrier with
+// 1-bit sequence numbers both ways and a CRC-8 on every word, so a DMI access that goes
+// astray - a lost answer, a corrupted word - neither duplicates nor drops a byte.
+//
+// Test hooks, off unless a build defines them: OEP_CONSOLE_FAULT_PERMILLE drops or corrupts
+// that share of answers and corrupts that share of frames read; OEP_CONSOLE_FAULT_SYN drops
+// the answers to the first N SYN frames after each resync. Both were how the framing was
+// chosen (oep-spec experiments/dm-console-seq); keep them for regressions.
+#ifndef OEP_CONSOLE_FAULT_PERMILLE
+#define OEP_CONSOLE_FAULT_PERMILLE 0
+#endif
+#ifndef OEP_CONSOLE_FAULT_SYN
+#define OEP_CONSOLE_FAULT_SYN 0
+#endif
+
+static uint8_t seqCrc8(const uint8_t *p, size_t n) {   // poly 0x07, init 0xFF
+  uint8_t crc = 0xff;
+  for (size_t i = 0; i < n; ++i) {
+    crc ^= p[i];
+    for (int b = 0; b < 8; ++b) crc = static_cast<uint8_t>((crc & 0x80) ? (crc << 1) ^ 0x07 : crc << 1);
+  }
+  return crc;
+}
+
+static bool seqFault() {
+#if OEP_CONSOLE_FAULT_PERMILLE > 0
+  static uint32_t x = 2463534242u;
+  x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+  return (x % 1000u) < OEP_CONSOLE_FAULT_PERMILLE;
+#else
+  return false;
+#endif
+}
+
+void TargetConsole::pollSeq() {
+  // DATA0 first, DATA1 only when the frame reaches it, and the answer only after both: once
+  // answered, the target may post its next frame and overwrite DATA1.
+  uint32_t w0 = 0, w1 = 0;
+  if (!phy_.read(0x04, w0)) return;
+  if (!(w0 & 0x80u)) return;                   // our answer still there, or nothing yet
+  const uint8_t n = w0 & 0x07u;
+  if (n >= 3 && !phy_.read(0x05, w1)) return;
+  if (seqFault()) w0 ^= 1u << (8 + (w0 & 7));  // test hook: a frame read corrupted
+  const uint8_t b[8] = {static_cast<uint8_t>(w0), static_cast<uint8_t>(w0 >> 8), static_cast<uint8_t>(w0 >> 16),
+                        static_cast<uint8_t>(w0 >> 24), static_cast<uint8_t>(w1), static_cast<uint8_t>(w1 >> 8),
+                        static_cast<uint8_t>(w1 >> 16), static_cast<uint8_t>(w1 >> 24)};
+  // N before the CRC: at N = 7 there is no byte 1+N, and 0xffffffff - what an attach leaves
+  // in DATA0 - decodes to exactly that.
+  if (n > 6 || seqCrc8(b, static_cast<size_t>(1 + n)) != b[1 + n]) {
+    // Usually a bad read, and the next poll reads it right. If it stays bad the word may be
+    // our own answer, corrupted into a shape with bit 7 set, and then both sides wait.
+    // Answering K = the last S we accepted is safe whatever is there: if the target's
+    // outstanding frame is that one, it was ours already; if it is a new one, K does not
+    // match and the target posts it again.
+    if (++seq_bad_run_ >= 3 && seq_synced_) { seq_bad_run_ = 0; seqAnswer(seq_last_s_, false); }
+    return;
+  }
+  seq_bad_run_ = 0;
+  const uint8_t s = (w0 >> 5) & 1u, a = (w0 >> 4) & 1u;
+  const bool syn = (w0 & 0x08u) != 0;
+  // A SYN frame posted again (its answer did not land) is a duplicate like any other; only
+  // a SYN that is not one resyncs. Resyncing on every SYN delivered the same payload twice
+  // (found in review by the ch32rv side, 2026-09-24).
+  const bool duplicate = seq_synced_ && s == seq_last_s_ && (!syn || seq_last_syn_);
+  if (!duplicate && (syn || !seq_synced_)) {    // resync, then accept as below
+    seq_synced_ = true;
+    seq_last_s_ = static_cast<uint8_t>(s ^ 1u);   // so this frame counts as new
+    seq_h_ = static_cast<uint8_t>(a ^ 1u);
+    seq_chunk_len_ = 0;                           // anything half-sent went to the old session
+    seq_syn_drops_ = 0;
+  }
+  if (s != seq_last_s_) {
+    for (uint8_t i = 0; i < n; ++i) push(b[1 + i]);
+    seq_last_s_ = s;
+    seq_last_syn_ = syn;
+  }
+  if (seq_chunk_len_ && a == seq_h_) {           // the target has our last payload
+    seq_chunk_len_ = 0;
+    seq_h_ ^= 1u;
+  }
+#if OEP_CONSOLE_FAULT_SYN > 0
+  if (syn && seq_syn_drops_ < OEP_CONSOLE_FAULT_SYN) { ++seq_syn_drops_; return; }   // test hook
+#endif
+  seqAnswer(s, true);
+}
+
+void TargetConsole::seqAnswer(uint8_t k, bool with_data) {
+  if (with_data && !seq_chunk_len_) {
+    while (seq_chunk_len_ < 2 && tx_tail_ != tx_head_) {
+      seq_chunk_[seq_chunk_len_++] = tx_[tx_tail_];
+      tx_tail_ = static_cast<uint16_t>((tx_tail_ + 1) % kTxCapacity);
+    }
+  }
+  const uint8_t m = with_data ? seq_chunk_len_ : 0;
+  uint8_t ans[4] = {static_cast<uint8_t>((k << 5) | (seq_h_ << 4) | m), 0, 0, 0};
+  for (uint8_t i = 0; i < m; ++i) ans[1 + i] = seq_chunk_[i];
+  ans[1 + m] = seqCrc8(ans, static_cast<size_t>(1 + m));   // right after the payload
+  uint32_t answer = uint32_t(ans[0]) | (uint32_t(ans[1]) << 8) | (uint32_t(ans[2]) << 16) | (uint32_t(ans[3]) << 24);
+  if (seqFault()) return;                                   // test hook: the answer does not land
+  if (seqFault()) answer ^= 1u << (answer % 24);            // test hook: it lands corrupted
+  phy_.write(0x04, answer);
+}
+
 void TargetConsole::abandon() {
   enabled_ = false;
   head_ = tail_ = 0;
@@ -268,7 +373,7 @@ Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t l
       struct oep_v0_target_console_configure_request request;
       if (!oep_v0_target_console_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (request.enable && !dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
-      if (request.framing > 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (request.framing > 2) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       // Every enable is a fresh session, even over one that is still open: a runner that
       // moves from one sketch to the next reprograms the target in between, and bytes
       // queued for the last sketch must not be delivered to this one.
@@ -277,6 +382,10 @@ Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t l
         tx_head_ = tx_tail_ = 0;
         dropped_ = 0;
         saw_empty_ = false;
+        seq_synced_ = false;
+        seq_last_syn_ = false;
+        seq_syn_drops_ = 0;
+        seq_chunk_len_ = 0;
         // Whatever an earlier session left in the mailbox would read as a frame - including
         // SerialDMDATA's latched timeout, which a host clears by taking the word. Claim it,
         // then let a couple of rounds go by and throw those away, so the first exchange the
@@ -313,7 +422,7 @@ Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t l
     case OEP_V0_TARGET_CONSOLE_OP_WRITE: {
       struct oep_v0_target_console_write_request request;
       if (!oep_v0_target_console_write_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!enabled_ || framing_ != 1) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (!enabled_ || framing_ == 0) return rejected(OEP_V0_REJECT_UNAVAILABLE);
       uint16_t queued = 0;
       while (queued < request.data_length) {
         const uint16_t next = static_cast<uint16_t>((tx_head_ + 1) % kTxCapacity);
