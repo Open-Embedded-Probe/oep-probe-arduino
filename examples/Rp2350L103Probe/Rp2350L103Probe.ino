@@ -56,6 +56,9 @@ static oep::Ch32Dm dm(phy, {0x08000000u, 65536u, 256u, 256u});
 static oep::TargetControl targetControl(dm, phy, kNrst);   // reset mode 3 = pin reset (sets PINRSTF)
 static oep::TargetMemory targetMemory(dm);
 static oep::TargetFlash targetFlash(dm);
+// Console with no console wiring: the target writes into the debug module's data
+// registers and the probe collects them from loop() (ArduinoCore-CH32's SerialSDI).
+static oep::TargetConsole targetConsole(dm, phy);
 static oep::PinTable *pinTable = nullptr;
 static oep::FixtureGpio *fixtureGpio = nullptr;
 static oep::FixtureUart *fixtureUart = nullptr;   // DUT console once the jig's UART pins are known
@@ -81,11 +84,13 @@ void setup() {
   endpoint.addService(targetControl);
   endpoint.addService(targetMemory);
   endpoint.addService(targetFlash);
+  endpoint.addService(targetConsole);
   endpoint.addService(*fixtureGpio);
   endpoint.addService(*fixtureUart);
 }
 
 void loop() {
   endpoint.poll();
+  targetConsole.poll();
   if (endpoint.idleFor(1500)) endpoint.abandonAll();
 }

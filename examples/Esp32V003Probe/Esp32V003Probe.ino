@@ -37,6 +37,9 @@ static oep::Ch32Dm dm(phy, {0x08000000u, 16384u, 64u, 64u}, oep::DmProfile::kQin
 static oep::TargetControl targetControl(dm, phy, 23);   // GPIO23 -> PD7/NRST: reset mode 3 (pin reset, sets PINRSTF)
 static oep::TargetMemory targetMemory(dm);
 static oep::TargetFlash targetFlash(dm);
+// Console with no console wiring: the target writes into the debug module's data
+// registers and the probe collects them from loop() (ArduinoCore-CH32's SerialSDI).
+static oep::TargetConsole targetConsole(dm, phy);
 static oep::PinTable *pinTable = nullptr;
 static oep::FixtureGpio *fixtureGpio = nullptr;
 static oep::FixtureUart *fixtureUart = nullptr;   // DUT console: V003 PD5/TX -> GPIO22, PD6/RX <- GPIO21 (E132)
@@ -64,6 +67,7 @@ void setup() {
   endpoint.addService(targetControl);
   endpoint.addService(targetMemory);
   endpoint.addService(targetFlash);
+  endpoint.addService(targetConsole);
   endpoint.addService(*fixtureGpio);
   endpoint.addService(*fixtureUart);
   endpoint.addService(*i2cTarget);
@@ -73,6 +77,7 @@ void setup() {
 
 void loop() {
   endpoint.poll();
+  targetConsole.poll();
   i2cTarget->service();
   spiTarget->service();
   if (endpoint.idleFor(1500)) endpoint.abandonAll();

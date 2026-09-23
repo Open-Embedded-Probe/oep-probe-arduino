@@ -150,6 +150,85 @@ Result TargetMemory::handle(uint8_t operation, const uint8_t *payload, size_t le
 }
 
 // ---- target.flash --------------------------------------------------------
+void TargetConsole::push(uint8_t byte) {
+  const uint16_t next = static_cast<uint16_t>((head_ + 1) % kCapacity);
+  if (next == tail_) { ++dropped_; return; }   // full: the reader is not keeping up
+  buffer_[head_] = byte;
+  head_ = next;
+}
+
+void TargetConsole::poll() {
+  // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless
+  // the target is attached and running its own code.
+  if (!enabled_ || dm_.halted()) return;
+  if (!phy_.attached()) {
+    // A reset detaches, and the console has to outlive that: the point of it is to watch
+    // a target through its own restarts. Retry at a slow rate so a target that is simply
+    // gone does not turn every loop into a full attach.
+    if (millis() - last_attach_ms_ < 250) return;
+    last_attach_ms_ = millis();
+    if (!dm_.attach()) return;
+  }
+  uint32_t data0 = 0;
+  if (!phy_.read(0x04, data0)) return;
+  const uint8_t length = static_cast<uint8_t>(data0 & 0xff);
+  if (length == 0 || length > 7) return;       // 0 = nothing waiting; anything else is not a frame
+  uint32_t data1 = 0;
+  if (!phy_.read(0x05, data1)) return;
+  const uint8_t bytes[7] = {
+      static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
+      static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
+      static_cast<uint8_t>(data1 >> 16), static_cast<uint8_t>(data1 >> 24)};
+  for (uint8_t i = 0; i < length; ++i) push(bytes[i]);
+  phy_.write(0x04, 0);                         // taken: this is what the target waits for
+}
+
+void TargetConsole::abandon() {
+  enabled_ = false;
+  head_ = tail_ = 0;
+  dropped_ = 0;
+}
+
+Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t length,
+                                      uint8_t *out, size_t capacity) {
+  switch (operation) {
+    case OEP_V0_TARGET_CONSOLE_OP_CONFIGURE: {
+      struct oep_v0_target_console_configure_request request;
+      if (!oep_v0_target_console_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (request.enable && !dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (request.enable && !enabled_) {
+        head_ = tail_ = 0;
+        dropped_ = 0;
+        // Whatever an earlier session left in the mailbox would read as a frame.
+        phy_.write(0x04, 0);
+      }
+      enabled_ = request.enable != 0;
+      struct oep_v0_target_console_configure_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0)};
+      return completed(oep_v0_target_console_configure_result_pack(&result, out, capacity));
+    }
+    case OEP_V0_TARGET_CONSOLE_OP_READ: {
+      struct oep_v0_target_console_read_request request;
+      if (!oep_v0_target_console_read_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      poll();                                  // one more frame before answering, if one is waiting
+      size_t n = 0;
+      const size_t limit = request.maximum < capacity ? request.maximum : capacity;
+      while (n < limit && tail_ != head_) {
+        out[n++] = buffer_[tail_];
+        tail_ = static_cast<uint16_t>((tail_ + 1) % kCapacity);
+      }
+      return completed(n);
+    }
+    case OEP_V0_TARGET_CONSOLE_OP_STATUS: {
+      struct oep_v0_target_console_status_request request;
+      if (!oep_v0_target_console_status_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      struct oep_v0_target_console_status_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0), buffered(), dropped_};
+      return completed(oep_v0_target_console_status_result_pack(&result, out, capacity));
+    }
+    default:
+      return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
+  }
+}
+
 bool TargetFlash::inRange(uint32_t address, uint32_t bytes) const {
   const FlashGeometry &g = dm_.geometry();
   return address >= g.base && bytes <= g.size && address - g.base <= g.size - bytes;

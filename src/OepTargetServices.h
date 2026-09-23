@@ -1,4 +1,5 @@
-// target.control / target.memory / target.flash (owner 0, ids 0x10..0x12) over Ch32Dm.
+// target.control / target.memory / target.flash / target.console (owner 0, ids 0x10..0x13)
+// over Ch32Dm.
 // Failure is reported through outcomes and CRC/read-back, never through DMI parity alone.
 #pragma once
 
@@ -36,6 +37,35 @@ class TargetMemory final : public Service {
 
  private:
   Ch32Dm &dm_;
+};
+
+// A console the target writes through the debug module's own data registers - no UART, no
+// pin, no wiring, and the hart is never halted for it. The target blocks until the probe
+// zeroes DATA0, so nothing is lost as long as somebody is collecting; bytes that arrive
+// with no room left are counted instead.
+class TargetConsole final : public Service {
+ public:
+  TargetConsole(Ch32Dm &dm, DmiPhy &phy) : dm_(dm), phy_(phy) {}
+  uint16_t owner() const override { return OEP_V0_DEF_TARGET_CONSOLE_OWNER; }
+  uint16_t id() const override { return OEP_V0_DEF_TARGET_CONSOLE_ID; }
+  uint8_t revision() const override { return OEP_V0_DEF_TARGET_CONSOLE_REVISION; }
+  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  void abandon() override;
+  // Call from loop(). Collects at most one frame, and only while the target is attached
+  // and running: those two registers are where abstract commands put their operands.
+  void poll();
+
+ private:
+  static constexpr size_t kCapacity = 2048;
+  Ch32Dm &dm_;
+  DmiPhy &phy_;
+  bool enabled_ = false;
+  uint16_t head_ = 0, tail_ = 0;
+  uint32_t dropped_ = 0;
+  uint32_t last_attach_ms_ = 0;
+  uint8_t buffer_[kCapacity];
+  uint16_t buffered() const { return static_cast<uint16_t>((head_ - tail_ + kCapacity) % kCapacity); }
+  void push(uint8_t byte);
 };
 
 class TargetFlash final : public Service {
