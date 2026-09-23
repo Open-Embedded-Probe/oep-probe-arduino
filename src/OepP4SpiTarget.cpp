@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include <initializer_list>
+
 #include "OepTlv.h"
 
 namespace oep {

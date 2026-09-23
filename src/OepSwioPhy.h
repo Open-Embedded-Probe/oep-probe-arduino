@@ -30,7 +30,7 @@ class SwioPhy final : public DmiPhy {
  private:
   bool ready_ = false, attached_ = false;
   uint32_t retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
-  bool IRAM_ATTR readRaw(uint8_t address, uint32_t &value);
+  bool readRaw(uint8_t address, uint32_t &value);   // IRAM_ATTR on the definition: the attribute is ESP32-only
 };
 
 }  // namespace oep
