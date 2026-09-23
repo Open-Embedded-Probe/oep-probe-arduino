@@ -307,35 +307,44 @@ bool Ch32Dm::loadRegisters(uint32_t &data0_address) {
 
 bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr) {
   if (!halted_ || !words) return false;
-  uint32_t data0_address = 0;
-  if (!loadRegisters(data0_address)) return false;
-  for (size_t i = 0; i < sizeof kReader / sizeof kReader[0]; ++i) phy_.write(kProgBuf0 + i, kReader[i]);
-  phy_.write(kData1, address);
-  phy_.write(kAbstractAuto, 1);
-  phy_.write(kCommand, 0x00240000);  // first run
-  bool ok = true;
-  for (size_t i = 0; i < words; ++i) {
-    // E156: one program-buffer run finishes within one DMI transaction; no poll.
-    if (!phy_.read(kData0, out[i])) { ok = false; break; }
-  }
-  // The last read launched a look-ahead; let it finish and record its cmderr
-  // (an exception there is expected at the end of flash and does not affect data).
+  // Long runs of these hiccup now and then - roughly one chunk in a couple of hundred on
+  // the CH32L103 jig, which is a whole-flash verify failing every few tries. The words
+  // already read are then meaningless, so redo the chunk from its own bring-up rather
+  // than hand the caller a plausible-looking answer (2026-09-23).
   uint8_t err = 0;
-  for (int i = 0; i < 1000; ++i) {
-    uint32_t cs = 0;
-    if (!phy_.read(kAbstractCs, cs)) break;
-    if (cs & (1u << 12)) continue;
-    err = (cs >> 8) & 7;
-    break;
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    uint32_t data0_address = 0;
+    if (!loadRegisters(data0_address)) { phy_.reinit(); continue; }
+    for (size_t i = 0; i < sizeof kReader / sizeof kReader[0]; ++i) phy_.write(kProgBuf0 + i, kReader[i]);
+    phy_.write(kData1, address);
+    phy_.write(kAbstractAuto, 1);
+    phy_.write(kCommand, 0x00240000);  // first run
+    bool ok = true;
+    for (size_t i = 0; i < words; ++i) {
+      // E156: one program-buffer run finishes within one DMI transaction; no poll.
+      if (!phy_.read(kData0, out[i])) { ok = false; break; }
+    }
+    // The last read launched a look-ahead; let it finish and record its cmderr
+    // (an exception there is expected at the end of flash and does not affect data).
+    err = 0;
+    for (int i = 0; i < 1000; ++i) {
+      uint32_t cs = 0;
+      if (!phy_.read(kAbstractCs, cs)) break;
+      if (cs & (1u << 12)) continue;
+      err = (cs >> 8) & 7;
+      break;
+    }
+    phy_.write(kAbstractAuto, 0);
+    if (err) phy_.write(kAbstractCs, 0x700);
+    cmderr_ = err;
+    if (cmderr) *cmderr = err;
+    // cmderr 3 is the look-ahead walking off the end of a region and says nothing about
+    // the words already read. Anything else means the program buffer did not run: the
+    // reads then returned whatever was left in DATA0, which looks like data and is not.
+    if (ok && (err == 0 || err == 3)) return true;
+    phy_.reinit();
   }
-  phy_.write(kAbstractAuto, 0);
-  if (err) phy_.write(kAbstractCs, 0x700);
-  cmderr_ = err;
-  if (cmderr) *cmderr = err;
-  // cmderr 3 is the look-ahead walking off the end of a region and says nothing about the
-  // words already read. Anything else means the program buffer did not run: the reads then
-  // returned whatever was left in DATA0, which looks like data and is not (2026-09-23).
-  return ok && (err == 0 || err == 3);
+  return false;
 }
 
 bool Ch32Dm::readWordScalar(uint32_t address, uint32_t &value) {
