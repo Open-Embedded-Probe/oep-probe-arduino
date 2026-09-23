@@ -12,17 +12,7 @@ Result FixtureGpio::handle(uint8_t operation, const uint8_t *payload, size_t len
       if (!oep_v0_fixture_gpio_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (!pins_.allowed(request.channel) || request.mode > kGpioOpenDrainRelease) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (pins_.owner(request.channel) != 0 && pins_.owner(request.channel) != kOwner) return rejected(OEP_V0_REJECT_UNAVAILABLE);
-      const int pin = request.channel;
-      switch (request.mode) {
-        case kGpioInputFloating: pinMode(pin, INPUT); break;
-        case kGpioInputPullUp: pinMode(pin, INPUT_PULLUP); break;
-        case kGpioInputPullDown: pinMode(pin, INPUT_PULLDOWN); break;
-        case kGpioInputPullUpDown: pinMode(pin, INPUT_PULLUP | INPUT_PULLDOWN); break;
-        case kGpioOutputLow: pinMode(pin, OUTPUT); digitalWrite(pin, LOW); break;
-        case kGpioOutputHigh: pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); break;
-        case kGpioOpenDrainLow: pinMode(pin, OUTPUT_OPEN_DRAIN); digitalWrite(pin, LOW); break;
-        case kGpioOpenDrainRelease: pinMode(pin, OUTPUT_OPEN_DRAIN); digitalWrite(pin, HIGH); break;
-      }
+      platformGpio(request.channel, request.mode);
       configured_ |= uint64_t{1} << request.channel;
       return completed();
     }
@@ -102,15 +92,14 @@ Result FixtureUart::handle(uint8_t operation, const uint8_t *payload, size_t len
       if (rx_ < 0) return rejected(OEP_V0_REJECT_UNAVAILABLE);  // no lease
       if (configured_) serial_.end();
       // A peer may echo while the probe is still writing; hold a full window of it.
-      serial_.setRxBufferSize(4096);
-      serial_.setTxBufferSize(1024);
+      platformUartBuffers(serial_, 4096, 1024);
       // Park TX at the UART idle level before the peripheral takes the pin: begin()
       // otherwise lets the line dip and the DUT receives a framing-error byte that
       // sits in its line buffer until the next newline (2026-09-22, X035 testcmd).
       pinMode(tx_, INPUT_PULLUP);   // high through the pull-up first: pinMode(OUTPUT) alone starts low
       digitalWrite(tx_, HIGH);
       pinMode(tx_, OUTPUT);
-      serial_.begin(request.baud, SERIAL_8N1, rx_, tx_);
+      if (!platformUartBegin(serial_, request.baud, rx_, tx_)) return failed();
       configured_ = true;
       struct oep_v0_fixture_uart_configure_result result = {request.baud};
       return completed(oep_v0_fixture_uart_configure_result_pack(&result, out, capacity));
