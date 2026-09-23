@@ -211,6 +211,33 @@ static void linkQuality(int dio, int clk) {
   pinMode(dio, INPUT); pinMode(clk, INPUT);
 }
 
+// Does the debug port take writes, not just reads? Power up the debug domain through DP
+// CTRL/STAT and read the acknowledge back. Harmless: it powers a domain, it halts nothing.
+static void swdWriteCheck(int dio, int clk) {
+  if (!io.setup(dio, clk)) return;
+  io.setHalfNs(500);
+  io.driveBoth();
+  swd::jtagToSwd(io);
+  uint32_t dpidr = 0;
+  const uint8_t ack = swd::transfer(io, false, true, 0x0, dpidr);
+  if (ack != swd::kOk) { Serial.printf("  no DPIDR on GP%d/GP%d\n", dio, clk); io.releaseBoth(); return; }
+  uint32_t abort = 0x1e;                       // clear any sticky error
+  swd::transfer(io, false, false, 0x0, abort);
+  uint32_t ctrl = 0x50000000u;                 // CDBGPWRUPREQ | CSYSPWRUPREQ
+  const uint8_t wack = swd::transfer(io, false, false, 0x1, ctrl);
+  uint32_t back = 0;
+  uint8_t rack = 0;
+  for (int i = 0; i < 20; ++i) {
+    rack = swd::transfer(io, false, true, 0x1, back);
+    if (rack == swd::kOk && (back & 0xa0000000u) == 0xa0000000u) break;
+    delay(1);
+  }
+  io.releaseBoth();
+  Serial.printf("  DPIDR 0x%08lx | CTRL/STAT write ack=%u | read ack=%u value 0x%08lx -> %s\n",
+                (unsigned long)dpidr, wack, rack, (unsigned long)back,
+                (back & 0xa0000000u) == 0xa0000000u ? "debug domain powered up: writes land" : "no power-up acknowledge");
+}
+
 void loop() {
   static uint32_t round = 0;
   Serial.printf("---- sweep %lu\n", (unsigned long)++round);
@@ -241,6 +268,53 @@ void loop() {
                     (unsigned)half, (unsigned long)first, same, differed, dirty);
     }
     d.release();
+  }
+  {   // is the haltreq write landing at all? DMCONTROL reads back what was written.
+    oep::RvswdPhy w;
+    w.begin(0, 1);
+    if (w.attach()) {
+      uint32_t before = 0, after = 0, status = 0;
+      w.read(0x10, before);
+      w.write(0x10, 0x80000001);
+      const bool ok = w.read(0x10, after);
+      w.read(0x11, status);
+      Serial.printf("write check: DMCONTROL before 0x%08lx, wrote 0x80000001, reads back %s0x%08lx (haltreq=%lu) DMSTATUS 0x%08lx\n",
+                    (unsigned long)before, ok ? "" : "(failed) ", (unsigned long)after,
+                    (unsigned long)((after >> 31) & 1), (unsigned long)status);
+      // Does a bus re-init after haltreq make the hart visibly halt?
+      for (int i = 0; i < 10; ++i) {
+        w.wakeBus();
+        w.write(0x10, 0x80000001);
+        uint32_t st = 0;
+        const bool ok = w.read(0x11, st);
+        Serial.printf("  re-init #%d: DMSTATUS %s0x%08lx allhalted=%lu\n", i, ok ? "" : "(failed) ",
+                      (unsigned long)st, (unsigned long)((st >> 9) & 1));
+        if (ok && ((st >> 9) & 1) && st != 0xffffffffu) break;
+        delay(5);
+      }
+      // Halt through reset: if the running application is what refuses to stop (a low-power
+      // mode gates the core clock), the hart still halts at its reset vector.
+      w.wakeBus();
+      w.write(0x10, 0x80000003);   // haltreq | ndmreset | dmactive
+      delay(2);
+      w.wakeBus();
+      w.write(0x10, 0x80000001);   // release ndmreset, keep haltreq
+      for (int i = 0; i < 6; ++i) {
+        delay(5);
+        w.wakeBus();
+        uint32_t st = 0;
+        const bool ok = w.read(0x11, st);
+        Serial.printf("  halt-through-reset #%d: DMSTATUS %s0x%08lx allhalted=%lu\n", i,
+                      ok ? "" : "(failed) ", (unsigned long)st, (unsigned long)((st >> 9) & 1));
+        if (ok && st != 0xffffffffu && ((st >> 9) & 1)) break;
+      }
+      w.wakeBus();
+      w.write(0x10, 0x40000001);   // resumereq
+      delay(2);
+      w.wakeBus();
+      w.write(0x10, 0x00000001);
+    }
+    w.release();
   }
   {   // does the hart halt? write DMCONTROL.haltreq and watch DMSTATUS
     oep::RvswdPhy h;
@@ -292,6 +366,10 @@ void loop() {
         any |= tryOne(dio, clk, 500, how, &kTargets[i], kTargetNames[i]);
     }
   }
+#if !defined(ARDUINO_SPARKFUN_PROMICRO_RP2350)
+  Serial.println("ARM SWD write path (DP CTRL/STAT power-up):");
+  for (int swap = 0; swap < 2; ++swap) swdWriteCheck(swap ? 1 : 0, swap ? 0 : 1);
+#endif
   Serial.println("CH32 RVSWD on the same wires:");
   for (int swap = 0; swap < 2; ++swap) any |= tryRvswd(swap ? 1 : 0, swap ? 0 : 1, true);
   any |= sweepRvswdPairs(kCandidates, kCandidateCount);
