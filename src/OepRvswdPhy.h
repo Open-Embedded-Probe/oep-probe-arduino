@@ -26,6 +26,9 @@ class RvswdPhy final : public DmiPhy {
   bool probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven = false);
   // One read, no retry: for measuring how often the link is clean.
   bool readOnce(uint8_t address, uint32_t &value) { return readRaw(address, value); }
+  // Re-run the bus bring-up without touching any debug-module register. This part drops the
+  // DMI link when its state changes, so a caller that has just written DMCONTROL may need it.
+  void wakeBus() { configureBus(); }
   void write(uint8_t address, uint32_t value) override;
   uint32_t halfNs() const { return half_ns_; }
   // Measured during attach: wall time of one DMI read at the selected half period,
