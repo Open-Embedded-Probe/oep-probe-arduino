@@ -140,10 +140,12 @@ void RvswdPhy::release() {
 
 void RvswdPhy::park() {
   if (swdio_ < 0) { attached_ = false; return; }
+  if (!park_low_) { release(); return; }
   ioDrive(swdio_, swclk_);
   gIo.clkLowDio(true);
   attached_ = false;
 }
+
 
 // with_wake runs the hundred-clock wake burst. That burst resets the target, not just the
 // debug interface: with it on every re-sync, the CH32L103's application restarted each
@@ -203,6 +205,7 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
   {
     Critical lock;
     ok = rvswd::readWord(gIo, address, value);
+    if (park_low_) gIo.clkLowDio(true);
   }
   ++transactions_;
   last_activity_us_ = micros();
@@ -222,6 +225,7 @@ void RvswdPhy::writeRaw(uint8_t address, uint32_t data) {
   {
     Critical lock;
     rvswd::writeWord(gIo, address, data);
+    if (park_low_) gIo.clkLowDio(true);
   }
   ++transactions_;
   last_activity_us_ = micros();
@@ -265,11 +269,14 @@ bool RvswdPhy::attach() {
     bool awake = false;
     for (int wake = 0; wake < 8 && !awake; ++wake) {
       configureBus(true);
-      // Only write dmactive if the module is not already up: that write clears haltreq, so
-      // attaching to a target somebody halted earlier would set it running again, and the
-      // stability check below would then be watching a hart change state under it.
+      // Only skip the dmactive write when the module is plainly up: that write clears
+      // haltreq, so attaching to a target somebody halted earlier would set it running
+      // again. "Plainly" matters - a module that is not active leaves the bus floating,
+      // and all ones has bit 0 set too. Trusting that, the CH32X035 was never activated
+      // and attach failed every time (2026-09-23), so an all-ones read counts as no answer.
       uint32_t control = 0;
-      if (!readRaw(kDmControl, control) || !(control & 1)) writeRaw(kDmControl, 1);
+      const bool up = readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1);
+      if (!up) writeRaw(kDmControl, 1);
       awake = readRaw(kDmStatus, first);
     }
     // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
