@@ -90,6 +90,39 @@ cd <scratchpad>
 両方を OEP probe にして片側を駆動・他側で bank read（E143 と同じ方法）→ 1 本も動かない。
 Zero の GP0/GP1 は Pro Micro の **GPIO ではなく SWD ヘッダ**に行っている、という配線の裏付け。
 
+## L103 に給電したあと（同日、利用者が電源を接続）
+
+### RVSWD の pair が確定
+
+Pro Micro の **SWDIO = GP0、SWCLK = GP1**。全 420 組の総当たりでこの 1 組だけが応答し、DMSTATUS = `0x00000c82`
+（version 2、authenticated、allrunning）。GP0/GP1 は Serial1 の既定 pin でもあるので、`fixture.uart` には別の組を割り当てる。
+
+### 半周期の実測（この配線・flying wire）
+
+| half | 冷えた bus の初回応答 | 連続 1000 read |
+|---:|---|---|
+| 0 / 25 ns | 応答なし | — |
+| 50 ns | 応答するが内容が壊れる | identical 0 / differed 793 / parity fail 207 |
+| **100 ns** | 安定 | **1000 / 1000** |
+| 200 / 500 ns | 安定 | 1000 / 1000 |
+
+`attach()` は 100 ns を選ぶ。1 DMI read は約 26 µs。
+
+### `attach()` の修正 2 点（どちらも実測が根拠）
+
+1. **半周期ごとに bus を張り直す**。追従できない半周期を試すと DM が歩調を崩し、そのままだと後続の遅い候補まで巻き添えになる。
+2. **冷えた DM は最初の wake に答えない**。500 ns で「5 回目の試行」で初めて応答し、以後は 95/100。よって候補ごとに
+   wake を最大 8 回試してから判定する。これを入れる前は、温まっていない L103 が「ターゲット無し」に見えていた。
+
+修正後、OEP の `target.control.read_dmi` が probe 経由で DMSTATUS を返す。
+
+### 未解決: halt が効かない
+
+`DMCONTROL.haltreq`（0x80000001）を書いても hart は走り続ける（DMSTATUS は 30 ms 追跡しても allrunning のまま、
+ackhavereset を足しても同じ）。読みは 1000/1000 clean なので書きだけが落ちているのか、L103 側が低消費電力モードで
+halt を受け付けないのか（`DBGMCU` の stop/standby debug enable 未設定など）は未切り分け。L103 に何の firmware が
+入っているか不明なのも効いている。X035 では同じ `Ch32Dm::halt()` が通る。
+
 ## 書き込みと USB bind の実際
 
 - udev rule を入れた後は **picotool が WSL から使える**。ただし **複数の RP2 を同時に列挙すると picotool 2.3.0 は
@@ -101,7 +134,8 @@ Zero の GP0/GP1 は Pro Micro の **GPIO ではなく SWD ヘッダ**に行っ�
 
 ## 未了
 
-- **L103 に給電して**（WCH-LinkE `0E028F0692F1` を挿す）RVSWD pair を確定する。候補は SWDIO=GP24 / SWCLK=GP23。
+- **L103 の halt が効かない**理由の切り分け（書き落ち / 低消費電力モード / DBGMCU）。読みと attach は通る。
+  L103 に既知の firmware を入れてから再確認するのが早い。
 - ordinary SWD を OEP の service にするか決める（今は frame + survey sketch まで。`target.control` は CH32 DM 専用）。
 - V003 を決めた pinout で繋いだ後のフルテスト（GPIO / UART / I2C / SPI / ADC / reset）。配線を決める際は、
   PIO を使う日のために **SWD/UART/SPI の各組を連番ピンに**寄せておくと後が楽。
