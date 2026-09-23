@@ -59,13 +59,21 @@ class TargetConsole final : public Service {
   static constexpr size_t kCapacity = 2048;
   Ch32Dm &dm_;
   DmiPhy &phy_;
+  static constexpr size_t kTxCapacity = 256;
   bool enabled_ = false;
+  uint8_t framing_ = 0;                 // 0 = SerialSDI (one way), 1 = SerialDMDATA (two way)
   uint16_t head_ = 0, tail_ = 0;
+  uint16_t tx_head_ = 0, tx_tail_ = 0;
   uint32_t dropped_ = 0;
   uint32_t last_attach_ms_ = 0;
   uint8_t buffer_[kCapacity];
+  uint8_t tx_[kTxCapacity];
   uint16_t buffered() const { return static_cast<uint16_t>((head_ - tail_ + kCapacity) % kCapacity); }
+  uint16_t pending() const { return static_cast<uint16_t>((tx_head_ - tx_tail_ + kTxCapacity) % kTxCapacity); }
   void push(uint8_t byte);
+  void pollSdi();
+  void pollDmdata();
+  void sendOrClear();
 };
 
 class TargetFlash final : public Service {

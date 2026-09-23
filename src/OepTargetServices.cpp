@@ -169,6 +169,12 @@ void TargetConsole::poll() {
     last_attach_ms_ = millis();
     if (!dm_.attach()) return;
   }
+  if (framing_ == 1) pollDmdata(); else pollSdi();
+}
+
+// SerialSDI: the target waits for DATA0 to read zero, writes DATA1 = bytes 3..6 and
+// DATA0 = length | bytes 0..2 << 8, and we zero DATA0 once we have the frame.
+void TargetConsole::pollSdi() {
   uint32_t data0 = 0;
   if (!phy_.read(0x04, data0)) return;
   const uint8_t length = static_cast<uint8_t>(data0 & 0xff);
@@ -183,9 +189,57 @@ void TargetConsole::poll() {
   phy_.write(0x04, 0);                         // taken: this is what the target waits for
 }
 
+// SerialDMDATA, minichlink's framing. The status byte is the low byte of DATA0: bit 7 says
+// the frame is the target's, the low six bits are a byte count biased by 4. Clearing bit 7
+// is how we say we took it, and a word with bit 7 clear and a count is our frame going the
+// other way - three bytes at a time, since only DATA0 carries host payload.
+void TargetConsole::pollDmdata() {
+  uint32_t data0 = 0;
+  if (!phy_.read(0x04, data0)) return;
+  if (data0 & 0x80u) {                         // the target's word
+    uint32_t count = data0 & 0x3fu;
+    if (count > 4u) {                          // count 4 is its empty frame: "the mailbox is yours"
+      count -= 4u;
+      if (count > 7u) count = 7u;
+      uint32_t data1 = 0;
+      if (!phy_.read(0x05, data1)) return;
+      const uint8_t bytes[7] = {
+          static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
+          static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
+          static_cast<uint8_t>(data1 >> 16), static_cast<uint8_t>(data1 >> 24)};
+      for (uint32_t i = 0; i < count; ++i) push(bytes[i]);
+    }
+    sendOrClear();
+    return;
+  }
+  if (data0 & 0x3fu) return;                   // our own frame, not collected yet
+  sendOrClear();
+}
+
+// Clearing bit 7 is how the target learns its frame was taken - and our own frame clears
+// it too. So when there is something to send, send it here rather than zeroing first: a
+// target that keeps printing leaves its empty frame on every poll, and a probe that only
+// ever answered with zero would never get a turn (2026-09-23).
+void TargetConsole::sendOrClear() {
+  const uint16_t waiting = pending();
+  if (!waiting) {
+    phy_.write(0x04, 0);
+    return;
+  }
+  uint8_t p[3] = {0, 0, 0};
+  const uint8_t chunk = waiting > 3 ? 3 : static_cast<uint8_t>(waiting);
+  for (uint8_t i = 0; i < chunk; ++i) {
+    p[i] = tx_[tx_tail_];
+    tx_tail_ = static_cast<uint16_t>((tx_tail_ + 1) % kTxCapacity);
+  }
+  phy_.write(0x04, uint32_t(chunk + 4u) | (uint32_t(p[0]) << 8) |
+                       (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 24));
+}
+
 void TargetConsole::abandon() {
   enabled_ = false;
   head_ = tail_ = 0;
+  tx_head_ = tx_tail_ = 0;
   dropped_ = 0;
 }
 
@@ -196,14 +250,24 @@ Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t l
       struct oep_v0_target_console_configure_request request;
       if (!oep_v0_target_console_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (request.enable && !dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (request.framing > 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (request.enable && !enabled_) {
         head_ = tail_ = 0;
+        tx_head_ = tx_tail_ = 0;
         dropped_ = 0;
-        // Whatever an earlier session left in the mailbox would read as a frame.
+        // Whatever an earlier session left in the mailbox would read as a frame - including
+        // SerialDMDATA's latched timeout, which a host clears by taking the word. Claim it,
+        // then let a couple of rounds go by and throw those away, so the first exchange the
+        // caller sees is not the tail of somebody else's.
         phy_.write(0x04, 0);
+        enabled_ = true;
+        framing_ = request.framing;
+        for (int i = 0; i < 4; ++i) poll();
+        head_ = tail_ = 0;
       }
       enabled_ = request.enable != 0;
-      struct oep_v0_target_console_configure_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0)};
+      framing_ = request.framing;
+      struct oep_v0_target_console_configure_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0), framing_};
       return completed(oep_v0_target_console_configure_result_pack(&result, out, capacity));
     }
     case OEP_V0_TARGET_CONSOLE_OP_READ: {
@@ -223,6 +287,21 @@ Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t l
       if (!oep_v0_target_console_status_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       struct oep_v0_target_console_status_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0), buffered(), dropped_};
       return completed(oep_v0_target_console_status_result_pack(&result, out, capacity));
+    }
+    case OEP_V0_TARGET_CONSOLE_OP_WRITE: {
+      struct oep_v0_target_console_write_request request;
+      if (!oep_v0_target_console_write_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (!enabled_ || framing_ != 1) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      uint16_t queued = 0;
+      while (queued < request.data_length) {
+        const uint16_t next = static_cast<uint16_t>((tx_head_ + 1) % kTxCapacity);
+        if (next == tx_tail_) break;           // full: the target is not collecting
+        tx_[tx_head_] = request.data[queued++];
+        tx_head_ = next;
+      }
+      poll();                                  // start it on its way before answering
+      struct oep_v0_target_console_write_result result = {queued};
+      return completed(oep_v0_target_console_write_result_pack(&result, out, capacity));
     }
     default:
       return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
