@@ -334,18 +334,6 @@ bool RvswdPhy::attach() {
 
 namespace oep {
 bool RvswdPhy::begin(int, int) { return false; }
-bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
-  if (!ready_) return false;
-  setHalf(half_ns);
-  configureBus(true);
-  write(0x10, 1);  // DMCONTROL.dmactive
-  dmstatus = 0;
-  const bool ok = readRaw(0x11, dmstatus);
-  if (!keep_driven) { ioRelease(swdio_, swclk_); attached_ = false; }
-  // A debug module reports a nonzero DMSTATUS.version; an idle bus reads all ones or zeros.
-  return ok && ((dmstatus >> 8) & 0xf) != 0 && dmstatus != 0xffffffffu;
-}
-
 bool RvswdPhy::attach() { return false; }
 void RvswdPhy::release() { attached_ = false; }
 void RvswdPhy::park() { attached_ = false; }
@@ -356,7 +344,7 @@ void RvswdPhy::configureBus(bool) {}
 void RvswdPhy::writeRaw(uint8_t, uint32_t) {}
 void RvswdPhy::reviveIfIdle() {}
 bool RvswdPhy::readRaw(uint8_t, uint32_t &) { return false; }
-bool RvswdPhy::probeOnce(uint32_t, uint32_t &) { return false; }
+bool RvswdPhy::probeOnce(uint32_t, uint32_t &, bool) { return false; }
 }  // namespace oep
 
 #endif
