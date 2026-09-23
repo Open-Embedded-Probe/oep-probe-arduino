@@ -112,7 +112,8 @@ uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
 
 namespace oep {
 namespace {
-constexpr uint8_t kDmData0 = 0x04, kDmControl = 0x10, kDmStatus = 0x11, kAbstractCs = 0x16, kDmAbstractAuto = 0x18;
+constexpr uint8_t kDmControl = 0x10, kDmStatus = 0x11, kAbstractCs = 0x16, kDmAbstractAuto = 0x18,
+                  kDmProgBuf0 = 0x20;
 constexpr uint8_t kDmShadowCfgr = 0x7e, kDmCfgr = 0x7d;
 constexpr uint32_t kCfgr = 0x5aa50400;   // WCH key | (1 << 10) "allow output from slave"
 }  // namespace
@@ -293,6 +294,11 @@ bool RvswdPhy::attach() {
   // intact, and the multi-transaction sequences behind a memory read still broke. Match
   // the read check's weight - a few hundred round trips - so a half period only survives
   // if its writes land as reliably as its reads.
+  //
+  // The scratch is the first program buffer word, not DATA0. DATA0 belongs to whatever is
+  // running: a target printing through the debug module's console writes it continuously,
+  // and attaching to one failed every time while this check used it (2026-09-23). Nothing
+  // reads the program buffer until an abstract command runs one.
   auto writes_land = [this] {
     static const uint32_t kPatterns[] = {0xa5a5a5a5u, 0x5a5a5a5au, 0xffffffffu, 0x00000001u,
                                          0x0f0f0f0fu, 0xf0f0f0f0u, 0x80000000u, 0x7fffffffu};
@@ -304,12 +310,12 @@ bool RvswdPhy::attach() {
     bool ok = true;
     for (int round = 0; round < 32 && ok; ++round) {
       for (uint32_t pattern : kPatterns) {
-        write(kDmData0, pattern);
+        write(kDmProgBuf0, pattern);
         uint32_t read_back = 0;
-        if (!readRaw(kDmData0, read_back) || read_back != pattern) { ok = false; break; }
+        if (!readRaw(kDmProgBuf0, read_back) || read_back != pattern) { ok = false; break; }
       }
     }
-    write(kDmData0, 0);
+    write(kDmProgBuf0, 0);
     return ok;
   };
   // Two passes. A cold debug module can need more waking than one candidate's eight
