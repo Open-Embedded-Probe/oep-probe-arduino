@@ -80,6 +80,10 @@ P4 は「適当に繋いでよい」のが長所で、実際 55 本中 51 本を
 
 - **PIO を使う日のために、同じ機能の線は連番に寄せる**（SWD の 2 本、UART の 2 本、SPI の 4 本）。RP2 の PIO は
   連続した pin 群を前提にする。今は bit-bang なので順序自由だが、後から効く。
+- **使わない pin は起動時に Hi-Z にする。** RP2 の pad は reset 直後 **pull-down 有効**で、ESP32 にも同種の既定がある。
+  半結線の治具ではそれが DUT のリセット系を引きっぱなしにしうる。実際 CH32L103 治具では、この pull-down だけで
+  「DM には繋がるのに hart が halt しない」状態になった（2026-09-23）。probe sketch は service 起動前に
+  `oep::platformParkPins()` を呼ぶこと。プローブは頼まれていない線を動かさない、が原則。
 - **プローブ側で予約した pin は `probe.identity` の reserved mask に必ず入れる。** host は fixture channel を
   そこから決めるので、宣言さえすれば誤用は起きない。
 - **DUT 側にも同じ注意がある**（CH32 の SWDIO/SWCLK、USB pad、BOOT pin）。DUT 側の制約は

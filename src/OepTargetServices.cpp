@@ -123,13 +123,22 @@ Result TargetMemory::handle(uint8_t operation, const uint8_t *payload, size_t le
     case OEP_V0_TARGET_MEMORY_OP_WRITE: {
       struct oep_v0_target_memory_write_request request;
       if (!oep_v0_target_memory_write_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if ((request.address & 3) || !request.data_length || (request.data_length & 3)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      // Two bytes at a two-byte address is a half-word store, which is how option bytes are
+      // programmed; everything else stays word aligned.
+      const bool half_word = request.data_length == 2 && (request.address & 1) == 0;
+      if (!half_word && ((request.address & 3) || !request.data_length || (request.data_length & 3)))
+        return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       if (!dm_.halted()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
       uint16_t written = 0;
-      for (; written < request.data_length; written += 4) {
-        const uint8_t *p = request.data + written;
-        const uint32_t value = uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
-        if (!dm_.writeWord(request.address + written, value)) break;
+      if (half_word) {
+        const uint16_t value = uint16_t(request.data[0]) | uint16_t(request.data[1]) << 8;
+        if (dm_.writeHalfWord(request.address, value)) written = 2;
+      } else {
+        for (; written < request.data_length; written += 4) {
+          const uint8_t *p = request.data + written;
+          const uint32_t value = uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+          if (!dm_.writeWord(request.address + written, value)) break;
+        }
       }
       struct oep_v0_target_memory_write_result result = {written};
       const size_t n = oep_v0_target_memory_write_result_pack(&result, out, capacity);

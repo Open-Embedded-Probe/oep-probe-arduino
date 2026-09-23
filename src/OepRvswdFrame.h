@@ -24,7 +24,17 @@ namespace rvswd {
 template <typename Io> inline void clockBit(Io &io, bool v) { io.clkLowDio(v); io.spin(); io.clkHigh(); io.spin(); }
 template <typename Io> inline bool readBit(Io &io) { io.clk(false); io.spin(); const bool v = io.dioRead(); io.clkHigh(); io.spin(); return v; }
 template <typename Io> inline void startFrame(Io &io) { io.bothHigh(); io.spin(); io.dio(false); io.spin(); }
-template <typename Io> inline void stopFrame(Io &io) { clockBit(io, false); io.bothHigh(); io.spin(); }
+// The stop condition is SWDIO rising while SWCLK is high - and then the clock goes back
+// down, because both lines held high is how this bus is told to reset. A CH32L103 left
+// parked high for 10 ms dropped the link and let its halted hart run again, while parking
+// the clock low held both across seconds of idle (2026-09-23).
+template <typename Io> inline void stopFrame(Io &io) {
+  clockBit(io, false);
+  io.bothHigh();
+  io.spin();
+  io.clkLowDio(true);
+  io.spin();
+}
 
 template <typename Io>
 inline void header(Io &io, uint8_t address, bool write) {
