@@ -72,8 +72,18 @@ GP24 / GP23 は CH32 の SWDIO(PA13, pull-up) / SWCLK(PA14, pull-down) の signa
 
 ### L103 は応答しない = 無給電
 
-Pro Micro から ARM SWD 380 組・CH32 RVSWD 420 組を総当たりして、どれも無応答。**CH32L103 の WCH-LinkE
-（`0E028F0692F1`）が挿さっておらず**、あの基板に電源が来ていない。給電してから再測する。
+Pro Micro から ARM SWD 380 組・CH32 RVSWD 420 組を総当たりして、どれも無応答。**CH32L103 基板に電源が来ていない**
+（利用者確認済み、2026-09-23。WCH-LinkE `0E028F0692F1` も挿さっていない）。したがってこの結果は配線の否定にはならない。
+
+給電後の再測は 1 コマンドで済む:
+
+```sh
+cd <scratchpad>
+./picoflash.sh 9-1 /dev/serial/by-id/usb-SparkFun_ProMicro_RP2350_9489DD2AE0953650-if00 \
+    $PWD/surveyp/PicoDebugPortSurvey.ino.uf2 2e8a:000f
+# console を読むと pull signature と RVSWD pair sweep が出る。確定したら
+# examples/Rp2350L103Probe の既定 pin を直して probe firmware に戻す。
+```
 
 ### 両機の GPIO は互いに繋がっていない
 
