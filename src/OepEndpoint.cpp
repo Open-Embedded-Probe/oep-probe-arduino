@@ -123,6 +123,11 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   }
   if (result.length > capacity) result = failed(0);
   sendResult(header.correlation, result);
+  // Idle is measured from when the last request finished, not from when it arrived. A
+  // request that runs longer than the idle window - a whole-flash CRC over a slow link takes
+  // seconds - otherwise came back to find its own session abandoned, the target detached and
+  // the next request refused (2026-09-23, CH32L103 behind the RP2350 probe).
+  last_request_millis_ = millis();
 }
 
 Result Endpoint::handleCore(uint8_t operation, const uint8_t *payload, size_t length,
