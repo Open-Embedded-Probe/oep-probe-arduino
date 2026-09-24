@@ -21,7 +21,8 @@
 // responses lost bytes (2026-09-22, 2026-09-24). One 512-byte frame in flight keeps the outstanding data small.
 static uint8_t rxBuffer[1024];
 static uint8_t txBuffer[1024];
-static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 512, 1});
+static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 512, 1},
+                                  oep::v1::Endpoint::Framing::kCobsCrc);   // UART: COBS + CRC-16
 // Reserved: GPIO16 (SWIO), GPIO1/3 (UART0 transport), GPIO6-11 (SPI flash), GPIO0/2/12/15 (boot straps; 2 is the LED).
 static constexpr uint64_t kReserved = (1ull << 16) | (1ull << 1) | (1ull << 3) | (0x3full << 6) |
                                       (1ull << 0) | (1ull << 2) | (1ull << 12) | (1ull << 15);
