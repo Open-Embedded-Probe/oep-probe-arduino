@@ -43,10 +43,12 @@ inline void platformGpio(int pin, uint8_t mode) {
     case kGpioInputPullUp: pinMode(pin, INPUT_PULLUP); break;
     case kGpioInputPullDown: pinMode(pin, INPUT_PULLDOWN); break;
     case kGpioInputPullUpDown: pinMode(pin, INPUT); gpio_set_pulls(pin, true, true); break;
-    case kGpioOutputLow: pinMode(pin, OUTPUT); digitalWrite(pin, LOW); break;
-    case kGpioOutputHigh: pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); break;
+    // The level goes into the output latch before the output is enabled: the other order drives whatever the
+    // latch held last, which on a reset line can be a brief high.
+    case kGpioOutputLow: digitalWrite(pin, LOW); pinMode(pin, OUTPUT); break;
+    case kGpioOutputHigh: digitalWrite(pin, HIGH); pinMode(pin, OUTPUT); break;
     // No open-drain output on the RP2 pad: release as an input, drive the low.
-    case kGpioOpenDrainLow: pinMode(pin, OUTPUT); digitalWrite(pin, LOW); break;
+    case kGpioOpenDrainLow: digitalWrite(pin, LOW); pinMode(pin, OUTPUT); break;
     case kGpioOpenDrainRelease: pinMode(pin, INPUT); break;
     default: break;
   }

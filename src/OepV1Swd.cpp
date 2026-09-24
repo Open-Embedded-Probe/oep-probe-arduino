@@ -33,6 +33,13 @@ size_t describePins(const SwdPort &port, uint8_t *out, size_t capacity) {
 
 size_t WireSwd::describe(uint8_t *out, size_t capacity) { return describePins(port_, out, capacity); }
 
+bool WireSwd::xferDpidr(uint32_t &dpidr) {
+  uint32_t id = 0;
+  if (swd::transfer(port_.io, false, true, 0x0, id) != swd::kOk || id == 0 || id == 0xffffffffu) return false;
+  dpidr = id;
+  return true;
+}
+
 // Wake the port and read DPIDR: the legacy JTAG-to-SWD select first, then the dormant wake (an SWD v2 port with
 // dormant support - the RP2350's - only answers the latter). A multidrop port needs TARGETSEL after each line reset.
 bool WireSwd::wake(const uint32_t *targetsel, uint32_t &dpidr, bool &dormant) {
@@ -60,8 +67,13 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       uint32_t dpidr = 0;
       bool dormant = false;
       out[0] = 0;
-      const bool found = wake(nullptr, dpidr, dormant);
-      if (!port_.connected) port_.io.releaseBoth();
+      bool found;
+      if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state
+        found = xferDpidr(dpidr);
+      } else {
+        found = wake(nullptr, dpidr, dormant);
+        port_.io.releaseBoth();
+      }
       if (!found) return completed(1);
       out[0] = 1;
       out[1] = kKindArmAdi;

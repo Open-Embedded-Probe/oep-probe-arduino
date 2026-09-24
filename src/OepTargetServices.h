@@ -1,43 +1,12 @@
-// target.control / target.memory / target.flash / target.console (owner 0, ids 0x10..0x13)
-// over Ch32Dm.
-// Failure is reported through outcomes and CRC/read-back, never through DMI parity alone.
+// target.console (owner 0, id 0x13) over Ch32Dm: the target's console through the debug module's data
+// registers. The v1 oep.target.console stream (OepV1Console) drives it; the v0 target.control / memory / flash
+// services that lived here are gone - v1 does those from the host through oep.target.riscv-dm.
 #pragma once
 
 #include "OepCh32Dm.h"
 #include "OepService.h"
 
 namespace oep {
-
-uint32_t crc32Ieee(uint32_t crc, const uint8_t *data, size_t length);
-
-class TargetControl final : public Service {
- public:
-  // reset_pin: probe GPIO wired to the target's NRST (open-drain low pulse for reset mode 3), -1 = none.
-  TargetControl(Ch32Dm &dm, DmiPhy &phy, int reset_pin = -1) : dm_(dm), phy_(phy), reset_pin_(reset_pin) {}
-  uint16_t owner() const override { return OEP_V0_DEF_TARGET_CONTROL_OWNER; }
-  uint16_t id() const override { return OEP_V0_DEF_TARGET_CONTROL_ID; }
-  uint8_t revision() const override { return OEP_V0_DEF_TARGET_CONTROL_REVISION; }
-  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  size_t describe(uint8_t first, uint8_t *out, size_t capacity) override;
-  void abandon() override;
-
- private:
-  Ch32Dm &dm_;
-  DmiPhy &phy_;
-  int reset_pin_;
-};
-
-class TargetMemory final : public Service {
- public:
-  explicit TargetMemory(Ch32Dm &dm) : dm_(dm) {}
-  uint16_t owner() const override { return OEP_V0_DEF_TARGET_MEMORY_OWNER; }
-  uint16_t id() const override { return OEP_V0_DEF_TARGET_MEMORY_ID; }
-  uint8_t revision() const override { return OEP_V0_DEF_TARGET_MEMORY_REVISION; }
-  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-
- private:
-  Ch32Dm &dm_;
-};
 
 // A console the target writes through the debug module's own data registers - no UART, no
 // pin, no wiring, and the hart is never halted for it. The target blocks until the probe
@@ -97,20 +66,6 @@ class TargetConsole final : public Service {
   uint8_t seq_bad_run_ = 0;             // consecutive invalid words
   uint8_t seq_syn_drops_ = 0;           // test hook OEP_CONSOLE_FAULT_SYN
   uint32_t seq_resyncs_ = 0;
-};
-
-class TargetFlash final : public Service {
- public:
-  explicit TargetFlash(Ch32Dm &dm) : dm_(dm) {}
-  uint16_t owner() const override { return OEP_V0_DEF_TARGET_FLASH_OWNER; }
-  uint16_t id() const override { return OEP_V0_DEF_TARGET_FLASH_ID; }
-  uint8_t revision() const override { return OEP_V0_DEF_TARGET_FLASH_REVISION; }
-  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-
- private:
-  Ch32Dm &dm_;
-  uint32_t page_[64];  // read-back buffer for one 256-byte page
-  bool inRange(uint32_t address, uint32_t bytes) const;
 };
 
 }  // namespace oep

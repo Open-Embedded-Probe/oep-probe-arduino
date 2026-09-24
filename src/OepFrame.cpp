@@ -93,18 +93,27 @@ size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length) {
   // Standard COBS: each block is its length + 1 followed by up to 254 non-zero bytes; a block shorter than
   // 254 bytes implies the zero that ended it (none after the last block). A full block (code 0xFF) implies
   // nothing, so the next block starts right after it - and if the data ends there, an empty block follows.
+  // Encoded into a small buffer and written in pieces: one Stream::write per byte takes the UART driver's lock
+  // every time.
+  uint8_t out[64];
+  size_t n = 0;
+  auto put = [&](uint8_t b) {
+    out[n++] = b;
+    if (n == sizeof out) { stream.write(out, n); n = 0; }
+  };
   size_t i = 0;
   for (;;) {
     size_t j = i;
     while (j < total && at(j) != 0 && j - i < 254) ++j;
     const uint8_t code = static_cast<uint8_t>(j - i + 1);
-    stream.write(code);
-    for (size_t k = i; k < j; ++k) stream.write(at(k));
+    put(code);
+    for (size_t k = i; k < j; ++k) put(at(k));
     if (code == 0xff) { i = j; continue; }
     if (j >= total) break;
     i = j + 1;   // skip the zero this block stood for
   }
-  stream.write(static_cast<uint8_t>(0));
+  put(0);
+  if (n) stream.write(out, n);
   return length;
 }
 

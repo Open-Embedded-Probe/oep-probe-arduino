@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "OepPlatform.h"
+
 namespace oep {
 namespace v1 {
 namespace {
@@ -41,7 +43,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (length != 0 || capacity < 10) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       uint32_t status = 0;
       out[0] = 0;
-      if (attachAndRead(port_.dm, status)) {
+      // On a live connection, look through it: re-attaching (and detaching on a miss) would pull the link out from
+      // under the host that holds it.
+      const bool found = port_.connected ? port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu
+                                         : attachAndRead(port_.dm, status);
+      if (found) {
         out[0] = 1;
         out[1] = kKindRiscvDm;
         putU16(out + 2, port_.swdio);
@@ -73,8 +79,8 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (channel < 0 || channel > 63 || !((port_.reset_allowed >> channel) & 1)) return rejected(OEP_V0_REJECT_UNAVAILABLE);
       uint32_t dpc = 0;
       // Open drain: pull low, then release to Hi-Z - never drive a reset line high.
-      auto hold = [](void *ctx) { const int ch = *static_cast<int *>(ctx); pinMode(ch, OUTPUT); digitalWrite(ch, LOW); };
-      auto release = [](void *ctx) { pinMode(*static_cast<int *>(ctx), INPUT); };
+      auto hold = [](void *ctx) { platformGpio(*static_cast<int *>(ctx), kGpioOpenDrainLow); };
+      auto release = [](void *ctx) { platformGpio(*static_cast<int *>(ctx), kGpioOpenDrainRelease); };
       const bool ok = port_.dm.attachUnderReset(hold, release, &channel, getU16(payload + 2), dpc);
       if (!ok) return failed();
       port_.connected = true;
