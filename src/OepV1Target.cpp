@@ -30,6 +30,12 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.pinGroup(port_.swdio, port_.swclk);       // fixed on this probe
   w.u8(kTagImplementation, 1);                // bit-bang
+  // Diagnostics (interface-specific tags): the link as it is now - the SWCLK rate the last speed search settled
+  // on, DMI retries (parity / no answer) and transactions since boot.
+  DmiPhy &phy = port_.dm.phy();
+  w.u32(0x40, phy.clockHz());
+  w.u32(0x41, phy.retries());
+  w.u32(0x42, phy.transactions());
   return w.ok() ? w.length() : 0;
 }
 
