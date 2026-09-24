@@ -32,6 +32,8 @@ class TargetConsoleStream final : public Interface {
   bool lockFree(uint8_t op) const override { return op == kOpRead || op == kOpMarks; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void poll();   // from loop()
+  // What one read may return: declare it within the probe's frame (1000 suits a 1 KiB frame).
+  void setMaxRead(uint16_t bytes) { max_read_ = bytes; }
 
  private:
   static constexpr size_t kCapacity = 8192, kMarks = 16;
@@ -40,6 +42,7 @@ class TargetConsoleStream final : public Interface {
   TargetConsole &driver_;
   uint16_t instance_;
   bool open_ = false;
+  uint16_t max_read_ = 1000;
   uint8_t buffer_[kCapacity];
   uint32_t total_ = 0;   // bytes ever collected = the position of the next byte
   uint32_t base_ = 0;    // nothing before this position is kept (clear)

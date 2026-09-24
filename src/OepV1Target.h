@@ -1,6 +1,7 @@
 // OEP v1 draft target interfaces over Ch32Dm (oep-spec docs/capability-name-hierarchy.ja.md):
 //
 //   oep.wire.rvswd       scan / attach / detach on the probe's fixed RVSWD pair; attach returns connection 1
+//   oep.wire.swio        the same on a single SWIO wire (CH32V003); one class, told which it is
 //   oep.target.riscv-dm  RISC-V Debug Module over DMI on that connection: a DMI step list plus the parts that
 //                        make host-driven flashing fast (block read/write through autoexec, run until halt,
 //                        halt / resume with the CH32 re-issue and bus bring-up, ndmreset)
@@ -18,7 +19,7 @@ namespace v1 {
 // What both interfaces share: the one debug connection of this wire.
 struct DebugPort {
   Ch32Dm &dm;
-  uint16_t swdio, swclk;   // probe channels, for scan results and the describe pin set
+  uint16_t swdio, swclk;   // probe channels, for scan results and the describe pin set (swclk 0xffff: one wire)
   bool connected = false;
   uint32_t resets = 0;     // resets issued through riscv-dm (the console marks them)
 };
@@ -26,8 +27,9 @@ struct DebugPort {
 class WireRvswd final : public Interface {
  public:
   enum : uint8_t { kOpScan = 0x01, kOpAttach = 0x02, kOpDetach = 0x03 };
-  WireRvswd(DebugPort &port, uint16_t instance) : port_(port), instance_(instance) {}
-  const char *name() const override { return "oep.wire.rvswd"; }
+  WireRvswd(DebugPort &port, uint16_t instance, const char *name = "oep.wire.rvswd")
+      : port_(port), instance_(instance), name_(name) {}
+  const char *name() const override { return name_; }
   uint16_t instance() const override { return instance_; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
@@ -35,6 +37,7 @@ class WireRvswd final : public Interface {
  private:
   DebugPort &port_;
   uint16_t instance_;
+  const char *name_;
 };
 
 class TargetRiscvDm final : public Interface {

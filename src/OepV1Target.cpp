@@ -14,10 +14,11 @@ enum : uint8_t { kStepOk = 0, kStepMalformed = 1, kStepAccess = 2, kStepPollGave
 
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  uint8_t group[7] = {1, 1, 0, 0, 2, 0, 0};   // pin set 1: role 1 SWDIO, role 2 SWCLK (fixed on this probe)
+  // pin set 1, fixed on this probe: role 1 SWDIO (or SWIO), role 2 SWCLK (two-wire only)
+  uint8_t group[7] = {1, 1, 0, 0, 2, 0, 0};
   putU16(group + 2, port_.swdio);
   putU16(group + 5, port_.swclk);
-  w.put(kTagChannelGroup, group, sizeof group);
+  w.put(kTagChannelGroup, group, port_.swclk == 0xffff ? 4 : sizeof group);
   w.u8(kTagImplementation, 1);                // bit-bang
   return w.ok() ? w.length() : 0;
 }
