@@ -143,11 +143,15 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
     case kOpStatus: return rejected(OEP_V0_REJECT_UNAVAILABLE);   // no long operations yet (they block)
     case kOpEnd:
     case kOpKeepalive:
-    case kOpCancel: {
+    case kOpCancel:
+    case kOpPlanApply:
+    case kOpPlanRelease: {
       const Result check = checkSession(has_session, session, out, capacity);
       if (check.resolution != OEP_V0_RESOLUTION_COMPLETED) return check;
       if (op == kOpEnd) locked_ = false;   // the last id stays: the same host may resume
       if (op == kOpCancel) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
+      if (op == kOpPlanRelease) planRelease();
       return completed();
     }
     default: return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
@@ -169,6 +173,63 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   putU32(out + 4, boot_id_);
   out[8] = resumed;
   return completed(9);
+}
+
+// The v0 plan, unchanged: role assignments as critical TLVs 0x90 = fn(u16) role(u8) channel(u16); every
+// interface checks its own roles without side effects, then all apply or none does. One plan at a time; it is
+// probe state and stays until plan_release (no session end or lapse releases it).
+Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  (void)out; (void)capacity;
+  if (plan_active_) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+  constexpr size_t kMaxRoles = 16;
+  RoleAssignment roles[kMaxRoles];
+  size_t count = 0, at = 0;
+  while (at + 2 <= length) {
+    const uint8_t tag = payload[at], len = payload[at + 1];
+    if (at + 2 + len > length) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+    const uint8_t *v = payload + at + 2;
+    if (tag == kTagRoleAssignment) {
+      if (len != 5 || count >= kMaxRoles) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      roles[count] = {getU16(v), v[2], getU16(v + 3)};
+      if (roles[count].function == 0 || roles[count].function > count_) return rejected(OEP_V0_REJECT_UNKNOWN_FUNCTION);
+      ++count;
+    } else if (tag & 0x80) {
+      return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);   // critical and unknown: refuse the whole plan
+    }
+    at += 2 + len;
+  }
+  if (!count || at != length) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  bool wants[kMaxInterfaces] = {};
+  for (size_t i = 0; i < count_; ++i) {
+    RoleAssignment mine[kMaxRoles];
+    size_t n = 0;
+    for (size_t r = 0; r < count; ++r) if (roles[r].function == i + 1) mine[n++] = roles[r];
+    if (!n) continue;
+    const uint8_t reason = interfaces_[i]->planCheck(mine, n);
+    if (reason) return rejected(reason);
+    wants[i] = true;
+  }
+  for (size_t i = 0; i < count_; ++i) {
+    if (!wants[i]) continue;
+    RoleAssignment mine[kMaxRoles];
+    size_t n = 0;
+    for (size_t r = 0; r < count; ++r) if (roles[r].function == i + 1) mine[n++] = roles[r];
+    if (!interfaces_[i]->planApply(mine, n)) {
+      for (size_t j = 0; j < i; ++j) if (planned_[j]) { interfaces_[j]->planRelease(); planned_[j] = false; }
+      return failed();
+    }
+    planned_[i] = true;
+  }
+  plan_active_ = true;
+  return completed();
+}
+
+void Endpoint::planRelease() {
+  for (size_t i = 0; i < count_; ++i) {
+    if (planned_[i]) interfaces_[i]->planRelease();
+    planned_[i] = false;
+  }
+  plan_active_ = false;
 }
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
