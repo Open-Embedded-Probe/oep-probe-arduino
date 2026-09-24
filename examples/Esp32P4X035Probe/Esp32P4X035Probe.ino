@@ -1,77 +1,60 @@
-// OEP v0 development probe on ESP32-P4 for the CH32X035 fixture.
+// OEP v1 draft probe on ESP32-P4 for the CH32X035 fixture (oep-spec docs/v1-core-wire-delta.ja.md).
 // Transport: USB-Serial/JTAG (HWCDC). Limits from E155: 1 KiB frames, 4 KiB window.
+//
+// v1 first cut, the minimum to program the target from the host: oep.core (the probe described in its
+// describe), oep.wire.rvswd (scan / attach / detach), oep.target.riscv-dm (DMI step lists, block
+// read/write, run until halt, halt / resume, ndmreset). The v0 fixtures and console come back as v1
+// interfaces once flashing works (decided 2026-09-24: v0 may go away until v1 exists).
 #include <OepCh32Dm.h>
-#include <OepEndpoint.h>
-#include <OepExpTargetPrimitives.h>
-#include <OepFixtureCapture.h>
-#include <OepFixtureServices.h>
-#include <OepP4I2cTarget.h>
-#include <OepP4SpiTarget.h>
-#include <OepProbeIdentity.h>
 #include <OepRvswdPhy.h>
-#include <OepTargetServices.h>
+#include <OepV1Endpoint.h>
+#include <OepV1Target.h>
 
 static uint8_t rxBuffer[1024];
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer,
-                              {1024, 4096, 8});
-// 'P4DV' generic P4 development probe; firmware 3.0.0. Reserved: GPIO2/54 (RVSWD), GPIO24/25 (USB-Serial/JTAG).
-static constexpr uint64_t kReserved = (1ull << 2) | (1ull << 24) | (1ull << 25) | (1ull << 54);
-static constexpr uint64_t kAllPins = (1ull << 55) - 1;
-static oep::ProbeIdentity identity({0x50344456u, 0x00030000u, kReserved, kAllPins & ~kReserved});
-// Fixture channels = every P4 GPIO that is not reserved.
-static uint8_t fixturePins[55];
-static size_t fixturePinCount = 0;
+static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8});
 
 // Fixture wiring: P4 GPIO2 -> X035 PC18 (SWDIO), GPIO54 -> PC19 (SWCLK). CH32X035F8U6: 62 KiB, 256-byte pages.
 static oep::RvswdPhy phy;
 static oep::Ch32Dm dm(phy, {0x08000000u, 63488u, 256u, 256u});
-static oep::TargetControl targetControl(dm, phy);
-static oep::TargetMemory targetMemory(dm);
-static oep::TargetFlash targetFlash(dm);
-static oep::ExpTargetPrimitives expTarget(dm);   // experiment F3/F4: host-driven flashing
-// Console with no console wiring: the target writes into the debug module's data
-// registers and the probe collects them from loop() (ArduinoCore-CH32's SerialSDI).
-static oep::TargetConsole targetConsole(dm, phy);
-static oep::PinTable *pinTable = nullptr;
-static oep::FixtureGpio *fixtureGpio = nullptr;
-static oep::FixtureUart *fixtureUart = nullptr;
-static oep::FixtureUart *fixtureUart2 = nullptr;  // second UART for DUT peripheral tests (X035 USART2 on GPIO48/49)
-static oep::FixtureCapture *fixtureCapture = nullptr;
-static oep::P4I2cTarget *p4I2cTarget = nullptr;  // vendor tool (owner 0x0100)
-static oep::P4SpiTarget *p4SpiTarget = nullptr;  // vendor tool (owner 0x0100), SPI2_HOST slave
+static oep::v1::DebugPort port{dm, 2, 54};
+static oep::v1::WireRvswd wire(port, 1);
+static oep::v1::TargetRiscvDm riscvDm(port, 1);
+
+// Reserved: GPIO2/54 (RVSWD), GPIO24/25 (USB-Serial/JTAG).
+static uint8_t probeTlv[160];
+
+static size_t describeProbe() {
+  oep::v1::TlvWriter w(probeTlv, sizeof probeTlv);
+  w.text(oep::v1::kCoreFirmware, "3.1.0-v1draft");
+  w.text(oep::v1::kCoreModel, "esp32-p4-devkit");
+  const uint64_t mac = ESP.getEfuseMac();   // the unit id: the probe says who it is on any transport
+  uint8_t id[6];
+  for (int i = 0; i < 6; ++i) id[i] = static_cast<uint8_t>(mac >> (8 * i));
+  w.put(oep::v1::kCoreUnitId, id, sizeof id);
+  w.u16(oep::v1::kCoreChannels, 55);
+  const uint64_t reserved = (1ull << 2) | (1ull << 24) | (1ull << 25) | (1ull << 54);
+  uint8_t bitmap[2 + 7] = {0, 0};
+  for (int i = 0; i < 7; ++i) bitmap[2 + i] = static_cast<uint8_t>(reserved >> (8 * i));
+  w.put(oep::v1::kCoreReserved, bitmap, sizeof bitmap);
+  w.text(oep::v1::kCoreProfile, "io.github.ch32-riscv-ug.p4-x035");
+  w.label(2, "SWDIO");
+  w.label(54, "SWCLK");
+  w.label(51, "LED");
+  return w.ok() ? w.length() : 0;
+}
 
 void setup() {
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
   phy.begin(2, 54);
-  for (uint8_t pin = 0; pin < 55; ++pin) if (!((kReserved >> pin) & 1)) fixturePins[fixturePinCount++] = pin;
-  pinTable = new oep::PinTable(fixturePins, fixturePinCount);
-  fixtureGpio = new oep::FixtureGpio(*pinTable);
-  fixtureUart = new oep::FixtureUart(*pinTable, Serial1, 2);
-  fixtureUart2 = new oep::FixtureUart(*pinTable, Serial2, 5);
-  p4I2cTarget = new oep::P4I2cTarget(*pinTable);
-  p4SpiTarget = new oep::P4SpiTarget(*pinTable);
-  fixtureCapture = new oep::FixtureCapture(*pinTable);
-  endpoint.addService(identity);
-  endpoint.addService(targetControl);
-  endpoint.addService(targetMemory);
-  endpoint.addService(targetFlash);
-  endpoint.addService(targetConsole);
-  endpoint.addService(*fixtureGpio);
-  endpoint.addService(*fixtureUart);
-  endpoint.addService(*fixtureUart2);
-  endpoint.addService(*p4I2cTarget);
-  endpoint.addService(*p4SpiTarget);
-  endpoint.addService(*fixtureCapture);
-  endpoint.addService(expTarget);
+  endpoint.setProbeDescription(probeTlv, describeProbe());
+  endpoint.setBootId(esp_random());
+  endpoint.add(wire);
+  endpoint.add(riscvDm);
 }
 
 void loop() {
   endpoint.poll();
-  targetConsole.poll();
-  p4I2cTarget->service();
-  p4SpiTarget->service();
-  if (endpoint.idleFor(1500)) endpoint.abandonAll();
 }
