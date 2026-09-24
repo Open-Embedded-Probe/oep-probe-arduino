@@ -4,10 +4,13 @@
 // v1 draft: oep.core (the probe described in its describe), oep.wire.rvswd (scan / attach / detach),
 // oep.target.riscv-dm (DMI step lists, block read/write, run until halt, halt / resume, ndmreset),
 // oep.target.console (a position-addressed stream of the target's DM console), and the fixtures
-// oep.fixture.gpio / uart (x2) / capture - the v0 services under v1 names, their operations unchanged.
+// oep.fixture.gpio / uart (x2) / capture - the v0 services under v1 names, their operations unchanged -
+// and the ESP-IDF I2C / SPI targets under io.github.ch32-riscv-ug.esp32.*.
 #include <OepCh32Dm.h>
 #include <OepFixtureCapture.h>
 #include <OepFixtureServices.h>
+#include <OepP4I2cTarget.h>
+#include <OepP4SpiTarget.h>
 #include <OepRvswdPhy.h>
 #include <OepTargetServices.h>
 #include <OepV1Console.h>
@@ -37,6 +40,14 @@ static oep::FixtureGpio *gpio = nullptr;
 static oep::FixtureUart *uart1 = nullptr, *uart2 = nullptr;   // uart2: X035 USART2 tests (GPIO48/49)
 static oep::FixtureCapture *capture = nullptr;
 static oep::v1::V0Fixture *gpioV1 = nullptr, *uart1V1 = nullptr, *uart2V1 = nullptr, *captureV1 = nullptr;
+// ESP-IDF I2C / SPI slave tools under the project's own names (capability-name-hierarchy.ja.md, decision 4):
+// both implementations so far are the ESP-IDF slave drivers, whose quirks stay out of any oep. name.
+static oep::P4I2cTarget *i2c = nullptr;
+static oep::P4SpiTarget *spi = nullptr;
+static oep::v1::V0Fixture *i2cV1 = nullptr, *spiV1 = nullptr;
+static const uint8_t kI2cRoles[] = {1, 2};                    // SDA, SCL
+static const uint8_t kSpiRoles[] = {1, 2, 3, 4};              // SCK, MOSI, MISO, CS
+static const uint8_t kPeripheral[] = {oep::v1::kTagImplementation, 1, 2};
 static const uint8_t kGpioRoles[] = {1};                      // line
 static const uint8_t kUartRoles[] = {1, 2};                   // RX, TX
 static const uint8_t kCaptureRoles[] = {0, 1, 2, 3, 4, 5, 6, 7};   // line k
@@ -89,9 +100,20 @@ void setup() {
   endpoint.add(*uart1V1);
   endpoint.add(*uart2V1);
   endpoint.add(*captureV1);
+  i2c = new oep::P4I2cTarget(*pins);
+  spi = new oep::P4SpiTarget(*pins);
+  // lock-free: i2c status (5) and read_hw (0x10), spi status (4)
+  i2cV1 = new oep::v1::V0Fixture(*i2c, "io.github.ch32-riscv-ug.esp32.i2c-target", 6, *pins, kI2cRoles, 2,
+                                 (1u << 5) | (1u << 16), kPeripheral, sizeof kPeripheral);
+  spiV1 = new oep::v1::V0Fixture(*spi, "io.github.ch32-riscv-ug.esp32.spi-target", 7, *pins, kSpiRoles, 4,
+                                 1u << 4, kPeripheral, sizeof kPeripheral);
+  endpoint.add(*i2cV1);
+  endpoint.add(*spiV1);
 }
 
 void loop() {
   endpoint.poll();
   console.poll();
+  i2c->service();
+  spi->service();
 }
