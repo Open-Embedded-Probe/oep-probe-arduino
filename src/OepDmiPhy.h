@@ -25,6 +25,13 @@ class DmiPhy {
   // DMI link when its state changes, so a caller whose write did not take can try again
   // from a known bus state. Backends with nothing to do leave this alone.
   virtual void reinit() {}
+  // The speed attach() picks holds only for the target's clock at that moment. A reset drops a CH32 back to its
+  // default clock - slower than a sketch that raised it - and a link tuned to the sketch then garbles writes: the
+  // haltreq held through a reset was lost that way, and the hart ran into its image (2026-09-24, CH32X035). So a
+  // reset runs at the slowest period, and once the hart has stopped the link is tuned again without a wake (which
+  // would reset the target). Backends whose speed does not depend on the target leave these alone.
+  virtual void useSafeSpeed() {}
+  virtual bool retune() { return true; }
   // Measured at attach: wall time of one DMI read and the clock rate it implies (0 before attach).
   virtual uint32_t dmiNs() const = 0;
   virtual uint32_t clockHz() const = 0;

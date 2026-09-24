@@ -83,6 +83,8 @@ void setup() {
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
   endpoint.add(riscvDm);
+  // attach-under-reset: no NRST is wired on this jig, so no default; the host may name any fixture channel.
+  port.reset_allowed = ((1ull << 55) - 1) & ~kReserved;
   endpoint.add(console);
   for (uint8_t pin = 0; pin < 55; ++pin) if (!((kReserved >> pin) & 1)) fixturePins[fixturePinCount++] = pin;
   pins = new oep::PinTable(fixturePins, fixturePinCount);

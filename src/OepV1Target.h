@@ -22,11 +22,16 @@ struct DebugPort {
   uint16_t swdio, swclk;   // probe channels, for scan results and the describe pin set (swclk 0xffff: one wire)
   bool connected = false;
   uint32_t resets = 0;     // resets issued through riscv-dm (the console marks them)
+  // The target's reset line for attach-under-reset: the host names the channel (it can find it by pulsing
+  // candidates and watching havereset); a probe with fixed wiring may offer a default. Only channels in
+  // reset_allowed may be pulled (the same idea as the scan allow-list: never drive a pin the jig did not clear).
+  int16_t reset_default = -1;
+  uint64_t reset_allowed = 0;
 };
 
 class WireRvswd final : public Interface {
  public:
-  enum : uint8_t { kOpScan = 0x01, kOpAttach = 0x02, kOpDetach = 0x03 };
+  enum : uint8_t { kOpScan = 0x01, kOpAttach = 0x02, kOpDetach = 0x03, kOpAttachUnderReset = 0x04 };
   WireRvswd(DebugPort &port, uint16_t instance, const char *name = "oep.wire.rvswd")
       : port_(port), instance_(instance), name_(name) {}
   const char *name() const override { return name_; }
@@ -44,9 +49,10 @@ class TargetRiscvDm final : public Interface {
  public:
   enum : uint8_t {
     kOpDmi = 0x01, kOpHalt = 0x02, kOpResume = 0x03, kOpReset = 0x04,
-    kOpReadBlock = 0x05, kOpWriteBlock = 0x06, kOpRun = 0x07,
+    kOpReadBlock = 0x05, kOpWriteBlock = 0x06, kOpRun = 0x07, kOpStep = 0x08,
   };
-  enum : uint8_t { kStepWrite = 0x01, kStepRead = 0x02, kStepPoll = 0x03 };
+  enum : uint8_t { kStepWrite = 0x01, kStepRead = 0x02, kStepPoll = 0x03, kStepDelay = 0x04, kStepPollTime = 0x05 };
+  enum : uint8_t { kResetRun = 0, kResetRunConfirm = 1, kResetHalt = 2 };
   TargetRiscvDm(DebugPort &port, uint16_t instance) : port_(port), instance_(instance) {}
   const char *name() const override { return "oep.target.riscv-dm"; }
   uint16_t instance() const override { return instance_; }

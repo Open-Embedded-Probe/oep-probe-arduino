@@ -72,6 +72,20 @@ class Ch32Dm {
   struct RunReport { bool stopped; uint32_t dpc; uint32_t a0; uint32_t elapsed_us; };
   bool runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
                     uint32_t timeout_us, RunReport &report);
+  // Parts from the ch32rv review of the v1 draft (2026-09-24):
+  // resetHalt: system reset with haltreq held through it, so the hart stops before its first instruction
+  // (semihosting, gdb "monitor reset halt", flashing over a running watchdog). dpc = where it stopped.
+  bool resetHalt(uint32_t &dpc);
+  // step: one instruction with dcsr.step, resumed exactly once (a re-issued resume would step twice), the
+  // privilege level left as it is; moved = dpc changed (the CH32L103 raises no allresumeack to go by).
+  bool step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved);
+  // Acknowledge a pending havereset: until then a V00x DM keeps DMSTATUS's halt / run bits frozen at their
+  // reset values. true = one was pending.
+  bool ackHaveReset();
+  // Attach while the target is held in reset, then release it and stop the hart at once: the way back from
+  // firmware that turns the debug pins into GPIOs or sleeps straight away. `release` lets go of the reset line;
+  // the halt requests start before it and run through it.
+  bool attachUnderReset(void (*hold)(void *), void (*release)(void *), void *ctx, uint32_t hold_ms, uint32_t &dpc);
   // Flash (hart halted, page aligned).
   bool flashUnlock();
   bool flashErasePage(uint32_t page);   // V2 profile: no-op (the loader erases inside flashProgramPage)
@@ -91,6 +105,7 @@ class Ch32Dm {
   uint8_t reset_diag_ = 0;
   bool waitAbstract();
   bool loadRegisters(uint32_t &data0_address);
+  ResetReport resetSequence(bool confirm);   // reset() without the final retune
   bool resetOnce();                 // one ndmreset state machine, ends released; true = DM said running
   bool confirmExecution(uint32_t &pc, bool &halt_failed);  // attach, halt, sample dpc, resume, release
   bool waitFlash();

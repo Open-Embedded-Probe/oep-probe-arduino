@@ -1,10 +1,22 @@
 #include "OepV1Target.h"
 
+#include <Arduino.h>
+
 namespace oep {
 namespace v1 {
 namespace {
 
 constexpr uint8_t kDmStatus = 0x11;
+
+// A cold CH32 ignores the first wake now and then (the CH32L103 answered on the fifth, 2026-09-23), and one that
+// sat idle past its link timeout has dropped the link: bring the bus up afresh and try again before saying no.
+bool attachAndRead(Ch32Dm &dm, uint32_t &status) {
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    if (dm.attach() && dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return true;
+    dm.detach();
+  }
+  return false;
+}
 constexpr uint8_t kKindRiscvDm = 0x01;
 enum : uint8_t { kStepOk = 0, kStepMalformed = 1, kStepAccess = 2, kStepPollGaveUp = 3 };
 
@@ -29,7 +41,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (length != 0 || capacity < 10) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       uint32_t status = 0;
       out[0] = 0;
-      if (port_.dm.attach() && port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) {
+      if (attachAndRead(port_.dm, status)) {
         out[0] = 1;
         out[1] = kKindRiscvDm;
         putU16(out + 2, port_.swdio);
@@ -39,14 +51,36 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       }
       return completed(1);
     }
-    case kOpAttach: {   // method(u8): 0 leave it running, 1 halt  ->  connection(u8), DMSTATUS(u32)
-      if (length != 1 || payload[0] > 1 || capacity < 5) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+    case kOpAttach: {   // method(u8): 0 leave it running, 1 halt  ->  connection(u8), DMSTATUS(u32), flags(u8)
+      if (length != 1 || payload[0] > 1 || capacity < 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       uint32_t status = 0;
-      if (!port_.dm.attach() || !port_.dm.readDmi(kDmStatus, status)) return failed();
+      if (!attachAndRead(port_.dm, status)) return failed();
+      // A pending havereset freezes a V00x's DMSTATUS halt / run bits at their reset values (ch32rv 0.8.0):
+      // acknowledge it first so the DMSTATUS returned is current, and say that it was there (flags bit0).
+      const bool had_reset = port_.dm.ackHaveReset();
+      if (!port_.dm.readDmi(kDmStatus, status)) return failed();
       if (payload[0] == 1 && !port_.dm.halt()) return failed();
       port_.connected = true;
       out[0] = 1;
       putU32(out + 1, status);
+      out[5] = had_reset ? 1 : 0;
+      return completed(6);
+    }
+    case kOpAttachUnderReset: {   // channel(u16, 0xffff = the probe's default) hold_ms(u16)  ->  connection(u8), dpc(u32)
+      if (length != 4 || capacity < 5) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      int channel = getU16(payload);
+      if (channel == 0xffff) channel = port_.reset_default;
+      if (channel < 0 || channel > 63 || !((port_.reset_allowed >> channel) & 1)) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      uint32_t dpc = 0;
+      // Open drain: pull low, then release to Hi-Z - never drive a reset line high.
+      auto hold = [](void *ctx) { const int ch = *static_cast<int *>(ctx); pinMode(ch, OUTPUT); digitalWrite(ch, LOW); };
+      auto release = [](void *ctx) { pinMode(*static_cast<int *>(ctx), INPUT); };
+      const bool ok = port_.dm.attachUnderReset(hold, release, &channel, getU16(payload + 2), dpc);
+      if (!ok) return failed();
+      port_.connected = true;
+      ++port_.resets;
+      out[0] = 1;
+      putU32(out + 1, dpc);
       return completed(5);
     }
     case kOpDetach:
@@ -80,15 +114,35 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
     case kOpDmi: return dmi(p, n, out, capacity);
     case kOpHalt: return dm.halt() ? completed() : failed();
     case kOpResume: return dm.resume() ? completed() : failed();
-    case kOpReset: {   // confirm(u8)  ->  flags(u8) attempts(u8) pc(u32), as the v0 reset report
-      if (n != 1 || capacity < 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      const Ch32Dm::ResetReport r = dm.reset(p[0] == 1);
+    case kOpReset: {   // mode(u8): 0 run, 1 run + confirm, 2 halt  ->  flags(u8) attempts(u8) pc(u32)
+      if (n != 1 || p[0] > kResetHalt || capacity < 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (p[0] == kResetHalt) {   // stopped before the first instruction; flags bit0 = halted, pc = dpc
+        uint32_t dpc = 0;
+        const bool ok = dm.resetHalt(dpc);
+        ++port_.resets;
+        out[0] = ok ? 1 : 0;
+        out[1] = 1;
+        putU32(out + 2, dpc);
+        return ok ? completed(6) : failed(6);
+      }
+      const Ch32Dm::ResetReport r = dm.reset(p[0] == kResetRunConfirm);
       ++port_.resets;
       out[0] = r.flags;
       out[1] = r.attempts;
       putU32(out + 2, r.pc);
-      const bool ok = p[0] == 1 ? (r.flags & 2) != 0 : (r.flags & 1) != 0;
+      const bool ok = p[0] == kResetRunConfirm ? (r.flags & 2) != 0 : (r.flags & 1) != 0;
       return ok ? completed(6) : failed(6);
+    }
+    case kOpStep: {   // -> moved(u8) dpc_before(u32) dpc_after(u32); one resume only, the privilege level kept
+      if (n != 0 || capacity < 9) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (!dm.halted()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      uint32_t before = 0, after = 0;
+      bool moved = false;
+      const bool ok = dm.step(before, after, moved);
+      out[0] = moved;
+      putU32(out + 1, before);
+      putU32(out + 5, after);
+      return ok ? completed(9) : failed(9);
     }
     case kOpReadBlock: {   // address(u32) count(u16)  ->  words
       if (n != 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
@@ -136,6 +190,9 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
 //   0x01 write  address(u8) value(u32)
 //   0x02 read   address(u8)                                 (the value is appended to the result)
 //   0x03 poll   address(u8) mask(u32) value(u32) max(u16)   ((read & mask) == value within max reads)
+//   0x04 delay  us(u32)
+//   0x05 poll   address(u8) mask(u32) value(u32) max_us(u32)   (the same, bounded by time: means the same on a
+//                                                               slow bit-banged link and a fast one)
 // result: done(u16) status(u8: 0 ok, 1 malformed, 2 access, 3 poll gave up) reads
 Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity) {
   if (capacity < 3) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
@@ -167,6 +224,20 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
       }
       if (status == kStepOk && !met) status = kStepPollGaveUp;
       at += 12;
+    } else if (kind == kStepDelay && left >= 4) {
+      delayMicroseconds(getU32(s));
+      at += 5;
+    } else if (kind == kStepPollTime && left >= 13) {
+      const uint32_t mask = getU32(s + 1), want = getU32(s + 5), max_us = getU32(s + 9);
+      bool met = false;
+      const uint32_t started = micros();
+      do {
+        uint32_t v = 0;
+        if (!dm.readDmi(s[0], v)) status = kStepAccess;
+        else met = (v & mask) == want;
+      } while (!met && status == kStepOk && micros() - started < max_us);
+      if (status == kStepOk && !met) status = kStepPollGaveUp;
+      at += 14;
     } else {
       status = kStepMalformed;
     }
