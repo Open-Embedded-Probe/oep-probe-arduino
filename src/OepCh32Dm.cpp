@@ -460,15 +460,29 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   if (!writeRegister(0x07b1, pc)) return false;
   loader_resident_ = false;   // the host's code may have overwritten the V2 loader's RAM
   phy_.write(kAbstractAuto, 0);
-  phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
+  // The CH32L103 needs what halt()/resume() learned (2026-09-23): one resumereq does not always take and it never
+  // raises allresumeack, and a change of hart state drops its DMI link, so a failed read is followed by a bus
+  // bring-up. A stop with dpc still at `pc` means the code never ran - ask again (the host's code ends in an
+  // ebreak somewhere else, so a real stop never sits at its first instruction). Measured on the L103 over flying
+  // leads, 2026-09-24: 2 of 248 runs stopped at pc without running, 1 lost the link while polling.
   const uint32_t started = micros();
-  while (micros() - started < timeout_us) {
-    uint32_t status = 0;
-    if (phy_.read(kDmStatus, status) && (status & (1u << 9))) { report.stopped = true; break; }
+  for (int attempt = 0; attempt < 4 && !report.stopped; ++attempt) {
+    phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
+    bool halted = false;
+    while (micros() - started < timeout_us) {
+      uint32_t status = 0;
+      if (!phy_.read(kDmStatus, status)) { phy_.reinit(); continue; }
+      if (status & (1u << 9)) { halted = true; break; }
+    }
+    phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
+    phy_.write(kAbstractCs, 0x700);
+    if (!halted) break;                   // the timeout: forced halt below
+    phy_.reinit();                        // the stop changed the hart's state
+    uint32_t dpc = 0;
+    if (readRegister(0x07b1, dpc) && dpc == pc) continue;   // never ran: resume again
+    report.stopped = true;
   }
   report.elapsed_us = micros() - started;
-  phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
-  phy_.write(kAbstractCs, 0x700);
   if (!report.stopped) {
     halted_ = false;
     if (!halt()) return false;
