@@ -14,6 +14,7 @@ class Ch32Dm {
  public:
   explicit Ch32Dm(DmiPhy &phy) : phy_(phy) {}
   bool attached() const { return phy_.attached(); }
+  DmiPhy &phy() { return phy_; }
   bool halted() const { return halted_; }
   bool attach();
   bool halt();            // attach + haltreq, waits for allhalted
