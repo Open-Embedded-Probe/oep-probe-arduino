@@ -1,12 +1,14 @@
 // OEP v1 draft probe on ESP32-P4 for the CH32X035 fixture (oep-spec docs/v1-core-wire-delta.ja.md).
 // Transport: USB-Serial/JTAG (HWCDC). Limits from E155: 1 KiB frames, 4 KiB window.
 //
-// v1 first cut, the minimum to program the target from the host: oep.core (the probe described in its
-// describe), oep.wire.rvswd (scan / attach / detach), oep.target.riscv-dm (DMI step lists, block
-// read/write, run until halt, halt / resume, ndmreset). The v0 fixtures and console come back as v1
-// interfaces once flashing works (decided 2026-09-24: v0 may go away until v1 exists).
+// v1 draft: oep.core (the probe described in its describe), oep.wire.rvswd (scan / attach / detach),
+// oep.target.riscv-dm (DMI step lists, block read/write, run until halt, halt / resume, ndmreset),
+// oep.target.console (a position-addressed stream of the target's DM console). The v0 fixtures come back
+// as v1 interfaces next (decided 2026-09-24: v0 may go away until v1 exists).
 #include <OepCh32Dm.h>
 #include <OepRvswdPhy.h>
+#include <OepTargetServices.h>
+#include <OepV1Console.h>
 #include <OepV1Endpoint.h>
 #include <OepV1Target.h>
 
@@ -20,6 +22,8 @@ static oep::Ch32Dm dm(phy, {0x08000000u, 63488u, 256u, 256u});
 static oep::v1::DebugPort port{dm, 2, 54};
 static oep::v1::WireRvswd wire(port, 1);
 static oep::v1::TargetRiscvDm riscvDm(port, 1);
+static oep::TargetConsole consoleDriver(dm, phy);   // the DM console framings (SDI / DMDATA / dmseq)
+static oep::v1::TargetConsoleStream console(port, consoleDriver, 1);
 
 // Reserved: GPIO2/54 (RVSWD), GPIO24/25 (USB-Serial/JTAG).
 static uint8_t probeTlv[160];
@@ -53,8 +57,10 @@ void setup() {
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
   endpoint.add(riscvDm);
+  endpoint.add(console);
 }
 
 void loop() {
   endpoint.poll();
+  console.poll();
 }

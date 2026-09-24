@@ -20,6 +20,7 @@ struct DebugPort {
   Ch32Dm &dm;
   uint16_t swdio, swclk;   // probe channels, for scan results and the describe pin set
   bool connected = false;
+  uint32_t resets = 0;     // resets issued through riscv-dm (the console marks them)
 };
 
 class WireRvswd final : public Interface {
