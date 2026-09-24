@@ -10,7 +10,7 @@ size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagFeatures, 0b0111);            // mechanisms SDI, DMDATA, dmseq (on the debug connection)
   w.u32(0x40, kCapacity);                 // buffer_bytes
   w.u8(0x41, kMarks);                     // mark_capacity
-  w.u16(0x43, 1000);                      // max_read
+  w.u16(0x43, max_read_);                 // max_read
   return w.ok() ? w.length() : 0;
 }
 
@@ -98,7 +98,8 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
       if (static_cast<int32_t>(start - total_) > 0) start = total_;
       uint32_t count = total_ - start;
       uint32_t room = capacity - 5;
-      const uint16_t max = getU16(p + 5);
+      uint16_t max = getU16(p + 5);
+      if (max > max_read_) max = max_read_;
       if (room > max) room = max;
       if (count > room) { count = room; flags |= 1; }
       putU32(out, start);
