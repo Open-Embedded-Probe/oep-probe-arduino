@@ -74,6 +74,9 @@ class Ch32Dm {
   bool host_raw_ = false;
   uint8_t cmderr_ = 0;
   bool waitAbstract();
+  void relink();                          // PHY re-sync + abstract-command block back to a known state
+  void retune();                          // PHY speed search + the same
+  void settleHalted(bool ack_reset);      // after the hart stopped: ack a pending reset, relink, halted_
   bool loadRegisters(uint32_t &data0_address);
   ResetReport resetSequence(bool confirm);   // reset() without the final retune
   bool resetOnce();                 // one ndmreset state machine, ends released; true = DM said running

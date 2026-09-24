@@ -1,54 +1,47 @@
-// target.console (owner 0, id 0x13) over Ch32Dm: the target's console through the debug module's data
-// registers. The v1 oep.target.console stream (OepV1Console) drives it; the v0 target.control / memory / flash
-// services that lived here are gone - v1 does those from the host through oep.target.riscv-dm.
+// The target's console through the debug module's data registers (SerialSDI, SerialDMDATA, dmseq), over Ch32Dm.
+// The v1 oep.target.console stream (OepV1Console) drives it and owns the only buffer: every byte goes straight into
+// the stream's sink.
 #pragma once
 
 #include "OepCh32Dm.h"
-#include "OepService.h"
 
 namespace oep {
 
 // A console the target writes through the debug module's own data registers - no UART, no
 // pin, no wiring, and the hart is never halted for it. The target blocks until the probe
 // zeroes DATA0, so nothing is lost as long as somebody is collecting; bytes that arrive
-// with no room left are counted instead.
-class TargetConsole final : public Service {
+// with no room left in the stream overwrite its oldest (the stream reports that as a gap).
+class DmConsole {
  public:
-  TargetConsole(Ch32Dm &dm, DmiPhy &phy) : dm_(dm), phy_(phy) {}
-  uint16_t owner() const override { return OEP_V0_DEF_TARGET_CONSOLE_OWNER; }
-  uint16_t id() const override { return OEP_V0_DEF_TARGET_CONSOLE_ID; }
-  uint8_t revision() const override { return OEP_V0_DEF_TARGET_CONSOLE_REVISION; }
-  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  void abandon() override;
+  using Sink = void (*)(void *ctx, uint8_t byte);
+  DmConsole(Ch32Dm &dm, DmiPhy &phy) : dm_(dm), phy_(phy) {}
+  // Where the bytes from the target go (the v1 stream's buffer). Set before start().
+  void setSink(Sink sink, void *ctx) { sink_ = sink; sink_ctx_ = ctx; }
   // Call from loop(). Collects at most one frame, and only while the target is attached
   // and running: those two registers are where abstract commands put their operands.
   void poll();
-  // For the v1 console stream (OepV1Console), which keeps its own position-addressed buffer:
-  // start a fresh session in `framing`, stop, take what has arrived, queue bytes for the target.
+  // Start a fresh session in `framing` (whatever an earlier one left in the mailbox is thrown away), stop, queue
+  // bytes for the target.
   bool start(uint8_t framing);
   void stop() { enabled_ = false; }
   bool enabled() const { return enabled_; }
-  size_t take(uint8_t *out, size_t maximum);
   size_t queue(const uint8_t *data, size_t length);
-  uint32_t dropped() const { return dropped_; }
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
   uint32_t resyncs() const { return seq_resyncs_; }
 
  private:
-  static constexpr size_t kCapacity = 2048;
   Ch32Dm &dm_;
   DmiPhy &phy_;
   static constexpr size_t kTxCapacity = 256;
   bool enabled_ = false;
   uint8_t framing_ = 0;                 // 0 = SerialSDI (one way), 1 = SerialDMDATA, 2 = dmseq (two way)
   bool saw_empty_ = false;              // the target's empty frame was already there last poll
-  uint16_t head_ = 0, tail_ = 0;
+  bool discarding_ = false;             // start(): what arrives now is an earlier session's
+  Sink sink_ = nullptr;
+  void *sink_ctx_ = nullptr;
   uint16_t tx_head_ = 0, tx_tail_ = 0;
-  uint32_t dropped_ = 0;
   uint32_t last_attach_ms_ = 0;
-  uint8_t buffer_[kCapacity];
   uint8_t tx_[kTxCapacity];
-  uint16_t buffered() const { return static_cast<uint16_t>((head_ - tail_ + kCapacity) % kCapacity); }
   uint16_t pending() const { return static_cast<uint16_t>((tx_head_ - tx_tail_ + kTxCapacity) % kTxCapacity); }
   void push(uint8_t byte);
   void pollSdi();

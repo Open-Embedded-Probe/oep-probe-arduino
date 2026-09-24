@@ -1,5 +1,5 @@
 // OEP v1 draft console stream (oep-spec docs/console-stream.ja.md, capability-name-hierarchy.ja.md):
-// a stream opened on the debug connection (SDI / DMDATA / dmseq through the v0 TargetConsole driver),
+// a stream opened on the debug connection (SDI / DMDATA / dmseq through the DmConsole driver),
 // kept in a position-addressed buffer that reads do not consume, with marks for what happened.
 //
 //   0x01 open(conn u8, mechanism u8)              -> stream u8          mechanism 0 SDI, 1 DMDATA, 2 dmseq
@@ -12,7 +12,7 @@
 // buffer overflows, on clear, or when the probe restarts.
 #pragma once
 
-#include "OepTargetServices.h"
+#include "OepDmConsole.h"
 #include "OepV1Target.h"
 
 namespace oep {
@@ -24,8 +24,10 @@ class TargetConsoleStream final : public Interface {
                    kOpWrite = 0x06, kOpClose = 0x07 };
   enum : uint8_t { kMarkReset = 0x01, kMarkRestart = 0x02, kMarkAttach = 0x03, kMarkDetach = 0x04,
                    kMarkLost = 0x05, kMarkClear = 0x06, kMarkHost = 0x07, kMarkLinkLost = 0x08 };
-  TargetConsoleStream(DebugPort &port, TargetConsole &driver, uint16_t instance)
-      : port_(port), driver_(driver), instance_(instance) {}
+  TargetConsoleStream(DebugPort &port, DmConsole &driver, uint16_t instance)
+      : port_(port), driver_(driver), instance_(instance) {
+    driver_.setSink(&TargetConsoleStream::take, this);   // the driver writes straight into this buffer
+  }
   const char *name() const override { return "oep.target.console"; }
   uint16_t instance() const override { return instance_; }
   size_t describe(uint8_t *out, size_t capacity) override;
@@ -39,7 +41,7 @@ class TargetConsoleStream final : public Interface {
   static constexpr size_t kCapacity = 8192, kMarks = 16;
   struct Mark { uint32_t position; uint8_t kind; uint32_t time_ms; uint8_t detail; };
   DebugPort &port_;
-  TargetConsole &driver_;
+  DmConsole &driver_;
   uint16_t instance_;
   bool open_ = false;
   uint16_t max_read_ = 1000;
@@ -48,10 +50,14 @@ class TargetConsoleStream final : public Interface {
   uint32_t base_ = 0;    // nothing before this position is kept (clear)
   Mark marks_[kMarks];
   uint32_t mark_count_ = 0;
-  uint32_t seen_resets_ = 0, seen_resyncs_ = 0, seen_dropped_ = 0;
+  uint32_t seen_resets_ = 0, seen_resyncs_ = 0;
   uint32_t oldest() const;
   void mark(uint8_t kind, uint8_t detail = 0);
-  void collect();
+  static void take(void *self, uint8_t byte) {
+    auto *s = static_cast<TargetConsoleStream *>(self);
+    s->buffer_[s->total_ % kCapacity] = byte;   // the oldest byte goes when the buffer is full (a read reports a gap)
+    ++s->total_;
+  }
 };
 
 }  // namespace v1

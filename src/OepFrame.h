@@ -7,6 +7,13 @@
 
 namespace oep {
 
+// What an endpoint accepts per frame and keeps in flight (core confirm reports it).
+struct Limits {
+  uint16_t max_frame;
+  uint16_t window_bytes;
+  uint8_t max_inflight;
+};
+
 class FrameReader {
  public:
   FrameReader(uint8_t *buffer, size_t capacity, uint16_t max_frame)

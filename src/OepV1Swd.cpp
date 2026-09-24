@@ -18,12 +18,8 @@ uint8_t statusOf(uint8_t ack) {
 
 size_t describePins(const SwdPort &port, uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  // pin set 1, fixed on this probe: role 1 SWDIO, role 2 SWCLK
-  uint8_t group[7] = {1, 1, 0, 0, 2, 0, 0};
-  putU16(group + 2, port.swdio);
-  putU16(group + 5, port.swclk);
-  w.put(kTagChannelGroup, group, sizeof group);
-  w.u8(kTagImplementation, 1);   // bit-bang
+  w.pinGroup(port.swdio, port.swclk);   // fixed on this probe
+  w.u8(kTagImplementation, 1);          // bit-bang
   return w.ok() ? w.length() : 0;
 }
 
@@ -63,7 +59,7 @@ bool WireSwd::wake(const uint32_t *targetsel, uint32_t &dpidr, bool &dormant) {
 Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   switch (op) {
     case kOpScan: {   // -> count(u8), then kind(u8) swdio(u16) swclk(u16) DPIDR(u32) per answer
-      if (length != 0 || capacity < 10) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (length != 0 || capacity < 10) return rejected(kRejectMalformed);
       uint32_t dpidr = 0;
       bool dormant = false;
       out[0] = 0;
@@ -83,7 +79,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       return completed(10);
     }
     case kOpAttach: {   // [TARGETSEL(u32)]  ->  connection(u8), DPIDR(u32), flags(u8: bit0 woke from dormant)
-      if ((length != 0 && length != 4) || capacity < 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if ((length != 0 && length != 4) || capacity < 6) return rejected(kRejectMalformed);
       uint32_t targetsel = length == 4 ? getU32(payload) : 0;
       uint32_t dpidr = 0;
       bool dormant = false;
@@ -95,13 +91,13 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       return completed(6);
     }
     case kOpDetach: {
-      if (length != 1 || payload[0] != 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (length != 1 || payload[0] != 1) return rejected(kRejectMalformed);
       port_.io.releaseBoth();
       port_.connected = false;
       return completed();
     }
     default:
-      return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
+      return rejected(kRejectUnknownOperation);
   }
 }
 
@@ -119,7 +115,7 @@ uint8_t TargetArmAdi::xfer(bool ap, bool read, uint8_t a23, uint32_t &data) {
 }
 
 Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length < 1 || payload[0] != 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  if (length < 1 || payload[0] != 1) return rejected(kRejectMalformed);
   if (!port_.connected) return failed();
   const uint8_t *p = payload + 1;
   size_t n = length - 1;
@@ -128,7 +124,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       // steps: req(u8: bit0 APnDP, bit1 RnW, bits 2-3 A[3:2]) [+ value(u32) for a write]
       // -> done(u16), status(u8: 0 ok / 1 malformed / 2 FAULT / 3 no reply or parity / 4 WAIT gave up), ack(u8),
       //    then the value of every read, in order. AP reads are posted: the host reads RDBUFF or the next AP read.
-      if (capacity < 4) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (capacity < 4) return rejected(kRejectMalformed);
       size_t at = 0, o = 4;
       uint16_t done = 0;
       uint8_t status = kStatusOk, ack = swd::kOk;
@@ -157,10 +153,10 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       // address(u32), count(u16) words through the current MEM-AP (the host has set SELECT to the bank holding
       // TAR / DRW and CSW to 32-bit, single increment). TAR is written again at each 1 KiB boundary, where its
       // auto-increment may stop. -> the words
-      if (n != 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (n != 6) return rejected(kRejectMalformed);
       uint32_t address = getU32(p);
       const uint16_t count = getU16(p + 4);
-      if (address & 3 || size_t(count) * 4 > capacity) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (address & 3 || size_t(count) * 4 > capacity) return rejected(kRejectMalformed);
       size_t o = 0;
       uint16_t left = count;
       while (left) {
@@ -180,9 +176,9 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       return completed(o);
     }
     case kOpWriteBlock: {   // address(u32), then words
-      if (n < 4 || (n - 4) % 4) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (n < 4 || (n - 4) % 4) return rejected(kRejectMalformed);
       uint32_t address = getU32(p);
-      if (address & 3) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (address & 3) return rejected(kRejectMalformed);
       size_t at = 4;
       while (at < n) {
         const size_t chunk = min<size_t>((n - at) / 4, (0x400 - (address & 0x3ff)) / 4);
@@ -200,7 +196,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       return completed();
     }
     default:
-      return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
+      return rejected(kRejectUnknownOperation);
   }
 }
 

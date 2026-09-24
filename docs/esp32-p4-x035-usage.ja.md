@@ -1,225 +1,45 @@
-# ESP32-P4 / CH32X035 OEP prototype利用手順
+# ESP32-P4 / CH32X035 OEP probe 利用手順
 
-状態: 破壊的変更を前提とする実験用手順。ArduinoCore-CH32から暫定probeを利用するための現時点の
-再現方法であり、公開Protocolや安定CLIではない。
+状態: 仮置きの OEP v1（oep-spec `docs/v1-core-wire-delta.ja.md`）の probe。破壊的変更を前提とする。
+v0 の prototype（`Esp32P4X035Prototype`、`python -m oep_client` の CLI）の手順は廃止した（git の履歴に残る）。
 
 ## 対象
 
-- probe: ESP32-P4
-- target: CH32X035C8T6（62 KiB flash）
-- OEP transport: ESP32-P4のUSB Serial/JTAG CDC、115200 bps
-- target transport: RVSWD software bit-bang
+- probe: ESP32-P4（`examples/Esp32P4X035Probe`）
+- target: CH32X035F8U6 の治具
+- OEP transport: ESP32-P4 の USB Serial/JTAG（長さつきフレーム）
+- target transport: RVSWD（dedicated GPIO の bit-bang）
 
-既知fixtureの必須配線は次の2本と共通GNDである。
+必須の配線は次の 2 本と共通 GND。target は別に給電し、信号は 3.3 V。
 
 | ESP32-P4 | CH32X035 | 用途 |
 |---:|---|---|
 | GPIO2 | PC18 | SWDIO |
 | GPIO54 | PC19 | SWCLK |
 
-PC15は開発board上でP4 GPIO15とGPIO45の2本へ出ているが、書込みには使用しない。targetは別途給電
-する。P4とtargetの信号電圧は3.3 Vを前提とする。
+ほかの GPIO は `oep.fixture.*`（gpio / uart / capture）のチャンネルとして使える。この治具には NRST の配線がない。
 
 ## probe firmware
 
-`oep-probe-arduino`のrootで実行する。
+`examples/Esp32P4X035Probe` で:
 
 ```sh
-arduino-cli compile --clean --profile esp32p4 \
-  --output-dir /tmp/oep-p4-x035 \
-  examples/Esp32P4X035Prototype
-
-arduino-cli upload --profile esp32p4 \
-  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
-  --input-dir /tmp/oep-p4-x035 \
-  examples/Esp32P4X035Prototype
+arduino-cli compile --profile esp32p4 --jobs 2 --output-dir <build dir> .
+arduino-cli upload --profile esp32p4 -p "$(readlink -f /run/board-identify/by-id/esp32-series-30eda0e31108)" \
+  --input-dir <build dir> .
 ```
 
-この環境では列挙順で変化する`/dev/ttyACM*`を直接使わず、次の固定名を使用する。
+列挙順で変わる `/dev/ttyACM*` ではなく `/run/board-identify/by-id/esp32-series-30eda0e31108` を使う。
+CDC 全体を OEP のフレームに使うので、serial monitor を同時に開かない。
 
-```text
-/run/board-identify/by-id/esp32-series-30eda0e31108
-```
+## 使い方
 
-起動bannerは出さず、CDC stream全体をOEP binary frameに使用する。serial monitorを同時に開かない。
-
-## ArduinoCore-CH32のbinを作る
-
-ArduinoCore-CH32の開発coreがArduino CLIへ`ch32-riscv-ug`として導入済みの例:
+host は oep-client-python の `oep_client.v1`（README に例）。書き込みの知識（RAM ローダー、ページ）は host 側に
+ある（`ch32_flash`）。実機の一通りの確認は ArduinoCore-CH32 の `tests/manual/oep_smoke/`:
 
 ```sh
-arduino-cli compile \
-  --fqbn 'ch32-riscv-ug:ch32v:CH32X035:pnum=CH32X035C8T6' \
-  --output-dir /tmp/ch32x035-build \
-  path/to/sketch
+uv run tests/manual/oep_smoke/oep_smoke.py --target x035 --sketch all
+uv run tests/manual/oep_smoke/oep_probe_checks.py --target x035
 ```
 
-書込み対象は`/tmp/ch32x035-build/<sketch>.ino.bin`のraw binaryである。ELFやIntel HEXを渡さない。
-
-## 退避、書込み、検証
-
-`oep-client-python`のrootで実行する。初回は必ず現在の全flashを退避する。
-
-```sh
-uv run python -m oep_client \
-  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
-  --backup-flash /tmp/ch32x035-original.bin
-```
-
-raw binを差分書込みし、software reset後に全域verifyする。
-
-```sh
-uv run python -m oep_client \
-  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
-  --program-image /tmp/ch32x035-build/<sketch>.ino.bin \
-  --destructive
-```
-
-このP4 fixtureはCH32X035F8U6専用である。`--program-image`は破壊的操作の前にESIG
-`0x1ffff704=0x035e0601`、flash base/size（`0x08000000`/63,488 byte）、FLASH OBRの
-read-protection無効、WPR全解除をread-onlyで確認する。どれかが不一致・保護中・読出し不能なら
-書込みは開始せずnonzeroで終了する。別package/familyへ`--flash-size`だけを変えて使うことはできない。
-たとえば`--flash-size 63424`は実機でexit=2、明示的なcapacity errorとなり、flash requestを送らずに
-終了することを確認した。
-
-書込み済みimageのverifyのみ:
-
-```sh
-uv run python -m oep_client \
-  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
-  --verify-image /tmp/ch32x035-build/<sketch>.ino.bin
-```
-
-CI/soakでwall timeを機械可読に残すには`--result-json`を併用する。成功時だけ指定fileへ原子的でない
-JSONを書き、`verify`/`verify_reset`またはprogramの各phaseを秒で記録する。2026-09-21のPWM image
-実機verifyでは`{"verify": 5.025535, "verify_reset": 0.00343}`だった。program時は
-`program.bytes_compared`、`program.bytes_verified`、`pages_programmed`、`attempts`、および
-`target_preflight`（ESIG/OBR/WPR）も出す。PWM imageが既に同一の場合の実機結果は比較/verify各
-63,488 byte、page=0、attempt=0、preflight 6.174 ms、比較4.998319 s、verify4.987103 sだった。
-attach単独、request別転送量、page別の詳細telemetryはまだP0.2の未実装項目である。
-
-```sh
-uv run python -m oep_client \
-  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
-  --verify-image /tmp/ch32x035-build/<sketch>.ino.bin \
-  --result-json /tmp/x035-verify.json
-```
-
-元imageへ戻す場合、退避ファイルは既に63,488 byteなのでそのまま指定できる。
-
-```sh
-uv run python -m oep_client \
-  --port /run/board-identify/by-id/esp32-series-30eda0e31108 \
-  --program-image /tmp/ch32x035-original.bin \
-  --destructive
-```
-
-CLIは入力binを63,488 byteまで`0xff`で埋め、target全域を先に読み、異なる64-byte論理pageだけを
-programする。最後にresetし、全域を読み直してbyte単位で照合し、memory readによるhaltを解除する
-ためもう一度resetする。backupとverify-onlyも終了時にtargetを通常実行へ戻す。
-
-## 結果の見方
-
-正常終了例では最後に次を出す。
-
-```text
-program-image pages=109 attempts=109 sha256=<63,488-byte image hash>
-```
-
-`pages=0`は既に同じimageだったことを示す。`attempts`が`pages`より多い場合はoperation failure後に
-同一pageを再送して回復した。processの終了codeが非zero、`flash program failed`、`verify mismatch`
-のいずれかが出た場合は成功扱いにしない。
-
-## 制約と復旧
-
-- X035の物理erase単位256 byteをprobe内部のread-modify-erase-programで吸収する。
-- 書込み後の`normalize-user`は単なるdebug resumeではなく、RAM上の短いpayloadからPFIC system resetを
-  発行する。これにより旧imageの停止PCではなく、新imageのreset vectorから開始する。
-- operation途中で失敗した場合、probe RAMのerase前imageを使って同じ64-byte要求の再送から回復する。
-- 未回復中の別物理page要求は診断`0xe0`で拒否する。
-- erase後にprobeもresetまたは電源断すると回復cacheは失われる。この場合、退避済みの完全imageを
-  `--program-image`で再送する。部分imageや別pageから書込みを続行しない。
-- このcache喪失境界は故障注入で実機確認済みである。erase直後に止めてP4 firmwareを再書込みした後、
-  対象page先頭88 byteは全FFだった。正常firmwareへ戻して完全PWM imageを再送すると差分1 physical page
-  とfull-image hash一致で復旧した。従ってP4 reset後にprobe RAMの内容を根拠として復旧成功と判断しない。
-- host processがkillされて`normalize-user`を送れない場合にも、P4 firmwareは最後の有効OEP request
-  から1.5秒無通信でRVSWD sessionをsystem reset/releaseする。これはhost中断時の安全cleanupであり、
-  1.5秒を超える一つのOEP requestを許容するタイムアウトではない。長時間のprobe operationを追加する
-  場合は、operation中のkeepaliveまたは明示的なbusy状態を先に設計する。
-- targetのflash/option保護、型番、容量を自動識別していない。CH32X035以外へ既定値のまま使わない。
-- 2026-09-20の初期実装では全域read/verify約240秒、109 pageの差分書込み約298秒だった。
-  SWDIOの不要な方向切替を除去し、追加half-periodを0にし、1要求を32から88 byteへ拡張した後は、
-  全域read 24.80秒、109 pageの比較・書込み・全域verifyを含む復元全体80.00秒を実測した。
-  続いて同一 OEP 接続の連続 read/program request 間でRVSWD attach/halt sessionを再利用し、
-  このX035 fixtureでのみ post-frame guardを0 µsにした結果、62 KiB full verifyは
-  20.972/21.005/21.044秒（平均21.007秒、全域hash一致3/3）となった。別配線では保守的な
-  20 µs defaultを使い、同等のfull-image検証が通るまで0 µsを選ばない。
-- さらに`DMABSTRACTAUTO`とDMDATA1に保持したtarget-side addressを使う連続readを導入した。
-  program buffer、register、addressを4 byteごとに再設定せず、DMDATA0 readで次wordを起動する。
-  62 KiB full verifyは4.896/4.959/4.961秒（平均4.939秒、全域hash一致3/3）となった。flash終端の
-  最後のlook-aheadは範囲外になるため待機せず、次のscalar flash操作前にabstract cmderrをclearする。
-  同じimageへの`--program-image --destructive`もpages=0、比較5.111秒、全域verify5.104秒、
-  reset成功を確認した。変更pageのerase/program性能は別途測る。
-- TargetFlash revision 2 は、image更新clientだけが使う`stage-page64`（4 fragment）と
-  `commit-page256`を追加した。OEP message上限を変えず、full physical pageをprobe RAMへ
-  完成させてから一回だけ消去・program・readbackする。既存の`--program-page64`は単発診断用の
-  互換操作として残る。現在のimageと同じ先頭256 byteをstage/commitし、reset後に全62 KiB hashが
-  一致することを実機で確認した。変更fragmentを含むimageの反復性能と故障注入は次のP0試験である。
-- PWM probe imageへの実機更新では、27 physical pageの差分を`pages=27, attempts=27`で完走した。
-  stage/commitを含む差分更新9.685秒、reset0.0046秒、全62 KiB verify5.119秒、最終reset0.0030秒で
-  hash一致した。旧64-byte単発APIなら最大108回になるerase/programを27回へ畳めたことは確認したが、
-  同一imageでの旧API比較、反復、fault injectionは未完了である。
-- `OEP_X035_INJECT_FLASH_FAILURE=1`でerase直後に一度だけ失敗を注入したstage/commitでは、
-  最初のcommitが診断`0xe1`で失敗し、独立readで先頭88 byteが全FFになった。同じP4 sessionの
-  staged pageを再commitすると成功し、reset後の全62 KiB hashは元imageと一致した。これは
-  probe RAMが生きている間の再送回復だけを示す。P4 reset/電源断後にerase前imageを再構成できない
-  制約は変わらない。
-- `OEP_X035_INJECT_FLASH_FAILURE=2`では最初の64-byte program直後に一度だけ失敗を注入した。
-  最初のcommitは`0xe2`で失敗し、独立readで先頭64 byteだけが希望値、続く24 byteが全FFの部分状態を
-  確認した。同じsessionのretry commitは成功し、reset後の全62 KiB hashは元imageと一致した。
-- `half_period_us=0`は今回の短いfixture配線で全域hash一致を確認した設定である。配線条件が変わる
-  汎用probeでは設定可能なままにし、エラー時は遅い設定へ戻せるようにする。
-- target USBはOEP transportではない。USB deviceのbind状態はRVSWD書込みには関係しない。
-
-正式なArduinoCore upload toolへ組み込む段階では、CLI出力文字列ではなくPython APIまたは安定した
-machine-readable resultを使用する必要がある。現時点ではcore側の標準upload手段へ登録せず、manual
-prototypeとして呼び出す。
-
-## 現時点の使い勝手評価
-
-- 固定alias、書込み前の全域backup、差分書込み、reset、全域verify、hash表示まで一連で行え、
-  破壊的prototypeとしての最低限の復旧性はある。
-- 高速化後は約80秒で別imageへ更新して全域検証できる。core開発の反復には使えるが、通常の
-  Arduino uploadとしてはまだ遅い。今後は256-byte物理page単位の転送・処理が改善候補となる。
-- 現在のP4 exampleはTargetControl / TargetMemory / TargetFlashに加え、FixtureGpioとFixtureUartを
-  公開する。genericな`ProbeCapabilities`と`ProbeConfiguration`も公開し、hostがConnectionManifestを
-  解決してUART groupを原子的に予約・解放してからbaudを設定する。capsはP4 firmwareの能力だけを返し、
-  CH32X035名・DUT pin名・今回の配線を含まない。Caps/Configuration revision 2はgroup内roleにも安定した
-  wire ID（UARTは`rx=1`/`tx=2`、I2Cは`sda=1`/`scl=2`）を持たせる。したがって、将来clock/dataのように
-  同じfunctionを使う複数roleも曖昧にせずplanへエンコードできる。revision 1 peerとの互換decodeは残すが、
-  新規capabilityはrevision 2を使う。現在構成可能なのはSerial1のRX GPIO12/TX GPIO6とI2C targetの
-  SDA GPIO50/SCL GPIO52であり、`core_api`のcommand/response自己試験を完走した既知の経路である。FixtureGpioは安全な
-  allowed pinのread、input pull、push-pull、open-drainを構成できる。target outputとの競合を避け、終了時は
-  floating inputへ戻す。
-- ADC端点はPA5/P4 GPIO4で0 V相当（ADC=2）と3.3 V相当（ADC=1001）を実測した。一方、P4の両pullは
-  ADC=345（約1.1 V）であり、1.65 V基準には使えない。中点のrelease検証には校正済みDACまたは外付け
-  分圧が必要である。
-- I2C/SPI peerとPWM波形計測は未実装である。GPIOのopen-drainはI2C bit-bangの基礎にはなるが、
-  速度・clock stretch・SPI slaveの時刻保証を持つ専用capabilityへ発展させる必要がある。
-
-- `FixtureI2c` revision 1 は P4 の一時的な I2C target の状態取得だけを公開する。
-  `getStatus()` は peer started、SCL/SDA の現在 level、最後の受信長、受信 transaction 回数、
-  read request 回数、設定周波数を返す。I2C の成否をこの値だけで判定せず、RMT observer を
-  追加した後は trace と対にして判定する。詳細な段階設計は
-  [`esp32-p4-i2c-observation-design.ja.md`](esp32-p4-i2c-observation-design.ja.md) に記録する。
-  このimageで選んでいるのはsoftware targetであり、writeのみ・10 kHz以下の切り分け用である。
-  Arduino-ESP32 3.3.12 の `Wire` slave は正式実装の基盤には使わない。ESP-IDF I2C slave
-  driver のdirect pathは、別P4 peerで1/10/100/400 kHzと1 MHzの固定長write、および
-  preload済みreadを実測した。ただしOEP protocolにはまだframe長やresponse slotを指定する
-  操作がない。従ってdirect pathは4 byte固定・一回受信の診断だけであり、可変長write、
-  動的read応答、連続readをこのcapabilityから主張しない。
-  2026-09-21に`stop → pin設定 → start` lifecycleを`ProbeConfiguration`へ追加し、generic Capsにも
-  I2C target groupとして再掲した。ただし再構成後の実機ACK/trace試験は未実施である。固定配線を暗黙に
-  再利用せず、hostが明示的にleaseを取得してから実行することが、target差し替え可能なprobeの前提である。
-- target型番・flash容量・保護状態を自動確認しないため、別targetへ誤って書くことを防げない。
-  capabilityだけでなくtarget identityを返す機能が正式probeには必要である。
+能力の一覧: `uv run python -m oep_client.v1 dump --port /run/board-identify/by-id/esp32-series-30eda0e31108`。

@@ -58,8 +58,10 @@ class TargetRiscvDm final : public Interface {
   uint16_t instance() const override { return instance_; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  void setFrameLimit(size_t max_frame) override { max_frame_ = max_frame; }
 
  private:
+  size_t max_frame_ = 0;
   Result dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity);
   DebugPort &port_;
   uint16_t instance_;

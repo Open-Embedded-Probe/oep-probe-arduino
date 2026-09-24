@@ -11,6 +11,7 @@
 
 #if defined(ARDUINO_ARCH_RP2040)
 #include <hardware/gpio.h>
+#include <pico/unique_id.h>
 #endif
 
 namespace oep {
@@ -69,6 +70,31 @@ inline void platformGpio(int pin, uint8_t mode) {
 
 inline void platformParkPins(const uint8_t *pins, size_t count) {
   for (size_t i = 0; i < count; ++i) platformGpio(pins[i], kGpioInputFloating);
+}
+
+// The same, for every channel set in `mask`.
+inline void platformParkMask(uint64_t mask) {
+  for (int pin = 0; pin < 64; ++pin) if ((mask >> pin) & 1) platformGpio(pin, kGpioInputFloating);
+}
+
+// This probe's own unit id, the same on any transport: the eFuse MAC on the ESP32 family, the flash's unique id on
+// the RP2040 / RP2350. -> bytes written (at most `capacity`).
+inline size_t platformUnitId(uint8_t *out, size_t capacity) {
+#if defined(ARDUINO_ARCH_RP2040)
+  pico_unique_board_id_t id;
+  pico_get_unique_board_id(&id);
+  const size_t n = sizeof id.id < capacity ? sizeof id.id : capacity;
+  memcpy(out, id.id, n);
+  return n;
+#elif defined(ARDUINO_ARCH_ESP32)
+  const uint64_t mac = ESP.getEfuseMac();
+  const size_t n = capacity < 6 ? capacity : 6;
+  for (size_t i = 0; i < n; ++i) out[i] = static_cast<uint8_t>(mac >> (8 * i));
+  return n;
+#else
+  (void)out; (void)capacity;
+  return 0;
+#endif
 }
 
 // Sizes are hints: a core that cannot resize its buffers keeps its default.

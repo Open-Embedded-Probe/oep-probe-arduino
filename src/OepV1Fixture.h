@@ -9,6 +9,14 @@
 namespace oep {
 namespace v1 {
 
+// The plan roles and extra describe TLVs of the fixtures every probe offers the same way.
+constexpr uint8_t kGpioRoles[] = {1};                                    // line
+constexpr uint8_t kUartRoles[] = {1, 2};                                 // RX, TX
+constexpr uint8_t kCaptureRoles[] = {0, 1, 2, 3, 4, 5, 6, 7};            // line k
+constexpr uint8_t kImplementationPeripheral[] = {kTagImplementation, 1, 2};        // implementation: peripheral
+constexpr uint32_t kGpioLockFree = 1u << 2;                              // read_bank changes nothing
+constexpr uint32_t kCaptureLockFree = (1u << 3) | (1u << 4);             // status, read
+
 class V0Fixture final : public Interface {
  public:
   // roles: the plan roles this fixture takes (each may use any allowed channel); lock_free: bit n = op n

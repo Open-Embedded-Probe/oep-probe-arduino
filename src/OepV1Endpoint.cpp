@@ -9,7 +9,7 @@ namespace {
 Result lockedFor(uint32_t remaining_ms, uint8_t *out, size_t capacity) {
   if (capacity < 4) return rejected(kRejectLocked);
   putU32(out, remaining_ms);
-  return {OEP_V0_RESOLUTION_REJECTED, kRejectLocked, 4};
+  return {kResolutionRejected, kRejectLocked, 4};
 }
 
 // Label-boundary prefix match: "oep.fixture.uart" matches "oep.fixture.uart" and "oep.fixture.uart.stream",
@@ -47,6 +47,7 @@ size_t pageTlv(const uint8_t *tlv, size_t length, uint8_t first, uint8_t *out, s
 bool Endpoint::add(Interface &interface) {
   if (count_ >= kMaxInterfaces) return false;
   interfaces_[count_++] = &interface;
+  interface.setFrameLimit(limits_.max_frame);
   return true;
 }
 
@@ -112,11 +113,11 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   if (fn == 0) {
     result = core(op, has_session, session, payload, payload_length, out, capacity);
   } else if (fn > count_) {
-    result = rejected(OEP_V0_REJECT_UNKNOWN_FUNCTION);
+    result = rejected(kRejectUnknownFunction);
   } else {
     Interface &it = *interfaces_[fn - 1];
     result = it.lockFree(op) ? completed() : checkSession(has_session, session, out, capacity);
-    if (result.resolution == OEP_V0_RESOLUTION_COMPLETED) result = it.handle(op, payload, payload_length, out, capacity);
+    if (result.resolution == kResolutionCompleted) result = it.handle(op, payload, payload_length, out, capacity);
   }
   if (result.length > capacity) result = failed(0);
   // The lease runs from when the holder's request completed (a long verify must not lapse its own lock).
@@ -148,26 +149,26 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       out[0] = locked_;
       putU32(out + 1, remaining());
       return completed(5);
-    case kOpStatus: return rejected(OEP_V0_REJECT_UNAVAILABLE);   // no long operations yet (they block)
+    case kOpStatus: return rejected(kRejectUnavailable);   // no long operations yet (they block)
     case kOpEnd:
     case kOpKeepalive:
     case kOpCancel:
     case kOpPlanApply:
     case kOpPlanRelease: {
       const Result check = checkSession(has_session, session, out, capacity);
-      if (check.resolution != OEP_V0_RESOLUTION_COMPLETED) return check;
+      if (check.resolution != kResolutionCompleted) return check;
       if (op == kOpEnd) locked_ = false;   // the last id stays: the same host may resume
-      if (op == kOpCancel) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (op == kOpCancel) return rejected(kRejectUnavailable);
       if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
       if (op == kOpPlanRelease) planRelease();
       return completed();
     }
-    default: return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
+    default: return rejected(kRejectUnknownOperation);
   }
 }
 
 Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length != 9 || capacity < 9) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  if (length != 9 || capacity < 9) return rejected(kRejectMalformed);
   const uint32_t session = getU32(payload), lease = getU32(payload + 4);
   const bool force = payload[8];
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), out, capacity);
@@ -188,25 +189,25 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
 // probe state and stays until plan_release (no session end or lapse releases it).
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   (void)out; (void)capacity;
-  if (plan_active_) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+  if (plan_active_) return rejected(kRejectUnavailable);
   constexpr size_t kMaxRoles = 16;
   RoleAssignment roles[kMaxRoles];
   size_t count = 0, at = 0;
   while (at + 2 <= length) {
     const uint8_t tag = payload[at], len = payload[at + 1];
-    if (at + 2 + len > length) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+    if (at + 2 + len > length) return rejected(kRejectMalformed);
     const uint8_t *v = payload + at + 2;
     if (tag == kTagRoleAssignment) {
-      if (len != 5 || count >= kMaxRoles) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (len != 5 || count >= kMaxRoles) return rejected(kRejectMalformed);
       roles[count] = {getU16(v), v[2], getU16(v + 3)};
-      if (roles[count].function == 0 || roles[count].function > count_) return rejected(OEP_V0_REJECT_UNKNOWN_FUNCTION);
+      if (roles[count].function == 0 || roles[count].function > count_) return rejected(kRejectUnknownFunction);
       ++count;
     } else if (tag & 0x80) {
-      return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);   // critical and unknown: refuse the whole plan
+      return rejected(kRejectMalformed);   // critical and unknown: refuse the whole plan
     }
     at += 2 + len;
   }
-  if (!count || at != length) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  if (!count || at != length) return rejected(kRejectMalformed);
   bool wants[kMaxInterfaces] = {};
   for (size_t i = 0; i < count_; ++i) {
     RoleAssignment mine[kMaxRoles];
@@ -242,7 +243,7 @@ void Endpoint::planRelease() {
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // flags(u8, bit0 exact) first(u8) prefix_len(u8) prefix  ->  total(u8) count(u8) entries
-  if (length < 3 || length != 3u + payload[2] || capacity < 2) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  if (length < 3 || length != 3u + payload[2] || capacity < 2) return rejected(kRejectMalformed);
   const bool exact = payload[0] & 1;
   const uint8_t first = payload[1], n = payload[2];
   const uint8_t *prefix = payload + 3;
@@ -276,7 +277,7 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
 
 Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // fn(u16) first(u8)  ->  more(u8) TLVs
-  if (length != 3 || capacity < 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  if (length != 3 || capacity < 1) return rejected(kRejectMalformed);
   const uint16_t fn = getU16(payload);
   const uint8_t first = payload[2];
   const uint8_t *tlv = nullptr;
@@ -288,7 +289,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
     tlv_length = interfaces_[fn - 1]->describe(scratch_, sizeof scratch_);
     tlv = scratch_;
   } else {
-    return rejected(OEP_V0_REJECT_UNKNOWN_FUNCTION);
+    return rejected(kRejectUnknownFunction);
   }
   bool more = false;
   const size_t used = tlv ? pageTlv(tlv, tlv_length, first, out + 1, capacity - 1, more) : 0;

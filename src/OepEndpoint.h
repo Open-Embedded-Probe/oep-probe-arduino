@@ -10,12 +10,6 @@
 
 namespace oep {
 
-struct Limits {
-  uint16_t max_frame;
-  uint16_t window_bytes;
-  uint8_t max_inflight;
-};
-
 class Endpoint {
  public:
   static constexpr size_t kMaxServices = 16;
