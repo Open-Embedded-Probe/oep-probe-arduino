@@ -54,7 +54,14 @@ class Ch32Dm {
   bool readWordScalar(uint32_t address, uint32_t &value);
   bool readRegister(uint16_t regno, uint32_t &value);
   bool writeRegister(uint16_t regno, uint32_t value);
-  bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
+  bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }
+  // Raw DMI write for host-built step lists (v1 oep.target.riscv-dm). It bypasses this helper's view of the
+  // hart: after raw dmcontrol writes, use halt()/resume() to bring halted() back in line.
+  bool writeDmi(uint8_t address, uint32_t value) {
+    if (!attach()) return false;
+    phy_.write(address, value);   // a DMI write reports nothing; read back through the list to check
+    return true;
+  }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
   bool writeWord(uint32_t address, uint32_t value);
   bool writeHalfWord(uint32_t address, uint16_t value);
   // Generic parts for host-driven flashing (experiment F3/F4, 2026-09-24). writeWordsFast
