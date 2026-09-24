@@ -3,8 +3,8 @@
 // backend in OepRvswdPhy.cpp (same frame as the ESP32-P4 probe).
 //
 // v1 draft: oep.core (the probe in its describe), oep.wire.rvswd, oep.target.riscv-dm, oep.target.console,
-// oep.fixture.gpio / uart. GP2 is the target's NRST: a gpio channel labelled NRST, not a reset capability
-// (capability-name-hierarchy.ja.md, decision 2) - pulse it open-drain, never drive it high.
+// oep.fixture.gpio / uart. GP2 is the target's NRST: a gpio channel labelled NRST and the default reset line for
+// oep.wire.rvswd attach-under-reset (the host may name another channel) - open drain only, never driven high.
 #include <OepCh32Dm.h>
 #include <OepFixtureServices.h>
 #include <OepRvswdPhy.h>
@@ -102,6 +102,8 @@ void setup() {
   endpoint.setBootId(rp2040.hwrand32());
   endpoint.add(wire);
   endpoint.add(riscvDm);
+  port.reset_default = kNrst;   // attach-under-reset through the L103's NRST unless the host names another channel
+  for (size_t i = 0; i < fixturePinCount; ++i) port.reset_allowed |= uint64_t{1} << fixturePins[i];
   endpoint.add(console);
   gpio = new oep::FixtureGpio(*pins);
   uart = new oep::FixtureUart(*pins, Serial1, 2);

@@ -248,6 +248,93 @@ bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven)
   return ok && ((dmstatus >> 8) & 0xf) != 0 && dmstatus != 0xffffffffu;
 }
 
+namespace {
+const uint32_t kHalfNs[] = {0, 25, 50, 100, 200, 500};
+const size_t kCount = sizeof kHalfNs / sizeof kHalfNs[0];
+}  // namespace
+
+bool RvswdPhy::readsStable(uint32_t &first) {
+  // Let anything the bring-up disturbed settle before the reference read, or a hart that
+  // is still coming to a stop makes a good half period look unstable.
+  for (int i = 0; i < 8; ++i) readRaw(kDmStatus, first);
+  if (((first >> 8) & 0xf) == 0 || first == 0xffffffffu) return false;
+  const uint32_t t0 = micros();
+  for (int i = 0; i < 1000; ++i) {
+    uint32_t value = 0;
+    if (!readRaw(kDmStatus, value) || value != first) return false;
+  }
+  dmi_ns_ = micros() - t0;   // 1000 reads -> ns per read
+  return true;
+}
+
+// Reads can be clean at a half period whose writes are not. Measured on a CH32L103 over
+// the Pico's flying wires (2026-09-23): DMSTATUS read the same 1000 times at 100 ns, yet
+// the halt requests written at that speed were silently mangled - the hart kept running
+// and abstract commands failed cmderr=4. So prove the write path at the same speed.
+// DATA0 is the debug module's own scratch register while no abstract command runs.
+// A handful of patterns is not enough: at 200 ns on that jig every pattern came back
+// intact, and the multi-transaction sequences behind a memory read still broke. Match
+// the read check's weight - a few hundred round trips - so a half period only survives
+// if its writes land as reliably as its reads.
+//
+// The scratch is the first program buffer word, not DATA0. DATA0 belongs to whatever is
+// running: a target printing through the debug module's console writes it continuously,
+// and attaching to one failed every time while this check used it (2026-09-23). Nothing
+// reads the program buffer until an abstract command runs one.
+bool RvswdPhy::writesLand() {
+  static const uint32_t kPatterns[] = {0xa5a5a5a5u, 0x5a5a5a5au, 0xffffffffu, 0x00000001u,
+                                       0x0f0f0f0fu, 0xf0f0f0f0u, 0x80000000u, 0x7fffffffu};
+  // DATA0 is only scratch while nothing is armed on it: a previous session that left
+  // ABSTRACTAUTO set would re-run its command on every access here and the readback
+  // would never match (2026-09-23: an aborted flash sequence did exactly that, and
+  // every later attach failed until the probe was power-cycled).
+  write(kDmAbstractAuto, 0);
+  bool ok = true;
+  for (int round = 0; round < 32 && ok; ++round) {
+    for (uint32_t pattern : kPatterns) {
+      write(kDmProgBuf0, pattern);
+      uint32_t read_back = 0;
+      if (!readRaw(kDmProgBuf0, read_back) || read_back != pattern) { ok = false; break; }
+    }
+  }
+  write(kDmProgBuf0, 0);
+  return ok;
+}
+
+void RvswdPhy::useSafeSpeed() {
+  if (!attached_) return;
+  setHalf(kHalfNs[kCount - 1] > min_half_ns_ ? kHalfNs[kCount - 1] : min_half_ns_);
+  configureBus(false);
+}
+
+// attach()'s search without the wake: the wake burst resets the target, and this runs on a hart the caller has
+// just stopped. It starts from the slowest period, which a reset has to be done at anyway, and speeds up while
+// both checks pass. A period the target cannot follow leaves its debug module out of step, so after the first
+// failure it steps back to the last good one and proves that again rather than trusting it.
+bool RvswdPhy::retune() {
+  if (!attached_) return false;
+  const uint32_t floor = min_half_ns_;
+  size_t good = kCount;   // index of the fastest period that passed
+  for (size_t i = kCount; i-- > 0;) {
+    if (kHalfNs[i] < floor && i != kCount - 1) break;
+    setHalf(kHalfNs[i] > floor ? kHalfNs[i] : floor);
+    configureBus(false);
+    uint32_t first = 0;
+    if (!readsStable(first) || !writesLand()) break;
+    good = i;
+  }
+  if (good == kCount) { useSafeSpeed(); return false; }
+  for (int tries = 0; tries < 3; ++tries) {
+    setHalf(kHalfNs[good] > floor ? kHalfNs[good] : floor);
+    configureBus(false);
+    uint32_t first = 0;
+    if (readsStable(first) && writesLand()) return true;
+    if (good + 1 < kCount) ++good;   // slower
+  }
+  useSafeSpeed();
+  return false;
+}
+
 bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
@@ -256,8 +343,6 @@ bool RvswdPhy::attach() {
   // debug module out of step and the next, slower attempt would inherit that (2026-09-23:
   // on the Pico's flying wires to a CH32L103, one probe with a fresh init answered while
   // this loop without one failed at every half period).
-  static const uint32_t kHalfNs[] = {0, 25, 50, 100, 200, 500};
-  static const size_t kCount = sizeof kHalfNs / sizeof kHalfNs[0];
   // One candidate: bring the bus up, then insist on 1000 identical DMSTATUS reads.
   auto clean_at = [this](uint32_t half) {
     setHalf(half);
@@ -281,49 +366,7 @@ bool RvswdPhy::attach() {
     }
     // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
     if (!awake || ((first >> 8) & 0xf) == 0) return false;
-    // Let anything the bring-up disturbed settle before the reference read, or a hart that
-    // is still coming to a stop makes a good half period look unstable.
-    for (int i = 0; i < 8; ++i) readRaw(kDmStatus, first);
-    const uint32_t t0 = micros();
-    for (int i = 0; i < 1000; ++i) {
-      uint32_t value = 0;
-      if (!readRaw(kDmStatus, value) || value != first) return false;
-    }
-    dmi_ns_ = micros() - t0;   // 1000 reads -> ns per read
-    return true;
-  };
-  // Reads can be clean at a half period whose writes are not. Measured on a CH32L103 over
-  // the Pico's flying wires (2026-09-23): DMSTATUS read the same 1000 times at 100 ns, yet
-  // the halt requests written at that speed were silently mangled - the hart kept running
-  // and abstract commands failed cmderr=4. So prove the write path at the same speed.
-  // DATA0 is the debug module's own scratch register while no abstract command runs.
-  // A handful of patterns is not enough: at 200 ns on that jig every pattern came back
-  // intact, and the multi-transaction sequences behind a memory read still broke. Match
-  // the read check's weight - a few hundred round trips - so a half period only survives
-  // if its writes land as reliably as its reads.
-  //
-  // The scratch is the first program buffer word, not DATA0. DATA0 belongs to whatever is
-  // running: a target printing through the debug module's console writes it continuously,
-  // and attaching to one failed every time while this check used it (2026-09-23). Nothing
-  // reads the program buffer until an abstract command runs one.
-  auto writes_land = [this] {
-    static const uint32_t kPatterns[] = {0xa5a5a5a5u, 0x5a5a5a5au, 0xffffffffu, 0x00000001u,
-                                         0x0f0f0f0fu, 0xf0f0f0f0u, 0x80000000u, 0x7fffffffu};
-    // DATA0 is only scratch while nothing is armed on it: a previous session that left
-    // ABSTRACTAUTO set would re-run its command on every access here and the readback
-    // would never match (2026-09-23: an aborted flash sequence did exactly that, and
-    // every later attach failed until the probe was power-cycled).
-    write(kDmAbstractAuto, 0);
-    bool ok = true;
-    for (int round = 0; round < 32 && ok; ++round) {
-      for (uint32_t pattern : kPatterns) {
-        write(kDmProgBuf0, pattern);
-        uint32_t read_back = 0;
-        if (!readRaw(kDmProgBuf0, read_back) || read_back != pattern) { ok = false; break; }
-      }
-    }
-    write(kDmProgBuf0, 0);
-    return ok;
+    return readsStable(first);
   };
   // Two passes. A cold debug module can need more waking than one candidate's eight
   // attempts, and the candidates that fail warm it up as a side effect: with a floor that
@@ -332,7 +375,7 @@ bool RvswdPhy::attach() {
   for (int pass = 0; pass < 2; ++pass) {
     for (size_t i = 0; i < kCount; ++i) {
       if (kHalfNs[i] < min_half_ns_) continue;
-      if (!clean_at(kHalfNs[i]) || !writes_land()) continue;
+      if (!clean_at(kHalfNs[i]) || !writesLand()) continue;
       attached_ = true;
       return true;
     }

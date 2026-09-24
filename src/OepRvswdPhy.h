@@ -32,6 +32,8 @@ class RvswdPhy final : public DmiPhy {
   void wakeBus() { configureBus(true); }
   void reinit() override { configureBus(false); }
   void useHalf(uint32_t half_ns) { setHalf(half_ns); }
+  void useSafeSpeed() override;
+  bool retune() override;
   // Refuse to attach faster than this. attach() measures the link, but a marginal one
   // (flying leads to a bench target) can pass both the read and the write check at a
   // period whose longer abstract-command sequences still break, and the period it lands
@@ -66,6 +68,8 @@ class RvswdPhy final : public DmiPhy {
   uint32_t last_activity_us_ = 0;
   bool park_low_ = false;     // idle with SWCLK low instead of both lines high (setIdleClockLow)
   void setHalf(uint32_t half_ns);
+  bool readsStable(uint32_t &first);   // 1000 identical DMSTATUS reads at the current period
+  bool writesLand();                   // a few hundred program-buffer write/read round trips
   void configureBus(bool with_wake);
   void writeRaw(uint8_t address, uint32_t data);
   void reviveIfIdle();

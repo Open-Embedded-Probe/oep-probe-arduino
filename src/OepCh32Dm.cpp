@@ -186,6 +186,7 @@ bool Ch32Dm::resetOnce() {
   // ndmreset applied to a running hart left it stopped in most cycles, while a
   // halted hart always restarted (2026-09-22, 20-cycle alternation). Halt first.
   if (!halted_) halt();
+  phy_.useSafeSpeed();                 // the part comes out of reset on its default, slower clock
   phy_.write(kAbstractAuto, 0);
   phy_.write(kDmControl, 0x00000003);  // dmactive | ndmreset
   delay(1);
@@ -255,6 +256,12 @@ bool Ch32Dm::confirmExecution(uint32_t &pc, bool &halt_failed) {
 }
 
 Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
+  const ResetReport report = resetSequence(confirm);
+  if (attached()) phy_.retune();   // resetOnce() dropped to the slowest speed for the reset itself
+  return report;
+}
+
+Ch32Dm::ResetReport Ch32Dm::resetSequence(bool confirm) {
   ResetReport report = {0, 0, 0};
   if (!attach()) return report;
   const bool running = resetOnce();
@@ -489,6 +496,110 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   }
   // The caller judges success from dpc (its ebreak) and a0; a stop somewhere else is a fault.
   return readRegister(0x07b1, report.dpc) && readRegister(0x100a, report.a0);
+}
+
+bool Ch32Dm::ackHaveReset() {
+  uint32_t status = 0;
+  if (!attach() || !phy_.read(kDmStatus, status)) return false;
+  if (!(status & (3u << 18))) return false;               // anyhavereset / allhavereset
+  phy_.write(kDmControl, halted_ ? 0x90000001 : 0x10000001);   // ackhavereset, haltreq kept if we hold a halt
+  // The CH32L103 drops its DMI link after this write and the next read fails (2026-09-24: every attach failed
+  // until the bus was brought up again here, as halt() does after a change of state).
+  phy_.reinit();
+  return true;
+}
+
+bool Ch32Dm::resetHalt(uint32_t &dpc) {
+  dpc = 0;
+  if (!attach()) return false;
+  loader_resident_ = false;
+  if (!halted_) halt();                    // ndmreset on a running hart left it stopped oddly (2026-09-22)
+  phy_.write(kAbstractAuto, 0);
+  // haltreq is held through the reset, so the hart comes out of it into debug mode - provided the writes land. The
+  // part leaves reset on its default clock, slower than a sketch that raised it, and at the speed attach() tuned to
+  // the sketch the release was garbled and the hart ran into its image (2026-09-24, CH32X035 from a running
+  // sketch: 0 of 28 at the vector; at the slowest period 28 of 28, as through a WCH-LinkE). So run the reset at
+  // the slowest period and tune the link again once the hart has stopped. A DMSTATUS without version 2 is noise.
+  phy_.useSafeSpeed();
+  phy_.write(kDmControl, 0x80000003);      // haltreq | ndmreset | dmactive
+  phy_.write(kDmControl, 0x80000001);
+  // Out of reset the hart may be unavailable for a while; it should then come up halted at the reset vector.
+  // The release is written again with haltreq in case the DM ignored it (it ignores DMI writes for a while after
+  // ndmreset, 2026-09-22), and ndmreset is checked clear at the end.
+  bool halted = false;
+  for (int poll = 0; poll < 400 && !halted; ++poll) {
+    uint32_t status = 0;
+    if (!phy_.read(kDmStatus, status) || (status & 0xf) != 2) { phy_.reinit(); continue; }
+    if (status & (1u << 13)) { delayMicroseconds(250); continue; }   // anyunavail
+    if (status & (1u << 9)) { halted = true; break; }
+    phy_.write(kDmControl, 0x80000001);
+    delayMicroseconds(250);
+  }
+  uint32_t control = 0;
+  const bool released = phy_.read(kDmControl, control) && (control & 0x3) == 0x1;
+  phy_.write(kDmControl, 0x90000001);      // ackhavereset, haltreq kept
+  phy_.write(kAbstractCs, 0x700);
+  phy_.reinit();
+  halted_ = halted;
+  phy_.retune();                           // at the default clock this time
+  return released && halted && readRegister(0x07b1, dpc);
+}
+
+bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved) {
+  dpc_before = dpc_after = 0;
+  moved = false;
+  if (!halted_) return false;
+  uint32_t dcsr = 0;
+  if (!readRegister(0x07b1, dpc_before) || !readRegister(0x07b0, dcsr)) return false;
+  if (!writeRegister(0x07b0, dcsr | 0x4u)) return false;   // dcsr.step, the privilege level as it is
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kDmControl, 0x40000001);      // resumereq, once
+  bool halted = false;
+  const uint32_t started = micros();
+  while (micros() - started < 50000u) {
+    uint32_t status = 0;
+    if (!phy_.read(kDmStatus, status)) { phy_.reinit(); continue; }
+    if (status & (1u << 9)) { halted = true; break; }
+  }
+  phy_.write(kDmControl, 0x80000001);
+  phy_.write(kAbstractCs, 0x700);
+  phy_.reinit();
+  if (!halted) {
+    halted_ = false;
+    if (!halt()) return false;
+  }
+  const bool ok = readRegister(0x07b1, dpc_after) && writeRegister(0x07b0, dcsr & ~0x4u);
+  moved = dpc_after != dpc_before;
+  return ok;
+}
+
+bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), void *ctx, uint32_t hold_ms,
+                              uint32_t &dpc) {
+  dpc = 0;
+  halted_ = false;
+  loader_resident_ = false;
+  hold(ctx);
+  delay(hold_ms);
+  // Bring the link up while the target is held (it may or may not answer yet), queue the halt request, then let
+  // go and keep asking until the hart reports halted - before firmware that kills the debug pins gets that far.
+  phy_.reinit();
+  phy_.attach();
+  phy_.write(kDmControl, 0x80000001);
+  release(ctx);
+  bool halted = false;
+  const uint32_t started = micros();
+  while (!halted && micros() - started < 200000u) {
+    phy_.write(kDmControl, 0x80000001);
+    uint32_t status = 0;
+    if (phy_.read(kDmStatus, status)) halted = (status & (1u << 9)) != 0;
+    else phy_.reinit();
+  }
+  if (!halted) return false;
+  phy_.write(kDmControl, 0x90000001);      // ackhavereset, haltreq kept
+  phy_.write(kAbstractCs, 0x700);
+  phy_.reinit();
+  halted_ = true;
+  return readRegister(0x07b1, dpc);
 }
 
 bool Ch32Dm::waitFlash() {

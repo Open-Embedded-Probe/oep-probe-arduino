@@ -3,9 +3,9 @@
 // (single wire, SwioPhy).
 //
 // v1 draft: oep.core (the probe in its describe), oep.wire.swio, oep.target.riscv-dm, oep.target.console,
-// and the fixtures oep.fixture.gpio / uart / capture (v0 services under v1 names). GPIO23 -> PD7/NRST is a
-// gpio channel labelled NRST, not a reset capability (oep-spec capability-name-hierarchy.ja.md, decision 2):
-// pulse it open-drain through fixture.gpio when a pin reset is needed (UIAPduino bootloader, PINRSTF).
+// and the fixtures oep.fixture.gpio / uart / capture (v0 services under v1 names). GPIO23 -> PD7/NRST is a gpio
+// channel labelled NRST and the default reset line for oep.wire.swio attach-under-reset (the host may name another);
+// a plain pin reset (UIAPduino bootloader, PINRSTF) pulses it open drain through fixture.gpio.
 // The ESP-IDF I2C / SPI targets are offered under io.github.ch32-riscv-ug.esp32.*.
 #include <OepCh32Dm.h>
 #include <OepFixtureCapture.h>
@@ -98,6 +98,8 @@ void setup() {
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
   endpoint.add(riscvDm);
+  port.reset_default = 23;   // attach-under-reset through the V003's NRST unless the host names another channel
+  for (size_t i = 0; i < fixturePinCount; ++i) port.reset_allowed |= 1ull << fixturePins[i];
   console.setMaxRead(480);   // 512-byte frames
   endpoint.add(console);
   pins = new oep::PinTable(fixturePins, fixturePinCount);
