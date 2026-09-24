@@ -20,10 +20,14 @@ class Endpoint {
   static constexpr size_t kMaxInterfaces = 16;
   static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMaxMs = 600000;
 
+  // Framing: length-prefixed on reliable streams (USB CDC, USB-Serial/JTAG, TCP); COBS + CRC-16 on a UART
+  // (through a USB-UART bridge the bytes are not protected). The probe knows which transport it has.
+  enum class Framing : uint8_t { kLengthPrefixed, kCobsCrc };
+
   Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
-           Limits limits)
-      : stream_(stream), reader_(rx_buffer, rx_capacity, limits.max_frame), tx_(tx_buffer),
-        tx_capacity_(tx_capacity), limits_(limits) {}
+           Limits limits, Framing framing = Framing::kLengthPrefixed)
+      : stream_(stream), reader_(rx_buffer, rx_capacity, limits.max_frame), cobs_(rx_buffer, rx_capacity),
+        tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(limits), framing_(framing) {}
 
   bool add(Interface &interface);
   // oep.core's describe: the probe itself, as TLV bytes (kept by the caller).
@@ -35,9 +39,11 @@ class Endpoint {
  private:
   Stream &stream_;
   FrameReader reader_;
+  CobsReader cobs_;
   uint8_t *tx_;
   size_t tx_capacity_;
   Limits limits_;
+  Framing framing_;
   Interface *interfaces_[kMaxInterfaces] = {};
   size_t count_ = 0;
   const uint8_t *probe_tlv_ = nullptr;

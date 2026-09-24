@@ -52,9 +52,16 @@ bool Endpoint::add(Interface &interface) {
 
 void Endpoint::poll() {
   while (stream_.available()) {
-    if (!reader_.push(static_cast<uint8_t>(stream_.read()))) continue;
-    handleMessage(reader_.message(), reader_.length());
-    reader_.consume();
+    const uint8_t byte = static_cast<uint8_t>(stream_.read());
+    if (framing_ == Framing::kCobsCrc) {
+      if (!cobs_.push(byte)) continue;
+      handleMessage(cobs_.message(), cobs_.length());
+      cobs_.consume();
+    } else {
+      if (!reader_.push(byte)) continue;
+      handleMessage(reader_.message(), reader_.length());
+      reader_.consume();
+    }
   }
 }
 
@@ -118,7 +125,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   putU16(tx_ + 1, corr);
   tx_[3] = result.resolution;
   tx_[4] = result.detail;
-  writeFrame(stream_, tx_, kResultHeader + result.length);
+  if (framing_ == Framing::kCobsCrc) writeCobsFrame(stream_, tx_, kResultHeader + result.length);
+  else writeFrame(stream_, tx_, kResultHeader + result.length);
 }
 
 Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,

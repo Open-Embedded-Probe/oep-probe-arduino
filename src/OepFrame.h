@@ -38,4 +38,31 @@ class FrameReader {
 // Write one message with its length prefix. Returns bytes of message written (0 on failure).
 size_t writeFrame(Stream &stream, const uint8_t *message, size_t length);
 
+// UART binding (oep-spec v0-core-wire-model §2.2, provisional): message + CRC-16 (little endian), COBS-encoded,
+// ended by 0x00. A corrupted, truncated or joined frame fails the decode or the CRC and is dropped; the next
+// 0x00 is a fresh start, so a stray byte costs one frame, never the link.
+// CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor ("123456789" -> 0x29B1). Provisional.
+uint16_t crc16Ccitt(const uint8_t *data, size_t length, uint16_t crc = 0xFFFF);
+
+class CobsReader {
+ public:
+  CobsReader(uint8_t *buffer, size_t capacity) : buffer_(buffer), capacity_(capacity) {}
+  bool push(uint8_t byte);   // true when a checked message is available
+  const uint8_t *message() const { return buffer_; }
+  size_t length() const { return length_; }
+  void consume() { length_ = 0; have_ = 0; }
+  uint32_t crcErrors() const { return crc_errors_; }
+  uint32_t malformed() const { return malformed_; }
+
+ private:
+  uint8_t *buffer_;
+  size_t capacity_;
+  size_t have_ = 0;     // encoded bytes since the last delimiter
+  size_t length_ = 0;   // decoded message length once complete
+  bool overflow_ = false;
+  uint32_t crc_errors_ = 0, malformed_ = 0;
+};
+
+size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length);
+
 }  // namespace oep

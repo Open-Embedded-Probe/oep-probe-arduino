@@ -51,4 +51,61 @@ size_t writeFrame(Stream &stream, const uint8_t *message, size_t length) {
   return stream.write(message, length);
 }
 
+uint16_t crc16Ccitt(const uint8_t *data, size_t length, uint16_t crc) {
+  for (size_t i = 0; i < length; ++i) {
+    crc ^= static_cast<uint16_t>(data[i]) << 8;
+    for (int b = 0; b < 8; ++b) crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
+  }
+  return crc;
+}
+
+bool CobsReader::push(uint8_t byte) {
+  if (byte != 0) {
+    if (have_ < capacity_) buffer_[have_++] = byte;
+    else overflow_ = true;
+    return false;
+  }
+  // Delimiter: decode in place (the output is never longer than the input).
+  const size_t n = have_;
+  have_ = 0;
+  if (n == 0) return false;                 // back-to-back delimiters: nothing
+  if (overflow_) { overflow_ = false; ++malformed_; return false; }
+  size_t in = 0, out = 0;
+  while (in < n) {
+    const uint8_t code = buffer_[in++];
+    if (in + code - 1 > n) { ++malformed_; return false; }
+    for (uint8_t i = 1; i < code; ++i) buffer_[out++] = buffer_[in++];
+    if (code != 0xff && in < n) buffer_[out++] = 0;
+  }
+  if (out < 3) { ++malformed_; return false; }
+  const uint16_t got = static_cast<uint16_t>(buffer_[out - 2] | buffer_[out - 1] << 8);
+  if (crc16Ccitt(buffer_, out - 2) != got) { ++crc_errors_; return false; }
+  length_ = out - 2;
+  return true;
+}
+
+size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length) {
+  if (length == 0) return 0;
+  const uint16_t crc = crc16Ccitt(message, length);
+  const uint8_t tail[2] = {static_cast<uint8_t>(crc), static_cast<uint8_t>(crc >> 8)};
+  const size_t total = length + 2;
+  auto at = [&](size_t i) -> uint8_t { return i < length ? message[i] : tail[i - length]; };
+  // Standard COBS: each block is its length + 1 followed by up to 254 non-zero bytes; a block shorter than
+  // 254 bytes implies the zero that ended it (none after the last block). A full block (code 0xFF) implies
+  // nothing, so the next block starts right after it - and if the data ends there, an empty block follows.
+  size_t i = 0;
+  for (;;) {
+    size_t j = i;
+    while (j < total && at(j) != 0 && j - i < 254) ++j;
+    const uint8_t code = static_cast<uint8_t>(j - i + 1);
+    stream.write(code);
+    for (size_t k = i; k < j; ++k) stream.write(at(k));
+    if (code == 0xff) { i = j; continue; }
+    if (j >= total) break;
+    i = j + 1;   // skip the zero this block stood for
+  }
+  stream.write(static_cast<uint8_t>(0));
+  return length;
+}
+
 }  // namespace oep
