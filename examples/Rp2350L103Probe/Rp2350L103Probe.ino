@@ -24,9 +24,9 @@
 #ifndef OEP_RVSWD_SWCLK
 #define OEP_RVSWD_SWCLK 1
 #endif
-// The jig is flying leads, and it shows: at 100 and 200 ns the link passes attach()'s read
-// and write checks yet memory reads come back as the previous operation's leftover, while
-// 500 ns is stable (2026-09-23). Hold the floor there until the CH32L103 is properly wired.
+// Measured 2026-09-23: at 100 and 200 ns the link passed attach()'s read and write checks yet memory reads came
+// back as the previous operation's leftover, while 500 ns was stable. That was before the RP2 bit-bang's wait
+// matched its calibration (2026-09-24) and the reset rework (2026-09-25); re-measure before trusting this floor.
 #ifndef OEP_RVSWD_MIN_HALF_NS
 #define OEP_RVSWD_MIN_HALF_NS 500
 #endif

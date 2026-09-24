@@ -265,7 +265,7 @@ bool RvswdPhy::readsStable(uint32_t &first) {
 }
 
 // Reads can be clean at a half period whose writes are not. Measured on a CH32L103 over
-// the Pico's flying wires (2026-09-23): DMSTATUS read the same 1000 times at 100 ns, yet
+// the RP2350 probe (2026-09-23): DMSTATUS read the same 1000 times at 100 ns, yet
 // the halt requests written at that speed were silently mangled - the hart kept running
 // and abstract commands failed cmderr=4. So prove the write path at the same speed.
 // DATA0 is the debug module's own scratch register while no abstract command runs.
@@ -344,13 +344,13 @@ bool RvswdPhy::attach() {
   // Margin check (E156/E157): half 0 ns sometimes fails for a whole run. The bus is brought
   // up again for each candidate, because a half period the target cannot follow leaves its
   // debug module out of step and the next, slower attempt would inherit that (2026-09-23:
-  // on the Pico's flying wires to a CH32L103, one probe with a fresh init answered while
+  // on the RP2350 probe to a CH32L103, one probe with a fresh init answered while
   // this loop without one failed at every half period).
   // One candidate: bring the bus up, then insist on 1000 identical DMSTATUS reads.
   auto clean_at = [this](uint32_t half) {
     setHalf(half);
     // A cold debug module does not answer the first wake. Measured on a CH32L103 over the
-    // Pico's flying wires (2026-09-23): the first clean read came on attempt 5 at a 500 ns
+    // RP2350 probe (2026-09-23): the first clean read came on attempt 5 at a 500 ns
     // half period, and on attempt 0 once the module had answered. So give each candidate a
     // few tries before judging it, or a cold target looks like no target at all.
     uint32_t first = 0;

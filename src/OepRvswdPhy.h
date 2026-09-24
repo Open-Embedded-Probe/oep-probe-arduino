@@ -35,7 +35,7 @@ class RvswdPhy final : public DmiPhy {
   void useSafeSpeed() override;
   bool retune() override;
   // Refuse to attach faster than this. attach() measures the link, but a marginal one
-  // (flying leads to a bench target) can pass both the read and the write check at a
+  // (a bench jig) can pass both the read and the write check at a
   // period whose longer abstract-command sequences still break, and the period it lands
   // on then varies run to run. A jig that is known to be provisional says so here rather
   // than leaving the probe to guess: 0 = no floor.
