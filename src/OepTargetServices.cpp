@@ -326,6 +326,7 @@ void TargetConsole::pollSeq() {
     seq_h_ = static_cast<uint8_t>(a ^ 1u);
     seq_chunk_len_ = 0;                           // anything half-sent went to the old session
     seq_syn_drops_ = 0;
+    ++seq_resyncs_;
   }
   if (s != seq_last_s_) {
     for (uint8_t i = 0; i < n; ++i) push(b[1 + i]);
@@ -359,6 +360,53 @@ void TargetConsole::seqAnswer(uint8_t k, bool with_data) {
   phy_.write(0x04, answer);
 }
 
+// Every start is a fresh session, even over one that is still open: a runner that moves from one
+// sketch to the next reprograms the target in between, and bytes queued for the last sketch must
+// not be delivered to this one.
+bool TargetConsole::start(uint8_t framing) {
+  if (framing > 2 || !dm_.attach()) return false;
+  head_ = tail_ = 0;
+  tx_head_ = tx_tail_ = 0;
+  dropped_ = 0;
+  saw_empty_ = false;
+  seq_synced_ = false;
+  seq_last_syn_ = false;
+  seq_syn_drops_ = 0;
+  seq_chunk_len_ = 0;
+  seq_resyncs_ = 0;
+  // Whatever an earlier session left in the mailbox would read as a frame - including
+  // SerialDMDATA's latched timeout, which a host clears by taking the word. Claim it,
+  // then let a couple of rounds go by and throw those away, so the first exchange the
+  // caller sees is not the tail of somebody else's.
+  phy_.write(0x04, 0);
+  enabled_ = true;
+  framing_ = framing;
+  for (int i = 0; i < 4; ++i) poll();
+  head_ = tail_ = 0;
+  return true;
+}
+
+size_t TargetConsole::take(uint8_t *out, size_t maximum) {
+  size_t n = 0;
+  while (n < maximum && tail_ != head_) {
+    out[n++] = buffer_[tail_];
+    tail_ = static_cast<uint16_t>((tail_ + 1) % kCapacity);
+  }
+  return n;
+}
+
+size_t TargetConsole::queue(const uint8_t *data, size_t length) {
+  if (!enabled_ || framing_ == 0) return 0;
+  size_t queued = 0;
+  while (queued < length) {
+    const uint16_t next = static_cast<uint16_t>((tx_head_ + 1) % kTxCapacity);
+    if (next == tx_tail_) break;           // full: the target is not collecting
+    tx_[tx_head_] = data[queued++];
+    tx_head_ = next;
+  }
+  return queued;
+}
+
 void TargetConsole::abandon() {
   enabled_ = false;
   head_ = tail_ = 0;
@@ -372,30 +420,8 @@ Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t l
     case OEP_V0_TARGET_CONSOLE_OP_CONFIGURE: {
       struct oep_v0_target_console_configure_request request;
       if (!oep_v0_target_console_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (request.enable && !dm_.attach()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
       if (request.framing > 2) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      // Every enable is a fresh session, even over one that is still open: a runner that
-      // moves from one sketch to the next reprograms the target in between, and bytes
-      // queued for the last sketch must not be delivered to this one.
-      if (request.enable) {
-        head_ = tail_ = 0;
-        tx_head_ = tx_tail_ = 0;
-        dropped_ = 0;
-        saw_empty_ = false;
-        seq_synced_ = false;
-        seq_last_syn_ = false;
-        seq_syn_drops_ = 0;
-        seq_chunk_len_ = 0;
-        // Whatever an earlier session left in the mailbox would read as a frame - including
-        // SerialDMDATA's latched timeout, which a host clears by taking the word. Claim it,
-        // then let a couple of rounds go by and throw those away, so the first exchange the
-        // caller sees is not the tail of somebody else's.
-        phy_.write(0x04, 0);
-        enabled_ = true;
-        framing_ = request.framing;
-        for (int i = 0; i < 4; ++i) poll();
-        head_ = tail_ = 0;
-      }
+      if (request.enable && !start(request.framing)) return rejected(OEP_V0_REJECT_UNAVAILABLE);
       enabled_ = request.enable != 0;
       framing_ = request.framing;
       struct oep_v0_target_console_configure_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0), framing_};

@@ -82,6 +82,7 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
     case kOpReset: {   // confirm(u8)  ->  flags(u8) attempts(u8) pc(u32), as the v0 reset report
       if (n != 1 || capacity < 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
       const Ch32Dm::ResetReport r = dm.reset(p[0] == 1);
+      ++port_.resets;
       out[0] = r.flags;
       out[1] = r.attempts;
       putU32(out + 2, r.pc);

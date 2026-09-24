@@ -54,6 +54,16 @@ class TargetConsole final : public Service {
   // Call from loop(). Collects at most one frame, and only while the target is attached
   // and running: those two registers are where abstract commands put their operands.
   void poll();
+  // For the v1 console stream (OepV1Console), which keeps its own position-addressed buffer:
+  // start a fresh session in `framing`, stop, take what has arrived, queue bytes for the target.
+  bool start(uint8_t framing);
+  void stop() { enabled_ = false; }
+  bool enabled() const { return enabled_; }
+  size_t take(uint8_t *out, size_t maximum);
+  size_t queue(const uint8_t *data, size_t length);
+  uint32_t dropped() const { return dropped_; }
+  // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
+  uint32_t resyncs() const { return seq_resyncs_; }
 
  private:
   static constexpr size_t kCapacity = 2048;
@@ -86,6 +96,7 @@ class TargetConsole final : public Service {
   uint8_t seq_chunk_len_ = 0;           // 0 = nothing outstanding
   uint8_t seq_bad_run_ = 0;             // consecutive invalid words
   uint8_t seq_syn_drops_ = 0;           // test hook OEP_CONSOLE_FAULT_SYN
+  uint32_t seq_resyncs_ = 0;
 };
 
 class TargetFlash final : public Service {
