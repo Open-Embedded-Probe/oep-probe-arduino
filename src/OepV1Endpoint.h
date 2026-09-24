@@ -55,6 +55,10 @@ class Endpoint {
   Result list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  Result planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  void planRelease();
+  bool planned_[kMaxInterfaces] = {};
+  bool plan_active_ = false;
   Result checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity);
   void lapse();
   uint32_t remaining() const;

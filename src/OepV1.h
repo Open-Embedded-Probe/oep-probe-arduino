@@ -86,7 +86,18 @@ class Interface {
   // Operations that change nothing may run without the lock (and without a session id).
   virtual bool lockFree(uint8_t op) const { (void)op; return false; }
   virtual Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) = 0;
+  // Pin plan (core plan_apply / plan_release, the v0 shape): check without side effects (0 = acceptable, else a
+  // reject reason), apply, undo. The plan is probe state: it outlives sessions until released.
+  virtual uint8_t planCheck(const RoleAssignment *roles, size_t count) {
+    (void)roles;
+    return count ? OEP_V0_REJECT_UNAVAILABLE : 0;
+  }
+  virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
+  virtual void planRelease() {}
 };
+
+constexpr uint8_t kOpPlanApply = 0x04, kOpPlanRelease = 0x05;
+constexpr uint8_t kTagRoleAssignment = 0x90;   // fn(u16) role(u8) channel(u16), critical
 
 }  // namespace v1
 }  // namespace oep
