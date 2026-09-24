@@ -584,6 +584,10 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   // go and keep asking until the hart reports halted - before firmware that kills the debug pins gets that far.
   phy_.reinit();
   phy_.attach();
+  // The part comes out of reset on its default clock: a speed tuned earlier to a sketch's raised clock garbles the
+  // halt requests below and the hart runs into its image (2026-09-24, CH32L103: 2 in 10 stopped mid-sketch after a
+  // plain attach had tuned the link). Same rule as the other resets - slowest period, retune once stopped.
+  phy_.useSafeSpeed();
   phy_.write(kDmControl, 0x80000001);
   release(ctx);
   bool halted = false;
@@ -599,6 +603,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   phy_.write(kAbstractCs, 0x700);
   phy_.reinit();
   halted_ = true;
+  phy_.retune();
   return readRegister(0x07b1, dpc);
 }
 

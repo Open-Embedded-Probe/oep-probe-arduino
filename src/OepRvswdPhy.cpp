@@ -302,7 +302,9 @@ bool RvswdPhy::writesLand() {
 }
 
 void RvswdPhy::useSafeSpeed() {
-  if (!attached_) return;
+  // Also when attach() did not take: a CH32 held in reset may not answer, and the writes that follow the release
+  // must still go out at a speed its default clock can follow.
+  if (!ready_) return;
   setHalf(kHalfNs[kCount - 1] > min_half_ns_ ? kHalfNs[kCount - 1] : min_half_ns_);
   configureBus(false);
 }
