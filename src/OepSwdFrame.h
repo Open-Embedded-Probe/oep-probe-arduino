@@ -74,12 +74,21 @@ inline uint8_t transfer(Io &io, bool ap, bool read_op, uint8_t a2_3, uint32_t &d
   io.hostDrives(false);
   sampleBit(io);                   // turnaround
   const uint8_t ack = uint8_t(readBits(io, 3));
+  if (ack != kOk) {
+    // WAIT and FAULT have no data phase (overrun detection off): one turnaround and the host has the line back.
+    // Clocking a data phase here anyway put every later transfer out of step - after the RP2350 faulted a read,
+    // even the ABORT that clears the fault got no reply (2026-09-24).
+    sampleBit(io);
+    io.hostDrives(true);
+    idle(io, 8);
+    return ack;
+  }
   if (read_op) {
     const uint32_t value = readBits(io, 32);
     const bool par = sampleBit(io);
     sampleBit(io);                 // turnaround
     io.hostDrives(true);
-    if (ack == kOk && par != parity32(value)) return kNoReply;
+    if (par != parity32(value)) return kNoReply;
     data = value;
   } else {
     sampleBit(io);                 // turnaround
