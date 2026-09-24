@@ -45,9 +45,9 @@ static constexpr uint64_t kReserved = (uint64_t{1} << kSwdio) | (uint64_t{1} << 
 static uint8_t fixturePins[30];
 static size_t fixturePinCount = 0;
 
-// CH32L103C8T6: 64 KiB flash from 0x08000000, 256-byte pages, QingKe V4 - the same DM profile as the CH32X035.
+// CH32L103C8T6. The flash layout is the host's business.
 static oep::RvswdPhy phy;
-static oep::Ch32Dm dm(phy, {0x08000000u, 65536u, 256u, 256u});
+static oep::Ch32Dm dm(phy);
 static oep::v1::DebugPort port{dm, kSwdio, kSwclk};
 static oep::v1::WireRvswd wire(port, 1);
 static oep::v1::TargetRiscvDm riscvDm(port, 1);

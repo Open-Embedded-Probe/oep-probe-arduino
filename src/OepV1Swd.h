@@ -35,6 +35,7 @@ class WireSwd final : public Interface {
 
  private:
   bool wake(const uint32_t *targetsel, uint32_t &dpidr, bool &dormant);
+  bool xferDpidr(uint32_t &dpidr);   // one DPIDR read on the current, live port
   SwdPort &port_;
   uint16_t instance_;
 };

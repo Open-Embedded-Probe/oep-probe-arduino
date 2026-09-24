@@ -37,7 +37,9 @@ inline uint32_t loopPicoseconds() {
 struct BitBang {
   uint32_t dio_mask = 0, clk_mask = 0, both_mask = 0, loops = 0;
 
-  inline void spin() const { for (uint32_t i = loops; i; --i) __asm__ volatile("nop"); }
+  // The same noinline loop the calibration timed, so the half period is what setHalfNs() promised (an inlined
+  // copy compiles to a different loop and runs at a different speed).
+  inline void spin() const { if (loops) nopLoop(loops); }
   inline void bothHigh() const { sio_hw->gpio_set = both_mask; }
   // SWCLK low and SWDIO to the bit: the clear lands first so the clock edge never rides
   // on a stale data level.

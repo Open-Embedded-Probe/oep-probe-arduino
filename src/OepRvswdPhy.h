@@ -1,7 +1,7 @@
-// RVSWD physical layer on ESP32 dedicated GPIO (E151/E153/E156/E157):
-// push-pull SWDIO with explicit turnaround, per-session half-period margin
-// check, bounded retry on DMI parity failure. Other architectures get a stub
-// that reports Unavailable, so the same services compile everywhere.
+// RVSWD physical layer: push-pull SWDIO with explicit turnaround, per-session half-period margin
+// check, bounded retry on DMI parity failure. Backends: ESP32 dedicated GPIO (E151/E153/E156/E157)
+// and RP2040 / RP2350 SIO (OepRp2BitBang.h). Other architectures get a stub that reports
+// Unavailable, so the same services compile everywhere.
 #pragma once
 
 #include <Arduino.h>

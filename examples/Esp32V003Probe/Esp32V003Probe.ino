@@ -36,9 +36,9 @@ static constexpr uint64_t kBonded = (1ull << 4) | (1ull << 5) | (1ull << 13) | (
 static uint8_t fixturePins[40];
 static size_t fixturePinCount = 0;
 
-// CH32V003F4U6: 16 KiB, 64-byte pages, QingKe V2.
+// CH32V003 (UIAPduino). The flash layout and the RAM loader are the host's business.
 static oep::SwioPhy phy;
-static oep::Ch32Dm dm(phy, {0x08000000u, 16384u, 64u, 64u}, oep::DmProfile::kQingKeV2);
+static oep::Ch32Dm dm(phy);
 static oep::v1::DebugPort port{dm, oep::SwioPhy::kPin, 0xffff};
 static oep::v1::WireRvswd wire(port, 1, "oep.wire.swio");
 static oep::v1::TargetRiscvDm riscvDm(port, 1);

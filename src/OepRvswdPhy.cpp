@@ -317,15 +317,17 @@ bool RvswdPhy::retune() {
   if (!attached_) return false;
   const uint32_t floor = min_half_ns_;
   size_t good = kCount;   // index of the fastest period that passed
+  bool failed = false;
   for (size_t i = kCount; i-- > 0;) {
     if (kHalfNs[i] < floor && i != kCount - 1) break;
     setHalf(kHalfNs[i] > floor ? kHalfNs[i] : floor);
     configureBus(false);
     uint32_t first = 0;
-    if (!readsStable(first) || !writesLand()) break;
+    if (!readsStable(first) || !writesLand()) { failed = true; break; }
     good = i;
   }
   if (good == kCount) { useSafeSpeed(); return false; }
+  if (!failed) return true;   // the fastest candidate passed and is still set: nothing is out of step
   for (int tries = 0; tries < 3; ++tries) {
     setHalf(kHalfNs[good] > floor ? kHalfNs[good] : floor);
     configureBus(false);

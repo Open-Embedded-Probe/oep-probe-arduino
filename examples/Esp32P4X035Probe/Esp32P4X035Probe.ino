@@ -22,9 +22,9 @@ static uint8_t rxBuffer[1024];
 static uint8_t txBuffer[1024];
 static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8});
 
-// Fixture wiring: P4 GPIO2 -> X035 PC18 (SWDIO), GPIO54 -> PC19 (SWCLK). CH32X035F8U6: 62 KiB, 256-byte pages.
+// Fixture wiring: P4 GPIO2 -> X035 PC18 (SWDIO), GPIO54 -> PC19 (SWCLK). The flash layout is the host's business.
 static oep::RvswdPhy phy;
-static oep::Ch32Dm dm(phy, {0x08000000u, 63488u, 256u, 256u});
+static oep::Ch32Dm dm(phy);
 static oep::v1::DebugPort port{dm, 2, 54};
 static oep::v1::WireRvswd wire(port, 1);
 static oep::v1::TargetRiscvDm riscvDm(port, 1);
