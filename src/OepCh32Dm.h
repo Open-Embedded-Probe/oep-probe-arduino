@@ -18,12 +18,9 @@ class Ch32Dm {
   bool attach();
   bool halt();            // attach + haltreq, waits for allhalted
   bool resume();          // resumereq, waits for allresumeack
-  // ndmreset then detach: the target restarts from its reset vector. The report
-  // mirrors target.control reset: flags bit0 DM said running, bit1 execution
-  // confirmed by a nonzero PC sample (confirm = true: brief halt, dpc read,
-  // resume, re-sampled while the hart sits at the reset vector), bit2 the hart
-  // was found parked at the reset vector or the sequence was redone, bit3 the
-  // confirmation halt failed on the last attempt.
+  // Restart the target from its reset vector and let it run (reset-halt, then resume; the link stays attached).
+  // flags: bit0 released and running, bit1 execution confirmed by a nonzero pc sample (confirm = true: a brief
+  // halt, dpc read, resume), bit2 the sequence was redone, bit3 a confirmation halt / resume failed.
   struct ResetReport { uint8_t flags; uint8_t attempts; uint32_t pc; };
   ResetReport reset(bool confirm = true);
   void detach();          // dmactive = 0, lines Hi-Z (target keeps running or stays halted)
@@ -78,9 +75,6 @@ class Ch32Dm {
   void retune();                          // PHY speed search + the same
   void settleHalted(bool ack_reset);      // after the hart stopped: ack a pending reset, relink, halted_
   bool loadRegisters(uint32_t &data0_address);
-  ResetReport resetSequence(bool confirm);   // reset() without the final retune
-  bool resetOnce();                 // one ndmreset state machine, ends released; true = DM said running
-  bool confirmExecution(uint32_t &pc, bool &halt_failed);  // attach, halt, sample dpc, resume, release
 };
 
 }  // namespace oep

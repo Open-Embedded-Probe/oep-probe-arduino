@@ -59,8 +59,8 @@ void Ch32Dm::settleHalted(bool ack_reset) {
 bool Ch32Dm::halt() {
   if (!attach()) return false;
   if (halted_) return true;
-  // One halt request is not always enough. Measured on a CH32L103 over the Pico's flying
-  // wires (2026-09-23): DMCONTROL reads the request back as set while the hart keeps
+  // One halt request is not always enough. Measured on a CH32L103 through the RP2350
+  // probe (2026-09-23): DMCONTROL reads the request back as set while the hart keeps
   // running, and abstract commands fail cmderr=4; repeating it makes the halt land every
   // time. minichlink writes it three or four times in a row for the same reason, so
   // re-issue between polls instead of only polling.
@@ -108,116 +108,36 @@ bool Ch32Dm::resume() {
   return ok;
 }
 
-bool Ch32Dm::resetOnce() {
-  if (!attach()) return false;
-  // ndmreset applied to a running hart left it stopped in most cycles, while a
-  // halted hart always restarted (2026-09-22, 20-cycle alternation). Halt first.
-  if (!halted_) halt();
-  phy_.useSafeSpeed();                 // the part comes out of reset on its default, slower clock
-  phy_.write(kAbstractAuto, 0);
-  phy_.write(kDmControl, 0x00000003);  // dmactive | ndmreset
-  delay(1);
-  // The de-assert write issued 100 us after asserting ndmreset was lost every
-  // second time (2026-09-22, strict good/bad alternation): the DM does not take
-  // DMI writes for a while after ndmreset. Write, read back, repeat until the
-  // ndmreset bit is really clear.
-  bool released = false;
-  for (int i = 0; i < 50 && !released; ++i) {
-    phy_.write(kDmControl, 0x00000001);
-    uint32_t control = 0;
-    if (phy_.read(kDmControl, control) && (control & 0x3) == 0x1) released = true;
-    else delay(1);
-  }
-  // Re-activating the debug module (dmactive 0 -> 1) is what reliably let the
-  // hart out of reset on the next attach when a plain de-assert did not
-  // (2026-09-22). Do it here so the target runs before the probe lets go.
-  phy_.write(kDmControl, 0x00000000);
-  delayMicroseconds(200);
-  phy_.write(kDmControl, 0x00000001);
-  delay(1);
-  // After ndmreset the hart may report unavailable for a while, or come out
-  // halted (2026-09-22: every second reset showed allhalted+anyunavail right
-  // after the release). Wait for a consistent running state, resuming a halted
-  // hart, before letting go of the debug module.
-  uint32_t status = 0;
-  int polls = 0;
-  bool running = false;
-  for (; polls < 200 && !running; ++polls) {
-    if (!phy_.read(kDmStatus, status)) { delayMicroseconds(500); continue; }
-    const bool unavail = status & (1u << 13), halted = status & (1u << 9), allrunning = status & (1u << 11);
-    if (unavail) { delayMicroseconds(500); continue; }
-    if (halted) { phy_.write(kDmControl, 0x40000001); delayMicroseconds(500); continue; }  // resumereq
-    if (allrunning) running = true; else delayMicroseconds(500);
-  }
-  // bit0 running (consistent), bit1 last allhalted, bit2 last anyunavail, bit3 allhavereset, bit4 ndmreset released, bits5-7 polls/32
-  phy_.write(kDmControl, 0x10000001);  // ackhavereset
-  phy_.write(kDmControl, 0x00000001);
-  delay(1);
-  phy_.write(kDmControl, 0x00000000);
-  halted_ = false;
-  phy_.release();
-  delay(2);
-  // A hart that ndmreset left stopped was released every time by a fresh
-  // attach (lines re-driven, init sequence, dmactive 0 -> 1) and a running hart
-  // is not disturbed by it (2026-09-22). Do that once here, then let go.
-  if (phy_.attach()) {
-    phy_.write(kDmControl, 0x00000000);
-    phy_.release();
-    delay(2);
-  }
-  return running;
-}
-
-bool Ch32Dm::confirmExecution(uint32_t &pc, bool &halt_failed) {
-  pc = 0;
-  halt_failed = false;
-  if (!phy_.attach()) return false;
-  halted_ = false;
-  if (!halt()) { halt_failed = true; detach(); return false; }
-  const bool sampled = readRegister(0x7b1, pc);  // dpc
-  const bool resumed = resume();
-  detach();
-  return sampled && resumed;
-}
-
 Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
+  // Stop the hart at its reset vector (resetHalt: haltreq held through ndmreset, at the slowest speed, retuned once
+  // stopped), then let it run. The link stays attached the whole way. The old sequence - ndmreset with the hart
+  // running, then letting go of the bus and attaching again (a wake burst each time) to release and to confirm it -
+  // came through first time in only 9 of 20 resets on the CH32L103 and failed 5, while reset-halt + resume ran
+  // 20 of 20 on the L103, the X035 and the V003 alike (2026-09-25). Stopping at the vector first also takes care of
+  // the X035's parked-at-vector resets (E158).
   host_raw_ = false;
-  // resetOnce() dropped to the slowest speed for the reset and the sequence ends with the link released, so the
-  // next access attaches afresh and measures the speed again at whatever clock the target runs by then.
-  return resetSequence(confirm);
-}
-
-Ch32Dm::ResetReport Ch32Dm::resetSequence(bool confirm) {
   ResetReport report = {0, 0, 0};
-  if (!attach()) return report;
-  const bool running = resetOnce();
-  report.attempts = 1;
-  report.flags = running ? 1 : 0;
-  if (!confirm) return report;
-  // Evidence (E158, 2026-09-22): after ndmreset the X035 hart sits at the reset
-  // vector (dpc 0, CSRs at reset values) in about 4-5 % of cycles while DMSTATUS
-  // says allrunning; a haltreq/resumereq pair released it 9/9 times. So a
-  // sample at pc 0 is "parked, released by this resume", not execution: sample
-  // again and count only a nonzero pc. A failed halt means the DM is not usable
-  // at all; redo the reset sequence for that.
-  for (int attempt = 0; attempt < 4; ++attempt) {
-    bool halt_failed = false;
-    uint32_t pc = 0;
-    const bool ok = confirmExecution(pc, halt_failed);
-    if (ok && pc != 0) {
-      report.flags = (report.flags & ~8) | 2;
-      report.pc = pc;
-      return report;
+  for (uint8_t attempt = 1; attempt <= 3; ++attempt) {
+    report.attempts = attempt;
+    if (attempt > 1) report.flags |= 4;                     // redone
+    uint32_t dpc = 0;
+    if (!resetHalt(dpc) || !resume()) continue;
+    report.flags |= 1;                                      // released and running
+    if (!confirm) return report;
+    // Confirm execution: a moment for the image to start, then a brief halt for the pc. A pc still at the vector
+    // is not execution yet: resume and sample again.
+    for (int sample = 0; sample < 3; ++sample) {
+      delay(1);
+      uint32_t pc = 0;
+      if (!halt()) { report.flags |= 8; break; }            // the confirmation halt failed
+      const bool read = readRegister(0x7b1, pc);
+      if (!resume()) { report.flags |= 8; break; }
+      if (read && pc != 0) {
+        report.flags = static_cast<uint8_t>((report.flags & ~8) | 2);
+        report.pc = pc;
+        return report;
+      }
     }
-    if (ok) {  // parked at the reset vector: the resume above released it; re-sample
-      report.flags |= 4;
-      delayMicroseconds(500);
-      continue;
-    }
-    report.flags = (report.flags & ~8) | (halt_failed ? 8 : 0) | 4;
-    if (!attach()) break;
-    resetOnce();
-    ++report.attempts;
   }
   return report;
 }
@@ -277,7 +197,7 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
     // the first one plus one per DATA0 read, or one fewer when the last look-ahead faulted
     // (cmderr 3) before its store. A mangled address write, a trigger the module missed or
     // one it took twice all leave a count that is off - and all of them otherwise hand back
-    // plausible words with no error. Measured on the CH32L103 over the Pico's flying wires
+    // plausible words with no error. Measured on the CH32L103 through the RP2350 probe
     // (2026-09-23): a whole-flash CRC came out different about one read in three, with
     // every read reporting success.
     uint32_t next = 0;
@@ -380,7 +300,7 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   // The CH32L103 needs what halt()/resume() learned (2026-09-23): one resumereq does not always take and it never
   // raises allresumeack, and a change of hart state drops its DMI link, so a failed read is followed by a bus
   // bring-up. A stop with dpc still at `pc` means the code never ran - ask again (the host's code ends in an
-  // ebreak somewhere else, so a real stop never sits at its first instruction). Measured on the L103 over flying
+  // ebreak somewhere else, so a real stop never sits at its first instruction). Measured on the L103 through the RP2350 probe over
   // leads, 2026-09-24: 2 of 248 runs stopped at pc without running, 1 lost the link while polling.
   const uint32_t started = micros();
   for (int attempt = 0; attempt < 4 && !report.stopped; ++attempt) {
