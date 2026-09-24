@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "OepService.h"
+#include "OepResult.h"
 
 namespace oep {
 namespace v1 {
@@ -40,6 +40,9 @@ inline uint32_t getU32(const uint8_t *p) {
 inline void putU16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 inline void putU32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 
+// The firmware string every v1 draft probe reports (oep.core describe tag 0x40).
+constexpr const char *kFirmwareVersion = "3.1.0-v1draft";
+
 // Appends TLVs (tag, len, value) to a fixed buffer; ok() stays false once something did not fit.
 class TlvWriter {
  public:
@@ -62,6 +65,13 @@ class TlvWriter {
     putU16(b, channel);
     memcpy(b + 2, name, n);
     return put(kCoreLabel, b, 2 + n);
+  }
+  // A wire's fixed pin set as a channel group: role 1 SWDIO (or SWIO), role 2 SWCLK (none on a one-wire link).
+  bool pinGroup(uint16_t swdio, uint16_t swclk) {
+    uint8_t group[7] = {1, 1, 0, 0, 2, 0, 0};
+    putU16(group + 2, swdio);
+    putU16(group + 5, swclk);
+    return put(kTagChannelGroup, group, swclk == 0xffff ? 4 : sizeof group);
   }
   size_t length() const { return n_; }
   bool ok() const { return ok_; }
@@ -90,11 +100,27 @@ class Interface {
   // reject reason), apply, undo. The plan is probe state: it outlives sessions until released.
   virtual uint8_t planCheck(const RoleAssignment *roles, size_t count) {
     (void)roles;
-    return count ? OEP_V0_REJECT_UNAVAILABLE : 0;
+    return count ? kRejectUnavailable : 0;
   }
   virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
   virtual void planRelease() {}
+  // The endpoint's frame limit, told when the interface is added: what a describe may promise.
+  virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
 };
+
+// The part of oep.core's describe every probe writes the same way: firmware, model, unit id, channel count and
+// the reserved-channel bitmap. The sketch adds its profile and labels after it.
+inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id, size_t unit_id_length,
+                         uint16_t channels, uint64_t reserved) {
+  w.text(kCoreFirmware, kFirmwareVersion);
+  w.text(kCoreModel, model);
+  if (unit_id_length) w.put(kCoreUnitId, unit_id, unit_id_length);
+  w.u16(kCoreChannels, channels);
+  uint8_t bitmap[2 + 8] = {0, 0};                       // first channel (u16) = 0, then one bit per channel
+  const size_t bytes = (channels + 7) / 8 < 8 ? (channels + 7) / 8 : 8;
+  for (size_t i = 0; i < bytes; ++i) bitmap[2 + i] = static_cast<uint8_t>(reserved >> (8 * i));
+  return w.put(kCoreReserved, bitmap, 2 + bytes);
+}
 
 constexpr uint8_t kOpPlanApply = 0x04, kOpPlanRelease = 0x05;
 constexpr uint8_t kTagRoleAssignment = 0x90;   // fn(u16) role(u8) channel(u16), critical

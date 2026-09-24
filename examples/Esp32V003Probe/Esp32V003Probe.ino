@@ -13,7 +13,7 @@
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
 #include <OepSwioPhy.h>
-#include <OepTargetServices.h>
+#include <OepDmConsole.h>
 #include <OepV1Console.h>
 #include <OepV1Endpoint.h>
 #include <OepV1Fixture.h>
@@ -33,8 +33,7 @@ static constexpr uint64_t kBonded = (1ull << 4) | (1ull << 5) | (1ull << 13) | (
                                     (1ull << 19) | (1ull << 21) | (1ull << 22) | (1ull << 23) | (1ull << 25) | (1ull << 26) |
                                     (1ull << 27) | (1ull << 32) | (1ull << 33) | (1ull << 34) | (1ull << 35) | (1ull << 36) |
                                     (1ull << 39);
-static uint8_t fixturePins[40];
-static size_t fixturePinCount = 0;
+static constexpr uint64_t kFixtures = kBonded & ~kReserved;
 
 // CH32V003 (UIAPduino). The flash layout and the RAM loader are the host's business.
 static oep::SwioPhy phy;
@@ -42,40 +41,36 @@ static oep::Ch32Dm dm(phy);
 static oep::v1::DebugPort port{dm, oep::SwioPhy::kPin, 0xffff};
 static oep::v1::WireRvswd wire(port, 1, "oep.wire.swio");
 static oep::v1::TargetRiscvDm riscvDm(port, 1);
-static oep::TargetConsole consoleDriver(dm, phy);
+static oep::DmConsole consoleDriver(dm, phy);
 static oep::v1::TargetConsoleStream console(port, consoleDriver, 1);
-static oep::PinTable *pins = nullptr;
-static oep::FixtureGpio *gpio = nullptr;
-static oep::FixtureUart *uart = nullptr;       // DUT console: V003 PD5/TX -> GPIO22, PD6/RX <- GPIO21 (E132)
-static oep::FixtureCapture *capture = nullptr;  // GPIO sampler on core 0, 0.4..2 MHz, 1 byte/sample
-static oep::v1::V0Fixture *gpioV1 = nullptr, *uartV1 = nullptr, *captureV1 = nullptr;
+static oep::PinTable pins(kFixtures);
+static oep::FixtureGpio gpio(pins);
+static oep::FixtureUart uart(pins, Serial2, 2);       // DUT console: V003 PD5/TX -> GPIO22, PD6/RX <- GPIO21 (E132)
+static oep::FixtureCapture capture(pins);             // GPIO sampler on core 0, 0.4..2 MHz, 1 byte/sample
+static const uint8_t kCaptureExtra[] = {oep::v1::kTagImplementation, 1, 1};   // software sampler
+static oep::v1::V0Fixture gpioV1(gpio, "oep.fixture.gpio", 2, pins, oep::v1::kGpioRoles, 1, oep::v1::kGpioLockFree);
+static oep::v1::V0Fixture uartV1(uart, "oep.fixture.uart", 3, pins, oep::v1::kUartRoles, 2, 0,
+                                 oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
+static oep::v1::V0Fixture captureV1(capture, "oep.fixture.capture", 4, pins, oep::v1::kCaptureRoles, 8,
+                                    oep::v1::kCaptureLockFree, kCaptureExtra, sizeof kCaptureExtra);
 // ESP-IDF I2C / SPI slave tools under the project's own names (capability-name-hierarchy.ja.md, decision 4):
 // both implementations so far are the ESP-IDF slave drivers, whose quirks stay out of any oep. name.
-static oep::P4I2cTarget *i2c = nullptr;
-static oep::P4SpiTarget *spi = nullptr;
-static oep::v1::V0Fixture *i2cV1 = nullptr, *spiV1 = nullptr;
+static oep::P4I2cTarget i2c(pins);
+static oep::P4SpiTarget spi(pins);
 static const uint8_t kI2cRoles[] = {1, 2};                    // SDA, SCL
 static const uint8_t kSpiRoles[] = {1, 2, 3, 4};              // SCK, MOSI, MISO, CS
-static const uint8_t kPeripheral[] = {oep::v1::kTagImplementation, 1, 2};
-static const uint8_t kGpioRoles[] = {1};
-static const uint8_t kUartRoles[] = {1, 2};
-static const uint8_t kCaptureRoles[] = {0, 1, 2, 3, 4, 5, 6, 7};
-static const uint8_t kUartExtra[] = {oep::v1::kTagImplementation, 1, 2};
-static const uint8_t kCaptureExtra[] = {oep::v1::kTagImplementation, 1, 1};   // software sampler
+// lock-free: i2c status (5) and read_hw (0x10), spi status (4)
+static oep::v1::V0Fixture i2cV1(i2c, "io.github.ch32-riscv-ug.esp32.i2c-target", 5, pins, kI2cRoles, 2,
+                                (1u << 5) | (1u << 16), oep::v1::kImplementationPeripheral,
+                                sizeof oep::v1::kImplementationPeripheral);
+static oep::v1::V0Fixture spiV1(spi, "io.github.ch32-riscv-ug.esp32.spi-target", 6, pins, kSpiRoles, 4, 1u << 4,
+                                oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
   oep::v1::TlvWriter w(probeTlv, sizeof probeTlv);
-  w.text(oep::v1::kCoreFirmware, "3.1.0-v1draft");
-  w.text(oep::v1::kCoreModel, "esp32-d0wd");
-  const uint64_t mac = ESP.getEfuseMac();
-  uint8_t id[6];
-  for (int i = 0; i < 6; ++i) id[i] = static_cast<uint8_t>(mac >> (8 * i));
-  w.put(oep::v1::kCoreUnitId, id, sizeof id);
-  w.u16(oep::v1::kCoreChannels, 40);
-  uint8_t bitmap[2 + 5] = {0, 0};
-  for (int i = 0; i < 5; ++i) bitmap[2 + i] = static_cast<uint8_t>(kReserved >> (8 * i));
-  w.put(oep::v1::kCoreReserved, bitmap, sizeof bitmap);
+  uint8_t id[8];
+  oep::v1::describeCore(w, "esp32-d0wd", id, oep::platformUnitId(id, sizeof id), 40, kReserved);
   w.text(oep::v1::kCoreProfile, "io.github.ch32-riscv-ug.esp32-v003");
   w.label(16, "SWIO");
   w.label(23, "NRST");
@@ -90,43 +85,27 @@ void setup() {
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
   phy.begin(oep::SwioPhy::kPin);
-  for (uint8_t pin = 0; pin < 40; ++pin) if ((kBonded >> pin) & 1 && !((kReserved >> pin) & 1)) fixturePins[fixturePinCount++] = pin;
   // E132: every UIAP pin is wired here, including the software-USB pair (PD3/PD4); a permanent
   // ESP32 pull on either USB line breaks enumeration. Idle must be genuinely high impedance.
-  for (size_t i = 0; i < fixturePinCount; ++i) pinMode(fixturePins[i], INPUT);
+  oep::platformParkMask(kFixtures);
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
   endpoint.add(riscvDm);
   port.reset_default = 23;   // attach-under-reset through the V003's NRST unless the host names another channel
-  for (size_t i = 0; i < fixturePinCount; ++i) port.reset_allowed |= 1ull << fixturePins[i];
+  port.reset_allowed = kFixtures;
   console.setMaxRead(480);   // 512-byte frames
   endpoint.add(console);
-  pins = new oep::PinTable(fixturePins, fixturePinCount);
-  gpio = new oep::FixtureGpio(*pins);
-  uart = new oep::FixtureUart(*pins, Serial2, 2);
-  capture = new oep::FixtureCapture(*pins);
-  gpioV1 = new oep::v1::V0Fixture(*gpio, "oep.fixture.gpio", 2, *pins, kGpioRoles, 1, 1u << 2);
-  uartV1 = new oep::v1::V0Fixture(*uart, "oep.fixture.uart", 3, *pins, kUartRoles, 2, 0, kUartExtra, sizeof kUartExtra);
-  captureV1 = new oep::v1::V0Fixture(*capture, "oep.fixture.capture", 4, *pins, kCaptureRoles, 8, (1u << 3) | (1u << 4),
-                                     kCaptureExtra, sizeof kCaptureExtra);
-  endpoint.add(*gpioV1);
-  endpoint.add(*uartV1);
-  endpoint.add(*captureV1);
-  i2c = new oep::P4I2cTarget(*pins);
-  spi = new oep::P4SpiTarget(*pins);
-  // lock-free: i2c status (5) and read_hw (0x10), spi status (4)
-  i2cV1 = new oep::v1::V0Fixture(*i2c, "io.github.ch32-riscv-ug.esp32.i2c-target", 5, *pins, kI2cRoles, 2,
-                                 (1u << 5) | (1u << 16), kPeripheral, sizeof kPeripheral);
-  spiV1 = new oep::v1::V0Fixture(*spi, "io.github.ch32-riscv-ug.esp32.spi-target", 6, *pins, kSpiRoles, 4,
-                                 1u << 4, kPeripheral, sizeof kPeripheral);
-  endpoint.add(*i2cV1);
-  endpoint.add(*spiV1);
+  endpoint.add(gpioV1);
+  endpoint.add(uartV1);
+  endpoint.add(captureV1);
+  endpoint.add(i2cV1);
+  endpoint.add(spiV1);
 }
 
 void loop() {
   endpoint.poll();
   console.poll();
-  i2c->service();
-  spi->service();
+  i2c.service();
+  spi.service();
 }

@@ -168,11 +168,8 @@ void RvswdPhy::configureBus(bool with_wake) {
     writeRaw(kDmShadowCfgr, kCfgr);
     writeRaw(kDmCfgr, kCfgr);
   }
-  // Leave the abstract-command block in a known state. A session that ended mid-sequence
-  // can leave autoexec armed on DATA0 or a sticky cmderr behind, and then the next
-  // attach's write check reads back something it never wrote (2026-09-23).
-  writeRaw(kDmAbstractAuto, 0);
-  writeRaw(kAbstractCs, 0x700);
+  // The abstract-command block (ABSTRACTAUTO, cmderr) is the debug module's business, not the bus's: Ch32Dm
+  // clears it when it attaches and whenever it brings the link up again (Ch32Dm::relink).
 }
 
 // The CH32's two-wire debug interface drops the link when the bus goes quiet. Measured on
@@ -327,7 +324,9 @@ bool RvswdPhy::retune() {
     good = i;
   }
   if (good == kCount) { useSafeSpeed(); return false; }
-  if (!failed) return true;   // the fastest candidate passed and is still set: nothing is out of step
+  // Prove the chosen period once more even when nothing failed on the way down: the fastest candidates are
+  // marginal (half 0 ns sometimes fails for a whole run), and skipping this broke the X035's reset-halt (2026-09-25).
+  (void)failed;
   for (int tries = 0; tries < 3; ++tries) {
     setHalf(kHalfNs[good] > floor ? kHalfNs[good] : floor);
     configureBus(false);

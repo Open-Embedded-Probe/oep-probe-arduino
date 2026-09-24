@@ -22,7 +22,39 @@ bool Ch32Dm::waitAbstract() {
   return false;
 }
 
-bool Ch32Dm::attach() { return phy_.attach(); }
+bool Ch32Dm::attach() {
+  if (phy_.attached()) return true;
+  if (!phy_.attach()) return false;
+  // Leave the abstract-command block in a known state. A session that ended mid-sequence can leave autoexec armed
+  // on DATA0 or a sticky cmderr behind (2026-09-23).
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kAbstractCs, 0x700);
+  return true;
+}
+
+// Bring the link up again (the CH32 drops it on a change of state) and put the abstract-command block back in a
+// known state: autoexec off, cmderr cleared.
+void Ch32Dm::relink() {
+  phy_.reinit();
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kAbstractCs, 0x700);
+}
+
+// Measure the link speed again (the target's clock may have changed), then put the abstract-command block back in
+// a known state: the search re-syncs the bus once per candidate and leaves whatever the probes did behind.
+void Ch32Dm::retune() {
+  phy_.retune();
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kAbstractCs, 0x700);
+}
+
+// The hart has just stopped: acknowledge a pending reset (haltreq kept), clear cmderr, start the caller from a
+// freshly brought-up bus (the first transaction after a change of state can be lost on this part).
+void Ch32Dm::settleHalted(bool ack_reset) {
+  if (ack_reset) phy_.write(kDmControl, 0x90000001);   // haltreq | ackhavereset | dmactive
+  relink();
+  halted_ = true;
+}
 
 bool Ch32Dm::halt() {
   if (!attach()) return false;
@@ -36,20 +68,15 @@ bool Ch32Dm::halt() {
     // A request that does not take leaves the bus out of step, and every attempt that
     // worked on the bench had a fresh bring-up in front of it, so start each round from
     // one (2026-09-23, CH32L103: without this, halt landed on every other attempt).
-    phy_.reinit();
+    relink();
     for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x80000001);
     for (int i = 0; i < 25; ++i) {
       uint32_t status = 0;
       if (phy_.read(kDmStatus, status) && (status & (1u << 9))) {
-        // Keep haltreq asserted while halted (E156/E157 ran this way); acknowledge any pending reset flag.
-        if (status & (3u << 18)) phy_.write(kDmControl, 0x90000001);  // haltreq | ackhavereset | dmactive
-        phy_.write(kAbstractCs, 0x700);
-        // The hart changing state drops the DMI link on this part, and the first
-        // transaction afterwards can be lost: the first word of the first memory read
-        // after a halt came back as the previous operation's leftover (2026-09-23).
-        // Start the caller from a freshly brought-up bus.
-        phy_.reinit();
-        halted_ = true;
+        // Keep haltreq asserted while halted (E156/E157 ran this way). The hart changing state drops the DMI link
+        // on this part, and the first word of the first memory read after a halt came back as the previous
+        // operation's leftover (2026-09-23): settleHalted starts the caller from a freshly brought-up bus.
+        settleHalted(status & (3u << 18));
         return true;
       }
     }
@@ -66,7 +93,7 @@ bool Ch32Dm::resume() {
   // accept either the acknowledgement or the hart plainly being back on its feet.
   bool ok = false;
   for (int round = 0; round < 8 && !ok; ++round) {
-    phy_.reinit();
+    relink();
     for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x40000001);
     for (int i = 0; i < 25 && !ok; ++i) {
       uint32_t status = 0;
@@ -222,7 +249,7 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
   uint8_t err = 0;
   for (int attempt = 0; attempt < 3; ++attempt) {
     uint32_t data0_address = 0;
-    if (!loadRegisters(data0_address)) { phy_.reinit(); continue; }
+    if (!loadRegisters(data0_address)) { relink(); continue; }
     for (size_t i = 0; i < sizeof kReader / sizeof kReader[0]; ++i) phy_.write(kProgBuf0 + i, kReader[i]);
     phy_.write(kData1, address);
     phy_.write(kAbstractAuto, 1);
@@ -260,7 +287,7 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
     // the words already read. Anything else means the program buffer did not run: the
     // reads then returned whatever was left in DATA0, which looks like data and is not.
     if (ok && counted && (err == 0 || err == 3)) return true;
-    phy_.reinit();
+    relink();
   }
   return false;
 }
@@ -315,7 +342,7 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
   // address the writer leaves in DATA1 counts the runs and catches a missed or doubled trigger.
   for (int attempt = 0; attempt < 3; ++attempt) {
     uint32_t data0_address = 0;
-    if (!loadRegisters(data0_address)) { phy_.reinit(); continue; }
+    if (!loadRegisters(data0_address)) { relink(); continue; }
     for (size_t i = 0; i < sizeof kBlockWriter / sizeof kBlockWriter[0]; ++i) phy_.write(kProgBuf0 + i, kBlockWriter[i]);
     phy_.write(kData1, address);
     phy_.write(kData0, words[0]);
@@ -331,7 +358,7 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
     if (ok && phy_.read(kData1, next) && next == address + 4u * static_cast<uint32_t>(count)) return true;
     phy_.write(kAbstractAuto, 0);
     phy_.write(kAbstractCs, 0x700);
-    phy_.reinit();
+    relink();
   }
   return false;
 }
@@ -361,13 +388,13 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     bool halted = false;
     while (micros() - started < timeout_us) {
       uint32_t status = 0;
-      if (!phy_.read(kDmStatus, status)) { phy_.reinit(); continue; }
+      if (!phy_.read(kDmStatus, status)) { relink(); continue; }
       if (status & (1u << 9)) { halted = true; break; }
     }
     phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
     phy_.write(kAbstractCs, 0x700);
     if (!halted) break;                   // the timeout: forced halt below
-    phy_.reinit();                        // the stop changed the hart's state
+    relink();                        // the stop changed the hart's state
     uint32_t dpc = 0;
     if (readRegister(0x07b1, dpc) && dpc == pc) continue;   // never ran: resume again
     report.stopped = true;
@@ -388,7 +415,7 @@ bool Ch32Dm::ackHaveReset() {
   phy_.write(kDmControl, halted_ ? 0x90000001 : 0x10000001);   // ackhavereset, haltreq kept if we hold a halt
   // The CH32L103 drops its DMI link after this write and the next read fails (2026-09-24: every attach failed
   // until the bus was brought up again here, as halt() does after a change of state).
-  phy_.reinit();
+  relink();
   return true;
 }
 
@@ -411,7 +438,7 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   bool halted = false;
   for (int poll = 0; poll < 400 && !halted; ++poll) {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status) || (status & 0xf) != 2) { phy_.reinit(); continue; }
+    if (!phy_.read(kDmStatus, status) || (status & 0xf) != 2) { relink(); continue; }
     if (status & (1u << 13)) { delayMicroseconds(250); continue; }   // anyunavail
     if (status & (1u << 9)) { halted = true; break; }
     phy_.write(kDmControl, 0x80000001);
@@ -419,11 +446,9 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   }
   uint32_t control = 0;
   const bool released = phy_.read(kDmControl, control) && (control & 0x3) == 0x1;
-  phy_.write(kDmControl, 0x90000001);      // ackhavereset, haltreq kept
-  phy_.write(kAbstractCs, 0x700);
-  phy_.reinit();
-  halted_ = halted;
-  phy_.retune();                           // at the default clock this time
+  if (halted) settleHalted(true);
+  else { relink(); halted_ = false; }
+  retune();                                // at the default clock this time
   return released && halted && readRegister(0x07b1, dpc);
 }
 
@@ -440,12 +465,12 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved) {
   const uint32_t started = micros();
   while (micros() - started < 50000u) {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status)) { phy_.reinit(); continue; }
+    if (!phy_.read(kDmStatus, status)) { relink(); continue; }
     if (status & (1u << 9)) { halted = true; break; }
   }
   phy_.write(kDmControl, 0x80000001);
   phy_.write(kAbstractCs, 0x700);
-  phy_.reinit();
+  relink();
   if (!halted) {
     halted_ = false;
     if (!halt()) return false;
@@ -463,7 +488,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   delay(hold_ms);
   // Bring the link up while the target is held (it may or may not answer yet), queue the halt request, then let
   // go and keep asking until the hart reports halted - before firmware that kills the debug pins gets that far.
-  phy_.reinit();
+  relink();
   phy_.attach();
   // The part comes out of reset on its default clock: a speed tuned earlier to a sketch's raised clock garbles the
   // halt requests below and the hart runs into its image (2026-09-24, CH32L103: 2 in 10 stopped mid-sketch after a
@@ -477,14 +502,11 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
     phy_.write(kDmControl, 0x80000001);
     uint32_t status = 0;
     if (phy_.read(kDmStatus, status)) halted = (status & (1u << 9)) != 0;
-    else phy_.reinit();
+    else relink();
   }
   if (!halted) return false;
-  phy_.write(kDmControl, 0x90000001);      // ackhavereset, haltreq kept
-  phy_.write(kAbstractCs, 0x700);
-  phy_.reinit();
-  halted_ = true;
-  phy_.retune();
+  settleHalted(true);
+  retune();
   return readRegister(0x07b1, dpc);
 }
 

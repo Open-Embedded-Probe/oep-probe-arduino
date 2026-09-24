@@ -28,11 +28,7 @@ enum : uint8_t { kStepOk = 0, kStepMalformed = 1, kStepAccess = 2, kStepPollGave
 
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  // pin set 1, fixed on this probe: role 1 SWDIO (or SWIO), role 2 SWCLK (two-wire only)
-  uint8_t group[7] = {1, 1, 0, 0, 2, 0, 0};
-  putU16(group + 2, port_.swdio);
-  putU16(group + 5, port_.swclk);
-  w.put(kTagChannelGroup, group, port_.swclk == 0xffff ? 4 : sizeof group);
+  w.pinGroup(port_.swdio, port_.swclk);       // fixed on this probe
   w.u8(kTagImplementation, 1);                // bit-bang
   return w.ok() ? w.length() : 0;
 }
@@ -40,7 +36,7 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
 Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   switch (op) {
     case kOpScan: {   // -> count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32) per answer
-      if (length != 0 || capacity < 10) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (length != 0 || capacity < 10) return rejected(kRejectMalformed);
       uint32_t status = 0;
       out[0] = 0;
       // On a live connection, look through it: re-attaching (and detaching on a miss) would pull the link out from
@@ -58,7 +54,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       return completed(1);
     }
     case kOpAttach: {   // method(u8): 0 leave it running, 1 halt  ->  connection(u8), DMSTATUS(u32), flags(u8)
-      if (length != 1 || payload[0] > 1 || capacity < 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (length != 1 || payload[0] > 1 || capacity < 6) return rejected(kRejectMalformed);
       uint32_t status = 0;
       if (!attachAndRead(port_.dm, status)) return failed();
       // A pending havereset freezes a V00x's DMSTATUS halt / run bits at their reset values (ch32rv 0.8.0):
@@ -73,10 +69,10 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       return completed(6);
     }
     case kOpAttachUnderReset: {   // channel(u16, 0xffff = the probe's default) hold_ms(u16)  ->  connection(u8), dpc(u32)
-      if (length != 4 || capacity < 5) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (length != 4 || capacity < 5) return rejected(kRejectMalformed);
       int channel = getU16(payload);
       if (channel == 0xffff) channel = port_.reset_default;
-      if (channel < 0 || channel > 63 || !((port_.reset_allowed >> channel) & 1)) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (channel < 0 || channel > 63 || !((port_.reset_allowed >> channel) & 1)) return rejected(kRejectUnavailable);
       uint32_t dpc = 0;
       // Open drain: pull low, then release to Hi-Z - never drive a reset line high.
       auto hold = [](void *ctx) { platformGpio(*static_cast<int *>(ctx), kGpioOpenDrainLow); };
@@ -90,12 +86,12 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       return completed(5);
     }
     case kOpDetach:
-      if (length != 1 || payload[0] != 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (length != 1 || payload[0] != 1) return rejected(kRejectMalformed);
       port_.dm.detach();
       port_.connected = false;
       return completed();
     default:
-      return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
+      return rejected(kRejectUnknownOperation);
   }
 }
 
@@ -106,13 +102,15 @@ size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
   // bit0 block read/write (progbuf + autoexec), bit1 run until halt, bit2 ndmreset
   w.u32(kTagFeatures, 0b0111);
   w.u8(kTagImplementation, 1);
-  w.u16(kTagMaxLength, sizeof words_);
+  // One block operation's data: the word buffer, and what fits a frame (request header, session, connection, address).
+  const size_t fits = max_frame_ > 15 ? (max_frame_ - 15) / 4 * 4 : 0;
+  w.u16(kTagMaxLength, static_cast<uint16_t>(fits && fits < sizeof words_ ? fits : sizeof words_));
   return w.ok() ? w.length() : 0;
 }
 
 Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length < 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-  if (payload[0] != 1 || !port_.connected) return rejected(OEP_V0_REJECT_UNAVAILABLE);   // connection 1 only
+  if (length < 1) return rejected(kRejectMalformed);
+  if (payload[0] != 1 || !port_.connected) return rejected(kRejectUnavailable);   // connection 1 only
   const uint8_t *p = payload + 1;
   const size_t n = length - 1;
   Ch32Dm &dm = port_.dm;
@@ -121,7 +119,7 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
     case kOpHalt: return dm.halt() ? completed() : failed();
     case kOpResume: return dm.resume() ? completed() : failed();
     case kOpReset: {   // mode(u8): 0 run, 1 run + confirm, 2 halt  ->  flags(u8) attempts(u8) pc(u32)
-      if (n != 1 || p[0] > kResetHalt || capacity < 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (n != 1 || p[0] > kResetHalt || capacity < 6) return rejected(kRejectMalformed);
       if (p[0] == kResetHalt) {   // stopped before the first instruction; flags bit0 = halted, pc = dpc
         uint32_t dpc = 0;
         const bool ok = dm.resetHalt(dpc);
@@ -140,8 +138,8 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
       return ok ? completed(6) : failed(6);
     }
     case kOpStep: {   // -> moved(u8) dpc_before(u32) dpc_after(u32); one resume only, the privilege level kept
-      if (n != 0 || capacity < 9) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!dm.halted()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (n != 0 || capacity < 9) return rejected(kRejectMalformed);
+      if (!dm.halted()) return rejected(kRejectUnavailable);
       uint32_t before = 0, after = 0;
       bool moved = false;
       const bool ok = dm.step(before, after, moved);
@@ -151,28 +149,28 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
       return ok ? completed(9) : failed(9);
     }
     case kOpReadBlock: {   // address(u32) count(u16)  ->  words
-      if (n != 6) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (n != 6) return rejected(kRejectMalformed);
       const uint32_t address = getU32(p);
       const uint16_t count = getU16(p + 4);
       if ((address & 3) || !count || count > sizeof words_ / 4 || 4u * count > capacity)
-        return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!dm.halted()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+        return rejected(kRejectMalformed);
+      if (!dm.halted()) return rejected(kRejectUnavailable);
       if (!dm.readWords(address, words_, count)) return failed();
       for (uint16_t i = 0; i < count; ++i) putU32(out + 4 * i, words_[i]);
       return completed(4u * count);
     }
     case kOpWriteBlock: {   // address(u32) words
-      if (n < 8 || (n - 4) % 4) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+      if (n < 8 || (n - 4) % 4) return rejected(kRejectMalformed);
       const uint32_t address = getU32(p);
       const size_t count = (n - 4) / 4;
-      if ((address & 3) || count > sizeof words_ / 4) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!dm.halted()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if ((address & 3) || count > sizeof words_ / 4) return rejected(kRejectMalformed);
+      if (!dm.halted()) return rejected(kRejectUnavailable);
       for (size_t i = 0; i < count; ++i) words_[i] = getU32(p + 4 + 4 * i);
       return dm.writeWordsFast(address, words_, count) ? completed() : failed();
     }
     case kOpRun: {   // pc(u32) timeout_ms(u16) n(u8) n x (regno u16, value u32)  ->  stopped dpc a0 elapsed_us
-      if (n < 7 || n != 7u + 6u * p[6] || p[6] > 16 || capacity < 13) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!dm.halted()) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+      if (n < 7 || n != 7u + 6u * p[6] || p[6] > 16 || capacity < 13) return rejected(kRejectMalformed);
+      if (!dm.halted()) return rejected(kRejectUnavailable);
       uint16_t regnos[16];
       uint32_t values[16];
       for (uint8_t i = 0; i < p[6]; ++i) {
@@ -188,7 +186,7 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
       return ok ? completed(13) : failed(13);
     }
     default:
-      return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
+      return rejected(kRejectUnknownOperation);
   }
 }
 
@@ -201,7 +199,7 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
 //                                                               slow bit-banged link and a fast one)
 // result: done(u16) status(u8: 0 ok, 1 malformed, 2 access, 3 poll gave up) reads
 Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity) {
-  if (capacity < 3) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
+  if (capacity < 3) return rejected(kRejectMalformed);
   size_t at = 0, written = 3;
   uint16_t done = 0;
   uint8_t status = kStepOk;

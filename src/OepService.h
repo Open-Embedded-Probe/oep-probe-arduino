@@ -5,27 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "OepResult.h"
 #include "oep_v0.h"
 
 namespace oep {
-
-struct Result {
-  uint8_t resolution;
-  uint8_t detail;   // reject reason or outcome
-  size_t length;    // payload bytes written into the result buffer
-};
-
-inline Result completed(size_t length = 0) { return {OEP_V0_RESOLUTION_COMPLETED, OEP_V0_OUTCOME_SUCCESS, length}; }
-inline Result failed(size_t length = 0) { return {OEP_V0_RESOLUTION_COMPLETED, OEP_V0_OUTCOME_FAILED, length}; }
-inline Result partial(size_t length = 0) { return {OEP_V0_RESOLUTION_COMPLETED, OEP_V0_OUTCOME_PARTIAL, length}; }
-inline Result rejected(uint8_t reason) { return {OEP_V0_RESOLUTION_REJECTED, reason, 0}; }
-
-// One entry of a plan: this connection asks `function` to use probe `channel` in `role`.
-struct RoleAssignment {
-  uint16_t function;
-  uint8_t role;
-  uint16_t channel;
-};
 
 class Service {
  public:

@@ -17,6 +17,7 @@ class PinTable {
   explicit PinTable(const uint8_t *allowed, size_t count) {
     for (size_t i = 0; i < count && allowed[i] < kChannels; ++i) allowed_ |= uint64_t{1} << allowed[i];
   }
+  explicit constexpr PinTable(uint64_t allowed) : allowed_(allowed) {}
   bool allowed(uint16_t channel) const { return channel < kChannels && (allowed_ >> channel) & 1; }
   bool free(uint16_t channel) const { return allowed(channel) && owner_[channel] == 0; }
   bool claim(uint16_t channel, uint8_t owner) {

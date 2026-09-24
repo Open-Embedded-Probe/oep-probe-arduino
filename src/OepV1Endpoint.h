@@ -8,7 +8,6 @@
 
 #include <Arduino.h>
 
-#include "OepEndpoint.h"   // Limits
 #include "OepFrame.h"
 #include "OepV1.h"
 

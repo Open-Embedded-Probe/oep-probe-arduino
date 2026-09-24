@@ -1,20 +1,16 @@
-#include "OepTargetServices.h"
+#include "OepDmConsole.h"
 
 #include <string.h>
 
-#include "OepTlv.h"
 
 namespace oep {
 
 // ---- target.console ------------------------------------------------------
-void TargetConsole::push(uint8_t byte) {
-  const uint16_t next = static_cast<uint16_t>((head_ + 1) % kCapacity);
-  if (next == tail_) { ++dropped_; return; }   // full: the reader is not keeping up
-  buffer_[head_] = byte;
-  head_ = next;
+void DmConsole::push(uint8_t byte) {
+  if (!discarding_ && sink_) sink_(sink_ctx_, byte);
 }
 
-void TargetConsole::poll() {
+void DmConsole::poll() {
   // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless
   // the target is attached and running its own code - and not while the host drives the debug
   // module through raw DMI writes, which halted() does not see.
@@ -34,7 +30,7 @@ void TargetConsole::poll() {
 
 // SerialSDI: the target waits for DATA0 to read zero, writes DATA1 = bytes 3..6 and
 // DATA0 = length | bytes 0..2 << 8, and we zero DATA0 once we have the frame.
-void TargetConsole::pollSdi() {
+void DmConsole::pollSdi() {
   uint32_t data0 = 0;
   if (!phy_.read(0x04, data0)) return;
   const uint8_t length = static_cast<uint8_t>(data0 & 0xff);
@@ -53,7 +49,7 @@ void TargetConsole::pollSdi() {
 // the word is the target's, the low bits are a byte count biased by 4. We answer each of its
 // words exactly once, and the answer is also our outgoing frame when there is one - three
 // bytes at a time, since only DATA0 carries host payload - or zero when there is not.
-void TargetConsole::pollDmdata() {
+void DmConsole::pollDmdata() {
   uint32_t data0 = 0;
   if (!phy_.read(0x04, data0)) return;
   if (data0 & 0x80u) {                         // the target's word
@@ -98,7 +94,7 @@ void TargetConsole::pollDmdata() {
 // it too. So when there is something to send, send it here rather than zeroing first: a
 // target that keeps printing leaves its empty frame on every poll, and a probe that only
 // ever answered with zero would never get a turn (2026-09-23).
-void TargetConsole::sendOrClear() {
+void DmConsole::sendOrClear() {
   const uint16_t waiting = pending();
   if (!waiting) {
     phy_.write(0x04, 0);
@@ -148,7 +144,7 @@ static bool seqFault() {
 #endif
 }
 
-void TargetConsole::pollSeq() {
+void DmConsole::pollSeq() {
   // DATA0 first, DATA1 only when the frame reaches it, and the answer only after both: once
   // answered, the target may post its next frame and overwrite DATA1.
   uint32_t w0 = 0, w1 = 0;
@@ -201,7 +197,7 @@ void TargetConsole::pollSeq() {
   seqAnswer(s, true);
 }
 
-void TargetConsole::seqAnswer(uint8_t k, bool with_data) {
+void DmConsole::seqAnswer(uint8_t k, bool with_data) {
   if (with_data && !seq_chunk_len_) {
     while (seq_chunk_len_ < 2 && tx_tail_ != tx_head_) {
       seq_chunk_[seq_chunk_len_++] = tx_[tx_tail_];
@@ -221,11 +217,9 @@ void TargetConsole::seqAnswer(uint8_t k, bool with_data) {
 // Every start is a fresh session, even over one that is still open: a runner that moves from one
 // sketch to the next reprograms the target in between, and bytes queued for the last sketch must
 // not be delivered to this one.
-bool TargetConsole::start(uint8_t framing) {
+bool DmConsole::start(uint8_t framing) {
   if (framing > 2 || !dm_.attach()) return false;
-  head_ = tail_ = 0;
   tx_head_ = tx_tail_ = 0;
-  dropped_ = 0;
   saw_empty_ = false;
   seq_synced_ = false;
   seq_last_syn_ = false;
@@ -239,21 +233,13 @@ bool TargetConsole::start(uint8_t framing) {
   phy_.write(0x04, 0);
   enabled_ = true;
   framing_ = framing;
+  discarding_ = true;
   for (int i = 0; i < 4; ++i) poll();
-  head_ = tail_ = 0;
+  discarding_ = false;
   return true;
 }
 
-size_t TargetConsole::take(uint8_t *out, size_t maximum) {
-  size_t n = 0;
-  while (n < maximum && tail_ != head_) {
-    out[n++] = buffer_[tail_];
-    tail_ = static_cast<uint16_t>((tail_ + 1) % kCapacity);
-  }
-  return n;
-}
-
-size_t TargetConsole::queue(const uint8_t *data, size_t length) {
+size_t DmConsole::queue(const uint8_t *data, size_t length) {
   if (!enabled_ || framing_ == 0) return 0;
   size_t queued = 0;
   while (queued < length) {
@@ -263,64 +249,6 @@ size_t TargetConsole::queue(const uint8_t *data, size_t length) {
     tx_head_ = next;
   }
   return queued;
-}
-
-void TargetConsole::abandon() {
-  enabled_ = false;
-  head_ = tail_ = 0;
-  tx_head_ = tx_tail_ = 0;
-  dropped_ = 0;
-}
-
-Result TargetConsole::handle(uint8_t operation, const uint8_t *payload, size_t length,
-                                      uint8_t *out, size_t capacity) {
-  switch (operation) {
-    case OEP_V0_TARGET_CONSOLE_OP_CONFIGURE: {
-      struct oep_v0_target_console_configure_request request;
-      if (!oep_v0_target_console_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (request.framing > 2) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (request.enable && !start(request.framing)) return rejected(OEP_V0_REJECT_UNAVAILABLE);
-      enabled_ = request.enable != 0;
-      framing_ = request.framing;
-      struct oep_v0_target_console_configure_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0), framing_};
-      return completed(oep_v0_target_console_configure_result_pack(&result, out, capacity));
-    }
-    case OEP_V0_TARGET_CONSOLE_OP_READ: {
-      struct oep_v0_target_console_read_request request;
-      if (!oep_v0_target_console_read_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      poll();                                  // one more frame before answering, if one is waiting
-      size_t n = 0;
-      const size_t limit = request.maximum < capacity ? request.maximum : capacity;
-      while (n < limit && tail_ != head_) {
-        out[n++] = buffer_[tail_];
-        tail_ = static_cast<uint16_t>((tail_ + 1) % kCapacity);
-      }
-      return completed(n);
-    }
-    case OEP_V0_TARGET_CONSOLE_OP_STATUS: {
-      struct oep_v0_target_console_status_request request;
-      if (!oep_v0_target_console_status_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      struct oep_v0_target_console_status_result result = {static_cast<uint8_t>(enabled_ ? 1 : 0), buffered(), dropped_};
-      return completed(oep_v0_target_console_status_result_pack(&result, out, capacity));
-    }
-    case OEP_V0_TARGET_CONSOLE_OP_WRITE: {
-      struct oep_v0_target_console_write_request request;
-      if (!oep_v0_target_console_write_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!enabled_ || framing_ == 0) return rejected(OEP_V0_REJECT_UNAVAILABLE);
-      uint16_t queued = 0;
-      while (queued < request.data_length) {
-        const uint16_t next = static_cast<uint16_t>((tx_head_ + 1) % kTxCapacity);
-        if (next == tx_tail_) break;           // full: the target is not collecting
-        tx_[tx_head_] = request.data[queued++];
-        tx_head_ = next;
-      }
-      poll();                                  // start it on its way before answering
-      struct oep_v0_target_console_write_result result = {queued};
-      return completed(oep_v0_target_console_write_result_pack(&result, out, capacity));
-    }
-    default:
-      return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
-  }
 }
 
 }  // namespace oep
