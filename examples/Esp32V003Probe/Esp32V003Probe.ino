@@ -3,6 +3,7 @@
 // (single wire, SwioPhy). GPIO23 -> RST is wired but deliberately never driven.
 #include <OepCh32Dm.h>
 #include <OepEndpoint.h>
+#include <OepExpTargetPrimitives.h>
 #include <OepFixtureCapture.h>
 #include <OepFixtureServices.h>
 #include <OepP4I2cTarget.h>
@@ -37,6 +38,7 @@ static oep::Ch32Dm dm(phy, {0x08000000u, 16384u, 64u, 64u}, oep::DmProfile::kQin
 static oep::TargetControl targetControl(dm, phy, 23);   // GPIO23 -> PD7/NRST: reset mode 3 (pin reset, sets PINRSTF)
 static oep::TargetMemory targetMemory(dm);
 static oep::TargetFlash targetFlash(dm);
+static oep::ExpTargetPrimitives expTarget(dm);   // experiment F3/F4: host-driven flashing
 // Console with no console wiring: the target writes into the debug module's data
 // registers and the probe collects them from loop() (ArduinoCore-CH32's SerialSDI).
 static oep::TargetConsole targetConsole(dm, phy);
@@ -73,6 +75,7 @@ void setup() {
   endpoint.addService(*i2cTarget);
   endpoint.addService(*spiTarget);
   endpoint.addService(*fixtureCapture);
+  endpoint.addService(expTarget);
 }
 
 void loop() {
