@@ -57,6 +57,14 @@ class Ch32Dm {
   bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
   bool writeWord(uint32_t address, uint32_t value);
   bool writeHalfWord(uint32_t address, uint16_t value);
+  // Generic parts for host-driven flashing (experiment F3/F4, 2026-09-24). writeWordsFast
+  // stores consecutive words through an autoexec program buffer (the write-side twin of
+  // readWords); runUntilHalt sets registers and dpc, resumes, and waits for the hart to stop
+  // on its own ebreak (ebreakm/s/u are set first), forcing a halt at the timeout.
+  bool writeWordsFast(uint32_t address, const uint32_t *words, size_t count);
+  struct RunReport { bool stopped; uint32_t dpc; uint32_t a0; uint32_t elapsed_us; };
+  bool runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
+                    uint32_t timeout_us, RunReport &report);
   // Flash (hart halted, page aligned).
   bool flashUnlock();
   bool flashErasePage(uint32_t page);   // V2 profile: no-op (the loader erases inside flashProgramPage)

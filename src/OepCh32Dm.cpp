@@ -13,6 +13,8 @@ constexpr uint32_t kFtpg = 1u << 16, kFter = 1u << 17, kBufload = 1u << 18, kBuf
 constexpr uint32_t kWriter[] = {0x41044180, 0xc254c004, 0x8b054218, 0x0411ff75, 0x9002c180};
 // E156 reader: lw s0,0(a1); lw s1,0(s0); addi s0,4; sw s1,0(a0); sw s0,0(a1); ebreak
 constexpr uint32_t kReader[] = {0x40044180, 0xc1040411, 0x9002c180};
+// Block writer (the reader turned round): lw s0,0(a1); lw s1,0(a0); sw s1,0(s0); addi s0,4; sw s0,0(a1); ebreak
+constexpr uint32_t kBlockWriter[] = {0x41044180, 0x0411c004, 0x9002c180};
 // QingKe V2 (CH32V003) RAM flash loader from ch32-rs/wlink (MIT/Apache-2.0), built from the WCH
 // EVT flash routine. Runs on the target at 0x20000000 with a0 = operation flags (0x1d = unlock,
 // erase, program, verify), a1 = flash address, a2 = 64, input at 0x20000200, sp = 0x20000800;
@@ -414,6 +416,65 @@ bool Ch32Dm::writeWord(uint32_t address, uint32_t value) {
   phy_.write(kData0, value);
   phy_.write(kCommand, 0x00271008);
   return waitAbstract();
+}
+
+bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t count) {
+  if (!halted_ || !count || (address & 3)) return false;
+  // Plain memory, so a failed attempt is simply redone from the start. As with readWords, the
+  // address the writer leaves in DATA1 counts the runs and catches a missed or doubled trigger.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    uint32_t data0_address = 0;
+    if (!loadRegisters(data0_address)) { phy_.reinit(); continue; }
+    for (size_t i = 0; i < sizeof kBlockWriter / sizeof kBlockWriter[0]; ++i) phy_.write(kProgBuf0 + i, kBlockWriter[i]);
+    phy_.write(kData1, address);
+    phy_.write(kData0, words[0]);
+    phy_.write(kCommand, 0x00240000);  // run the writer for word 0 (also arms autoexec's command)
+    bool ok = waitAbstract();
+    if (ok && count > 1) {
+      phy_.write(kAbstractAuto, 1);
+      for (size_t i = 1; i < count; ++i) phy_.write(kData0, words[i]);
+      ok = waitAbstract();
+      phy_.write(kAbstractAuto, 0);
+    }
+    uint32_t next = 0;
+    if (ok && phy_.read(kData1, next) && next == address + 4u * static_cast<uint32_t>(count)) return true;
+    phy_.write(kAbstractAuto, 0);
+    phy_.write(kAbstractCs, 0x700);
+    phy_.reinit();
+  }
+  return false;
+}
+
+bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
+                          uint32_t timeout_us, RunReport &report) {
+  report = {false, 0, 0, 0};
+  if (!halted_) return false;
+  // Without ebreakm the final ebreak traps through mtvec and the application restarts
+  // (the V003 loader finding, 2026-09-22). prv = M: the hart may have been stopped in U mode
+  // (ArduinoCore-CH32 sketches on V3B/V4 run there), where interrupts cannot be masked; the
+  // caller masks them with mstatus in the register list.
+  uint32_t dcsr = 0;
+  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0xb003u)) return false;
+  for (size_t i = 0; i < count; ++i)
+    if (!writeRegister(regnos[i], values[i])) return false;
+  if (!writeRegister(0x07b1, pc)) return false;
+  loader_resident_ = false;   // the host's code may have overwritten the V2 loader's RAM
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
+  const uint32_t started = micros();
+  while (micros() - started < timeout_us) {
+    uint32_t status = 0;
+    if (phy_.read(kDmStatus, status) && (status & (1u << 9))) { report.stopped = true; break; }
+  }
+  report.elapsed_us = micros() - started;
+  phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
+  phy_.write(kAbstractCs, 0x700);
+  if (!report.stopped) {
+    halted_ = false;
+    if (!halt()) return false;
+  }
+  // The caller judges success from dpc (its ebreak) and a0; a stop somewhere else is a fault.
+  return readRegister(0x07b1, report.dpc) && readRegister(0x100a, report.a0);
 }
 
 bool Ch32Dm::waitFlash() {
