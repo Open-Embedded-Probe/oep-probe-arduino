@@ -21,7 +21,8 @@ namespace oep {
 
 class DirectBulkStream final : public Stream, public v1::DirectTransport {
  public:
-  static constexpr size_t kResultBytes = 16384 + 64, kRxBytes = 8192, kQueue = 32, kPacket = 512;
+  // kRxBytes: two whole max_frame requests; the usbd task can land a frame faster than loop() reads it byte by byte
+  static constexpr size_t kResultBytes = 16384 + 64, kRxBytes = 32768, kQueue = 32, kPacket = 512;
 
   explicit DirectBulkStream(EspUsbDeviceVendor &vendor) : vendor_(vendor) {}
 

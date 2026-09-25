@@ -191,16 +191,23 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length)
 }
 
 void Endpoint::poll() {
-  while (stream_.available()) {
-    const uint8_t byte = static_cast<uint8_t>(stream_.read());
-    if (framing_ == Framing::kCobsCrc) {
-      if (!cobs_.push(byte)) continue;
+  if (framing_ == Framing::kCobsCrc) {
+    while (stream_.available()) {
+      if (!cobs_.push(static_cast<uint8_t>(stream_.read()))) continue;
       handleMessage(cobs_.message(), cobs_.length());
       cobs_.consume();
-    } else {
-      if (!reader_.push(byte)) continue;
-      handleMessage(reader_.message(), reader_.length());
-      reader_.consume();
+    }
+  } else {
+    uint8_t chunk[512];
+    for (int avail; (avail = stream_.available()) > 0;) {
+      size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
+      for (size_t i = 0; i < n; ++i) chunk[i] = static_cast<uint8_t>(stream_.read());
+      const uint8_t *p = chunk;
+      while (n) {
+        if (!reader_.feed(p, n)) continue;
+        handleMessage(reader_.message(), reader_.length());
+        reader_.consume();
+      }
     }
   }
   push();   // after the results for everything that has arrived
@@ -296,6 +303,19 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       out[9] = limits_.max_inflight;
       return completed(10);
     case kOpList: return list(payload, length, out, capacity);
+    case kOpLinkSource: {   // length(u32) -> that many bytes (as many as fit one frame), byte k = k & 0xff
+      if (length != 4) return rejected(kRejectMalformed);
+      size_t n = getU32(payload);
+      if (n > capacity) n = capacity;
+      static uint8_t pattern[256];
+      if (pattern[255] != 255) for (size_t k = 0; k < 256; ++k) pattern[k] = static_cast<uint8_t>(k);
+      for (size_t at = 0; at < n; at += 256) memcpy(out + at, pattern, n - at < 256 ? n - at : 256);
+      return completed(n);
+    }
+    case kOpLinkSink:       // any bytes -> how many arrived (u32)
+      if (capacity < 4) return failed();
+      putU32(out, static_cast<uint32_t>(length));
+      return completed(4);
     case kOpDescribe: return describe(payload, length, out, capacity);
     case kOpOpen: return open(payload, length, out, capacity);
     case kOpLockState:
