@@ -133,7 +133,10 @@ void Endpoint::push() {
       const size_t ready = interfaces_[i]->pending();
       if (ready == 0) { waiting_[i] = false; continue; }
       if (!waiting_[i]) { waiting_[i] = true; waiting_since_[i] = millis(); }
-      if (ready < min_bytes_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) < max_delay_ms_[i]) continue;
+      // 0 = that condition is not used (v1 wire §4.5): send on min_bytes ready, or max_delay_ms after the first byte
+      const bool enough = min_bytes_[i] && ready >= min_bytes_[i];
+      const bool due = max_delay_ms_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) >= max_delay_ms_[i];
+      if (!enough && !due) continue;
     }
     const int writable = stream_.availableForWrite();
     // Keep at most push_queue_ bytes waiting in the transport: a result queues behind no more than that. The
