@@ -258,6 +258,7 @@ void Endpoint::lapse() {
   if (locked_ && static_cast<int32_t>(millis() - expires_ms_) >= 0) {
     locked_ = false;   // the last id stays
     endSubscriptions();
+    for (size_t i = 0; i < count_; ++i) interfaces_[i]->sessionLapsed();   // a host that fell away keeps nothing open
   }
 }
 

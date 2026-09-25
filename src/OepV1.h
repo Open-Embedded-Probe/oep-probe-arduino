@@ -276,6 +276,9 @@ class Interface {
   }
   virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
   virtual void planRelease() {}
+  // The lock holder's lease lapsed (v1 wire §5.5): drop what that session used (a wire: the host's use of its
+  // connection). An explicit end does not come here.
+  virtual void sessionLapsed() {}
   // The endpoint's frame limit, told when the interface is added: what a describe may promise.
   virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
   // Push (§4.5): while subscribed, the endpoint asks for bytes to send. Return up to `capacity` bytes and set
