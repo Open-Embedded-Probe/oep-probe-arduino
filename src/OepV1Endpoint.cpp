@@ -231,10 +231,11 @@ void Endpoint::poll() {
         t.cobs.consume();
       }
     } else {
-      uint8_t chunk[512];
+      uint8_t chunk[2048];
       for (int avail; (avail = t.stream->available()) > 0;) {
         size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
-        for (size_t k = 0; k < n; ++k) chunk[k] = static_cast<uint8_t>(t.stream->read());
+        n = t.stream->readBytes(chunk, n);   // a stream that copies in bulk (DirectBulkStream, CDC) does it here
+        if (!n) break;
         const uint8_t *p = chunk;
         while (n) {
           if (!t.reader.feed(p, n)) continue;

@@ -47,6 +47,19 @@ class DirectBulkStream final : public Stream, public v1::DirectTransport {
     rx_tail_ = (rx_tail_ + 1) & (kRxBytes - 1);
     return c;
   }
+  // What is there, in at most two copies (the ring's end, then its start): the endpoint reads whole chunks this way
+  size_t readBytes(char *out, size_t length) override {
+    size_t done = 0;
+    while (done < length && rx_head_ != rx_tail_) {
+      const size_t tail = rx_tail_, head = rx_head_;
+      const size_t run = head > tail ? head - tail : kRxBytes - tail;
+      const size_t n = run < length - done ? run : length - done;
+      memcpy(out + done, rx_ + tail, n);
+      rx_tail_ = (tail + n) & (kRxBytes - 1);
+      done += n;
+    }
+    return done;
+  }
   int peek() override { return rx_head_ == rx_tail_ ? -1 : rx_[rx_tail_]; }
   size_t write(uint8_t c) override { return write(&c, 1); }
   size_t write(const uint8_t *data, size_t size) override {

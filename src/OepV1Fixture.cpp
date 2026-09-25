@@ -134,10 +134,11 @@ void FixtureUart::planRelease() {
 
 void FixtureUart::poll() {
   if (!configured_) return;
-  for (int n = serial_.available(); n > 0; --n) {
-    const int c = serial_.read();
-    if (c < 0) break;
-    stream_.put(static_cast<uint8_t>(c));
+  uint8_t chunk[256];   // in chunks: a byte at a time through the UART driver capped a 2 Mbaud bridge near 88 kB/s (P7)
+  for (int n; (n = serial_.available()) > 0;) {
+    const size_t k = serial_.readBytes(chunk, static_cast<size_t>(n) < sizeof chunk ? static_cast<size_t>(n) : sizeof chunk);
+    if (!k) break;
+    for (size_t i = 0; i < k; ++i) stream_.put(chunk[i]);
   }
   if (port_.port()) forward();
 }

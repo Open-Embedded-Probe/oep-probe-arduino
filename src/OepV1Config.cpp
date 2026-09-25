@@ -167,6 +167,24 @@ void ProbeConfig::applySaved() {
   }
 }
 
+bool ProbeConfig::forgetBootMode() {
+  if (boot_mode_ == 0xFF) return false;
+  uint8_t kept[kMaxSaved];
+  size_t n = 0;
+  for (size_t at = 0; at + 2 <= saved_length_ && at + 2u + saved_[at + 1] <= saved_length_; at += 2u + saved_[at + 1]) {
+    if (saved_[at] == cfg::kTlvItemBootMode) continue;
+    memcpy(kept + n, saved_ + at, 2u + saved_[at + 1]);
+    n += 2u + saved_[at + 1];
+  }
+  Preferences p;
+  if (!p.begin("oepcfg", false)) return false;
+  if (n) p.putBytes("items", kept, n);
+  else p.remove("items");
+  p.end();
+  boot_mode_ = 0xFF;
+  return true;
+}
+
 void ProbeConfig::poll() {
   if (reboot_ && static_cast<int32_t>(millis() - reboot_at_) >= 0) ESP.restart();
 }

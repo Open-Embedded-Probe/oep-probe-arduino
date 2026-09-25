@@ -8,6 +8,7 @@ class CdcStream final : public Stream {
   explicit CdcStream(EspUsbDeviceCdcSerial &p) : p_(p) {}
   int available() override { return p_.available(); }
   int read() override { return p_.read(); }
+  size_t readBytes(char *b, size_t n) override { return p_.read(reinterpret_cast<uint8_t *>(b), n); }
   int peek() override { return -1; }
   size_t write(uint8_t c) override { return write(&c, 1); }
   size_t write(const uint8_t *b, size_t n) override {
@@ -39,6 +40,18 @@ class HidStream final : public Stream {
   }
   int available() override { return (head_ + sizeof rx_ - tail_) % sizeof rx_; }
   int read() override { if (head_ == tail_) return -1; const uint8_t c = rx_[tail_]; tail_ = (tail_ + 1) % sizeof rx_; return c; }
+  size_t readBytes(char *b, size_t n) override {   // in at most two copies
+    size_t done = 0;
+    while (done < n && head_ != tail_) {
+      const size_t t = tail_, h = head_;
+      const size_t run = h > t ? h - t : sizeof rx_ - t;
+      const size_t k = run < n - done ? run : n - done;
+      memcpy(b + done, rx_ + t, k);
+      tail_ = (t + k) % sizeof rx_;
+      done += k;
+    }
+    return done;
+  }
   int peek() override { return head_ == tail_ ? -1 : rx_[tail_]; }
   size_t write(uint8_t c) override { return write(&c, 1); }
   size_t write(const uint8_t *b, size_t n) override {
