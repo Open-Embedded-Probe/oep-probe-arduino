@@ -1,9 +1,9 @@
-// OEP v1 draft probe on a Waveshare RP2040-Zero (oep-spec docs/v1-core-wire-delta.ja.md): the ordinary-ARM counterpart
+// OEP v1 probe on a Waveshare RP2040-Zero (oep-spec docs/v1-core-wire-delta.ja.md): the ordinary-ARM counterpart
 // of the CH32 probes. Its GP0/GP1 reach the Pro Micro RP2350's SWD port (SWCLK = GP0, SWDIO = GP1, DPIDR 0x4c013477,
 // measured 2026-09-23).
 //
 // Transport: USB CDC (Serial, length-prefixed frames).
-// v1 draft: oep.core (the probe in its describe), oep.wire.swd, oep.target.arm-adi, oep.fixture.gpio / uart.
+// oep.core (the probe in its describe), oep.wire.swd, oep.target.arm-adi, oep.fixture.gpio / uart (revision 1).
 #include <OepFixtureServices.h>
 #include <OepV1Endpoint.h>
 #include <OepV1Fixture.h>
@@ -22,11 +22,8 @@ static oep::v1::SwdPort port{kSwdio, kSwclk};
 static oep::v1::WireSwd wire(port, 1);
 static oep::v1::TargetArmAdi adi(port, 1);
 static oep::PinTable pins(kFixtures);
-static oep::FixtureGpio gpio(pins);
-static oep::FixtureUart uart(pins, Serial1, 2);
-static oep::v1::V0Fixture gpioV1(gpio, "oep.fixture.gpio", 2, pins, oep::v1::kGpioRoles, 1, oep::v1::kGpioLockFree);
-static oep::v1::V0Fixture uartV1(uart, "oep.fixture.uart", 3, pins, oep::v1::kUartRoles, 2, 0,
-                                 oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
+static oep::v1::FixtureGpio gpio(pins, 2);
+static oep::v1::FixtureUart uart(pins, Serial1, 3, 2);
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
@@ -48,8 +45,11 @@ void setup() {
   endpoint.setBootId(rp2040.hwrand32());
   endpoint.add(wire);
   endpoint.add(adi);
-  endpoint.add(gpioV1);
-  endpoint.add(uartV1);
+  endpoint.add(gpio);
+  endpoint.add(uart);
 }
 
-void loop() { endpoint.poll(); }
+void loop() {
+  endpoint.poll();
+  uart.poll();
+}

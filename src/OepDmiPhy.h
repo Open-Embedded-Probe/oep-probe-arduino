@@ -32,6 +32,9 @@ class DmiPhy {
   // would reset the target). Backends whose speed does not depend on the target leave these alone.
   virtual void useSafeSpeed() {}
   virtual bool retune() { return true; }
+  // A ceiling on the link speed from the next attach on (and the retunes after it): the host's max_speed, in Hz of the
+  // bit clock. 0 = none. false: this backend cannot stay under it (a fixed speed above it).
+  virtual bool setMaxHz(uint32_t hz) { return hz == 0; }
   // Measured at attach: wall time of one DMI read and the clock rate it implies (0 before attach).
   virtual uint32_t dmiNs() const = 0;
   virtual uint32_t clockHz() const = 0;

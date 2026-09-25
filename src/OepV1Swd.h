@@ -1,7 +1,8 @@
-// OEP v1 draft ARM SWD interfaces (oep-spec docs/capability-name-hierarchy.ja.md; op tables provisional, 2026-09-24):
+// OEP v1 ARM SWD interfaces (oep-spec docs/v1-core-wire-delta.ja.md §5.4 / §5.6, revision 1):
 //
 //   oep.wire.swd         scan / attach / detach on the probe's fixed SWD pair; attach wakes the port (JTAG-to-SWD,
-//                        then the dormant wake), sends TARGETSEL when the host gives one, and returns DPIDR
+//                        then the dormant wake), sends TARGETSEL when the host gives one, and returns DPIDR; attaching
+//                        an attached port hands its connection back (flags bit1)
 //   oep.target.arm-adi   ADI (v5 / v6) access on that connection: a list of raw DP / AP transfers, and MEM-AP block
 //                        reads / writes through TAR / DRW
 //
@@ -19,22 +20,25 @@ namespace v1 {
 
 struct SwdPort {
   uint16_t swdio, swclk;       // probe channels (GPIO numbers)
-  uint32_t half_ns = 500;      // SWCLK half period
+  uint32_t half_ns = 500;      // SWCLK half period (the fastest this probe uses)
   bool connected = false;
   rp2::BitBang io;
+  uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
 };
 
 class WireSwd final : public Interface {
  public:
-  enum : uint8_t { kOpScan = 0x01, kOpAttach = 0x02, kOpDetach = 0x03 };
+  enum : uint8_t { kOpScan = reg::wire_swd::kOpScan, kOpAttach = reg::wire_swd::kOpAttach,
+                   kOpDetach = reg::wire_swd::kOpDetach };
   WireSwd(SwdPort &port, uint16_t instance) : port_(port), instance_(instance) {}
-  const char *name() const override { return "oep.wire.swd"; }
+  const char *name() const override { return reg::wire_swd::kName; }
   uint16_t instance() const override { return instance_; }
+  uint8_t revision() const override { return reg::wire_swd::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 
  private:
-  bool wake(const uint32_t *targetsel, uint32_t &dpidr, bool &dormant);
+  bool wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr, bool &dormant);
   bool xferDpidr(uint32_t &dpidr);   // one DPIDR read on the current, live port
   SwdPort &port_;
   uint16_t instance_;
@@ -42,10 +46,12 @@ class WireSwd final : public Interface {
 
 class TargetArmAdi final : public Interface {
  public:
-  enum : uint8_t { kOpTransfer = 0x01, kOpReadBlock = 0x02, kOpWriteBlock = 0x03 };
+  enum : uint8_t { kOpTransfer = reg::target_arm_adi::kOpTransfer, kOpReadBlock = reg::target_arm_adi::kOpReadBlock,
+                   kOpWriteBlock = reg::target_arm_adi::kOpWriteBlock };
   TargetArmAdi(SwdPort &port, uint16_t instance) : port_(port), instance_(instance) {}
-  const char *name() const override { return "oep.target.arm-adi"; }
+  const char *name() const override { return reg::target_arm_adi::kName; }
   uint16_t instance() const override { return instance_; }
+  uint8_t revision() const override { return reg::target_arm_adi::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 

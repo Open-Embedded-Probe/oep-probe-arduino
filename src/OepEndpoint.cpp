@@ -145,7 +145,7 @@ Result Endpoint::handleCore(uint8_t operation, const uint8_t *payload, size_t le
       memcpy(result.magic, OEP_V0_CONST_CONFIRM_RESULT_MAGIC, 4);
       result.revision = OEP_V0_PROTOCOL_REVISION;
       result.max_frame = limits_.max_frame;
-      result.window_bytes = limits_.window_bytes;
+      result.window_bytes = static_cast<uint16_t>(limits_.window_bytes > 0xffff ? 0xffff : limits_.window_bytes);
       result.max_inflight = limits_.max_inflight;
       result.flags = 0;
       return completed(oep_v0_core_confirm_result_pack(&result, out, capacity));

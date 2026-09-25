@@ -58,7 +58,16 @@ void Ch32Dm::settleHalted(bool ack_reset) {
 
 bool Ch32Dm::halt() {
   if (!attach()) return false;
-  if (halted_) return true;
+  // Already stopped: nothing to do (v1 riscv-dm halt is idempotent). Asked of the debug module rather than halted_,
+  // since the host may have resumed or halted the hart through raw DMI writes since. Not while a reset is pending:
+  // a V00x keeps DMSTATUS's halt / run bits frozen until it is acknowledged.
+  {
+    uint32_t status = 0;
+    if (phy_.read(kDmStatus, status) && (status & 0xf) == 2 && (status & (1u << 9)) && !(status & (3u << 18))) {
+      if (!halted_) settleHalted(false);
+      return true;
+    }
+  }
   // One halt request is not always enough. Measured on a CH32L103 through the RP2350
   // probe (2026-09-23): DMCONTROL reads the request back as set while the hart keeps
   // running, and abstract commands fail cmderr=4; repeating it makes the halt land every
@@ -88,23 +97,40 @@ bool Ch32Dm::resume() {
   if (!attached()) return false;
   host_raw_ = false;          // the probe has the hart back
   phy_.write(kAbstractAuto, 0);
-  // Same story as halt(): one request is not always enough, and the CH32L103 never raises
-  // allresumeack at all (2026-09-23) - it just starts running. So repeat the request, and
-  // accept either the acknowledgement or the hart plainly being back on its feet.
-  bool ok = false;
+  // v1 wire §5.5: ok = the hart left debug mode once. One request is not always enough (CH32L103, V006), yet a
+  // second one after the hart already ran and stopped again (a breakpoint straight ahead) would run it past that.
+  // So one request per round, and a round is repeated only when the hart plainly did not go: no allresumeack, not
+  // running, and still halted with dpc where it was. The CH32L103 never raises allresumeack at all (2026-09-23) -
+  // there a dpc that moved is the proof.
+  uint32_t before = 0;
+  bool have_before = false;
+  {
+    uint32_t status = 0;
+    if (phy_.read(kDmStatus, status) && (status & 0xf) == 2 && (status & (1u << 9))) {
+      halted_ = true;
+      have_before = readRegister(0x07b1, before);
+    }
+  }
+  bool ok = false, stopped_again = false;
   for (int round = 0; round < 8 && !ok; ++round) {
     relink();
-    for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x40000001);
+    phy_.write(kDmControl, 0x40000001);                          // resumereq, once
+    int halted_reads = 0;
     for (int i = 0; i < 25 && !ok; ++i) {
       uint32_t status = 0;
       if (!phy_.read(kDmStatus, status)) continue;
       if (status & (1u << 17)) ok = true;                        // allresumeack
       else if ((status & 0xf) == 2 && (status & (1u << 11)) && !(status & (1u << 9)))
         ok = true;                                               // allrunning, not halted
+      else if ((status & (1u << 9)) && ++halted_reads >= 3) break;
     }
+    if (ok || !have_before) continue;
+    relink();                                                    // a change of state drops this part's link
+    uint32_t now = 0;
+    if (readRegister(0x07b1, now) && now != before) ok = stopped_again = true;   // it ran, and stopped again
   }
   phy_.write(kDmControl, 0x00000001);
-  halted_ = !ok;
+  halted_ = !ok || stopped_again;
   return ok;
 }
 
@@ -284,7 +310,7 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
 }
 
 bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
-                          uint32_t timeout_us, RunReport &report) {
+                          uint32_t timeout_ms, RunReport &report) {
   report = {false, 0, 0, 0};
   if (!halted_) return false;
   // Without ebreakm the final ebreak traps through mtvec and the application restarts
@@ -302,11 +328,17 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   // bring-up. A stop with dpc still at `pc` means the code never ran - ask again (the host's code ends in an
   // ebreak somewhere else, so a real stop never sits at its first instruction). Measured on the L103 through the RP2350 probe over
   // leads, 2026-09-24: 2 of 248 runs stopped at pc without running, 1 lost the link while polling.
-  const uint32_t started = micros();
+  const uint32_t started = micros(), started_ms = millis();
+  // micros() up to 4000 s (its u32 holds that many us), millis() beyond; 0xFFFFFFFF waits for ever
+  auto expired = [&]() {
+    if (timeout_ms == 0xFFFFFFFFu) return false;
+    if (timeout_ms <= 4000000u) return micros() - started >= timeout_ms * 1000u;
+    return millis() - started_ms >= timeout_ms;
+  };
   for (int attempt = 0; attempt < 4 && !report.stopped; ++attempt) {
     phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
     bool halted = false;
-    while (micros() - started < timeout_us) {
+    while (!expired()) {
       uint32_t status = 0;
       if (!phy_.read(kDmStatus, status)) { relink(); continue; }
       if (status & (1u << 9)) { halted = true; break; }

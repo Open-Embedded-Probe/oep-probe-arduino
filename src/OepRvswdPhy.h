@@ -40,6 +40,12 @@ class RvswdPhy final : public DmiPhy {
   // on then varies run to run. A jig that is known to be provisional says so here rather
   // than leaving the probe to guess: 0 = no floor.
   void setMinHalfNs(uint32_t half_ns) { min_half_ns_ = half_ns; }
+  // The host's max_speed (v1 attach TLV 0x01): no half period shorter than one SWCLK period of 1 / hz allows. Taken
+  // from the nominal period (the measured rate, with the loop overhead, is lower). 0 = no ceiling.
+  bool setMaxHz(uint32_t hz) override {
+    cap_half_ns_ = hz ? static_cast<uint32_t>((1000000000ull + 2ull * hz - 1) / (2ull * hz)) : 0;
+    return true;
+  }
   // Rest the bus with SWCLK low between transactions instead of both lines high. Which one
   // a target needs is a property of the target, and they disagree (2026-09-23): a CH32L103
   // resting high drops the link after about 1 ms and its debug module resets, letting a
@@ -61,6 +67,8 @@ class RvswdPhy final : public DmiPhy {
   int swdio_ = -1, swclk_ = -1;
   bool ready_ = false, attached_ = false;
   uint32_t min_half_ns_ = 0;
+  uint32_t cap_half_ns_ = 0;
+  uint32_t floorNs() const { return min_half_ns_ > cap_half_ns_ ? min_half_ns_ : cap_half_ns_; }
   uint32_t half_cycles_ = 0, half_ns_ = 0, retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   // Longest quiet spell the target's debug interface tolerates before the link has to be
   // brought up again. It measured out at about 1 ms; this leaves margin.

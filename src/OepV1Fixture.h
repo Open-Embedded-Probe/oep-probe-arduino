@@ -1,21 +1,90 @@
-// A v0 fixture service offered under a v1 name (oep-spec capability-name-hierarchy.ja.md: v1 starts with
-// oep.fixture.gpio / uart / capture). Operations and payloads stay the v0 ones for now; the describe is
-// rebuilt in the v1 vocabulary (role_channels from the probe's pin table instead of channel_candidate).
+// OEP v1 fixtures on the probe's own pins (oep-spec v1-core-wire-delta.ja.md §5.8, revision 1):
+//
+//   oep.fixture.gpio   plan role 1 = a line (any number of them). Only planned channels may be set or read.
+//     0x01 set(n u8, n x (channel u16, mode u8)) [TLV]      modes 0 input, 1 pull-up, 2 pull-down, 3 output low,
+//                                                          4 output high, 5 open-drain low, 6 open-drain release
+//     0x02 read(n u8, n x channel u16) [TLV] -> n x level   no lock
+//   oep.fixture.uart   plan roles 1 = RX, 2 = TX. A position stream like oep.target.console (without the stream
+//                      byte): received bytes are kept from configure until plan_release whatever the sessions do,
+//                      and reading does not consume them. TX idles high before configure and after plan_release.
+//     0x01 configure(baud u32) [TLV 0x01 format] -> baud    0x02 read(from, arg, max) -> start flags data (no lock)
+//     0x03 marks(from_serial) (no lock)   0x04 clear   0x05 mark(value)   0x06 write(count u16, data) -> accepted
+//
+// V0Fixture offers a v0 service (its payloads unchanged) under a project-specific name, revision 0: the ESP-IDF I2C /
+// SPI slave tools. The oep.fixture.* names are revision 1 only (the v0-shape gpio / uart / capture are not offered).
 #pragma once
 
 #include "OepFixtureServices.h"
 #include "OepV1.h"
+#include "OepV1Stream.h"
 
 namespace oep {
 namespace v1 {
 
 // The plan roles and extra describe TLVs of the fixtures every probe offers the same way.
-constexpr uint8_t kGpioRoles[] = {1};                                    // line
-constexpr uint8_t kUartRoles[] = {1, 2};                                 // RX, TX
-constexpr uint8_t kCaptureRoles[] = {0, 1, 2, 3, 4, 5, 6, 7};            // line k
-constexpr uint8_t kImplementationPeripheral[] = {kTagImplementation, 1, 2};        // implementation: peripheral
-constexpr uint32_t kGpioLockFree = 1u << 2;                              // read_bank changes nothing
-constexpr uint32_t kCaptureLockFree = (1u << 3) | (1u << 4);             // status, read
+constexpr uint8_t kGpioRoles[] = {reg::fixture_gpio::kRoleLine};                               // line
+constexpr uint8_t kUartRoles[] = {reg::fixture_uart::kRoleRx, reg::fixture_uart::kRoleTx};    // RX, TX
+constexpr uint8_t kImplementationPeripheral[] = {kTagImplementation, 1, 2};                     // implementation: peripheral
+
+class FixtureGpio final : public Interface {
+ public:
+  enum : uint8_t { kOpSet = reg::fixture_gpio::kOpSet, kOpRead = reg::fixture_gpio::kOpRead };
+  // owner: this instance's PinTable owner id (keeps it off the channels other fixtures hold).
+  FixtureGpio(PinTable &pins, uint16_t instance, uint8_t owner = 1) : pins_(pins), instance_(instance), owner_(owner) {}
+  const char *name() const override { return reg::fixture_gpio::kName; }
+  uint16_t instance() const override { return instance_; }
+  uint8_t revision() const override { return reg::fixture_gpio::kRevision; }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_gpio::kLockFreeOps, op); }
+  size_t describe(uint8_t *out, size_t capacity) override;
+  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
+  bool planApply(const RoleAssignment *roles, size_t count) override;
+  void planRelease() override;   // every planned channel back to a floating input
+
+ private:
+  PinTable &pins_;
+  uint16_t instance_;
+  uint8_t owner_;
+  uint64_t planned_ = 0;
+  bool planned(uint16_t channel) const { return channel < 64 && ((planned_ >> channel) & 1); }
+};
+
+class FixtureUart final : public Interface {
+ public:
+  enum : uint8_t {
+    kOpConfigure = reg::fixture_uart::kOpConfigure, kOpRead = reg::fixture_uart::kOpRead,
+    kOpMarks = reg::fixture_uart::kOpMarks, kOpClear = reg::fixture_uart::kOpClear,
+    kOpMark = reg::fixture_uart::kOpMark, kOpWrite = reg::fixture_uart::kOpWrite,
+  };
+  // owner: this instance's PinTable owner id (each UART instance needs its own so a release returns only its pins).
+  FixtureUart(PinTable &pins, OepUart &serial, uint16_t instance, uint8_t owner = 2)
+      : pins_(pins), serial_(serial), instance_(instance), owner_(owner), stream_(buffer_, kCapacity, marks_, kMarks) {}
+  const char *name() const override { return reg::fixture_uart::kName; }
+  uint16_t instance() const override { return instance_; }
+  uint8_t revision() const override { return reg::fixture_uart::kRevision; }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_uart::kLockFreeOps, op); }
+  size_t describe(uint8_t *out, size_t capacity) override;
+  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
+  bool planApply(const RoleAssignment *roles, size_t count) override;
+  void planRelease() override;
+  void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 10 ? static_cast<uint16_t>(max_frame - 10) : 0; }
+  void poll();   // from loop(): moves what the UART received into the stream
+
+ private:
+  static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
+  PinTable &pins_;
+  OepUart &serial_;
+  uint16_t instance_;
+  uint8_t owner_;
+  int rx_ = -1, tx_ = -1;
+  bool configured_ = false;
+  uint16_t max_read_ = 1000;
+  uint8_t buffer_[kCapacity];
+  PositionStream::Mark marks_[kMarks];
+  PositionStream stream_;
+  void idleHigh();   // TX at the UART idle level, driven
+};
 
 class V0Fixture final : public Interface {
  public:
@@ -34,17 +103,7 @@ class V0Fixture final : public Interface {
   }
   size_t describe(uint8_t *out, size_t capacity) override {
     TlvWriter w(out, capacity);
-    const uint64_t mask = pins_.allowedMask();
-    uint8_t value[3 + 8];
-    int top = 63;
-    while (top >= 0 && !((mask >> top) & 1)) --top;
-    const size_t bytes = top < 0 ? 0 : static_cast<size_t>(top / 8 + 1);
-    for (uint8_t r = 0; r < role_count_; ++r) {   // role(u8) base(u16 = 0) bitmap
-      value[0] = roles_[r];
-      value[1] = value[2] = 0;
-      for (size_t i = 0; i < bytes; ++i) value[3 + i] = static_cast<uint8_t>(mask >> (8 * i));
-      w.put(kTagRoleChannels, value, 3 + bytes);
-    }
+    w.roleChannels(roles_, role_count_, pins_.allowedMask());
     if (extra_length_ && w.ok() && w.length() + extra_length_ <= capacity) {
       memcpy(out + w.length(), extra_, extra_length_);
       return w.length() + extra_length_;

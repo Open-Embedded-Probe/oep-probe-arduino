@@ -1,18 +1,18 @@
-// OEP v1 draft probe on ESP32-P4 for the CH32X035 fixture (oep-spec docs/v1-core-wire-delta.ja.md).
+// OEP v1 probe on ESP32-P4 for the CH32X035 fixture (oep-spec docs/v1-core-wire-delta.ja.md).
 // Transport: USB-Serial/JTAG (HWCDC). Limits from E155: 1 KiB frames, 4 KiB window.
 //
-// v1 draft: oep.core (the probe described in its describe), oep.wire.rvswd (scan / attach / detach),
-// oep.target.riscv-dm (DMI step lists, block read/write, run until halt, halt / resume, ndmreset),
-// oep.target.console (a position-addressed stream of the target's DM console), and the fixtures
-// oep.fixture.gpio / uart (x2) / capture - the v0 services under v1 names, their operations unchanged -
-// and the ESP-IDF I2C / SPI targets under io.github.ch32-riscv-ug.esp32.*.
+// oep.core (the probe described in its describe), oep.wire.rvswd (scan / attach / detach / attach_under_reset),
+// oep.target.riscv-dm (DMI step lists, block read/write, run until halt, halt / resume, reset, step),
+// oep.target.console (a position-addressed stream of the target's DM console), the fixtures
+// oep.fixture.gpio / uart (x2) / capture (PARLIO), all revision 1, and the ESP-IDF I2C / SPI targets under
+// io.github.ch32-riscv-ug.esp32.* (v0 payloads, revision 0).
 #include <OepCh32Dm.h>
-#include <OepFixtureCapture.h>
 #include <OepFixtureServices.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
 #include <OepRvswdPhy.h>
 #include <OepDmConsole.h>
+#include <OepV1Capture.h>
 #include <OepV1Console.h>
 #include <OepV1Endpoint.h>
 #include <OepV1Fixture.h>
@@ -35,17 +35,9 @@ static oep::v1::TargetConsoleStream console(port, consoleDriver, 1);
 static constexpr uint64_t kReserved = (1ull << 2) | (1ull << 24) | (1ull << 25) | (1ull << 54);
 static constexpr uint64_t kFixtures = ((1ull << 55) - 1) & ~kReserved;
 static oep::PinTable pins(kFixtures);
-static oep::FixtureGpio gpio(pins);
-static oep::FixtureUart uart1(pins, Serial1, 2), uart2(pins, Serial2, 5);   // uart2: X035 USART2 tests (GPIO48/49)
-static oep::FixtureCapture capture(pins);
-static const uint8_t kCaptureExtra[] = {oep::v1::kTagImplementation, 1, 3};   // peripheral + DMA
-static oep::v1::V0Fixture gpioV1(gpio, "oep.fixture.gpio", 2, pins, oep::v1::kGpioRoles, 1, oep::v1::kGpioLockFree);
-static oep::v1::V0Fixture uart1V1(uart1, "oep.fixture.uart", 3, pins, oep::v1::kUartRoles, 2, 0,
-                                  oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
-static oep::v1::V0Fixture uart2V1(uart2, "oep.fixture.uart", 4, pins, oep::v1::kUartRoles, 2, 0,
-                                  oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
-static oep::v1::V0Fixture captureV1(capture, "oep.fixture.capture", 5, pins, oep::v1::kCaptureRoles, 8,
-                                    oep::v1::kCaptureLockFree, kCaptureExtra, sizeof kCaptureExtra);
+static oep::v1::FixtureGpio gpio(pins, 2);
+static oep::v1::FixtureUart uart1(pins, Serial1, 3, 2), uart2(pins, Serial2, 4, 5);   // uart2: X035 USART2 tests (GPIO48/49)
+static oep::v1::LogicCapture capture(endpoint, kReserved, 5);   // PARLIO RX; its lines are never driven
 // ESP-IDF I2C / SPI slave tools under the project's own names (capability-name-hierarchy.ja.md, decision 4):
 // both implementations so far are the ESP-IDF slave drivers, whose quirks stay out of any oep. name.
 static oep::P4I2cTarget i2c(pins);
@@ -84,10 +76,10 @@ void setup() {
   endpoint.add(console);
   // The fixture pins are left as the P4 boots them (inputs, nothing driven); the RP2 sketches park theirs because
   // the RP2 pad comes up with a pull-down.
-  endpoint.add(gpioV1);
-  endpoint.add(uart1V1);
-  endpoint.add(uart2V1);
-  endpoint.add(captureV1);
+  endpoint.add(gpio);
+  endpoint.add(uart1);
+  endpoint.add(uart2);
+  endpoint.add(capture);
   endpoint.add(i2cV1);
   endpoint.add(spiV1);
 }
@@ -95,6 +87,9 @@ void setup() {
 void loop() {
   endpoint.poll();
   console.poll();
+  uart1.poll();
+  uart2.poll();
+  capture.poll();
   i2c.service();
   spi.service();
 }
