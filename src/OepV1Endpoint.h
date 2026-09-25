@@ -63,6 +63,13 @@ class Endpoint {
   Result planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   void planRelease();
   bool planned_[kMaxInterfaces] = {};
+  // Experimental push subscriptions, per fn.
+  bool subscribed_[kMaxInterfaces] = {};
+  int32_t credit_[kMaxInterfaces] = {};
+  uint16_t push_seq_[kMaxInterfaces] = {};
+  Result subscription(uint8_t op, const uint8_t *payload, size_t length);
+  void push();
+  void send(size_t length);
   bool plan_active_ = false;
   Result checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity);
   void lapse();
