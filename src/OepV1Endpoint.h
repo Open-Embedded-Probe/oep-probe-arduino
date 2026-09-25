@@ -23,10 +23,19 @@ class Endpoint {
   // (through a USB-UART bridge the bytes are not protected). The probe knows which transport it has.
   enum class Framing : uint8_t { kLengthPrefixed, kCobsCrc };
 
+  static constexpr size_t kMaxTransports = 4;
+
   Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
            Limits limits, Framing framing = Framing::kLengthPrefixed)
-      : stream_(stream), reader_(rx_buffer, rx_capacity, limits.max_frame), cobs_(rx_buffer, rx_capacity),
-        tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(limits), framing_(framing) {}
+      : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(limits) {
+    addTransport(stream, rx_buffer, rx_capacity, framing, false);
+  }
+
+  // Another way in to the same probe (v1 wire §1): vendor bulk, HID, CDC, USB-Serial/JTAG, UART. Every transport shares
+  // the one session and lock; a result goes back on the transport its request came from, pushes and events go to the
+  // transport the subscription came from. rx: one whole frame (max_frame) for this transport. The transport the
+  // constructor took is transport 0 (the one a DirectTransport, if any, belongs to).
+  bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, Framing framing, bool flush_after_burst);
 
   bool add(Interface &interface);
   // oep.core's describe: the probe itself, as TLV bytes (kept by the caller).
@@ -44,24 +53,35 @@ class Endpoint {
   void setPushQueue(size_t bytes) { push_queue_ = bytes; }
   // Flush the stream after each poll that wrote something: a buffered USB vendor interface sends a short frame only
   // when flushed (E160). Off for streams that send by themselves (USB-Serial/JTAG, UART).
-  void setFlushAfterBurst(bool on) { flush_after_burst_ = on; }
+  void setFlushAfterBurst(bool on) { transports_[0].flush_after_burst = on; }
   // Experimental: a zero-copy path for an interface's data pushes (length-prefixed framing only). The interface builds
   // whole push frames itself, from its own task: directPush says whether it may send now (the lock holder subscribed
   // its fn) with the fn and the subscriber's batching; takeSeq numbers a frame (shared with that fn's events).
   void setDirect(DirectTransport *direct) { direct_ = direct; }
-  DirectTransport *direct() const { return framing_ == Framing::kLengthPrefixed ? direct_ : nullptr; }
+  // the zero-copy path belongs to transport 0: pushes use it only while the subscriber came in on transport 0
+  DirectTransport *direct() const {
+    return push_ == 0 && transports_[0].framing == Framing::kLengthPrefixed ? direct_ : nullptr;
+  }
   bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint16_t &max_delay_ms) const;
   uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&push_seq_[fn - 1], 1, __ATOMIC_RELAXED); }
   void poll();
 
  private:
-  Stream &stream_;
-  FrameReader reader_;
-  CobsReader cobs_;
+  struct Transport {
+    Stream *stream = nullptr;
+    FrameReader reader;
+    CobsReader cobs;
+    Framing framing = Framing::kLengthPrefixed;
+    bool flush_after_burst = false, wrote = false;
+    int tx_room_max = 0;
+  };
+  Transport transports_[kMaxTransports];
+  size_t transport_count_ = 0;
+  size_t current_ = 0;   // the transport the message being handled came in on (results go back there)
+  size_t push_ = 0;      // the transport the push subscriptions came in on
   uint8_t *tx_;
   size_t tx_capacity_;
   Limits limits_;
-  Framing framing_;
   Interface *interfaces_[kMaxInterfaces] = {};
   size_t count_ = 0;
   const uint8_t *probe_tlv_ = nullptr;
@@ -101,8 +121,6 @@ class Endpoint {
   bool queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length);
   bool sendEvents();
   size_t push_queue_ = 1024;
-  bool flush_after_burst_ = false, wrote_ = false;
-  int tx_room_max_ = 0;
   Result subscription(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   void push();
   void endSubscriptions();

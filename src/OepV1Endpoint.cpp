@@ -51,10 +51,23 @@ bool Endpoint::add(Interface &interface) {
   return true;
 }
 
+bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, Framing framing,
+                            bool flush_after_burst) {
+  if (transport_count_ >= kMaxTransports) return false;
+  Transport &t = transports_[transport_count_++];
+  t.stream = &stream;
+  t.reader.reset(rx_buffer, rx_capacity, limits_.max_frame);
+  t.cobs.reset(rx_buffer, rx_capacity);
+  t.framing = framing;
+  t.flush_after_burst = flush_after_burst;
+  return true;
+}
+
 void Endpoint::send(size_t length) {
-  wrote_ = true;
-  if (framing_ == Framing::kCobsCrc) writeCobsFrame(stream_, tx_, length);
-  else writeFrame(stream_, tx_, length);
+  Transport &t = transports_[current_];
+  t.wrote = true;
+  if (t.framing == Framing::kCobsCrc) writeCobsFrame(*t.stream, tx_, length);
+  else writeFrame(*t.stream, tx_, length);
 }
 
 // Pushes go at a lower priority than results: poll() answers what has arrived first, and a push is only written
@@ -100,8 +113,9 @@ bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_byt
 bool Endpoint::sendEvents() {
   while (event_tail_ != event_head_) {
     const Event &e = events_[event_tail_ % kEvents];
-    const int need = static_cast<int>(kEventHeader + e.length) + (framing_ == Framing::kCobsCrc ? 8 : 2);
-    if (stream_.availableForWrite() < need) return false;
+    const Transport &t = transports_[current_];
+    const int need = static_cast<int>(kEventHeader + e.length) + (t.framing == Framing::kCobsCrc ? 8 : 2);
+    if (t.stream->availableForWrite() < need) return false;
     tx_[0] = kRoleEvent;
     putU16(tx_ + 1, e.fn);
     putU16(tx_ + 3, e.seq);
@@ -138,17 +152,18 @@ void Endpoint::push() {
       const bool due = max_delay_ms_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) >= max_delay_ms_[i];
       if (!enough && !due) continue;
     }
-    const int writable = stream_.availableForWrite();
+    Transport &t = transports_[current_];
+    const int writable = t.stream->availableForWrite();
     // Keep at most push_queue_ bytes waiting in the transport: a result queues behind no more than that. The
     // transport's capacity is taken as the most room ever seen free (idle).
-    if (writable > tx_room_max_) tx_room_max_ = writable;
-    const int queued = tx_room_max_ - writable;
+    if (writable > t.tx_room_max) t.tx_room_max = writable;
+    const int queued = t.tx_room_max - writable;
     if (push_queue_ && queued >= static_cast<int>(push_queue_)) return;
     // length prefix (2) or COBS/CRC overhead (about 1 per 254 + 2 CRC + delimiter) on top of the header
-    const size_t overhead = kPushHeader + (framing_ == Framing::kCobsCrc ? 8 : 2);
+    const size_t overhead = kPushHeader + (t.framing == Framing::kCobsCrc ? 8 : 2);
     if (writable <= static_cast<int>(overhead) + 16) return;
     size_t free_room = static_cast<size_t>(writable) - overhead;
-    if (framing_ == Framing::kCobsCrc) free_room -= free_room / 254;
+    if (t.framing == Framing::kCobsCrc) free_room -= free_room / 254;
     size_t cap = room < free_room ? room : free_room;
     if (push_queue_ && cap + overhead + queued > push_queue_) {
       const int left = static_cast<int>(push_queue_) - queued - static_cast<int>(overhead);
@@ -179,6 +194,7 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length,
   if (parsed.resolution != kResolutionCompleted) return parsed;
   const uint16_t fn = getU16(payload);
   const uint16_t min_bytes = batching ? getU16(payload + 2) : 0, max_delay = batching ? getU16(payload + 4) : 0;
+  if (op == kOpSubscribe) push_ = current_;   // pushes and events go where the subscription came from
   if (fn == 0) {
     heartbeat_ = op == kOpSubscribe;
     if (heartbeat_) {
@@ -205,28 +221,36 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length,
 }
 
 void Endpoint::poll() {
-  if (framing_ == Framing::kCobsCrc) {
-    while (stream_.available()) {
-      if (!cobs_.push(static_cast<uint8_t>(stream_.read()))) continue;
-      handleMessage(cobs_.message(), cobs_.length());
-      cobs_.consume();
-    }
-  } else {
-    uint8_t chunk[512];
-    for (int avail; (avail = stream_.available()) > 0;) {
-      size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
-      for (size_t i = 0; i < n; ++i) chunk[i] = static_cast<uint8_t>(stream_.read());
-      const uint8_t *p = chunk;
-      while (n) {
-        if (!reader_.feed(p, n)) continue;
-        handleMessage(reader_.message(), reader_.length());
-        reader_.consume();
+  for (size_t i = 0; i < transport_count_; ++i) {
+    Transport &t = transports_[i];
+    current_ = i;   // results go back on this transport
+    if (t.framing == Framing::kCobsCrc) {
+      while (t.stream->available()) {
+        if (!t.cobs.push(static_cast<uint8_t>(t.stream->read()))) continue;
+        handleMessage(t.cobs.message(), t.cobs.length());
+        t.cobs.consume();
+      }
+    } else {
+      uint8_t chunk[512];
+      for (int avail; (avail = t.stream->available()) > 0;) {
+        size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
+        for (size_t k = 0; k < n; ++k) chunk[k] = static_cast<uint8_t>(t.stream->read());
+        const uint8_t *p = chunk;
+        while (n) {
+          if (!t.reader.feed(p, n)) continue;
+          handleMessage(t.reader.message(), t.reader.length());
+          t.reader.consume();
+        }
       }
     }
   }
-  push();   // after the results for everything that has arrived
-  if (flush_after_burst_ && wrote_) stream_.flush();
-  wrote_ = false;
+  current_ = push_;
+  push();   // after the results for everything that has arrived, on the subscriber's transport
+  for (size_t i = 0; i < transport_count_; ++i) {
+    Transport &t = transports_[i];
+    if (t.flush_after_burst && t.wrote) t.stream->flush();
+    t.wrote = false;
+  }
 }
 
 void Endpoint::lapse() {
