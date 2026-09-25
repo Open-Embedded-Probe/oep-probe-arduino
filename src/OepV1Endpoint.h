@@ -38,6 +38,11 @@ class Endpoint {
   bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, Framing framing, bool flush_after_burst);
 
   bool add(Interface &interface);
+  // The plan as probe state (oep.probe.config's plan item): the roles now applied, and a replacement that is all or
+  // nothing (0: applied; else the reject reason, with the plan before it applied again).
+  static constexpr size_t kMaxRoles = 16;
+  size_t plan(RoleAssignment *out, size_t max) const;
+  uint8_t replacePlan(const RoleAssignment *roles, size_t count);
   // oep.core's describe: the probe itself, as TLV bytes (kept by the caller).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
   // A random-ish value per boot; 0 = unknown (then hosts treat every no-session as a possible reboot).
@@ -126,6 +131,8 @@ class Endpoint {
   void endSubscriptions();
   void send(size_t length);
   bool plan_active_ = false;
+  RoleAssignment plan_roles_[kMaxRoles] = {};
+  size_t plan_count_ = 0;
   Result checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity);
   void lapse();
   uint32_t remaining() const;

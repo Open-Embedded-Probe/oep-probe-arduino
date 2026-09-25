@@ -440,7 +440,6 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   Tail tail;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity);
   if (refused(parsed)) return parsed;
-  constexpr size_t kMaxRoles = 16;
   RoleAssignment roles[kMaxRoles];
   size_t count = 0, at = 0;
   uint8_t raw = 0, len = 0;
@@ -475,6 +474,8 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     planned_[i] = true;
   }
   plan_active_ = true;
+  memcpy(plan_roles_, roles, count * sizeof roles[0]);
+  plan_count_ = count;
   return tail.finish(completed(), out, capacity);
 }
 
@@ -484,6 +485,38 @@ void Endpoint::planRelease() {
     planned_[i] = false;
   }
   plan_active_ = false;
+  plan_count_ = 0;
+}
+
+size_t Endpoint::plan(RoleAssignment *out, size_t max) const {
+  const size_t n = plan_count_ < max ? plan_count_ : max;
+  memcpy(out, plan_roles_, n * sizeof out[0]);
+  return n;
+}
+
+uint8_t Endpoint::replacePlan(const RoleAssignment *roles, size_t count) {
+  if (count > kMaxRoles) return kRejectMalformed;
+  auto apply = [this](const RoleAssignment *r, size_t n) -> uint8_t {
+    if (!n) return 0;
+    uint8_t tlv[kMaxRoles * 7], scratch[16];
+    for (size_t i = 0; i < n; ++i) {
+      uint8_t *t = tlv + i * 7;
+      t[0] = kTagRoleAssignment;
+      t[1] = 5;
+      putU16(t + 2, r[i].function);
+      t[4] = r[i].role;
+      putU16(t + 5, r[i].channel);
+    }
+    const Result res = planApply(tlv, n * 7, scratch, sizeof scratch);
+    if (res.resolution == kResolutionRejected) return res.detail;
+    return res.detail == kOutcomeSuccess ? 0 : kRejectUnavailable;
+  };
+  RoleAssignment before[kMaxRoles];
+  const size_t had = plan(before, kMaxRoles);
+  planRelease();
+  const uint8_t reason = apply(roles, count);
+  if (reason) apply(before, had);
+  return reason;
 }
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
