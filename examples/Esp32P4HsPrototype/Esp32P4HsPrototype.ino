@@ -79,6 +79,12 @@ static bool bindHook(uint8_t port, const oep::v1::ProbeConfig::Bind &b, void *) 
   if (port != 0 || !portStream) return false;
   if (b.source == 0) { uart.setPort(nullptr); followCoding = false; return true; }
   if (oep::v1::getU16(b.args) != uartFn) return false;
+  // baud(u32) format(u8) after the fn: run the UART now (the plan gave it its pins, applied before binds); 0 = wait for
+  // the port's line coding. format as fixture.uart's configure: data bits 0-1 (0 = 8, 1 = 7), parity 2-3, stop bit 4
+  const uint32_t baud = oep::v1::getU32(b.args + 2);
+  const uint8_t f = b.args[6];
+  if (baud && !uart.setLineCoding(baud, (f & 3) ? 7 : 8, (f >> 2) & 3, (f & 0x10) ? 2 : 1)) return false;
+  applyLoopback();
   uart.setPort(portStream);
   followCoding = b.flags & 1;
   return true;

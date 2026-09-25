@@ -50,7 +50,7 @@ try:
         A.call(fc, ERASE)   # the saved copy only: clear the current items too
         A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, b"") + tlv(T_PLAN, b""))
         want = [(T_PLAN, struct.pack("<HBH", fu, 1, RX) + struct.pack("<HBH", fu, 2, TX)),
-                (T_BIND, bytes([0, 1, 0, 1]) + struct.pack("<H", fu))]
+                (T_BIND, bytes([0, 1, 0, 1]) + struct.pack("<HIB", fu, 0, 0))]
         h = struct.unpack("<I", A.call(fc, SET, b"".join(tlv(t, v) for t, v in reversed(want))).payload)[0]
         mine = binascii.crc32(canonical(want))
         check("set hash = host's CRC-32 of the canonical form", h == mine, f"{h:#x} {mine:#x}")
@@ -74,6 +74,29 @@ try:
         while len(got) < 14 and time.monotonic() - t < 2: got += p.read(64)
         check("bridge echo after reboot", got == b"after reboot\r\n", repr(got))
         p.close()
+    elif phase == "setbaud":   # a bind that carries its baud: the UART runs without the port being opened
+        A.call(fc, ERASE)
+        A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, b"") + tlv(T_PLAN, b""))
+        A.call(fc, SET, tlv(T_PLAN, struct.pack("<HBH", fu, 1, RX) + struct.pack("<HBH", fu, 2, TX))
+               + tlv(T_BIND, bytes([0, 1, 0, 0]) + struct.pack("<HIB", fu, 230400, 0)))
+        st = struct.unpack("<III", A.call(core.find(A, "oep.test.bridge"), 0x03).payload[:12])
+        check("bind with a baud runs the UART at once", abs(st[0] - 230400) < 5000, str(st))
+        try:
+            A.call(fc, SET, tlv(T_BIND, bytes([0, 1, 0, 0]) + struct.pack("<HIB", fu, 0, 0)))
+            check("baud 0 without flags bit0 refused", False)
+        except Exception as e:
+            check("baud 0 without flags bit0 refused", "alformed" in type(e).__name__ or "Rejected" in type(e).__name__, type(e).__name__)
+        try:
+            A.call(fc, SET, tlv(T_BIND, bytes([0, 1, 0, 2]) + struct.pack("<HIB", fu, 230400, 0)))
+            check("flags bit1 (withdrawn) refused", False)
+        except Exception as e:
+            check("flags bit1 (withdrawn) refused", True, type(e).__name__)
+        A.call(fc, SAVE)
+        A.call(fc, CFG.op["reboot"])
+        print("saved plan + bind(230400); rebooting")
+    elif phase == "checkbaud":
+        st = struct.unpack("<III", A.call(core.find(A, "oep.test.bridge"), 0x03).payload[:12])
+        check("after reboot the saved bind runs the UART at its baud", abs(st[0] - 230400) < 5000, str(st))
     elif phase.startswith("mode"):
         m = int(phase[4:])
         extra = sys.argv[2:]

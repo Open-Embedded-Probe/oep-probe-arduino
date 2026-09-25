@@ -19,7 +19,7 @@ try:
     u.configure(115200)
     A.call(fb, 0x02, bytes([1, TX]))
     fc = core.find(A, "oep.probe.config")
-    A.call(fc, 0x02, bytes([0x04, 6, 0, 1, 0, 1]) + struct.pack("<H", fu))   # bind: port 0 <- fixture.uart, line coding
+    A.call(fc, 0x02, bytes([0x04, 11, 0, 1, 0, 1]) + struct.pack("<HIB", fu, 0, 0))   # bind: port 0 <- fixture.uart, baud from line coding
     start = u.read(console.PositionStream.FROM_NOW, 0, 0).start
     body = b"while closed\r\n"
     A.call(fu, 0x06, struct.pack("<H", len(body)) + body)     # the port was never opened
