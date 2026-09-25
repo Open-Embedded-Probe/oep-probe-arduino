@@ -1,5 +1,6 @@
-// OEP v1 (oep-spec docs/v1-core-wire-delta.ja.md, frozen candidate 2026-09-25): interfaces found by name, the probe
-// described by oep.core, a lock held by a host-chosen session id. Every number comes from the registry
+// OEP v1 core (oep-spec docs/oep-core.ja.md, frozen candidate 2026-09-26): interfaces found by name, the probe
+// described by oep.core, a lock held by a host-chosen session id. The standard interfaces' shared parts are in
+// OepV1Stream.h (position streams) and OepV1Debug.h (wire / target status, pin pairs). Every number comes from the registry
 // (OepV1Registry.h, generated from oep-spec registry/oep-v1.toml); the names below are the library's aliases.
 // Results reuse the v0 Result helpers: resolutions and reject reasons 0x01..0x06 keep their values.
 #pragma once
@@ -16,7 +17,7 @@ namespace v1 {
 
 constexpr uint8_t kRoleRequest = reg::kRoleRequest, kRoleResult = reg::kRoleResult,
                   kRoleSession = reg::kRoleSessionFlag;
-// Probe-initiated frames (§4.5), sent only to the lock holder that subscribed, after results.
+// Probe-initiated frames (core §11), sent only to the lock holder that subscribed, after results.
 //   role(0x06) fn(u16) seq(u16) payload     the core's part; the payload is the interface's (a stream: position(u64)
 //                                           then data - the standard interfaces' position stream)
 constexpr uint8_t kRolePush = reg::kRoleData;
@@ -35,10 +36,6 @@ constexpr uint8_t kRejectSessionRequired = reg::kRejectSessionRequired;  // a st
 constexpr uint8_t kRejectNoConnection = reg::kRejectNoConnection;        // the request's connection is not known
 constexpr uint8_t kRejectUnsupported = reg::kRejectUnsupported;          // a critical TLV (payload: tag) or value (none)
 
-// The status byte of wire and target results (§5.4). A failure is completed failed / partial with this in it.
-constexpr uint8_t kStatusOk = reg::kStatusOk, kStatusWait = reg::kStatusWait, kStatusLine = reg::kStatusLine,
-                  kStatusFault = reg::kStatusFault, kStatusTimeout = reg::kStatusTimeout, kStatusState = reg::kStatusState;
-
 // core (fn 0)
 constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpList, kOpDescribe = reg::core::kOpDescribe;
 constexpr uint8_t kOpOpen = reg::core::kOpOpen, kOpEnd = reg::core::kOpEnd, kOpKeepalive = reg::core::kOpKeepalive,
@@ -49,7 +46,7 @@ constexpr uint8_t kOpSubscribe = reg::core::kOpSubscribe, kOpUnsubscribe = reg::
 constexpr uint8_t kOpPlanApply = reg::core::kOpPlanApply, kOpPlanRelease = reg::core::kOpPlanRelease;
 constexpr uint8_t kTagRoleAssignment = reg::core::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), critical
 
-// common describe tags (capability-declaration-model.ja.md §3)
+// common describe tags (core §7.4)
 constexpr uint8_t kTagRoleChannels = reg::kDescribeRoleChannels, kTagMaxClockHz = reg::kDescribeMaxClockHz,
                   kTagMaxLength = reg::kDescribeMaxLength, kTagFeatures = reg::kDescribeFeatures,
                   kTagImplementation = reg::kDescribeImplementation, kTagChannelGroup = reg::kDescribeChannelGroup;
@@ -60,7 +57,7 @@ constexpr uint8_t kCoreFirmware = reg::core::kTlvDescribeFirmware, kCoreModel = 
                   kCoreLabel = reg::core::kTlvDescribeLabel, kCoreResetsOnOpen = reg::core::kTlvDescribeResetsOnOpen,
                   kCoreUartRates = reg::core::kTlvDescribeUartRates;
 
-// TLV tag bits (§0): bit 7 = critical (in requests); 0x7F = ignored (in every result); 0xFF invalid.
+// TLV tag bits (core §2.2): bit 7 = critical (in requests); 0x7F = ignored (in every result); 0xFF invalid.
 constexpr uint8_t kTagCritical = reg::kTagCritical, kTagIgnored = reg::kTagIgnored, kTagInvalid = reg::kTagInvalid;
 
 inline uint16_t getU16(const uint8_t *p) { return uint16_t(p[0]) | uint16_t(p[1]) << 8; }
@@ -71,22 +68,6 @@ inline void putU16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 inline void putU32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 inline uint64_t getU64(const uint8_t *p) { return getU32(p) | (static_cast<uint64_t>(getU32(p + 4)) << 32); }
 inline void putU64(uint8_t *p, uint64_t v) { putU32(p, static_cast<uint32_t>(v)); putU32(p + 4, static_cast<uint32_t>(v >> 32)); }
-// v1 wire §5.5 pin pairs, for a probe whose wire has one fixed pair (swclk 0xffff on one wire): scan's
-// count(u8) + count x (swdio u16, swclk u16) - every pair must be that one (count 0 = the probe's pairs); the attach
-// pins TLV (swdio u16, swclk u16), absent = that pair. Return 0 when allowed, else a reject reason.
-inline uint8_t fixedPairScan(const uint8_t *p, size_t n, uint16_t swdio, uint16_t swclk, size_t &fixed) {
-  if (n < 1 || n < 1u + 4u * p[0]) return 0x03;   // malformed
-  fixed = 1u + 4u * p[0];
-  for (uint8_t i = 0; i < p[0]; ++i)
-    if (getU16(p + 1 + 4 * i) != swdio || getU16(p + 3 + 4 * i) != swclk) return 0x04;   // unavailable: not allowed here
-  return 0;
-}
-inline uint8_t fixedPairPins(const uint8_t *v, uint8_t len, uint16_t swdio, uint16_t swclk) {
-  if (!v) return 0;                                 // absent: the one pair
-  if (len != 4) return 0x03;
-  return getU16(v) == swdio && getU16(v + 2) == swclk ? 0 : 0x04;
-}
-
 // bit n of a registry kLockFreeOps mask = op n needs no lock
 inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> op) & 1); }
 
@@ -97,17 +78,10 @@ inline Result rejectedWith(uint8_t reason, uint8_t *out, size_t capacity, uint8_
   return {kResolutionRejected, reason, 1};
 }
 
-// A wire / target result that did not go all the way (§5.4): nothing done = failed, some done = partial. The payload
-// has the success shape; its status byte says why.
-inline Result outcome(uint8_t status, size_t done, size_t length) {
-  if (status == kStatusOk) return completed(length);
-  return done ? partial(length) : failed(length);
-}
-
 // The firmware string every v1 probe reports (oep.core describe tag 0x40).
 constexpr const char *kFirmwareVersion = "3.2.0-v1rc";
 
-// The TLVs after a request's fixed part (§0). A handler checks the fixed part (shorter = malformed), then:
+// The TLVs after a request's fixed part (core §2.3). A handler checks the fixed part (shorter = malformed), then:
 //
 //   Tail tail;
 //   const Result r = tail.parse(p + fixed, n - fixed, kKnown, out, capacity);   // kKnown: tags (bit 7 clear) it reads
@@ -130,7 +104,7 @@ class Tail {
     const uint8_t *value = nullptr;
     while (at < n) {
       if (!step(at, raw, value, len)) return rejected(kRejectMalformed);
-      if (raw == kTagInvalid || raw == kTagIgnored) return rejected(kRejectMalformed);   // 0x7F: results only (§0)
+      if (raw == kTagInvalid || raw == kTagIgnored) return rejected(kRejectMalformed);   // 0x7F: results only (core §2.3)
       const uint8_t tag = raw & ~kTagCritical;
       bool is_known = false;
       for (size_t i = 0; i < known_count && !is_known; ++i) is_known = (known[i] & ~kTagCritical) == tag;
@@ -205,14 +179,6 @@ class Tail {
   }
 };
 
-// A wire op that failed before it had anything of its success shape to report (scan, attach, attach_under_reset,
-// detach): completed failed with the status byte alone.
-inline Result failedStatus(uint8_t status, uint8_t *out, size_t capacity) {
-  if (capacity < 1) return failed();
-  out[0] = status;
-  return failed(1);
-}
-
 // The common case: a request with a fixed part of `fixed` bytes and a tail of TLVs none of which this op reads.
 inline Result plainTail(Tail &tail, const uint8_t *p, size_t n, size_t fixed, uint8_t *out, size_t capacity) {
   if (n < fixed) return rejected(kRejectMalformed);
@@ -279,7 +245,7 @@ class Interface {
   virtual ~Interface() = default;
   virtual const char *name() const = 0;
   virtual uint16_t instance() const = 0;
-  // The payload shapes are fixed by (name, revision) (§0); every oep.* interface in this library is revision 1.
+  // The payload shapes are fixed by (name, revision) (core §2.7); every oep.* interface in this library is revision 1.
   virtual uint8_t revision() const { return 0; }
   virtual uint8_t flags() const { return 0; }
   // The whole describe as TLV bytes; the endpoint pages it by whole TLVs.
@@ -295,12 +261,12 @@ class Interface {
   }
   virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
   virtual void planRelease() {}
-  // The lock holder's lease lapsed (v1 wire §5.5): drop what that session used (a wire: the host's use of its
+  // The lock holder's lease lapsed (core §9): drop what that session used (a wire: the host's use of its
   // connection). An explicit end does not come here.
   virtual void sessionLapsed() {}
   // The endpoint's frame limit, told when the interface is added: what a describe may promise.
   virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
-  // Push (§4.5): while subscribed, the endpoint asks for a data frame's payload. Write up to `capacity` bytes of it
+  // Push (core §11): while subscribed, the endpoint asks for a data frame's payload. Write up to `capacity` bytes of it
   // (the interface decides its form: a stream writes position(u64) then data) and return the length; 0 = nothing now.
   virtual bool subscribe(bool on) { (void)on; return false; }   // false: this interface does not push
   virtual size_t pull(uint8_t *out, size_t capacity) {

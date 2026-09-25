@@ -97,7 +97,7 @@ bool Ch32Dm::resume() {
   if (!attached()) return false;
   host_raw_ = false;          // the probe has the hart back
   phy_.write(kAbstractAuto, 0);
-  // v1 wire §5.5: ok = the hart left debug mode once. One request is not always enough (CH32L103, V006), yet a
+  // oep-if-debug §4.2: ok = the hart left debug mode once. One request is not always enough (CH32L103, V006), yet a
   // second one after the hart already ran and stopped again (a breakpoint straight ahead) would run it past that.
   // So one request per round, and a round is repeated only when the hart plainly did not go: no allresumeack, not
   // running, and still halted with dpc where it was. The CH32L103 never raises allresumeack at all (2026-09-23) -

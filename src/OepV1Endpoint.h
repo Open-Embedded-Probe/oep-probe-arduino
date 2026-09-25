@@ -31,7 +31,7 @@ class Endpoint {
     addTransport(stream, rx_buffer, rx_capacity, framing, false);
   }
 
-  // Another way in to the same probe (v1 wire §1): vendor bulk, HID, CDC, USB-Serial/JTAG, UART. Every transport shares
+  // Another way in to the same probe (core §3.3): vendor bulk, HID, CDC, USB-Serial/JTAG, UART. Every transport shares
   // the one session and lock; a result goes back on the transport its request came from, pushes and events go to the
   // transport the subscription came from. rx: one whole frame (max_frame) for this transport. The transport the
   // constructor took is transport 0 (the one a DirectTransport, if any, belongs to).
@@ -130,7 +130,7 @@ class Endpoint {
   void push();
   void endSubscriptions();
   void send(size_t length);
-  // Dedup of the lock holder's requests sent again (v1-open-proposals §4): the last kDedupEntries results, keyed on corr
+  // Dedup of the lock holder's requests sent again (core §5.2): the last kDedupEntries results, keyed on corr
   // and checked against fn, op and a CRC of the payload; dropped at every open. Results over kDedupBytes are not kept.
   static constexpr size_t kDedupEntries = 16, kDedupBytes = 72;
   struct Dedup {

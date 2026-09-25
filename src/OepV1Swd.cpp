@@ -12,7 +12,7 @@ constexpr uint8_t kKindArmAdi = 0x02;
 constexpr int kWaitRetries = 100;
 inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 
-// §5.4 status from the last ACK: WAIT to the end = wait, FAULT = fault, no answer or parity = line.
+// oep-if-common §3 status from the last ACK: WAIT to the end = wait, FAULT = fault, no answer or parity = line.
 uint8_t statusOf(uint8_t ack) {
   return ack == swd::kOk ? kStatusOk : ack == swd::kFault ? kStatusFault : ack == swd::kWait ? kStatusWait : kStatusLine;
 }

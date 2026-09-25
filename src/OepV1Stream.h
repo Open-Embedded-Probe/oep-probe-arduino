@@ -1,5 +1,5 @@
 // The position-addressed byte stream behind oep.target.console and oep.fixture.uart (oep-spec
-// v1-core-wire-delta.ja.md §5.7 / §5.8, console-stream.ja.md): bytes kept in a ring that reads do not consume,
+// docs/oep-if-common.ja.md §1): bytes kept in a ring that reads do not consume,
 // addressed by a u64 position (it does not wrap in practice), and marks with their own u32 serial numbers. One of the
 // standard interfaces' shared forms (the capture uses the same u64 positions).
 //

@@ -1,4 +1,4 @@
-// OEP v1 fixtures on the probe's own pins (oep-spec v1-core-wire-delta.ja.md §5.8, revision 1):
+// OEP v1 fixtures on the probe's own pins (oep-spec docs/oep-if-fixture.ja.md, revision 1):
 //
 //   oep.fixture.gpio   plan role 1 = a line (any number of them). Only planned channels may be set or read.
 //     0x01 set(n u8, n x (channel u16, mode u8)) [TLV]      modes 0 input, 1 pull-up, 2 pull-down, 3 output low,

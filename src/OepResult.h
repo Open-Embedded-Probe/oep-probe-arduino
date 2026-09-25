@@ -1,5 +1,5 @@
 // What a handler returns (resolution, reject reason or outcome, payload length) and the pin-plan entry. Shared by
-// the v1 interfaces and the v0 services; the numbers are the same on both wires (oep-spec v1-core-wire-delta §1),
+// the v1 interfaces and the v0 services; the numbers are the same on both wires (oep-spec oep-core §4.3),
 // so this header needs nothing from oep_v0.h.
 #pragma once
 

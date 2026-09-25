@@ -66,7 +66,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
   Bind binds[kMaxPorts];
   for (size_t at = 0; at < length;) {
     if (length - at < 2 || length - at - 2 < items[at + 1]) return rejected(kRejectMalformed);
-    const uint8_t tag = items[at] & 0x7f, len = items[at + 1];   // kept and hashed without the critical bit (§5.10)
+    const uint8_t tag = items[at] & 0x7f, len = items[at + 1];   // kept and hashed without the critical bit (oep-if-probe-config §2)
     const uint8_t *v = items + at + 2;
     at += 2u + len;
     if (tag == cfg::kTlvItemBootMode) {
