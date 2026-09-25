@@ -5,8 +5,8 @@
 //   0x02 set(items) -> hash(u32)    0x03 save -> hash(u32)    0x04 erase    0x05 reboot (answers, then restarts)
 //
 // Items (TLV, tag u8 len u8 value): 0x01 boot_mode(u8), 0x02 plan (fn u16 role u8 channel u16) x n - the endpoint's
-// plan itself, 0x04 bind (port u8 source u8 attach u8 flags u8, source args: fixture.uart fn u16 / target.console
-// wire_fn u16 mechanism u8), 0x05 target (wire_fn u16 chip_id u32; needed by a bind that attaches by itself). A set
+// plan itself, 0x04 bind (port u8 source u8 attach u8 flags u8, source args: fixture.uart fn u16 baud u32 format u8 /
+// target.console wire_fn u16 mechanism u8), 0x05 target (wire_fn u16 chip_id u32; needed by a bind that attaches by itself). A set
 // replaces every item of the tags it carries; a tag sent with length 0 clears it. label (0x03) is not in this
 // prototype (refused as unsupported). No defaults: nothing the host did not set is done - the boot mode without a saved one is the sketch's
 // own choice. Saved to NVS on ESP32 (Preferences, namespace "oepcfg").
@@ -30,7 +30,7 @@ class ProbeConfig final : public Interface {
     uint8_t ports;       // data CDC ports
     const char *name;
   };
-  static constexpr size_t kMaxPorts = 4, kMaxBindArgs = 8, kMaxSaved = 512;
+  static constexpr size_t kMaxPorts = 4, kMaxBindArgs = 8, kMaxSaved = 512;   // args: fixture.uart 7, console 3
   struct Bind {
     bool set = false;
     uint8_t source = 0, attach = 0, flags = 0, arg_length = 0;

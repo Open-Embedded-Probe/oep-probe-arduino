@@ -34,7 +34,7 @@ try:
     baud = u.configure(115200)
     A.call(fb, 0x02, bytes([1, TX]))            # loopback: RX from the TX pad
     fc = core.find(A, "oep.probe.config")
-    A.call(fc, 0x02, bytes([0x04, 6, 0, 1, 0, 1]) + struct.pack("<H", fu))   # bind: port 0 <- fixture.uart, line coding
+    A.call(fc, 0x02, bytes([0x04, 11, 0, 1, 0, 1]) + struct.pack("<HIB", fu, 0, 0))   # bind: port 0 <- fixture.uart, baud from line coding
     start = u.read(console.PositionStream.FROM_NOW, 0, 0).start
 
     p = serial.Serial(PORT, 115200, timeout=0.05)   # sets line coding 115200 (same)

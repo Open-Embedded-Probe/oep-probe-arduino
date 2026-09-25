@@ -85,10 +85,12 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       if (len < 4 || len - 4 > kMaxBindArgs) return rejected(kRejectMalformed);
       if (v[0] >= port_count_ || binds[v[0]].set) return rejected(kRejectMalformed);
       if (v[1] > cfg::kBindSourceTargetConsole) return rejected(kRejectUnsupported);
-      if (v[1] == cfg::kBindSourceFixtureUart && (len != 6 || v[2] != cfg::kBindAttachHost)) return rejected(kRejectMalformed);
+      // fixture.uart: fn u16, baud u32 (0: not until the port's line coding, which then needs flags bit0), format u8
+      if (v[1] == cfg::kBindSourceFixtureUart && (len != 11 || v[2] != cfg::kBindAttachHost)) return rejected(kRejectMalformed);
+      if (v[1] == cfg::kBindSourceFixtureUart && getU32(v + 6) == 0 && !(v[3] & 1)) return rejected(kRejectMalformed);
       if (v[1] == cfg::kBindSourceTargetConsole && len != 7) return rejected(kRejectMalformed);
       if (v[2] > cfg::kBindAttachAtBoot) return rejected(kRejectUnsupported);
-      if (v[3] & ~0x03) return rejected(kRejectUnsupported);
+      if (v[3] & ~0x01) return rejected(kRejectUnsupported);   // bit0 line coding; bit1 (TX before open) withdrawn
       Bind &b = binds[v[0]];
       b.set = true;
       b.source = v[1];
