@@ -98,8 +98,10 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
           if (refused(r)) return r;
         }
         flags |= 2;
+        // halt() is idempotent and also brings this driver's own halted state in line with the hart: a hart left
+        // halted (by an earlier process or a reset-halt) must count as halted here, or block reads refuse it
         if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
-        else if (halt && !(status & (1u << 9)) && !(port_.dm.halt() && port_.dm.readDmi(kDmStatus, status)))
+        else if ((halt || (status & (1u << 9))) && !(port_.dm.halt() && port_.dm.readDmi(kDmStatus, status)))
           failure = kStatusTimeout;
       } else {
         if (!phy.setMaxHz(max_hz)) {   // a ceiling this link cannot keep (a fixed speed above it)
