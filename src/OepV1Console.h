@@ -50,6 +50,13 @@ class TargetConsoleStream final : public Interface {
   void poll();   // from loop()
   // What one read may return: declare it within the probe's frame (1000 suits a 1 KiB frame).
   void setMaxRead(uint16_t bytes) { max_read_ = bytes; }
+  // Experimental (probe-cdc-and-persistence P6): a bind opens the stream itself on the connection it attached (the
+  // same stream a host's open gets back), and a port follows it both ways (StreamPort). false: no connection, or
+  // another mechanism is open.
+  bool bindOpen(uint8_t mechanism);
+  bool isOpen() const { return open_; }
+  void setPort(Stream *port) { cdc_.set(port, stream_); }
+  uint32_t portGaps() const { return cdc_.gaps(); }
 
  private:
   static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
@@ -64,6 +71,8 @@ class TargetConsoleStream final : public Interface {
   PositionStream::Mark marks_[kMarks];
   PositionStream stream_;
   uint32_t seen_resets_ = 0, seen_resyncs_ = 0;
+  StreamPort cdc_;   // the bound port, if any
+  bool openStream(uint8_t mechanism);
   static void take(void *self, uint8_t byte) { static_cast<TargetConsoleStream *>(self)->stream_.put(byte); }
 };
 

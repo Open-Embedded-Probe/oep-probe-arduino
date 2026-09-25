@@ -79,7 +79,7 @@ class FixtureUart final : public Interface {
   void setPort(Stream *port);
   // Run the UART at a port's line coding (the same as configure). false: no plan, or the UART refused.
   bool setLineCoding(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits);
-  uint32_t portGaps() const { return port_gaps_; }
+  uint32_t portGaps() const { return port_.gaps(); }
   uint32_t baud() const { return configured_ ? baud_ : 0; }
 
  private:
@@ -97,8 +97,8 @@ class FixtureUart final : public Interface {
   void idleHigh();   // TX at the UART idle level, driven
   bool begin(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits);
   void forward();
-  Stream *port_ = nullptr;
-  uint32_t port_pos_ = 0, port_gaps_ = 0, baud_ = 0;
+  StreamPort port_;
+  uint32_t baud_ = 0;
 };
 
 class V0Fixture final : public Interface {

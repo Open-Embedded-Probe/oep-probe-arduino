@@ -41,6 +41,12 @@ size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
     memcpy(v + 4, b.args, b.arg_length);
     w.put(cfg::kTlvItemBind, v, 4u + b.arg_length);
   }
+  if (target_.set) {
+    uint8_t v[6];
+    putU16(v, target_.wire_fn);
+    putU32(v + 2, target_.chip_id);
+    w.put(cfg::kTlvItemTarget, v, 6);
+  }
   return w.ok() ? w.length() : 0;
 }
 
@@ -52,7 +58,8 @@ uint32_t ProbeConfig::hash() const {
 // Checks every item first, then changes: plan (the endpoint's, all or nothing), then binds (a bind may need the plan's
 // pins), then boot_mode. A refusal leaves everything as it was.
 Result ProbeConfig::apply(const uint8_t *items, size_t length) {
-  bool has_mode = false, has_plan = false, has_bind = false;
+  bool has_mode = false, has_plan = false, has_bind = false, has_target = false;
+  Target target;
   uint8_t mode = 0xFF;
   RoleAssignment roles[Endpoint::kMaxRoles];
   size_t role_count = 0;
@@ -77,8 +84,10 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       if (!len) continue;   // clears every bind
       if (len < 4 || len - 4 > kMaxBindArgs) return rejected(kRejectMalformed);
       if (v[0] >= port_count_ || binds[v[0]].set) return rejected(kRejectMalformed);
-      if (v[1] != cfg::kBindSourceNone && v[1] != cfg::kBindSourceFixtureUart) return rejected(kRejectUnsupported);
+      if (v[1] > cfg::kBindSourceTargetConsole) return rejected(kRejectUnsupported);
       if (v[1] == cfg::kBindSourceFixtureUart && (len != 6 || v[2] != cfg::kBindAttachHost)) return rejected(kRejectMalformed);
+      if (v[1] == cfg::kBindSourceTargetConsole && len != 7) return rejected(kRejectMalformed);
+      if (v[2] > cfg::kBindAttachAtBoot) return rejected(kRejectUnsupported);
       if (v[3] & ~0x03) return rejected(kRejectUnsupported);
       Bind &b = binds[v[0]];
       b.set = true;
@@ -87,9 +96,21 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       b.flags = v[3];
       b.arg_length = static_cast<uint8_t>(len - 4);
       memcpy(b.args, v + 4, b.arg_length);
+    } else if (tag == cfg::kTlvItemTarget) {
+      if (len != 0 && len != 6) return rejected(kRejectMalformed);
+      has_target = true;
+      target.set = len == 6;
+      if (len) { target.wire_fn = getU16(v); target.chip_id = getU32(v + 2); }
     } else {
-      return rejected(kRejectUnsupported);   // label / target: not in this prototype; others unknown
+      return rejected(kRejectUnsupported);   // label: not in this prototype; others unknown
     }
+  }
+  // a bind that attaches by itself checks the target it finds against the target item: it must be there
+  const bool target_after = has_target ? target.set : target_.set;
+  for (size_t port = 0; port < port_count_; ++port) {
+    const Bind &b = has_bind ? binds[port] : binds_[port];
+    if (b.set && b.source == cfg::kBindSourceTargetConsole && b.attach != cfg::kBindAttachHost && !target_after)
+      return rejected(kRejectUnavailable);
   }
   RoleAssignment before[Endpoint::kMaxRoles];
   const size_t had = endpoint_.plan(before, Endpoint::kMaxRoles);
@@ -111,6 +132,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
     for (size_t port = 0; port < port_count_; ++port) binds_[port] = binds[port];
   }
   if (has_mode) boot_mode_ = mode;
+  if (has_target) target_ = target;
   return completed();
 }
 

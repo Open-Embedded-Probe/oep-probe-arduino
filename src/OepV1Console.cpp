@@ -29,11 +29,33 @@ void TargetConsoleStream::poll() {
     seen_resets_ = port_.resets;
     stream_.mark(kMarkReset, 0);          // detail 0: ndmreset
   }
+  if (cdc_.port()) {   // port -> target, as much as the driver takes now
+    uint8_t chunk[64];
+    const size_t k = cdc_.fromPort(chunk, driver_.room() < sizeof chunk ? driver_.room() : sizeof chunk);
+    if (k) driver_.queue(chunk, k);
+  }
   driver_.poll();
   if (driver_.resyncs() > seen_resyncs_) {   // the target's console started over: after the first, a restart
     if (seen_resyncs_ > 0) stream_.mark(kMarkRestart, 1);   // detail 1: console resync
     seen_resyncs_ = driver_.resyncs();
   }
+  cdc_.toPort(stream_);
+}
+
+bool TargetConsoleStream::openStream(uint8_t mechanism) {
+  if (!driver_.start(mechanism)) return false;
+  exists_ = open_ = true;
+  mechanism_ = mechanism;
+  seen_resets_ = port_.resets;
+  seen_resyncs_ = driver_.resyncs();
+  stream_.mark(kMarkAttach, mechanism);
+  return true;
+}
+
+bool TargetConsoleStream::bindOpen(uint8_t mechanism) {
+  if (!port_.connected || mechanism > reg::target_console::kMechanismDmseq) return false;
+  if (open_) return mechanism_ == mechanism;
+  return openStream(mechanism);
 }
 
 Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
@@ -50,12 +72,7 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
       return tail.finish(completed(2), out, capacity);
     }
     if (open_) return rejected(kRejectUnavailable);   // one stream at a time on this connection
-    if (!driver_.start(payload[1])) return failed();
-    exists_ = open_ = true;
-    mechanism_ = payload[1];
-    seen_resets_ = port_.resets;
-    seen_resyncs_ = driver_.resyncs();
-    stream_.mark(kMarkAttach, payload[1]);
+    if (!openStream(payload[1])) return failed();
     out[0] = 1;
     out[1] = 0;
     return tail.finish(completed(2), out, capacity);

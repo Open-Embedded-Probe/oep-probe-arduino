@@ -30,7 +30,17 @@ struct DebugPort {
   // reset_allowed may be pulled (the same idea as the scan allow-list: never drive a pin the jig did not clear).
   int16_t reset_default = -1;
   uint64_t reset_allowed = 0;
+  // Who uses the connection (v1 wire §5.5, probe-cdc-and-persistence P6): the host through attach, a bind through
+  // attachRunning. A host's detach drops only its own use; the link goes when nobody uses it, or on a forced detach.
+  enum : uint8_t { kUserHost = 1, kUserBind = 2 };
+  uint8_t users = 0;
 };
+
+// Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the
+// host's attach, havereset acknowledged. Joins an existing connection. Adds `user`. false: the target did not answer.
+bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus);
+// Drop `user`'s use; the link is closed when nobody is left (or `force`).
+void releaseConnection(DebugPort &port, uint8_t user, bool force);
 
 class WireRvswd final : public Interface {
  public:

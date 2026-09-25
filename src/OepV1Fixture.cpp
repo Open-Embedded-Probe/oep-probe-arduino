@@ -139,46 +139,23 @@ void FixtureUart::poll() {
     if (c < 0) break;
     stream_.put(static_cast<uint8_t>(c));
   }
-  if (port_) forward();
+  if (port_.port()) forward();
 }
 
-void FixtureUart::setPort(Stream *port) {
-  port_ = port;
-  port_pos_ = stream_.end();   // from now on
-}
+void FixtureUart::setPort(Stream *port) { port_.set(port, stream_); }
 
 void FixtureUart::forward() {
   // port -> TX: only what the UART takes without waiting, so the RX side keeps being emptied (a blocking write let the
   // UART's receive buffer overflow while a 64 KiB echo was going out)
   uint8_t chunk[256];
-  for (int n; (n = port_->available()) > 0;) {
-    size_t k = static_cast<size_t>(n) < sizeof chunk ? static_cast<size_t>(n) : sizeof chunk;
+  for (;;) {
     const int room = serial_.availableForWrite();
     if (room <= 0) break;
-    if (k > static_cast<size_t>(room)) k = static_cast<size_t>(room);
-    k = port_->readBytes(chunk, k);
+    const size_t k = port_.fromPort(chunk, static_cast<size_t>(room) < sizeof chunk ? static_cast<size_t>(room) : sizeof chunk);
     if (!k) break;
     serial_.write(chunk, k);
   }
-  if (static_cast<int32_t>(stream_.oldest() - port_pos_) > 0) {   // fell a whole buffer behind
-    port_pos_ = stream_.oldest();
-    ++port_gaps_;
-  }
-  // RX -> port, as much as it takes, and only while the port is open (it reports 0 room otherwise): what arrives while
-  // it is closed goes to the stream only (OEP reads keep it), as on a USB-UART cable. Handing the backlog over when the
-  // port opens lost it (pyserial empties its input at open) or had it echoed back to the target (the tty echoes until
-  // the program sets raw mode) - probe-cdc-and-persistence §7.2.
-  if (port_->availableForWrite() <= 0) {
-    port_pos_ = stream_.end();
-    return;
-  }
-  while (port_pos_ != stream_.end()) {
-    const uint8_t *data;
-    const size_t n = stream_.contiguous(port_pos_, data);
-    const size_t written = port_->write(data, n);
-    port_pos_ += written;
-    if (written < n) break;
-  }
+  port_.toPort(stream_);   // RX -> port
 }
 
 bool FixtureUart::begin(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits) {
