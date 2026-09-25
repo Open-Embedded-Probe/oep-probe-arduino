@@ -60,11 +60,14 @@ bool WireSwd::wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr,
 }
 
 Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  static const uint8_t kAttachTags[] = {reg::wire_swd::kTlvAttachMaxSpeed, reg::wire_swd::kTlvAttachTargetsel};
+  static const uint8_t kAttachTags[] = {reg::wire_swd::kTlvAttachMaxSpeed, reg::wire_swd::kTlvAttachTargetsel,
+                                         reg::wire_swd::kTlvAttachPins};
   Tail tail;
   switch (op) {
-    case kOpScan: {   // [TLV]  ->  count(u8), then kind(u8) swdio(u16) swclk(u16) DPIDR(u32) per answer
-      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+    case kOpScan: {   // count(u8) pairs [TLV]  ->  count(u8), then kind(u8) swdio(u16) swclk(u16) DPIDR(u32) per answer
+      size_t fixed = 0;
+      if (const uint8_t bad = fixedPairScan(payload, length, port_.swdio, port_.swclk, fixed)) return rejected(bad);
+      const Result parsed = plainTail(tail, payload, length, fixed, out, capacity);
       if (refused(parsed)) return parsed;
       if (capacity < 10) return failed();
       uint32_t dpidr = 0;
@@ -90,6 +93,11 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       //   ->  connection(u8) DPIDR(u32) flags(u8: bit0 woke from dormant, bit1 existing connection) speed_hz(u32)
       const Result parsed = tail.parse(payload, length, kAttachTags, out, capacity);
       if (refused(parsed)) return parsed;
+      {
+        uint8_t plen = 0;
+        const uint8_t *pins = tail.find(reg::wire_swd::kTlvAttachPins, plen);
+        if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
+      }
       if (capacity < 10) return failed();
       uint8_t len = 0;
       bool critical = false;
