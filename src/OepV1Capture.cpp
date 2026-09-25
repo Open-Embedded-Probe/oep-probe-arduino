@@ -186,7 +186,13 @@ bool LogicCapture::openStages() {
   if (frame > kStageFrameMax) frame = kStageFrameMax;
   frame = frame / 512 * 512;
   stage_data_ = static_cast<uint32_t>(frame - kPushHead);
-  stage_count_ = 0;
+  // Allocated once and kept: freeing and taking 8 x 16 KiB (and the 128 KiB ring) at every configure fragmented the
+  // internal heap until the next streaming configure found no block (2026-09-25).
+  if (stage_count_) {
+    stage_free_ = (1u << stage_count_) - 1;
+    stage_cur_ = -1;
+    return stage_count_ >= 2;
+  }
   for (size_t i = 0; i < kStagesMax; ++i) {
     if (heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL) < frame + 48 * 1024) break;   // leave room
     stage_[i] = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, frame, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
@@ -198,14 +204,10 @@ bool LogicCapture::openStages() {
   return stage_count_ >= 2;
 }
 
-void LogicCapture::freeStages() {
+void LogicCapture::freeStages() {   // the stages stay allocated (openStages); wait until the transport gives them back
   if (!stage_count_) return;
   const uint32_t all = (1u << stage_count_) - 1;
-  for (int i = 0; i < 500 && (stage_free_ & all) != all; ++i) delay(2);   // wait for the transport to give them back
-  if ((stage_free_ & all) != all) return;   // still owned by the controller: keep them (a leak beats a DMA into freed RAM)
-  for (uint8_t i = 0; i < stage_count_; ++i) { heap_caps_free(stage_[i]); stage_[i] = nullptr; }
-  stage_count_ = 0;
-  stage_free_ = 0;
+  for (int i = 0; i < 500 && (stage_free_ & all) != all; ++i) delay(2);
 }
 
 void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
@@ -360,7 +362,7 @@ bool LogicCapture::open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t 
 
 void LogicCapture::close() {
   stopRepeat();
-  if (ring_) { heap_caps_free(ring_); ring_ = nullptr; }
+  // the DMA ring stays allocated (see openStages): taking 128 KiB of internal RAM again and again fragmented it
   if (store_) { heap_caps_free(store_); store_ = nullptr; }
   store_bytes_ = 0;
   freeStages();
@@ -542,7 +544,7 @@ bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples,
   sent_seg_ = 0;
   sent_off_ = 0;
   captured_ = dropped_ = 0;
-  ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kRingBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  if (!ring_) ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kRingBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
   queue_ = xQueueCreate(128, sizeof(Chunk));
   if (!ring_ || !queue_) return false;
   if (direct_) {
