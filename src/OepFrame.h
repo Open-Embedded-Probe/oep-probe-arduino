@@ -18,6 +18,8 @@ class FrameReader {
  public:
   FrameReader(uint8_t *buffer, size_t capacity, uint16_t max_frame)
       : buffer_(buffer), capacity_(capacity), max_frame_(max_frame) {}
+  FrameReader() : FrameReader(nullptr, 0, 0) {}
+  void reset(uint8_t *buffer, size_t capacity, uint16_t max_frame) { *this = FrameReader(buffer, capacity, max_frame); }
   // Feed one byte. Returns true when a complete message is available.
   bool push(uint8_t byte);
   // Feed a run of bytes: consumes them up to the end of a message (true: the message is available, `data` / `n` point
@@ -58,6 +60,8 @@ uint16_t crc16Ccitt(const uint8_t *data, size_t length, uint16_t crc = 0xFFFF);
 class CobsReader {
  public:
   CobsReader(uint8_t *buffer, size_t capacity) : buffer_(buffer), capacity_(capacity) {}
+  CobsReader() : CobsReader(nullptr, 0) {}
+  void reset(uint8_t *buffer, size_t capacity) { *this = CobsReader(buffer, capacity); }
   bool push(uint8_t byte);   // true when a checked message is available
   const uint8_t *message() const { return buffer_; }
   size_t length() const { return length_; }
