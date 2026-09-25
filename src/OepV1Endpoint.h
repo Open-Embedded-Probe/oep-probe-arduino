@@ -33,6 +33,9 @@ class Endpoint {
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
   // A random-ish value per boot; 0 = unknown (then hosts treat every no-session as a possible reboot).
   void setBootId(uint32_t boot_id) { boot_id_ = boot_id; }
+  // Experimental: at most this many bytes of pushes may wait in the transport (0 = no limit). Size it to the link:
+  // a result waits behind up to this much (256 B is about 0.3 ms on USB-Serial/JTAG, 23 ms on a 115200 UART).
+  void setPushQueue(size_t bytes) { push_queue_ = bytes; }
   void poll();
 
  private:
@@ -65,10 +68,12 @@ class Endpoint {
   bool planned_[kMaxInterfaces] = {};
   // Experimental push subscriptions, per fn.
   bool subscribed_[kMaxInterfaces] = {};
-  int32_t credit_[kMaxInterfaces] = {};
   uint16_t push_seq_[kMaxInterfaces] = {};
+  size_t push_queue_ = 1024;
+  int tx_room_max_ = 0;
   Result subscription(uint8_t op, const uint8_t *payload, size_t length);
   void push();
+  void endSubscriptions();
   void send(size_t length);
   bool plan_active_ = false;
   Result checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity);

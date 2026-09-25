@@ -56,13 +56,33 @@ void Endpoint::send(size_t length) {
   else writeFrame(stream_, tx_, length);
 }
 
-// One push frame per subscribed fn per poll, so results and pushes interleave.
+// Pushes go at a lower priority than results: poll() answers what has arrived first, and a push is only written
+// into the room the transport has free right now, so it never blocks and a result is never queued behind more than
+// what already sits in the transport's own buffer. One push frame per subscribed fn per poll.
 void Endpoint::push() {
+  lapse();
+  if (!locked_) return;
   size_t room = tx_capacity_ - kPushHeader;
   if (room > static_cast<size_t>(limits_.max_frame) - kPushHeader) room = limits_.max_frame - kPushHeader;
   for (size_t i = 0; i < count_; ++i) {
-    if (!subscribed_[i] || credit_[i] <= 0) continue;
-    size_t cap = room < static_cast<size_t>(credit_[i]) ? room : static_cast<size_t>(credit_[i]);
+    if (!subscribed_[i]) continue;
+    const int writable = stream_.availableForWrite();
+    // Keep at most push_queue_ bytes waiting in the transport: a result queues behind no more than that. The
+    // transport's capacity is taken as the most room ever seen free (idle).
+    if (writable > tx_room_max_) tx_room_max_ = writable;
+    const int queued = tx_room_max_ - writable;
+    if (push_queue_ && queued >= static_cast<int>(push_queue_)) return;
+    // length prefix (2) or COBS/CRC overhead (about 1 per 254 + 2 CRC + delimiter) on top of the header
+    const size_t overhead = kPushHeader + (framing_ == Framing::kCobsCrc ? 8 : 2);
+    if (writable <= static_cast<int>(overhead) + 16) return;
+    size_t free_room = static_cast<size_t>(writable) - overhead;
+    if (framing_ == Framing::kCobsCrc) free_room -= free_room / 254;
+    size_t cap = room < free_room ? room : free_room;
+    if (push_queue_ && cap + overhead + queued > push_queue_) {
+      const int left = static_cast<int>(push_queue_) - queued - static_cast<int>(overhead);
+      if (left < 16) return;
+      cap = static_cast<size_t>(left);
+    }
     uint32_t position = 0;
     const size_t n = interfaces_[i]->pull(position, tx_ + kPushHeader, cap);
     if (n == 0) continue;
@@ -70,38 +90,27 @@ void Endpoint::push() {
     putU16(tx_ + 1, static_cast<uint16_t>(i + 1));
     putU16(tx_ + 3, push_seq_[i]++);
     putU32(tx_ + 5, position);
-    credit_[i] -= static_cast<int32_t>(n);
     send(kPushHeader + n);
   }
 }
 
 Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length) {
-  if (length < 2) return rejected(kRejectMalformed);
+  if (length != 2) return rejected(kRejectMalformed);
   const uint16_t fn = getU16(payload);
   if (fn == 0 || fn > count_) return rejected(kRejectUnknownFunction);
   const size_t i = fn - 1;
   if (op == kOpUnsubscribe) {
     if (subscribed_[i]) interfaces_[i]->subscribe(false);
     subscribed_[i] = false;
-    credit_[i] = 0;
     return completed();
   }
-  if (length != 6) return rejected(kRejectMalformed);
-  const uint32_t credit = getU32(payload + 2);
-  if (op == kOpSubscribe) {
-    if (!interfaces_[i]->subscribe(true)) return rejected(kRejectUnavailable);
-    subscribed_[i] = true;
-    credit_[i] = static_cast<int32_t>(credit);
-    push_seq_[i] = 0;
-    return completed();
-  }
-  if (!subscribed_[i]) return rejected(kRejectUnavailable);   // credit
-  credit_[i] += static_cast<int32_t>(credit);
+  if (!interfaces_[i]->subscribe(true)) return rejected(kRejectUnavailable);
+  subscribed_[i] = true;
+  push_seq_[i] = 0;
   return completed();
 }
 
 void Endpoint::poll() {
-  push();
   while (stream_.available()) {
     const uint8_t byte = static_cast<uint8_t>(stream_.read());
     if (framing_ == Framing::kCobsCrc) {
@@ -114,10 +123,22 @@ void Endpoint::poll() {
       reader_.consume();
     }
   }
+  push();   // after the results for everything that has arrived
 }
 
 void Endpoint::lapse() {
-  if (locked_ && static_cast<int32_t>(millis() - expires_ms_) >= 0) locked_ = false;   // the last id stays
+  if (locked_ && static_cast<int32_t>(millis() - expires_ms_) >= 0) {
+    locked_ = false;   // the last id stays
+    endSubscriptions();
+  }
+}
+
+// Subscriptions belong to the lock: a host that vanished stops being pushed to when its lease lapses.
+void Endpoint::endSubscriptions() {
+  for (size_t i = 0; i < count_; ++i) {
+    if (subscribed_[i]) interfaces_[i]->subscribe(false);
+    subscribed_[i] = false;
+  }
 }
 
 uint32_t Endpoint::remaining() const {
@@ -200,8 +221,11 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       return completed(5);
     case kOpStatus: return rejected(kRejectUnavailable);   // no long operations yet (they block)
     case kOpSubscribe:
-    case kOpCredit:
-    case kOpUnsubscribe: return subscription(op, payload, length);   // experimental, no lock (reads only)
+    case kOpUnsubscribe: {   // experimental: the lock holder only, and they end with the lock
+      const Result check = checkSession(has_session, session, out, capacity);
+      if (check.resolution != kResolutionCompleted) return check;
+      return subscription(op, payload, length);
+    }
     case kOpEnd:
     case kOpKeepalive:
     case kOpCancel:
@@ -209,7 +233,7 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
     case kOpPlanRelease: {
       const Result check = checkSession(has_session, session, out, capacity);
       if (check.resolution != kResolutionCompleted) return check;
-      if (op == kOpEnd) locked_ = false;   // the last id stays: the same host may resume
+      if (op == kOpEnd) { locked_ = false; endSubscriptions(); }   // the last id stays: the same host may resume
       if (op == kOpCancel) return rejected(kRejectUnavailable);
       if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
       if (op == kOpPlanRelease) planRelease();
