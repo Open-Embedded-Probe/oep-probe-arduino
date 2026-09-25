@@ -45,6 +45,13 @@ class Endpoint {
   // Flush the stream after each poll that wrote something: a buffered USB vendor interface sends a short frame only
   // when flushed (E160). Off for streams that send by themselves (USB-Serial/JTAG, UART).
   void setFlushAfterBurst(bool on) { flush_after_burst_ = on; }
+  // Experimental: a zero-copy path for an interface's data pushes (length-prefixed framing only). The interface builds
+  // whole push frames itself, from its own task: directPush says whether it may send now (the lock holder subscribed
+  // its fn) with the fn and the subscriber's batching; takeSeq numbers a frame (shared with that fn's events).
+  void setDirect(DirectTransport *direct) { direct_ = direct; }
+  DirectTransport *direct() const { return framing_ == Framing::kLengthPrefixed ? direct_ : nullptr; }
+  bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint16_t &max_delay_ms) const;
+  uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&push_seq_[fn - 1], 1, __ATOMIC_RELAXED); }
   void poll();
 
  private:
@@ -60,7 +67,7 @@ class Endpoint {
   const uint8_t *probe_tlv_ = nullptr;
   size_t probe_tlv_length_ = 0;
   uint32_t boot_id_ = 0;
-  bool locked_ = false;
+  volatile bool locked_ = false;
   uint32_t holder_ = 0, last_ = 0;
   bool have_last_ = false;
   uint32_t lease_ms_ = kLeaseDefaultMs, expires_ms_ = 0;
@@ -76,7 +83,8 @@ class Endpoint {
   void planRelease();
   bool planned_[kMaxInterfaces] = {};
   // Experimental push subscriptions, per fn.
-  bool subscribed_[kMaxInterfaces] = {};
+  volatile bool subscribed_[kMaxInterfaces] = {};
+  DirectTransport *direct_ = nullptr;
   uint16_t push_seq_[kMaxInterfaces] = {};
   uint16_t min_bytes_[kMaxInterfaces] = {}, max_delay_ms_[kMaxInterfaces] = {};
   uint32_t waiting_since_[kMaxInterfaces] = {};

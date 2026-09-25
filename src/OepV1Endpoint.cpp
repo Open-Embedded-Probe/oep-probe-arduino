@@ -65,7 +65,7 @@ bool Endpoint::queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, siz
   if (event_head_ - event_tail_ >= kEvents) ++event_tail_;   // full: the oldest goes (its seq never appears)
   Event &e = events_[event_head_ % kEvents];
   e.fn = fn;
-  e.seq = fn == 0 ? core_seq_++ : push_seq_[fn - 1]++;   // numbered when queued: one dropped from the queue leaves a gap
+  e.seq = fn == 0 ? core_seq_++ : takeSeq(fn);   // numbered when queued: one dropped from the queue leaves a gap
   e.kind = kind;
   e.length = static_cast<uint8_t>(length);
   memcpy(e.payload, payload, length);
@@ -81,7 +81,19 @@ bool Endpoint::event(Interface &from, uint8_t kind, const uint8_t *payload, size
 
 void Endpoint::eventsLost(Interface &from, uint16_t count) {
   for (size_t i = 0; i < count_; ++i)
-    if (interfaces_[i] == &from && subscribed_[i]) push_seq_[i] += count;
+    if (interfaces_[i] == &from && subscribed_[i]) __atomic_fetch_add(&push_seq_[i], count, __ATOMIC_RELAXED);
+}
+
+bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint16_t &max_delay_ms) const {
+  for (size_t i = 0; i < count_; ++i) {
+    if (interfaces_[i] != &from) continue;
+    if (!subscribed_[i] || !locked_) return false;
+    fn = static_cast<uint16_t>(i + 1);
+    min_bytes = min_bytes_[i];
+    max_delay_ms = max_delay_ms_[i];
+    return true;
+  }
+  return false;
 }
 
 // Events go before data (they are small and usually what someone waits for). false: no room right now.

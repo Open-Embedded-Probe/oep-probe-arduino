@@ -84,6 +84,23 @@ class LogicCapture final : public Interface {
   void close();
   size_t segmentInfo(uint8_t *out) const;
   size_t storeBudget(uint32_t &caps) const;   // bytes the segments may take now (counting the store already held)
+  // streaming through the endpoint's zero-copy transport: the harvest copies straight from the DMA ring into stages
+  // (internal RAM, one whole push frame each: length prefix, push header, data) and hands full ones to the transport
+  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + 9;
+  bool direct_ = false;
+  uint8_t *stage_[kStagesMax] = {};
+  uint8_t stage_count_ = 0;
+  volatile uint32_t stage_free_ = 0;   // bit per stage the transport has given back
+  int stage_cur_ = -1;
+  uint32_t stage_fill_ = 0, stage_pos_ = 0, stage_since_ = 0, stage_data_ = 0;
+  volatile uint32_t stage_drops_ = 0;  // bytes dropped because every stage was queued or in flight
+  bool carry_ = false;                 // a byte held back from the last frame (so that it ended with a short packet)
+  uint8_t carry_byte_ = 0;
+  bool takeStage();
+  bool openStages();
+  void freeStages();
+  void sendStage();
+  static void stageDone(void *context, const uint8_t *buffer);
   size_t store_bytes_ = 0;
   // repeat
   struct Chunk { const uint8_t *data; size_t length; };
@@ -110,6 +127,7 @@ class LogicCapture final : public Interface {
   static bool partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *, void *context);
   static void harvestTask(void *context);
   void harvest(const Chunk &chunk);
+  void harvestDirect(const Chunk &chunk);
   void finishSegment(uint32_t bytes, uint8_t flags);
   bool openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples, uint32_t segments, uint32_t &num, uint32_t &den,
                   uint32_t &actual_samples, uint32_t &actual_segments);
