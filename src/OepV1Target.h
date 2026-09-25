@@ -55,6 +55,7 @@ class WireRvswd final : public Interface {
   uint8_t revision() const override { return reg::wire_rvswd::kRevision; }   // oep.wire.swio: the same (1)
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  void sessionLapsed() override { releaseConnection(port_, DebugPort::kUserHost, false); }
 
  private:
   DebugPort &port_;

@@ -36,6 +36,12 @@ class WireSwd final : public Interface {
   uint8_t revision() const override { return reg::wire_swd::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  // v1 wire §0 / §5.5: a host that fell away (its lease lapsed) keeps nothing open; the host is this link's only user
+  void sessionLapsed() override {
+    if (!port_.connected) return;
+    port_.io.releaseBoth();
+    port_.connected = false;
+  }
 
  private:
   bool wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr, bool &dormant);

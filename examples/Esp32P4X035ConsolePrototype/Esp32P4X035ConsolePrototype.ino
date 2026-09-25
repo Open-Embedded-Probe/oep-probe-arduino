@@ -6,7 +6,7 @@
 //                       the target item, then the console
 //   attach 2 (at boot): the same once at boot
 // A host's detach then drops only the host's use (the link stays for the console); detach with force closes it.
-// oep.test.console-bind (scratch): 0x01 status -> state u8 (0 idle, 1 console on, 2 chip mismatch, 3 attach failed),
+// oep.test.console-bind (scratch): 0x01 status -> state u8 (0 idle, 1 console on, 2 chip mismatch, 3 attach failed, 4 chip_id unknown),
 //   users u8, connected u8, console_open u8, chip_seen u32, port_gaps u32, dtr u8
 #include <OepCh32Dm.h>
 #include <EspUsbDevice.h>
@@ -119,7 +119,14 @@ static void attachForBind() {
   dm.readDmi(0x7f, chip);
   bindState.chip_seen = chip;
   const auto &t = config.target();
-  if (t.set && chip != t.chip_id) {   // not the target this bind was set for: leave it alone
+  // v1 wire §5.10: bits [7:4] are the silicon revision and are not compared (ch32rv matches AttachChip's chip_id the
+  // same way); 0 or all ones means this part does not say (0x7f is only confirmed on L103 / V203 / V003 / X035)
+  if (chip == 0 || chip == 0xffffffffu) {
+    oep::v1::releaseConnection(port, oep::v1::DebugPort::kUserBind, false);
+    bindState.state = 4;
+    return;
+  }
+  if (t.set && ((chip ^ t.chip_id) & ~0xf0u)) {   // not the target this bind was set for: leave it alone
     oep::v1::releaseConnection(port, oep::v1::DebugPort::kUserBind, false);
     bindState.state = 2;
     return;
