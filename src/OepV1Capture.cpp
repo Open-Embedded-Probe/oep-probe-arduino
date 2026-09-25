@@ -87,6 +87,121 @@ void LogicCapture::harvest(const Chunk &chunk) {
   }
 }
 
+// Streaming, zero-copy transport: copy one finished DMA chunk into the current stage; with no stage free the bytes are
+// dropped and the stream position skips them. Harvest task only.
+void LogicCapture::harvestDirect(const Chunk &chunk) {
+  size_t at = 0;
+  while (at < chunk.length) {
+    if (stage_cur_ < 0 && !takeStage()) {
+      const size_t rest = chunk.length - at;
+      stage_drops_ += rest;
+      dropped_ += rest;
+      captured_ += rest;
+      carry_ = false;   // the held byte goes with the drop (the position jump covers it)
+      return;
+    }
+    const size_t n = min(static_cast<size_t>(stage_data_ - stage_fill_), chunk.length - at);
+    memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, chunk.data + at, n);
+    if (produced_ - static_cast<uint32_t>(captured_) > kRingBytes) {   // the DMA rewrote these bytes: drop them
+      const size_t rest = chunk.length - at;
+      dropped_ += rest;
+      captured_ += rest;
+      ++overruns_;
+      if (stage_fill_) sendStage();   // a frame is contiguous; the next one starts after the gap
+      return;
+    }
+    stage_fill_ += n;
+    at += n;
+    captured_ += n;
+    if (stage_fill_ == stage_data_) sendStage();
+  }
+}
+
+// A free stage becomes the current one, starting with the byte held back from the last frame, if any.
+bool LogicCapture::takeStage() {
+  const uint32_t free = stage_free_;
+  if (free == 0) return false;
+  stage_cur_ = __builtin_ctz(free);
+  __atomic_fetch_and(&stage_free_, ~(1u << stage_cur_), __ATOMIC_ACQ_REL);
+  stage_fill_ = 0;
+  stage_pos_ = static_cast<uint32_t>(captured_);
+  if (carry_) {
+    stage_[stage_cur_][kPushHead] = carry_byte_;
+    stage_fill_ = 1;
+    --stage_pos_;
+    carry_ = false;
+  }
+  stage_since_ = millis();
+  return true;
+}
+
+// Hand the current stage to the transport as one push frame (or give it back if nobody may receive it now). A full
+// stage is a whole number of 512-byte packets and the host's read runs on into the next one. A partial one (sent for
+// max_delay_ms, or at stop) that happens to be whole packets would leave the host's read open (the direct build sends
+// no zero-length packet), so its last byte is held back for the next frame and this one ends with a short packet.
+void LogicCapture::sendStage() {
+  if (stage_cur_ < 0) return;
+  uint8_t *s = stage_[stage_cur_];
+  const int index = stage_cur_;
+  uint32_t fill = stage_fill_;
+  stage_cur_ = -1;
+  stage_fill_ = 0;
+  DirectTransport *tr = endpoint_.direct();
+  if (fill > 1 && fill < stage_data_ && (kPushHead + fill) % 512 == 0 && tr && tr->queued() == 0) {
+    carry_byte_ = s[kPushHead + fill - 1];
+    carry_ = true;
+    --fill;
+  }
+  uint16_t fn = 0, min_bytes = 0, max_delay = 0;
+  DirectTransport *t = endpoint_.direct();
+  if (fill == 0 || !t || !endpoint_.directPush(*this, fn, min_bytes, max_delay)) {
+    __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
+    return;
+  }
+  putU16(s, static_cast<uint16_t>(9 + fill));   // length prefix (the message: push header + data)
+  s[2] = kRolePush;
+  putU16(s + 3, fn);
+  putU16(s + 5, endpoint_.takeSeq(fn));
+  putU32(s + 7, stage_pos_);
+  if (!t->queueData(s, kPushHead + fill, stageDone, this)) __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
+}
+
+void LogicCapture::stageDone(void *context, const uint8_t *buffer) {
+  auto *self = static_cast<LogicCapture *>(context);
+  for (uint8_t i = 0; i < self->stage_count_; ++i)
+    if (self->stage_[i] == buffer) __atomic_fetch_or(&self->stage_free_, 1u << i, __ATOMIC_ACQ_REL);
+}
+
+bool LogicCapture::openStages() {
+  // one frame per stage, a whole number of 512-byte packets within the frame limit, so the host's read runs on across
+  // frames (every frame ending with a short packet cost gaps at 40-160 MHz: a host read completing per frame over
+  // usbipd). The host bounds the latency with its read size (64 KiB: four frames).
+  size_t frame = max_read_ + 16 + 2;
+  if (frame > kStageFrameMax) frame = kStageFrameMax;
+  frame = frame / 512 * 512;
+  stage_data_ = static_cast<uint32_t>(frame - kPushHead);
+  stage_count_ = 0;
+  for (size_t i = 0; i < kStagesMax; ++i) {
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL) < frame + 48 * 1024) break;   // leave room
+    stage_[i] = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, frame, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    if (!stage_[i]) break;
+    ++stage_count_;
+  }
+  stage_free_ = stage_count_ ? (1u << stage_count_) - 1 : 0;
+  stage_cur_ = -1;
+  return stage_count_ >= 2;
+}
+
+void LogicCapture::freeStages() {
+  if (!stage_count_) return;
+  const uint32_t all = (1u << stage_count_) - 1;
+  for (int i = 0; i < 500 && (stage_free_ & all) != all; ++i) delay(2);   // wait for the transport to give them back
+  if ((stage_free_ & all) != all) return;   // still owned by the controller: keep them (a leak beats a DMA into freed RAM)
+  for (uint8_t i = 0; i < stage_count_; ++i) { heap_caps_free(stage_[i]); stage_[i] = nullptr; }
+  stage_count_ = 0;
+  stage_free_ = 0;
+}
+
 void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
   Info &info = infos_[completed_ % kInfos];
   info.samples = bytes * 8 / width_;
@@ -99,6 +214,23 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
 void LogicCapture::harvestTask(void *context) {
   auto *self = static_cast<LogicCapture *>(context);
   Chunk chunk;
+  if (self->direct_) {
+    while (self->harvesting_) {
+      const bool got = xQueueReceive(self->queue_, &chunk, pdMS_TO_TICKS(2)) == pdTRUE;
+      if (got) self->harvestDirect(chunk);
+      if (self->stage_cur_ < 0 || self->stage_fill_ == 0) continue;
+      // the subscriber's batching: at least min_bytes, or max_delay_ms after the stage's first byte (0, 0: when idle)
+      uint16_t fn = 0, min_bytes = 0, max_delay = 0;
+      if (!self->endpoint_.directPush(*self, fn, min_bytes, max_delay)) continue;
+      const bool idle = uxQueueMessagesWaiting(self->queue_) == 0;
+      if ((min_bytes == 0 && max_delay == 0 && idle) || (min_bytes && self->stage_fill_ >= min_bytes) ||
+          (max_delay && millis() - self->stage_since_ >= max_delay))
+        self->sendStage();
+    }
+    while (xQueueReceive(self->queue_, &chunk, 0) == pdTRUE) self->harvestDirect(chunk);
+    self->task_ = nullptr;
+    vTaskDelete(nullptr);
+  }
   while (self->harvesting_) {
     if (xQueueReceive(self->queue_, &chunk, pdMS_TO_TICKS(20)) == pdTRUE) self->harvest(chunk);
   }
@@ -225,6 +357,8 @@ void LogicCapture::close() {
   if (ring_) { heap_caps_free(ring_); ring_ = nullptr; }
   if (store_) { heap_caps_free(store_); store_ = nullptr; }
   store_bytes_ = 0;
+  freeStages();
+  direct_ = false;
   if (queue_) { vQueueDelete(queue_); queue_ = nullptr; }
   if (unit_) {
     if (delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
@@ -331,6 +465,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     den = static_cast<uint32_t>(bottom / g);
   } else if (mode == 2 || mode == 3) {
     close();
+    direct_ = mode == 3 && endpoint_.direct() != nullptr;
     uint32_t got_samples = 0, got_segments = 0;
     if (!openRepeat(rate, width, samples, actual_segments, num, den, got_samples, got_segments)) {
       close();
@@ -392,13 +527,18 @@ bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples,
   sent_seg_ = 0;
   sent_off_ = 0;
   captured_ = dropped_ = 0;
-  uint32_t caps = 0;
-  storeBudget(caps);
-  store_bytes_ = static_cast<size_t>(segment_bytes_) * segment_count_;
-  store_ = static_cast<uint8_t *>(heap_caps_malloc(store_bytes_, caps));
   ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kRingBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
   queue_ = xQueueCreate(128, sizeof(Chunk));
-  if (!store_ || !ring_ || !queue_) return false;
+  if (!ring_ || !queue_) return false;
+  if (direct_) {
+    if (!openStages()) return false;
+  } else {
+    uint32_t caps = 0;
+    storeBudget(caps);
+    store_bytes_ = static_cast<size_t>(segment_bytes_) * segment_count_;
+    store_ = static_cast<uint8_t *>(heap_caps_malloc(store_bytes_, caps));
+    if (!store_) return false;
+  }
   if (!open(rate_hz, width, kRingBytes, num, den)) return false;
   parlio_rx_event_callbacks_t cb = {};
   cb.on_partial_receive = partialReceive;
@@ -416,7 +556,8 @@ bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples,
 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (capacity < 4) return failed();
-  completed_ = released_ = fill_ = queue_overflow_ = overruns_ = 0;
+  completed_ = released_ = fill_ = queue_overflow_ = overruns_ = stage_drops_ = 0;
+  carry_ = false;
   produced_ = 0;
   sent_seg_ = 0;
   sent_off_ = 0;
@@ -446,6 +587,12 @@ void LogicCapture::stopRepeat() {
   if (unit_ && delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
   harvesting_ = false;
   for (int i = 0; i < 100 && task_; ++i) delay(2);   // the task drains what arrived, then ends
+  if (direct_) {   // the task is gone: send what is left, the held byte too
+    sendStage();
+    if (carry_ && takeStage()) sendStage();
+    carry_ = false;
+    return;
+  }
   if (fill_ && completed_ - released_ < segment_count_) finishSegment(fill_, infos_[completed_ % kInfos].flags | 2);
 }
 
@@ -520,7 +667,7 @@ bool LogicCapture::findSegment(uint32_t position, uint32_t &serial, uint32_t &of
 }
 
 size_t LogicCapture::pending() {
-  if (mode_ != 3 || !(state_ == kStateCapturing || state_ == kStateConfigured)) return 0;
+  if (mode_ != 3 || direct_ || !(state_ == kStateCapturing || state_ == kStateConfigured)) return 0;
   const uint32_t done = completed_, fill = fill_;
   uint64_t n = 0;
   for (uint32_t k = sent_seg_; k < done; ++k) n += infos_[k % kInfos].samples * width_ / 8;
@@ -530,7 +677,7 @@ size_t LogicCapture::pending() {
 
 // Streaming push: the next bytes in stream order, from the segment being sent; a segment fully sent is released.
 size_t LogicCapture::pull(uint32_t &position, uint8_t *out, size_t capacity) {
-  if (mode_ != 3 || !store_) return 0;
+  if (mode_ != 3 || direct_ || !store_) return 0;
   const uint32_t serial = sent_seg_;
   const bool finished = serial < completed_;
   const uint32_t length = segmentLength(serial);
@@ -591,7 +738,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (mode_ == 2 || mode_ == 3) {
         putU32(out + 1, completed_);
         putU32(out + 5, mode_ == 3 ? static_cast<uint32_t>(captured_) : completed_ * segment_bytes_ + fill_);
-        out[9] = (queue_overflow_ ? 1 : 0) | (overruns_ ? 2 : 0);     // bit0 chunk queue full, bit1 DMA ring overrun
+        out[9] = (queue_overflow_ ? 1 : 0) | (overruns_ ? 2 : 0) | (stage_drops_ ? 4 : 0);   // bit0 chunk queue full,
+                                                                     // bit1 DMA ring overrun, bit2 no free stage
       } else {
         putU32(out + 1, state_ == kStateDone ? 1 : 0);                // segments done
         putU32(out + 5, state_ == kStateDone ? bytes_ : 0);           // write position
@@ -606,7 +754,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (mode_ == 3) {   // streaming: what is still in the store, by stream position
         uint32_t serial = 0, offset = 0;
         uint8_t flags = 0;
-        if (!findSegment(position, serial, offset)) {   // gone (reused) or not captured yet: nothing, gap flag
+        if (direct_ || !findSegment(position, serial, offset)) {   // zero-copy streaming keeps nothing to read back   // gone (reused) or not captured yet: nothing, gap flag
           putU32(out, position);
           out[4] = 2;
           return completed(5);

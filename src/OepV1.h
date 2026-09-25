@@ -127,6 +127,20 @@ class Interface {
   virtual size_t pending() { return 0; }
 };
 
+// Experimental: a transport that sends caller-owned buffers without copying them (USB writeDirect). A buffer holds
+// whole frames (length prefix included), is 64-byte aligned in DMA-capable internal RAM, and stays untouched until
+// done(context, buffer) runs (on the transport's task; keep it short). Results still go through the Stream.
+class DirectTransport {
+ public:
+  using Done = void (*)(void *context, const uint8_t *buffer);
+  virtual bool queueData(const uint8_t *buffer, size_t length, Done done, void *context) = 0;
+  // Data transfers queued or in flight (0: the link is idle - a buffer queued now goes straight out, alone).
+  virtual size_t queued() const = 0;
+
+ protected:
+  ~DirectTransport() = default;
+};
+
 // The part of oep.core's describe every probe writes the same way: firmware, model, unit id, channel count and
 // the reserved-channel bitmap. The sketch adds its profile and labels after it.
 inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id, size_t unit_id_length,
