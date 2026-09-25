@@ -29,6 +29,9 @@ class DmConsole {
   size_t room() const { return kTxCapacity - 1 - pending(); }   // what queue() takes now
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
   uint32_t resyncs() const { return seq_resyncs_; }
+  // dmseq diagnostics: polls that read a word with bit 7 set, of those the invalid ones, answers written
+  struct SeqStats { uint32_t polls, frames, invalid, answers; };
+  SeqStats seqStats() const { return stats_; }
 
  private:
   Ch32Dm &dm_;
@@ -60,6 +63,7 @@ class DmConsole {
   uint8_t seq_bad_run_ = 0;             // consecutive invalid words
   uint8_t seq_syn_drops_ = 0;           // test hook OEP_CONSOLE_FAULT_SYN
   uint32_t seq_resyncs_ = 0;
+  SeqStats stats_ = {0, 0, 0, 0};
 };
 
 }  // namespace oep

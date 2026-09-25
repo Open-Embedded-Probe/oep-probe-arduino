@@ -148,8 +148,10 @@ void DmConsole::pollSeq() {
   // DATA0 first, DATA1 only when the frame reaches it, and the answer only after both: once
   // answered, the target may post its next frame and overwrite DATA1.
   uint32_t w0 = 0, w1 = 0;
+  ++stats_.polls;
   if (!phy_.read(0x04, w0)) return;
   if (!(w0 & 0x80u)) return;                   // our answer still there, or nothing yet
+  ++stats_.frames;
   const uint8_t n = w0 & 0x07u;
   if (n >= 3 && !phy_.read(0x05, w1)) return;
   if (seqFault()) w0 ^= 1u << (8 + (w0 & 7));  // test hook: a frame read corrupted
@@ -159,6 +161,7 @@ void DmConsole::pollSeq() {
   // N before the CRC: at N = 7 there is no byte 1+N, and 0xffffffff - what an attach leaves
   // in DATA0 - decodes to exactly that.
   if (n > 6 || seqCrc8(b, static_cast<size_t>(1 + n)) != b[1 + n]) {
+    ++stats_.invalid;
     // Usually a bad read, and the next poll reads it right. If it stays bad the word may be
     // our own answer, corrupted into a shape with bit 7 set, and then both sides wait.
     // Answering K = the last S we accepted is safe whatever is there: if the target's
@@ -212,6 +215,7 @@ void DmConsole::seqAnswer(uint8_t k, bool with_data) {
   if (seqFault()) return;                                   // test hook: the answer does not land
   if (seqFault()) answer ^= 1u << (answer % 24);            // test hook: it lands corrupted
   phy_.write(0x04, answer);
+  ++stats_.answers;
 }
 
 // Every start is a fresh session, even over one that is still open: a runner that moves from one
@@ -226,13 +230,18 @@ bool DmConsole::start(uint8_t framing) {
   seq_syn_drops_ = 0;
   seq_chunk_len_ = 0;
   seq_resyncs_ = 0;
-  // Whatever an earlier session left in the mailbox would read as a frame - including
-  // SerialDMDATA's latched timeout, which a host clears by taking the word. Claim it,
-  // then let a couple of rounds go by and throw those away, so the first exchange the
-  // caller sees is not the tail of somebody else's.
-  phy_.write(0x04, 0);
   enabled_ = true;
   framing_ = framing;
+  // dmseq writes DATA0 only while bit 7 is set (a target frame is there): zeroing it at the start broke the frame the
+  // target had out, which then waited out its timeout (up to 1 s per try) before posting again - the console took
+  // 1-6 s to come back after a refused automatic attach (oep-spec probe-cdc-and-persistence §7.5, ch32rv's review).
+  // Its framing sorts out an earlier session by itself: a leftover word fails the target's answer check, the target
+  // posts again every 20 ms, and the first frame seen is accepted whatever its sequence bit.
+  if (framing == 2) return true;
+  // SDI / DMDATA: whatever an earlier session left in the mailbox would read as a frame - including SerialDMDATA's
+  // latched timeout, which a host clears by taking the word. Claim it, then let a couple of rounds go by and throw
+  // those away, so the first exchange the caller sees is not the tail of somebody else's.
+  phy_.write(0x04, 0);
   discarding_ = true;
   for (int i = 0; i < 4; ++i) poll();
   discarding_ = false;

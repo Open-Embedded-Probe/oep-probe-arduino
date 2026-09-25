@@ -152,6 +152,12 @@ class ConsoleBindTest final : public oep::v1::Interface {
   uint16_t instance() const override { return 0; }
   bool lockFree(uint8_t) const override { return true; }
   oep::Result handle(uint8_t op, const uint8_t *, size_t n, uint8_t *out, size_t capacity) override {
+    if (op == 0x02 && !n && capacity >= 16) {   // dmseq diagnostics: polls, frames, invalid, answers
+      const auto st = consoleDriver.seqStats();
+      oep::v1::putU32(out, st.polls); oep::v1::putU32(out + 4, st.frames);
+      oep::v1::putU32(out + 8, st.invalid); oep::v1::putU32(out + 12, st.answers);
+      return oep::completed(16);
+    }
     if (op != 0x01 || n || capacity < 13) return oep::rejected(oep::kRejectMalformed);
     out[0] = bindState.state;
     out[1] = port.users;
