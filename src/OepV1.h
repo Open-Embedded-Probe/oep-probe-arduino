@@ -28,6 +28,7 @@ constexpr uint8_t kEventHeartbeat = reg::core::kEventHeartbeat;
 constexpr size_t kRequestHeader = 6, kResultHeader = 5, kSessionBytes = 4;
 
 // Reject reasons added in v1 (0x01..0x06 as in v0).
+constexpr uint8_t kRejectResultLost = reg::kRejectResultLost, kRejectCorrReused = reg::kRejectCorrReused;
 constexpr uint8_t kRejectNoSession = reg::kRejectNoSession;              // lock free, not the last session id: open again
 constexpr uint8_t kRejectLocked = reg::kRejectLocked;                    // another session holds it; payload = remaining ms
 constexpr uint8_t kRejectSessionRequired = reg::kRejectSessionRequired;  // a state-changing request without a session id

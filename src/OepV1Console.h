@@ -64,6 +64,7 @@ class TargetConsoleStream final : public Interface {
   DmConsole &driver_;
   uint16_t instance_;
   bool exists_ = false;    // a stream was opened (and may be closed but still readable)
+  uint8_t stream_number_ = 0;   // the current stream's number (1..255, the next for every stream opened)
   bool open_ = false;
   uint8_t mechanism_ = 0;
   uint16_t max_read_ = 1000;
