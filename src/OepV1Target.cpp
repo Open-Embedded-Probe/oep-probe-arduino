@@ -74,12 +74,14 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
 }
 
 Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  static const uint8_t kAttachTags[] = {reg::wire_rvswd::kTlvAttachMaxSpeed};
+  static const uint8_t kAttachTags[] = {reg::wire_rvswd::kTlvAttachMaxSpeed, reg::wire_rvswd::kTlvAttachPins};
   DmiPhy &phy = port_.dm.phy();
   Tail tail;
   switch (op) {
-    case kOpScan: {   // [TLV]  ->  count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32) per answer
-      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+    case kOpScan: {   // count(u8) pairs [TLV]  ->  count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32) per answer
+      size_t fixed = 0;
+      if (const uint8_t bad = fixedPairScan(payload, length, port_.swdio, port_.swclk, fixed)) return rejected(bad);
+      const Result parsed = plainTail(tail, payload, length, fixed, out, capacity);
       if (refused(parsed)) return parsed;
       if (capacity < 10) return failed();
       uint32_t status = 0;
@@ -102,6 +104,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (length < 1) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity);
       if (refused(parsed)) return parsed;
+      {
+        uint8_t plen = 0;
+        const uint8_t *pins = tail.find(reg::wire_rvswd::kTlvAttachPins, plen);
+        if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
+      }
       uint32_t max_hz = 0;
       bool critical = false;
       if (!maxSpeed(tail, max_hz, critical)) return rejected(kRejectMalformed);
@@ -157,6 +164,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (length < 4) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 4, length - 4, kAttachTags, out, capacity);
       if (refused(parsed)) return parsed;
+      {
+        uint8_t plen = 0;
+        const uint8_t *pins = tail.find(reg::wire_rvswd::kTlvAttachUnderResetPins, plen);
+        if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
+      }
       uint32_t max_hz = 0;
       bool critical = false;
       if (!maxSpeed(tail, max_hz, critical)) return rejected(kRejectMalformed);

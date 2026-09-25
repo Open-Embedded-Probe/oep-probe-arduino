@@ -71,6 +71,21 @@ inline void putU16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 inline void putU32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 inline uint64_t getU64(const uint8_t *p) { return getU32(p) | (static_cast<uint64_t>(getU32(p + 4)) << 32); }
 inline void putU64(uint8_t *p, uint64_t v) { putU32(p, static_cast<uint32_t>(v)); putU32(p + 4, static_cast<uint32_t>(v >> 32)); }
+// v1 wire §5.5 pin pairs, for a probe whose wire has one fixed pair (swclk 0xffff on one wire): scan's
+// count(u8) + count x (swdio u16, swclk u16) - every pair must be that one (count 0 = the probe's pairs); the attach
+// pins TLV (swdio u16, swclk u16), absent = that pair. Return 0 when allowed, else a reject reason.
+inline uint8_t fixedPairScan(const uint8_t *p, size_t n, uint16_t swdio, uint16_t swclk, size_t &fixed) {
+  if (n < 1 || n < 1u + 4u * p[0]) return 0x03;   // malformed
+  fixed = 1u + 4u * p[0];
+  for (uint8_t i = 0; i < p[0]; ++i)
+    if (getU16(p + 1 + 4 * i) != swdio || getU16(p + 3 + 4 * i) != swclk) return 0x04;   // unavailable: not allowed here
+  return 0;
+}
+inline uint8_t fixedPairPins(const uint8_t *v, uint8_t len, uint16_t swdio, uint16_t swclk) {
+  if (!v) return 0;                                 // absent: the one pair
+  if (len != 4) return 0x03;
+  return getU16(v) == swdio && getU16(v + 2) == swclk ? 0 : 0x04;
+}
 
 // bit n of a registry kLockFreeOps mask = op n needs no lock
 inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> op) & 1); }
