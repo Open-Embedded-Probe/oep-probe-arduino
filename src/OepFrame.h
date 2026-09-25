@@ -20,6 +20,10 @@ class FrameReader {
       : buffer_(buffer), capacity_(capacity), max_frame_(max_frame) {}
   // Feed one byte. Returns true when a complete message is available.
   bool push(uint8_t byte);
+  // Feed a run of bytes: consumes them up to the end of a message (true: the message is available, `data` / `n` point
+  // past it) or all of them. One clock read per call and the body copied whole - push() reads the clock per byte,
+  // which cost ~1.2 us a byte on the ESP32-P4 (host -> probe capped at 0.8 MB/s).
+  bool feed(const uint8_t *&data, size_t &n);
   const uint8_t *message() const { return buffer_; }
   size_t length() const { return length_; }
   void consume() { length_ = 0; have_ = 0; state_ = State::LengthLow; }

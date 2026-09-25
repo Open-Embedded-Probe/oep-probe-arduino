@@ -31,6 +31,7 @@ constexpr uint8_t kRejectSessionRequired = 0x09;  // a state-changing request wi
 // core (fn 0)
 constexpr uint8_t kOpConfirm = 0x01, kOpList = 0x02, kOpDescribe = 0x03;
 constexpr uint8_t kOpOpen = 0x10, kOpEnd = 0x11, kOpKeepalive = 0x12, kOpLockState = 0x13;
+constexpr uint8_t kOpLinkSource = 0x40, kOpLinkSink = 0x41;   // link throughput (lock-free)
 constexpr uint8_t kOpStatus = 0x20, kOpCancel = 0x21;
 // Experimental: subscribe(fn u16), unsubscribe(fn u16); the lock holder only, ended with the lock.
 constexpr uint8_t kOpSubscribe = 0x30, kOpUnsubscribe = 0x32;

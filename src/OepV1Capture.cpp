@@ -620,7 +620,7 @@ void LogicCapture::poll() {
   if (mode_ == 2 || mode_ == 3) {
     if (mode_ == 2 && (state_ == kStateCapturing || state_ == kStatePaused)) state_ = paused_ ? kStatePaused : kStateCapturing;
     while (reported_ < completed_) {
-      if (subscribed_) {
+      if (subscribed_ && mode_ == 2) {   // streaming sends no segment events (its data frames carry the positions)
         uint8_t seg[21];
         endpoint_.event(*this, kEventSegment, seg, infoBytes(infos_[reported_ % kInfos], seg));
       }

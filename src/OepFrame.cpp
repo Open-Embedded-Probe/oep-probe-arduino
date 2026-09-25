@@ -1,6 +1,33 @@
 #include "OepFrame.h"
+#include <string.h>
 
 namespace oep {
+
+bool FrameReader::feed(const uint8_t *&data, size_t &n) {
+  if (n == 0) return false;
+  const uint32_t now = millis();
+  if (state_ != State::LengthLow && static_cast<uint32_t>(now - last_byte_ms_) > kIdleResyncMs) {
+    ++resyncs_;
+    state_ = State::LengthLow;
+  }
+  while (n) {
+    if (state_ == State::Body && have_ < length_) {
+      const size_t take = length_ - have_ < n ? length_ - have_ : n;
+      memcpy(buffer_ + have_, data, take);
+      have_ += take;
+      data += take;
+      n -= take;
+      if (have_ == length_) { last_byte_ms_ = now; return true; }
+      continue;
+    }
+    last_byte_ms_ = now;   // push() then sees no idle gap
+    const bool done = push(*data++);
+    --n;
+    if (done) return true;
+  }
+  last_byte_ms_ = now;
+  return false;
+}
 
 bool FrameReader::push(uint8_t byte) {
   // Resync (2026-09-22, classic ESP32 UART): a single stray byte was taken as a length and the
