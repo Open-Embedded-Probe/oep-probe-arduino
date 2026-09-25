@@ -10,10 +10,16 @@ A = link.open_usb_host(transports=("vendor",))
 try:
     A.open(5000)
     fu, fb = core.find(A, "oep.fixture.uart"), core.find(A, "oep.test.bridge")
+    try:
+        core.plan_release(A)                    # a plan outlives sessions: an earlier run may have left one
+    except Exception:
+        pass
     core.plan_apply(A, [(fu, 1, RX), (fu, 2, TX)])
     u = fixture.FixtureUart(A, fu)
     u.configure(115200)
-    A.call(fb, 0x02, bytes([1, TX])); A.call(fb, 0x01, b"\x01")
+    A.call(fb, 0x02, bytes([1, TX]))
+    fc = core.find(A, "oep.probe.config")
+    A.call(fc, 0x02, bytes([0x04, 6, 0, 1, 0, 1]) + struct.pack("<H", fu))   # bind: port 0 <- fixture.uart, line coding
     start = u.read(console.PositionStream.FROM_NOW, 0, 0).start
     body = b"while closed\r\n"
     A.call(fu, 0x06, struct.pack("<H", len(body)) + body)     # the port was never opened
@@ -29,6 +35,7 @@ try:
     A.call(fu, 0x06, struct.pack("<H", 6) + b"open\r\n"); time.sleep(0.2)
     print("port while open:", p.read(256))
     p.close()
-    A.call(fb, 0x01, b"\x00"); core.plan_release(A); A.end()
+    A.call(fc, 0x02, bytes([0x04, 0]))   # unbind
+    core.plan_release(A); A.end()
 finally:
     A.link.close()
