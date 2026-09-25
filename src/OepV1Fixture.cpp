@@ -139,6 +139,62 @@ void FixtureUart::poll() {
     if (c < 0) break;
     stream_.put(static_cast<uint8_t>(c));
   }
+  if (port_) forward();
+}
+
+void FixtureUart::setPort(Stream *port) {
+  port_ = port;
+  port_pos_ = stream_.end();   // from now on
+}
+
+void FixtureUart::forward() {
+  // port -> TX: only what the UART takes without waiting, so the RX side keeps being emptied (a blocking write let the
+  // UART's receive buffer overflow while a 64 KiB echo was going out)
+  uint8_t chunk[256];
+  for (int n; (n = port_->available()) > 0;) {
+    size_t k = static_cast<size_t>(n) < sizeof chunk ? static_cast<size_t>(n) : sizeof chunk;
+    const int room = serial_.availableForWrite();
+    if (room <= 0) break;
+    if (k > static_cast<size_t>(room)) k = static_cast<size_t>(room);
+    k = port_->readBytes(chunk, k);
+    if (!k) break;
+    serial_.write(chunk, k);
+  }
+  if (static_cast<int32_t>(stream_.oldest() - port_pos_) > 0) {   // fell a whole buffer behind
+    port_pos_ = stream_.oldest();
+    ++port_gaps_;
+  }
+  // RX -> port, as much as it takes, and only while the port is open (it reports 0 room otherwise): what arrives while
+  // it is closed goes to the stream only (OEP reads keep it), as on a USB-UART cable. Handing the backlog over when the
+  // port opens lost it (pyserial empties its input at open) or had it echoed back to the target (the tty echoes until
+  // the program sets raw mode) - probe-cdc-and-persistence §7.2.
+  if (port_->availableForWrite() <= 0) {
+    port_pos_ = stream_.end();
+    return;
+  }
+  while (port_pos_ != stream_.end()) {
+    const uint8_t *data;
+    const size_t n = stream_.contiguous(port_pos_, data);
+    const size_t written = port_->write(data, n);
+    port_pos_ += written;
+    if (written < n) break;
+  }
+}
+
+bool FixtureUart::begin(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits) {
+  poll();
+  if (configured_) serial_.end();
+  // A peer may echo while the probe is still writing; hold a full window of it.
+  platformUartBuffers(serial_, 4096, 1024);
+  idleHigh();
+  configured_ = platformUartBegin(serial_, baud, rx_, tx_, platformUartConfig(data_bits, parity, stop_bits));
+  baud_ = configured_ ? platformUartBaud(serial_, baud) : 0;
+  return configured_;
+}
+
+bool FixtureUart::setLineCoding(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits) {
+  if (rx_ < 0 || baud < 1200 || baud > 2000000) return false;
+  return begin(baud, data_bits, parity, stop_bits);
 }
 
 Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
@@ -168,17 +224,8 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       }
       if (rx_ < 0) return rejected(kRejectUnavailable);   // no plan
       if (capacity < 4) return failed();
-      poll();
-      if (configured_) serial_.end();
-      // A peer may echo while the probe is still writing; hold a full window of it.
-      platformUartBuffers(serial_, 4096, 1024);
-      idleHigh();
-      if (!platformUartBegin(serial_, baud, rx_, tx_, platformUartConfig(data_bits, parity, stop_bits))) {
-        configured_ = false;
-        return failed();
-      }
-      configured_ = true;
-      putU32(out, platformUartBaud(serial_, baud));
+      if (!begin(baud, data_bits, parity, stop_bits)) return failed();
+      putU32(out, baud_);
       return tail.finish(completed(4), out, capacity);
     }
     case kOpRead: {   // from(u8) arg(u32) max(u16) [TLV]  ->  start(u32) flags(u8) data (closed tail)

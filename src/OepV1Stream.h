@@ -27,6 +27,12 @@ class PositionStream {
   // The oldest byte goes when the ring is full (a read then reports a gap).
   void put(uint8_t byte) { buffer_[total_ & (capacity_ - 1)] = byte; ++total_; }
   uint32_t end() const { return total_; }   // the position of the next byte
+  // The bytes kept from `from` on that lie in one piece of the ring (from must be within oldest()..end()).
+  size_t contiguous(uint32_t from, const uint8_t *&data) const {
+    const size_t at = from & (capacity_ - 1), left = total_ - from;
+    data = buffer_ + at;
+    return left < capacity_ - at ? left : capacity_ - at;
+  }
   uint32_t oldest() const { return total_ - base_ > capacity_ ? total_ - static_cast<uint32_t>(capacity_) : base_; }
   void mark(uint8_t kind, uint8_t detail = 0) {
     marks_[serial_ % mark_capacity_] = {serial_, total_, kind, static_cast<uint32_t>(millis()), detail};
