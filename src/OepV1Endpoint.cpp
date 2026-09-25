@@ -22,9 +22,9 @@ bool nameMatches(const char *name, const uint8_t *prefix, size_t n, bool exact) 
 }
 
 // Page a TLV stream by whole TLVs: skip `first`, then copy while they fit. Returns bytes, sets more.
-size_t pageTlv(const uint8_t *tlv, size_t length, uint8_t first, uint8_t *out, size_t capacity, bool &more) {
+size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, size_t capacity, bool &more) {
   size_t at = 0, n = 0, used = 0;
-  uint8_t index = 0;
+  uint16_t index = 0;
   more = false;
   while (at + 2 <= length) {
     const size_t size = 2 + tlv[at + 1];
@@ -164,30 +164,41 @@ void Endpoint::push() {
   }
 }
 
-// subscribe(fn u16 [, min_bytes u16, max_delay_ms u16]); fn 0 = heartbeat events, max_delay_ms = the period.
-Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length) {
-  if (length != 2 && !(op == kOpSubscribe && length == 6)) return rejected(kRejectMalformed);
+// subscribe(fn u16, min_bytes u16, max_delay_ms u16) [TLV]; unsubscribe(fn u16) [TLV]. fn 0 = heartbeat events,
+// max_delay_ms = the period (0: 1000 ms). seq starts again at 0 with every subscribe. No field is optional (v1 wire
+// §0: an optional fixed field could not be told apart from a tail).
+Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  const bool batching = op == kOpSubscribe;
+  const size_t fixed = batching ? 6 : 2;
+  if (length < fixed) return rejected(kRejectMalformed);
+  Tail tail;
+  const Result parsed = tail.parse(payload + fixed, length - fixed, out, capacity);
+  if (parsed.resolution != kResolutionCompleted) return parsed;
   const uint16_t fn = getU16(payload);
+  const uint16_t min_bytes = batching ? getU16(payload + 2) : 0, max_delay = batching ? getU16(payload + 4) : 0;
   if (fn == 0) {
     heartbeat_ = op == kOpSubscribe;
-    if (length == 6 && getU16(payload + 4)) heartbeat_ms_ = getU16(payload + 4);
-    heartbeat_last_ = millis() - heartbeat_ms_;
-    return completed();
+    if (heartbeat_) {
+      heartbeat_ms_ = max_delay ? max_delay : reg::kHeartbeatDefaultMs;
+      heartbeat_last_ = millis() - heartbeat_ms_;
+      core_seq_ = 0;
+    }
+    return tail.finish(completed(), out, capacity);
   }
   if (fn > count_) return rejected(kRejectUnknownFunction);
   const size_t i = fn - 1;
   if (op == kOpUnsubscribe) {
     if (subscribed_[i]) interfaces_[i]->subscribe(false);
     subscribed_[i] = false;
-    return completed();
+    return tail.finish(completed(), out, capacity);
   }
   if (!interfaces_[i]->subscribe(true)) return rejected(kRejectUnavailable);
   subscribed_[i] = true;
   push_seq_[i] = 0;
-  min_bytes_[i] = length == 6 ? getU16(payload + 2) : 0;
-  max_delay_ms_[i] = length == 6 ? getU16(payload + 4) : 0;
+  min_bytes_[i] = min_bytes;
+  max_delay_ms_[i] = max_delay;
   waiting_[i] = false;
-  return completed();
+  return tail.finish(completed(), out, capacity);
 }
 
 void Endpoint::poll() {
@@ -291,44 +302,64 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   send(kResultHeader + result.length);
 }
 
+namespace {
+inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
+}  // namespace
+
 Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,
                       uint8_t *out, size_t capacity) {
+  Tail tail;
   switch (op) {
-    case kOpConfirm:   // -> magic, revision, max_frame, window, max_inflight
-      if (capacity < 10) return failed();
-      memcpy(out, "OEP!", 4);
-      out[4] = 1;
-      putU16(out + 5, limits_.max_frame);
-      putU16(out + 7, limits_.window_bytes);
-      out[9] = limits_.max_inflight;
-      return completed(10);
+    case kOpConfirm: {
+      // "OEP?" min_rev(u8) max_rev(u8) [TLV]  ->  "OEP!" revision(u8) flags(u8) max_frame(u16) window(u32) max_inflight(u8)
+      if (length < 6 || memcmp(payload, reg::kConfirmRequestMagic, 4) != 0) return rejected(kRejectMalformed);
+      const Result parsed = tail.parse(payload + 6, length - 6, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (reg::kProtocolRevision < payload[4] || reg::kProtocolRevision > payload[5]) return rejected(kRejectUnsupported);
+      if (capacity < 13) return failed();
+      memcpy(out, reg::kConfirmResultMagic, 4);
+      out[4] = reg::kProtocolRevision;
+      out[5] = 0;                                     // flags: reserved
+      putU16(out + 6, limits_.max_frame);
+      putU32(out + 8, limits_.window_bytes);
+      out[12] = limits_.max_inflight;
+      return tail.finish(completed(13), out, capacity);
+    }
     case kOpList: return list(payload, length, out, capacity);
-    case kOpLinkSource: {   // length(u32) -> that many bytes (as many as fit one frame), byte k = k & 0xff
-      if (length != 4) return rejected(kRejectMalformed);
+    case kOpLinkSource: {   // length(u32) [TLV] -> that many bytes (as many as fit one frame), byte k = k & 0xff
+      const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
+      if (refused(parsed)) return parsed;
       size_t n = getU32(payload);
       if (n > capacity) n = capacity;
       static uint8_t pattern[256];
       if (pattern[255] != 255) for (size_t k = 0; k < 256; ++k) pattern[k] = static_cast<uint8_t>(k);
       for (size_t at = 0; at < n; at += 256) memcpy(out + at, pattern, n - at < 256 ? n - at : 256);
-      return completed(n);
+      return completed(n);   // closed tail: nothing can follow the bytes
     }
-    case kOpLinkSink:       // any bytes -> how many arrived (u32)
+    case kOpLinkSink:       // any bytes (no tail) -> how many arrived (u32)
       if (capacity < 4) return failed();
       putU32(out, static_cast<uint32_t>(length));
       return completed(4);
     case kOpDescribe: return describe(payload, length, out, capacity);
     case kOpOpen: return open(payload, length, out, capacity);
-    case kOpLockState:
+    case kOpLockState: {
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
       if (capacity < 5) return failed();
       out[0] = locked_;
       putU32(out + 1, remaining());
-      return completed(5);
-    case kOpStatus: return rejected(kRejectUnavailable);   // no long operations yet (they block)
+      return tail.finish(completed(5), out, capacity);
+    }
+    case kOpStatus: {   // activity(u16): no long operations yet (they block)
+      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+      if (refused(parsed)) return parsed;
+      return rejected(kRejectUnavailable);
+    }
     case kOpSubscribe:
-    case kOpUnsubscribe: {   // experimental: the lock holder only, and they end with the lock
+    case kOpUnsubscribe: {   // the lock holder only, and they end with the lock
       const Result check = checkSession(has_session, session, out, capacity);
-      if (check.resolution != kResolutionCompleted) return check;
-      return subscription(op, payload, length);
+      if (refused(check)) return check;
+      return subscription(op, payload, length, out, capacity);
     }
     case kOpEnd:
     case kOpKeepalive:
@@ -336,22 +367,30 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
     case kOpPlanApply:
     case kOpPlanRelease: {
       const Result check = checkSession(has_session, session, out, capacity);
-      if (check.resolution != kResolutionCompleted) return check;
-      if (op == kOpEnd) { locked_ = false; endSubscriptions(); }   // the last id stays: the same host may resume
-      if (op == kOpCancel) return rejected(kRejectUnavailable);
+      if (refused(check)) return check;
       if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, op == kOpCancel ? 2 : 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (op == kOpCancel) return rejected(kRejectUnavailable);   // nothing that could be stopped
+      if (op == kOpEnd) { locked_ = false; endSubscriptions(); }   // the last id stays: the same host may resume
       if (op == kOpPlanRelease) planRelease();
-      return completed();
+      return tail.finish(completed(), out, capacity);
     }
     default: return rejected(kRejectUnknownOperation);
   }
 }
 
+// session_id(u32) lease_ms(u32) force(u8) [TLV]  ->  lease_ms(u32) boot_id(u32) resumed(u8)
 Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length != 9 || capacity < 9) return rejected(kRejectMalformed);
+  Tail tail;
+  const Result parsed = plainTail(tail, payload, length, 9, out, capacity);
+  if (refused(parsed)) return parsed;
+  if (capacity < 9) return failed();
   const uint32_t session = getU32(payload), lease = getU32(payload + 4);
   const bool force = payload[8];
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), out, capacity);
+  // Taken over by force: the previous holder's subscriptions end with its lock (§4.5).
+  if (locked_ && holder_ != session) endSubscriptions();
   const bool resumed = (locked_ && holder_ == session) || (have_last_ && last_ == session);
   locked_ = true;
   holder_ = last_ = session;
@@ -361,33 +400,32 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   putU32(out, lease_ms_);
   putU32(out + 4, boot_id_);
   out[8] = resumed;
-  return completed(9);
+  return tail.finish(completed(9), out, capacity);
 }
 
-// The v0 plan, unchanged: role assignments as critical TLVs 0x90 = fn(u16) role(u8) channel(u16); every
-// interface checks its own roles without side effects, then all apply or none does. One plan at a time; it is
-// probe state and stays until plan_release (no session end or lapse releases it).
+// Role assignments as TLVs 0x90 = fn(u16) role(u8) channel(u16) (critical); every interface checks its own roles
+// without side effects, then all apply or none does. An unknown critical TLV refuses the plan (unsupported), an
+// unknown non-critical one is ignored and listed. One plan at a time; it is probe state and stays until
+// plan_release (no session end or lapse releases it).
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  (void)out; (void)capacity;
   if (plan_active_) return rejected(kRejectUnavailable);
+  static const uint8_t kKnown[] = {kTagRoleAssignment};
+  Tail tail;
+  const Result parsed = tail.parse(payload, length, kKnown, out, capacity);
+  if (refused(parsed)) return parsed;
   constexpr size_t kMaxRoles = 16;
   RoleAssignment roles[kMaxRoles];
   size_t count = 0, at = 0;
-  while (at + 2 <= length) {
-    const uint8_t tag = payload[at], len = payload[at + 1];
-    if (at + 2 + len > length) return rejected(kRejectMalformed);
-    const uint8_t *v = payload + at + 2;
-    if (tag == kTagRoleAssignment) {
-      if (len != 5 || count >= kMaxRoles) return rejected(kRejectMalformed);
-      roles[count] = {getU16(v), v[2], getU16(v + 3)};
-      if (roles[count].function == 0 || roles[count].function > count_) return rejected(kRejectUnknownFunction);
-      ++count;
-    } else if (tag & 0x80) {
-      return rejected(kRejectMalformed);   // critical and unknown: refuse the whole plan
-    }
-    at += 2 + len;
+  uint8_t raw = 0, len = 0;
+  const uint8_t *v = nullptr;
+  while (tail.next(at, raw, v, len)) {
+    if ((raw & ~kTagCritical) != (kTagRoleAssignment & ~kTagCritical)) continue;
+    if (len != 5 || count >= kMaxRoles) return rejected(kRejectMalformed);
+    roles[count] = {getU16(v), v[2], getU16(v + 3)};
+    if (roles[count].function == 0 || roles[count].function > count_) return rejected(kRejectUnknownFunction);
+    ++count;
   }
-  if (!count || at != length) return rejected(kRejectMalformed);
+  if (!count) return rejected(kRejectMalformed);
   bool wants[kMaxInterfaces] = {};
   for (size_t i = 0; i < count_; ++i) {
     RoleAssignment mine[kMaxRoles];
@@ -410,7 +448,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     planned_[i] = true;
   }
   plan_active_ = true;
-  return completed();
+  return tail.finish(completed(), out, capacity);
 }
 
 void Endpoint::planRelease() {
@@ -422,19 +460,27 @@ void Endpoint::planRelease() {
 }
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // flags(u8, bit0 exact) first(u8) prefix_len(u8) prefix  ->  total(u8) count(u8) entries
-  if (length < 3 || length != 3u + payload[2] || capacity < 2) return rejected(kRejectMalformed);
+  // flags(u8, bit0 exact) first(u16) prefix_len(u8) prefix [TLV]  ->  total(u16) count(u8) entries
+  // entry: fn(u16) instance(u16) revision(u8) flags(u8) name_len(u8) name; oep.core (fn 0) is the first one
+  if (length < 4 || length < 4u + payload[3] || capacity < 3) return rejected(kRejectMalformed);
+  Tail tail;
+  const Result parsed = tail.parse(payload + 4 + payload[3], length - 4 - payload[3], out, capacity);
+  if (refused(parsed)) return parsed;
   const bool exact = payload[0] & 1;
-  const uint8_t first = payload[1], n = payload[2];
-  const uint8_t *prefix = payload + 3;
-  uint8_t total = 0, count = 0;
-  size_t used = 2;
+  const uint16_t first = getU16(payload + 1);
+  const uint8_t n = payload[3];
+  const uint8_t *prefix = payload + 4;
+  uint16_t total = 0;
+  uint8_t count = 0;
+  size_t used = 3;
   bool full = false;
+  // room for the ignored TLV after the entries, if there is one to report
+  const size_t room = tail.anyIgnored() && capacity > 2 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
   auto consider = [&](uint16_t fn, uint16_t instance, uint8_t revision, uint8_t flags, const char *name) {
     if (!nameMatches(name, prefix, n, exact)) return;
     if (total++ < first || full) return;
     const size_t name_len = strlen(name);
-    if (used + 7 + name_len > capacity) { full = true; return; }
+    if (used + 7 + name_len > room || count == 255) { full = true; return; }
     uint8_t *e = out + used;
     putU16(e, fn);
     putU16(e + 2, instance);
@@ -445,21 +491,24 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
     used += 7 + name_len;
     ++count;
   };
-  consider(0, 0, 1, 0, "oep.core");
+  consider(0, 0, reg::core::kRevision, 0, reg::core::kName);
   for (size_t i = 0; i < count_; ++i) {
     Interface &it = *interfaces_[i];
     consider(static_cast<uint16_t>(i + 1), it.instance(), it.revision(), it.flags(), it.name());
   }
-  out[0] = total;
-  out[1] = count;
-  return completed(used);
+  putU16(out, total);
+  out[2] = count;
+  return tail.finish(completed(used), out, capacity);
 }
 
 Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // fn(u16) first(u8)  ->  more(u8) TLVs
-  if (length != 3 || capacity < 1) return rejected(kRejectMalformed);
+  // fn(u16) first(u16) [TLV]  ->  more(u8) TLVs (first = the index of the first TLV)
+  if (length < 4 || capacity < 1) return rejected(kRejectMalformed);
+  Tail tail;
+  const Result parsed = tail.parse(payload + 4, length - 4, out, capacity);
+  if (refused(parsed)) return parsed;
   const uint16_t fn = getU16(payload);
-  const uint8_t first = payload[2];
+  const uint16_t first = getU16(payload + 2);
   const uint8_t *tlv = nullptr;
   size_t tlv_length = 0;
   if (fn == 0) {
@@ -471,10 +520,11 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   } else {
     return rejected(kRejectUnknownFunction);
   }
+  const size_t room = tail.anyIgnored() && capacity > 3 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
   bool more = false;
-  const size_t used = tlv ? pageTlv(tlv, tlv_length, first, out + 1, capacity - 1, more) : 0;
+  const size_t used = tlv ? pageTlv(tlv, tlv_length, first, out + 1, room - 1, more) : 0;
   out[0] = more;
-  return completed(1 + used);
+  return tail.finish(completed(1 + used), out, capacity);
 }
 
 }  // namespace v1

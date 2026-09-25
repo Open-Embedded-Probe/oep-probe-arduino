@@ -10,7 +10,7 @@ namespace oep {
 // What an endpoint accepts per frame and keeps in flight (core confirm reports it).
 struct Limits {
   uint16_t max_frame;
-  uint16_t window_bytes;
+  uint32_t window_bytes;   // v1 confirm reports a u32; v0 a u16
   uint8_t max_inflight;
 };
 

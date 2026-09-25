@@ -1,9 +1,9 @@
-// OEP v1 draft probe on a SparkFun Pro Micro RP2350 for the CH32L103 jig (oep-spec docs/v1-core-wire-delta.ja.md).
+// OEP v1 probe on a SparkFun Pro Micro RP2350 for the CH32L103 jig (oep-spec docs/v1-core-wire-delta.ja.md).
 // Transport: USB CDC (Serial, length-prefixed frames). Target link: RVSWD on two GPIOs through the SIO
 // backend in OepRvswdPhy.cpp (same frame as the ESP32-P4 probe).
 //
-// v1 draft: oep.core (the probe in its describe), oep.wire.rvswd, oep.target.riscv-dm, oep.target.console,
-// oep.fixture.gpio / uart. GP2 is the target's NRST: a gpio channel labelled NRST and the default reset line for
+// oep.core (the probe in its describe), oep.wire.rvswd, oep.target.riscv-dm, oep.target.console,
+// oep.fixture.gpio / uart (all revision 1). GP2 is the target's NRST: a gpio channel labelled NRST and the default reset line for
 // oep.wire.rvswd attach-under-reset (the host may name another channel) - open drain only, never driven high.
 #include <OepCh32Dm.h>
 #include <OepFixtureServices.h>
@@ -53,11 +53,8 @@ static oep::v1::TargetRiscvDm riscvDm(port, 1);
 static oep::DmConsole consoleDriver(dm, phy);
 static oep::v1::TargetConsoleStream console(port, consoleDriver, 1);
 static oep::PinTable pins(kFixtures);
-static oep::FixtureGpio gpio(pins);
-static oep::FixtureUart uart(pins, Serial1, 2);   // UART0 reaches GP0/1, GP12/13, GP16/17 and GP28/29 on this part
-static oep::v1::V0Fixture gpioV1(gpio, "oep.fixture.gpio", 2, pins, oep::v1::kGpioRoles, 1, oep::v1::kGpioLockFree);
-static oep::v1::V0Fixture uartV1(uart, "oep.fixture.uart", 3, pins, oep::v1::kUartRoles, 2, 0,
-                                 oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
+static oep::v1::FixtureGpio gpio(pins, 2);
+static oep::v1::FixtureUart uart(pins, Serial1, 3, 2);   // UART0 reaches GP0/1, GP12/13, GP16/17 and GP28/29 on this part
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
@@ -94,11 +91,12 @@ void setup() {
   port.reset_default = kNrst;   // attach-under-reset through the L103's NRST unless the host names another channel
   port.reset_allowed = kFixtures;
   endpoint.add(console);
-  endpoint.add(gpioV1);
-  endpoint.add(uartV1);
+  endpoint.add(gpio);
+  endpoint.add(uart);
 }
 
 void loop() {
   endpoint.poll();
   console.poll();
+  uart.poll();
 }

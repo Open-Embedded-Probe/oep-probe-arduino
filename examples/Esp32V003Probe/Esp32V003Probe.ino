@@ -1,14 +1,13 @@
-// OEP v1 draft probe on the classic ESP32 for the UIAPduino CH32V003 jig (E132 wiring).
+// OEP v1 probe on the classic ESP32 for the UIAPduino CH32V003 jig (E132 wiring).
 // Transport: UART0 through the board's USB-UART bridge at 115200. Target link: GPIO16 -> PD1/SWIO
 // (single wire, SwioPhy).
 //
-// v1 draft: oep.core (the probe in its describe), oep.wire.swio, oep.target.riscv-dm, oep.target.console,
-// and the fixtures oep.fixture.gpio / uart / capture (v0 services under v1 names). GPIO23 -> PD7/NRST is a gpio
-// channel labelled NRST and the default reset line for oep.wire.swio attach-under-reset (the host may name another);
-// a plain pin reset (UIAPduino bootloader, PINRSTF) pulses it open drain through fixture.gpio.
-// The ESP-IDF I2C / SPI targets are offered under io.github.ch32-riscv-ug.esp32.*.
+// oep.core (the probe in its describe), oep.wire.swio, oep.target.riscv-dm, oep.target.console, and the fixtures
+// oep.fixture.gpio / uart, all revision 1 (no oep.fixture.capture: the v0 GPIO sampler has no revision-1 shape yet).
+// GPIO23 -> PD7/NRST is a gpio channel labelled NRST and the default reset line for oep.wire.swio attach-under-reset
+// (the host may name another); a plain pin reset (UIAPduino bootloader, PINRSTF) pulses it open drain through
+// fixture.gpio. The ESP-IDF I2C / SPI targets are offered under io.github.ch32-riscv-ug.esp32.* (v0 payloads).
 #include <OepCh32Dm.h>
-#include <OepFixtureCapture.h>
 #include <OepFixtureServices.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
@@ -44,15 +43,8 @@ static oep::v1::TargetRiscvDm riscvDm(port, 1);
 static oep::DmConsole consoleDriver(dm, phy);
 static oep::v1::TargetConsoleStream console(port, consoleDriver, 1);
 static oep::PinTable pins(kFixtures);
-static oep::FixtureGpio gpio(pins);
-static oep::FixtureUart uart(pins, Serial2, 2);       // DUT console: V003 PD5/TX -> GPIO22, PD6/RX <- GPIO21 (E132)
-static oep::FixtureCapture capture(pins);             // GPIO sampler on core 0, 0.4..2 MHz, 1 byte/sample
-static const uint8_t kCaptureExtra[] = {oep::v1::kTagImplementation, 1, 1};   // software sampler
-static oep::v1::V0Fixture gpioV1(gpio, "oep.fixture.gpio", 2, pins, oep::v1::kGpioRoles, 1, oep::v1::kGpioLockFree);
-static oep::v1::V0Fixture uartV1(uart, "oep.fixture.uart", 3, pins, oep::v1::kUartRoles, 2, 0,
-                                 oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
-static oep::v1::V0Fixture captureV1(capture, "oep.fixture.capture", 4, pins, oep::v1::kCaptureRoles, 8,
-                                    oep::v1::kCaptureLockFree, kCaptureExtra, sizeof kCaptureExtra);
+static oep::v1::FixtureGpio gpio(pins, 2);
+static oep::v1::FixtureUart uart(pins, Serial2, 3, 2);   // DUT console: V003 PD5/TX -> GPIO22, PD6/RX <- GPIO21 (E132)
 // ESP-IDF I2C / SPI slave tools under the project's own names (capability-name-hierarchy.ja.md, decision 4):
 // both implementations so far are the ESP-IDF slave drivers, whose quirks stay out of any oep. name.
 static oep::P4I2cTarget i2c(pins);
@@ -60,10 +52,10 @@ static oep::P4SpiTarget spi(pins);
 static const uint8_t kI2cRoles[] = {1, 2};                    // SDA, SCL
 static const uint8_t kSpiRoles[] = {1, 2, 3, 4};              // SCK, MOSI, MISO, CS
 // lock-free: i2c status (5) and read_hw (0x10), spi status (4)
-static oep::v1::V0Fixture i2cV1(i2c, "io.github.ch32-riscv-ug.esp32.i2c-target", 5, pins, kI2cRoles, 2,
+static oep::v1::V0Fixture i2cV1(i2c, "io.github.ch32-riscv-ug.esp32.i2c-target", 4, pins, kI2cRoles, 2,
                                 (1u << 5) | (1u << 16), oep::v1::kImplementationPeripheral,
                                 sizeof oep::v1::kImplementationPeripheral);
-static oep::v1::V0Fixture spiV1(spi, "io.github.ch32-riscv-ug.esp32.spi-target", 6, pins, kSpiRoles, 4, 1u << 4,
+static oep::v1::V0Fixture spiV1(spi, "io.github.ch32-riscv-ug.esp32.spi-target", 5, pins, kSpiRoles, 4, 1u << 4,
                                 oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
 static uint8_t probeTlv[200];
 
@@ -96,9 +88,8 @@ void setup() {
   port.reset_allowed = kFixtures;
   console.setMaxRead(480);   // 512-byte frames
   endpoint.add(console);
-  endpoint.add(gpioV1);
-  endpoint.add(uartV1);
-  endpoint.add(captureV1);
+  endpoint.add(gpio);
+  endpoint.add(uart);
   endpoint.add(i2cV1);
   endpoint.add(spiV1);
 }
@@ -106,6 +97,7 @@ void setup() {
 void loop() {
   endpoint.poll();
   console.poll();
+  uart.poll();
   i2c.service();
   spi.service();
 }

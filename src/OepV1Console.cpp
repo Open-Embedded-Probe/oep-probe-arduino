@@ -4,6 +4,9 @@
 
 namespace oep {
 namespace v1 {
+namespace {
+inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
+}  // namespace
 
 size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
@@ -14,120 +17,103 @@ size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   return w.ok() ? w.length() : 0;
 }
 
-uint32_t TargetConsoleStream::oldest() const {
-  const uint32_t kept = total_ - base_;
-  return kept > kCapacity ? total_ - kCapacity : base_;
-}
-
-void TargetConsoleStream::mark(uint8_t kind, uint8_t detail) {
-  marks_[mark_count_ % kMarks] = {total_, kind, millis(), detail};
-  ++mark_count_;
-}
-
 void TargetConsoleStream::poll() {
   if (!open_) return;
-  if (!port_.connected) {                 // detached: the stream ends with the connection
+  if (!port_.connected) {                 // detached: the stream ends with the connection, and stays readable
     driver_.stop();
-    mark(kMarkDetach);
+    stream_.mark(kMarkDetach);
     open_ = false;
     return;
   }
   if (port_.resets != seen_resets_) {     // a reset issued through riscv-dm
     seen_resets_ = port_.resets;
-    mark(kMarkReset, 0);                  // detail 0: ndmreset
+    stream_.mark(kMarkReset, 0);          // detail 0: ndmreset
   }
   driver_.poll();
   if (driver_.resyncs() > seen_resyncs_) {   // the target's console started over: after the first, a restart
-    if (seen_resyncs_ > 0) mark(kMarkRestart, 1);   // detail 1: console resync
+    if (seen_resyncs_ > 0) stream_.mark(kMarkRestart, 1);   // detail 1: console resync
     seen_resyncs_ = driver_.resyncs();
   }
 }
 
 Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (op == kOpOpen) {
-    if (length != 2 || payload[1] > 2 || capacity < 1) return rejected(kRejectMalformed);
-    if (payload[0] != 1 || !port_.connected) return rejected(kRejectUnavailable);
+  Tail tail;
+  if (op == kOpOpen) {   // connection(u8) mechanism(u8) [TLV]  ->  stream(u8) flags(u8: bit0 existing)
+    const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+    if (refused(parsed)) return parsed;
+    if (payload[0] != 1 || !port_.connected) return rejected(kRejectNoConnection);
+    if (payload[1] > reg::target_console::kMechanismDmseq) return rejected(kRejectUnsupported);
+    if (capacity < 2) return failed();
+    if (open_ && mechanism_ == payload[1]) {   // the same stream, positions and marks as they are
+      out[0] = 1;
+      out[1] = 1;
+      return tail.finish(completed(2), out, capacity);
+    }
+    if (open_) return rejected(kRejectUnavailable);   // one stream at a time on this connection
     if (!driver_.start(payload[1])) return failed();
-    open_ = true;
+    exists_ = open_ = true;
+    mechanism_ = payload[1];
     seen_resets_ = port_.resets;
     seen_resyncs_ = driver_.resyncs();
-    mark(kMarkAttach, payload[1]);
+    stream_.mark(kMarkAttach, payload[1]);
     out[0] = 1;
-    return completed(1);
+    out[1] = 0;
+    return tail.finish(completed(2), out, capacity);
   }
-  if (length < 1 || payload[0] != 1) return rejected(kRejectUnavailable);   // stream 1 only
+  if (length < 1) return rejected(kRejectMalformed);
+  if (payload[0] != 1 || !exists_) return rejected(kRejectUnavailable);   // stream 1 only
   const uint8_t *p = payload + 1;
   const size_t n = length - 1;
   switch (op) {
-    case kOpRead: {
-      if (n != 7 || capacity < 5) return rejected(kRejectMalformed);
+    case kOpRead: {   // from(u8) arg(u32) max(u16) [TLV]  ->  start(u32) flags(u8) data (closed tail)
+      const Result parsed = plainTail(tail, p, n, 7, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (p[0] > reg::target_console::kReadFromLastMark) return rejected(kRejectUnsupported);
       poll();   // take what is waiting first
-      const uint8_t from = p[0];
-      const uint32_t arg = getU32(p + 1);
-      uint32_t start = total_;
-      if (from == 0) start = arg;
-      else if (from == 1) start = oldest();
-      else if (from == 3) {
-        start = oldest();
-        for (uint32_t i = mark_count_; i > 0 && i + kMarks > mark_count_; --i) {
-          const Mark &mk = marks_[(i - 1) % kMarks];
-          if ((arg & 0xff) == 0 || mk.kind == (arg & 0xff)) { start = mk.position; break; }
-        }
-      } else if (from != 2) {
-        return rejected(kRejectMalformed);
-      }
-      uint8_t flags = 0;
-      if (static_cast<int32_t>(start - oldest()) < 0) { start = oldest(); flags |= 2; }   // gap: pushed out
-      if (static_cast<int32_t>(start - total_) > 0) start = total_;
-      uint32_t count = total_ - start;
-      uint32_t room = capacity - 5;
-      uint16_t max = getU16(p + 5);
-      if (max > max_read_) max = max_read_;
-      if (room > max) room = max;
-      if (count > room) { count = room; flags |= 1; }
-      putU32(out, start);
-      out[4] = flags;
-      for (uint32_t i = 0; i < count; ++i) out[5 + i] = buffer_[(start + i) % kCapacity];
-      return completed(5 + count);
+      return stream_.read(p, out, capacity, max_read_);
     }
-    case kOpMarks: {
-      if (n != 4 || capacity < 1) return rejected(kRejectMalformed);
-      const uint32_t from = getU32(p);
-      uint8_t count = 0;
-      size_t used = 1;
-      const uint32_t first = mark_count_ > kMarks ? mark_count_ - kMarks : 0;
-      for (uint32_t i = first; i < mark_count_ && used + 10 <= capacity; ++i) {
-        const Mark &mk = marks_[i % kMarks];
-        if (static_cast<int32_t>(mk.position - from) < 0) continue;
-        putU32(out + used, mk.position);
-        out[used + 4] = mk.kind;
-        putU32(out + used + 5, mk.time_ms);
-        out[used + 9] = mk.detail;
-        used += 10;
-        ++count;
-      }
-      out[0] = count;
-      return completed(used);
+    case kOpMarks: {   // from_serial(u32) [TLV]  ->  more(u8) count(u8) entries
+      const Result parsed = plainTail(tail, p, n, 4, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (capacity < 2) return failed();
+      poll();
+      const size_t room = tail.anyIgnored() && capacity > 2 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
+      return tail.finish(completed(stream_.marks(getU32(p), out, room)), out, capacity);
     }
     case kOpClear:
-      base_ = total_;
-      mark(kMarkClear);
-      return completed();
-    case kOpMark:
-      if (n != 1) return rejected(kRejectMalformed);
-      mark(kMarkHost, p[0]);
-      return completed();
-    case kOpWrite: {
-      if (!open_ || capacity < 2) return rejected(kRejectUnavailable);
-      const size_t queued = driver_.queue(p, n);
+    case kOpClose: {
+      const Result parsed = plainTail(tail, p, n, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (!open_) return rejected(kRejectUnavailable);
+      if (op == kOpClear) {
+        stream_.clear();
+      } else {
+        driver_.stop();
+        stream_.mark(kMarkDetach);
+        open_ = false;
+      }
+      return tail.finish(completed(), out, capacity);
+    }
+    case kOpMark: {   // value(u8) [TLV]
+      const Result parsed = plainTail(tail, p, n, 1, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (!open_) return rejected(kRejectUnavailable);
+      stream_.mark(kMarkHost, p[0]);
+      return tail.finish(completed(), out, capacity);
+    }
+    case kOpWrite: {   // count(u16) data [TLV]  ->  accepted(u16); what was not taken is the host's to send again
+      if (n < 2) return rejected(kRejectMalformed);
+      const uint16_t count = getU16(p);
+      const Result parsed = plainTail(tail, p, n, 2u + count, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (!open_) return rejected(kRejectUnavailable);
+      if (capacity < 2) return failed();
+      const size_t queued = driver_.queue(p + 2, count);
       driver_.poll();   // start it on its way
       putU16(out, static_cast<uint16_t>(queued));
-      return completed(2);
+      const Result r = queued == count ? completed(2) : queued ? partial(2) : failed(2);
+      return tail.finish(r, out, capacity);
     }
-    case kOpClose:
-      driver_.stop();
-      open_ = false;
-      return completed();
     default:
       return rejected(kRejectUnknownOperation);
   }

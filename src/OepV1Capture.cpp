@@ -14,13 +14,19 @@ namespace oep {
 namespace v1 {
 namespace {
 
-// configure TLVs (oep-spec logic-capture §5.3); bit 7 of the tag = critical
-enum : uint8_t { kTagMode = 0x40, kTagQuery = 0x41, kTagRate = 0x42, kTagSamples = 0x43, kTagSegments = 0x44,
-                 kTagTrigger = 0x45, kTagPretrigger = 0x46 };
-enum : uint8_t { kTagActualRate = 0x50, kTagLayout = 0x51, kTagActualSamples = 0x52, kTagActualSegments = 0x53,
-                 kTagTiming = 0x54, kTagBlocking = 0x56, kTagIgnored = 0x57 };
-enum : uint8_t { kEventSegment = 0x01, kEventStopped = 0x02 };
-constexpr uint8_t kCritical = 0x80;
+namespace cap = reg::fixture_capture;
+// configure / query TLVs (oep-spec logic-capture §5.3); bit 7 of the tag = critical
+enum : uint8_t { kTagMode = cap::kTlvConfigureMode, kTagRate = cap::kTlvConfigureRate,
+                 kTagSamples = cap::kTlvConfigureSamples, kTagSegments = cap::kTlvConfigureSegments,
+                 kTagTrigger = cap::kTlvConfigureTrigger, kTagPretrigger = cap::kTlvConfigurePretrigger };
+enum : uint8_t { kTagActualRate = cap::kTlvConfigureAnswerActualRate, kTagLayout = cap::kTlvConfigureAnswerLayout,
+                 kTagActualSamples = cap::kTlvConfigureAnswerActualSamples,
+                 kTagActualSegments = cap::kTlvConfigureAnswerActualSegments, kTagTiming = cap::kTlvConfigureAnswerTiming,
+                 kTagBlocking = cap::kTlvConfigureAnswerBlockingMs };
+enum : uint8_t { kEventSegment = cap::kEventSegment, kEventStopped = cap::kEventStopped };
+enum : uint8_t { kStoppedComplete = cap::kStoppedReasonComplete, kStoppedHost = cap::kStoppedReasonHost,
+                 kStoppedNoFreeSegment = cap::kStoppedReasonNoFreeSegment };
+inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 
 uint8_t widthFor(uint8_t channels) {
   uint8_t w = 1;
@@ -250,38 +256,38 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   uint8_t mode[10] = {1, 1};                       // one-shot, runs in the background (DMA)
   putU32(mode + 2, kSegmentBytes * 8);             // max samples at w = 1
   putU32(mode + 6, 1);                             // one segment
-  w.put(0x40, mode, sizeof mode);
+  w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   mode[0] = 2;                                     // repeat, in the background too
   uint32_t caps = 0;
   const size_t budget = storeBudget(caps);
   putU32(mode + 2, kSegmentMaxRepeat * 8);
   putU32(mode + 6, budget / kSegmentMin);
-  w.put(0x40, mode, sizeof mode);
+  w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   mode[0] = 3;                                     // streaming: segments of 64 KiB, pushed (needs a subscription)
   putU32(mode + 2, kSegmentBytes * 8);
   putU32(mode + 6, kInfos);
-  w.put(0x40, mode, sizeof mode);
+  w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   uint8_t range[9];
   putU32(range, kMinHz);
   putU32(range + 4, kSourceHz);
   range[8] = 1;                                    // any value in range (fractional divider)
-  w.put(0x41, range, sizeof range);
+  w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   const uint32_t list[] = {1000000, 2000000, 5000000, 10000000, 20000000, 40000000, 80000000, 160000000};
   uint8_t l[sizeof list];
   for (size_t i = 0; i < 8; ++i) putU32(l + 4 * i, list[i]);
-  w.put(0x42, l, sizeof l);
+  w.put(cap::kTlvDescribeRateList, l, sizeof l);
   uint8_t lim[6] = {1, 8};                         // wch-protocols E033: 8 lines to 100 MHz, 16 lines to 48 MHz
   putU32(lim + 2, 100000000);
-  w.put(0x43, lim, sizeof lim);
+  w.put(cap::kTlvDescribeRateLimit, lim, sizeof lim);
   lim[1] = 16;
   putU32(lim + 2, 48000000);
-  w.put(0x43, lim, sizeof lim);
+  w.put(cap::kTlvDescribeRateLimit, lim, sizeof lim);
   uint8_t ch[2] = {kMaxChannels, 0b11111};         // w in {1, 2, 4, 8, 16}
-  w.put(0x44, ch, sizeof ch);
+  w.put(cap::kTlvDescribeChannels, ch, sizeof ch);
   uint8_t trig[5] = {0b1};                         // immediate only; no pretrigger
-  w.put(0x45, trig, sizeof trig);
-  w.u32(0x47, static_cast<uint32_t>(max_read_));
-  w.u16(0x48, kInfos);                             // segment infos kept
+  w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
+  w.u32(cap::kTlvDescribeMaxRead, static_cast<uint32_t>(max_read_));
+  w.u16(cap::kTlvDescribeSegmentRing, kInfos);                            // segment infos kept
   return w.ok() ? w.length() : 0;
 }
 
@@ -371,46 +377,56 @@ void LogicCapture::close() {
 }
 
 Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query) {
-  if (channels_ == 0) return rejected(kRejectUnavailable);   // plan first
-  uint8_t mode = 1, ignored[16], ignored_count = 0;
+  static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger};
+  Tail tail;
+  const Result parsed = tail.parse(p, n, kKnown, out, capacity);   // unknown: critical refused, others ignored
+  if (refused(parsed)) return parsed;
+  // The known ones, each checked for shape (malformed) and for what this probe can do: a value it cannot honour
+  // refuses the configure when critical and is ignored (and listed) when not.
+  uint8_t mode = cap::kModeOneShot;
   uint32_t rate = 1000000, samples = 0, segments = 0;
-  for (size_t at = 0; at + 2 <= n;) {
-    const uint8_t raw = p[at], tag = raw & ~kCritical, len = p[at + 1];
-    const uint8_t *v = p + at + 2;
-    if (at + 2 + len > n) return rejected(kRejectMalformed);
-    bool understood = true;
-    switch (tag) {
-      case kTagMode: if (len != 1) return rejected(kRejectMalformed); mode = v[0]; break;
-      case kTagRate: if (len != 4) return rejected(kRejectMalformed); rate = getU32(v); break;
-      case kTagSamples: if (len != 4) return rejected(kRejectMalformed); samples = getU32(v); break;
-      case kTagSegments: if (len != 4) return rejected(kRejectMalformed); segments = getU32(v); break;
-      case kTagTrigger:
-        if (len != 4) return rejected(kRejectMalformed);
-        if (v[0] != 0) understood = false;                           // immediate only
-        break;
-      case kTagPretrigger: if (len != 4 || getU32(v)) understood = false; break;
-      default: understood = false;
+  uint8_t len = 0;
+  bool critical = false;
+  if (const uint8_t *v = tail.find(kTagMode, len, &critical)) {
+    if (len != 1) return rejected(kRejectMalformed);
+    if (v[0] == cap::kModeOneShot || v[0] == cap::kModeRepeat || v[0] == cap::kModeStreaming) mode = v[0];
+    else {
+      const Result r = tail.refuse(kTagMode, critical, out, capacity);
+      if (refused(r)) return r;
     }
-    if (!understood) {
-      if (raw & kCritical) {                                         // cannot do what the host requires
-        if (capacity < 1) return rejected(kRejectUnavailable);
-        out[0] = tag;
-        return {kResolutionRejected, kRejectUnavailable, 1};
-      }
-      if (ignored_count < sizeof ignored) ignored[ignored_count++] = tag;
+  }
+  if (const uint8_t *v = tail.find(kTagRate, len, &critical)) {
+    if (len != 4) return rejected(kRejectMalformed);
+    // out of range: the driver would silently run at 160 MHz instead
+    if (getU32(v) >= kMinHz && getU32(v) <= kSourceHz) rate = getU32(v);
+    else {
+      const Result r = tail.refuse(kTagRate, critical, out, capacity);
+      if (refused(r)) return r;
     }
-    at += 2 + len;
   }
-  if (mode != 1 && mode != 2 && mode != 3) {
-    if (capacity < 1) return rejected(kRejectUnavailable);
-    out[0] = kTagMode;
-    return {kResolutionRejected, kRejectUnavailable, 1};
+  if (const uint8_t *v = tail.find(kTagSamples, len)) {
+    if (len != 4) return rejected(kRejectMalformed);
+    samples = getU32(v);
   }
-  if (rate < kMinHz || rate > kSourceHz) {   // the driver would silently run at 160 MHz instead
-    if (capacity < 1) return rejected(kRejectUnavailable);
-    out[0] = kTagRate;
-    return {kResolutionRejected, kRejectUnavailable, 1};
+  if (const uint8_t *v = tail.find(kTagSegments, len)) {
+    if (len != 4) return rejected(kRejectMalformed);
+    segments = getU32(v);
   }
+  if (const uint8_t *v = tail.find(kTagTrigger, len, &critical)) {   // type(u8) role(u8) value(u16): immediate only
+    if (len != 4) return rejected(kRejectMalformed);
+    if (v[0] != cap::kTriggerImmediate) {
+      const Result r = tail.refuse(kTagTrigger, critical, out, capacity);
+      if (refused(r)) return r;
+    }
+  }
+  if (const uint8_t *v = tail.find(kTagPretrigger, len, &critical)) {   // no pretrigger
+    if (len != 4) return rejected(kRejectMalformed);
+    if (getU32(v)) {
+      const Result r = tail.refuse(kTagPretrigger, critical, out, capacity);
+      if (refused(r)) return r;
+    }
+  }
+  if (channels_ == 0) return rejected(kRejectUnavailable);   // plan first
   if ((state_ == kStateCapturing || state_ == kStatePaused) && !query) return rejected(kRejectBusy);
   const uint8_t width = widthFor(channels_);
   uint32_t actual_segments = 1;
@@ -514,8 +530,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   putU32(timing + 1, den == 1 ? 0 : 7);                               // one 160 MHz period, rounded up (ns)
   w.put(kTagTiming, timing, sizeof timing);
   w.u32(kTagBlocking, 0);
-  if (ignored_count) w.put(kTagIgnored, ignored, ignored_count);
-  return w.ok() ? completed(w.length()) : failed();
+  return w.ok() ? tail.finish(completed(w.length()), out, capacity) : failed();
 }
 
 bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples, uint32_t segments, uint32_t &num,
@@ -629,7 +644,7 @@ void LogicCapture::poll() {
     if (mode_ == 3) return;   // streaming keeps capturing; dropped bytes show as a position jump
     if (paused_ && !paused_reported_) {
       paused_reported_ = true;
-      if (subscribed_) { const uint8_t reason = 2; endpoint_.event(*this, kEventStopped, &reason, 1); }
+      if (subscribed_) { const uint8_t reason = kStoppedNoFreeSegment; endpoint_.event(*this, kEventStopped, &reason, 1); }
     }
     if (!paused_) paused_reported_ = false;
     return;
@@ -640,7 +655,7 @@ void LogicCapture::poll() {
   if (subscribed_) {
     uint8_t seg[21];
     endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
-    const uint8_t reason = 0;      // complete
+    const uint8_t reason = kStoppedComplete;
     endpoint_.event(*this, kEventStopped, &reason, 1);
   }
 }
@@ -696,13 +711,20 @@ size_t LogicCapture::pull(uint32_t &position, uint8_t *out, size_t capacity) {
 }
 
 Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
+  if (op == kOpConfigure || op == kOpQuery) return configure(p, n, out, capacity, op == kOpQuery);
+  // Every other request: a fixed part (start / stop / force / status: none; read: 8; segments / release: 4), then
+  // TLVs, none of which these ops read.
+  const size_t fixed = op == kOpRead ? 8 : (op == kOpSegments || op == kOpRelease) ? 4 : 0;
+  Tail tail;
+  if (op >= kOpStart && op <= kOpRelease) {
+    const Result parsed = plainTail(tail, p, n, fixed, out, capacity);
+    if (refused(parsed)) return parsed;
+  }
   switch (op) {
-    case kOpConfigure: return configure(p, n, out, capacity, false);
-    case kOpQuery: return configure(p, n, out, capacity, true);
     case kOpStart: {
       if (state_ != kStateConfigured && state_ != kStateDone) return rejected(kRejectUnavailable);
       if (mode_ == 3 && !subscribed_) return rejected(kRejectUnavailable);   // streaming pushes: subscribe first
-      if (mode_ == 2 || mode_ == 3) return startRepeat(out, capacity);
+      if (mode_ == 2 || mode_ == 3) return tail.finish(startRepeat(out, capacity), out, capacity);
       if (capacity < 4) return failed();
       if (state_ == kStateDone) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
       done_ = false;
@@ -715,23 +737,23 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { state_ = kStateError; return failed(); }
       state_ = kStateCapturing;
       putU32(out, 0);              // blocking_ms: DMA, the probe keeps answering
-      return completed(4);
+      return tail.finish(completed(4), out, capacity);
     }
     case kOpStop:
       if ((mode_ == 2 || mode_ == 3) && (state_ == kStateCapturing || state_ == kStatePaused)) {
         stopRepeat();
         poll();
         state_ = kStateConfigured;
-        if (subscribed_) { const uint8_t reason = 1; endpoint_.event(*this, kEventStopped, &reason, 1); }
-        return completed();
+        if (subscribed_) { const uint8_t reason = kStoppedHost; endpoint_.event(*this, kEventStopped, &reason, 1); }
+        return tail.finish(completed(), out, capacity);
       }
       if (state_ == kStateCapturing) {
         parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
         state_ = kStateConfigured;
-        if (subscribed_) { const uint8_t reason = 1; endpoint_.event(*this, kEventStopped, &reason, 1); }
+        if (subscribed_) { const uint8_t reason = kStoppedHost; endpoint_.event(*this, kEventStopped, &reason, 1); }
       }
-      return completed();
-    case kOpStatus: {
+      return tail.finish(completed(), out, capacity);
+    case kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u32) flags(u8)
       if (capacity < 10) return failed();
       poll();
       out[0] = state_;
@@ -745,16 +767,17 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(out + 5, state_ == kStateDone ? bytes_ : 0);           // write position
         out[9] = 0;
       }
-      return completed(10);
+      return tail.finish(completed(10), out, capacity);
     }
-    case kOpRead: {
-      if (n != 8 || capacity < 5) return rejected(kRejectMalformed);
+    case kOpRead: {   // position(u32) max(u32) [TLV]  ->  position(u32) flags(u8: bit0 more, bit1 gap) data (closed tail)
+      if (capacity < 5) return failed();
       poll();
       uint32_t position = getU32(p), max = getU32(p + 4);
       if (mode_ == 3) {   // streaming: what is still in the store, by stream position
         uint32_t serial = 0, offset = 0;
         uint8_t flags = 0;
-        if (direct_ || !findSegment(position, serial, offset)) {   // zero-copy streaming keeps nothing to read back   // gone (reused) or not captured yet: nothing, gap flag
+        // zero-copy streaming keeps nothing to read back; gone (reused) or not captured yet: nothing, gap flag
+        if (direct_ || !findSegment(position, serial, offset)) {
           putU32(out, position);
           out[4] = 2;
           return completed(5);
@@ -769,13 +792,18 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         memcpy(out + 5, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + offset, count);
         return completed(5 + count);
       }
-      if (mode_ == 2) {   // completed segments the host has not released
+      if (mode_ == 2) {
+        // Completed segments the host has not released. Positions wrap at 2^32 and a segment's length need not
+        // divide that, so the segment is found by its serial: counted from the first unreleased one, whose position
+        // is released_ * segment_bytes_ (mod 2^32) - the whole store is far below 2 GiB, so differences are exact.
         const uint32_t first = released_ * segment_bytes_, end = completed_ * segment_bytes_;
         uint8_t flags = 0;
         if (static_cast<int32_t>(position - first) < 0) { position = first; flags |= 2; }   // already released: gap
         if (static_cast<int32_t>(position - end) > 0) position = end;
+        const uint32_t ahead = position - first;                       // bytes past the first unreleased segment
+        const uint32_t serial = released_ + ahead / segment_bytes_, offset = ahead % segment_bytes_;
         uint32_t count = end - position;
-        const uint32_t in_segment = segment_bytes_ - position % segment_bytes_;
+        const uint32_t in_segment = segment_bytes_ - offset;
         if (count > in_segment) count = in_segment;                    // one segment per answer (contiguous)
         size_t room = capacity - 5;
         if (room > max_read_) room = max_read_;
@@ -784,8 +812,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (end - position > count) flags |= 1;
         putU32(out, position);
         out[4] = flags;
-        const size_t slot = (position / segment_bytes_) % segment_count_;
-        if (count) memcpy(out + 5, store_ + slot * segment_bytes_ + position % segment_bytes_, count);
+        const size_t slot = serial % segment_count_;
+        if (count) memcpy(out + 5, store_ + slot * segment_bytes_ + offset, count);
         return completed(5 + count);
       }
       const uint32_t have = state_ == kStateDone ? bytes_ : 0;
@@ -801,28 +829,29 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (count) memcpy(out + 5, buffer_ + position, count);
       return completed(5 + count);
     }
-    case kOpSegments: {
-      if (n != 4 || capacity < 1 + 21) return rejected(kRejectMalformed);
+    case kOpSegments: {   // from_serial(u32) [TLV]  ->  count(u8) segment infos
+      if (capacity < 1 + 21) return failed();
       poll();
+      const size_t room = tail.anyIgnored() && capacity > 2 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
       if (mode_ == 2 || mode_ == 3) {
         uint32_t from = getU32(p);
         const uint32_t oldest = completed_ > kInfos ? completed_ - kInfos : 0;
         if (from < oldest) from = oldest;
         uint8_t count = 0;
         size_t used = 1;
-        for (uint32_t k = from; k < completed_ && used + 21 <= capacity && count < 255; ++k, ++count)
+        for (uint32_t k = from; k < completed_ && used + 21 <= room && count < 255; ++k, ++count)
           used += infoBytes(infos_[k % kInfos], out + used);
         out[0] = count;
-        return completed(used);
+        return tail.finish(completed(used), out, capacity);
       }
       const bool one = state_ == kStateDone && getU32(p) == 0;
       out[0] = one ? 1 : 0;
-      return completed(1 + (one ? segmentInfo(out + 1) : 0));
+      return tail.finish(completed(1 + (one ? segmentInfo(out + 1) : 0)), out, capacity);
     }
-    case kOpRelease:
-      if (mode_ != 2 || n != 4) return rejected(kRejectUnavailable);
+    case kOpRelease:   // serial(u32) [TLV]: that segment and the ones before it may be reused
+      if (mode_ != 2) return rejected(kRejectUnavailable);
       if (getU32(p) + 1 > released_ && getU32(p) < completed_) released_ = getU32(p) + 1;
-      return completed();
+      return tail.finish(completed(), out, capacity);
     default:
       return rejected(kRejectUnknownOperation);   // force: not in this implementation (immediate trigger only)
   }

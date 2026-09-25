@@ -1,4 +1,4 @@
-// OEP v1 draft logic capture, the basic set of oep-spec docs/logic-capture.ja.md (§3.0, §4, §5), on the ESP32-P4
+// oep.fixture.capture revision 1: the basic set of oep-spec docs/logic-capture.ja.md (§3.0, §4, §5), on the ESP32-P4
 // PARLIO RX. This implementation picks: one-shot, repeat and streaming, immediate trigger only, pushes events when
 // subscribed. Repeat (as wch-protocols E078): PARLIO fills a 64 KiB internal DMA ring by partial receive; the ISR
 // queues each finished chunk; a harvest task on core 0 copies it into K segments in PSRAM before the ring comes round
@@ -6,7 +6,9 @@
 // with every segment unsent, new bytes are dropped and the stream position skips them (the host sees the jump).
 //
 //   0x01 configure(TLV)  -> TLV     0x02 start -> blocking_ms u32     0x03 stop     0x05 status     0x06 read
-//   0x07 segments(from u32)   0x09 query(TLV) -> TLV, no lock           (0x04 force, 0x08 release: not in one-shot)
+//   0x07 segments(from u32)   0x08 release(serial u32) (repeat)   0x09 query(TLV) -> TLV, no lock   (0x04 force: no)
+// Every request takes a TLV tail after its fixed part (v1 wire §0); configure / query answer unhandled non-critical
+// TLVs in ignored (0x7F) and refuse unhandled critical ones (rejected unsupported, the tag).
 //
 // Channel k is plan role k (0..15), taken in role order. Unused bits of a sample are left as captured (undefined).
 #pragma once
@@ -28,10 +30,19 @@ class Endpoint;
 
 class LogicCapture final : public Interface {
  public:
-  enum : uint8_t { kOpConfigure = 0x01, kOpStart = 0x02, kOpStop = 0x03, kOpForce = 0x04, kOpStatus = 0x05,
-                   kOpRead = 0x06, kOpSegments = 0x07, kOpRelease = 0x08, kOpQuery = 0x09 };
-  enum : uint8_t { kStateUnconfigured = 0, kStateConfigured = 1, kStateWaiting = 2, kStateCapturing = 3,
-                   kStateDone = 4, kStatePaused = 5, kStateError = 6 };
+  enum : uint8_t {
+    kOpConfigure = reg::fixture_capture::kOpConfigure, kOpStart = reg::fixture_capture::kOpStart,
+    kOpStop = reg::fixture_capture::kOpStop, kOpForce = reg::fixture_capture::kOpForce,
+    kOpStatus = reg::fixture_capture::kOpStatus, kOpRead = reg::fixture_capture::kOpRead,
+    kOpSegments = reg::fixture_capture::kOpSegments, kOpRelease = reg::fixture_capture::kOpRelease,
+    kOpQuery = reg::fixture_capture::kOpQuery,
+  };
+  enum : uint8_t {
+    kStateUnconfigured = reg::fixture_capture::kStateUnconfigured, kStateConfigured = reg::fixture_capture::kStateConfigured,
+    kStateWaiting = reg::fixture_capture::kStateWaiting, kStateCapturing = reg::fixture_capture::kStateCapturing,
+    kStateDone = reg::fixture_capture::kStateDone, kStatePaused = reg::fixture_capture::kStatePaused,
+    kStateError = reg::fixture_capture::kStateError,
+  };
   static constexpr uint8_t kMaxChannels = 16;
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
   static constexpr uint32_t kSourceHz = 160000000, kMinHz = 627451;   // PLL_F160M / 255 (256 silently fails)
@@ -44,12 +55,11 @@ class LogicCapture final : public Interface {
 
   LogicCapture(Endpoint &endpoint, uint64_t reserved_pins, uint16_t instance = 0)
       : endpoint_(endpoint), reserved_(reserved_pins), instance_(instance) {}
-  const char *name() const override { return "oep.fixture.capture"; }
+  const char *name() const override { return reg::fixture_capture::kName; }
   uint16_t instance() const override { return instance_; }
+  uint8_t revision() const override { return reg::fixture_capture::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
-  bool lockFree(uint8_t op) const override {
-    return op == kOpStatus || op == kOpRead || op == kOpSegments || op == kOpQuery;
-  }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_capture::kLockFreeOps, op); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   bool planApply(const RoleAssignment *roles, size_t count) override;

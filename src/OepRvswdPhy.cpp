@@ -302,7 +302,7 @@ void RvswdPhy::useSafeSpeed() {
   // Also when attach() did not take: a CH32 held in reset may not answer, and the writes that follow the release
   // must still go out at a speed its default clock can follow.
   if (!ready_) return;
-  setHalf(kHalfNs[kCount - 1] > min_half_ns_ ? kHalfNs[kCount - 1] : min_half_ns_);
+  setHalf(kHalfNs[kCount - 1] > floorNs() ? kHalfNs[kCount - 1] : floorNs());
   configureBus(false);
 }
 
@@ -312,7 +312,7 @@ void RvswdPhy::useSafeSpeed() {
 // failure it steps back to the last good one and proves that again rather than trusting it.
 bool RvswdPhy::retune() {
   if (!attached_) return false;
-  const uint32_t floor = min_half_ns_;
+  const uint32_t floor = floorNs();
   size_t good = kCount;   // index of the fastest period that passed
   bool failed = false;
   for (size_t i = kCount; i-- > 0;) {
@@ -338,49 +338,60 @@ bool RvswdPhy::retune() {
   return false;
 }
 
+// v1 wire §5.4: nothing is written to the target until the link speed is settled, and the speed is chosen by reads
+// alone - a write garbled by a period the target cannot follow can land anywhere in the debug module. So the
+// bring-up writes (the wake, DMSHDWCFGR / DMCFGR, dmactive) go out at the slowest period, the one every target
+// follows and the one the resets use; faster periods are then tried with DMSTATUS reads only (margin check E156 /
+// E157: 1000 identical reads); writes start again at the fastest period that passed, which the write check
+// (writesLand) must also pass before it is kept - otherwise the next slower one is proved the same way.
 bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
-  // Margin check (E156/E157): half 0 ns sometimes fails for a whole run. The bus is brought
-  // up again for each candidate, because a half period the target cannot follow leaves its
-  // debug module out of step and the next, slower attempt would inherit that (2026-09-23:
-  // on the RP2350 probe to a CH32L103, one probe with a fresh init answered while
-  // this loop without one failed at every half period).
-  // One candidate: bring the bus up, then insist on 1000 identical DMSTATUS reads.
-  auto clean_at = [this](uint32_t half) {
-    setHalf(half);
-    // A cold debug module does not answer the first wake. Measured on a CH32L103 over the
-    // RP2350 probe (2026-09-23): the first clean read came on attempt 5 at a 500 ns
-    // half period, and on attempt 0 once the module had answered. So give each candidate a
-    // few tries before judging it, or a cold target looks like no target at all.
+  const uint32_t floor = floorNs();
+  const uint32_t slowest = kHalfNs[kCount - 1] > floor ? kHalfNs[kCount - 1] : floor;
+  // Two passes. A cold debug module can need more waking than one pass's eight attempts (2026-09-23: the first pass
+  // failed where the same period attached immediately on the second).
+  for (int pass = 0; pass < 2; ++pass) {
+    setHalf(slowest);
+    // A cold debug module does not answer the first wake. Measured on a CH32L103 over the RP2350 probe (2026-09-23):
+    // the first clean read came on attempt 5 at a 500 ns half period, and on attempt 0 once the module had answered.
     uint32_t first = 0;
     bool awake = false;
     for (int wake = 0; wake < 8 && !awake; ++wake) {
       configureBus(true);
-      // Only skip the dmactive write when the module is plainly up: that write clears
-      // haltreq, so attaching to a target somebody halted earlier would set it running
-      // again. "Plainly" matters - a module that is not active leaves the bus floating,
-      // and all ones has bit 0 set too. Trusting that, the CH32X035 was never activated
-      // and attach failed every time (2026-09-23), so an all-ones read counts as no answer.
+      // Only skip the dmactive write when the module is plainly up: that write clears haltreq, so attaching to a
+      // target somebody halted earlier would set it running again. "Plainly" matters - a module that is not active
+      // leaves the bus floating, and all ones has bit 0 set too (2026-09-23, CH32X035), so all ones is no answer.
       uint32_t control = 0;
       const bool up = readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1);
       if (!up) writeRaw(kDmControl, 1);
-      awake = readRaw(kDmStatus, first);
+      // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
+      awake = readRaw(kDmStatus, first) && ((first >> 8) & 0xf) != 0 && first != 0xffffffffu;
     }
-    // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
-    if (!awake || ((first >> 8) & 0xf) == 0) return false;
-    return readsStable(first);
-  };
-  // Two passes. A cold debug module can need more waking than one candidate's eight
-  // attempts, and the candidates that fail warm it up as a side effect: with a floor that
-  // leaves a single candidate, the first pass failed where the same period attached
-  // immediately on the second (2026-09-23).
-  for (int pass = 0; pass < 2; ++pass) {
-    for (size_t i = 0; i < kCount; ++i) {
-      if (kHalfNs[i] < min_half_ns_) continue;
-      if (!clean_at(kHalfNs[i]) || !writesLand()) continue;
-      attached_ = true;
-      return true;
+    if (!awake || !readsStable(first)) continue;
+    // Faster, reading only. The first period that fails ends the search.
+    size_t chosen = kCount;   // kCount = the slowest period (which may be a floor between the table's entries)
+    for (size_t i = kCount - 1; i-- > 0;) {
+      if (kHalfNs[i] < floor) break;
+      setHalf(kHalfNs[i]);
+      uint32_t value = 0;
+      if (!readsStable(value)) break;
+      chosen = i;
+    }
+    // Settle there: bring the bus back in step at that period (a failed faster read may have left it out), then prove
+    // the writes. A period whose writes do not land gives way to the next slower one.
+    for (;;) {
+      const uint32_t half = chosen == kCount ? slowest : kHalfNs[chosen];
+      setHalf(half);
+      configureBus(false);
+      uint32_t value = 0;
+      if (readsStable(value) && writesLand()) {
+        attached_ = true;
+        return true;
+      }
+      if (chosen == kCount) break;
+      ++chosen;
+      if (chosen < kCount && kHalfNs[chosen] >= slowest) chosen = kCount;
     }
   }
   release();

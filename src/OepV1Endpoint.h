@@ -1,4 +1,4 @@
-// OEP v1 draft endpoint: frames in, interfaces by name, the session lock, results out.
+// OEP v1 endpoint: frames in, interfaces by name, the session lock, results out.
 //
 // The lock follows oep-spec docs/session-and-exclusivity.ja.md: a host-chosen u32 session id, a lease
 // extended by every request of its holder and counted from when that request completed; when it lapses
@@ -96,14 +96,14 @@ class Endpoint {
   uint32_t event_head_ = 0, event_tail_ = 0;
   uint16_t core_seq_ = 0;
   bool heartbeat_ = false;
-  uint16_t heartbeat_ms_ = 1000;
+  uint32_t heartbeat_ms_ = reg::kHeartbeatDefaultMs;
   uint32_t heartbeat_last_ = 0;
   bool queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length);
   bool sendEvents();
   size_t push_queue_ = 1024;
   bool flush_after_burst_ = false, wrote_ = false;
   int tx_room_max_ = 0;
-  Result subscription(uint8_t op, const uint8_t *payload, size_t length);
+  Result subscription(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   void push();
   void endSubscriptions();
   void send(size_t length);

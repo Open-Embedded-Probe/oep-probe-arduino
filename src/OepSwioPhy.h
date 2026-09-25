@@ -25,6 +25,9 @@ class SwioPhy final : public DmiPhy {
   // 1 start + 7 address + 1 direction + 32 data bits per transaction
   uint32_t clockHz() const override { return dmi_ns_ ? uint32_t(41000000000ull / dmi_ns_) : 0; }
   uint32_t retries() const override { return retries_; }
+  // The bit timing is fixed (about 1.1 us a bit): a ceiling at or above it holds, a lower one cannot be kept.
+  static constexpr uint32_t kNominalHz = 888888;
+  bool setMaxHz(uint32_t hz) override { return hz == 0 || hz >= kNominalHz; }
   uint32_t transactions() const override { return transactions_; }
 
  private:

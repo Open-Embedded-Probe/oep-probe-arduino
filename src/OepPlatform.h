@@ -110,18 +110,37 @@ inline void platformUartBuffers(OepUart &serial, size_t rx, size_t tx) {
 #endif
 }
 
-inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx) {
+// config: the core's SERIAL_xyz frame format (8N1 unless told otherwise).
+inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, uint32_t config = SERIAL_8N1) {
 #if defined(ARDUINO_ARCH_RP2040)
   if (!serial.setRX(rx) || !serial.setTX(tx)) return false;
-  serial.begin(baud, SERIAL_8N1);
+  serial.begin(baud, static_cast<uint16_t>(config));
   return true;
 #elif defined(ARDUINO_ARCH_ESP32)
-  serial.begin(baud, SERIAL_8N1, rx, tx);
+  serial.begin(baud, config, rx, tx);
   return true;
 #else
-  (void)serial; (void)baud; (void)rx; (void)tx;
+  (void)serial; (void)baud; (void)rx; (void)tx; (void)config;
   return false;
 #endif
+}
+
+// The rate the UART actually runs at (its divider), where the core can tell; else the one asked for.
+inline uint32_t platformUartBaud(OepUart &serial, uint32_t requested) {
+#if defined(ARDUINO_ARCH_ESP32)
+  const uint32_t actual = serial.baudRate();
+  return actual ? actual : requested;
+#else
+  (void)serial;
+  return requested;
+#endif
+}
+
+// The SERIAL_xyz config for 7 or 8 data bits, parity 0 none / 1 even / 2 odd, 1 or 2 stop bits.
+inline uint32_t platformUartConfig(uint8_t data_bits, uint8_t parity, uint8_t stop_bits) {
+  static const uint32_t k8[3][2] = {{SERIAL_8N1, SERIAL_8N2}, {SERIAL_8E1, SERIAL_8E2}, {SERIAL_8O1, SERIAL_8O2}};
+  static const uint32_t k7[3][2] = {{SERIAL_7N1, SERIAL_7N2}, {SERIAL_7E1, SERIAL_7E2}, {SERIAL_7O1, SERIAL_7O2}};
+  return (data_bits == 7 ? k7 : k8)[parity > 2 ? 0 : parity][stop_bits == 2 ? 1 : 0];
 }
 
 }  // namespace oep

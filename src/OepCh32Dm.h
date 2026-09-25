@@ -16,9 +16,10 @@ class Ch32Dm {
   bool attached() const { return phy_.attached(); }
   DmiPhy &phy() { return phy_; }
   bool halted() const { return halted_; }
+  uint8_t lastCmderr() const { return cmderr_; }   // cmderr of the last abstract command that failed (0 = none)
   bool attach();
-  bool halt();            // attach + haltreq, waits for allhalted
-  bool resume();          // resumereq, waits for allresumeack
+  bool halt();            // attach + haltreq, waits for allhalted; true at once when already halted
+  bool resume();          // resumereq until the hart left debug mode once (allresumeack, running, or dpc moved)
   // Restart the target from its reset vector and let it run (reset-halt, then resume; the link stays attached).
   // flags: bit0 released and running, bit1 execution confirmed by a nonzero pc sample (confirm = true: a brief
   // halt, dpc read, resume), bit2 the sequence was redone, bit3 a confirmation halt / resume failed.
@@ -51,7 +52,7 @@ class Ch32Dm {
   bool writeWordsFast(uint32_t address, const uint32_t *words, size_t count);
   struct RunReport { bool stopped; uint32_t dpc; uint32_t a0; uint32_t elapsed_us; };
   bool runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
-                    uint32_t timeout_us, RunReport &report);
+                    uint32_t timeout_ms, RunReport &report);   // timeout_ms 0xFFFFFFFF = no limit
   // Parts from the ch32rv review of the v1 draft (2026-09-24):
   // resetHalt: system reset with haltreq held through it, so the hart stops before its first instruction
   // (semihosting, gdb "monitor reset halt", flashing over a running watchdog). dpc = where it stopped.
