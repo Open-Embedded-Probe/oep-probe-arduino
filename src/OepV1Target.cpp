@@ -91,8 +91,9 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       uint8_t failure = kStatusOk;   // a failed attach answers its status alone: line (no answer) or timeout (no halt)
       if (port_.connected) {
         // Already attached: the same connection, nothing redone (a one-command-per-process host gets its link back).
-        // A ceiling the running link is over cannot be met without attaching again.
-        if (max_hz && phy.clockHz() > max_hz) {
+        // A running link over the new ceiling is slowed to it (going slower is safe); only a link that cannot keep
+        // the ceiling refuses it.
+        if (max_hz && phy.clockHz() > max_hz && !(phy.setMaxHz(max_hz) && phy.retune() && phy.clockHz() <= max_hz)) {
           const Result r = tail.refuse(reg::wire_rvswd::kTlvAttachMaxSpeed, critical, out, capacity);
           if (refused(r)) return r;
         }
@@ -258,7 +259,8 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
       uint8_t status = kStatusState;   // not halted: nothing to step
       if (dm.halted()) {
         const bool ok = dm.step(before, after, moved);
-        status = !ok ? (dm.lastCmderr() ? kStatusFault : failure(kStatusTimeout)) : moved ? kStatusOk : kStatusState;
+        // an unmoved dpc is not a failure: a self jump (j .) truly steps to itself; the host reads the instruction
+        status = !ok ? (dm.lastCmderr() ? kStatusFault : failure(kStatusTimeout)) : kStatusOk;
       }
       out[0] = status;
       out[1] = moved;
@@ -334,6 +336,8 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
       if (dm.halted()) {
         Ch32Dm::RunReport r;
         const bool ok = dm.runUntilHalt(getU32(p), regnos, values, regs, getU32(p + 4), r);
+        // a timeout halts the hart before dpc and the values are read; a hart that cannot be halted: status only
+        if (!ok && !dm.halted()) return failedStatus(kStatusState, out, capacity);
         status = !ok ? (dm.lastCmderr() ? kStatusFault : failure(kStatusFault)) : r.stopped ? kStatusOk : kStatusTimeout;
         out[1] = r.stopped;
         putU32(out + 2, r.dpc);
