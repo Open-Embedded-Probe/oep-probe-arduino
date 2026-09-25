@@ -1,53 +1,35 @@
-# OEP development probe firmware (v0)
+# OEP development probe firmware
 
-破壊的変更を前提とする Arduino 向け OEP probe 実装。wire 上の数値は
-[oep-spec](../oep-spec) の `registry/oep-v0.yaml` が唯一の定義で、`tools/sync_codec.sh` が生成 codec
-（`src/oep_v0.h` / `src/oep_v0.c`）を取り込む。設計の指針は oep-spec `docs/development-guidelines.ja.md`、
-進行は `docs/rebuild-plan-2026-09-22.ja.md`。
+Open Embedded Probe（OEP）の probe を Arduino で書くためのライブラリと、各 probe のファームウェア（`examples/`）。
+v1（oep-spec `docs/v1-core-wire-delta.ja.md`、固める候補の形）を話す。破壊的変更を前提とする実験段階で、互換は約束しない。
+
+wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で、その生成物を `src/OepV1Registry.h` に写している。
+OEP を初めて読む人は oep-spec の `docs/review-guide.ja.md`（どこに何が書いてあるか）から。
 
 ## 構成
 
-| ファイル | 役割 |
+| PATH | 中身 |
 |---|---|
-| `src/OepFrame.*` | length-prefixed frame（reliable byte stream 用） |
-| `src/OepEndpoint.*` | request の routing、core（confirm / list / describe / ping）、result の送出、watchdog |
-| `src/OepService.h` | service（offered function）の interface |
-| `src/OepProbeIdentity.h` | probe.identity |
-| `src/OepRvswdPhy.*` | RVSWD PHY。ESP32 dedicated GPIO、push-pull + 明示 turnaround、session ごとの half period margin check、bounded retry |
-| `src/OepCh32Dm.*` | CH32（QingKe V4、X035）debug module: halt / resume / reset、autoexec reader、autoexec flash writer |
-| `src/OepTargetServices.*` | target.control / target.memory / target.flash。program_page は erase → program → read-back を 1 transaction にする |
-| `examples/Esp32P4X035Probe/` | ESP32-P4 + CH32X035F8U6 fixture の firmware（USB-Serial/JTAG、1 KiB frame、4 KiB window） |
-| `tests/` | HIL 回帰試験（build → upload → test。`tests/README.ja.md`） |
+| `src/OepV1*.h` / `src/OepV1*.cpp` | v1 の本体: endpoint（フレーム、名前で探すインターフェース、ロック、複数の経路）、線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（試作）。各ファイルの冒頭に対応する仕様の節がある |
+| `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*` など | 世代によらない部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing） |
+| `src/OepEndpoint.*`、`src/OepService.h`、`src/oep_v0.*` など | v0 の endpoint と codec（経緯。v1 の probe は使わない） |
+| `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS）と試作（`Esp32P4HsPrototype`、`Esp32P4X035ConsolePrototype`） |
+| `docs/` | 日付入りの作業記録（経緯） |
+| `tests/hil/` | v0 の HIL 試験（古い。v1 の実機の回帰は ArduinoCore-CH32 の `tests/manual/oep_smoke/`） |
 
 ## 使い方
 
-firmware は**使う前に転送する**。
+firmware は**使う前に転送する**（ボードには何が入っているか分からない）。例: X035 の治具。
 
 ```sh
-arduino-cli compile --clean --profile esp32p4 examples/Esp32P4X035Probe
-arduino-cli upload --profile esp32p4 --port /run/board-identify/by-id/esp32-series-30eda0e31108 examples/Esp32P4X035Probe
+arduino-cli compile --clean examples/Esp32P4X035Probe
+arduino-cli upload -p /run/board-identify/by-id/esp32-series-30eda0e31108 examples/Esp32P4X035Probe
 ```
 
-host は oep-client-python の `oep_client.v0`（`Client`、`services.TargetMemory.read_range`、`services.TargetFlash.program_pages`）。
-USB-Serial/JTAG の port は open / close で P4 が reset するので、pytest からは harness の serial 実体を借りる。
-
-## 2026-09-22 の実測（HIL `tests/hil/probe`）
-
-| 操作 | 新 stack | 旧 prototype（E145） |
-|---|---:|---:|
-| 62 KiB full read（USB 越し、host CRC = probe CRC） | 0.154 s（414 kB/s） | 4.94 s |
-| 256-byte page program（erase + program + read-back）pipelined | 7.3 ms/page | 440 ms/page |
-| 500 B ping × 200 pipelined | 283 kB/s 片方向 | — |
-
-まだ無いもの: fixture service（GPIO / UART / I2C target / capture）と lease、host 側 `program_image`、ArduinoCore-CH32 の sketch runner、
-worklist P0 の reliability gate（verify 20 回、差分 program 20 回、中断 5 回）の新 stack での再取得。
+host は oep-client-python の `oep_client.v1`（`link.open_host()` / `link.open_usb_host()`）。
 
 ## 既知の罠
 
-- **X035 の ndmreset 後に hart が走り出さない回がある**（2026-09-22）。DMSTATUS は allrunning を返すが sketch は動かず、
-  次に線を放して再 attach（初期化列 + dmactive 0→1）すると走る。halt してから多数の autoexec read を行った後の reset は
-  20/20 走った。`Ch32Dm::reset()` は halt → ndmreset → 解除の読み返し → dmactive 再有効化 → running 待ち → ack →
-  線解放 → 再 attach → 解放、の順で、20 + 24 サイクルで 43/44。残る 1 件は台帳候補 `x035-ndmreset-hart-not-running`。
-
 - Arduino.h は `word(...)` を `makeWord(...)` の macro にしている。lambda や関数を `word` と名付けると引数がそのまま返る。
-- pytest-embedded の port を close → 再 open すると P4 が reset する。
+- ESP32-P4 の `RvswdPhy::begin` の後に同じピンへ `pinMode` / `digitalWrite` を使うと、dedicated GPIO の束から外れて戻らない（chip の reset が要る）。
+- direct build（`build_opt.h` で EspUsbDevice の vendor を直接書く形）のスケッチは、`build_opt.h` を変えたら `--clean` でビルドする。
