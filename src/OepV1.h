@@ -13,6 +13,10 @@ namespace oep {
 namespace v1 {
 
 constexpr uint8_t kRoleRequest = 0x01, kRoleResult = 0x02, kRoleSession = 0x80;
+// Experimental (2026-09-25): probe-initiated data, sent only while a host has subscribed and given credit.
+//   role(0x06) fn(u16) seq(u16) position(u32) data        seq counts this fn's frames, position its bytes
+constexpr uint8_t kRolePush = 0x06;
+constexpr size_t kPushHeader = 9;
 constexpr size_t kRequestHeader = 6, kResultHeader = 5, kSessionBytes = 4;
 
 // Reject reasons added in v1 (0x01..0x06 as in v0).
@@ -24,6 +28,8 @@ constexpr uint8_t kRejectSessionRequired = 0x09;  // a state-changing request wi
 constexpr uint8_t kOpConfirm = 0x01, kOpList = 0x02, kOpDescribe = 0x03;
 constexpr uint8_t kOpOpen = 0x10, kOpEnd = 0x11, kOpKeepalive = 0x12, kOpLockState = 0x13;
 constexpr uint8_t kOpStatus = 0x20, kOpCancel = 0x21;
+// Experimental: subscribe(fn u16, credit u32), credit(fn u16, add u32), unsubscribe(fn u16).
+constexpr uint8_t kOpSubscribe = 0x30, kOpCredit = 0x31, kOpUnsubscribe = 0x32;
 
 // common describe tags (capability-declaration-model.ja.md §3)
 constexpr uint8_t kTagRoleChannels = 0x01, kTagMaxClockHz = 0x02, kTagMaxLength = 0x03, kTagFeatures = 0x06,
@@ -106,6 +112,13 @@ class Interface {
   virtual void planRelease() {}
   // The endpoint's frame limit, told when the interface is added: what a describe may promise.
   virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
+  // Experimental push: while subscribed, the endpoint asks for bytes to send. Return up to `capacity` bytes and set
+  // `position` to the stream position of the first one (a jump past the previous end tells the host what was lost).
+  virtual bool subscribe(bool on) { (void)on; return false; }   // false: this interface does not push
+  virtual size_t pull(uint32_t &position, uint8_t *out, size_t capacity) {
+    (void)position; (void)out; (void)capacity;
+    return 0;
+  }
 };
 
 // The part of oep.core's describe every probe writes the same way: firmware, model, unit id, channel count and

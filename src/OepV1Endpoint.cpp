@@ -51,7 +51,57 @@ bool Endpoint::add(Interface &interface) {
   return true;
 }
 
+void Endpoint::send(size_t length) {
+  if (framing_ == Framing::kCobsCrc) writeCobsFrame(stream_, tx_, length);
+  else writeFrame(stream_, tx_, length);
+}
+
+// One push frame per subscribed fn per poll, so results and pushes interleave.
+void Endpoint::push() {
+  size_t room = tx_capacity_ - kPushHeader;
+  if (room > static_cast<size_t>(limits_.max_frame) - kPushHeader) room = limits_.max_frame - kPushHeader;
+  for (size_t i = 0; i < count_; ++i) {
+    if (!subscribed_[i] || credit_[i] <= 0) continue;
+    size_t cap = room < static_cast<size_t>(credit_[i]) ? room : static_cast<size_t>(credit_[i]);
+    uint32_t position = 0;
+    const size_t n = interfaces_[i]->pull(position, tx_ + kPushHeader, cap);
+    if (n == 0) continue;
+    tx_[0] = kRolePush;
+    putU16(tx_ + 1, static_cast<uint16_t>(i + 1));
+    putU16(tx_ + 3, push_seq_[i]++);
+    putU32(tx_ + 5, position);
+    credit_[i] -= static_cast<int32_t>(n);
+    send(kPushHeader + n);
+  }
+}
+
+Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length) {
+  if (length < 2) return rejected(kRejectMalformed);
+  const uint16_t fn = getU16(payload);
+  if (fn == 0 || fn > count_) return rejected(kRejectUnknownFunction);
+  const size_t i = fn - 1;
+  if (op == kOpUnsubscribe) {
+    if (subscribed_[i]) interfaces_[i]->subscribe(false);
+    subscribed_[i] = false;
+    credit_[i] = 0;
+    return completed();
+  }
+  if (length != 6) return rejected(kRejectMalformed);
+  const uint32_t credit = getU32(payload + 2);
+  if (op == kOpSubscribe) {
+    if (!interfaces_[i]->subscribe(true)) return rejected(kRejectUnavailable);
+    subscribed_[i] = true;
+    credit_[i] = static_cast<int32_t>(credit);
+    push_seq_[i] = 0;
+    return completed();
+  }
+  if (!subscribed_[i]) return rejected(kRejectUnavailable);   // credit
+  credit_[i] += static_cast<int32_t>(credit);
+  return completed();
+}
+
 void Endpoint::poll() {
+  push();
   while (stream_.available()) {
     const uint8_t byte = static_cast<uint8_t>(stream_.read());
     if (framing_ == Framing::kCobsCrc) {
@@ -126,8 +176,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   putU16(tx_ + 1, corr);
   tx_[3] = result.resolution;
   tx_[4] = result.detail;
-  if (framing_ == Framing::kCobsCrc) writeCobsFrame(stream_, tx_, kResultHeader + result.length);
-  else writeFrame(stream_, tx_, kResultHeader + result.length);
+  send(kResultHeader + result.length);
 }
 
 Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,
@@ -150,6 +199,9 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       putU32(out + 1, remaining());
       return completed(5);
     case kOpStatus: return rejected(kRejectUnavailable);   // no long operations yet (they block)
+    case kOpSubscribe:
+    case kOpCredit:
+    case kOpUnsubscribe: return subscription(op, payload, length);   // experimental, no lock (reads only)
     case kOpEnd:
     case kOpKeepalive:
     case kOpCancel:
