@@ -25,11 +25,16 @@ A = link.open_usb_host(transports=("vendor",))
 try:
     A.open(5000)
     fu, fb = core.find(A, "oep.fixture.uart"), core.find(A, "oep.test.bridge")
+    try:
+        core.plan_release(A)                    # a plan outlives sessions: an earlier run may have left one
+    except Exception:
+        pass
     core.plan_apply(A, [(fu, 1, RX), (fu, 2, TX)])
     u = fixture.FixtureUart(A, fu)
     baud = u.configure(115200)
     A.call(fb, 0x02, bytes([1, TX]))            # loopback: RX from the TX pad
-    A.call(fb, 0x01, b"\x01")                   # bind the bridge port
+    fc = core.find(A, "oep.probe.config")
+    A.call(fc, 0x02, bytes([0x04, 6, 0, 1, 0, 1]) + struct.pack("<H", fu))   # bind: port 0 <- fixture.uart, line coding
     start = u.read(console.PositionStream.FROM_NOW, 0, 0).start
 
     p = serial.Serial(PORT, 115200, timeout=0.05)   # sets line coding 115200 (same)
@@ -68,7 +73,7 @@ try:
     later = drain(p, len(body), 1.0)
     print(f"INFO after reopening the port got {later!r} (backlog kept while closed?)")
     p.close()
-    A.call(fb, 0x01, b"\x00")
+    A.call(fc, 0x02, bytes([0x04, 0]))   # unbind
     core.plan_release(A)
     A.end()
 finally:
