@@ -83,7 +83,12 @@ class FixtureUart final : public Interface {
   uint32_t baud() const { return configured_ ? baud_ : 0; }
 
  private:
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  // a port forwarded over USB may not be drained for 90 ms and more (usbip): 8 KiB overflowed at 921600 (P7)
+  static constexpr size_t kCapacity = 32768, kMarks = 16;
+#else
   static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
+#endif
   PinTable &pins_;
   OepUart &serial_;
   uint16_t instance_;

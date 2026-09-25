@@ -59,6 +59,9 @@ class ProbeConfig final : public Interface {
   void load();
   uint8_t bootMode(uint8_t fallback);
   void applySaved();
+  // The saved boot mode could not be built (the probe's own safety): drop it from the saved copy and the items.
+  // true: there was one to drop.
+  bool forgetBootMode();
   void poll();   // from loop(): a reboot asked for goes after its answer has left
   const Target &target() const { return target_; }
   const Bind &bind(uint8_t port) const { return binds_[port < kMaxPorts ? port : 0]; }
