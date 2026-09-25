@@ -16,6 +16,7 @@
 #include <OepV1Console.h>
 #include <OepV1Endpoint.h>
 #include <OepV1Fixture.h>
+#include <OepV1Sampler.h>
 #include <OepV1Target.h>
 
 // UART0 runs through the board's USB-UART bridge (no flow control) and usbip: long bursts of pipelined
@@ -47,6 +48,8 @@ static oep::v1::FixtureGpio gpio(pins, 2);
 static oep::v1::FixtureUart uart(pins, Serial2, 3, 2);   // DUT console: V003 PD5/TX -> GPIO22, PD6/RX <- GPIO21 (E132)
 // ESP-IDF I2C / SPI slave tools under the project's own names (capability-name-hierarchy.ja.md, decision 4):
 // both implementations so far are the ESP-IDF slave drivers, whose quirks stay out of any oep. name.
+// fixture.capture revision 1: the core-0 GPIO sampler, one-shot, one byte per sample (up to 8 lines, 0.4..2 MHz)
+static oep::v1::SamplerCapture capture(endpoint, kReserved);
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
 static const uint8_t kI2cRoles[] = {1, 2};                    // SDA, SCL
@@ -92,12 +95,14 @@ void setup() {
   endpoint.add(uart);
   endpoint.add(i2cV1);
   endpoint.add(spiV1);
+  endpoint.add(capture);   // last: the fns before it keep their numbers
 }
 
 void loop() {
   endpoint.poll();
   console.poll();
   uart.poll();
+  capture.poll();
   i2c.service();
   spi.service();
 }
