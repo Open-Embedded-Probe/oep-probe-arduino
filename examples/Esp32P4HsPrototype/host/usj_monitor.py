@@ -1,8 +1,8 @@
 # /// script
 # dependencies = ["pyserial"]
 # ///
-import sys, time, serial
 """Read a P4 USB-Serial/JTAG console without resetting it (DTR held): usj_monitor.py <tty> [seconds] [reset]."""
+import sys, time, serial
 s = serial.Serial(); s.port = sys.argv[1]; s.baudrate = 115200; s.timeout = 0.2
 s.dtr = True; s.rts = False
 if "reset" in sys.argv:
