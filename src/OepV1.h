@@ -13,7 +13,7 @@ namespace oep {
 namespace v1 {
 
 constexpr uint8_t kRoleRequest = 0x01, kRoleResult = 0x02, kRoleSession = 0x80;
-// Experimental (2026-09-25): probe-initiated data, sent only while a host has subscribed and given credit.
+// Experimental (2026-09-25): probe-initiated data, sent only to the lock holder that subscribed; after results.
 //   role(0x06) fn(u16) seq(u16) position(u32) data        seq counts this fn's frames, position its bytes
 constexpr uint8_t kRolePush = 0x06;
 constexpr size_t kPushHeader = 9;
@@ -28,8 +28,8 @@ constexpr uint8_t kRejectSessionRequired = 0x09;  // a state-changing request wi
 constexpr uint8_t kOpConfirm = 0x01, kOpList = 0x02, kOpDescribe = 0x03;
 constexpr uint8_t kOpOpen = 0x10, kOpEnd = 0x11, kOpKeepalive = 0x12, kOpLockState = 0x13;
 constexpr uint8_t kOpStatus = 0x20, kOpCancel = 0x21;
-// Experimental: subscribe(fn u16, credit u32), credit(fn u16, add u32), unsubscribe(fn u16).
-constexpr uint8_t kOpSubscribe = 0x30, kOpCredit = 0x31, kOpUnsubscribe = 0x32;
+// Experimental: subscribe(fn u16), unsubscribe(fn u16); the lock holder only, ended with the lock.
+constexpr uint8_t kOpSubscribe = 0x30, kOpUnsubscribe = 0x32;
 
 // common describe tags (capability-declaration-model.ja.md §3)
 constexpr uint8_t kTagRoleChannels = 0x01, kTagMaxClockHz = 0x02, kTagMaxLength = 0x03, kTagFeatures = 0x06,
