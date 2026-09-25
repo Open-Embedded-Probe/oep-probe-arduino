@@ -22,6 +22,8 @@ struct SwdPort {
   uint16_t swdio, swclk;       // probe channels (GPIO numbers)
   uint32_t half_ns = 500;      // SWCLK half period (the fastest this probe uses)
   bool connected = false;
+  uint8_t number = 0;          // the live connection's number: the next of 1..255 for every new one (as DebugPort)
+  void numberNew() { number = static_cast<uint8_t>(number % 255 + 1); }
   rp2::BitBang io;
   uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
 };

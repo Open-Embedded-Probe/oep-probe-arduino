@@ -46,6 +46,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus) {
     port.dm.ackHaveReset();
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
     port.connected = true;
+    port.numberNew();
   }
   port.users |= user;
   return true;
@@ -141,11 +142,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
           if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
           else if (halt && !port_.dm.halt()) failure = kStatusTimeout;
         }
-        if (failure == kStatusOk) port_.connected = true;
+        if (failure == kStatusOk) { port_.connected = true; port_.numberNew(); }
       }
       if (failure != kStatusOk) return tail.finish(failedStatus(failure, out, capacity), out, capacity);
       port_.users |= DebugPort::kUserHost;
-      out[0] = 1;
+      out[0] = port_.number;
       putU32(out + 1, status);
       out[5] = flags;
       putU32(out + 6, phy.clockHz());
@@ -177,10 +178,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
         const bool answers = port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
         return tail.finish(failedStatus(answers ? kStatusTimeout : kStatusLine, out, capacity), out, capacity);
       }
+      if (!port_.connected) port_.numberNew();
       port_.connected = true;
       port_.users |= DebugPort::kUserHost;
       ++port_.resets;
-      out[0] = 1;
+      out[0] = port_.number;
       putU32(out + 1, dpc);
       putU32(out + 5, phy.clockHz());
       return tail.finish(completed(9), out, capacity);
@@ -191,7 +193,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (length < 1) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 1, length - 1, kDetachTags, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] != 1 || !port_.connected) return rejected(kRejectNoConnection);
+      if (payload[0] != port_.number || !port_.connected) return rejected(kRejectNoConnection);
       uint8_t len = 0;
       const bool force = tail.find(reg::wire_rvswd::kTlvDetachForce, len) != nullptr;
       releaseConnection(port_, DebugPort::kUserHost, force);
@@ -223,7 +225,7 @@ uint8_t TargetRiscvDm::failure(uint8_t otherwise) {
 
 Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 1) return rejected(kRejectMalformed);
-  if (payload[0] != 1 || !port_.connected) return rejected(kRejectNoConnection);   // connection 1 only
+  if (payload[0] != port_.number || !port_.connected) return rejected(kRejectNoConnection);   // the live connection only
   const uint8_t *p = payload + 1;
   const size_t n = length - 1;
   Ch32Dm &dm = port_.dm;

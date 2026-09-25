@@ -124,12 +124,13 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         ok = wake(have_targetsel ? &targetsel : nullptr, half, dpidr, dormant);
         if (ok) {
           port_.connected = true;
+          port_.numberNew();
           port_.active_half_ns = half;
           if (dormant) flags |= 1;
         }
       }
       if (!ok) return tail.finish(failedStatus(kStatusLine, out, capacity), out, capacity);
-      out[0] = 1;
+      out[0] = port_.number;
       putU32(out + 1, dpidr);
       out[5] = flags;
       putU32(out + 6, hzOf(port_.active_half_ns));
@@ -139,7 +140,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (length < 1) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 1, length - 1, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] != 1 || !port_.connected) return rejected(kRejectNoConnection);
+      if (payload[0] != port_.number || !port_.connected) return rejected(kRejectNoConnection);
       port_.io.releaseBoth();
       port_.connected = false;
       return tail.finish(completed(), out, capacity);
@@ -164,7 +165,7 @@ uint8_t TargetArmAdi::xfer(bool ap, bool read, uint8_t a23, uint32_t &data) {
 
 Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 1) return rejected(kRejectMalformed);
-  if (payload[0] != 1 || !port_.connected) return rejected(kRejectNoConnection);
+  if (payload[0] != port_.number || !port_.connected) return rejected(kRejectNoConnection);
   const uint8_t *p = payload + 1;
   const size_t n = length - 1;
   Tail tail;

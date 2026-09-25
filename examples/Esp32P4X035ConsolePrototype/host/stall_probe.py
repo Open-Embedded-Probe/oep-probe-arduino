@@ -26,7 +26,7 @@ ds = lambda: struct.unpack("<IIII", A.call(fb, 0x02, locked=False).payload[:16])
 
 def force_detach():
     if st()[2]:
-        A.call(wire.fn, 0x03, bytes([1]) + m.tlv(1, b"", critical=True))
+        A.call(wire.fn, 0x03, bytes([wire.attach(halt=False)[0]]) + m.tlv(1, b"", critical=True))
 
 
 def into_stall(tty):

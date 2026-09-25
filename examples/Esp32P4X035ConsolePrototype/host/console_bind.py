@@ -84,7 +84,7 @@ try:
     wire = riscv.Wire(A, "oep.wire.rvswd")
     print("status at start:", status(A))
     if phase in ("host", "open") and status(A)["connected"]:   # start clean: a link an earlier run left goes
-        A.call(wire.fn, 0x03, bytes([1]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
+        A.call(wire.fn, 0x03, bytes([wire.attach(halt=False)[0]]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
     if phase == "host":
         A.call(fc, SET, bind(0) + tlv(T_TARGET, b""))
         p = serial.Serial(sys.argv[2], 115200, timeout=0.05)
@@ -139,7 +139,7 @@ try:
         time.sleep(0.3)
         st = status(A)
         check("closing the port keeps the console reading (SDI must not stall)", st["connected"] == 1 and st["open"] == 1, str(st))
-        A.call(wire.fn, 0x03, bytes([1]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
+        A.call(wire.fn, 0x03, bytes([wire.attach(halt=False)[0]]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
     elif phase == "boot-set":
         st = status(A)
         chip = st["chip"] or int(sys.argv[2], 0) if len(sys.argv) > 2 else st["chip"]

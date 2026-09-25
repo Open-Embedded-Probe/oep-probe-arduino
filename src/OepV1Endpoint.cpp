@@ -255,9 +255,18 @@ void Endpoint::poll() {
 void Endpoint::lapse() {
   if (locked_ && static_cast<int32_t>(millis() - expires_ms_) >= 0) {
     locked_ = false;   // the last id stays
-    endSubscriptions();
-    for (size_t i = 0; i < count_; ++i) interfaces_[i]->sessionLapsed();   // a host that fell away keeps nothing open
+    loseSession();
   }
+}
+
+// The lock holder is gone (its lease lapsed, or another host took the lock by force): what its session made goes -
+// subscriptions, its use of connections, and a plan it applied (the pins back to safe: released). A plan set through
+// oep.probe.config stays (probe settings, not a session's). An explicit end keeps all of it for the next session.
+// v1-open-proposals §3 (decided 2026-09-26).
+void Endpoint::loseSession() {
+  endSubscriptions();
+  for (size_t i = 0; i < count_; ++i) interfaces_[i]->sessionLapsed();
+  if (plan_active_ && !plan_persistent_) planRelease();
 }
 
 // Subscriptions belong to the lock: a host that vanished stops being pushed to when its lease lapses.
@@ -309,6 +318,19 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   if (capacity > static_cast<size_t>(limits_.max_frame) - kResultHeader) capacity = limits_.max_frame - kResultHeader;
 
   lapse();
+  // The lock holder's request sent again (the host lost the result): answer from what was kept, never run it twice.
+  const bool holder = has_session && locked_ && session == holder_;
+  const uint32_t crc = holder ? crc32(payload, payload_length) : 0;
+  if (holder) {
+    for (Dedup &d : dedup_) {
+      if (!d.used || d.corr != corr) continue;
+      if (d.fn != fn || d.op != op || d.crc != crc) { sendReject(corr, kRejectCorrReused); return; }
+      if (!d.kept) { sendReject(corr, kRejectResultLost); return; }
+      memcpy(tx_, d.result, d.length);
+      send(d.length);
+      return;
+    }
+  }
   Result result;
   if (fn == 0) {
     result = core(op, has_session, session, payload, payload_length, out, capacity);
@@ -326,7 +348,37 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   putU16(tx_ + 1, corr);
   tx_[3] = result.resolution;
   tx_[4] = result.detail;
-  send(kResultHeader + result.length);
+  const size_t total = kResultHeader + result.length;
+  if (holder && !(fn == 0 && op == kOpOpen)) {   // keep it for a request sent again (an open drops the table anyway)
+    Dedup &d = dedup_[dedup_next_];
+    dedup_next_ = (dedup_next_ + 1) % kDedupEntries;
+    d.used = true;
+    d.corr = corr;
+    d.fn = fn;
+    d.op = op;
+    d.crc = crc;
+    d.kept = total <= kDedupBytes;
+    d.length = d.kept ? static_cast<uint8_t>(total) : 0;
+    if (d.kept) memcpy(d.result, tx_, total);
+  }
+  send(total);
+}
+
+void Endpoint::sendReject(uint16_t corr, uint8_t reason) {
+  tx_[0] = kRoleResult;
+  putU16(tx_ + 1, corr);
+  tx_[3] = kResolutionRejected;
+  tx_[4] = reason;
+  send(kResultHeader);
+}
+
+uint32_t Endpoint::crc32(const uint8_t *data, size_t length) {   // IEEE, reflected (the key of a kept result)
+  uint32_t c = 0xFFFFFFFFu;
+  for (size_t i = 0; i < length; ++i) {
+    c ^= data[i];
+    for (int b = 0; b < 8; ++b) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+  }
+  return ~c;
 }
 
 namespace {
@@ -416,9 +468,12 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   const uint32_t session = getU32(payload), lease = getU32(payload + 4);
   const bool force = payload[8];
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), out, capacity);
-  // Taken over by force: the previous holder's subscriptions end with its lock (§4.5).
-  if (locked_ && holder_ != session) endSubscriptions();
+  // Taken over by force: the previous holder loses what its session made, as at a lapse (§3, §4.5).
+  if (locked_ && holder_ != session) loseSession();
   const bool resumed = (locked_ && holder_ == session) || (have_last_ && last_ == session);
+  // Every open (a resume too) drops the kept results: a one-shot CLI resumes the session with corr from 1 again, and
+  // must not get a previous process's result (v1-open-proposals §4, ch32rv's review).
+  for (Dedup &d : dedup_) d.used = false;
   locked_ = true;
   holder_ = last_ = session;
   have_last_ = true;
@@ -432,8 +487,8 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
 
 // Role assignments as TLVs 0x90 = fn(u16) role(u8) channel(u16) (critical); every interface checks its own roles
 // without side effects, then all apply or none does. An unknown critical TLV refuses the plan (unsupported), an
-// unknown non-critical one is ignored and listed. One plan at a time; it is probe state and stays until
-// plan_release (no session end or lapse releases it).
+// unknown non-critical one is ignored and listed. One plan at a time. It belongs to the session: an explicit end keeps
+// it, a lapse or a takeover releases it; a plan set through oep.probe.config (replacePlan) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (plan_active_) return rejected(kRejectUnavailable);
   static const uint8_t kKnown[] = {kTagRoleAssignment};
@@ -474,6 +529,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     planned_[i] = true;
   }
   plan_active_ = true;
+  plan_persistent_ = false;
   memcpy(plan_roles_, roles, count * sizeof roles[0]);
   plan_count_ = count;
   return tail.finish(completed(), out, capacity);
@@ -514,8 +570,10 @@ uint8_t Endpoint::replacePlan(const RoleAssignment *roles, size_t count) {
   RoleAssignment before[kMaxRoles];
   const size_t had = plan(before, kMaxRoles);
   planRelease();
+  const bool was_persistent = plan_persistent_;
   const uint8_t reason = apply(roles, count);
   if (reason) apply(before, had);
+  plan_persistent_ = reason ? was_persistent : true;   // oep.probe.config's plan: probe settings, it outlives sessions
   return reason;
 }
 

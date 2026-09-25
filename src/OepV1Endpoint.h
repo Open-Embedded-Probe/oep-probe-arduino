@@ -130,11 +130,28 @@ class Endpoint {
   void push();
   void endSubscriptions();
   void send(size_t length);
+  // Dedup of the lock holder's requests sent again (v1-open-proposals §4): the last kDedupEntries results, keyed on corr
+  // and checked against fn, op and a CRC of the payload; dropped at every open. Results over kDedupBytes are not kept.
+  static constexpr size_t kDedupEntries = 16, kDedupBytes = 72;
+  struct Dedup {
+    bool used = false, kept = false;
+    uint16_t corr = 0, fn = 0;
+    uint8_t op = 0;
+    uint8_t length = 0;
+    uint32_t crc = 0;
+    uint8_t result[kDedupBytes];
+  };
+  Dedup dedup_[kDedupEntries];
+  size_t dedup_next_ = 0;
   bool plan_active_ = false;
+  bool plan_persistent_ = false;   // applied through replacePlan (oep.probe.config): a lapse does not release it
   RoleAssignment plan_roles_[kMaxRoles] = {};
   size_t plan_count_ = 0;
   Result checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity);
   void lapse();
+  void loseSession();
+  void sendReject(uint16_t corr, uint8_t reason);
+  static uint32_t crc32(const uint8_t *data, size_t length);
   uint32_t remaining() const;
 };
 

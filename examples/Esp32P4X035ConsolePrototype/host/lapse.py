@@ -37,7 +37,7 @@ def status():
 def force_detach():
     if status()["connected"]:
         A.open(3000)
-        A.call(wire.fn, 0x03, bytes([1]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
+        A.call(wire.fn, 0x03, bytes([wire.attach(halt=False)[0]]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
         A.end()
 
 
