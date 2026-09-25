@@ -59,13 +59,69 @@ void Endpoint::send(size_t length) {
 // Pushes go at a lower priority than results: poll() answers what has arrived first, and a push is only written
 // into the room the transport has free right now, so it never blocks and a result is never queued behind more than
 // what already sits in the transport's own buffer. One push frame per subscribed fn per poll.
+bool Endpoint::queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length) {
+  if (length > sizeof(Event::payload)) return false;
+  if (event_head_ - event_tail_ >= kEvents) ++event_tail_;   // full: the oldest goes (its seq never appears)
+  Event &e = events_[event_head_ % kEvents];
+  e.fn = fn;
+  e.seq = fn == 0 ? core_seq_++ : push_seq_[fn - 1]++;   // numbered when queued: one dropped from the queue leaves a gap
+  e.kind = kind;
+  e.length = static_cast<uint8_t>(length);
+  memcpy(e.payload, payload, length);
+  ++event_head_;
+  return true;
+}
+
+bool Endpoint::event(Interface &from, uint8_t kind, const uint8_t *payload, size_t length) {
+  for (size_t i = 0; i < count_; ++i)
+    if (interfaces_[i] == &from) return subscribed_[i] && queueEvent(static_cast<uint16_t>(i + 1), kind, payload, length);
+  return false;
+}
+
+void Endpoint::eventsLost(Interface &from, uint16_t count) {
+  for (size_t i = 0; i < count_; ++i)
+    if (interfaces_[i] == &from && subscribed_[i]) push_seq_[i] += count;
+}
+
+// Events go before data (they are small and usually what someone waits for). false: no room right now.
+bool Endpoint::sendEvents() {
+  while (event_tail_ != event_head_) {
+    const Event &e = events_[event_tail_ % kEvents];
+    const int need = static_cast<int>(kEventHeader + e.length) + (framing_ == Framing::kCobsCrc ? 8 : 2);
+    if (stream_.availableForWrite() < need) return false;
+    tx_[0] = kRoleEvent;
+    putU16(tx_ + 1, e.fn);
+    putU16(tx_ + 3, e.seq);
+    tx_[5] = e.kind;
+    memcpy(tx_ + kEventHeader, e.payload, e.length);
+    ++event_tail_;
+    send(kEventHeader + e.length);
+  }
+  return true;
+}
+
 void Endpoint::push() {
   lapse();
   if (!locked_) return;
+  if (heartbeat_ && static_cast<uint32_t>(millis() - heartbeat_last_) >= heartbeat_ms_) {
+    heartbeat_last_ = millis();
+    uint8_t hb[8];
+    putU32(hb, boot_id_);
+    putU32(hb + 4, heartbeat_last_);
+    queueEvent(0, kEventHeartbeat, hb, sizeof hb);
+  }
+  if (!sendEvents()) return;
   size_t room = tx_capacity_ - kPushHeader;
   if (room > static_cast<size_t>(limits_.max_frame) - kPushHeader) room = limits_.max_frame - kPushHeader;
   for (size_t i = 0; i < count_; ++i) {
     if (!subscribed_[i]) continue;
+    // batching: wait for min_bytes, or max_delay_ms after the first byte became pending
+    if (min_bytes_[i] || max_delay_ms_[i]) {
+      const size_t ready = interfaces_[i]->pending();
+      if (ready == 0) { waiting_[i] = false; continue; }
+      if (!waiting_[i]) { waiting_[i] = true; waiting_since_[i] = millis(); }
+      if (ready < min_bytes_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) < max_delay_ms_[i]) continue;
+    }
     const int writable = stream_.availableForWrite();
     // Keep at most push_queue_ bytes waiting in the transport: a result queues behind no more than that. The
     // transport's capacity is taken as the most room ever seen free (idle).
@@ -91,13 +147,21 @@ void Endpoint::push() {
     putU16(tx_ + 3, push_seq_[i]++);
     putU32(tx_ + 5, position);
     send(kPushHeader + n);
+    waiting_[i] = false;
   }
 }
 
+// subscribe(fn u16 [, min_bytes u16, max_delay_ms u16]); fn 0 = heartbeat events, max_delay_ms = the period.
 Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length) {
-  if (length != 2) return rejected(kRejectMalformed);
+  if (length != 2 && !(op == kOpSubscribe && length == 6)) return rejected(kRejectMalformed);
   const uint16_t fn = getU16(payload);
-  if (fn == 0 || fn > count_) return rejected(kRejectUnknownFunction);
+  if (fn == 0) {
+    heartbeat_ = op == kOpSubscribe;
+    if (length == 6 && getU16(payload + 4)) heartbeat_ms_ = getU16(payload + 4);
+    heartbeat_last_ = millis() - heartbeat_ms_;
+    return completed();
+  }
+  if (fn > count_) return rejected(kRejectUnknownFunction);
   const size_t i = fn - 1;
   if (op == kOpUnsubscribe) {
     if (subscribed_[i]) interfaces_[i]->subscribe(false);
@@ -107,6 +171,9 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length)
   if (!interfaces_[i]->subscribe(true)) return rejected(kRejectUnavailable);
   subscribed_[i] = true;
   push_seq_[i] = 0;
+  min_bytes_[i] = length == 6 ? getU16(payload + 2) : 0;
+  max_delay_ms_[i] = length == 6 ? getU16(payload + 4) : 0;
+  waiting_[i] = false;
   return completed();
 }
 
@@ -135,6 +202,8 @@ void Endpoint::lapse() {
 
 // Subscriptions belong to the lock: a host that vanished stops being pushed to when its lease lapses.
 void Endpoint::endSubscriptions() {
+  heartbeat_ = false;
+  event_tail_ = event_head_;
   for (size_t i = 0; i < count_; ++i) {
     if (subscribed_[i]) interfaces_[i]->subscribe(false);
     subscribed_[i] = false;
