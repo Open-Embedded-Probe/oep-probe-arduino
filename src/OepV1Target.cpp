@@ -38,6 +38,27 @@ bool maxSpeed(const Tail &tail, uint32_t &hz, bool &critical) {
 
 // ---- oep.wire.rvswd / oep.wire.swio ------------------------------------------------------------------
 
+bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus) {
+  if (port.connected) {
+    if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
+  } else {
+    if (!attachAndRead(port.dm, dmstatus)) return false;
+    port.dm.ackHaveReset();
+    if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
+    port.connected = true;
+  }
+  port.users |= user;
+  return true;
+}
+
+void releaseConnection(DebugPort &port, uint8_t user, bool force) {
+  port.users &= static_cast<uint8_t>(~user);
+  if (!port.connected || (port.users && !force)) return;
+  port.dm.detach();
+  port.connected = false;
+  port.users = 0;
+}
+
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.pinGroup(port_.swdio, port_.swclk);       // fixed on this probe
@@ -123,6 +144,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
         if (failure == kStatusOk) port_.connected = true;
       }
       if (failure != kStatusOk) return tail.finish(failedStatus(failure, out, capacity), out, capacity);
+      port_.users |= DebugPort::kUserHost;
       out[0] = 1;
       putU32(out + 1, status);
       out[5] = flags;
@@ -156,19 +178,23 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
         return tail.finish(failedStatus(answers ? kStatusTimeout : kStatusLine, out, capacity), out, capacity);
       }
       port_.connected = true;
+      port_.users |= DebugPort::kUserHost;
       ++port_.resets;
       out[0] = 1;
       putU32(out + 1, dpc);
       putU32(out + 5, phy.clockHz());
       return tail.finish(completed(9), out, capacity);
     }
-    case kOpDetach: {   // connection(u8) [TLV]
+    case kOpDetach: {   // connection(u8) [TLV 0x01 force]
+      // The host's use goes; the link stays while another user (a bind's console) has it, unless forced.
+      static const uint8_t kDetachTags[] = {reg::wire_rvswd::kTlvDetachForce};
       if (length < 1) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(payload + 1, length - 1, out, capacity);
+      const Result parsed = tail.parse(payload + 1, length - 1, kDetachTags, out, capacity);
       if (refused(parsed)) return parsed;
       if (payload[0] != 1 || !port_.connected) return rejected(kRejectNoConnection);
-      port_.dm.detach();
-      port_.connected = false;
+      uint8_t len = 0;
+      const bool force = tail.find(reg::wire_rvswd::kTlvDetachForce, len) != nullptr;
+      releaseConnection(port_, DebugPort::kUserHost, force);
       return tail.finish(completed(), out, capacity);
     }
     default:

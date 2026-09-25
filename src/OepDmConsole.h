@@ -26,6 +26,7 @@ class DmConsole {
   void stop() { enabled_ = false; }
   bool enabled() const { return enabled_; }
   size_t queue(const uint8_t *data, size_t length);
+  size_t room() const { return kTxCapacity - 1 - pending(); }   // what queue() takes now
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
   uint32_t resyncs() const { return seq_resyncs_; }
 

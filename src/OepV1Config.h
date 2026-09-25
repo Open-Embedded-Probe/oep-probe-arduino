@@ -5,9 +5,10 @@
 //   0x02 set(items) -> hash(u32)    0x03 save -> hash(u32)    0x04 erase    0x05 reboot (answers, then restarts)
 //
 // Items (TLV, tag u8 len u8 value): 0x01 boot_mode(u8), 0x02 plan (fn u16 role u8 channel u16) x n - the endpoint's
-// plan itself, 0x04 bind (port u8 source u8 attach u8 flags u8, source args). A set replaces every item of the tags it
-// carries; a tag sent with length 0 clears it. label (0x03) and target (0x05) are not in this prototype (refused as
-// unsupported). No defaults: nothing the host did not set is done - the boot mode without a saved one is the sketch's
+// plan itself, 0x04 bind (port u8 source u8 attach u8 flags u8, source args: fixture.uart fn u16 / target.console
+// wire_fn u16 mechanism u8), 0x05 target (wire_fn u16 chip_id u32; needed by a bind that attaches by itself). A set
+// replaces every item of the tags it carries; a tag sent with length 0 clears it. label (0x03) is not in this
+// prototype (refused as unsupported). No defaults: nothing the host did not set is done - the boot mode without a saved one is the sketch's
 // own choice. Saved to NVS on ESP32 (Preferences, namespace "oepcfg").
 #pragma once
 
@@ -35,6 +36,11 @@ class ProbeConfig final : public Interface {
     uint8_t source = 0, attach = 0, flags = 0, arg_length = 0;
     uint8_t args[kMaxBindArgs] = {};
   };
+  struct Target {
+    bool set = false;
+    uint16_t wire_fn = 0;
+    uint32_t chip_id = 0;
+  };
   // A bind to apply (source 0: clear the port). false: the probe cannot do it (the set is refused, nothing changes).
   using BindHook = bool (*)(uint8_t port, const Bind &bind, void *context);
 
@@ -54,6 +60,8 @@ class ProbeConfig final : public Interface {
   uint8_t bootMode(uint8_t fallback);
   void applySaved();
   void poll();   // from loop(): a reboot asked for goes after its answer has left
+  const Target &target() const { return target_; }
+  const Bind &bind(uint8_t port) const { return binds_[port < kMaxPorts ? port : 0]; }
 
   const char *name() const override { return reg::probe_config::kName; }
   uint16_t instance() const override { return 0; }
@@ -72,6 +80,7 @@ class ProbeConfig final : public Interface {
   void *hook_context_ = nullptr;
   uint8_t current_mode_ = 0, boot_mode_ = 0xFF;   // boot_mode_: the item (0xFF: not set)
   Bind binds_[kMaxPorts];
+  Target target_;
   uint8_t storage_state_ = reg::probe_config::kStorageStateNone;
   uint32_t saved_hash_ = 0, save_ms_ = 0;
   uint8_t saved_[kMaxSaved];

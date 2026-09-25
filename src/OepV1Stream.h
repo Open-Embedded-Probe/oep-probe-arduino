@@ -110,5 +110,40 @@ class PositionStream {
   uint32_t serial_ = 0;   // marks ever made = the serial of the next one
 };
 
+// A serial port (a USB CDC port) that follows a PositionStream and feeds the other way (oep-spec
+// probe-cdc-and-persistence P3 / P6): the stream's bytes go to the port from a position of its own, as fast as the
+// port takes them and only while it is open (availableForWrite() > 0; what arrives while it is closed stays in the
+// stream only - a backlog handed over at open was lost or echoed back to the target); falling a whole buffer behind
+// skips to the oldest byte kept (gaps). The port's bytes are read out for the caller to send on.
+class StreamPort {
+ public:
+  void set(Stream *port, const PositionStream &stream) { port_ = port; pos_ = stream.end(); }
+  Stream *port() const { return port_; }
+  uint32_t gaps() const { return gaps_; }
+  void toPort(const PositionStream &stream) {
+    if (!port_) return;
+    if (port_->availableForWrite() <= 0) { pos_ = stream.end(); return; }
+    if (static_cast<int32_t>(stream.oldest() - pos_) > 0) { pos_ = stream.oldest(); ++gaps_; }
+    while (pos_ != stream.end()) {
+      const uint8_t *data;
+      const size_t n = stream.contiguous(pos_, data);
+      const size_t written = port_->write(data, n);
+      pos_ += written;
+      if (written < n) break;
+    }
+  }
+  // Up to `room` bytes the port sent (never more than the caller can pass on: the rest waits in the port).
+  size_t fromPort(uint8_t *out, size_t room) {
+    if (!port_ || !room) return 0;
+    const int n = port_->available();
+    if (n <= 0) return 0;
+    return port_->readBytes(out, static_cast<size_t>(n) < room ? static_cast<size_t>(n) : room);
+  }
+
+ private:
+  Stream *port_ = nullptr;
+  uint32_t pos_ = 0, gaps_ = 0;
+};
+
 }  // namespace v1
 }  // namespace oep
