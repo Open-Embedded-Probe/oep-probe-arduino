@@ -1,4 +1,4 @@
-// OEP v1 oep.probe.config (oep-spec v1-core-wire-delta.ja.md §5.10, revision 1) - prototype P4 of
+// OEP v1 oep.probe.config (oep-spec docs/oep-if-probe-config.ja.md, revision 1) - prototype P4 of
 // probe-cdc-and-persistence §7: the probe's settings, set by the host and kept only when the host saves them.
 //
 //   0x01 get(first u16) -> more(u8) hash(u32) items      (no lock)

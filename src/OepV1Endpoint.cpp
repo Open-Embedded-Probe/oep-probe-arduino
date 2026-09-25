@@ -147,7 +147,7 @@ void Endpoint::push() {
       const size_t ready = interfaces_[i]->pending();
       if (ready == 0) { waiting_[i] = false; continue; }
       if (!waiting_[i]) { waiting_[i] = true; waiting_since_[i] = millis(); }
-      // 0 = that condition is not used (v1 wire §4.5): send on min_bytes ready, or max_delay_ms after the first byte
+      // 0 = that condition is not used (core §11.3): send on min_bytes ready, or max_delay_ms after the first byte
       const bool enough = min_bytes_[i] && ready >= min_bytes_[i];
       const bool due = max_delay_ms_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) >= max_delay_ms_[i];
       if (!enough && !due) continue;
@@ -181,8 +181,8 @@ void Endpoint::push() {
 }
 
 // subscribe(fn u16, min_bytes u16, max_delay_ms u16) [TLV]; unsubscribe(fn u16) [TLV]. fn 0 = heartbeat events,
-// max_delay_ms = the period (0: 1000 ms). seq starts again at 0 with every subscribe. No field is optional (v1 wire
-// §0: an optional fixed field could not be told apart from a tail).
+// max_delay_ms = the period (0: 1000 ms). seq starts again at 0 with every subscribe. No field is optional (core
+// §2.3: an optional fixed field could not be told apart from a tail).
 Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   const bool batching = op == kOpSubscribe;
   const size_t fixed = batching ? 6 : 2;
@@ -262,7 +262,7 @@ void Endpoint::lapse() {
 // The lock holder is gone (its lease lapsed, or another host took the lock by force): what its session made goes -
 // subscriptions, its use of connections, and a plan it applied (the pins back to safe: released). A plan set through
 // oep.probe.config stays (probe settings, not a session's). An explicit end keeps all of it for the next session.
-// v1-open-proposals §3 (decided 2026-09-26).
+// core §9 (decided 2026-09-26).
 void Endpoint::loseSession() {
   endSubscriptions();
   for (size_t i = 0; i < count_; ++i) interfaces_[i]->sessionLapsed();
@@ -468,11 +468,11 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   const uint32_t session = getU32(payload), lease = getU32(payload + 4);
   const bool force = payload[8];
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), out, capacity);
-  // Taken over by force: the previous holder loses what its session made, as at a lapse (§3, §4.5).
+  // Taken over by force: the previous holder loses what its session made, as at a lapse (core §6.4).
   if (locked_ && holder_ != session) loseSession();
   const bool resumed = (locked_ && holder_ == session) || (have_last_ && last_ == session);
   // Every open (a resume too) drops the kept results: a one-shot CLI resumes the session with corr from 1 again, and
-  // must not get a previous process's result (v1-open-proposals §4, ch32rv's review).
+  // must not get a previous process's result (core §5.2).
   for (Dedup &d : dedup_) d.used = false;
   locked_ = true;
   holder_ = last_ = session;

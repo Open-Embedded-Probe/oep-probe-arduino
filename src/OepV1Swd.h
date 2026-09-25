@@ -1,4 +1,4 @@
-// OEP v1 ARM SWD interfaces (oep-spec docs/v1-core-wire-delta.ja.md §5.4 / §5.6, revision 1):
+// OEP v1 ARM SWD interfaces (oep-spec docs/oep-if-debug.ja.md §1, §5-§6, revision 1):
 //
 //   oep.wire.swd         scan / attach / detach on the probe's fixed SWD pair; attach wakes the port (JTAG-to-SWD,
 //                        then the dormant wake), sends TARGETSEL when the host gives one, and returns DPIDR; attaching
@@ -14,6 +14,7 @@
 
 #include "OepRp2BitBang.h"
 #include "OepV1.h"
+#include "OepV1Debug.h"
 
 namespace oep {
 namespace v1 {
@@ -38,7 +39,7 @@ class WireSwd final : public Interface {
   uint8_t revision() const override { return reg::wire_swd::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  // v1 wire §0 / §5.5: a host that fell away (its lease lapsed) keeps nothing open; the host is this link's only user
+  // core §9 / oep-if-debug §2: a host that fell away (its lease lapsed) keeps nothing open; the host is this link's only user
   void sessionLapsed() override {
     if (!port_.connected) return;
     port_.io.releaseBoth();

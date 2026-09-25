@@ -44,7 +44,7 @@ void TargetConsoleStream::poll() {
 
 bool TargetConsoleStream::openStream(uint8_t mechanism) {
   if (!driver_.start(mechanism)) return false;
-  stream_number_ = static_cast<uint8_t>(stream_number_ % 255 + 1);   // a new stream: the next of 1..255 (§3)
+  stream_number_ = static_cast<uint8_t>(stream_number_ % 255 + 1);   // a new stream: the next of 1..255 (core §9)
   exists_ = open_ = true;
   mechanism_ = mechanism;
   seen_resets_ = port_.resets;

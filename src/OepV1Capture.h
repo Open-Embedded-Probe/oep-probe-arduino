@@ -1,4 +1,4 @@
-// oep.fixture.capture revision 1: the basic set of oep-spec docs/logic-capture.ja.md (§3.0, §4, §5), on the ESP32-P4
+// oep.fixture.capture revision 1 (oep-spec docs/oep-if-capture.ja.md), on the ESP32-P4
 // PARLIO RX. This implementation picks: one-shot, repeat and streaming, immediate trigger only, pushes events when
 // subscribed. Repeat (as wch-protocols E078): PARLIO fills a 64 KiB internal DMA ring by partial receive; the ISR
 // queues each finished chunk; a harvest task on core 0 copies it into K segments in PSRAM before the ring comes round
@@ -7,7 +7,7 @@
 //
 //   0x01 configure(TLV)  -> TLV     0x02 start -> blocking_ms u32     0x03 stop     0x05 status     0x06 read
 //   0x07 segments(from u32)   0x08 release(serial u32) (repeat)   0x09 query(TLV) -> TLV, no lock   (0x04 force: no)
-// Every request takes a TLV tail after its fixed part (v1 wire §0); configure / query answer unhandled non-critical
+// Every request takes a TLV tail after its fixed part (core §2.3); configure / query answer unhandled non-critical
 // TLVs in ignored (0x7F) and refuse unhandled critical ones (rejected unsupported, the tag).
 //
 // Channel k is plan role k (0..15), taken in role order. Unused bits of a sample are left as captured (undefined).

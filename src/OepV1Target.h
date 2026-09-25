@@ -1,4 +1,4 @@
-// OEP v1 target interfaces over Ch32Dm (oep-spec docs/v1-core-wire-delta.ja.md §5.4 / §5.5, revision 1):
+// OEP v1 target interfaces over Ch32Dm (oep-spec docs/oep-if-debug.ja.md §1-§4, revision 1):
 //
 //   oep.wire.rvswd       scan / attach / detach / attach_under_reset on the probe's fixed RVSWD pair; the one
 //                        connection is number 1, and attaching an attached wire hands it back (flags bit1)
@@ -15,6 +15,7 @@
 
 #include "OepCh32Dm.h"
 #include "OepV1.h"
+#include "OepV1Debug.h"
 
 namespace oep {
 namespace v1 {
@@ -30,12 +31,12 @@ struct DebugPort {
   // reset_allowed may be pulled (the same idea as the scan allow-list: never drive a pin the jig did not clear).
   int16_t reset_default = -1;
   uint64_t reset_allowed = 0;
-  // Who uses the connection (v1 wire §5.5, probe-cdc-and-persistence P6): the host through attach, a bind through
+  // Who uses the connection (oep-if-common §2, probe-cdc-and-persistence P6): the host through attach, a bind through
   // attachRunning. A host's detach drops only its own use; the link goes when nobody uses it, or on a forced detach.
   enum : uint8_t { kUserHost = 1, kUserBind = 2 };
   uint8_t users = 0;
   // The connection's number: a new connection takes the next of 1..255, so a host holding the number of an earlier one
-  // gets no_connection instead of reaching this one (v1-open-proposals §3). One connection at a time on this wire.
+  // gets no_connection instead of reaching this one (core §9). One connection at a time on this wire.
   uint8_t number = 0;
   void numberNew() { number = static_cast<uint8_t>(number % 255 + 1); }
 };

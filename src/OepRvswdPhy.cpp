@@ -340,7 +340,7 @@ bool RvswdPhy::retune() {
   return false;
 }
 
-// v1 wire §5.4: nothing is written to the target until the link speed is settled, and the speed is chosen by reads
+// oep-if-debug §1: nothing is written to the target until the link speed is settled, and the speed is chosen by reads
 // alone - a write garbled by a period the target cannot follow can land anywhere in the debug module. So the
 // bring-up writes (the wake, DMSHDWCFGR / DMCFGR, dmactive) go out at the slowest period, the one every target
 // follows and the one the resets use; faster periods are then tried with DMSTATUS reads only (margin check E156 /
