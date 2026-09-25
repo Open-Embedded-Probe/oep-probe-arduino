@@ -3,8 +3,8 @@
 // reads do not consume, with marks for what happened.
 //
 //   0x01 open(connection u8, mechanism u8) [TLV]   -> stream u8, flags u8 (bit0 an existing stream)
-//   0x02 read(stream, from u8, arg u32, max u16)   -> start u32, flags u8 (bit0 more, bit1 gap), data      no lock
-//   0x03 marks(stream, from_serial u32)            -> more u8, count u8, count x (serial u32, position u32, kind u8,
+//   0x02 read(stream, from u8, arg u64, max u16)   -> start u64, flags u8 (bit0 more, bit1 gap), data      no lock
+//   0x03 marks(stream, from_serial u32)            -> more u8, count u8, count x (serial u32, position u64, kind u8,
 //                                                     time_ms u32, detail u8)                              no lock
 //   0x04 clear(stream)   0x05 mark(stream, value u8)   0x06 write(stream, count u16, data) -> accepted u16
 //   0x07 close(stream)

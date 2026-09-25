@@ -4,6 +4,7 @@
 
 #include <esp_cache.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <hal/hal_utils.h>
 #include <soc/hp_sys_clkrst_struct.h>
 #include <string.h>
@@ -69,9 +70,9 @@ void LogicCapture::harvest(const Chunk &chunk) {
     if (fill_ == 0) {   // a new segment: remember where in time it starts
       Info &info = infos_[completed_ % kInfos];
       info.serial = completed_;
-      info.position = mode_ == 3 ? static_cast<uint32_t>(captured_) : completed_ * segment_bytes_;
+      info.position = mode_ == 3 ? captured_ : static_cast<uint64_t>(completed_) * segment_bytes_;
       const uint64_t first_sample = captured_ * 8 / width_;
-      info.start_us = start_us_ + static_cast<uint32_t>(first_sample * rate_den_ * 1000000ull / rate_num_);
+      info.start_us = start_us_ + first_sample * rate_den_ * 1000000ull / rate_num_;
       info.flags = gap_pending_ ? 1 : 0;
       gap_pending_ = false;
     }
@@ -130,7 +131,7 @@ bool LogicCapture::takeStage() {
   stage_cur_ = __builtin_ctz(free);
   __atomic_fetch_and(&stage_free_, ~(1u << stage_cur_), __ATOMIC_ACQ_REL);
   stage_fill_ = 0;
-  stage_pos_ = static_cast<uint32_t>(captured_);
+  stage_pos_ = captured_;
   if (carry_) {
     stage_[stage_cur_][kPushHead] = carry_byte_;
     stage_fill_ = 1;
@@ -164,11 +165,11 @@ void LogicCapture::sendStage() {
     __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
     return;
   }
-  putU16(s, static_cast<uint16_t>(9 + fill));   // length prefix (the message: push header + data)
+  putU16(s, static_cast<uint16_t>(kPushHead - 2 + fill));   // length prefix (the message: push header, position, data)
   s[2] = kRolePush;
   putU16(s + 3, fn);
   putU16(s + 5, endpoint_.takeSeq(fn));
-  putU32(s + 7, stage_pos_);
+  putU64(s + 7, stage_pos_);
   if (!t->queueData(s, kPushHead + fill, stageDone, this)) __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
 }
 
@@ -592,7 +593,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
   if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
-  start_us_ = micros();
+  start_us_ = static_cast<uint64_t>(esp_timer_get_time());
   if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
   state_ = kStateCapturing;
   putU32(out, 0);
@@ -615,22 +616,22 @@ void LogicCapture::stopRepeat() {
 
 size_t LogicCapture::infoBytes(const Info &info, uint8_t *out) const {
   putU32(out, info.serial);
-  putU32(out + 4, info.position);
-  putU32(out + 8, info.samples);
-  putU32(out + 12, info.start_us);
-  putU32(out + 16, 0xFFFFFFFFu);
-  out[20] = info.flags;
-  return 21;
+  putU64(out + 4, info.position);
+  putU32(out + 12, info.samples);
+  putU64(out + 16, info.start_us);
+  putU32(out + 24, 0xFFFFFFFFu);
+  out[28] = info.flags;
+  return kInfoBytes;
 }
 
 size_t LogicCapture::segmentInfo(uint8_t *out) const {
   putU32(out, 0);                  // serial
-  putU32(out + 4, 0);              // position
-  putU32(out + 8, samples_);
-  putU32(out + 12, start_us_);
-  putU32(out + 16, 0xFFFFFFFFu);   // no trigger inside (immediate start)
-  out[20] = 0;
-  return 21;
+  putU64(out + 4, 0);              // position
+  putU32(out + 12, samples_);
+  putU64(out + 16, start_us_);
+  putU32(out + 24, 0xFFFFFFFFu);   // no trigger inside (immediate start)
+  out[28] = 0;
+  return kInfoBytes;
 }
 
 void LogicCapture::poll() {
@@ -638,7 +639,7 @@ void LogicCapture::poll() {
     if (mode_ == 2 && (state_ == kStateCapturing || state_ == kStatePaused)) state_ = paused_ ? kStatePaused : kStateCapturing;
     while (reported_ < completed_) {
       if (subscribed_ && mode_ == 2) {   // streaming sends no segment events (its data frames carry the positions)
-        uint8_t seg[21];
+        uint8_t seg[kInfoBytes];
         endpoint_.event(*this, kEventSegment, seg, infoBytes(infos_[reported_ % kInfos], seg));
       }
       ++reported_;
@@ -655,7 +656,7 @@ void LogicCapture::poll() {
   esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
   state_ = kStateDone;
   if (subscribed_) {
-    uint8_t seg[21];
+    uint8_t seg[kInfoBytes];
     endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
     const uint8_t reason = kStoppedComplete;
     endpoint_.event(*this, kEventStopped, &reason, 1);
@@ -671,14 +672,14 @@ uint32_t LogicCapture::segmentLength(uint32_t serial) const {
 }
 
 // Streaming: the stored segment holding stream `position` (not yet reused), and the offset in it.
-bool LogicCapture::findSegment(uint32_t position, uint32_t &serial, uint32_t &offset) const {
+bool LogicCapture::findSegment(uint64_t position, uint32_t &serial, uint32_t &offset) const {
   const uint32_t done = completed_;
   const uint32_t oldest = done >= segment_count_ ? done - segment_count_ + 1 : 0;
   for (uint32_t k = done + 1; k-- > oldest;) {
     const uint32_t length = segmentLength(k);
-    const uint32_t delta = position - infos_[k % kInfos].position;
     if (k == done && fill_ == 0) continue;   // not started
-    if (delta < length) { serial = k; offset = delta; return true; }
+    const uint64_t begin = infos_[k % kInfos].position;
+    if (position >= begin && position - begin < length) { serial = k; offset = static_cast<uint32_t>(position - begin); return true; }
   }
   return false;
 }
@@ -693,8 +694,8 @@ size_t LogicCapture::pending() {
 }
 
 // Streaming push: the next bytes in stream order, from the segment being sent; a segment fully sent is released.
-size_t LogicCapture::pull(uint32_t &position, uint8_t *out, size_t capacity) {
-  if (mode_ != 3 || direct_ || !store_) return 0;
+size_t LogicCapture::pull(uint8_t *out, size_t capacity) {   // payload: position(u64) then data
+  if (mode_ != 3 || direct_ || !store_ || capacity <= 8) return 0;
   const uint32_t serial = sent_seg_;
   const bool finished = serial < completed_;
   const uint32_t length = segmentLength(serial);
@@ -704,19 +705,19 @@ size_t LogicCapture::pull(uint32_t &position, uint8_t *out, size_t capacity) {
     return 0;
   }
   size_t n = length - sent_off_;
-  if (n > capacity) n = capacity;
-  position = infos_[serial % kInfos].position + sent_off_;
-  memcpy(out, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + sent_off_, n);
+  if (n > capacity - 8) n = capacity - 8;
+  putU64(out, infos_[serial % kInfos].position + sent_off_);
+  memcpy(out + 8, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + sent_off_, n);
   sent_off_ += n;
   if (finished && sent_off_ >= length) { sent_off_ = 0; sent_seg_ = serial + 1; released_ = serial + 1; }
-  return n;
+  return 8 + n;
 }
 
 Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
   if (op == kOpConfigure || op == kOpQuery) return configure(p, n, out, capacity, op == kOpQuery);
   // Every other request: a fixed part (start / stop / force / status: none; read: 8; segments / release: 4), then
   // TLVs, none of which these ops read.
-  const size_t fixed = op == kOpRead ? 8 : (op == kOpSegments || op == kOpRelease) ? 4 : 0;
+  const size_t fixed = op == kOpRead ? 12 : (op == kOpSegments || op == kOpRelease) ? 4 : 0;
   Tail tail;
   if (op >= kOpStart && op <= kOpRelease) {
     const Result parsed = plainTail(tail, p, n, fixed, out, capacity);
@@ -755,84 +756,77 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (subscribed_) { const uint8_t reason = kStoppedHost; endpoint_.event(*this, kEventStopped, &reason, 1); }
       }
       return tail.finish(completed(), out, capacity);
-    case kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u32) flags(u8)
-      if (capacity < 10) return failed();
+    case kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u64) flags(u8)
+      if (capacity < 14) return failed();
       poll();
       out[0] = state_;
       if (mode_ == 2 || mode_ == 3) {
         putU32(out + 1, completed_);
-        putU32(out + 5, mode_ == 3 ? static_cast<uint32_t>(captured_) : completed_ * segment_bytes_ + fill_);
-        out[9] = (queue_overflow_ ? 1 : 0) | (overruns_ ? 2 : 0) | (stage_drops_ ? 4 : 0);   // bit0 chunk queue full,
+        putU64(out + 5, mode_ == 3 ? captured_ : static_cast<uint64_t>(completed_) * segment_bytes_ + fill_);
+        out[13] = (queue_overflow_ ? 1 : 0) | (overruns_ ? 2 : 0) | (stage_drops_ ? 4 : 0);   // bit0 chunk queue full,
                                                                      // bit1 DMA ring overrun, bit2 no free stage
       } else {
         putU32(out + 1, state_ == kStateDone ? 1 : 0);                // segments done
-        putU32(out + 5, state_ == kStateDone ? bytes_ : 0);           // write position
-        out[9] = 0;
+        putU64(out + 5, state_ == kStateDone ? bytes_ : 0);           // write position
+        out[13] = 0;
       }
-      return tail.finish(completed(10), out, capacity);
+      return tail.finish(completed(14), out, capacity);
     }
-    case kOpRead: {   // position(u32) max(u32) [TLV]  ->  position(u32) flags(u8: bit0 more, bit1 gap) data (closed tail)
-      if (capacity < 5) return failed();
+    case kOpRead: {   // position(u64) max(u32) [TLV]  ->  position(u64) flags(u8: bit0 more, bit1 gap) data (closed tail)
+      if (capacity < 9) return failed();
       poll();
-      uint32_t position = getU32(p), max = getU32(p + 4);
+      uint64_t position = getU64(p);
+      uint32_t max = getU32(p + 8);
+      size_t room = capacity - 9;
+      if (room > max_read_) room = max_read_;
+      if (max > room) max = static_cast<uint32_t>(room);
       if (mode_ == 3) {   // streaming: what is still in the store, by stream position
         uint32_t serial = 0, offset = 0;
         uint8_t flags = 0;
         // zero-copy streaming keeps nothing to read back; gone (reused) or not captured yet: nothing, gap flag
         if (direct_ || !findSegment(position, serial, offset)) {
-          putU32(out, position);
-          out[4] = 2;
-          return completed(5);
+          putU64(out, position);
+          out[8] = 2;
+          return completed(9);
         }
         uint32_t count = segmentLength(serial) - offset;
-        size_t room = capacity - 5;
-        if (room > max_read_) room = max_read_;
-        if (max > room) max = static_cast<uint32_t>(room);
         if (count > max) { count = max; flags |= 1; }
-        putU32(out, position);
-        out[4] = flags;
-        memcpy(out + 5, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + offset, count);
-        return completed(5 + count);
+        putU64(out, position);
+        out[8] = flags;
+        memcpy(out + 9, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + offset, count);
+        return completed(9 + count);
       }
-      if (mode_ == 2) {
-        // Completed segments the host has not released. Positions wrap at 2^32 and a segment's length need not
-        // divide that, so the segment is found by its serial: counted from the first unreleased one, whose position
-        // is released_ * segment_bytes_ (mod 2^32) - the whole store is far below 2 GiB, so differences are exact.
-        const uint32_t first = released_ * segment_bytes_, end = completed_ * segment_bytes_;
+      if (mode_ == 2) {   // completed segments the host has not released (positions are u64: no wrap to handle)
+        const uint64_t first = static_cast<uint64_t>(released_) * segment_bytes_;
+        const uint64_t end = static_cast<uint64_t>(completed_) * segment_bytes_;
         uint8_t flags = 0;
-        if (static_cast<int32_t>(position - first) < 0) { position = first; flags |= 2; }   // already released: gap
-        if (static_cast<int32_t>(position - end) > 0) position = end;
-        const uint32_t ahead = position - first;                       // bytes past the first unreleased segment
-        const uint32_t serial = released_ + ahead / segment_bytes_, offset = ahead % segment_bytes_;
-        uint32_t count = end - position;
-        const uint32_t in_segment = segment_bytes_ - offset;
-        if (count > in_segment) count = in_segment;                    // one segment per answer (contiguous)
-        size_t room = capacity - 5;
-        if (room > max_read_) room = max_read_;
-        if (max > room) max = static_cast<uint32_t>(room);
+        if (position < first) { position = first; flags |= 2; }   // already released: gap
+        if (position > end) position = end;
+        const uint64_t ahead = position - first;                   // bytes past the first unreleased segment
+        const uint32_t serial = released_ + static_cast<uint32_t>(ahead / segment_bytes_);
+        const uint32_t offset = static_cast<uint32_t>(ahead % segment_bytes_);
+        uint64_t left = end - position;
+        uint32_t count = left < segment_bytes_ - offset ? static_cast<uint32_t>(left) : segment_bytes_ - offset;   // one segment per answer
         if (count > max) { count = max; flags |= 1; }
-        if (end - position > count) flags |= 1;
-        putU32(out, position);
-        out[4] = flags;
+        if (left > count) flags |= 1;
+        putU64(out, position);
+        out[8] = flags;
         const size_t slot = serial % segment_count_;
-        if (count) memcpy(out + 5, store_ + slot * segment_bytes_ + offset, count);
-        return completed(5 + count);
+        if (count) memcpy(out + 9, store_ + slot * segment_bytes_ + offset, count);
+        return completed(9 + count);
       }
-      const uint32_t have = state_ == kStateDone ? bytes_ : 0;
+      const uint64_t have = state_ == kStateDone ? bytes_ : 0;
       if (position > have) position = have;
-      uint32_t count = have - position;
-      size_t room = capacity - 5;
-      if (room > max_read_) room = max_read_;
-      if (max > room) max = static_cast<uint32_t>(room);
+      uint32_t count = static_cast<uint32_t>(have - position);
       uint8_t flags = 0;
       if (count > max) { count = max; flags |= 1; }                   // more
-      putU32(out, position);
-      out[4] = flags;
-      if (count) memcpy(out + 5, buffer_ + position, count);
-      return completed(5 + count);
+      putU64(out, position);
+      out[8] = flags;
+      if (count) memcpy(out + 9, buffer_ + position, count);
+      return completed(9 + count);
     }
     case kOpSegments: {   // from_serial(u32) [TLV]  ->  count(u8) segment infos
-      if (capacity < 1 + 21) return failed();
+      if (capacity < 1 + kInfoBytes) return failed();
       poll();
       const size_t room = tail.anyIgnored() && capacity > 2 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
       if (mode_ == 2 || mode_ == 3) {
@@ -841,7 +835,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (from < oldest) from = oldest;
         uint8_t count = 0;
         size_t used = 1;
-        for (uint32_t k = from; k < completed_ && used + 21 <= room && count < 255; ++k, ++count)
+        for (uint32_t k = from; k < completed_ && used + kInfoBytes <= room && count < 255; ++k, ++count)
           used += infoBytes(infos_[k % kInfos], out + used);
         out[0] = count;
         return tail.finish(completed(used), out, capacity);

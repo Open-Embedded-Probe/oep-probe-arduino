@@ -3,6 +3,7 @@
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
 
 #include <esp_cpu.h>
+#include <esp_timer.h>
 #include <esp_heap_caps.h>
 #include <soc/gpio_struct.h>
 #include <string.h>
@@ -191,19 +192,19 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
 
 size_t SamplerCapture::segmentInfo(uint8_t *out) const {
   putU32(out, 0);                  // serial
-  putU32(out + 4, 0);              // position
-  putU32(out + 8, samples_);
-  putU32(out + 12, start_us_);
-  putU32(out + 16, 0xFFFFFFFFu);   // no trigger inside (immediate start)
-  out[20] = 0;
-  return 21;
+  putU64(out + 4, 0);              // position
+  putU32(out + 12, samples_);
+  putU64(out + 16, start_us_);
+  putU32(out + 24, 0xFFFFFFFFu);   // no trigger inside (immediate start)
+  out[28] = 0;
+  return 29;
 }
 
 void SamplerCapture::poll() {
   if (state_ != cap::kStateCapturing || !done_) return;
   state_ = cap::kStateDone;
   if (subscribed_) {
-    uint8_t seg[21];
+    uint8_t seg[29];
     endpoint_.event(*this, cap::kEventSegment, seg, segmentInfo(seg));
     const uint8_t reason = cap::kStoppedReasonComplete;
     endpoint_.event(*this, cap::kEventStopped, &reason, 1);
@@ -223,7 +224,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       waitIdle();
       done_ = false;
       memset(buffer_, 0, samples_);
-      start_us_ = micros();
+      start_us_ = static_cast<uint64_t>(esp_timer_get_time());
       if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, configMAX_PRIORITIES - 1, &sampler_, 0) != pdPASS) {
         sampler_ = nullptr;
         state_ = cap::kStateError;
@@ -246,40 +247,41 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
     case cap::kOpStatus: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 10) return failed();
+      if (capacity < 14) return failed();
       poll();
       out[0] = state_;
       const bool finished = state_ == cap::kStateDone;
       putU32(out + 1, finished ? 1 : 0);
-      putU32(out + 5, finished ? samples_ : 0);
-      out[9] = 0;
-      return tail.finish(completed(10), out, capacity);
+      putU64(out + 5, finished ? samples_ : 0);
+      out[13] = 0;
+      return tail.finish(completed(14), out, capacity);
     }
-    case cap::kOpRead: {           // position(u32) max(u32) -> position flags data (closed tail)
-      if (n < 8) return rejected(kRejectMalformed);
-      const Result parsed = plainTail(tail, p, n, 8, out, capacity);
+    case cap::kOpRead: {           // position(u64) max(u32) -> position(u64) flags data (closed tail)
+      if (n < 12) return rejected(kRejectMalformed);
+      const Result parsed = plainTail(tail, p, n, 12, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 5) return failed();
+      if (capacity < 9) return failed();
       poll();
-      const uint32_t have = state_ == cap::kStateDone ? samples_ : 0;
-      uint32_t position = getU32(p), max = getU32(p + 4);
+      const uint64_t have = state_ == cap::kStateDone ? samples_ : 0;
+      uint64_t position = getU64(p);
+      uint32_t max = getU32(p + 8);
       if (position > have) position = have;
-      uint32_t count = have - position;
-      size_t room = capacity - 5;
+      uint32_t count = static_cast<uint32_t>(have - position);
+      size_t room = capacity - 9;
       if (room > max_read_) room = max_read_;
       if (max > room) max = static_cast<uint32_t>(room);
       uint8_t flags = 0;
       if (count > max) { count = max; flags |= 1; }   // more
-      putU32(out, position);
-      out[4] = flags;
-      if (count) memcpy(out + 5, buffer_ + position, count);
-      return completed(5 + count);
+      putU64(out, position);
+      out[8] = flags;
+      if (count) memcpy(out + 9, buffer_ + position, count);
+      return completed(9 + count);
     }
     case cap::kOpSegments: {
       if (n < 4) return rejected(kRejectMalformed);
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 1 + 21) return failed();
+      if (capacity < 1 + 29) return failed();
       poll();
       const bool one = state_ == cap::kStateDone && getU32(p) == 0;
       out[0] = one ? 1 : 0;
