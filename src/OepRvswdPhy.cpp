@@ -366,7 +366,17 @@ bool RvswdPhy::attach() {
       // leaves the bus floating, and all ones has bit 0 set too (2026-09-23, CH32X035), so all ones is no answer.
       uint32_t control = 0;
       const bool up = readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1);
-      if (!up) writeRaw(kDmControl, 1);
+      if (!up) {
+        writeRaw(kDmControl, 1);
+        // The CFGR pair above went to a module that was not active (a detach writes DMCONTROL = 0): write it again now
+        // that it is, the order a WCH-LinkE uses (dmactive, then CFGR; wch-protocols link-to-target §5). It did not
+        // cure the dmseq console coming back 1-10 s late after a refused automatic attach (probe-cdc-and-persistence
+        // §7.5.1); oep_smoke x035 14/14 with it.
+        for (int i = 0; i < 2; ++i) {
+          writeRaw(kDmShadowCfgr, kCfgr);
+          writeRaw(kDmCfgr, kCfgr);
+        }
+      }
       // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
       awake = readRaw(kDmStatus, first) && ((first >> 8) & 0xf) != 0 && first != 0xffffffffu;
     }
