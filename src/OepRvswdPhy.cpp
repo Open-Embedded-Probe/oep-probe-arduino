@@ -150,7 +150,9 @@ void RvswdPhy::park() {
 // with_wake runs the hundred-clock wake burst. That burst resets the target, not just the
 // debug interface: with it on every re-sync, the CH32L103's application restarted each
 // time the probe halted it - its SysTick read the same 8 ms however long we had waited
-// (2026-09-23). So only a cold bring-up wakes; re-syncing just rewrites the config.
+// (2026-09-23). So only a cold bring-up wakes; re-syncing just rewrites the config. A CH32X035 is not reset by it:
+// neither the 100-clock burst nor 100-236 clocks with SWDIO held high or low set havereset there (wch-protocols
+// E170, 2026-09-26) - the reset is the L103's, so keep the wake off re-syncs for the parts that do it.
 void RvswdPhy::configureBus(bool with_wake) {
   gIo.bothHigh();
   ioDrive(swdio_, swclk_);

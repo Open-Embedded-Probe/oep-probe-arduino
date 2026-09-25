@@ -12,6 +12,8 @@ namespace oep {
 
 class RvswdPhy final : public DmiPhy {
  public:
+  // Takes the two pins into a dedicated-GPIO bundle (P4). pinMode / digitalWrite on either pin afterwards drops it
+  // from the bundle, and neither begin() again nor anything short of a chip reset brings it back (wch-protocols E170).
   bool begin(int swdio, int swclk);
   // Drive the bus, write dmactive, and pick the smallest half period whose
   // DMSTATUS reads are all parity-clean and consistent. false = no target.
