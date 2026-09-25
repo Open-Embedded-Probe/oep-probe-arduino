@@ -52,6 +52,7 @@ bool Endpoint::add(Interface &interface) {
 }
 
 void Endpoint::send(size_t length) {
+  wrote_ = true;
   if (framing_ == Framing::kCobsCrc) writeCobsFrame(stream_, tx_, length);
   else writeFrame(stream_, tx_, length);
 }
@@ -191,6 +192,8 @@ void Endpoint::poll() {
     }
   }
   push();   // after the results for everything that has arrived
+  if (flush_after_burst_ && wrote_) stream_.flush();
+  wrote_ = false;
 }
 
 void Endpoint::lapse() {
