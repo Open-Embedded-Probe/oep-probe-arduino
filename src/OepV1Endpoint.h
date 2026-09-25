@@ -42,6 +42,9 @@ class Endpoint {
   // Experimental: at most this many bytes of pushes may wait in the transport (0 = no limit). Size it to the link:
   // a result waits behind up to this much (256 B is about 0.3 ms on USB-Serial/JTAG, 23 ms on a 115200 UART).
   void setPushQueue(size_t bytes) { push_queue_ = bytes; }
+  // Flush the stream after each poll that wrote something: a buffered USB vendor interface sends a short frame only
+  // when flushed (E160). Off for streams that send by themselves (USB-Serial/JTAG, UART).
+  void setFlushAfterBurst(bool on) { flush_after_burst_ = on; }
   void poll();
 
  private:
@@ -90,6 +93,7 @@ class Endpoint {
   bool queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length);
   bool sendEvents();
   size_t push_queue_ = 1024;
+  bool flush_after_burst_ = false, wrote_ = false;
   int tx_room_max_ = 0;
   Result subscription(uint8_t op, const uint8_t *payload, size_t length);
   void push();

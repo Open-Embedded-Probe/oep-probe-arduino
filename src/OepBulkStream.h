@@ -40,6 +40,8 @@ class BulkStream final : public Stream {
     return done;
   }
   void flush() override { vendor_.flush(); }
+  // What can be written now without waiting (the v1 endpoint sizes its pushes from this).
+  int availableForWrite() override { return static_cast<int>(vendor_.writeAvailable()); }
   bool mounted() const { return vendor_.mounted(); }
 
  private:
