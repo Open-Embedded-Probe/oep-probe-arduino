@@ -170,7 +170,12 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
 
 void Ch32Dm::detach() {
   host_raw_ = false;
-  if (attached()) { phy_.write(kAbstractAuto, 0); phy_.write(kDmControl, 0); }
+  // dmactive stays set (haltreq / resumereq / ndmreset go): writing 0 reset the debug module, which wiped a dmseq
+  // frame the target had out in DATA0, and the target, reading 0 as silence, then waited out its timeout - counted in
+  // its own reads of DATA0, which the probe's polling slows, so 1-10 s - before posting again (the console came back
+  // that late after a refused automatic attach; with dmactive kept, 8 of 8 came at once. probe-cdc-and-persistence
+  // §7.5.1). The same frame is at stake after a host's flash, reset and detach.
+  if (attached()) { phy_.write(kAbstractAuto, 0); phy_.write(kDmControl, 1); }
   halted_ = false;
   phy_.park();   // floating both wires high is how this bus is told to reset
 }
