@@ -17,6 +17,10 @@ constexpr uint8_t kRoleRequest = 0x01, kRoleResult = 0x02, kRoleSession = 0x80;
 //   role(0x06) fn(u16) seq(u16) position(u32) data        seq counts this fn's frames, position its bytes
 constexpr uint8_t kRolePush = 0x06;
 constexpr size_t kPushHeader = 9;
+//   role(0x05) fn(u16) seq(u16) kind(u8) payload            events; fn 0 kind 1 = heartbeat (boot_id u32, uptime_ms u32)
+constexpr uint8_t kRoleEvent = 0x05;
+constexpr size_t kEventHeader = 6;
+constexpr uint8_t kEventHeartbeat = 0x01;
 constexpr size_t kRequestHeader = 6, kResultHeader = 5, kSessionBytes = 4;
 
 // Reject reasons added in v1 (0x01..0x06 as in v0).
@@ -119,6 +123,8 @@ class Interface {
     (void)position; (void)out; (void)capacity;
     return 0;
   }
+  // Bytes waiting to be pulled, for the subscriber's "at least n bytes or t ms" batching (0 when unknown: no batching).
+  virtual size_t pending() { return 0; }
 };
 
 // The part of oep.core's describe every probe writes the same way: firmware, model, unit id, channel count and

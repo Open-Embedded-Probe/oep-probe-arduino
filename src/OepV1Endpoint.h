@@ -33,6 +33,12 @@ class Endpoint {
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
   // A random-ish value per boot; 0 = unknown (then hosts treat every no-session as a possible reboot).
   void setBootId(uint32_t boot_id) { boot_id_ = boot_id; }
+  // Experimental event from an interface (sent to the lock holder if it subscribed to that interface), after
+  // results; kept in a small queue until then (oldest dropped when full - the seq gap shows it).
+  bool event(Interface &from, uint8_t kind, const uint8_t *payload, size_t length);
+  // Events the interface lost before handing them over (its own queue overflowed): the seq skips them, so the
+  // host sees the gap. Every event generated must take a seq number, sent or not.
+  void eventsLost(Interface &from, uint16_t count);
   // Experimental: at most this many bytes of pushes may wait in the transport (0 = no limit). Size it to the link:
   // a result waits behind up to this much (256 B is about 0.3 ms on USB-Serial/JTAG, 23 ms on a 115200 UART).
   void setPushQueue(size_t bytes) { push_queue_ = bytes; }
@@ -69,6 +75,20 @@ class Endpoint {
   // Experimental push subscriptions, per fn.
   bool subscribed_[kMaxInterfaces] = {};
   uint16_t push_seq_[kMaxInterfaces] = {};
+  uint16_t min_bytes_[kMaxInterfaces] = {}, max_delay_ms_[kMaxInterfaces] = {};
+  uint32_t waiting_since_[kMaxInterfaces] = {};
+  bool waiting_[kMaxInterfaces] = {};
+  // events: fn (0 = core), seq per fn shared with data frames
+  struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[24]; };
+  static constexpr size_t kEvents = 32;
+  Event events_[kEvents];
+  uint32_t event_head_ = 0, event_tail_ = 0;
+  uint16_t core_seq_ = 0;
+  bool heartbeat_ = false;
+  uint16_t heartbeat_ms_ = 1000;
+  uint32_t heartbeat_last_ = 0;
+  bool queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length);
+  bool sendEvents();
   size_t push_queue_ = 1024;
   int tx_room_max_ = 0;
   Result subscription(uint8_t op, const uint8_t *payload, size_t length);
