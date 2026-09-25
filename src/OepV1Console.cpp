@@ -82,8 +82,8 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
   const uint8_t *p = payload + 1;
   const size_t n = length - 1;
   switch (op) {
-    case kOpRead: {   // from(u8) arg(u32) max(u16) [TLV]  ->  start(u32) flags(u8) data (closed tail)
-      const Result parsed = plainTail(tail, p, n, 7, out, capacity);
+    case kOpRead: {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) data (closed tail)
+      const Result parsed = plainTail(tail, p, n, PositionStream::kReadRequest, out, capacity);
       if (refused(parsed)) return parsed;
       if (p[0] > reg::target_console::kReadFromLastMark) return rejected(kRejectUnsupported);
       poll();   // take what is waiting first

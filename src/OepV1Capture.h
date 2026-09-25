@@ -67,7 +67,7 @@ class LogicCapture final : public Interface {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   size_t pending() override;
-  size_t pull(uint32_t &position, uint8_t *out, size_t capacity) override;
+  size_t pull(uint8_t *out, size_t capacity) override;
   void poll();   // from loop(): turns a finished capture into events
 
  private:
@@ -87,7 +87,7 @@ class LogicCapture final : public Interface {
   parlio_rx_delimiter_handle_t delimiter_ = nullptr;
   uint8_t *buffer_ = nullptr;
   volatile bool done_ = false;
-  uint32_t start_us_ = 0;
+  uint64_t start_us_ = 0;   // µs since boot (esp_timer), u64 like the positions
 
   Result configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query);
   bool open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t &num, uint32_t &den);
@@ -96,13 +96,14 @@ class LogicCapture final : public Interface {
   size_t storeBudget(uint32_t &caps) const;   // bytes the segments may take now (counting the store already held)
   // streaming through the endpoint's zero-copy transport: the harvest copies straight from the DMA ring into stages
   // (internal RAM, one whole push frame each: length prefix, push header, data) and hands full ones to the transport
-  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + 9;
+  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + kPushHeader + 8;   // length, core push header, position(u64)
   bool direct_ = false;
   uint8_t *stage_[kStagesMax] = {};
   uint8_t stage_count_ = 0;
   volatile uint32_t stage_free_ = 0;   // bit per stage the transport has given back
   int stage_cur_ = -1;
-  uint32_t stage_fill_ = 0, stage_pos_ = 0, stage_since_ = 0, stage_data_ = 0;
+  uint32_t stage_fill_ = 0, stage_since_ = 0, stage_data_ = 0;
+  uint64_t stage_pos_ = 0;
   volatile uint32_t stage_drops_ = 0;  // bytes dropped because every stage was queued or in flight
   bool carry_ = false;                 // a byte held back from the last frame (so that it ended with a short packet)
   uint8_t carry_byte_ = 0;
@@ -114,7 +115,8 @@ class LogicCapture final : public Interface {
   size_t store_bytes_ = 0;
   // repeat
   struct Chunk { const uint8_t *data; size_t length; };
-  struct Info { uint32_t serial, position, samples, start_us; uint8_t flags; };
+  struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_us; uint8_t flags; };
+  static constexpr size_t kInfoBytes = 29;   // serial u32, position u64, samples u32, start_us u64, trigger_index u32, flags u8
   uint8_t mode_ = 1;
   uint32_t segment_bytes_ = 0, segment_count_ = 0;
   uint8_t *ring_ = nullptr, *store_ = nullptr;
@@ -131,7 +133,7 @@ class LogicCapture final : public Interface {
   volatile uint32_t sent_seg_ = 0;
   uint32_t sent_off_ = 0;
   uint32_t segmentLength(uint32_t serial) const;
-  bool findSegment(uint32_t position, uint32_t &serial, uint32_t &offset) const;
+  bool findSegment(uint64_t position, uint32_t &serial, uint32_t &offset) const;
   bool paused_reported_ = false;
   Info infos_[kInfos];
   static bool partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *, void *context);

@@ -1,10 +1,11 @@
 // The position-addressed byte stream behind oep.target.console and oep.fixture.uart (oep-spec
 // v1-core-wire-delta.ja.md §5.7 / §5.8, console-stream.ja.md): bytes kept in a ring that reads do not consume,
-// addressed by a u32 position that wraps, and marks with their own u32 serial numbers.
+// addressed by a u64 position (it does not wrap in practice), and marks with their own u32 serial numbers. One of the
+// standard interfaces' shared forms (the capture uses the same u64 positions).
 //
-//   read(from u8, arg u32, max u16)  ->  start(u32) flags(u8: bit0 more, bit1 gap) data        (closed tail)
+//   read(from u8, arg u64, max u16)  ->  start(u64) flags(u8: bit0 more, bit1 gap) data        (closed tail)
 //        from: 0 position = arg, 1 oldest, 2 now, 3 the last mark of kind arg (0 = any)
-//   marks(from_serial u32)           ->  more(u8) count(u8) count x (serial u32, position u32, kind u8, time_ms u32,
+//   marks(from_serial u32)           ->  more(u8) count(u8) count x (serial u32, position u64, kind u8, time_ms u32,
 //                                        detail u8)
 #pragma once
 
@@ -17,23 +18,24 @@ namespace v1 {
 
 class PositionStream {
  public:
-  struct Mark { uint32_t serial, position; uint8_t kind; uint32_t time_ms; uint8_t detail; };
-  static constexpr size_t kMarkBytes = 14;
+  struct Mark { uint32_t serial; uint64_t position; uint8_t kind; uint32_t time_ms; uint8_t detail; };
+  static constexpr size_t kMarkBytes = 18;
+  static constexpr size_t kReadRequest = 11;   // from(u8) arg(u64) max(u16)
 
-  // capacity: a power of two (positions wrap at 2^32, the ring index is position & (capacity - 1)).
+  // capacity: a power of two (the ring index is position & (capacity - 1)).
   PositionStream(uint8_t *buffer, size_t capacity, Mark *marks, size_t mark_capacity)
       : buffer_(buffer), capacity_(capacity), marks_(marks), mark_capacity_(mark_capacity) {}
 
   // The oldest byte goes when the ring is full (a read then reports a gap).
   void put(uint8_t byte) { buffer_[total_ & (capacity_ - 1)] = byte; ++total_; }
-  uint32_t end() const { return total_; }   // the position of the next byte
+  uint64_t end() const { return total_; }   // the position of the next byte
   // The bytes kept from `from` on that lie in one piece of the ring (from must be within oldest()..end()).
-  size_t contiguous(uint32_t from, const uint8_t *&data) const {
-    const size_t at = from & (capacity_ - 1), left = total_ - from;
+  size_t contiguous(uint64_t from, const uint8_t *&data) const {
+    const size_t at = static_cast<size_t>(from & (capacity_ - 1)), left = static_cast<size_t>(total_ - from);
     data = buffer_ + at;
     return left < capacity_ - at ? left : capacity_ - at;
   }
-  uint32_t oldest() const { return total_ - base_ > capacity_ ? total_ - static_cast<uint32_t>(capacity_) : base_; }
+  uint64_t oldest() const { return total_ - base_ > capacity_ ? total_ - capacity_ : base_; }
   void mark(uint8_t kind, uint8_t detail = 0) {
     marks_[serial_ % mark_capacity_] = {serial_, total_, kind, static_cast<uint32_t>(millis()), detail};
     ++serial_;
@@ -43,12 +45,12 @@ class PositionStream {
     mark(reg::target_console::kMarkKindClear);
   }
 
-  // p: from(u8) arg(u32) max(u16). from > 3 is the caller's to refuse (unknown value).
+  // p: from(u8) arg(u64) max(u16). from > 3 is the caller's to refuse (unknown value).
   Result read(const uint8_t *p, uint8_t *out, size_t capacity, uint16_t max_read) const {
-    if (capacity < 5) return failed();
+    if (capacity < 9) return failed();
     const uint8_t from = p[0];
-    const uint32_t arg = getU32(p + 1);
-    uint32_t start = total_;
+    const uint64_t arg = getU64(p + 1);
+    uint64_t start = total_;
     if (from == reg::target_console::kReadFromPosition) {
       start = arg;
     } else if (from == reg::target_console::kReadFromOldest) {
@@ -62,18 +64,18 @@ class PositionStream {
       }
     }
     uint8_t flags = 0;
-    if (static_cast<int32_t>(start - oldest()) < 0) { start = oldest(); flags |= 2; }   // gap: pushed out or cleared
-    if (static_cast<int32_t>(start - total_) > 0) start = total_;
-    uint32_t count = total_ - start;
-    uint32_t room = static_cast<uint32_t>(capacity - 5);
-    uint16_t max = getU16(p + 5);
+    if (start < oldest()) { start = oldest(); flags |= 2; }   // gap: pushed out or cleared
+    if (start > total_) start = total_;
+    uint32_t count = static_cast<uint32_t>(total_ - start);
+    uint32_t room = static_cast<uint32_t>(capacity - 9);
+    uint16_t max = getU16(p + 9);
     if (max > max_read) max = max_read;
     if (room > max) room = max;
     if (count > room) { count = room; flags |= 1; }
-    putU32(out, start);
-    out[4] = flags;
-    for (uint32_t i = 0; i < count; ++i) out[5 + i] = buffer_[(start + i) & (capacity_ - 1)];
-    return completed(5 + count);
+    putU64(out, start);
+    out[8] = flags;
+    for (uint32_t i = 0; i < count; ++i) out[9 + i] = buffer_[(start + i) & (capacity_ - 1)];
+    return completed(9 + count);
   }
 
   // Marks from serial `from` on (serial arithmetic; an older one starts at the oldest kept). -> bytes written.
@@ -88,10 +90,10 @@ class PositionStream {
       if (used + kMarkBytes > capacity || count == 255) { more = true; break; }
       const Mark &mk = marks_[s % mark_capacity_];
       putU32(out + used, mk.serial);
-      putU32(out + used + 4, mk.position);
-      out[used + 8] = mk.kind;
-      putU32(out + used + 9, mk.time_ms);
-      out[used + 13] = mk.detail;
+      putU64(out + used + 4, mk.position);
+      out[used + 12] = mk.kind;
+      putU32(out + used + 13, mk.time_ms);
+      out[used + 17] = mk.detail;
       used += kMarkBytes;
       ++count;
     }
@@ -105,8 +107,8 @@ class PositionStream {
   size_t capacity_;
   Mark *marks_;
   size_t mark_capacity_;
-  uint32_t total_ = 0;    // bytes ever collected = the position of the next byte
-  uint32_t base_ = 0;     // nothing before this position is kept (clear)
+  uint64_t total_ = 0;    // bytes ever collected = the position of the next byte
+  uint64_t base_ = 0;     // nothing before this position is kept (clear)
   uint32_t serial_ = 0;   // marks ever made = the serial of the next one
 };
 
@@ -123,7 +125,7 @@ class StreamPort {
   void toPort(const PositionStream &stream) {
     if (!port_) return;
     if (port_->availableForWrite() <= 0) { pos_ = stream.end(); return; }
-    if (static_cast<int32_t>(stream.oldest() - pos_) > 0) { pos_ = stream.oldest(); ++gaps_; }
+    if (stream.oldest() > pos_) { pos_ = stream.oldest(); ++gaps_; }
     while (pos_ != stream.end()) {
       const uint8_t *data;
       const size_t n = stream.contiguous(pos_, data);
@@ -142,7 +144,8 @@ class StreamPort {
 
  private:
   Stream *port_ = nullptr;
-  uint32_t pos_ = 0, gaps_ = 0;
+  uint64_t pos_ = 0;
+  uint32_t gaps_ = 0;
 };
 
 }  // namespace v1

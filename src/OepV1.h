@@ -17,9 +17,10 @@ namespace v1 {
 constexpr uint8_t kRoleRequest = reg::kRoleRequest, kRoleResult = reg::kRoleResult,
                   kRoleSession = reg::kRoleSessionFlag;
 // Probe-initiated frames (§4.5), sent only to the lock holder that subscribed, after results.
-//   role(0x06) fn(u16) seq(u16) position(u32) data        seq counts this fn's frames, position its bytes
+//   role(0x06) fn(u16) seq(u16) payload     the core's part; the payload is the interface's (a stream: position(u64)
+//                                           then data - the standard interfaces' position stream)
 constexpr uint8_t kRolePush = reg::kRoleData;
-constexpr size_t kPushHeader = 9;
+constexpr size_t kPushHeader = 5;
 //   role(0x05) fn(u16) seq(u16) kind(u8) payload            events; fn 0 kind 1 = heartbeat (boot_id u32, uptime_ms u32)
 constexpr uint8_t kRoleEvent = reg::kRoleEvent;
 constexpr size_t kEventHeader = 6;
@@ -67,6 +68,8 @@ inline uint32_t getU32(const uint8_t *p) {
 }
 inline void putU16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 inline void putU32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+inline uint64_t getU64(const uint8_t *p) { return getU32(p) | (static_cast<uint64_t>(getU32(p + 4)) << 32); }
+inline void putU64(uint8_t *p, uint64_t v) { putU32(p, static_cast<uint32_t>(v)); putU32(p + 4, static_cast<uint32_t>(v >> 32)); }
 
 // bit n of a registry kLockFreeOps mask = op n needs no lock
 inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> op) & 1); }
@@ -281,11 +284,11 @@ class Interface {
   virtual void sessionLapsed() {}
   // The endpoint's frame limit, told when the interface is added: what a describe may promise.
   virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
-  // Push (§4.5): while subscribed, the endpoint asks for bytes to send. Return up to `capacity` bytes and set
-  // `position` to the stream position of the first one (a jump past the previous end tells the host what was lost).
+  // Push (§4.5): while subscribed, the endpoint asks for a data frame's payload. Write up to `capacity` bytes of it
+  // (the interface decides its form: a stream writes position(u64) then data) and return the length; 0 = nothing now.
   virtual bool subscribe(bool on) { (void)on; return false; }   // false: this interface does not push
-  virtual size_t pull(uint32_t &position, uint8_t *out, size_t capacity) {
-    (void)position; (void)out; (void)capacity;
+  virtual size_t pull(uint8_t *out, size_t capacity) {
+    (void)out; (void)capacity;
     return 0;
   }
   // Bytes waiting to be pulled, for the subscriber's "at least n bytes or t ms" batching (0 when unknown: no batching).

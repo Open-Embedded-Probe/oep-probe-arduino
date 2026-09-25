@@ -206,8 +206,8 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       putU32(out, baud_);
       return tail.finish(completed(4), out, capacity);
     }
-    case kOpRead: {   // from(u8) arg(u32) max(u16) [TLV]  ->  start(u32) flags(u8) data (closed tail)
-      const Result parsed = plainTail(tail, payload, length, 7, out, capacity);
+    case kOpRead: {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) data (closed tail)
+      const Result parsed = plainTail(tail, payload, length, PositionStream::kReadRequest, out, capacity);
       if (refused(parsed)) return parsed;
       if (payload[0] > reg::target_console::kReadFromLastMark) return rejected(kRejectUnsupported);
       poll();

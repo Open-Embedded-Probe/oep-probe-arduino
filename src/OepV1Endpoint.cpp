@@ -170,13 +170,11 @@ void Endpoint::push() {
       if (left < 16) return;
       cap = static_cast<size_t>(left);
     }
-    uint32_t position = 0;
-    const size_t n = interfaces_[i]->pull(position, tx_ + kPushHeader, cap);
+    const size_t n = interfaces_[i]->pull(tx_ + kPushHeader, cap);   // the payload is the interface's
     if (n == 0) continue;
     tx_[0] = kRolePush;
     putU16(tx_ + 1, static_cast<uint16_t>(i + 1));
     putU16(tx_ + 3, push_seq_[i]++);
-    putU32(tx_ + 5, position);
     send(kPushHeader + n);
     waiting_[i] = false;
   }
