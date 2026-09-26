@@ -13,7 +13,7 @@
 #include <EspUsbDevice.h>
 #include <esp_mac.h>
 #include <OepV1Config.h>
-#include <OepFixtureServices.h>
+#include <OepPinTable.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
 #include <OepRvswdPhy.h>
@@ -48,13 +48,6 @@ static oep::v1::LogicCapture capture(endpoint, kReserved, 5);   // PARLIO RX; it
 // both implementations so far are the ESP-IDF slave drivers, whose quirks stay out of any oep. name.
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
-static const uint8_t kI2cRoles[] = {1, 2};                    // SDA, SCL
-static const uint8_t kSpiRoles[] = {1, 2, 3, 4};              // SCK, MOSI, MISO, CS
-// lock-free: i2c status (5) and read_hw (0x10), spi status (4)
-static oep::v1::V0Fixture i2cV1(i2c, "io.github.ch32-riscv-ug.esp32.i2c-target", 6, pins, kI2cRoles, 2,
-                                (1u << 5) | (1u << 16), oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
-static oep::v1::V0Fixture spiV1(spi, "io.github.ch32-riscv-ug.esp32.spi-target", 7, pins, kSpiRoles, 4, 1u << 4,
-                                oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
 static uint8_t probeTlv[160];
 
 // The HS port: one data CDC port (port 0) for the console bind.
@@ -211,8 +204,8 @@ void setup() {
   endpoint.add(uart1);
   endpoint.add(uart2);
   endpoint.add(capture);
-  endpoint.add(i2cV1);
-  endpoint.add(spiV1);
+  endpoint.add(i2c);
+  endpoint.add(spi);
   endpoint.add(config);
   endpoint.add(bindTest);
   uint8_t mac[6];

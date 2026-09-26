@@ -6,15 +6,15 @@
 //     0x02 read(n u8, n x channel u16) [TLV] -> n x level   no lock
 //   oep.fixture.uart   plan roles 1 = RX, 2 = TX. A position stream like oep.target.console (without the stream
 //                      byte): received bytes are kept from configure until plan_release whatever the sessions do,
-//                      and reading does not consume them. TX idles high before configure and after plan_release.
+//                      and reading does not consume them. TX idles high while planned (before configure too);
+//                      released, it goes to its idle state (PinTable, default Hi-Z).
 //     0x01 configure(baud u32) [TLV 0x01 format] -> baud    0x02 read(from, arg, max) -> start flags data (no lock)
 //     0x03 marks(from_serial) (no lock)   0x04 clear   0x05 mark(value)   0x06 write(count u16, data) -> accepted
 //
-// V0Fixture offers a v0 service (its payloads unchanged) under a project-specific name, revision 0: the ESP-IDF I2C /
-// SPI slave tools. The oep.fixture.* names are revision 1 only (the v0-shape gpio / uart / capture are not offered).
+// The ESP32 I2C / SPI slave tools are their own custom interfaces (OepP4I2cTarget.h, OepP4SpiTarget.h).
 #pragma once
 
-#include "OepFixtureServices.h"
+#include "OepPinTable.h"
 #include "OepV1.h"
 #include "OepV1Stream.h"
 
@@ -104,46 +104,6 @@ class FixtureUart final : public Interface {
   void forward();
   StreamPort port_;
   uint32_t baud_ = 0;
-};
-
-class V0Fixture final : public Interface {
- public:
-  // roles: the plan roles this fixture takes (each may use any allowed channel); lock_free: bit n = op n
-  // changes nothing; extra: more describe TLVs (limits, implementation), kept by the caller.
-  V0Fixture(Service &service, const char *name, uint16_t instance, PinTable &pins, const uint8_t *roles,
-            uint8_t role_count, uint32_t lock_free, const uint8_t *extra = nullptr, size_t extra_length = 0)
-      : service_(service), name_(name), instance_(instance), pins_(pins), roles_(roles), role_count_(role_count),
-        lock_free_(lock_free), extra_(extra), extra_length_(extra_length) {}
-
-  const char *name() const override { return name_; }
-  uint16_t instance() const override { return instance_; }
-  bool lockFree(uint8_t op) const override { return op < 32 && ((lock_free_ >> op) & 1); }
-  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override {
-    return service_.handle(op, payload, length, out, capacity);
-  }
-  size_t describe(uint8_t *out, size_t capacity) override {
-    TlvWriter w(out, capacity);
-    w.roleChannels(roles_, role_count_, pins_.allowedMask());
-    if (extra_length_ && w.ok() && w.length() + extra_length_ <= capacity) {
-      memcpy(out + w.length(), extra_, extra_length_);
-      return w.length() + extra_length_;
-    }
-    return w.ok() ? w.length() : 0;
-  }
-  uint8_t planCheck(const RoleAssignment *roles, size_t count) override { return service_.planCheck(roles, count); }
-  bool planApply(const RoleAssignment *roles, size_t count) override { return service_.planApply(roles, count); }
-  void planRelease() override { service_.planRelease(); }
-
- private:
-  Service &service_;
-  const char *name_;
-  uint16_t instance_;
-  PinTable &pins_;
-  const uint8_t *roles_;
-  uint8_t role_count_;
-  uint32_t lock_free_;
-  const uint8_t *extra_;
-  size_t extra_length_;
 };
 
 }  // namespace v1
