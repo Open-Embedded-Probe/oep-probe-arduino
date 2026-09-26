@@ -1,6 +1,6 @@
 # ESP32-P4 / CH32X035 OEP probe 利用手順
 
-状態: 仮置きの OEP v1（oep-spec `docs/v1-core-wire-delta.ja.md`）の probe。破壊的変更を前提とする。
+状態: OEP v1（oep-spec の `docs/oep-core.ja.md` と `docs/oep-if-*.ja.md`、固める候補）の probe。破壊的変更を前提とする。
 v0 の prototype（`Esp32P4X035Prototype`、`python -m oep_client` の CLI）の手順は廃止した（git の履歴に残る）。
 
 ## 対象

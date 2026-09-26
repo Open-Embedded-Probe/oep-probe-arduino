@@ -15,9 +15,8 @@ OEP を初めて読む人は oep-spec の `docs/review-guide.ja.md`（どこに�
 | `src/OepV1Target.*` など | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（試作）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*` など | 世代によらない部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing） |
 | `src/OepEndpoint.*`、`src/OepService.h`、`src/oep_v0.*` など | v0 の endpoint と codec（経緯。v1 の probe は使わない） |
-| `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS、P4 のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`）と試作（`Esp32P4HsPrototype`、`Esp32P4X035ConsolePrototype`） |
+| `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`）と試作（`Esp32P4HsPrototype`、`Esp32P4X035ConsolePrototype`） |
 | `docs/` | 日付入りの作業記録（経緯） |
-| `tests/hil/` | v0 の HIL 試験（古い。v1 の実機の回帰は ArduinoCore-CH32 の `tests/manual/oep_smoke/`） |
 
 ## 使い方
 
