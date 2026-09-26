@@ -97,40 +97,24 @@ bool Ch32Dm::resume() {
   if (!attached()) return false;
   host_raw_ = false;          // the probe has the hart back
   phy_.write(kAbstractAuto, 0);
-  // oep-if-debug §4.2: ok = the hart left debug mode once. One request is not always enough (CH32L103, V006), yet a
-  // second one after the hart already ran and stopped again (a breakpoint straight ahead) would run it past that.
-  // So one request per round, and a round is repeated only when the hart plainly did not go: no allresumeack, not
-  // running, and still halted with dpc where it was. The CH32L103 never raises allresumeack at all (2026-09-23) -
-  // there a dpc that moved is the proof.
-  uint32_t before = 0;
-  bool have_before = false;
-  {
+  // oep-if-debug §4.2: one resumereq; ok = the hart left debug mode (allresumeack, or running and not halted). A
+  // target that needs the request again (the CH32V006 now and then) or never raises allresumeack and stops again at
+  // once (a breakpoint straight ahead on a CH32L103) comes back as not ok: the host, which knows the part, reads dpc and
+  // asks again (the CH32 rule lives in the host, not in this generic operation).
+  relink();                                                      // a change of state drops the CH32's link
+  phy_.write(kDmControl, 0x40000001);                            // resumereq, once
+  bool ok = false;
+  int halted_reads = 0;
+  for (int i = 0; i < 25 && !ok; ++i) {
     uint32_t status = 0;
-    if (phy_.read(kDmStatus, status) && (status & 0xf) == 2 && (status & (1u << 9))) {
-      halted_ = true;
-      have_before = readRegister(0x07b1, before);
-    }
-  }
-  bool ok = false, stopped_again = false;
-  for (int round = 0; round < 8 && !ok; ++round) {
-    relink();
-    phy_.write(kDmControl, 0x40000001);                          // resumereq, once
-    int halted_reads = 0;
-    for (int i = 0; i < 25 && !ok; ++i) {
-      uint32_t status = 0;
-      if (!phy_.read(kDmStatus, status)) continue;
-      if (status & (1u << 17)) ok = true;                        // allresumeack
-      else if ((status & 0xf) == 2 && (status & (1u << 11)) && !(status & (1u << 9)))
-        ok = true;                                               // allrunning, not halted
-      else if ((status & (1u << 9)) && ++halted_reads >= 3) break;
-    }
-    if (ok || !have_before) continue;
-    relink();                                                    // a change of state drops this part's link
-    uint32_t now = 0;
-    if (readRegister(0x07b1, now) && now != before) ok = stopped_again = true;   // it ran, and stopped again
+    if (!phy_.read(kDmStatus, status)) continue;
+    if (status & (1u << 17)) ok = true;                          // allresumeack
+    else if ((status & 0xf) == 2 && (status & (1u << 11)) && !(status & (1u << 9)))
+      ok = true;                                                 // allrunning, not halted
+    else if ((status & (1u << 9)) && ++halted_reads >= 3) break;
   }
   phy_.write(kDmControl, 0x00000001);
-  halted_ = !ok || stopped_again;
+  halted_ = !ok;
   return ok;
 }
 
