@@ -79,24 +79,28 @@ def main() -> int:
             end = cap.status()[2]
             reached = (got.start or 0) + len(got.data) + sum(n for _, n in got.gaps)
             skipped = sum(n for _, n in got.gaps)
-            bad = []
+            bad = []   # (rises, off grid) per channel; None where the rate is too low to see the square (< 4 per period)
             for k, (_, hz) in enumerate(SIGNALS):
                 period = float(cfg.rate) / hz
+                if period < 4:
+                    bad.append(None)
+                    continue
                 e = [edges_on_grid(r, cfg, k, period) for r in runs(got)]
                 bad.append((sum(x for x, _ in e), sum(y for _, y in e)))
-            ok = reached == end and not got.gaps and not got.seq_lost and all(b == 0 for _, b in bad) and \
-                all(n > 0 for n, _ in bad)
+            judged = [x for x in bad if x is not None]
+            ok = reached == end and not got.gaps and not got.seq_lost and all(b == 0 and n > 0 for n, b in judged)
             failed += not ok
             print(f"{'ok  ' if ok else 'FAIL'} rate {float(cfg.rate) / 1e6:g} MHz w={cfg.width} pos={cfg.positions}: "
                   f"{len(got.data) / 1e6:.1f} MB in {took:.1f} s ({len(got.data) / took / 1e6:.1f} MB/s), "
                   f"{got.frames} frames, end {'=' if reached == end else '!='} write_pos, gaps {len(got.gaps)} "
                   f"({skipped / 1e6:.2f} MB), seq lost {got.seq_lost}, edges off grid "
-                  + ", ".join(f"ch{k} {b}/{n}" for k, (n, b) in enumerate(bad)))
+                  + ", ".join(f"ch{k} " + ("-" if x is None else f"{x[1]}/{x[0]}") for k, x in enumerate(bad)))
     finally:
         for pin, _ in SIGNALS:
             hst.call(sig, 0x02, bytes([pin]))
         core.plan_release(hst)
         hst.end()
+        lk.close()   # the async IN transfers must be cancelled, or libusb's finalizer waits on them at exit
     return 1 if failed else 0
 
 
