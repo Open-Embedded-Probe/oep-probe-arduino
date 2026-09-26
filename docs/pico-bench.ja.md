@@ -15,7 +15,7 @@
 
 | sketch | profile（`sketch.yaml` で版を固定） | 内容 |
 |---|---|---|
-| `examples/Rp2350L103Probe` | `rp2040:rp2040 (6.1.1)` / `sparkfun_promicrorp2350:usbstack=picosdk` | OEP v0 endpoint を USB CDC に出す。probe.identity / target.control・memory・flash（RVSWD、既定 GP2=SWDIO, GP3=SWCLK、`-DOEP_RVSWD_SWDIO=` で変更）/ fixture.gpio / fixture.uart |
+| `examples/Rp2350L103Probe` | `rp2040:rp2040 (6.1.1)` / `sparkfun_promicrorp2350:usbstack=picosdk` | OEP v1 の endpoint を USB CDC に出す。`oep.wire.rvswd`、`oep.target.riscv-dm`、`oep.target.console`、`oep.fixture.gpio` / `uart`（RVSWD、既定 GP2=SWDIO, GP3=SWCLK、`-DOEP_RVSWD_SWDIO=` で変更。2026-09-23 は v0 だった） |
 | `examples/Rp2040SwdSurvey` | `rp2040:rp2040 (6.1.1)` / `waveshare_rp2040_zero:usbstack=picosdk` | ordinary ARM SWD の bring-up。GP0/GP1 の両向き × half period × multidrop TARGETSEL 候補を掃いて DPIDR が返る組を報告する（read only） |
 
 core は **global に入れない**。`arduino-cli compile --profile <name>` が `~/.arduino15/internal/` へ pin 止めで展開する。

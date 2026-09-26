@@ -4,11 +4,11 @@
 「特定の診断 sketch が一度動く」ではなく、同じ常駐 probe firmware と公開された OEP
 capability だけを使い、再現可能な HIL 試験を実行できる状態を指す。
 
-2026-09-22時点の実測済み範囲、公開可否、依存順の要約は
-[progress-and-next-work-2026-09-22.ja.md](progress-and-next-work-2026-09-22.ja.md)を参照する。
-この文書はrelease gateごとの詳細証跡と未完了条件を維持する。
-
-進行順と優先度は[rebuild-plan-2026-09-22.ja.md](rebuild-plan-2026-09-22.ja.md)を正とする。
+状態（2026-09-26）: **OEP v1 が固まるまで止めている作業の控え**。ArduinoCore-CH32 の core の作業は OEP v1 まで止めている。
+ここに書いた証跡の多くは v0 の stack（v0 の probe と `oep_client.v0`、2026-09-22）のもので、今の probe は v1 を話す。
+v1 の実機の回帰は ArduinoCore-CH32 の `tests/manual/oep_smoke/`。再開するときに、各 gate を v1 で測り直す。
+この文書はrelease gateごとの詳細証跡と未完了条件を維持する（以前あった進行順の計画と現在地の文書は、済んだので消した。
+git の履歴に残る）。
 
 ## 原則
 
