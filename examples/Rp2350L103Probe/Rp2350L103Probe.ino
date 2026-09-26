@@ -6,7 +6,7 @@
 // oep.fixture.gpio / uart (all revision 1). GP2 is the target's NRST: a gpio channel labelled NRST and the default reset line for
 // oep.wire.rvswd attach-under-reset (the host may name another channel) - open drain only, never driven high.
 #include <OepCh32Dm.h>
-#include <OepFixtureServices.h>
+#include <OepPinTable.h>
 #include <OepRvswdPhy.h>
 #include <OepDmConsole.h>
 #include <OepV1Console.h>

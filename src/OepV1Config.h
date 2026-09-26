@@ -18,7 +18,7 @@
 
 #include <Arduino.h>
 
-#include "OepFixtureServices.h"
+#include "OepPinTable.h"
 #include "OepV1.h"
 
 #if defined(ARDUINO_ARCH_ESP32)

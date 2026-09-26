@@ -8,7 +8,7 @@
 // (the host may name another); a plain pin reset (UIAPduino bootloader, PINRSTF) pulses it open drain through
 // fixture.gpio. The ESP-IDF I2C / SPI targets are offered under io.github.ch32-riscv-ug.esp32.* (v0 payloads).
 #include <OepCh32Dm.h>
-#include <OepFixtureServices.h>
+#include <OepPinTable.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
 #include <OepSwioPhy.h>
@@ -52,14 +52,6 @@ static oep::v1::FixtureUart uart(pins, Serial2, 3, 2);   // DUT console: V003 PD
 static oep::v1::SamplerCapture capture(endpoint, kReserved);
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
-static const uint8_t kI2cRoles[] = {1, 2};                    // SDA, SCL
-static const uint8_t kSpiRoles[] = {1, 2, 3, 4};              // SCK, MOSI, MISO, CS
-// lock-free: i2c status (5) and read_hw (0x10), spi status (4)
-static oep::v1::V0Fixture i2cV1(i2c, "io.github.ch32-riscv-ug.esp32.i2c-target", 4, pins, kI2cRoles, 2,
-                                (1u << 5) | (1u << 16), oep::v1::kImplementationPeripheral,
-                                sizeof oep::v1::kImplementationPeripheral);
-static oep::v1::V0Fixture spiV1(spi, "io.github.ch32-riscv-ug.esp32.spi-target", 5, pins, kSpiRoles, 4, 1u << 4,
-                                oep::v1::kImplementationPeripheral, sizeof oep::v1::kImplementationPeripheral);
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
@@ -96,8 +88,8 @@ void setup() {
   endpoint.add(console);
   endpoint.add(gpio);
   endpoint.add(uart);
-  endpoint.add(i2cV1);
-  endpoint.add(spiV1);
+  endpoint.add(i2c);
+  endpoint.add(spi);
   endpoint.add(capture);   // last: the fns before it keep their numbers
 }
 

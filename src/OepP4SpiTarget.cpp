@@ -4,22 +4,25 @@
 
 #include <initializer_list>
 
-#include "OepTlv.h"
 
 namespace oep {
 
+namespace {
+inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
+}  // namespace
+
 uint8_t P4SpiTarget::planCheck(const RoleAssignment *roles, size_t count) {
-  if (count != 4) return OEP_V0_REJECT_MALFORMED_PAYLOAD;
+  if (count != 4) return kRejectMalformed;
   int pin[5] = {-1, -1, -1, -1, -1};
   for (size_t i = 0; i < count; ++i) {
-    if (roles[i].role < kRoleSck || roles[i].role > kRoleCs || pin[roles[i].role] >= 0) return OEP_V0_REJECT_MALFORMED_PAYLOAD;
+    if (roles[i].role < kRoleSck || roles[i].role > kRoleCs || pin[roles[i].role] >= 0) return kRejectMalformed;
     pin[roles[i].role] = roles[i].channel;
   }
   for (int r = kRoleSck; r <= kRoleCs; ++r) {
-    for (int q = r + 1; q <= kRoleCs; ++q) if (pin[r] == pin[q]) return OEP_V0_REJECT_MALFORMED_PAYLOAD;
-    if (!pins_.free(pin[r])) return OEP_V0_REJECT_UNAVAILABLE;
+    for (int q = r + 1; q <= kRoleCs; ++q) if (pin[r] == pin[q]) return kRejectMalformed;
+    if (!pins_.free(pin[r])) return kRejectUnavailable;
   }
-  if (sck_ >= 0) return OEP_V0_REJECT_UNAVAILABLE;
+  if (sck_ >= 0) return kRejectUnavailable;
   return 0;
 }
 
@@ -35,13 +38,11 @@ bool P4SpiTarget::planApply(const RoleAssignment *roles, size_t count) {
 
 void P4SpiTarget::planRelease() {
   stop();
-  for (int p : {sck_, mosi_, miso_, cs_}) if (p >= 0) pinMode(p, INPUT);
-  pins_.release(kOwnerId);
+  pins_.release(kOwnerId);   // each pin to its idle state
   sck_ = mosi_ = miso_ = cs_ = -1;
 }
 
-size_t P4SpiTarget::describe(uint8_t first, uint8_t *out, size_t capacity) {
-  size_t used = 0, index = 0;
+size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   // 64-byte FIFO transactions without DMA. Clock limit measured with the CH32 SPI1 masters on
   // 2026-09-22: ESP32-P4 exchanged 4 bytes both ways at 24 MHz (X035, /2); the classic ESP32 was
   // right up to 3 MHz and one bit late on MISO at 6 MHz (V003), so it declares 3 MHz.
@@ -50,16 +51,14 @@ size_t P4SpiTarget::describe(uint8_t first, uint8_t *out, size_t capacity) {
 #else
   constexpr uint32_t kMaxClockHz = 3000000u;
 #endif
-  if (index++ >= first) { used = tlvPutU16(out, capacity, used, OEP_V0_TLV_CORE_MAX_LENGTH, kMaxFrame); if (!used) return 0; }
-  if (index++ >= first) { const size_t n = tlvPutU32(out, capacity, used, OEP_V0_TLV_CORE_MAX_CLOCK_HZ, kMaxClockHz); if (!n) return used; used = n; }
-  for (uint8_t c = 0; c < PinTable::kChannels; ++c) {
-    if (!pins_.allowed(c)) continue;
-    if (index++ < first) continue;
-    const size_t n = tlvPutU16(out, capacity, used, OEP_V0_TLV_CORE_CHANNEL_CANDIDATE, c);
-    if (!n) break;
-    used = n;
-  }
-  return used;
+  static const uint8_t kRoles[] = {kRoleSck, kRoleMosi, kRoleMiso, kRoleCs};
+  v1::TlvWriter w(out, capacity);
+  w.roleChannels(kRoles, sizeof kRoles, pins_.allowedMask());
+  w.u16(v1::kTagMaxLength, kMaxFrame);
+  w.u32(v1::kTagMaxClockHz, kMaxClockHz);
+  w.u32(v1::kTagFeatures, 1);   // bit0 LSB first
+  w.u8(v1::kTagImplementation, 2);   // a dedicated peripheral
+  return w.ok() ? w.length() : 0;
 }
 
 #if defined(ARDUINO_ARCH_ESP32)
@@ -118,62 +117,65 @@ void P4SpiTarget::service() {}
 #endif
 
 Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  v1::Tail tail;
   switch (operation) {
-    case OEP_V0_P4_SPI_TARGET_OP_CONFIGURE: {
-      struct oep_v0_p4_spi_target_configure_request request;
-      if (!oep_v0_p4_spi_target_configure_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (request.mode > 3 || request.bit_order > 1) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (sck_ < 0) return rejected(OEP_V0_REJECT_UNAVAILABLE);  // needs a lease
+    case kOpConfigure: {   // mode(u8) bit_order(u8) [TLV]
+      const Result parsed = v1::plainTail(tail, payload, length, 2, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (payload[0] > 3 || payload[1] > 1) return rejected(v1::kRejectUnsupported);
+      if (sck_ < 0) return rejected(kRejectUnavailable);  // needs a plan
       stop();
-      mode_ = request.mode; bit_order_ = request.bit_order;
+      mode_ = payload[0]; bit_order_ = payload[1];
       if (!start()) return failed();
-      return completed();
+      return tail.finish(completed(), out, capacity);
     }
-    case OEP_V0_P4_SPI_TARGET_OP_ARM: {
-      struct oep_v0_p4_spi_target_arm_request request;
-      if (!oep_v0_p4_spi_target_arm_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!started_) return rejected(OEP_V0_REJECT_UNAVAILABLE);
-      if (request.length == 0 || request.length > kMaxFrame || request.tx_length > request.length) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (armed_) return rejected(OEP_V0_REJECT_UNAVAILABLE);
-      if (!arm(request.tx, request.tx_length, request.length)) return failed();
-      return completed();
+    case kOpArm: {   // length(u16) count(u16) tx [TLV]: MISO bytes for the next CS-framed transaction of length bytes
+      if (length < 4) return rejected(kRejectMalformed);
+      const uint16_t want = v1::getU16(payload), count = v1::getU16(payload + 2);
+      const Result parsed = v1::plainTail(tail, payload, length, 4u + count, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (!started_) return rejected(kRejectUnavailable);
+      if (want == 0 || want > kMaxFrame || count > want) return rejected(kRejectMalformed);
+      if (armed_) return rejected(kRejectUnavailable);
+      if (!arm(payload + 4, count, want)) return failed();
+      return tail.finish(completed(), out, capacity);
     }
-    case OEP_V0_P4_SPI_TARGET_OP_READ_RX: {
-      struct oep_v0_p4_spi_target_read_rx_request request;
-      if (!oep_v0_p4_spi_target_read_rx_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      struct oep_v0_p4_spi_target_read_rx_result result = {0, 0, nullptr, 0};
-      if (queue_count_) {
-        result.pending = static_cast<uint8_t>(queue_count_ - 1);
-        result.bits = queue_bits_[0];
-        result.data = queue_[0]; result.data_length = queue_length_[0];
-      }
-      const size_t n = oep_v0_p4_spi_target_read_rx_result_pack(&result, out, capacity);
+    case kOpReadRx: {   // [TLV] -> pending(u8) bits(u32) count(u16) data: the oldest finished transaction
+      const Result parsed = v1::plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      const size_t data = queue_count_ ? queue_length_[0] : 0;
+      if (capacity < 7 + data) return failed();
+      out[0] = queue_count_ ? static_cast<uint8_t>(queue_count_ - 1) : 0;
+      v1::putU32(out + 1, queue_count_ ? queue_bits_[0] : 0);
+      v1::putU16(out + 5, static_cast<uint16_t>(data));
+      if (data) memcpy(out + 7, queue_[0], data);
       if (queue_count_) {
         --queue_count_;
         memmove(queue_[0], queue_[1], sizeof(queue_[0]) * queue_count_);
         memmove(queue_length_, queue_length_ + 1, queue_count_);
         memmove(queue_bits_, queue_bits_ + 1, sizeof(queue_bits_[0]) * queue_count_);
       }
-      return completed(n);
+      return tail.finish(completed(7 + data), out, capacity);
     }
-    case OEP_V0_P4_SPI_TARGET_OP_STATUS: {
-      struct oep_v0_p4_spi_target_status_request request;
-      if (!oep_v0_p4_spi_target_status_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      struct oep_v0_p4_spi_target_status_result result = {
-          static_cast<uint8_t>((started_ ? 1 : 0) | (armed_ ? 2 : 0) | (mode_ << 2) | (bit_order_ << 4) | (queue_count_ << 5)),
-          transactions_, errors_};
-      return completed(oep_v0_p4_spi_target_status_result_pack(&result, out, capacity));
+    case kOpStatus: {   // [TLV] -> flags(u8) transactions(u32) errors(u16)
+      const Result parsed = v1::plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (capacity < 7) return failed();
+      out[0] = static_cast<uint8_t>((started_ ? 1 : 0) | (armed_ ? 2 : 0) | (mode_ << 2) | (bit_order_ << 4) | (queue_count_ << 5));
+      v1::putU32(out + 1, transactions_);
+      v1::putU16(out + 5, errors_);
+      return tail.finish(completed(7), out, capacity);
     }
-    case OEP_V0_P4_SPI_TARGET_OP_RESET: {
-      struct oep_v0_p4_spi_target_reset_request request;
-      if (!oep_v0_p4_spi_target_reset_request_unpack(payload, length, &request)) return rejected(OEP_V0_REJECT_MALFORMED_PAYLOAD);
-      if (!started_) return rejected(OEP_V0_REJECT_UNAVAILABLE);
+    case kOpReset: {
+      const Result parsed = v1::plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (!started_) return rejected(kRejectUnavailable);
       stop(); transactions_ = 0; errors_ = 0;
       if (!start()) return failed();
-      return completed();
+      return tail.finish(completed(), out, capacity);
     }
     default:
-      return rejected(OEP_V0_REJECT_UNKNOWN_OPERATION);
+      return rejected(kRejectUnknownOperation);
   }
 }
 

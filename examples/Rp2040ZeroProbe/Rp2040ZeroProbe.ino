@@ -4,7 +4,7 @@
 //
 // Transport: USB CDC (Serial, length-prefixed frames).
 // oep.core (the probe in its describe), oep.wire.swd, oep.target.arm-adi, oep.fixture.gpio / uart (revision 1).
-#include <OepFixtureServices.h>
+#include <OepPinTable.h>
 #include <OepV1Endpoint.h>
 #include <OepV1Fixture.h>
 #include <OepV1Swd.h>

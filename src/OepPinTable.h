@@ -1,13 +1,11 @@
-// fixture.gpio / fixture.uart (owner 0, ids 0x20 / 0x21) on the probe's own GPIO. Pins
-// are probe channels; the DUT wiring is the host's manifest. A shared pin table keeps
-// GPIO and UART from driving the same channel. Per-core differences (pin modes, UART
-// pin assignment) live in OepPlatform.h.
+// The probe channels a sketch may hand to interfaces, who holds each one, and the state a free channel rests in
+// (oep-spec oep-core §8: a released pin goes to its idle state, Hi-Z unless set otherwise). Shared by every
+// interface that takes pins, so two of them never drive the same channel. Per-core pin modes live in OepPlatform.h.
 #pragma once
 
 #include <Arduino.h>
 
 #include "OepPlatform.h"
-#include "OepService.h"
 
 namespace oep {
 
@@ -59,45 +57,6 @@ class PinTable {
     const uint8_t m = idle_[c];
     platformGpio(c, m == kIdlePullUp ? kGpioInputPullUp : m == kIdlePullDown ? kGpioInputPullDown : kGpioInputFloating);
   }
-};
-
-class FixtureGpio final : public Service {
- public:
-  static constexpr uint8_t kOwner = 1;
-  explicit FixtureGpio(PinTable &pins) : pins_(pins) {}
-  uint16_t owner() const override { return OEP_V0_DEF_FIXTURE_GPIO_OWNER; }
-  uint16_t id() const override { return OEP_V0_DEF_FIXTURE_GPIO_ID; }
-  uint8_t revision() const override { return OEP_V0_DEF_FIXTURE_GPIO_REVISION; }
-  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  size_t describe(uint8_t first, uint8_t *out, size_t capacity) override;
-  void abandon() override;  // every configured channel back to floating input
-
- private:
-  PinTable &pins_;
-  uint64_t configured_ = 0;
-};
-
-class FixtureUart final : public Service {
- public:
-  enum Role : uint8_t { kRoleRx = 1, kRoleTx = 2 };
-  // `owner` is this instance's PinTable owner id (each UART instance needs its own so a
-  // release only returns its own pins); 2 keeps the historical value for the first one.
-  FixtureUart(PinTable &pins, OepUart &serial, uint8_t owner = 2) : pins_(pins), serial_(serial), kOwner(owner) {}
-  uint16_t owner() const override { return OEP_V0_DEF_FIXTURE_UART_OWNER; }
-  uint16_t id() const override { return OEP_V0_DEF_FIXTURE_UART_ID; }
-  uint8_t revision() const override { return OEP_V0_DEF_FIXTURE_UART_REVISION; }
-  Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  size_t describe(uint8_t first, uint8_t *out, size_t capacity) override;
-  uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
-  bool planApply(const RoleAssignment *roles, size_t count) override;
-  void planRelease() override;
-
- private:
-  PinTable &pins_;
-  OepUart &serial_;
-  const uint8_t kOwner;
-  int rx_ = -1, tx_ = -1;
-  bool configured_ = false;
 };
 
 }  // namespace oep
