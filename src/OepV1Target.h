@@ -35,10 +35,12 @@ struct DebugPort {
   // attachRunning. A host's detach drops only its own use; the link goes when nobody uses it, or on a forced detach.
   enum : uint8_t { kUserHost = 1, kUserBind = 2 };
   uint8_t users = 0;
-  // The connection's number: a new connection takes the next of 1..255, so a host holding the number of an earlier one
-  // gets no_connection instead of reaching this one (core §9). One connection at a time on this wire.
-  uint8_t number = 0;
-  void numberNew() { number = static_cast<uint8_t>(number % 255 + 1); }
+  // The connection's number (u16): a new connection takes the next, never reused within a boot, so a host holding the
+  // number of an earlier one gets no_connection instead of reaching this one (core §9). One connection at a time on
+  // this wire. exhausted(): every number used - a new connection is refused (unavailable).
+  uint16_t number = 0;
+  void numberNew() { ++number; }
+  bool exhausted() const { return !connected && number == 0xffff; }
 };
 
 // Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the

@@ -42,7 +42,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus) {
   if (port.connected) {
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
   } else {
-    if (!attachAndRead(port.dm, dmstatus)) return false;
+    if (port.exhausted() || !attachAndRead(port.dm, dmstatus)) return false;
     port.dm.ackHaveReset();
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
     port.connected = true;
@@ -78,29 +78,30 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
   DmiPhy &phy = port_.dm.phy();
   Tail tail;
   switch (op) {
-    case kOpScan: {   // count(u8) pairs [TLV]  ->  count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32) per answer
+    case kOpScan: {   // count(u8) pairs [TLV]  ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32) per answer
       size_t fixed = 0;
       if (const uint8_t bad = fixedPairScan(payload, length, port_.swdio, port_.swclk, fixed)) return rejected(bad);
       const Result parsed = plainTail(tail, payload, length, fixed, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 10) return failed();
+      if (capacity < 11) return failed();
       uint32_t status = 0;
-      out[0] = 0;
+      out[0] = payload[0] ? payload[0] : 1;   // tried: every pair asked for (they are all the one pair)
+      out[1] = 0;
       // On a live connection, look through it: re-attaching (and detaching on a miss) would pull the link out from
       // under the host that holds it.
       const bool found = port_.connected ? port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu
                                          : attachAndRead(port_.dm, status);
-      if (!found) return tail.finish(completed(1), out, capacity);
-      out[0] = 1;
-      out[1] = kKindRiscvDm;
-      putU16(out + 2, port_.swdio);
-      putU16(out + 4, port_.swclk);
-      putU32(out + 6, status);
-      return tail.finish(completed(10), out, capacity);
+      if (!found) return tail.finish(completed(2), out, capacity);
+      out[1] = 1;
+      out[2] = kKindRiscvDm;
+      putU16(out + 3, port_.swdio);
+      putU16(out + 5, port_.swclk);
+      putU32(out + 7, status);
+      return tail.finish(completed(11), out, capacity);
     }
     case kOpAttach: {
       // method(u8: 0 leave it running, 1 halt) [TLV 0x01 max_speed]
-      //   ->  connection(u8) DMSTATUS(u32) flags(u8: bit0 acknowledged a pending havereset, bit1 existing) speed_hz(u32)
+      //   ->  connection(u16) DMSTATUS(u32) flags(u8: bit0 acknowledged a pending havereset, bit1 existing) speed_hz(u32)
       if (length < 1) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity);
       if (refused(parsed)) return parsed;
@@ -113,7 +114,8 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       bool critical = false;
       if (!maxSpeed(tail, max_hz, critical)) return rejected(kRejectMalformed);
       if (payload[0] > reg::wire_rvswd::kAttachMethodHalt) return rejected(kRejectUnsupported);
-      if (capacity < 10) return failed();
+      if (port_.exhausted()) return rejected(kRejectUnavailable);
+      if (capacity < 11) return failed();
       const bool halt = payload[0] == reg::wire_rvswd::kAttachMethodHalt;
       uint32_t status = 0;
       uint8_t flags = 0;
@@ -153,14 +155,14 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       }
       if (failure != kStatusOk) return tail.finish(failedStatus(failure, out, capacity), out, capacity);
       port_.users |= DebugPort::kUserHost;
-      out[0] = port_.number;
-      putU32(out + 1, status);
-      out[5] = flags;
-      putU32(out + 6, phy.clockHz());
-      return tail.finish(completed(10), out, capacity);
+      putU16(out, port_.number);
+      putU32(out + 2, status);
+      out[6] = flags;
+      putU32(out + 7, phy.clockHz());
+      return tail.finish(completed(11), out, capacity);
     }
     case kOpAttachUnderReset: {
-      // channel(u16, 0xffff = the probe's default) hold_ms(u16) [TLV 0x01 max_speed]  ->  connection(u8) dpc(u32) speed_hz(u32)
+      // channel(u16, 0xffff = the probe's default) hold_ms(u16) [TLV 0x01 max_speed]  ->  connection(u16) dpc(u32) speed_hz(u32)
       if (length < 4) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 4, length - 4, kAttachTags, out, capacity);
       if (refused(parsed)) return parsed;
@@ -172,7 +174,8 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       uint32_t max_hz = 0;
       bool critical = false;
       if (!maxSpeed(tail, max_hz, critical)) return rejected(kRejectMalformed);
-      if (capacity < 9) return failed();
+      if (port_.exhausted()) return rejected(kRejectUnavailable);
+      if (capacity < 10) return failed();
       int channel = getU16(payload);
       if (channel == 0xffff) channel = port_.reset_default;
       if (channel < 0 || channel > 63 || !((port_.reset_allowed >> channel) & 1)) return rejected(kRejectUnavailable);
@@ -194,18 +197,18 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       port_.connected = true;
       port_.users |= DebugPort::kUserHost;
       ++port_.resets;
-      out[0] = port_.number;
-      putU32(out + 1, dpc);
-      putU32(out + 5, phy.clockHz());
-      return tail.finish(completed(9), out, capacity);
+      putU16(out, port_.number);
+      putU32(out + 2, dpc);
+      putU32(out + 6, phy.clockHz());
+      return tail.finish(completed(10), out, capacity);
     }
-    case kOpDetach: {   // connection(u8) [TLV 0x01 force]
+    case kOpDetach: {   // connection(u16) [TLV 0x01 force]
       // The host's use goes; the link stays while another user (a bind's console) has it, unless forced.
       static const uint8_t kDetachTags[] = {reg::wire_rvswd::kTlvDetachForce};
-      if (length < 1) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(payload + 1, length - 1, kDetachTags, out, capacity);
+      if (length < 2) return rejected(kRejectMalformed);
+      const Result parsed = tail.parse(payload + 2, length - 2, kDetachTags, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] != port_.number || !port_.connected) return rejected(kRejectNoConnection);
+      if (getU16(payload) != port_.number || !port_.connected) return rejected(kRejectNoConnection);
       uint8_t len = 0;
       const bool force = tail.find(reg::wire_rvswd::kTlvDetachForce, len) != nullptr;
       releaseConnection(port_, DebugPort::kUserHost, force);
@@ -224,8 +227,8 @@ size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagFeatures, 0b0111);
   w.u8(kTagImplementation, 1);
   // One block operation's data in bytes: the word buffer, and what fits a frame - write_block's request (header 6,
-  // session 4, connection, address, count = 17) and read_block's result (header 5, done, status = 8).
-  const size_t fits = max_frame_ > 17 ? (max_frame_ - 17) / 4 * 4 : 0;
+  // session 4, connection 2, address, count = 18) and read_block's result (header 5, done, status = 8).
+  const size_t fits = max_frame_ > 18 ? (max_frame_ - 18) / 4 * 4 : 0;
   w.u16(kTagMaxLength, static_cast<uint16_t>(fits && fits < sizeof words_ ? fits : sizeof words_));
   return w.ok() ? w.length() : 0;
 }
@@ -236,10 +239,10 @@ uint8_t TargetRiscvDm::failure(uint8_t otherwise) {
 }
 
 Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length < 1) return rejected(kRejectMalformed);
-  if (payload[0] != port_.number || !port_.connected) return rejected(kRejectNoConnection);   // the live connection only
-  const uint8_t *p = payload + 1;
-  const size_t n = length - 1;
+  if (length < 2) return rejected(kRejectMalformed);
+  if (getU16(payload) != port_.number || !port_.connected) return rejected(kRejectNoConnection);   // the live connection only
+  const uint8_t *p = payload + 2;
+  const size_t n = length - 2;
   Ch32Dm &dm = port_.dm;
   Tail tail;
   switch (op) {
