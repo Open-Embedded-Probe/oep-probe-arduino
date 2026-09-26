@@ -43,7 +43,7 @@ def check(name, cond, extra=""):
     ok &= bool(cond); print(f"{'PASS' if cond else 'FAIL'} {name} {extra}", flush=True)
 
 phase = sys.argv[1]
-A = link.open_usb_host(transports=("vendor",))
+A = link.open_usb_host(serial=os.environ.get("OEP_USB_SERIAL"), transports=("vendor",))   # two HS probes: name one
 try:
     A.open(5000)
     fc, fu = core.find(A, "oep.probe.config"), core.find(A, "oep.fixture.uart")
