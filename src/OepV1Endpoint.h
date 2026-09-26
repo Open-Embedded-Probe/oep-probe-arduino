@@ -38,11 +38,15 @@ class Endpoint {
   bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, Framing framing, bool flush_after_burst);
 
   bool add(Interface &interface);
-  // The plan as probe state (oep.probe.config's plan item): the roles now applied, and a replacement that is all or
-  // nothing (0: applied; else the reject reason, with the plan before it applied again).
+  // The plan (oep-core §8, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
+  // a replacement of the fns listed that is all or nothing and outlives sessions (0: applied; else the reject reason,
+  // with the plans before it applied again). A listed fn with no role is released.
   static constexpr size_t kMaxRoles = 16;
-  size_t plan(RoleAssignment *out, size_t max) const;
-  uint8_t replacePlan(const RoleAssignment *roles, size_t count);
+  size_t plan(RoleAssignment *out, size_t max, bool persistent_only = false) const;
+  uint8_t replacePlan(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns);
+  // The identity of the interface list (oep-if-probe-config §2): CRC-32 of every entry (fn u16, instance u16,
+  // revision u8, name) in fn order, oep.core first.
+  uint32_t listHash() const;
   // oep.core's describe: the probe itself, as TLV bytes (kept by the caller).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
   // A random-ish value per boot; 0 = unknown (then hosts treat every no-session as a possible reboot).
@@ -105,8 +109,10 @@ class Endpoint {
   Result describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
-  void planRelease();
+  uint16_t replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns, bool persistent);
+  void planRelease(const uint16_t *fns, size_t nfns);
   bool planned_[kMaxInterfaces] = {};
+  bool persistent_[kMaxInterfaces] = {};   // planned through replacePlan (oep.probe.config): a lapse does not release it
   // Experimental push subscriptions, per fn.
   volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;
@@ -145,8 +151,6 @@ class Endpoint {
   size_t dedup_next_ = 0;
   uint16_t newest_corr_ = 0;   // the last session's newest request (core §4.1: the host numbers them in order)
   bool have_newest_ = false;
-  bool plan_active_ = false;
-  bool plan_persistent_ = false;   // applied through replacePlan (oep.probe.config): a lapse does not release it
   RoleAssignment plan_roles_[kMaxRoles] = {};
   size_t plan_count_ = 0;
   Result checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity);

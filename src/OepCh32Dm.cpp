@@ -328,11 +328,9 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     if (!writeRegister(regnos[i], values[i])) return false;
   if (!writeRegister(0x07b1, pc)) return false;
   phy_.write(kAbstractAuto, 0);
-  // The CH32L103 needs what halt()/resume() learned (2026-09-23): one resumereq does not always take and it never
-  // raises allresumeack, and a change of hart state drops its DMI link, so a failed read is followed by a bus
-  // bring-up. A stop with dpc still at `pc` means the code never ran - ask again (the host's code ends in an
-  // ebreak somewhere else, so a real stop never sits at its first instruction). Measured on the L103 through the RP2350 probe over
-  // leads, 2026-09-24: 2 of 248 runs stopped at pc without running, 1 lost the link while polling.
+  // A change of hart state drops the CH32L103's DMI link, so a failed read is followed by a bus bring-up. One
+  // resumereq, never re-issued (oep-if-debug §4.4): a stop with dpc still at `pc` may be a run that never started
+  // (the L103 did it 2 of 248 times, 2026-09-24) or one that came back - the host, which knows its code, decides.
   const uint32_t started = micros(), started_ms = millis();
   // micros() up to 4000 s (its u32 holds that many us), millis() beyond; 0xFFFFFFFF waits for ever
   auto expired = [&]() {
@@ -340,7 +338,7 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     if (timeout_ms <= 4000000u) return micros() - started >= timeout_ms * 1000u;
     return millis() - started_ms >= timeout_ms;
   };
-  for (int attempt = 0; attempt < 4 && !report.stopped; ++attempt) {
+  for (int attempt = 0; attempt < 1 && !report.stopped; ++attempt) {
     phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
     bool halted = false;
     while (!expired()) {
@@ -352,8 +350,6 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     phy_.write(kAbstractCs, 0x700);
     if (!halted) break;                   // the timeout: forced halt below
     relink();                        // the stop changed the hart's state
-    uint32_t dpc = 0;
-    if (readRegister(0x07b1, dpc) && dpc == pc) continue;   // never ran: resume again
     report.stopped = true;
   }
   report.elapsed_us = micros() - started;

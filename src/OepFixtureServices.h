@@ -25,13 +25,40 @@ class PinTable {
     owner_[channel] = owner;
     return true;
   }
-  void release(uint8_t owner) { for (uint8_t c = 0; c < kChannels; ++c) if (owner_[c] == owner) owner_[c] = 0; }
+  // A released channel goes to its idle state (oep-core §8): Hi-Z unless the probe's settings (or its fixed wiring)
+  // say pull-up / pull-down. Nothing keeps driving a pin nobody owns.
+  void release(uint8_t owner) {
+    for (uint8_t c = 0; c < kChannels; ++c)
+      if (owner_[c] == owner) { owner_[c] = 0; applyIdle(c); }
+  }
   uint64_t allowedMask() const { return allowed_; }
   uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
+  // Idle states (oep.probe.config idle: 0 Hi-Z, 1 pull-up, 2 pull-down; kIdleUnset = Hi-Z). Applied now to a free
+  // channel, and at every release. false: not a channel of this table, or a mode it does not know.
+  static constexpr uint8_t kIdleHiZ = 0, kIdlePullUp = 1, kIdlePullDown = 2, kIdleUnset = 0xff;
+  bool setIdle(uint16_t channel, uint8_t mode) {
+    if (!allowed(channel) || (mode > kIdlePullDown && mode != kIdleUnset)) return false;
+    idle_[channel] = mode;
+    if (owner_[channel] == 0) applyIdle(static_cast<uint8_t>(channel));
+    return true;
+  }
+  uint8_t idle(uint16_t channel) const { return channel < kChannels ? idle_[channel] : kIdleUnset; }
 
  private:
   uint64_t allowed_ = 0;
   uint8_t owner_[kChannels] = {};
+  uint8_t idle_[kChannels] = {kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
+                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
+                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
+                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
+                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
+                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
+                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
+                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset};
+  void applyIdle(uint8_t c) const {
+    const uint8_t m = idle_[c];
+    platformGpio(c, m == kIdlePullUp ? kGpioInputPullUp : m == kIdlePullDown ? kGpioInputPullDown : kGpioInputFloating);
+  }
 };
 
 class FixtureGpio final : public Service {

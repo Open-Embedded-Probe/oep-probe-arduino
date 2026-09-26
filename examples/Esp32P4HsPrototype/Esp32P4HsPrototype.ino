@@ -172,6 +172,7 @@ void setup() {
   uartFn = 2;   // list order: config 1, uart 2
   endpoint.add(bridgeTest);
   config.setBindHook(bindHook, nullptr);
+  config.setPins(&pins);   // the idle item sets these pins' free state
   config.applySaved();
   endpoint.setBootId(esp_random());
   Serial.printf("# P4 mode=%u usb=%d direct=%d\n", mode, ok ? 1 : 0, direct ? 1 : 0);

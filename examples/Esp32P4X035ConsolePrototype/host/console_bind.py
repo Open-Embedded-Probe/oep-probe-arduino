@@ -43,8 +43,19 @@ def tlv(tag, v):
     return bytes([tag, len(v)]) + v
 
 
+PINS = (2, 54)          # the jig's RVSWD pair (swdio, swclk)
+MASK = 0xFFFFFF0F       # a WCH chip_id: bits [7:4] are the silicon revision - the host's knowledge, not the probe's
+
+
 def bind(attach, mechanism=2):
-    return tlv(T_BIND, bytes([0, 2, attach, 0]) + struct.pack("<HB", WIRE_FN, mechanism))
+    # target.console args: wire_fn u16, mechanism u8, swdio u16, swclk u16, max_speed u32 (0: no ceiling)
+    return tlv(T_BIND, bytes([0, 2, attach, 0]) + struct.pack("<HBHHI", WIRE_FN, mechanism, *PINS, 0))
+
+
+def target(chip):
+    # wire_fn u16, scheme u8 (1 = wch_dmi_7f), mask u32, value u32: what the automatic attach's target_id must match
+    return tlv(T_TARGET, struct.pack("<HBII", WIRE_FN, 1, MASK, chip & MASK))
+
 
 
 def status(A):
@@ -84,9 +95,9 @@ try:
     wire = riscv.Wire(A, "oep.wire.rvswd")
     print("status at start:", status(A))
     if phase in ("host", "open") and status(A)["connected"]:   # start clean: a link an earlier run left goes
-        A.call(wire.fn, 0x03, bytes([wire.attach(halt=False)[0]]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
+        A.call(wire.fn, 0x03, struct.pack("<H", wire.attach(halt=False)[0]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
     if phase == "host":
-        A.call(fc, SET, bind(0) + tlv(T_TARGET, b""))
+        A.call(fc, SET, bind(0) + tlv(T_TARGET, struct.pack("<H", WIRE_FN)))
         p = serial.Serial(sys.argv[2], 115200, timeout=0.05)
         time.sleep(0.3)
         p.reset_input_buffer()
@@ -119,14 +130,14 @@ try:
         check("no console after the forced detach", b"uptime" not in got, repr(got[-40:]))
         p.close()
     elif phase == "open":
-        A.call(fc, SET, bind(1) + tlv(T_TARGET, struct.pack("<HI", WIRE_FN, 0x12345678)))
+        A.call(fc, SET, bind(1) + target(0x12345678))
         p = serial.Serial(sys.argv[2], 115200, timeout=0.05)
         time.sleep(1.0)
         st = status(A)
         check("attach on open, wrong target: refused, link released", st["state"] == 2 and st["connected"] == 0, f"{st} chip {st['chip']:#010x}")
         chip = st["chip"]
         p.close()
-        A.call(fc, SET, tlv(T_TARGET, struct.pack("<HI", WIRE_FN, chip)))
+        A.call(fc, SET, target(chip))
         p = serial.Serial(sys.argv[2], 115200, timeout=0.05)
         t0 = time.monotonic()
         got = b""
@@ -139,11 +150,11 @@ try:
         time.sleep(0.3)
         st = status(A)
         check("closing the port keeps the console reading (SDI must not stall)", st["connected"] == 1 and st["open"] == 1, str(st))
-        A.call(wire.fn, 0x03, bytes([wire.attach(halt=False)[0]]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
+        A.call(wire.fn, 0x03, struct.pack("<H", wire.attach(halt=False)[0]) + m.tlv(reg.WIRE_RVSWD.tlv["detach"]["force"], b"", critical=True))
     elif phase == "boot-set":
         st = status(A)
         chip = st["chip"] or int(sys.argv[2], 0) if len(sys.argv) > 2 else st["chip"]
-        h = struct.unpack("<I", A.call(fc, SET, bind(2) + tlv(T_TARGET, struct.pack("<HI", WIRE_FN, chip))).payload)[0]
+        h = struct.unpack("<I", A.call(fc, SET, bind(2) + target(chip)).payload)[0]
         A.call(fc, SAVE)
         print(f"saved attach-at-boot bind, target chip {chip:#010x}, hash {h:#x}; reboot the probe now")
         A.call(fc, CFG.op["reboot"])
@@ -156,7 +167,7 @@ try:
         p.close()
     elif phase == "clear":
         A.call(fc, ERASE)
-        A.call(fc, SET, tlv(T_BIND, b"") + tlv(T_TARGET, b""))
+        A.call(fc, SET, tlv(T_BIND, bytes([0])) + tlv(T_TARGET, struct.pack("<H", WIRE_FN)))
         print("cleared")
     try:
         A.end()

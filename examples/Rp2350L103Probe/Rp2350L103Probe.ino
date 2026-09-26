@@ -69,6 +69,9 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  // This jig's wiring (fixed): channel 12 drives the DUT PB7 / RX, which must not float while no UART holds it (a floating
+  // RX line fed the DUT's command parser noise, 2026-09-22). Idle = pull-up; every other free pin stays Hi-Z.
+  pins.setIdle(12, oep::PinTable::kIdlePullUp);
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
   // The RP2 pad's default pull-down on NRST holds the target in reset. Release it and never drive it high -

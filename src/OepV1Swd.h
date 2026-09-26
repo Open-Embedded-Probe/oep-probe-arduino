@@ -28,6 +28,8 @@ struct SwdPort {
   bool exhausted() const { return !connected && number == 0xffff; }
   rp2::BitBang io;
   uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
+  bool active_targetsel = false;   // the live connection's TARGETSEL (part of its identity, oep-if-debug §5)
+  uint32_t targetsel = 0;
 };
 
 class WireSwd final : public Interface {

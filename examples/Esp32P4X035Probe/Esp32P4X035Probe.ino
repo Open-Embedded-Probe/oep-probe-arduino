@@ -63,6 +63,9 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  // This jig's wiring (fixed): channel 6 drives the DUT USART4 RX (PB1), which must not float while no UART holds it (a floating
+  // RX line fed the DUT's command parser noise, 2026-09-22). Idle = pull-up; every other free pin stays Hi-Z.
+  pins.setIdle(6, oep::PinTable::kIdlePullUp);
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);

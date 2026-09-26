@@ -266,7 +266,10 @@ void Endpoint::lapse() {
 void Endpoint::loseSession() {
   endSubscriptions();
   for (size_t i = 0; i < count_; ++i) interfaces_[i]->sessionLapsed();
-  if (plan_active_ && !plan_persistent_) planRelease();
+  uint16_t lapsed[kMaxInterfaces];
+  size_t n = 0;
+  for (size_t i = 0; i < count_; ++i) if (planned_[i] && !persistent_[i]) lapsed[n++] = static_cast<uint16_t>(i + 1);
+  if (n) planRelease(lapsed, n);   // n == 0 would mean every fn: only the session's plans go
 }
 
 // Subscriptions belong to the lock: a host that vanished stops being pushed to when its lease lapses.
@@ -447,10 +450,19 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       const Result check = checkSession(has_session, session, out, capacity);
       if (refused(check)) return check;
       if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
+      if (op == kOpPlanRelease) {   // n(u8) n x fn(u16) [TLV]; n = 0: every fn
+        if (length < 1) return rejected(kRejectMalformed);
+        const size_t n = payload[0];
+        const Result parsed = plainTail(tail, payload, length, 1 + 2 * n, out, capacity);
+        if (refused(parsed)) return parsed;
+        uint16_t fns[256];
+        for (size_t k = 0; k < n; ++k) fns[k] = getU16(payload + 1 + 2 * k);
+        planRelease(fns, n);
+        return tail.finish(completed(), out, capacity);
+      }
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (op == kOpEnd) { locked_ = false; endSubscriptions(); }   // the last id stays: the same host may resume
-      if (op == kOpPlanRelease) planRelease();
       return tail.finish(completed(), out, capacity);
     }
     default: return rejected(kRejectUnknownOperation);
@@ -484,12 +496,11 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   return tail.finish(completed(9), out, capacity);
 }
 
-// Role assignments as TLVs 0x90 = fn(u16) role(u8) channel(u16) (critical); every interface checks its own roles
-// without side effects, then all apply or none does. An unknown critical TLV refuses the plan (unsupported), an
-// unknown non-critical one is ignored and listed. One plan at a time. It belongs to the session: an explicit end keeps
-// it, a lapse or a takeover releases it; a plan set through oep.probe.config (replacePlan) stays.
+// Role assignments as TLVs 0x90 = fn(u16) role(u8) channel(u16) (critical). The plan is per fn (oep-core §8): the fns
+// the request names are replaced, every other fn keeps its plan. An unknown critical TLV refuses the plan (unsupported),
+// an unknown non-critical one is ignored and listed. A session's plan: an explicit end keeps it, a lapse or a takeover
+// releases it; a plan set through oep.probe.config (replacePlan, persistent) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (plan_active_) return rejected(kRejectUnavailable);
   static const uint8_t kKnown[] = {kTagRoleAssignment};
   Tail tail;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity);
@@ -506,74 +517,120 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     ++count;
   }
   if (!count) return rejected(kRejectMalformed);
-  bool wants[kMaxInterfaces] = {};
-  for (size_t i = 0; i < count_; ++i) {
-    RoleAssignment mine[kMaxRoles];
-    size_t n = 0;
-    for (size_t r = 0; r < count; ++r) if (roles[r].function == i + 1) mine[n++] = roles[r];
-    if (!n) continue;
-    const uint8_t reason = interfaces_[i]->planCheck(mine, n);
-    if (reason) return rejected(reason);
-    wants[i] = true;
+  uint16_t fns[kMaxInterfaces];
+  size_t nfns = 0;
+  for (size_t r = 0; r < count; ++r) {
+    bool seen = false;
+    for (size_t k = 0; k < nfns; ++k) seen |= fns[k] == roles[r].function;
+    if (!seen) fns[nfns++] = roles[r].function;
   }
-  for (size_t i = 0; i < count_; ++i) {
-    if (!wants[i]) continue;
-    RoleAssignment mine[kMaxRoles];
-    size_t n = 0;
-    for (size_t r = 0; r < count; ++r) if (roles[r].function == i + 1) mine[n++] = roles[r];
-    if (!interfaces_[i]->planApply(mine, n)) {
-      for (size_t j = 0; j < i; ++j) if (planned_[j]) { interfaces_[j]->planRelease(); planned_[j] = false; }
-      return failed();
-    }
-    planned_[i] = true;
-  }
-  plan_active_ = true;
-  plan_persistent_ = false;
-  memcpy(plan_roles_, roles, count * sizeof roles[0]);
-  plan_count_ = count;
+  const uint8_t reason = replaceFns(roles, count, fns, nfns, false);
+  if (reason > 0xff) return failed();
+  if (reason) return rejected(static_cast<uint8_t>(reason));
   return tail.finish(completed(), out, capacity);
 }
 
-void Endpoint::planRelease() {
-  for (size_t i = 0; i < count_; ++i) {
-    if (planned_[i]) interfaces_[i]->planRelease();
-    planned_[i] = false;
+// Replaces the plan of the fns listed (a listed fn with no role is released). All or nothing: the old plans of those
+// fns are taken off first (so a replacement may reuse its own pins), every interface checks without side effects, then
+// all apply; a refusal or a failed apply puts the old plans back. 0 = done; a reject reason; or
+// kRejectUnavailable + 0x100 when an interface accepted the check and then failed to apply (completed failed).
+uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns,
+                              bool persistent) {
+  bool listed[kMaxInterfaces] = {};
+  for (size_t k = 0; k < nfns; ++k) if (fns[k] >= 1 && fns[k] <= count_) listed[fns[k] - 1] = true;
+  RoleAssignment old[kMaxRoles];
+  size_t old_count = 0;
+  bool old_persistent[kMaxInterfaces] = {};
+  size_t keep = 0;
+  for (size_t r = 0; r < plan_count_; ++r) {   // the listed fns' old roles come out of the table
+    const uint16_t f = plan_roles_[r].function;
+    if (listed[f - 1]) old[old_count++] = plan_roles_[r];
+    else plan_roles_[keep++] = plan_roles_[r];
   }
-  plan_active_ = false;
-  plan_count_ = 0;
+  plan_count_ = keep;
+  for (size_t i = 0; i < count_; ++i) {
+    if (!listed[i]) continue;
+    old_persistent[i] = persistent_[i];
+    if (planned_[i]) { interfaces_[i]->planRelease(); planned_[i] = false; }
+  }
+  auto applyAll = [this, &listed](const RoleAssignment *set, size_t n, bool check) -> uint16_t {
+    for (size_t i = 0; i < count_; ++i) {
+      if (!listed[i]) continue;
+      RoleAssignment mine[kMaxRoles];
+      size_t m = 0;
+      for (size_t r = 0; r < n; ++r) if (set[r].function == i + 1) mine[m++] = set[r];
+      if (!m) continue;
+      if (check) {
+        if (const uint8_t reason = interfaces_[i]->planCheck(mine, m)) return reason;
+      } else {
+        if (!interfaces_[i]->planApply(mine, m)) return kRejectUnavailable + 0x100;
+        planned_[i] = true;
+      }
+    }
+    return 0;
+  };
+  auto undo = [&]() {   // the new ones off, the old ones back (they fitted before)
+    for (size_t i = 0; i < count_; ++i)
+      if (listed[i] && planned_[i]) { interfaces_[i]->planRelease(); planned_[i] = false; }
+    applyAll(old, old_count, false);
+    for (size_t r = 0; r < old_count && plan_count_ < kMaxRoles; ++r) plan_roles_[plan_count_++] = old[r];
+    for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = old_persistent[i];
+  };
+  if (plan_count_ + count > kMaxRoles) { undo(); return kRejectMalformed; }
+  if (const uint16_t reason = applyAll(roles, count, true)) { undo(); return reason; }
+  if (const uint16_t reason = applyAll(roles, count, false)) { undo(); return reason; }
+  for (size_t r = 0; r < count; ++r) plan_roles_[plan_count_++] = roles[r];
+  for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = persistent && planned_[i];
+  return 0;
 }
 
-size_t Endpoint::plan(RoleAssignment *out, size_t max) const {
-  const size_t n = plan_count_ < max ? plan_count_ : max;
-  memcpy(out, plan_roles_, n * sizeof out[0]);
+// plan_release: the fns listed (none = every fn); a fn with no plan is left alone.
+void Endpoint::planRelease(const uint16_t *fns, size_t nfns) {
+  for (size_t i = 0; i < count_; ++i) {
+    bool hit = nfns == 0;
+    for (size_t k = 0; k < nfns; ++k) hit |= fns[k] == i + 1;
+    if (!hit) continue;
+    if (planned_[i]) interfaces_[i]->planRelease();
+    planned_[i] = persistent_[i] = false;
+  }
+  size_t keep = 0;
+  for (size_t r = 0; r < plan_count_; ++r)
+    if (planned_[plan_roles_[r].function - 1]) plan_roles_[keep++] = plan_roles_[r];
+  plan_count_ = keep;
+}
+
+size_t Endpoint::plan(RoleAssignment *out, size_t max, bool persistent_only) const {
+  size_t n = 0;
+  for (size_t r = 0; r < plan_count_ && n < max; ++r)
+    if (!persistent_only || persistent_[plan_roles_[r].function - 1]) out[n++] = plan_roles_[r];
   return n;
 }
 
-uint8_t Endpoint::replacePlan(const RoleAssignment *roles, size_t count) {
-  if (count > kMaxRoles) return kRejectMalformed;
-  auto apply = [this](const RoleAssignment *r, size_t n) -> uint8_t {
-    if (!n) return 0;
-    uint8_t tlv[kMaxRoles * 7], scratch[16];
+uint8_t Endpoint::replacePlan(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns) {
+  const uint16_t reason = replaceFns(roles, count, fns, nfns, true);
+  return reason > 0xff ? kRejectUnavailable : static_cast<uint8_t>(reason);
+}
+
+uint32_t Endpoint::listHash() const {
+  uint32_t c = 0xFFFFFFFFu;
+  auto feed = [&c](const uint8_t *p, size_t n) {
     for (size_t i = 0; i < n; ++i) {
-      uint8_t *t = tlv + i * 7;
-      t[0] = kTagRoleAssignment;
-      t[1] = 5;
-      putU16(t + 2, r[i].function);
-      t[4] = r[i].role;
-      putU16(t + 5, r[i].channel);
+      c ^= p[i];
+      for (int b = 0; b < 8; ++b) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
     }
-    const Result res = planApply(tlv, n * 7, scratch, sizeof scratch);
-    if (res.resolution == kResolutionRejected) return res.detail;
-    return res.detail == kOutcomeSuccess ? 0 : kRejectUnavailable;
   };
-  RoleAssignment before[kMaxRoles];
-  const size_t had = plan(before, kMaxRoles);
-  planRelease();
-  const bool was_persistent = plan_persistent_;
-  const uint8_t reason = apply(roles, count);
-  if (reason) apply(before, had);
-  plan_persistent_ = reason ? was_persistent : true;   // oep.probe.config's plan: probe settings, it outlives sessions
-  return reason;
+  auto entry = [&feed](uint16_t fn, uint16_t instance, uint8_t revision, const char *name) {
+    uint8_t e[5];
+    putU16(e, fn);
+    putU16(e + 2, instance);
+    e[4] = revision;
+    feed(e, 5);
+    feed(reinterpret_cast<const uint8_t *>(name), strlen(name));
+  };
+  entry(0, 0, reg::core::kRevision, reg::core::kName);
+  for (size_t i = 0; i < count_; ++i)
+    entry(static_cast<uint16_t>(i + 1), interfaces_[i]->instance(), interfaces_[i]->revision(), interfaces_[i]->name());
+  return ~c;
 }
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
