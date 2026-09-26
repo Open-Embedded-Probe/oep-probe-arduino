@@ -318,10 +318,12 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   if (capacity > static_cast<size_t>(limits_.max_frame) - kResultHeader) capacity = limits_.max_frame - kResultHeader;
 
   lapse();
-  // The lock holder's request sent again (the host lost the result): answer from what was kept, never run it twice.
-  const bool holder = has_session && locked_ && session == holder_;
-  const uint32_t crc = holder ? crc32(payload, payload_length) : 0;
-  if (holder) {
+  // The last session's request sent again (the host lost the result): answer from what was kept, never run it twice,
+  // and before the session is judged (core §5.2) - an end sent again must not take the lock back. The host numbers
+  // its requests in order (core §4.1): a corr no newer than the newest seen and not in the table was dropped from it.
+  const bool mine = has_session && have_last_ && session == last_ && !(fn == 0 && op == kOpOpen);
+  const uint32_t crc = mine ? crc32(payload, payload_length) : 0;
+  if (mine) {
     for (Dedup &d : dedup_) {
       if (!d.used || d.corr != corr) continue;
       if (d.fn != fn || d.op != op || d.crc != crc) { sendReject(corr, kRejectCorrReused); return; }
@@ -330,6 +332,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
       send(d.length);
       return;
     }
+    if (have_newest_ && static_cast<int16_t>(corr - newest_corr_) <= 0) { sendReject(corr, kRejectResultLost); return; }
   }
   Result result;
   if (fn == 0) {
@@ -349,7 +352,9 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   tx_[3] = result.resolution;
   tx_[4] = result.detail;
   const size_t total = kResultHeader + result.length;
-  if (holder && !(fn == 0 && op == kOpOpen)) {   // keep it for a request sent again (an open drops the table anyway)
+  if (mine) {   // keep it for a request sent again (an open drops the table)
+    newest_corr_ = corr;
+    have_newest_ = true;
     Dedup &d = dedup_[dedup_next_];
     dedup_next_ = (dedup_next_ + 1) % kDedupEntries;
     d.used = true;
@@ -429,11 +434,6 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       putU32(out + 1, remaining());
       return tail.finish(completed(5), out, capacity);
     }
-    case kOpStatus: {   // activity(u16): no long operations yet (they block)
-      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
-      if (refused(parsed)) return parsed;
-      return rejected(kRejectUnavailable);
-    }
     case kOpSubscribe:
     case kOpUnsubscribe: {   // the lock holder only, and they end with the lock
       const Result check = checkSession(has_session, session, out, capacity);
@@ -442,15 +442,13 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
     }
     case kOpEnd:
     case kOpKeepalive:
-    case kOpCancel:
     case kOpPlanApply:
     case kOpPlanRelease: {
       const Result check = checkSession(has_session, session, out, capacity);
       if (refused(check)) return check;
       if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
-      const Result parsed = plainTail(tail, payload, length, op == kOpCancel ? 2 : 0, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (op == kOpCancel) return rejected(kRejectUnavailable);   // nothing that could be stopped
       if (op == kOpEnd) { locked_ = false; endSubscriptions(); }   // the last id stays: the same host may resume
       if (op == kOpPlanRelease) planRelease();
       return tail.finish(completed(), out, capacity);
@@ -474,6 +472,7 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   // Every open (a resume too) drops the kept results: a one-shot CLI resumes the session with corr from 1 again, and
   // must not get a previous process's result (core §5.2).
   for (Dedup &d : dedup_) d.used = false;
+  have_newest_ = false;
   locked_ = true;
   holder_ = last_ = session;
   have_last_ = true;

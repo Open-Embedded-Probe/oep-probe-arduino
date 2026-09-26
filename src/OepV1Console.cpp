@@ -44,7 +44,8 @@ void TargetConsoleStream::poll() {
 
 bool TargetConsoleStream::openStream(uint8_t mechanism) {
   if (!driver_.start(mechanism)) return false;
-  stream_number_ = static_cast<uint8_t>(stream_number_ % 255 + 1);   // a new stream: the next of 1..255 (core §9)
+  if (stream_number_ == 0xffff) return false;   // every number used (core §9: never reused within a boot)
+  ++stream_number_;
   exists_ = open_ = true;
   mechanism_ = mechanism;
   seen_resets_ = port_.resets;
@@ -61,27 +62,29 @@ bool TargetConsoleStream::bindOpen(uint8_t mechanism) {
 
 Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
-  if (op == kOpOpen) {   // connection(u8) mechanism(u8) [TLV]  ->  stream(u8) flags(u8: bit0 existing)
-    const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+  if (op == kOpOpen) {   // connection(u16) mechanism(u8) [TLV]  ->  stream(u16) flags(u8: bit0 existing)
+    const Result parsed = plainTail(tail, payload, length, 3, out, capacity);
     if (refused(parsed)) return parsed;
-    if (payload[0] != port_.number || !port_.connected) return rejected(kRejectNoConnection);
-    if (payload[1] > reg::target_console::kMechanismDmseq) return rejected(kRejectUnsupported);
-    if (capacity < 2) return failed();
-    if (open_ && mechanism_ == payload[1]) {   // the same stream, positions and marks as they are
-      out[0] = stream_number_;
-      out[1] = 1;
-      return tail.finish(completed(2), out, capacity);
+    if (getU16(payload) != port_.number || !port_.connected) return rejected(kRejectNoConnection);
+    const uint8_t mechanism = payload[2];
+    if (mechanism > reg::target_console::kMechanismDmseq) return rejected(kRejectUnsupported);
+    if (capacity < 3) return failed();
+    if (open_ && mechanism_ == mechanism) {   // the same stream, positions and marks as they are
+      putU16(out, stream_number_);
+      out[2] = 1;
+      return tail.finish(completed(3), out, capacity);
     }
     if (open_) return rejected(kRejectUnavailable);   // one stream at a time on this connection
-    if (!openStream(payload[1])) return failed();
-    out[0] = stream_number_;
-    out[1] = 0;
-    return tail.finish(completed(2), out, capacity);
+    if (stream_number_ == 0xffff) return rejected(kRejectUnavailable);
+    if (!openStream(mechanism)) return failed();
+    putU16(out, stream_number_);
+    out[2] = 0;
+    return tail.finish(completed(3), out, capacity);
   }
-  if (length < 1) return rejected(kRejectMalformed);
-  if (payload[0] != stream_number_ || !exists_) return rejected(kRejectUnavailable);   // the current stream only
-  const uint8_t *p = payload + 1;
-  const size_t n = length - 1;
+  if (length < 2) return rejected(kRejectMalformed);
+  if (getU16(payload) != stream_number_ || !exists_) return rejected(kRejectUnavailable);   // the current stream only
+  const uint8_t *p = payload + 2;
+  const size_t n = length - 2;
   switch (op) {
     case kOpRead: {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) data (closed tail)
       const Result parsed = plainTail(tail, p, n, PositionStream::kReadRequest, out, capacity);

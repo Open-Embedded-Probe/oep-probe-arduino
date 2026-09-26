@@ -2,7 +2,7 @@
 // the debug connection (SDI / DMDATA / dmseq through the DmConsole driver), kept in a position-addressed buffer that
 // reads do not consume, with marks for what happened.
 //
-//   0x01 open(connection u8, mechanism u8) [TLV]   -> stream u8, flags u8 (bit0 an existing stream)
+//   0x01 open(connection u16, mechanism u8) [TLV]  -> stream u16, flags u8 (bit0 an existing stream)
 //   0x02 read(stream, from u8, arg u64, max u16)   -> start u64, flags u8 (bit0 more, bit1 gap), data      no lock
 //   0x03 marks(stream, from_serial u32)            -> more u8, count u8, count x (serial u32, position u64, kind u8,
 //                                                     time_ms u32, detail u8)                              no lock
@@ -64,7 +64,7 @@ class TargetConsoleStream final : public Interface {
   DmConsole &driver_;
   uint16_t instance_;
   bool exists_ = false;    // a stream was opened (and may be closed but still readable)
-  uint8_t stream_number_ = 0;   // the current stream's number (1..255, the next for every stream opened)
+  uint16_t stream_number_ = 0;  // the current stream's number (the next for every stream opened, never reused)
   bool open_ = false;
   uint8_t mechanism_ = 0;
   uint16_t max_read_ = 1000;

@@ -41,7 +41,6 @@ constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpLi
 constexpr uint8_t kOpOpen = reg::core::kOpOpen, kOpEnd = reg::core::kOpEnd, kOpKeepalive = reg::core::kOpKeepalive,
                   kOpLockState = reg::core::kOpLockState;
 constexpr uint8_t kOpLinkSource = reg::core::kOpLinkSource, kOpLinkSink = reg::core::kOpLinkSink;
-constexpr uint8_t kOpStatus = reg::core::kOpStatus, kOpCancel = reg::core::kOpCancel;
 constexpr uint8_t kOpSubscribe = reg::core::kOpSubscribe, kOpUnsubscribe = reg::core::kOpUnsubscribe;
 constexpr uint8_t kOpPlanApply = reg::core::kOpPlanApply, kOpPlanRelease = reg::core::kOpPlanRelease;
 constexpr uint8_t kTagRoleAssignment = reg::core::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), critical
