@@ -120,6 +120,9 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       uint32_t dpidr = 0;
       uint8_t flags = 0;
       bool ok;   // a failed attach answers its status alone: line (no answer from the port)
+      if (port_.connected &&
+          (have_targetsel != port_.active_targetsel || (have_targetsel && targetsel != port_.targetsel)))
+        return rejected(kRejectUnavailable);   // another target on these pins: the host detaches first
       if (port_.connected) {
         // Already attached: the same connection, nothing redone. A ceiling the live link is over cannot be met
         // without attaching again.
@@ -136,6 +139,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           port_.connected = true;
           port_.numberNew();
           port_.active_half_ns = half;
+          port_.active_targetsel = have_targetsel;
+          port_.targetsel = targetsel;
           if (dormant) flags |= 1;
         }
       }

@@ -18,8 +18,13 @@ def items_split(b):
     while at < len(b):
         out.append((b[at], b[at + 2:at + 2 + b[at + 1]])); at += 2 + b[at + 1]
     return out
-def canonical(items):   # (tag, value) -> sorted by tag, then first key (bind: port)
-    return b"".join(tlv(t, v) for t, v in sorted(items, key=lambda i: (i[0], i[1][:1] if i[0] == T_BIND else b"")))
+def canonical(items):   # (tag, value) -> sorted by tag, then key (plan: fn, role; bind: port)
+    def key(i):
+        t, v = i
+        if t == T_PLAN:
+            return (t, struct.unpack_from("<H", v)[0], v[2])
+        return (t, v[0] if t == T_BIND else 0, 0)
+    return b"".join(tlv(t, v) for t, v in sorted(items, key=key))
 
 def describe(A, fn):
     data, first = b"", 0
@@ -48,8 +53,8 @@ try:
     print("get:", hex(h), [(hex(t), v.hex()) for t, v in items])
     if phase == "setup":
         A.call(fc, ERASE)   # the saved copy only: clear the current items too
-        A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, b"") + tlv(T_PLAN, b""))
-        want = [(T_PLAN, struct.pack("<HBH", fu, 1, RX) + struct.pack("<HBH", fu, 2, TX)),
+        A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, bytes([0])) + tlv(T_PLAN, struct.pack("<H", fu)))
+        want = [(T_PLAN, struct.pack("<HBH", fu, 1, RX)), (T_PLAN, struct.pack("<HBH", fu, 2, TX)),
                 (T_BIND, bytes([0, 1, 0, 1]) + struct.pack("<HIB", fu, 0, 0))]
         h = struct.unpack("<I", A.call(fc, SET, b"".join(tlv(t, v) for t, v in reversed(want))).payload)[0]
         mine = binascii.crc32(canonical(want))
@@ -76,8 +81,8 @@ try:
         p.close()
     elif phase == "setbaud":   # a bind that carries its baud: the UART runs without the port being opened
         A.call(fc, ERASE)
-        A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, b"") + tlv(T_PLAN, b""))
-        A.call(fc, SET, tlv(T_PLAN, struct.pack("<HBH", fu, 1, RX) + struct.pack("<HBH", fu, 2, TX))
+        A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, bytes([0])) + tlv(T_PLAN, struct.pack("<H", fu)))
+        A.call(fc, SET, tlv(T_PLAN, struct.pack("<HBH", fu, 1, RX)) + tlv(T_PLAN, struct.pack("<HBH", fu, 2, TX))
                + tlv(T_BIND, bytes([0, 1, 0, 0]) + struct.pack("<HIB", fu, 230400, 0)))
         st = struct.unpack("<III", A.call(core.find(A, "oep.test.bridge"), 0x03).payload[:12])
         check("bind with a baud runs the UART at once", abs(st[0] - 230400) < 5000, str(st))
@@ -107,7 +112,7 @@ try:
         print(f"INFO set boot_mode {m} saved, hash {h:#x}; rebooting")
         A.call(fc, REBOOT)
     elif phase == "erase":
-        A.call(fc, ERASE); A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, b"") + tlv(T_PLAN, b""))
+        A.call(fc, ERASE); A.call(fc, SET, tlv(T_MODE, b"") + tlv(T_BIND, bytes([0])) + tlv(T_PLAN, struct.pack("<H", fu)))
         print("erased")
     elif phase == "reboot":
         A.call(fc, REBOOT)

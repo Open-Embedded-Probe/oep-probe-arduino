@@ -38,6 +38,17 @@ bool maxSpeed(const Tail &tail, uint32_t &hz, bool &critical) {
 
 // ---- oep.wire.rvswd / oep.wire.swio ------------------------------------------------------------------
 
+// The attach result's target_id (oep-if-debug §1): scheme wch_dmi_7f, the u32 at DMI 0x7F; 0 and all ones = none.
+size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
+  uint32_t id = 0;
+  if (room < 7 || !port.dm.readDmi(0x7f, id) || id == 0 || id == 0xffffffffu) return 0;
+  out[0] = reg::wire_rvswd::kTlvAttachAnswerTargetId;
+  out[1] = 5;
+  out[2] = reg::wire_rvswd::kTargetIdSchemeWchDmi7f;
+  putU32(out + 3, id);
+  return 7;
+}
+
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus) {
   if (port.connected) {
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
@@ -159,7 +170,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       putU32(out + 2, status);
       out[6] = flags;
       putU32(out + 7, phy.clockHz());
-      return tail.finish(completed(11), out, capacity);
+      return tail.finish(completed(11 + targetId(port_, out + 11, capacity - 11)), out, capacity);
     }
     case kOpAttachUnderReset: {
       // channel(u16, 0xffff = the probe's default) hold_ms(u16) [TLV 0x01 max_speed]  ->  connection(u16) dpc(u32) speed_hz(u32)
@@ -200,7 +211,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       putU16(out, port_.number);
       putU32(out + 2, dpc);
       putU32(out + 6, phy.clockHz());
-      return tail.finish(completed(10), out, capacity);
+      return tail.finish(completed(10 + targetId(port_, out + 10, capacity - 10)), out, capacity);
     }
     case kOpDetach: {   // connection(u16) [TLV 0x01 force]
       // The host's use goes; the link stays while another user (a bind's console) has it, unless forced.
@@ -223,8 +234,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
 
 size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  // bit0 block read/write (progbuf + autoexec), bit1 run until halt, bit2 ndmreset
-  w.u32(kTagFeatures, 0b0111);
+  // bit0 block read/write (progbuf + autoexec), bit1 run until halt, bit2 reset (ndmreset), bit3 step
+  w.u32(kTagFeatures, 0b1111);
+  // block read / write leave a0, a1 (buffer addresses), s0, s1 (pointer, word) changed (oep-if-debug §4.5)
+  static const uint8_t kClobbers[] = {0x0a, 0x10, 0x0b, 0x10, 0x08, 0x10, 0x09, 0x10};
+  w.put(reg::target_riscv_dm::kTlvDescribeClobbers, kClobbers, sizeof kClobbers);
   w.u8(kTagImplementation, 1);
   // One block operation's data in bytes: the word buffer, and what fits a frame - write_block's request (header 6,
   // session 4, connection 2, address, count = 18) and read_block's result (header 5, done, status = 8).
@@ -360,7 +374,7 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
       return tail.finish(outcome(status, done, 3), out, capacity);
     }
     case kOpRun: {
-      // pc(u32) timeout_ms(u32, 0xFFFFFFFF = no limit) n(u8) n x (regno u16, value u32) n_out(u8) n_out x regno(u16)
+      // pc(u32) timeout_ms(u32, finite) n(u8) n x (regno u16, value u32) n_out(u8) n_out x regno(u16)
       // [TLV]  ->  status(u8) stopped(u8) dpc(u32) elapsed_us(u32) n_out x value(u32)
       if (n < 9) return rejected(kRejectMalformed);
       const uint8_t regs = p[8];
@@ -370,6 +384,7 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
       const Result parsed = plainTail(tail, p, n, outs_at + 1 + 2u * outs, out, capacity);
       if (refused(parsed)) return parsed;
       if (regs > kMaxRegs || outs > kMaxRegs || 10u + 4u * outs > capacity) return rejected(kRejectMalformed);
+      if (getU32(p + 4) == 0xFFFFFFFFu) return rejected(kRejectUnsupported);   // no limit: the probe would never answer
       uint16_t regnos[kMaxRegs];
       uint32_t values[kMaxRegs];
       for (uint8_t i = 0; i < regs; ++i) {

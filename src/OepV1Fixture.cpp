@@ -20,6 +20,7 @@ uint8_t platformMode(uint8_t mode) {
 size_t FixtureGpio::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.roleChannels(kGpioRoles, sizeof kGpioRoles, pins_.allowedMask());
+  w.u8(reg::fixture_gpio::kTlvDescribeModes, 0x7f);   // modes 0-6
   return w.ok() ? w.length() : 0;
 }
 
@@ -42,10 +43,8 @@ bool FixtureGpio::planApply(const RoleAssignment *roles, size_t count) {
 }
 
 void FixtureGpio::planRelease() {
-  for (uint8_t c = 0; c < 64; ++c)
-    if (planned(c)) platformGpio(c, kGpioInputFloating);
   planned_ = 0;
-  pins_.release(owner_);
+  pins_.release(owner_);   // each channel to its idle state
 }
 
 Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
@@ -83,6 +82,12 @@ size_t FixtureUart::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.roleChannels(kUartRoles, sizeof kUartRoles, pins_.allowedMask());
   w.put(kImplementationPeripheral[0], kImplementationPeripheral + 2, kImplementationPeripheral[1]);
+  // formats: data bits 8 / 7 (bits 0-1), parity none / even / odd (bits 2-3), stop 1 / 2 (bit 4) - every combination
+  uint8_t formats[12], n = 0;
+  for (uint8_t stop = 0; stop < 2; ++stop)
+    for (uint8_t parity = 0; parity < 3; ++parity)
+      for (uint8_t data = 0; data < 2; ++data) formats[n++] = static_cast<uint8_t>(data | parity << 2 | stop << 4);
+  w.put(reg::fixture_uart::kTlvDescribeFormats, formats, n);
   return w.ok() ? w.length() : 0;
 }
 
@@ -123,10 +128,8 @@ bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
 void FixtureUart::planRelease() {
   poll();
   if (configured_) serial_.end();
-  if (rx_ >= 0) pinMode(rx_, INPUT);
-  // The DUT's RX stays connected: leave the line at UART idle (high) instead of floating, or the DUT's command
-  // parser sees noise (2026-09-22, X035 USART4 stopped answering after 0.5 s of a floating PB1).
-  if (tx_ >= 0) pinMode(tx_, INPUT_PULLUP);
+  // Released pins go to their idle state (oep-core §8, default Hi-Z). A jig whose DUT RX must not float (2026-09-22,
+  // X035 USART4 stopped answering after 0.5 s of a floating PB1) sets that pin's idle to pull-up.
   pins_.release(owner_);
   rx_ = tx_ = -1;
   configured_ = false;

@@ -2,11 +2,12 @@
 // USB-Serial/JTAG) plus the P4's HS port as a USB device with one data CDC port, "Target console", that a bind
 // (oep.probe.config, source 2 = oep.target.console) follows both ways:
 //   attach 0 (host): when a host attaches, the probe opens the console on that connection and counts the bind as a user
-//   attach 1 (on open): when the port is opened (DTR), a non-halting attach, the chip_id (DM 0x7f) checked against
-//                       the target item, then the console
+//   attach 1 (on open): when the port is opened (DTR), a non-halting attach on the bind's pins and max_speed, its
+//                       target_id matched against the target item (scheme / mask / value), then the console
 //   attach 2 (at boot): the same once at boot
 // A host's detach then drops only the host's use (the link stays for the console); detach with force closes it.
-// oep.test.console-bind (scratch): 0x01 status -> state u8 (0 idle, 1 console on, 2 chip mismatch, 3 attach failed, 4 chip_id unknown),
+// oep.test.console-bind (scratch): 0x01 status -> state u8 (describe bind_state: 0 waiting, 1 streaming, 2 target mismatch,
+//   3 attach failed, 4 no target_id),
 //   users u8, connected u8, console_open u8, chip_seen u32, port_gaps u32, dtr u8
 #include <OepCh32Dm.h>
 #include <EspUsbDevice.h>
@@ -85,6 +86,7 @@ static struct {
   uint8_t mechanism = 2, attach = 0, state = 0;
   bool booted = false, last_dtr = false;
   uint32_t chip_seen = 0;
+  uint32_t max_hz = 0;   // the bind's max_speed (0: no ceiling)
 } bindState;
 
 static bool bindHook(uint8_t port_no, const oep::v1::ProbeConfig::Bind &b, void *) {
@@ -96,7 +98,10 @@ static bool bindHook(uint8_t port_no, const oep::v1::ProbeConfig::Bind &b, void 
     bindState.state = 0;
     return true;
   }
-  if (b.source != 2 || oep::v1::getU16(b.args) != kWireFn || b.args[2] > 2) return false;
+  // target.console args: wire_fn u16, mechanism u8, swdio u16, swclk u16, max_speed u32 - the pins must be this wire's pair
+  if (b.source != 2 || b.arg_length != 11 || oep::v1::getU16(b.args) != kWireFn || b.args[2] > 2) return false;
+  if (oep::v1::getU16(b.args + 3) != port.swdio || oep::v1::getU16(b.args + 5) != port.swclk) return false;
+  bindState.max_hz = oep::v1::getU32(b.args + 7);
   bindState.active = true;
   bindState.mechanism = b.args[2];
   bindState.attach = b.attach;
@@ -114,19 +119,20 @@ static void openConsoleForBind() {
 }
 
 static void attachForBind() {
-  uint32_t status = 0, chip = 0;
+  uint32_t status = 0;
+  if (!port.connected && !dm.phy().setMaxHz(bindState.max_hz)) { bindState.state = 3; return; }   // the bind's ceiling
   if (!oep::v1::attachRunning(port, oep::v1::DebugPort::kUserBind, status)) { bindState.state = 3; return; }
-  dm.readDmi(0x7f, chip);
-  bindState.chip_seen = chip;
-  const auto &t = config.target();
-  // v1 wire §5.10: bits [7:4] are the silicon revision and are not compared (ch32rv matches AttachChip's chip_id the
-  // same way); 0 or all ones means this part does not say (0x7f is only confirmed on L103 / V203 / V003 / X035)
-  if (chip == 0 || chip == 0xffffffffu) {
+  // oep-if-probe-config §1.1: the target_id this attach reads must match the wire's target item (the host's mask
+  // decides what is compared - for a WCH chip_id, not the revision bits [7:4])
+  uint8_t tlv[8];
+  const size_t n = oep::v1::targetId(port, tlv, sizeof tlv);
+  bindState.chip_seen = n ? oep::v1::getU32(tlv + 3) : 0;
+  if (!n) {
     oep::v1::releaseConnection(port, oep::v1::DebugPort::kUserBind, false);
     bindState.state = 4;
     return;
   }
-  if (t.set && ((chip ^ t.chip_id) & ~0xf0u)) {   // not the target this bind was set for: leave it alone
+  if (!config.matches(kWireFn, tlv[2], tlv + 3, 4)) {   // not the target this bind was set for: leave it alone
     oep::v1::releaseConnection(port, oep::v1::DebugPort::kUserBind, false);
     bindState.state = 2;
     return;
@@ -135,6 +141,7 @@ static void attachForBind() {
 }
 
 static void bindPoll() {
+  config.setBindState(0, bindState.state);   // describe bind_state (the same numbers)
   if (!bindState.active) return;
   const bool dtr = consolePort.connected();
   const bool rose = dtr && !bindState.last_dtr;
@@ -184,6 +191,9 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  // This jig's wiring (fixed): channel 6 drives the DUT USART4 RX (PB1), which must not float while no UART holds it (a floating
+  // RX line fed the DUT's command parser noise, 2026-09-22). Idle = pull-up; every other free pin stays Hi-Z.
+  pins.setIdle(6, oep::PinTable::kIdlePullUp);
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
@@ -219,6 +229,7 @@ void setup() {
   usb.controller = EspUsbController::HighSpeed;
   usbDevice.begin(usb);
   config.setBindHook(bindHook, nullptr);
+  config.setPins(&pins);   // the idle item sets these pins' free state
   config.applySaved();
 }
 

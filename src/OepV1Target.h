@@ -46,6 +46,8 @@ struct DebugPort {
 // Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the
 // host's attach, havereset acknowledged. Joins an existing connection. Adds `user`. false: the target did not answer.
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus);
+// The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
+size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`).
 void releaseConnection(DebugPort &port, uint8_t user, bool force);
 
