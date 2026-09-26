@@ -9,7 +9,7 @@ inline bool refused(const Result &r) { return r.resolution != kResolutionComplet
 // Wire mode (v1 table, 0-6) -> the platform's pin mode.
 uint8_t platformMode(uint8_t mode) {
   static const uint8_t kMap[] = {kGpioInputFloating, kGpioInputPullUp, kGpioInputPullDown, kGpioOutputLow,
-                                 kGpioOutputHigh, kGpioOpenDrainLow, kGpioOpenDrainRelease};
+                                 kGpioOutputHigh, kGpioOpenDrainLow, kGpioOpenDrainRelease, kGpioInputPullUpDown};
   return kMap[mode];
 }
 
@@ -20,7 +20,7 @@ uint8_t platformMode(uint8_t mode) {
 size_t FixtureGpio::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.roleChannels(kGpioRoles, sizeof kGpioRoles, pins_.allowedMask());
-  w.u8(reg::fixture_gpio::kTlvDescribeModes, 0x7f);   // modes 0-6
+  w.u8(reg::fixture_gpio::kTlvDescribeModes, 0xff);   // modes 0-7
   return w.ok() ? w.length() : 0;
 }
 
@@ -57,7 +57,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       const Result parsed = plainTail(tail, payload, length, 1u + 3u * n, out, capacity);
       if (refused(parsed)) return parsed;
       for (uint8_t i = 0; i < n; ++i)
-        if (!planned(getU16(payload + 1 + 3 * i)) || payload[3 + 3 * i] > reg::fixture_gpio::kModeOpenDrainRelease)
+        if (!planned(getU16(payload + 1 + 3 * i)) || payload[3 + 3 * i] > reg::fixture_gpio::kModeInputPullupPulldown)
           return rejectedWith(kRejectUnavailable, out, capacity, i);
       for (uint8_t i = 0; i < n; ++i) platformGpio(getU16(payload + 1 + 3 * i), platformMode(payload[3 + 3 * i]));
       return tail.finish(completed(), out, capacity);

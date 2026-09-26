@@ -2,7 +2,8 @@
 //
 //   oep.fixture.gpio   plan role 1 = a line (any number of them). Only planned channels may be set or read.
 //     0x01 set(n u8, n x (channel u16, mode u8)) [TLV]      modes 0 input, 1 pull-up, 2 pull-down, 3 output low,
-//                                                          4 output high, 5 open-drain low, 6 open-drain release
+//                                                          4 output high, 5 open-drain low, 6 open-drain release,
+//                                                          7 input with pull-up and pull-down
 //     0x02 read(n u8, n x channel u16) [TLV] -> n x level   no lock
 //   oep.fixture.uart   plan roles 1 = RX, 2 = TX. A position stream like oep.target.console (without the stream
 //                      byte): received bytes are kept from configure until plan_release whatever the sessions do,
