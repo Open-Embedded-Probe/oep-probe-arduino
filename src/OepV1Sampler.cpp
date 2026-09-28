@@ -39,10 +39,16 @@ void IRAM_ATTR SamplerCapture::samplerTask(void *context) {
   for (uint32_t l = 0; l < lines; ++l) high |= m1[l];
   portDISABLE_INTERRUPTS();
   uint32_t next = esp_cpu_get_cycle_count();
+  // A sample due more than one period ago when the loop comes round was taken late: the core was held up (the
+  // other core stalls this one now and then even with interrupts off, 2026-09-29), and the samples after it catch
+  // up faster than the rate. The segment says so (flags bit2) rather than passing a bent time base as even.
+  int32_t late = 0;
   if (!high) {
     // GPIO0..31 only: one register read per sample. Reading GPIO.in1 as well cost enough that 2 MHz fell behind
     // (1.92 MHz actually sampled, periods spread +-5 %, 2026-09-29); 1 MHz and below kept pace either way.
     for (uint32_t i = 0; i < n; ++i) {
+      const int32_t behind = static_cast<int32_t>(esp_cpu_get_cycle_count() - next);
+      if (behind > late) late = behind;
       while (static_cast<int32_t>(esp_cpu_get_cycle_count() - next) < 0) {}
       next += step;
       const uint32_t in0 = GPIO.in;
@@ -52,6 +58,8 @@ void IRAM_ATTR SamplerCapture::samplerTask(void *context) {
     }
   } else {
     for (uint32_t i = 0; i < n; ++i) {
+      const int32_t behind = static_cast<int32_t>(esp_cpu_get_cycle_count() - next);
+      if (behind > late) late = behind;
       while (static_cast<int32_t>(esp_cpu_get_cycle_count() - next) < 0) {}
       next += step;
       const uint32_t in0 = GPIO.in, in1 = GPIO.in1.val;
@@ -61,6 +69,8 @@ void IRAM_ATTR SamplerCapture::samplerTask(void *context) {
     }
   }
   portENABLE_INTERRUPTS();
+  self->late_cycles_ = static_cast<uint32_t>(late);
+  self->slipped_ = late > static_cast<int32_t>(step);
   self->done_ = true;
   self->sampler_ = nullptr;
   vTaskDelete(nullptr);
@@ -217,7 +227,7 @@ size_t SamplerCapture::segmentInfo(uint8_t *out) const {
   putU32(out + 12, samples_);
   putU64(out + 16, start_us_);
   putU32(out + 24, 0xFFFFFFFFu);   // no trigger inside (immediate start)
-  out[28] = 0;
+  out[28] = slipped_ ? cap::kSegmentFlagSlipped : 0;   // bit2: the time base bent (see samplerTask)
   return 29;
 }
 
