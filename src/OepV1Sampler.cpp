@@ -35,15 +35,30 @@ void IRAM_ATTR SamplerCapture::samplerTask(void *context) {
   const uint32_t n = self->samples_, step = self->cycles_, lines = self->channels_;
   uint32_t m0[kMaxChannels], m1[kMaxChannels];
   for (uint32_t l = 0; l < lines; ++l) { m0[l] = self->masks0_[l]; m1[l] = self->masks1_[l]; }
+  uint32_t high = 0;
+  for (uint32_t l = 0; l < lines; ++l) high |= m1[l];
   portDISABLE_INTERRUPTS();
   uint32_t next = esp_cpu_get_cycle_count();
-  for (uint32_t i = 0; i < n; ++i) {
-    while (static_cast<int32_t>(esp_cpu_get_cycle_count() - next) < 0) {}
-    next += step;
-    const uint32_t in0 = GPIO.in, in1 = GPIO.in1.val;
-    uint8_t byte = 0;
-    for (uint32_t l = 0; l < lines; ++l) byte |= static_cast<uint8_t>(((in0 & m0[l]) | (in1 & m1[l])) != 0) << l;
-    out[i] = byte;
+  if (!high) {
+    // GPIO0..31 only: one register read per sample. Reading GPIO.in1 as well cost enough that 2 MHz fell behind
+    // (1.92 MHz actually sampled, periods spread +-5 %, 2026-09-29); 1 MHz and below kept pace either way.
+    for (uint32_t i = 0; i < n; ++i) {
+      while (static_cast<int32_t>(esp_cpu_get_cycle_count() - next) < 0) {}
+      next += step;
+      const uint32_t in0 = GPIO.in;
+      uint8_t byte = 0;
+      for (uint32_t l = 0; l < lines; ++l) byte |= static_cast<uint8_t>((in0 & m0[l]) != 0) << l;
+      out[i] = byte;
+    }
+  } else {
+    for (uint32_t i = 0; i < n; ++i) {
+      while (static_cast<int32_t>(esp_cpu_get_cycle_count() - next) < 0) {}
+      next += step;
+      const uint32_t in0 = GPIO.in, in1 = GPIO.in1.val;
+      uint8_t byte = 0;
+      for (uint32_t l = 0; l < lines; ++l) byte |= static_cast<uint8_t>(((in0 & m0[l]) | (in1 & m1[l])) != 0) << l;
+      out[i] = byte;
+    }
   }
   portENABLE_INTERRUPTS();
   self->done_ = true;
@@ -156,6 +171,12 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   if (channels_ == 0) return rejected(kRejectUnavailable);   // plan first
   if (state_ == cap::kStateCapturing && !query) return rejected(kRejectBusy);
   if (samples == 0 || samples > kBufferBytes) samples = kBufferBytes;
+  // Paced in software, the loop keeps up to kMaxHz only while every channel is on GPIO0..31 (one register read per
+  // sample); with GPIO32..39 in the plan it keeps 1 MHz, not 2 (1.52 MHz actually sampled, 2026-09-29). The answer
+  // carries the rate that is really paced.
+  bool high = false;
+  for (uint8_t l = 0; l < channels_; ++l) high |= pins_[l] >= 32;
+  if (high && rate > kMaxHzHighBank) rate = kMaxHzHighBank;
   const uint32_t cpu_hz = getCpuFrequencyMhz() * 1000000u;
   const uint32_t cycles = cpu_hz / rate;
   const uint32_t g = gcd(cpu_hz, cycles);
