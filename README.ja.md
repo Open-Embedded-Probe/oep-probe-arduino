@@ -13,8 +13,8 @@ OEP を初めて読む人は oep-spec の `docs/review-guide.ja.md`（どこに�
 | `src/OepV1.h`、`src/OepV1Endpoint.*`、`src/OepV1Registry.h` | v1 の本体（oep-core）: フレーム、名前で探すインターフェース、ロック、複数の経路、plan、通知 |
 | `src/OepV1Stream.h`、`src/OepV1Debug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
 | `src/OepV1Target.*` など | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（試作）。各ファイルの冒頭に対応する仕様の節がある |
-| `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*` など | 世代によらない部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing） |
-| `src/OepEndpoint.*`、`src/OepService.h`、`src/oep_v0.*` など | v0 の endpoint と codec（経緯。v1 の probe は使わない） |
+| `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 独自インターフェース `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブ） |
+| `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
 | `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`）と試作（`Esp32P4HsPrototype`、`Esp32P4X035ConsolePrototype`） |
 | `docs/` | 日付入りの作業記録（経緯） |
 
