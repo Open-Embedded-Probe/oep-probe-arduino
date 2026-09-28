@@ -27,6 +27,7 @@ class SamplerCapture final : public Interface {
   // one sample per 120 cycles at 240 MHz is the tested ceiling; the floor keeps a full window under the 300 ms
   // interrupt watchdog while interrupts are off on the sampling core
   static constexpr uint32_t kMaxHz = 2000000, kMinHz = 400000;
+  static constexpr uint32_t kMaxHzHighBank = 1000000;   // with any channel on GPIO32..39
 
   SamplerCapture(Endpoint &endpoint, uint64_t reserved_pins, uint16_t instance = 0)
       : endpoint_(endpoint), reserved_(reserved_pins), instance_(instance) {}
