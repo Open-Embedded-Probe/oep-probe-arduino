@@ -40,6 +40,20 @@ uint32_t gcd(uint64_t a, uint64_t b) {
   return static_cast<uint32_t>(a);
 }
 
+// The rate 160 MHz / (int + numerator / denominator) as the answer's num / den (u32 each). A large fractional
+// denominator does not fit even reduced (14.886 MHz asked was answered 2685163520/1623 - the numerator cut to
+// 32 bits - while it sampled at 14.89 MHz, 2026-09-29): whole Hz then, off by less than 0.5 Hz.
+void rateFraction(uint64_t top, uint64_t bottom, uint32_t &num, uint32_t &den) {
+  const uint64_t g = gcd(top, bottom);
+  if (top / g > UINT32_MAX || bottom / g > UINT32_MAX) {
+    num = static_cast<uint32_t>((top + bottom / 2) / bottom);
+    den = 1;
+  } else {
+    num = static_cast<uint32_t>(top / g);
+    den = static_cast<uint32_t>(bottom / g);
+  }
+}
+
 }  // namespace
 
 bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *e, void *context) {
@@ -355,9 +369,7 @@ bool LogicCapture::open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t 
   uint32_t fd = HP_SYS_CLKRST.peri_clk_ctrl118.reg_parlio_rx_clk_div_denominator;
   if (fd == 0) fd = 1;
   const uint64_t top = static_cast<uint64_t>(kSourceHz) * fd, bottom = static_cast<uint64_t>(n) * fd + fn;
-  const uint32_t g = gcd(top, bottom);
-  num = static_cast<uint32_t>(top / g);
-  den = static_cast<uint32_t>(bottom / g);
+  rateFraction(top, bottom, num, den);
   return true;
 }
 
@@ -479,9 +491,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (!hal_utils_calc_clk_div_frac_accurate(&info, &div)) return failed();
     const uint32_t fd = div.denominator ? div.denominator : 1;
     const uint64_t top = static_cast<uint64_t>(kSourceHz) * fd, bottom = static_cast<uint64_t>(div.integer) * fd + div.numerator;
-    const uint32_t g = gcd(top, bottom);
-    num = static_cast<uint32_t>(top / g);
-    den = static_cast<uint32_t>(bottom / g);
+    rateFraction(top, bottom, num, den);
   } else if (mode == 2 || mode == 3) {
     close();
     direct_ = mode == 3 && endpoint_.direct() != nullptr;
