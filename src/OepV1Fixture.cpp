@@ -187,7 +187,7 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       const Result parsed = tail.parse(payload + 4, length - 4, kKnown, out, capacity);
       if (refused(parsed)) return parsed;
       const uint32_t baud = getU32(payload);
-      if (baud < 1200 || baud > 2000000) return rejected(kRejectMalformed);
+      if (baud < 1200 || baud > 2000000) return rejected(kRejectUnsupported);   // a fixed-part value it cannot run (core §4.3)
       // format: bits 0-1 data bits (0 = 8, 1 = 7), bits 2-3 parity (0 none, 1 even, 2 odd), bit 4 stop bits (0 = 1,
       // 1 = 2). 8N1 when absent, or when a value this probe does not know came without the critical bit.
       uint8_t data_bits = 8, parity = 0, stop_bits = 1, len = 0;
