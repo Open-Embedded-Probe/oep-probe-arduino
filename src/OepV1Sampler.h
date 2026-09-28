@@ -59,6 +59,8 @@ class SamplerCapture final : public Interface {
   uint32_t masks0_[kMaxChannels] = {}, masks1_[kMaxChannels] = {};
   TaskHandle_t sampler_ = nullptr;
   volatile bool done_ = false, reported_ = true;
+  volatile bool slipped_ = false;         // the last window had a sample more than one period late
+  volatile uint32_t late_cycles_ = 0;     // the most it was behind, in CPU cycles
 
   Result configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query);
   static void samplerTask(void *context);
