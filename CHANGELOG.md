@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) A read from the last mark of a kind that is not kept starts now, not at the oldest byte (oep-if-common §1.2): a fixture UART, which has no reset marks, gave its old output again at every open.
+- (JA) その kind のマークが残っていないときの「最後のマークから」の read は、一番古い位置ではなく今から（oep-if-common §1.2）。reset のマークを持たない fixture UART では、開くたびに古い出力が繰り返されていた。
 
 ## 0.0.2
 - (EN) A serial port no longer hands a lone 0x00 to its bind: the closing 0x00 of every OEP frame opened an empty candidate, and after 200 ms without input it went to the bound console as a raw byte (a stray 0x00 on the target after the first answer, a monitor reopened, a flash).
