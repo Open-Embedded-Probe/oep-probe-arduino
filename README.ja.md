@@ -45,5 +45,5 @@ USB CDC、UART bridge）は OEP のフレーム（`0x00 <COBS> 0x00`）と bind 
 
 [arduino-library-release-toolkit](https://github.com/tanakamasayuki/arduino-library-release-toolkit) の共通の仕組みをそのまま使う。
 変更は `CHANGELOG.md` の `## Unreleased` に (EN) / (JA) で書き足し、GitHub Actions の Release（workflow_dispatch）を起動すると、
-`library.properties` の版を上げ、`src/oepprobe_version.h` を作り、`release` ブランチで example の `sketch.yaml` の `dir: ../..` を
-`OEPProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。
+`library.properties` の版を上げ、`src/openembeddedprobe_version.h` を作り、`release` ブランチで example の `sketch.yaml` の `dir: ../..` を
+`OpenEmbeddedProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。
