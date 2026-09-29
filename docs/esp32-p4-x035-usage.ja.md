@@ -7,7 +7,9 @@ v0 の prototype（`Esp32P4X035Prototype`、`python -m oep_client` の CLI）の
 
 - probe: ESP32-P4（`examples/Esp32P4X035Probe`）
 - target: CH32X035F8U6 の治具
-- OEP transport: ESP32-P4 の USB Serial/JTAG（長さつきフレーム）
+- OEP transport（describe の順）: 0 HS の vendor bulk、1 USB-Serial/JTAG（シリアルの口）、2 HS の HID、3 HS の CDC
+  「OEP console」（シリアルの口）。HS の device は 303a:0002、serial は MAC + `-hs`。シリアルの口は COBS のフレームと bind の生のバイトを
+  1 本で運ぶ
 - target transport: RVSWD（dedicated GPIO の bit-bang）
 
 必須の配線は次の 2 本と共通 GND。target は別に給電し、信号は 3.3 V。
@@ -21,7 +23,7 @@ v0 の prototype（`Esp32P4X035Prototype`、`python -m oep_client` の CLI）の
 
 ## probe firmware
 
-`examples/Esp32P4X035Probe` で:
+`examples/Esp32P4X035Probe` で（direct build: `build_opt.h` を変えたら `--clean`）:
 
 ```sh
 arduino-cli compile --profile esp32p4 --jobs 2 --output-dir <build dir> .
@@ -30,7 +32,7 @@ arduino-cli upload --profile esp32p4 -p "$(readlink -f /run/board-identify/by-id
 ```
 
 列挙順で変わる `/dev/ttyACM*` ではなく `/run/board-identify/by-id/esp32-series-30eda0e31108` を使う。
-CDC 全体を OEP のフレームに使うので、serial monitor を同時に開かない。
+シリアルの口は排他で開く（TIOCEXCL）。OEP の道具と serial monitor は同時に開けない（`arduino-cli monitor` も TIOCEXCL）。
 
 ## 使い方
 

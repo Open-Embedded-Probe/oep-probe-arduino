@@ -86,29 +86,79 @@ uint16_t crc16Ccitt(const uint8_t *data, size_t length, uint16_t crc) {
   return crc;
 }
 
-bool CobsReader::push(uint8_t byte) {
-  if (byte != 0) {
-    if (have_ < capacity_) buffer_[have_++] = byte;
-    else overflow_ = true;
-    return false;
-  }
-  // Delimiter: decode in place (the output is never longer than the input).
+bool SerialReader::close() {   // decodes into dec_; the encoded bytes stay as they were
   const size_t n = have_;
-  have_ = 0;
-  if (n == 0) return false;                 // back-to-back delimiters: nothing
-  if (overflow_) { overflow_ = false; ++malformed_; return false; }
   size_t in = 0, out = 0;
   while (in < n) {
-    const uint8_t code = buffer_[in++];
-    if (in + code - 1 > n) { ++malformed_; return false; }
-    for (uint8_t i = 1; i < code; ++i) buffer_[out++] = buffer_[in++];
-    if (code != 0xff && in < n) buffer_[out++] = 0;
+    const uint8_t code = enc_[in++];
+    if (in + code - 1 > n || out + code > dec_cap_) return false;
+    memcpy(dec_ + out, enc_ + in, code - 1u);
+    out += code - 1u;
+    in += code - 1u;
+    if (code != 0xff && in < n) dec_[out++] = 0;
   }
-  if (out < 3) { ++malformed_; return false; }
-  const uint16_t got = static_cast<uint16_t>(buffer_[out - 2] | buffer_[out - 1] << 8);
-  if (crc16Ccitt(buffer_, out - 2) != got) { ++crc_errors_; return false; }
+  if (out < 3) return false;
+  const uint16_t got = static_cast<uint16_t>(dec_[out - 2] | dec_[out - 1] << 8);
+  if (crc16Ccitt(dec_, out - 2) != got) { ++crc_errors_; return false; }
   length_ = out - 2;
   return true;
+}
+
+void SerialReader::spill(RawSink sink, void *context) {
+  static const uint8_t kZero = 0;
+  if (!open_) return;
+  sink(context, &kZero, 1);
+  if (have_) sink(context, enc_, have_);
+  open_ = false;
+  have_ = 0;
+}
+
+void SerialReader::idle(RawSink sink, void *context) {
+  if (open_ && static_cast<uint32_t>(millis() - last_ms_) >= kGapMs) spill(sink, context);
+}
+
+bool SerialReader::feed(const uint8_t *&data, size_t &n, RawSink sink, void *context) {
+  if (!n) return false;
+  idle(sink, context);
+  last_ms_ = millis();
+  while (n) {
+    if (!open_) {   // raw up to the next 0x00, in one piece
+      const uint8_t *zero = static_cast<const uint8_t *>(memchr(data, 0, n));
+      const size_t run = zero ? static_cast<size_t>(zero - data) : n;
+      if (run) sink(context, data, run);
+      data += run;
+      n -= run;
+      if (!zero) return false;
+      ++data;
+      --n;
+      open_ = true;   // the 0x00 starts a candidate
+      have_ = 0;
+      continue;
+    }
+    const uint8_t b = *data;
+    if (b == 0) {
+      if (have_ == 0) { ++data; --n; continue; }   // 0x00 0x00: an empty frame; this 0x00 starts the next candidate
+      const bool message = close();
+      if (!message) {                              // not a frame: raw, its leading 0x00 too
+        static const uint8_t kZero = 0;
+        sink(context, &kZero, 1);
+        sink(context, enc_, have_);
+      }
+      have_ = 0;                                   // the closing 0x00 starts the next candidate (open_ stays)
+      ++data;
+      --n;
+      if (message) return true;
+      continue;
+    }
+    if (have_ == enc_cap_) {                       // longer than any frame: raw
+      spill(sink, context);
+      continue;                                    // this byte again, now outside a candidate
+    }
+    enc_[have_++] = b;
+    ++data;
+    --n;
+  }
+  return false;
 }
 
 size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length) {
@@ -117,17 +167,17 @@ size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length) {
   const uint8_t tail[2] = {static_cast<uint8_t>(crc), static_cast<uint8_t>(crc >> 8)};
   const size_t total = length + 2;
   auto at = [&](size_t i) -> uint8_t { return i < length ? message[i] : tail[i - length]; };
-  // Standard COBS: each block is its length + 1 followed by up to 254 non-zero bytes; a block shorter than
-  // 254 bytes implies the zero that ended it (none after the last block). A full block (code 0xFF) implies
-  // nothing, so the next block starts right after it - and if the data ends there, an empty block follows.
-  // Encoded into a small buffer and written in pieces: one Stream::write per byte takes the UART driver's lock
-  // every time.
+  // Standard COBS: each block is its length + 1 followed by up to 254 non-zero bytes; a block shorter than 254 bytes
+  // implies the zero that ended it (none after the last block). A full block (code 0xFF) implies nothing; when the
+  // data ends right after one, no empty block follows. Encoded into a small buffer and written in pieces: one
+  // Stream::write per byte takes the UART driver's lock every time.
   uint8_t out[64];
   size_t n = 0;
   auto put = [&](uint8_t b) {
     out[n++] = b;
     if (n == sizeof out) { stream.write(out, n); n = 0; }
   };
+  put(0);
   size_t i = 0;
   for (;;) {
     size_t j = i;
@@ -135,8 +185,8 @@ size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length) {
     const uint8_t code = static_cast<uint8_t>(j - i + 1);
     put(code);
     for (size_t k = i; k < j; ++k) put(at(k));
-    if (code == 0xff) { i = j; continue; }
     if (j >= total) break;
+    if (code == 0xff) { i = j; continue; }
     i = j + 1;   // skip the zero this block stood for
   }
   put(0);

@@ -51,33 +51,51 @@ class FrameReader {
 // Write one message with its length prefix. Returns bytes of message written (0 on failure).
 size_t writeFrame(Stream &stream, const uint8_t *message, size_t length);
 
-// UART binding (oep-spec v0-core-wire-model §2.2, provisional): message + CRC-16 (little endian), COBS-encoded,
-// ended by 0x00. A corrupted, truncated or joined frame fails the decode or the CRC and is dropped; the next
-// 0x00 is a fresh start, so a stray byte costs one frame, never the link.
-// CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor ("123456789" -> 0x29B1). Provisional.
+// Serial-port framing (oep-core §3.1, §3.4): message + CRC-16 (little endian), COBS-encoded, sent as 0x00 <COBS> 0x00.
+// A serial port carries raw bytes (a target's console) on the same line: a candidate runs from a 0x00 to the next
+// 0x00; one that decodes with a matching CRC is a message, any other (with its leading 0x00) is raw, and the closing
+// 0x00 starts the next candidate. Bytes outside a candidate are raw at once, and a candidate that stops for 200 ms is
+// raw too. Not a byte is lost to the raw side.
+// CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor ("123456789" -> 0x29B1).
 uint16_t crc16Ccitt(const uint8_t *data, size_t length, uint16_t crc = 0xFFFF);
 
-class CobsReader {
+class SerialReader {
  public:
-  CobsReader(uint8_t *buffer, size_t capacity) : buffer_(buffer), capacity_(capacity) {}
-  CobsReader() : CobsReader(nullptr, 0) {}
-  void reset(uint8_t *buffer, size_t capacity) { *this = CobsReader(buffer, capacity); }
-  bool push(uint8_t byte);   // true when a checked message is available
-  const uint8_t *message() const { return buffer_; }
+  using RawSink = void (*)(void *context, const uint8_t *data, size_t length);
+  // encoded: the candidate's bytes (a max_frame message is COBS(max_frame + 2) = max_frame + 2 + max_frame / 254 + 1
+  // bytes; a longer candidate is raw). decoded: where a message is decoded (at least max_frame + 2).
+  void reset(uint8_t *encoded, size_t encoded_capacity, uint8_t *decoded, size_t decoded_capacity) {
+    *this = SerialReader();
+    enc_ = encoded;
+    enc_cap_ = encoded_capacity;
+    dec_ = decoded;
+    dec_cap_ = decoded_capacity;
+  }
+  // Consume bytes until a message is complete (true: message() / length(); data and n point past it) or all are used.
+  // Raw bytes go to sink(context, ...) as they are found.
+  bool feed(const uint8_t *&data, size_t &n, RawSink sink, void *context);
+  // No byte for 200 ms: a candidate still open is raw.
+  void idle(RawSink sink, void *context);
+  const uint8_t *message() const { return dec_; }
   size_t length() const { return length_; }
-  void consume() { length_ = 0; have_ = 0; }
   uint32_t crcErrors() const { return crc_errors_; }
-  uint32_t malformed() const { return malformed_; }
+  static constexpr uint32_t kGapMs = 200;
 
  private:
-  uint8_t *buffer_;
-  size_t capacity_;
-  size_t have_ = 0;     // encoded bytes since the last delimiter
-  size_t length_ = 0;   // decoded message length once complete
-  bool overflow_ = false;
-  uint32_t crc_errors_ = 0, malformed_ = 0;
+  uint8_t *enc_ = nullptr, *dec_ = nullptr;
+  size_t enc_cap_ = 0, dec_cap_ = 0;
+  bool open_ = false;       // a candidate started (its leading 0x00 is implied, not stored)
+  size_t have_ = 0;         // encoded bytes of the candidate
+  size_t length_ = 0;
+  uint32_t last_ms_ = 0, crc_errors_ = 0;
+  bool close();             // the candidate ends at a 0x00: true = a message in dec_
+  void spill(RawSink sink, void *context);   // the open candidate as raw bytes (0x00 first)
 };
 
+// One message as 0x00 <COBS(message + CRC)> 0x00, in one piece where the stream takes it. No empty block after a full
+// one (oep-core §3.1).
 size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length);
+// The most bytes writeCobsFrame writes for a message of `length`.
+constexpr size_t cobsFrameMax(size_t length) { return length + 2 + (length + 2) / 254 + 3; }
 
 }  // namespace oep

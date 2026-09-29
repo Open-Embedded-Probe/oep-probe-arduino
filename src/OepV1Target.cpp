@@ -41,7 +41,9 @@ bool maxSpeed(const Tail &tail, uint32_t &hz, bool &critical) {
 // The attach result's target_id (oep-if-debug §1): scheme wch_dmi_7f, the u32 at DMI 0x7F; 0 and all ones = none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   uint32_t id = 0;
-  if (room < 7 || !port.dm.readDmi(0x7f, id) || id == 0 || id == 0xffffffffu) return 0;
+  port.has_tid = port.dm.readDmi(0x7f, id) && id != 0 && id != 0xffffffffu;   // kept for connections / the slots
+  port.tid = port.has_tid ? id : 0;
+  if (room < 7 || !port.has_tid) return 0;
   out[0] = reg::wire_rvswd::kTlvAttachAnswerTargetId;
   out[1] = 5;
   out[2] = reg::wire_rvswd::kTargetIdSchemeWchDmi7f;
@@ -58,6 +60,8 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus) {
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
     port.connected = true;
     port.numberNew();
+    uint8_t tlv[8];
+    targetId(port, tlv, sizeof tlv);   // what a slot's lock is checked against
   }
   port.users |= user;
   return true;
@@ -69,6 +73,26 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force) {
   port.dm.detach();
   port.connected = false;
   port.users = 0;
+  port.has_tid = false;
+}
+
+// connections (oep-if-debug §2.1): count(u8), per entry connection(u16) swdio(u16) swclk(u16) speed_hz(u32) users(u8)
+// slot(u8) tid_scheme(u8) tid_len(u8) tid. One place per wire here: at most one entry.
+Result connectionsOf(DebugPort &port, uint32_t speed_hz, uint8_t *out, size_t capacity) {
+  if (capacity < 1 + 20) return failed();
+  out[0] = 0;
+  if (!port.connected) return completed(1);
+  out[0] = 1;
+  putU16(out + 1, port.number);
+  putU16(out + 3, port.swdio);
+  putU16(out + 5, port.swclk);
+  putU32(out + 7, speed_hz);
+  out[11] = port.users;
+  out[12] = port.slot;
+  out[13] = port.has_tid ? reg::wire_rvswd::kTargetIdSchemeWchDmi7f : 0;
+  out[14] = port.has_tid ? 4 : 0;
+  if (port.has_tid) putU32(out + 15, port.tid);
+  return completed(port.has_tid ? 19 : 15);
 }
 
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
@@ -212,6 +236,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       putU32(out + 2, dpc);
       putU32(out + 6, phy.clockHz());
       return tail.finish(completed(10 + targetId(port_, out + 10, capacity - 10)), out, capacity);
+    }
+    case kOpConnections: {   // [TLV] -> the live connections (no lock)
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      return tail.finish(connectionsOf(port_, phy.clockHz(), out, capacity), out, capacity);
     }
     case kOpDetach: {   // connection(u16) [TLV 0x01 force]
       // The host's use goes; the link stays while another user (a bind's console) has it, unless forced.

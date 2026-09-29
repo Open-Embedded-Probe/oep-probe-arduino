@@ -10,11 +10,18 @@ inline bool refused(const Result &r) { return r.resolution != kResolutionComplet
 
 size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  w.u32(kTagFeatures, 0b0111);            // mechanisms SDI, DMDATA, dmseq (on the debug connection)
-  w.u32(0x40, kCapacity);                 // buffer_bytes
-  w.u8(0x41, kMarks);                     // mark_capacity
-  w.u16(0x43, max_read_);                 // max_read
+  static const uint8_t kMechanisms[] = {reg::target_console::kMechanismSdi, reg::target_console::kMechanismDmdata,
+                                       reg::target_console::kMechanismDmseq};
+  w.put(reg::target_console::kTlvDescribeMechanisms, kMechanisms, sizeof kMechanisms);   // oep-if-console §1
   return w.ok() ? w.length() : 0;
+}
+
+size_t TargetConsoleStream::bindInput(const uint8_t *data, size_t length) {
+  if (!open_) return 0;
+  const size_t room = driver_.room();
+  const size_t n = driver_.queue(data, length < room ? length : room);
+  if (n) driver_.poll();
+  return n;
 }
 
 void TargetConsoleStream::poll() {
@@ -29,17 +36,11 @@ void TargetConsoleStream::poll() {
     seen_resets_ = port_.resets;
     stream_.mark(kMarkReset, 0);          // detail 0: ndmreset
   }
-  if (cdc_.port()) {   // port -> target, as much as the driver takes now
-    uint8_t chunk[64];
-    const size_t k = cdc_.fromPort(chunk, driver_.room() < sizeof chunk ? driver_.room() : sizeof chunk);
-    if (k) driver_.queue(chunk, k);
-  }
   driver_.poll();
   if (driver_.resyncs() > seen_resyncs_) {   // the target's console started over: after the first, a restart
     if (seen_resyncs_ > 0) stream_.mark(kMarkRestart, 1);   // detail 1: console resync
     seen_resyncs_ = driver_.resyncs();
   }
-  cdc_.toPort(stream_);
 }
 
 bool TargetConsoleStream::openStream(uint8_t mechanism) {

@@ -1,6 +1,8 @@
 // OEP v1 probe on the classic ESP32 for the UIAPduino CH32V003 jig (E132 wiring).
-// Transport: UART0 through the board's USB-UART bridge at 115200. Target link: GPIO16 -> PD1/SWIO
-// (single wire, SwioPhy).
+// Transport: UART0 through the board's USB-UART bridge at 115200, fixed (probe guide §3.5) - the probe's one transport,
+// serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-core §3.4). Target link:
+// GPIO16 -> PD1/SWIO (single wire, SwioPhy). The bridge's auto-reset circuit resets the ESP32 when the port is opened
+// with DTR / RTS in the wrong order: a host opens it with both on (host guide §1).
 //
 // oep.core (the probe in its describe), oep.wire.swio, oep.target.riscv-dm, oep.target.console, and the fixtures
 // oep.fixture.gpio / uart, all revision 1 (no oep.fixture.capture: the v0 GPIO sampler has no revision-1 shape yet).
@@ -13,6 +15,8 @@
 #include <OepP4SpiTarget.h>
 #include <OepSwioPhy.h>
 #include <OepDmConsole.h>
+#include <OepV1Bind.h>
+#include <OepV1Config.h>
 #include <OepV1Console.h>
 #include <OepV1Endpoint.h>
 #include <OepV1Fixture.h>
@@ -21,10 +25,10 @@
 
 // UART0 runs through the board's USB-UART bridge (no flow control) and usbip: long bursts of pipelined
 // responses lost bytes (2026-09-22, 2026-09-24). One 512-byte frame in flight keeps the outstanding data small.
-static uint8_t rxBuffer[1024];
+static uint8_t rxBuffer[1024];   // the encoded candidate: cobsFrameMax(512)
 static uint8_t txBuffer[1024];
 static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 512, 1},
-                                  oep::v1::Endpoint::Framing::kCobsCrc);   // UART: COBS + CRC-16
+                                  oep::v1::Endpoint::kUartBridge);
 // Reserved: GPIO16 (SWIO), GPIO1/3 (UART0 transport), GPIO6-11 (SPI flash), GPIO0/2/12/15 (boot straps; 2 is the LED).
 static constexpr uint64_t kReserved = (1ull << 16) | (1ull << 1) | (1ull << 3) | (0x3full << 6) |
                                       (1ull << 0) | (1ull << 2) | (1ull << 12) | (1ull << 15);
@@ -52,6 +56,8 @@ static oep::v1::FixtureUart uart(pins, Serial2, 3, 2);   // DUT console: V003 PD
 static oep::v1::SamplerCapture capture(endpoint, kReserved);
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
+static oep::v1::Binds binds;
+static oep::v1::ProbeConfig config(endpoint, binds);   // one slot (this jig's SWIO), port 0's bind, saved in NVS
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
@@ -63,7 +69,6 @@ static size_t describeProbe() {
   w.label(23, "NRST");
   w.label(22, "DUT TX");
   w.label(21, "DUT RX");
-  w.u32(oep::v1::kCoreUartRates, 115200);
   return w.ok() ? w.length() : 0;
 }
 
@@ -78,6 +83,7 @@ void setup() {
   // E132: every UIAP pin is wired here, including the software-USB pair (PD3/PD4); a permanent
   // ESP32 pull on either USB line breaks enumeration. Idle must be genuinely high impedance.
   oep::platformParkMask(kFixtures);
+  endpoint.setRawPorts(&binds);
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
@@ -90,12 +96,19 @@ void setup() {
   endpoint.add(uart);
   endpoint.add(i2c);
   endpoint.add(spi);
-  endpoint.add(capture);   // last: the fns before it keep their numbers
+  endpoint.add(capture);
+  endpoint.add(config);   // last: the fns before it keep their numbers
+  config.addPlace(wire, console);
+  config.addUart(uart);
+  config.setPins(&pins);
+  config.load();
+  config.applySaved();
 }
 
 void loop() {
   endpoint.poll();
   console.poll();
+  config.poll();
   uart.poll();
   capture.poll();
   i2c.service();

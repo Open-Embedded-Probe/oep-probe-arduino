@@ -9,9 +9,10 @@
 #include <OepV1Fixture.h>
 #include <OepV1Swd.h>
 
-static uint8_t rxBuffer[1024];
+static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
-static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8});
+static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
+                                  oep::v1::Endpoint::kUsbCdc, 0);   // a serial port: COBS frames (oep-core §3.1)
 static constexpr uint8_t kSwclk = 0, kSwdio = 1;
 // GP16 drives the on-board WS2812; GP0/GP1 are the SWD pair. GP0..GP15 and GP26..GP29 reach the castellated edge.
 static constexpr uint64_t kReserved = (uint64_t{1} << kSwclk) | (uint64_t{1} << kSwdio) | (uint64_t{1} << 16);

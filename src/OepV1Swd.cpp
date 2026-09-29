@@ -151,6 +151,21 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       putU32(out + 7, hzOf(port_.active_half_ns));
       return tail.finish(completed(11), out, capacity);
     }
+    case kOpConnections: {   // [TLV] -> count(u8), the live connection (users: the host only; no target_id scheme)
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (capacity < 15) return failed();
+      out[0] = port_.connected ? 1 : 0;
+      if (!port_.connected) return tail.finish(completed(1), out, capacity);
+      putU16(out + 1, port_.number);
+      putU16(out + 3, port_.swdio);
+      putU16(out + 5, port_.swclk);
+      putU32(out + 7, port_.active_half_ns ? 500000000u / port_.active_half_ns : 0);
+      out[11] = reg::wire_swd::kConnectionUsersHostSession;
+      out[12] = 0xff;   // no slot
+      out[13] = out[14] = 0;
+      return tail.finish(completed(15), out, capacity);
+    }
     case kOpDetach: {   // connection(u16) [TLV]
       if (length < 2) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 2, length - 2, out, capacity);
