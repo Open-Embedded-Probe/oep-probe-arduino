@@ -1,0 +1,65 @@
+# OpenEmbeddedProbe (an Arduino library for OEP probes)
+
+[日本語](README.ja.md)
+
+A library for writing Open Embedded Probe (OEP) probes with Arduino, and the firmware of each probe (`examples/`). It speaks
+the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.ja.md` and the standard
+interfaces `docs/oep-if-*.ja.md`, a candidate being settled). This is an experimental stage: breaking changes are expected and
+no compatibility is promised.
+
+The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its generated header is copied to
+`src/OepRegistry.h`. For a map of the specification, start with oep-spec's `docs/review-guide.ja.md`.
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core): frames, interfaces by name, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (core §3.4), the plan, notifications |
+| `src/OepBind.*` | what each serial port carries (binds: last-reset / manual / mixed, held during a session and resumed from its last reset) |
+| `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
+| `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, NVS storage; ESP32). Each file starts with the spec sections it follows |
+| `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the custom interfaces `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target` (revision 1, the ESP-IDF I2C / SPI slaves) |
+| `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
+| `examples/` | probe firmware: ESP32-P4 + CH32X035, classic ESP32 + CH32V003, RP2350 + CH32L103, RP2040 Zero, the P4 HS logic capture `Esp32P4CaptureProbe` (with `host/stream_test.py`) |
+| `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
+| `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` |
+| `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
+| `docs/` | dated work records (history) |
+
+## Use
+
+**Flash the firmware before using a probe** (you cannot tell what is on the board). For example, the X035 jig:
+
+```sh
+arduino-cli compile --clean examples/Esp32P4X035Probe
+arduino-cli upload -p /run/board-identify/by-id/esp32-series-30eda0e31108 examples/Esp32P4X035Probe
+```
+
+The host is [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`,
+`oep_client.link.open_host()`). A serial port (USB-Serial/JTAG, USB CDC, a UART bridge) carries OEP frames
+(`0x00 <COBS> 0x00`) and its bind's raw bytes on one line. The host opens it exclusively (TIOCEXCL) and skips the bytes outside
+frames as noise (oep-spec host guide §1.6, §2).
+
+To carry a target's console on a serial port, register a slot and a bind (`oep.probe.config`, kept in NVS on ESP32):
+
+```sh
+oep config slot <probe> --name x035 --wire rvswd --pins 2,54 --attach at-boot --retry 1 --mechanism dmseq
+oep config bind <probe> --port 1 --mode last-reset --stream slot:x035 --save
+oep config show <probe>
+```
+
+## Known traps
+
+- Arduino.h makes `word(...)` a macro for `makeWord(...)`: a lambda or function named `word` returns its argument.
+- On the ESP32-P4, `pinMode` / `digitalWrite` on the same pins after `RvswdPhy::begin` takes them out of the dedicated GPIO
+  bundle for good (a chip reset is needed).
+- Sketches with a direct build (`build_opt.h`, EspUsbDevice's vendor written directly) are built with `--clean` after
+  `build_opt.h` changes.
+
+## Releases
+
+The shared [arduino-library-release-toolkit](https://github.com/tanakamasayuki/arduino-library-release-toolkit) is used as is.
+Record changes under `## Unreleased` in `CHANGELOG.md`, (EN) and (JA), and run the GitHub Actions workflow Release
+(workflow_dispatch): it bumps the version in `library.properties`, writes `src/openembeddedprobe_version.h`, rewrites the
+examples' `sketch.yaml` `dir: ../..` to `OpenEmbeddedProbe (<version>)` on the `release` branch, and makes the ZIP (without
+`tests/`), the tag and the GitHub Release.
