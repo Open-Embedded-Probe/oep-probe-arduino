@@ -107,8 +107,13 @@ bool SerialReader::close() {   // decodes into dec_; the encoded bytes stay as t
 void SerialReader::spill(RawSink sink, void *context) {
   static const uint8_t kZero = 0;
   if (!open_) return;
-  sink(context, &kZero, 1);
-  if (have_) sink(context, enc_, have_);
+  // A candidate with nothing after its 0x00 is a delimiter (a frame's closing 0x00, 0x00s in a row), not raw bytes: the
+  // closing 0x00 of every frame opens one, and spilling it after the 200 ms gap sent a stray 0x00 to the bound console
+  // (2026-09-29, the X035 jig: after the first answer, a monitor reopened, a flash).
+  if (have_) {
+    sink(context, &kZero, 1);
+    sink(context, enc_, have_);
+  }
   open_ = false;
   have_ = 0;
 }

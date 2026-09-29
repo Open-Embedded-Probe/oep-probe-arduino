@@ -142,6 +142,16 @@ static void testReader() {
   g_millis += 250;   // stopped for 200 ms: raw
   r.idle(sink, nullptr);
   CHECK(g_raw.size() == 3 && g_raw[0] == 0 && g_raw[1] == 'a');
+  // a frame's closing 0x00 opens a candidate; the 200 ms gap after it gives nothing raw (it was a delimiter)
+  g_raw.clear();
+  const Bytes lone = frame({9, 9, 9});
+  p = lone.data();
+  n = lone.size();
+  CHECK(r.feed(p, n, sink, nullptr));
+  CHECK(!r.feed(p, n, sink, nullptr));
+  g_millis += 250;
+  r.idle(sink, nullptr);
+  CHECK(g_raw.empty());
   // a full block at the end: no empty block after it, both forms taken
   Bytes big(254, 7);
   const Bytes fb = frame(big);

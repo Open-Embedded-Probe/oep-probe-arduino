@@ -55,7 +55,7 @@ size_t writeFrame(Stream &stream, const uint8_t *message, size_t length);
 // A serial port carries raw bytes (a target's console) on the same line: a candidate runs from a 0x00 to the next
 // 0x00; one that decodes with a matching CRC is a message, any other (with its leading 0x00) is raw, and the closing
 // 0x00 starts the next candidate. Bytes outside a candidate are raw at once, and a candidate that stops for 200 ms is
-// raw too. Not a byte is lost to the raw side.
+// raw too. A candidate that is only its 0x00 (the delimiter after a frame, 0x00s in a row) is nothing, not raw.
 // CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final xor ("123456789" -> 0x29B1).
 uint16_t crc16Ccitt(const uint8_t *data, size_t length, uint16_t crc = 0xFFFF);
 
