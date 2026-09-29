@@ -1,9 +1,8 @@
-#include "OepV1Console.h"
+#include "OepConsole.h"
 
 #include <Arduino.h>
 
 namespace oep {
-namespace v1 {
 namespace {
 inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 }  // namespace
@@ -141,5 +140,4 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
   }
 }
 
-}  // namespace v1
 }  // namespace oep

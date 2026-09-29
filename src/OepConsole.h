@@ -17,11 +17,10 @@
 #pragma once
 
 #include "OepDmConsole.h"
-#include "OepV1Stream.h"
-#include "OepV1Target.h"
+#include "OepStream.h"
+#include "OepTarget.h"
 
 namespace oep {
-namespace v1 {
 
 class TargetConsoleStream final : public Interface, public BindSource {
  public:
@@ -79,5 +78,4 @@ class TargetConsoleStream final : public Interface, public BindSource {
   static void take(void *self, uint8_t byte) { static_cast<TargetConsoleStream *>(self)->stream_.put(byte); }
 };
 
-}  // namespace v1
 }  // namespace oep

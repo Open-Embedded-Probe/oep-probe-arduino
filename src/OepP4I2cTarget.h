@@ -16,7 +16,7 @@
 #include <Arduino.h>
 
 #include "OepPinTable.h"
-#include "OepV1.h"
+#include "Oep.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <driver/i2c_slave.h>
@@ -24,7 +24,7 @@
 
 namespace oep {
 
-class P4I2cTarget final : public v1::Interface {
+class P4I2cTarget final : public Interface {
  public:
   static constexpr uint8_t kOwnerId = 3;
   enum Mode : uint8_t { kModeNone = 0, kModeFixedRx = 1, kModeFramedRx = 2, kModePreloadedTx = 3 };

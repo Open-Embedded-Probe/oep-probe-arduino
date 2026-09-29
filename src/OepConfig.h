@@ -21,16 +21,15 @@
 #include <Arduino.h>
 
 #include "OepPinTable.h"
-#include "OepV1.h"
-#include "OepV1Bind.h"
-#include "OepV1Console.h"
-#include "OepV1Fixture.h"
-#include "OepV1Target.h"
+#include "Oep.h"
+#include "OepBind.h"
+#include "OepConsole.h"
+#include "OepFixture.h"
+#include "OepTarget.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
 
 namespace oep {
-namespace v1 {
 
 class Endpoint;
 
@@ -106,7 +105,6 @@ class ProbeConfig final : public Interface {
 
 uint32_t crc32Ieee(const uint8_t *data, size_t length);
 
-}  // namespace v1
 }  // namespace oep
 
 #endif

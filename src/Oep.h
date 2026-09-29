@@ -1,7 +1,7 @@
 // OEP v1 core (oep-spec docs/oep-core.ja.md, frozen candidate 2026-09-26): interfaces found by name, the probe
 // described by oep.core, a lock held by a host-chosen session id. The standard interfaces' shared parts are in
-// OepV1Stream.h (position streams) and OepV1Debug.h (wire / target status, pin pairs). Every number comes from the registry
-// (OepV1Registry.h, generated from oep-spec registry/oep-v1.toml); the names below are the library's aliases.
+// OepStream.h (position streams) and OepDebug.h (wire / target status, pin pairs). Every number comes from the registry
+// (OepRegistry.h, generated from oep-spec registry/oep-v1.toml); the names below are the library's aliases.
 // Results reuse the v0 Result helpers: resolutions and reject reasons 0x01..0x06 keep their values.
 #pragma once
 
@@ -10,10 +10,12 @@
 #include <string.h>
 
 #include "OepResult.h"
-#include "OepV1Registry.h"
+#include "OepRegistry.h"
 
 namespace oep {
-namespace v1 {
+
+// The wire numbers (generated from oep-spec registry/oep-v1.toml - protocol revision 1 - into OepRegistry.h).
+namespace reg = v1::reg;
 
 constexpr uint8_t kRoleRequest = reg::kRoleRequest, kRoleResult = reg::kRoleResult,
                   kRoleSession = reg::kRoleSessionFlag;
@@ -303,5 +305,4 @@ inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id
   return w.put(kCoreReserved, bitmap, 2 + bytes);
 }
 
-}  // namespace v1
 }  // namespace oep

@@ -47,12 +47,12 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   // at 1 MHz 20/20 on 2026-09-22). The "lost tail bytes at 1 MHz" seen earlier were the peer's 256-byte HWCDC RX ring
   // truncating the 269-character FRAME command, not the slave.
   static const uint8_t kRoles[] = {kRoleSda, kRoleScl};
-  v1::TlvWriter w(out, capacity);
+  TlvWriter w(out, capacity);
   w.roleChannels(kRoles, sizeof kRoles, pins_.allowedMask());
-  w.u16(v1::kTagMaxLength, kMaxFrame);
-  w.u32(v1::kTagMaxClockHz, 1000000u);
-  w.u32(v1::kTagFeatures, 0b11);   // bit0 preloaded tx, bit1 clock stretching (set_stretch)
-  w.u8(v1::kTagImplementation, 2);   // a dedicated peripheral
+  w.u16(kTagMaxLength, kMaxFrame);
+  w.u32(kTagMaxClockHz, 1000000u);
+  w.u32(kTagFeatures, 0b11);   // bit0 preloaded tx, bit1 clock stretching (set_stretch)
+  w.u8(kTagImplementation, 2);   // a dedicated peripheral
   return w.ok() ? w.length() : 0;
 }
 
@@ -157,13 +157,13 @@ void P4I2cTarget::service() {}
 #endif
 
 Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  v1::Tail tail;
+  Tail tail;
   switch (operation) {
     case kOpConfigure: {   // address(u8) mode(u8) [TLV]
-      const Result parsed = v1::plainTail(tail, payload, length, 2, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
       if (refused(parsed)) return parsed;
       if (payload[0] > 0x7f) return rejected(kRejectMalformed);
-      if (payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return rejected(v1::kRejectUnsupported);
+      if (payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return rejected(kRejectUnsupported);
       if (sda_ < 0) return rejected(kRejectUnavailable);  // needs a plan
       stop();
       address_ = payload[0]; mode_ = payload[1]; framed_header_ = true;
@@ -172,9 +172,9 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       return tail.finish(completed(), out, capacity);
     }
     case kOpArmRx: {   // length(u16) [TLV]
-      const Result parsed = v1::plainTail(tail, payload, length, 2, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
       if (refused(parsed)) return parsed;
-      const uint16_t want = v1::getU16(payload);
+      const uint16_t want = getU16(payload);
       if (!started_ || mode_ != kModeFixedRx) return rejected(kRejectUnavailable);
       if (!want || want > kMaxFrame) return rejected(kRejectMalformed);
       if (armed_) {
@@ -189,7 +189,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       return arm(want) ? tail.finish(completed(), out, capacity) : failed();
     }
     case kOpReadRx: {   // [TLV] -> pending(u8) count(u16) data: the oldest received frame, then the ones still queued
-      const Result parsed = v1::plainTail(tail, payload, length, 0, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (!started_) return rejected(kRejectUnavailable);
       const size_t data = queue_count_ ? queue_length_[0] : 0;
@@ -200,13 +200,13 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
         --queue_count_;
       }
       out[0] = queue_count_;   // pending after this frame
-      v1::putU16(out + 1, static_cast<uint16_t>(data));
+      putU16(out + 1, static_cast<uint16_t>(data));
       return tail.finish(completed(3 + data), out, capacity);
     }
     case kOpPreloadTx: {   // count(u16) data [TLV] -> slots(u8)
       if (length < 2) return rejected(kRejectMalformed);
-      const uint16_t count = v1::getU16(payload);
-      const Result parsed = v1::plainTail(tail, payload, length, 2u + count, out, capacity);
+      const uint16_t count = getU16(payload);
+      const Result parsed = plainTail(tail, payload, length, 2u + count, out, capacity);
       if (refused(parsed)) return parsed;
       if (!started_ || mode_ != kModePreloadedTx) return rejected(kRejectUnavailable);
       if (!count || count > kMaxFrame) return rejected(kRejectMalformed);
@@ -230,38 +230,38 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       return tail.finish(completed(1), out, capacity);
     }
     case kOpStatus: {   // [TLV] -> flags(u8) rx_frames(u32) tx_slots(u8) errors(u16)
-      const Result parsed = v1::plainTail(tail, payload, length, 0, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (capacity < 8) return failed();
       out[0] = static_cast<uint8_t>((started_ ? 1 : 0) | (mode_ << 1) | (armed_ ? 0x10 : 0) | (queue_count_ << 5));
-      v1::putU32(out + 1, rx_frames_);
+      putU32(out + 1, rx_frames_);
       out[5] = tx_slots_;
-      v1::putU16(out + 6, errors_);
+      putU16(out + 6, errors_);
       return tail.finish(completed(8), out, capacity);
     }
     case kOpReadHw: {   // [TLV] -> sr int_raw fifo_st ctr slave_addr filter_cfg scl_stretch_conf (u32 each; zeros off the P4)
-      const Result parsed = v1::plainTail(tail, payload, length, 0, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (capacity < 28) return failed();
       memset(out, 0, 28);
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)   // register images of the P4 I2C block only
       const uint32_t regs[7] = {I2C0.sr.val, I2C0.int_raw.val, I2C0.fifo_st.val, I2C0.ctr.val, I2C0.slave_addr.val,
                                 I2C0.filter_cfg.val, I2C0.scl_stretch_conf.val};
-      for (int i = 0; i < 7; ++i) v1::putU32(out + 4 * i, regs[i]);
+      for (int i = 0; i < 7; ++i) putU32(out + 4 * i, regs[i]);
 #endif
       return tail.finish(completed(28), out, capacity);
     }
     case kOpSetStretch: {   // stretch_us(u32) [TLV]
-      const Result parsed = v1::plainTail(tail, payload, length, 4, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      const uint32_t us = v1::getU32(payload);
-      if (us > 100000) return rejected(v1::kRejectUnsupported);  // spins in the ISR; keep under the interrupt watchdog
+      const uint32_t us = getU32(payload);
+      if (us > 100000) return rejected(kRejectUnsupported);  // spins in the ISR; keep under the interrupt watchdog
       stretch_us_ = us;
       stretch_events_ = 0;
       return tail.finish(completed(), out, capacity);
     }
     case kOpReset: {
-      const Result parsed = v1::plainTail(tail, payload, length, 0, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (!started_) return rejected(kRejectUnavailable);
       const uint8_t mode = mode_, address = address_;

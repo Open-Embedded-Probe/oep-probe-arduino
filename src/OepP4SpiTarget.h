@@ -11,7 +11,7 @@
 #include <Arduino.h>
 
 #include "OepPinTable.h"
-#include "OepV1.h"
+#include "Oep.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <driver/spi_slave.h>
@@ -19,7 +19,7 @@
 
 namespace oep {
 
-class P4SpiTarget final : public v1::Interface {
+class P4SpiTarget final : public Interface {
  public:
   static constexpr uint8_t kOwnerId = 6;
   enum Role : uint8_t { kRoleSck = 1, kRoleMosi = 2, kRoleMiso = 3, kRoleCs = 4 };

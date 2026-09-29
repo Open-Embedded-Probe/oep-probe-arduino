@@ -5,14 +5,14 @@
 #include <vector>
 
 #include "OepFrame.h"
-#include "OepV1Bind.h"
-#include "OepV1Endpoint.h"
+#include "OepBind.h"
+#include "OepEndpoint.h"
 
 uint32_t g_millis = 1000;
 
 using Bytes = std::vector<uint8_t>;
 using namespace oep;
-using namespace oep::v1;
+
 
 static int failures = 0, checks = 0;
 #define CHECK(cond)                                                              \

@@ -9,10 +9,9 @@
 #include <Arduino.h>
 
 #include "OepFrame.h"
-#include "OepV1.h"
+#include "Oep.h"
 
 namespace oep {
-namespace v1 {
 
 // The raw side of the serial ports (core §3.4): what a serial port carries outside the frames. The binds implement it
 // (oep.probe.config §1.2); the endpoint calls it from poll(), the one writer of every port.
@@ -215,5 +214,4 @@ class Endpoint {
   uint32_t remaining() const;
 };
 
-}  // namespace v1
 }  // namespace oep

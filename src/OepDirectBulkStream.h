@@ -13,13 +13,13 @@
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 
-#include "OepV1.h"
+#include "Oep.h"
 
 #define OEP_HAS_DIRECT_BULK_STREAM 1
 
 namespace oep {
 
-class DirectBulkStream final : public Stream, public v1::DirectTransport {
+class DirectBulkStream final : public Stream, public DirectTransport {
  public:
   // kRxBytes: two whole max_frame requests; the usbd task can land a frame faster than loop() reads it byte by byte
   static constexpr size_t kResultBytes = 16384 + 64, kRxBytes = 32768, kQueue = 32, kPacket = 512;

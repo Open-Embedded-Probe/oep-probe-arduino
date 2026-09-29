@@ -1,14 +1,13 @@
-#include "OepV1Config.h"
+#include "OepConfig.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
 
 #include <Preferences.h>
 #include <stdio.h>
 
-#include "OepV1Endpoint.h"
+#include "OepEndpoint.h"
 
 namespace oep {
-namespace v1 {
 
 namespace cfg = reg::probe_config;
 
@@ -506,7 +505,6 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
   }
 }
 
-}  // namespace v1
 }  // namespace oep
 
 #endif

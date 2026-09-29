@@ -13,11 +13,10 @@
 #if defined(ARDUINO_ARCH_RP2040)
 
 #include "OepRp2BitBang.h"
-#include "OepV1.h"
-#include "OepV1Debug.h"
+#include "Oep.h"
+#include "OepDebug.h"
 
 namespace oep {
-namespace v1 {
 
 struct SwdPort {
   uint16_t swdio, swclk;       // probe channels (GPIO numbers)
@@ -74,7 +73,6 @@ class TargetArmAdi final : public Interface {
   uint16_t instance_;
 };
 
-}  // namespace v1
 }  // namespace oep
 
 #endif

@@ -14,11 +14,10 @@
 
 #include <Arduino.h>
 
-#include "OepV1Endpoint.h"
-#include "OepV1Stream.h"
+#include "OepEndpoint.h"
+#include "OepStream.h"
 
 namespace oep {
-namespace v1 {
 
 class Binds final : public RawPorts {
  public:
@@ -75,5 +74,4 @@ class Binds final : public RawPorts {
   bool mixedLine(uint8_t port);                                // one closed line into pending_, if there is one
 };
 
-}  // namespace v1
 }  // namespace oep

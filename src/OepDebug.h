@@ -2,10 +2,9 @@
 // docs/oep-if-debug.ja.md §1 pin pairs). Not the core: only oep.wire.* / oep.target.* use them.
 #pragma once
 
-#include "OepV1.h"
+#include "Oep.h"
 
 namespace oep {
-namespace v1 {
 
 // The status byte of wire and target results (oep-if-common §3). A failure is completed failed / partial with this
 // in it.
@@ -43,5 +42,4 @@ inline uint8_t fixedPairPins(const uint8_t *v, uint8_t len, uint16_t swdio, uint
   return getU16(v) == swdio && getU16(v + 2) == swclk ? 0 : kRejectUnavailable;
 }
 
-}  // namespace v1
 }  // namespace oep

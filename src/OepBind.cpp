@@ -1,10 +1,9 @@
-#include "OepV1Bind.h"
+#include "OepBind.h"
 
 #include <stdio.h>
 #include <string.h>
 
 namespace oep {
-namespace v1 {
 
 void Binds::set(uint8_t port, const Spec &spec) {
   if (port >= kMaxPorts) return;
@@ -178,5 +177,4 @@ void Binds::sessionOver(uint32_t held) {
   }
 }
 
-}  // namespace v1
 }  // namespace oep

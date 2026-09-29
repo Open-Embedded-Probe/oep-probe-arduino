@@ -9,10 +9,10 @@
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
 #include <OepDmConsole.h>
-#include <OepV1Console.h>
-#include <OepV1Endpoint.h>
-#include <OepV1Fixture.h>
-#include <OepV1Target.h>
+#include <OepConsole.h>
+#include <OepEndpoint.h>
+#include <OepFixture.h>
+#include <OepTarget.h>
 
 // Measured 2026-09-23 once the CH32L103 had power: the pair sweep found its debug module on
 // SWDIO=GP0, SWCLK=GP1 (DMSTATUS 0x00000c82) and on no other ordered pair. These are also
@@ -34,8 +34,8 @@
 
 static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
-static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
-                                  oep::v1::Endpoint::kUsbCdc, 0);   // a serial port: COBS frames (oep-core §3.1)
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
+                                  oep::Endpoint::kUsbCdc, 0);   // a serial port: COBS frames (oep-core §3.1)
 static constexpr uint8_t kSwdio = OEP_RVSWD_SWDIO, kSwclk = OEP_RVSWD_SWCLK;
 // GP2 is the target's NRST: measured 2026-09-23 by pulling each spare channel down on its
 // own and watching which one took the debug module away. It idles high on the CH32's own
@@ -48,21 +48,21 @@ static constexpr uint64_t kFixtures = ((1ull << 30) - 1) & ~kReserved;
 // CH32L103C8T6. The flash layout is the host's business.
 static oep::RvswdPhy phy;
 static oep::Ch32Dm dm(phy);
-static oep::v1::DebugPort port{dm, kSwdio, kSwclk};
-static oep::v1::WireRvswd wire(port, 1);
-static oep::v1::TargetRiscvDm riscvDm(port, 1);
+static oep::DebugPort port{dm, kSwdio, kSwclk};
+static oep::WireRvswd wire(port, 1);
+static oep::TargetRiscvDm riscvDm(port, 1);
 static oep::DmConsole consoleDriver(dm, phy);
-static oep::v1::TargetConsoleStream console(port, consoleDriver, 1);
+static oep::TargetConsoleStream console(port, consoleDriver, 1);
 static oep::PinTable pins(kFixtures);
-static oep::v1::FixtureGpio gpio(pins, 2);
-static oep::v1::FixtureUart uart(pins, Serial1, 3, 2);   // UART0 reaches GP0/1, GP12/13, GP16/17 and GP28/29 on this part
+static oep::FixtureGpio gpio(pins, 2);
+static oep::FixtureUart uart(pins, Serial1, 3, 2);   // UART0 reaches GP0/1, GP12/13, GP16/17 and GP28/29 on this part
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
-  oep::v1::TlvWriter w(probeTlv, sizeof probeTlv);
+  oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[8];   // the flash's unique id: the probe says who it is on any transport
-  oep::v1::describeCore(w, "sparkfun-promicro-rp2350", id, oep::platformUnitId(id, sizeof id), 30, kReserved);
-  w.text(oep::v1::kCoreProfile, "io.github.ch32-riscv-ug.rp2350-l103");
+  oep::describeCore(w, "sparkfun-promicro-rp2350", id, oep::platformUnitId(id, sizeof id), 30, kReserved);
+  w.text(oep::kCoreProfile, "io.github.ch32-riscv-ug.rp2350-l103");
   w.label(kSwdio, "SWDIO");
   w.label(kSwclk, "SWCLK");
   w.label(kNrst, "NRST");

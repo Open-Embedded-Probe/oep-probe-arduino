@@ -1,11 +1,10 @@
-#include "OepV1Target.h"
+#include "OepTarget.h"
 
 #include <Arduino.h>
 
 #include "OepPlatform.h"
 
 namespace oep {
-namespace v1 {
 namespace {
 
 constexpr uint8_t kDmStatus = 0x11;
@@ -542,5 +541,4 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
   return tail.finish(outcome(status, done, written), out, capacity);
 }
 
-}  // namespace v1
 }  // namespace oep

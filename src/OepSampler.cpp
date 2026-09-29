@@ -1,4 +1,4 @@
-#include "OepV1Sampler.h"
+#include "OepSampler.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
 
@@ -8,10 +8,9 @@
 #include <soc/gpio_struct.h>
 #include <string.h>
 
-#include "OepV1Endpoint.h"
+#include "OepEndpoint.h"
 
 namespace oep {
-namespace v1 {
 namespace {
 
 namespace cap = reg::fixture_capture;
@@ -323,7 +322,6 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
   }
 }
 
-}  // namespace v1
 }  // namespace oep
 
 #endif
