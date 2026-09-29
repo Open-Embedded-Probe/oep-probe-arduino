@@ -16,11 +16,10 @@
 #pragma once
 
 #include "OepPinTable.h"
-#include "OepV1.h"
-#include "OepV1Stream.h"
+#include "Oep.h"
+#include "OepStream.h"
 
 namespace oep {
-namespace v1 {
 
 // The plan roles and extra describe TLVs of the fixtures every probe offers the same way.
 constexpr uint8_t kGpioRoles[] = {reg::fixture_gpio::kRoleLine};                               // line
@@ -100,5 +99,4 @@ class FixtureUart final : public Interface, public BindSource {
   uint32_t baud_ = 0;
 };
 
-}  // namespace v1
 }  // namespace oep

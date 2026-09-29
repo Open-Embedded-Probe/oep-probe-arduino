@@ -9,14 +9,13 @@
 
 #include <Arduino.h>
 
-#include "OepV1.h"
+#include "Oep.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 namespace oep {
-namespace v1 {
 
 class Endpoint;
 
@@ -68,7 +67,6 @@ class SamplerCapture final : public Interface {
   size_t segmentInfo(uint8_t *out) const;
 };
 
-}  // namespace v1
 }  // namespace oep
 
 #endif

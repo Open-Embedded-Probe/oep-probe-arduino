@@ -8,8 +8,8 @@
 #include <EspUsbDevice.h>
 #include <OepDirectBulkStream.h>
 #include <OepPlatform.h>
-#include <OepV1Capture.h>
-#include <OepV1Endpoint.h>
+#include <OepCapture.h>
+#include <OepEndpoint.h>
 #include "TestSignal.h"
 
 static EspUsbDevice usbDevice;
@@ -17,20 +17,20 @@ static EspUsbDeviceVendor vendor(usbDevice);
 static oep::DirectBulkStream bulk(vendor);
 static uint8_t rxBuffer[16384];  // a whole max_frame request (link_sink sends full frames)
 static uint8_t txBuffer[16384];
-static oep::v1::Endpoint endpoint(bulk, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {16384, 16384, 16},
-                                  oep::v1::Endpoint::kVendorBulk, 0);
+static oep::Endpoint endpoint(bulk, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {16384, 16384, 16},
+                                  oep::Endpoint::kVendorBulk, 0);
 // board pull-ups (7, 8), the old 8-wire link (24, 25), straps (35), UART0 (37, 38), the LED (51)
 static constexpr uint64_t kReserved = (1ull << 7) | (1ull << 8) | (1ull << 24) | (1ull << 25) | (1ull << 35) |
                                       (1ull << 37) | (1ull << 38) | (1ull << 51);
-static oep::v1::LogicCapture capture(endpoint, kReserved, 0);
+static oep::LogicCapture capture(endpoint, kReserved, 0);
 static TestSignal signal_;
 static uint8_t probeTlv[160];
 static char serial_[20];
 
 static size_t describeProbe() {
-  oep::v1::TlvWriter w(probeTlv, sizeof probeTlv);
+  oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[8];
-  oep::v1::describeCore(w, "esp32-p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
+  oep::describeCore(w, "esp32-p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
   w.label(51, "LED");
   return w.ok() ? w.length() : 0;
 }

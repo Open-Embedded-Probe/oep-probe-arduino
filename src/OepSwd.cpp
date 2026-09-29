@@ -1,11 +1,10 @@
-#include "OepV1Swd.h"
+#include "OepSwd.h"
 
 #if defined(ARDUINO_ARCH_RP2040)
 
 #include "OepSwdFrame.h"
 
 namespace oep {
-namespace v1 {
 namespace {
 
 constexpr uint8_t kKindArmAdi = 0x02;
@@ -312,7 +311,6 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
   }
 }
 
-}  // namespace v1
 }  // namespace oep
 
 #endif

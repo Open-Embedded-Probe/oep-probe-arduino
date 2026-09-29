@@ -15,7 +15,7 @@
 
 #include <Arduino.h>
 
-#include "OepV1.h"
+#include "Oep.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <driver/parlio_rx.h>
@@ -24,7 +24,6 @@
 #include <freertos/task.h>
 
 namespace oep {
-namespace v1 {
 
 class Endpoint;
 
@@ -149,7 +148,6 @@ class LogicCapture final : public Interface {
   static bool receiveDone(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *, void *context);
 };
 
-}  // namespace v1
 }  // namespace oep
 
 #endif

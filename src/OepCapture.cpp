@@ -1,4 +1,4 @@
-#include "OepV1Capture.h"
+#include "OepCapture.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
 
@@ -9,10 +9,9 @@
 #include <soc/hp_sys_clkrst_struct.h>
 #include <string.h>
 
-#include "OepV1Endpoint.h"
+#include "OepEndpoint.h"
 
 namespace oep {
-namespace v1 {
 namespace {
 
 namespace cap = reg::fixture_capture;
@@ -863,7 +862,6 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
   }
 }
 
-}  // namespace v1
 }  // namespace oep
 
 #endif

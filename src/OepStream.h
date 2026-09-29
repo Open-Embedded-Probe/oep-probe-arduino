@@ -11,10 +11,9 @@
 
 #include <Arduino.h>
 
-#include "OepV1.h"
+#include "Oep.h"
 
 namespace oep {
-namespace v1 {
 
 class PositionStream {
  public:
@@ -127,5 +126,4 @@ class BindSource {
   ~BindSource() = default;
 };
 
-}  // namespace v1
 }  // namespace oep

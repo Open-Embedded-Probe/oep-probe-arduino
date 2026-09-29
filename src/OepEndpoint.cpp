@@ -1,9 +1,8 @@
-#include "OepV1Endpoint.h"
+#include "OepEndpoint.h"
 
 #include <string.h>
 
 namespace oep {
-namespace v1 {
 namespace {
 
 // rejected locked: remaining ms (u32), then the holder's owner TLV when it gave one (core §4.3, §6.4)
@@ -797,5 +796,4 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   return tail.finish(completed(1 + used), out, capacity);
 }
 
-}  // namespace v1
 }  // namespace oep

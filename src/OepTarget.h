@@ -14,11 +14,10 @@
 #pragma once
 
 #include "OepCh32Dm.h"
-#include "OepV1.h"
-#include "OepV1Debug.h"
+#include "Oep.h"
+#include "OepDebug.h"
 
 namespace oep {
-namespace v1 {
 
 // What both interfaces share: the one debug connection of this wire.
 struct DebugPort {
@@ -117,5 +116,4 @@ class TargetRiscvDm final : public Interface {
   uint32_t words_[256];
 };
 
-}  // namespace v1
 }  // namespace oep

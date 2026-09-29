@@ -1,7 +1,6 @@
-#include "OepV1Fixture.h"
+#include "OepFixture.h"
 
 namespace oep {
-namespace v1 {
 namespace {
 
 inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
@@ -243,5 +242,4 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
   }
 }
 
-}  // namespace v1
 }  // namespace oep
