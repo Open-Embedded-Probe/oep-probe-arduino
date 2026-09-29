@@ -41,7 +41,7 @@ static EspUsbDeviceVendor vendor(usbDevice);
 static oep::DirectBulkStream bulk(vendor);
 static EspUsbDeviceHidVendor hid(usbDevice, 511);
 static HidStream hidStream(hid);
-static EspUsbDeviceCdcSerial cdc(usbDevice, "OEP console");   // iInterface "OEP...": discovery (probe guide §3.8)
+static EspUsbDeviceCdcSerial cdc(usbDevice, "OEP console");   // a name to show; every CDC of the probe speaks OEP
 static CdcStream cdcStream(cdc);
 
 static uint8_t rxVendor[1024], rxUsj[1100], rxHid[1024], rxCdc[1100];   // serial ports: cobsFrameMax(1024)
@@ -104,7 +104,7 @@ void setup() {
   usb.vid = kUsbVid;
   usb.pid = kUsbPid;
   usb.manufacturer = "ch32-riscv-ug";
-  usb.product = "OEP probe (P4 HS)";
+  usb.product = "OEP probe (P4 HS)";   // iProduct "OEP...": how discovery knows the probe (core §3.3, probe guide §3.8)
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
   usbDevice.begin(usb);
@@ -114,8 +114,7 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::v1::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::v1::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
-  // describe oep_pid: listed by discovery (until the OEP PID is taken: by the "OEP..." interface name, the CDC here;
-  // EspUsbDevice 2.5.1 gives the vendor and HID interfaces no name)
+  // describe oep_pid: listed by discovery (until the OEP PID is taken: by the iProduct starting "OEP")
   endpoint.setOepPid(true);
 
   endpoint.setProbeDescription(probeTlv, describeProbe());
