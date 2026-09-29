@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.3
 - (EN) The console reads again once DMSTATUS shows the hart running after raw DMI writes (a debugger resuming it through dmcontrol), instead of waiting for the probe's own resume (oep-if-console §2).
 - (JA) raw の DMI の書き込みの後でも、DMSTATUS で hart が走っていればコンソールの読みを戻す（debugger が dmcontrol で走らせたとき）。probe 自身の resume を待たない（oep-if-console §2）。
 - (EN) A read from the last mark of a kind that is not kept starts now, not at the oldest byte (oep-if-common §1.2): a fixture UART, which has no reset marks, gave its old output again at every open.
