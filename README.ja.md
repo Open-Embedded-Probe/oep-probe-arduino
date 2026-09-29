@@ -19,6 +19,7 @@ OEP を初めて読む人は oep-spec の `docs/review-guide.ja.md`（どこに�
 | `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`） |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepV1Registry.h` に写す |
+| `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
 | `docs/` | 日付入りの作業記録（経緯） |
 
 ## 使い方
@@ -39,3 +40,10 @@ USB CDC、UART bridge）は OEP のフレーム（`0x00 <COBS> 0x00`）と bind 
 - Arduino.h は `word(...)` を `makeWord(...)` の macro にしている。lambda や関数を `word` と名付けると引数がそのまま返る。
 - ESP32-P4 の `RvswdPhy::begin` の後に同じピンへ `pinMode` / `digitalWrite` を使うと、dedicated GPIO の束から外れて戻らない（chip の reset が要る）。
 - direct build（`build_opt.h` で EspUsbDevice の vendor を直接書く形）のスケッチは、`build_opt.h` を変えたら `--clean` でビルドする。
+
+## リリース
+
+[arduino-library-release-toolkit](https://github.com/tanakamasayuki/arduino-library-release-toolkit) の共通の仕組みをそのまま使う。
+変更は `CHANGELOG.md` の `## Unreleased` に (EN) / (JA) で書き足し、GitHub Actions の Release（workflow_dispatch）を起動すると、
+`library.properties` の版を上げ、`src/oepprobe_version.h` を作り、`release` ブランチで example の `sketch.yaml` の `dir: ../..` を
+`OEPProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。
