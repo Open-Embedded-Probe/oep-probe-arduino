@@ -44,6 +44,10 @@ class Ch32Dm {
   // True from the host's first raw DMI write until the probe itself resumes, resets or detaches: the console must
   // not touch DATA0 / DATA1 then, whatever halted() says (the host may have halted the hart through the list).
   bool hostRaw() const { return host_raw_; }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
+  // After raw DMI writes: true when DMSTATUS says the hart runs (all running, none halted) - the host let it go by
+  // itself (a debugger writing resumereq), so hostRaw() ends and the console may read again (oep-if-console §2: it
+  // stops only for a riscv-dm request and while the hart is halted). False while halted, or when the read failed.
+  bool hostLetGo();
   bool writeWord(uint32_t address, uint32_t value);
   // Generic parts for host-driven flashing (experiment F3/F4, 2026-09-24). writeWordsFast
   // stores consecutive words through an autoexec program buffer (the write-side twin of

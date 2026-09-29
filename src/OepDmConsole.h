@@ -38,6 +38,7 @@ class DmConsole {
   DmiPhy &phy_;
   static constexpr size_t kTxCapacity = 256;
   bool enabled_ = false;
+  uint32_t last_raw_check_ms_ = 0;      // hostRaw(): when DMSTATUS was last asked whether the hart runs again
   uint8_t framing_ = 0;                 // 0 = SerialSDI (one way), 1 = SerialDMDATA, 2 = dmseq (two way)
   bool saw_empty_ = false;              // the target's empty frame was already there last poll
   bool discarding_ = false;             // start(): what arrives now is an earlier session's

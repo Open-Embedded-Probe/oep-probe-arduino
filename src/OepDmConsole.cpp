@@ -14,7 +14,14 @@ void DmConsole::poll() {
   // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless
   // the target is attached and running its own code - and not while the host drives the debug
   // module through raw DMI writes, which halted() does not see.
-  if (!enabled_ || dm_.halted() || dm_.hostRaw()) return;
+  if (!enabled_ || dm_.halted()) return;
+  if (dm_.hostRaw()) {
+    // The host drove the debug module through raw DMI: DATA0 / DATA1 may be its operands. Read again once the hart
+    // runs (a debugger that resumed it by writing dmcontrol itself), checked at most every 20 ms.
+    if (millis() - last_raw_check_ms_ < 20) return;
+    last_raw_check_ms_ = millis();
+    if (!dm_.hostLetGo()) return;
+  }
   if (!phy_.attached()) {
     // A reset detaches, and the console has to outlive that: the point of it is to watch
     // a target through its own restarts. Retry at a slow rate so a target that is simply
