@@ -53,8 +53,7 @@ constexpr uint8_t kTagRoleChannels = reg::kDescribeRoleChannels, kTagMaxClockHz 
 constexpr uint8_t kCoreFirmware = reg::core::kTlvDescribeFirmware, kCoreModel = reg::core::kTlvDescribeModel,
                   kCoreUnitId = reg::core::kTlvDescribeUnitId, kCoreChannels = reg::core::kTlvDescribeChannels,
                   kCoreReserved = reg::core::kTlvDescribeReserved, kCoreProfile = reg::core::kTlvDescribeProfile,
-                  kCoreLabel = reg::core::kTlvDescribeLabel, kCoreResetsOnOpen = reg::core::kTlvDescribeResetsOnOpen,
-                  kCoreUartRates = reg::core::kTlvDescribeUartRates;
+                  kCoreLabel = reg::core::kTlvDescribeLabel, kCoreResetsOnOpen = reg::core::kTlvDescribeResetsOnOpen;
 
 // TLV tag bits (core §2.2): bit 7 = critical (in requests); 0x7F = ignored (in every result); 0xFF invalid.
 constexpr uint8_t kTagCritical = reg::kTagCritical, kTagIgnored = reg::kTagIgnored, kTagInvalid = reg::kTagInvalid;

@@ -35,11 +35,12 @@ struct SwdPort {
 class WireSwd final : public Interface {
  public:
   enum : uint8_t { kOpScan = reg::wire_swd::kOpScan, kOpAttach = reg::wire_swd::kOpAttach,
-                   kOpDetach = reg::wire_swd::kOpDetach };
+                   kOpDetach = reg::wire_swd::kOpDetach, kOpConnections = reg::wire_swd::kOpConnections };
   WireSwd(SwdPort &port, uint16_t instance) : port_(port), instance_(instance) {}
   const char *name() const override { return reg::wire_swd::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::wire_swd::kRevision; }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::wire_swd::kLockFreeOps, op); }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   // core §9 / oep-if-debug §2: a host that fell away (its lease lapsed) keeps nothing open; the host is this link's only user

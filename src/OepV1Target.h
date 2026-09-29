@@ -31,10 +31,16 @@ struct DebugPort {
   // reset_allowed may be pulled (the same idea as the scan allow-list: never drive a pin the jig did not clear).
   int16_t reset_default = -1;
   uint64_t reset_allowed = 0;
-  // Who uses the connection (oep-if-common §2, probe-cdc-and-persistence P6): the host through attach, a bind through
-  // attachRunning. A host's detach drops only its own use; the link goes when nobody uses it, or on a forced detach.
-  enum : uint8_t { kUserHost = 1, kUserBind = 2 };
+  // Who uses the connection (oep-if-common §2): the host through attach, a slot (oep.probe.config) through its
+  // automatic attach or the console its bind opened. A host's detach drops only its own use; the link goes when nobody
+  // uses it, or on a forced detach. The bits are the connections entry's users (registry connection_users).
+  enum : uint8_t { kUserHost = reg::wire_rvswd::kConnectionUsersHostSession, kUserSlot = reg::wire_rvswd::kConnectionUsersSlot };
   uint8_t users = 0;
+  // The live connection's target_id as its attach read it (oep-if-debug §1; has_tid false: none).
+  bool has_tid = false;
+  uint32_t tid = 0;
+  // The slot registered on this place (oep.probe.config), 0xff: none - the connections entry's slot.
+  uint8_t slot = 0xff;
   // The connection's number (u16): a new connection takes the next, never reused within a boot, so a host holding the
   // number of an earlier one gets no_connection instead of reaching this one (core §9). One connection at a time on
   // this wire. exhausted(): every number used - a new connection is refused (unavailable).
@@ -50,19 +56,23 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus);
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`).
 void releaseConnection(DebugPort &port, uint8_t user, bool force);
+// The connections answer (oep-if-debug §2.1) for a wire with this one place.
+Result connectionsOf(DebugPort &port, uint32_t speed_hz, uint8_t *out, size_t capacity);
 
 class WireRvswd final : public Interface {
  public:
   enum : uint8_t {
     kOpScan = reg::wire_rvswd::kOpScan, kOpAttach = reg::wire_rvswd::kOpAttach, kOpDetach = reg::wire_rvswd::kOpDetach,
-    kOpAttachUnderReset = reg::wire_rvswd::kOpAttachUnderReset,
+    kOpAttachUnderReset = reg::wire_rvswd::kOpAttachUnderReset, kOpConnections = reg::wire_rvswd::kOpConnections,
   };
   WireRvswd(DebugPort &port, uint16_t instance, const char *name = reg::wire_rvswd::kName)
       : port_(port), instance_(instance), name_(name) {}
   const char *name() const override { return name_; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::wire_rvswd::kRevision; }   // oep.wire.swio: the same (1)
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::wire_rvswd::kLockFreeOps, op); }
   size_t describe(uint8_t *out, size_t capacity) override;
+  DebugPort &port() const { return port_; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void sessionLapsed() override { releaseConnection(port_, DebugPort::kUserHost, false); }
 

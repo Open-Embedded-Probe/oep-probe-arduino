@@ -143,23 +143,15 @@ void FixtureUart::poll() {
     if (!k) break;
     for (size_t i = 0; i < k; ++i) stream_.put(chunk[i]);
   }
-  if (port_.port()) forward();
 }
 
-void FixtureUart::setPort(Stream *port) { port_.set(port, stream_); }
-
-void FixtureUart::forward() {
-  // port -> TX: only what the UART takes without waiting, so the RX side keeps being emptied (a blocking write let the
-  // UART's receive buffer overflow while a 64 KiB echo was going out)
-  uint8_t chunk[256];
-  for (;;) {
-    const int room = serial_.availableForWrite();
-    if (room <= 0) break;
-    const size_t k = port_.fromPort(chunk, static_cast<size_t>(room) < sizeof chunk ? static_cast<size_t>(room) : sizeof chunk);
-    if (!k) break;
-    serial_.write(chunk, k);
-  }
-  port_.toPort(stream_);   // RX -> port
+size_t FixtureUart::bindInput(const uint8_t *data, size_t length) {
+  // only what the UART takes without waiting, so the RX side keeps being emptied (a blocking write let the UART's
+  // receive buffer overflow while a 64 KiB echo was going out)
+  if (!configured_) return 0;
+  const int room = serial_.availableForWrite();
+  if (room <= 0) return 0;
+  return serial_.write(data, static_cast<size_t>(room) < length ? static_cast<size_t>(room) : length);
 }
 
 bool FixtureUart::begin(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits) {
@@ -171,11 +163,6 @@ bool FixtureUart::begin(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_
   configured_ = platformUartBegin(serial_, baud, rx_, tx_, platformUartConfig(data_bits, parity, stop_bits));
   baud_ = configured_ ? platformUartBaud(serial_, baud) : 0;
   return configured_;
-}
-
-bool FixtureUart::setLineCoding(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits) {
-  if (rx_ < 0 || baud < 1200 || baud > 2000000) return false;
-  return begin(baud, data_bits, parity, stop_bits);
 }
 
 Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {

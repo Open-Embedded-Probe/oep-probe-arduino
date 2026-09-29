@@ -14,28 +14,71 @@
 namespace oep {
 namespace v1 {
 
+// The raw side of the serial ports (core §3.4): what a serial port carries outside the frames. The binds implement it
+// (oep.probe.config §1.2); the endpoint calls it from poll(), the one writer of every port.
+class RawPorts {
+ public:
+  // Bytes that came in on serial port `port` outside any frame (not called while a session holds the port).
+  virtual void rawIn(uint8_t port, const uint8_t *data, size_t length) = 0;
+  // Up to `room` bytes serial port `port` would send now (not asked while a session holds the port); nothing moves
+  // until rawSent says how many of them the port took.
+  virtual size_t rawOut(uint8_t port, uint8_t *out, size_t room) = 0;
+  virtual void rawSent(uint8_t port, size_t length) = 0;
+  // Every poll, before rawOut: `session` = a session holds the lock now.
+  virtual void poll(bool session) { (void)session; }
+  // The session ended (end, lapse, force): the ports it held (bit n = port n) take up the raw transfer again.
+  virtual void sessionOver(uint32_t held) = 0;
+
+ protected:
+  ~RawPorts() = default;
+};
+
 class Endpoint {
  public:
   static constexpr size_t kMaxInterfaces = 16;
   static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMaxMs = 600000;
 
-  // Framing: length-prefixed on reliable streams (USB CDC, USB-Serial/JTAG, TCP); COBS + CRC-16 on a UART
-  // (through a USB-UART bridge the bytes are not protected). The probe knows which transport it has.
-  enum class Framing : uint8_t { kLengthPrefixed, kCobsCrc };
-
+  // A transport's kind (core §7.5, registry transport_kind): the serial ports (UART bridge, USB CDC, USB-Serial/JTAG)
+  // frame as 0x00 <COBS> 0x00 and share the line with raw bytes (core §3.4); vendor bulk, HID and TCP are
+  // length(u16) message. The endpoint lists the transports in oep.core's describe, in the order they were added.
+  enum : uint8_t {
+    kUartBridge = reg::core::kTransportKindUartBridge, kUsbCdc = reg::core::kTransportKindUsbCdc,
+    kUsbSerialJtag = reg::core::kTransportKindUsbSerialJtag, kVendorBulk = reg::core::kTransportKindVendorBulk,
+    kHid = reg::core::kTransportKindHid, kTcp = reg::core::kTransportKindTcp,
+  };
+  static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
   static constexpr size_t kMaxTransports = 4;
+  // A serial port's frames are decoded here (one at a time): max_frame may not exceed this with a serial port.
+  static constexpr size_t kMaxSerialFrame = 2048;
 
   Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
-           Limits limits, Framing framing = Framing::kLengthPrefixed)
+           Limits limits, uint8_t kind, uint8_t usb_interface = 0xff)
       : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(limits) {
-    addTransport(stream, rx_buffer, rx_capacity, framing, false);
+    addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
   }
 
-  // Another way in to the same probe (core §3.3): vendor bulk, HID, CDC, USB-Serial/JTAG, UART. Every transport shares
-  // the one session and lock; a result goes back on the transport its request came from, pushes and events go to the
-  // transport the subscription came from. rx: one whole frame (max_frame) for this transport. The transport the
-  // constructor took is transport 0 (the one a DirectTransport, if any, belongs to).
-  bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, Framing framing, bool flush_after_burst);
+  // Another way in to the same probe (core §3.3). Every transport shares the one session and lock; a result goes back
+  // on the transport its request came from, pushes and events go to the transport the subscription came from.
+  // rx: one whole frame for this transport (a serial port: its encoded candidate, cobsFrameMax(max_frame)). The
+  // transport the constructor took is transport 0 (the one a DirectTransport, if any, belongs to). The index is the
+  // order of adding, as the describe lists them and the binds name the serial ports.
+  bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface = 0xff,
+                    bool flush_after_burst = false);
+  size_t transportCount() const { return transport_count_; }
+  bool isSerialPort(size_t index) const { return index < transport_count_ && serialKind(transports_[index].kind); }
+  // The raw side of the serial ports (the binds); nullptr: raw bytes are dropped.
+  void setRawPorts(RawPorts *raw) { raw_ = raw; }
+  // A session holds the lock / holds serial port `port` (its raw transfer is stopped, core §3.4).
+  bool locked() const { return locked_; }
+  bool held(size_t port) const { return locked_ && ((held_ >> port) & 1); }
+  // The probe also enumerates under the OEP VID:PID (describe oep_pid, probe guide §3.8).
+  void setOepPid(bool on) { oep_pid_ = on; }
+  // fn of an interface added (0: not added), and the interface at a fn (nullptr: none).
+  uint16_t fnOf(const Interface &interface) const {
+    for (size_t i = 0; i < count_; ++i) if (interfaces_[i] == &interface) return static_cast<uint16_t>(i + 1);
+    return 0;
+  }
+  Interface *interfaceAt(uint16_t fn) const { return fn >= 1 && fn <= count_ ? interfaces_[fn - 1] : nullptr; }
 
   bool add(Interface &interface);
   // The plan (oep-core §8, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
@@ -69,7 +112,7 @@ class Endpoint {
   void setDirect(DirectTransport *direct) { direct_ = direct; }
   // the zero-copy path belongs to transport 0: pushes use it only while the subscriber came in on transport 0
   DirectTransport *direct() const {
-    return push_ == 0 && transports_[0].framing == Framing::kLengthPrefixed ? direct_ : nullptr;
+    return push_ == 0 && !serialKind(transports_[0].kind) ? direct_ : nullptr;
   }
   bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint16_t &max_delay_ms) const;
   uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&push_seq_[fn - 1], 1, __ATOMIC_RELAXED); }
@@ -79,11 +122,22 @@ class Endpoint {
   struct Transport {
     Stream *stream = nullptr;
     FrameReader reader;
-    CobsReader cobs;
-    Framing framing = Framing::kLengthPrefixed;
+    SerialReader serial;
+    uint8_t kind = kVendorBulk, usb_interface = 0xff, index = 0;
+    Endpoint *owner = nullptr;
     bool flush_after_burst = false, wrote = false;
     int tx_room_max = 0;
   };
+  static void rawSink(void *context, const uint8_t *data, size_t length);
+  void rawOut();
+  void sessionEnded();
+  RawPorts *raw_ = nullptr;
+  uint32_t held_ = 0;   // serial ports the lock holder's requests came in on (core §3.4)
+  bool oep_pid_ = false;
+  uint8_t decode_[kMaxSerialFrame + 2];
+  uint8_t owner_[32];   // the lock holder's owner text (core §6.4)
+  uint8_t owner_length_ = 0;
+  size_t appendOwner(uint8_t *out, size_t room, uint8_t tag) const;
   Transport transports_[kMaxTransports];
   size_t transport_count_ = 0;
   size_t current_ = 0;   // the transport the message being handled came in on (results go back there)

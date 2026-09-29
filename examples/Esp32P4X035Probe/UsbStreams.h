@@ -1,5 +1,5 @@
-// Streams over EspUsbDevice functions for the OEP prototypes (P1-P4): the CDC OEP port, the vendor HID (count(u16)
-// report framing, report ID first on output) and a data port that never waits (FixtureUart::setPort).
+// Streams over the P4 HS port's EspUsbDevice functions: the vendor HID (count(u16) report framing, report ID first on
+// output) and a CDC port that never waits long (a serial port: frames and raw bytes, oep-core §3.4).
 #pragma once
 #include <EspUsbDevice.h>
 
@@ -11,13 +11,15 @@ class CdcStream final : public Stream {
   size_t readBytes(char *b, size_t n) override { return p_.read(reinterpret_cast<uint8_t *>(b), n); }
   int peek() override { return -1; }
   size_t write(uint8_t c) override { return write(&c, 1); }
+  // A frame waits a little for room while the port is open; nothing waits while it is closed (nobody reads it).
   size_t write(const uint8_t *b, size_t n) override {
+    if (!p_.connected()) return 0;
     size_t done = 0;
     for (uint32_t t = millis(); done < n && millis() - t < 200;) { const size_t w = p_.write(b + done, n - done); done += w; if (!w) delay(0); }
     return done;
   }
   void flush() override { p_.flush(); }
-  int availableForWrite() override { return 4096; }
+  int availableForWrite() override { return p_.connected() ? 4096 : 0; }
  private:
   EspUsbDeviceCdcSerial &p_;
 };
@@ -69,23 +71,8 @@ class HidStream final : public Stream {
   int availableForWrite() override { return 4096; }
  private:
   EspUsbDeviceHidVendor &h_;
-  uint8_t rx_[32768];
+  uint8_t rx_[8192];
   volatile size_t head_ = 0, tail_ = 0;
   uint8_t tx_[kReport];
   size_t fill_ = 0;
-};
-
-class PortStream final : public Stream {
- public:
-  explicit PortStream(EspUsbDeviceCdcSerial &p) : p_(p) {}
-  int available() override { return p_.available(); }
-  int read() override { return p_.read(); }
-  size_t readBytes(char *b, size_t n) override { return p_.read(reinterpret_cast<uint8_t *>(b), n); }
-  int peek() override { return -1; }
-  size_t write(uint8_t c) override { return p_.write(&c, 1); }
-  size_t write(const uint8_t *b, size_t n) override { return p_.write(b, n); }
-  void flush() override { p_.flush(); }
-  int availableForWrite() override { return p_.connected() ? 4096 : 0; }   // open (DTR) or not
- private:
-  EspUsbDeviceCdcSerial &p_;
 };

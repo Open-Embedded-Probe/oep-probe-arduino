@@ -50,7 +50,7 @@ class FixtureGpio final : public Interface {
   bool planned(uint16_t channel) const { return channel < 64 && ((planned_ >> channel) & 1); }
 };
 
-class FixtureUart final : public Interface {
+class FixtureUart final : public Interface, public BindSource {
  public:
   enum : uint8_t {
     kOpConfigure = reg::fixture_uart::kOpConfigure, kOpRead = reg::fixture_uart::kOpRead,
@@ -70,18 +70,13 @@ class FixtureUart final : public Interface {
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 10 ? static_cast<uint16_t>(max_frame - 10) : 0; }
-  void poll();   // from loop(): moves what the UART received into the stream (and to the port, if any)
-
-  // Experimental (oep-spec probe-cdc-and-persistence P3): forward this UART to a serial port (a USB CDC port) both
-  // ways. What the UART receives still goes into the stream, so OEP reads are unaffected; the port takes it from a
-  // position of its own, as fast as the port accepts it, only while the port is open (its availableForWrite() > 0;
-  // what arrives while it is closed stays in the stream only), and falling a whole buffer behind skips to the oldest
-  // byte kept (portGaps). Bytes from the port go out on TX while the UART runs. nullptr stops forwarding.
-  void setPort(Stream *port);
-  // Run the UART at a port's line coding (the same as configure). false: no plan, or the UART refused.
-  bool setLineCoding(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits);
-  uint32_t portGaps() const { return port_.gaps(); }
+  void poll();   // from loop(): moves what the UART received into the stream
   uint32_t baud() const { return configured_ ? baud_ : 0; }
+  // BindSource (oep.probe.config §1.2): the receive stream while the UART runs; a port's raw bytes go out on TX, as
+  // much as the UART takes without waiting.
+  const PositionStream *bindStream() const override { return configured_ ? &stream_ : nullptr; }
+  uint16_t bindStreamNumber() const override { return 1; }   // one stream for good: positions only grow
+  size_t bindInput(const uint8_t *data, size_t length) override;
 
  private:
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
@@ -102,8 +97,6 @@ class FixtureUart final : public Interface {
   PositionStream stream_;
   void idleHigh();   // TX at the UART idle level, driven
   bool begin(uint32_t baud, uint8_t data_bits, uint8_t parity, uint8_t stop_bits);
-  void forward();
-  StreamPort port_;
   uint32_t baud_ = 0;
 };
 

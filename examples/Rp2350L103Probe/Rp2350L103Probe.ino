@@ -32,9 +32,10 @@
 #define OEP_RVSWD_MIN_HALF_NS 500
 #endif
 
-static uint8_t rxBuffer[1024];
+static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
-static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8});
+static oep::v1::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
+                                  oep::v1::Endpoint::kUsbCdc, 0);   // a serial port: COBS frames (oep-core §3.1)
 static constexpr uint8_t kSwdio = OEP_RVSWD_SWDIO, kSwclk = OEP_RVSWD_SWCLK;
 // GP2 is the target's NRST: measured 2026-09-23 by pulling each spare channel down on its
 // own and watching which one took the debug module away. It idles high on the CH32's own
