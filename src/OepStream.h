@@ -55,7 +55,7 @@ class PositionStream {
     } else if (from == reg::target_console::kReadFromOldest) {
       start = oldest();
     } else if (from == reg::target_console::kReadFromLastMark) {
-      start = oldest();
+      start = total_;   // no such mark kept (never, or pushed out of the ring): from now (common §1.2)
       const uint32_t kept = serial_ < mark_capacity_ ? serial_ : static_cast<uint32_t>(mark_capacity_);
       for (uint32_t k = 0; k < kept; ++k) {
         const Mark &mk = marks_[(serial_ - 1 - k) % mark_capacity_];

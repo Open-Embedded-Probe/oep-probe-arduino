@@ -279,7 +279,17 @@ static void testMixed() {
   CHECK(text(cdc.tx) == "[s0] later\n");
 }
 
+static void testLastMarkMissing() {
+  FakeSource src;
+  src.say("old output");
+  const uint8_t req[11] = {3, 1, 0, 0, 0, 0, 0, 0, 0, 64, 0};   // from last mark, kind reset, max 64
+  uint8_t out[80];
+  const Result r = src.stream.read(req, out, sizeof out, 64);
+  CHECK(r.length == 9 && getU64(out) == 10);                      // no reset mark: from now (common §1.2)
+}
+
 int main() {
+  testLastMarkMissing();
   testReader();
   testEndpointSerialPort();
   testMixed();
