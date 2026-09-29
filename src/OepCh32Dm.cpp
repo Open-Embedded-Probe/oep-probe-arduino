@@ -93,6 +93,16 @@ bool Ch32Dm::halt() {
   return false;
 }
 
+bool Ch32Dm::hostLetGo() {
+  if (!host_raw_) return true;
+  uint32_t status = 0;
+  if (!attached() || !phy_.read(kDmStatus, status) || (status & 0xf) != 2) return false;   // version 2: a real read
+  if (!(status & (1u << 11)) || (status & (1u << 8))) return false;                         // allrunning, !anyhalted
+  host_raw_ = false;
+  halted_ = false;
+  return true;
+}
+
 bool Ch32Dm::resume() {
   if (!attached()) return false;
   host_raw_ = false;          // the probe has the hart back
