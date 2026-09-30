@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) P4 one-shot without a trigger: when no 64 KiB of internal DMA RAM is left for the segment (the ring a trigger or repeat keeps allocated), the ring is freed and the allocation tried again, then PSRAM. 5 MHz x 4 ch x 130816 samples failed configure after triggered captures (0.0.15, X035 jig).
+- (JA) トリガの無い P4 のワンショット: 区画のための 64 KiB の内部の DMA の RAM が残っていなければ（トリガやリピートが確保したままのリング）、リングを返してもう一度取り、次に PSRAM を使う。トリガ付きのキャプチャの後、5 MHz × 4 ch × 130816 サンプルの configure が失敗していた（0.0.15、X035 の治具）。
+- (EN) The P4 logic trigger is looked for once its pretrigger has filled (as the sampler and the analog do): a trigger 133 us after the start gave 266 samples of a pretrigger of 1000. A capture-group starts its trigger track once every follower holds its pretrigger (the analog had no values yet at a trigger right after the start); force starts it at once.
+- (JA) P4 のロジックのトリガは、プリトリガが埋まってから探す（sampler とアナログと同じ）。開始から 133 µs のトリガで、プリトリガ 1000 のうち 266 サンプルしか無かった。capture-group は、従うトラックがすべて自分のプリトリガを持ってからトリガのトラックを始める（開始直後のトリガで、アナログにまだ値が無かった）。force はすぐに始める。
+- (EN) Documented: an analog capture cuts its pads' digital input while it runs, so logic on the same pad reads 0 (classic ESP32 GPIO32).
+- (JA) 文書: アナログのキャプチャは取っている間 pad のデジタル入力を切るので、同じ pad のロジックは 0 を読む（classic ESP32 の GPIO32）。
 
 ## 0.0.16
 - (EN) Firmware/OepProbe on the ESP32-P4 updates over its HS port alone: a USB DFU interface (EspUsbDeviceDfu, download mode, EP0 only, interface 4 after the others) takes `dfu-util -D OepProbe-esp32p4-<version>.bin`, writes the other app partition, checks it and restarts into it; the settings (NVS) stay. The new firmware is confirmed once the HS port has enumerated (verifyRollbackLater, markValid), so one that does not get that far goes back at the next reset. Releases attach each ESP32 Firmware build's app image (`<Example>-<profile>-<version>.bin`) too; firmware-<version>.json gives each file's kind (merged / app / uf2). Unverified on hardware.

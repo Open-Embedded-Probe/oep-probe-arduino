@@ -10,7 +10,7 @@
 //   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16 (no lock)
 //
 // With trigger_track, that track waits for its own trigger and the others follow: they run into their rings from the
-// start, and when the trigger's time is known (trackTriggerNs) the group hands it to them (trackTriggerAt), and each
+// start (the trigger track starts once each holds its pretrigger), and when the trigger's time is known (trackTriggerNs) the group hands it to them (trackTriggerAt), and each
 // cuts its segment around the sample nearest to it, with its own pretrigger. A track that cannot follow (no ring)
 // is refused at bind.
 #pragma once
@@ -42,6 +42,7 @@ class GroupTrack {
   virtual void trackTriggerAt(uint64_t ns) { (void)ns; }
   virtual bool trackTriggerNs(uint64_t &ns) const { (void)ns; return false; }
   virtual void trackForce() {}
+  virtual bool trackArmed() const { return true; }   // following: it holds its pretrigger's worth of samples
   void setBound(bool on) { bound_ = on; if (!on) following_ = false; }
   bool bound() const { return bound_; }
 
@@ -92,6 +93,8 @@ class CaptureGroup final : public Interface {
   bool started_ = false;   // started since the bind: the state is the tracks' (done once all are)
   bool running_ = false;   // the stopped event is still to come
   int trigger_ = -1;       // the trigger track (index into tracks_), or none
+  bool trigger_pending_ = false;   // started, the trigger track not yet: the followers' pretriggers are filling
+  bool startTrigger();
   uint64_t trigger_ns_ = ~uint64_t{0};
   int indexOf(uint16_t fn) const;
   int indexOf(const GroupTrack &track) const;

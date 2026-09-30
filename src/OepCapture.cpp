@@ -226,10 +226,11 @@ void LogicCapture::freeStages() {   // the stages stay allocated (openStages); w
   for (int i = 0; i < 500 && (stage_free_ & all) != all; ++i) delay(2);
 }
 
-// The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. A byte whose
+// The first sample of `data` (the stream's sample first_sample on), at or after min_at, where the trigger holds: at,
+// its index (the ones before min_at, before the pretrigger has filled, only move the last level on). A byte whose
 // samples cannot trigger (the channel's bits masked: all at the known level for an edge, none at the level wanted for
 // a level) is skipped whole; the rest is looked at sample by sample. The last level carries over for edges.
-bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at) {
+bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at, uint64_t min_at) {
   const uint8_t w = width_, k = trig_role_;
   const bool edge = trig_type_ == cap::kTriggerEdge;
   const uint8_t want = trig_value_ & 1;
@@ -248,13 +249,16 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
       const uint8_t v = data[b] & mask;
       if (edge ? have_level_ && v == (last_level_ ? mask : 0) : v == (want ? 0 : mask)) continue;
       for (uint8_t s = 0; s < per; ++s)
-        if (hits((data[b] >> (s * w + k)) & 1)) { at = first_sample + static_cast<uint64_t>(b) * per + s; return true; }
+        if (hits((data[b] >> (s * w + k)) & 1) && first_sample + static_cast<uint64_t>(b) * per + s >= min_at) {
+          at = first_sample + static_cast<uint64_t>(b) * per + s;
+          return true;
+        }
     }
     return false;
   }
   for (size_t i = 0; i + 1 < length; i += 2) {   // 16-bit samples
     const uint16_t v = static_cast<uint16_t>(data[i] | data[i + 1] << 8);
-    if (hits((v >> k) & 1)) { at = first_sample + i / 2; return true; }
+    if (hits((v >> k) & 1) && first_sample + i / 2 >= min_at) { at = first_sample + i / 2; return true; }
   }
   return false;
 }
@@ -287,7 +291,7 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
       t = ext_sample_;
       if (t >= (base + chunk.length) * 8 / width_) return;
     } else if (force_) force_ = false;
-    else if (!findTrigger(chunk.data, chunk.length, first, t)) return;
+    else if (!findTrigger(chunk.data, chunk.length, first, t, pretrigger_)) return;   // once the pretrigger is in
     uint64_t s0 = t > pretrigger_ ? t - pretrigger_ : 0;
     // not before the oldest byte the ring still holds (with a margin for the DMA running on)
     const uint64_t newest = base + ahead;
@@ -657,7 +661,16 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   } else {
     close();
     if (!open(rate, width, bytes, num, den)) return failed();
+    // The DMA writes the segment itself: internal RAM. The ring a trigger or repeat left allocated (128 KiB, kept so
+    // that it does not fragment the heap) can leave no 64 KiB piece of it: 5 MHz x 4 ch x 130816 samples failed
+    // configure after triggered captures (0.0.15, the X035 jig). Then the ring goes, and PSRAM is the last resort.
     buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    if (!buffer_ && ring_) {
+      heap_caps_free(ring_);
+      ring_ = nullptr;
+      buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+    }
+    if (!buffer_) buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM));
     parlio_rx_event_callbacks_t cb = {};
     cb.on_receive_done = receiveDone;
     parlio_rx_soft_delimiter_config_t d = {};

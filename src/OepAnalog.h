@@ -19,7 +19,9 @@
 //   0x07 segments   0x09 query(TLV) -> TLV (no lock)   0x0A calibration -> TLV (no lock)   (0x08 release: unknown)
 //
 // Channel k is plan role k (0..3); a pin is an ADC input the sketch offers. A capture only listens: its pins are not
-// claimed in the pin table, but the pads go to their analog function while it runs.
+// claimed in the pin table, but the pads go to their analog function while it runs - their digital input is cut, so a
+// logic capture of the same pad reads 0 then (the classic ESP32: GPIO32 as logic and analog at once, 0 edges against
+// 129 alone, 2026-09-30).
 #pragma once
 #include <Arduino.h>
 
@@ -61,6 +63,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool trackStartFollowing() override;
   void trackTriggerAt(uint64_t ns) override;
   bool trackTriggerNs(uint64_t &ns) const override;
+  bool trackArmed() const override { return got_ >= pretrigger_; }
   void trackForce() override { if (state_ == reg::fixture_analog::kStateWaiting) force_ = true; }
   uint32_t trackLoad() const override { return total_hz_; }
   bool trackStart() override { follow_ = false; return startNow(); }
