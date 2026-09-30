@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.13
 - (EN) Analog triggers (oep.fixture.analog): the ADC value of one channel crossed up (from below to at or above) or down, with a pretrigger and force. ESP32: the segment's buffer is the ring the driver's reads fill, looked at after every read, turned to order at the end; the pretrigger leaves 129 frames for a channel running ahead (up to 16255 at one channel), a pool overflow after the segment's start marks it slipped. RP2040 / RP2350: the DMA runs round a 32 KiB write ring (allocated on the first triggered configure), poll looks at it and copies the segment out; a triggered segment is at most 8192 values (half the ring), and a DMA that came round over its start marks it slipped. A stop while waiting or filling gives no segment. Unverified on hardware.
 - (JA) アナログのトリガ（oep.fixture.analog）: 1 つのチャネルの ADC の値が上向き（下から、その値以上へ）または下向きに横切る。プリトリガと force。ESP32: 区画のバッファを、ドライバの読み出しが埋めるリングにし、読むたびに探し、最後に順に並べ替える。先に進むチャネルのために、プリトリガは 129 フレームを残す（1 チャネルで 16255 まで）。区画の始まりの後に置き場があふれたら slipped。RP2040 / RP2350: DMA を 32 KiB の書き込みのリング（最初のトリガ付きの configure で確保）で回し、poll で探して区画を写す。トリガ付きの区画は 8192 値まで（リングの半分）。DMA が区画の始まりまで回ってきたら slipped。待っている間や埋めている間の stop は区画を出さない。実機では未確認。
 
