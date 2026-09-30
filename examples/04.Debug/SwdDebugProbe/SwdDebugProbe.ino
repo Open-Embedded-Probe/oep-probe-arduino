@@ -28,8 +28,8 @@ static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeo
                               oep::Endpoint::kUsbCdc);
 
 static oep::SwdPort port{kSwdio, kSwclk};
-static oep::WireSwd wire(port, 1);
-static oep::TargetArmAdi adi(port, 1);
+static oep::WireSwd wire(port, 0);
+static oep::TargetArmAdi adi(port, 0);
 static uint8_t probeTlv[64];
 
 static size_t describeProbe() {

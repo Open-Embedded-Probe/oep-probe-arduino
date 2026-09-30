@@ -45,8 +45,8 @@ static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeo
 // The pins the fixtures share. Each interface claims what its plan names under its own owner id (1, 2), so one never
 // drives a pin another holds (core §8.1); a released pin goes back to Hi-Z (or its idle state).
 static oep::PinTable pins(kChannels);
-static oep::FixtureGpio gpio(pins, 1, 1);                  // instance 1, owner 1
-static oep::FixtureUart uart(pins, FIXTURE_UART, 1, 2);    // instance 1, owner 2
+static oep::FixtureGpio gpio(pins, 0, 1);                  // instance 0, owner 1
+static oep::FixtureUart uart(pins, FIXTURE_UART, 0, 2);    // instance 0, owner 2
 
 static uint8_t probeTlv[64];
 

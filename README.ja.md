@@ -165,6 +165,28 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 tag から各 example の各 profile をビルドし、`<Example>-<profile>-<version>.merged.bin`（ESP32、0x0 に書く）/ `.bin`（ESP32、更新用の app の image。P4 の DFU）/ `.uf2`（RP2040 / RP2350）と
 `firmware-<version>.json`（sha256）を Release に付ける（付けるのは `examples/Firmware/` の分だけ。ほかの example は確かめるためにビルドする）。probe は同じ版を describe の firmware の文字列で返す。
 
+### Release の添付
+
+`firmware-<version>.json` はこのリポジトリの決まり（OEP の規範ではない。oep-spec の凍結の決定 9）:
+
+```json
+{"schema": 1, "library": "OpenEmbeddedProbe", "version": "0.0.20", "firmware": [
+  {"example": "Firmware/OepProbe", "profile": "esp32p4", "file": "OepProbe-esp32p4-0.0.20.bin", "kind": "app",
+   "model": "esp32p4", "fqbn": "esp32:esp32:esp32p4:...", "flash_offset": null, "sha256": "..."}]}
+```
+
+| フィールド | 意味 |
+|---|---|
+| `schema` | 1。読む側は違う番号を断る。フィールドは足すだけ |
+| `kind` | `merged`（ESP32、`flash_offset` 0 から書く全体）、`app`（ESP32、app の image。もう片方の app の区画への更新、P4 の DFU）、`uf2`（RP2040 / RP2350） |
+| `model` | この image が describe の model で返す値（`esp32p4`、`esp32`、`rp2040`、`rp2350`）。ビルドの対象のチップ。describe の chip の TLV は別もので、動いている部品の `<model> v<rev>` |
+| `fqbn`、`flash_offset` | ビルドに使ったもの。`merged` を書く位置（ほかは `null`） |
+| `sha256` | ファイルの sha256 |
+
+このライブラリでビルドした sketch の describe の firmware の文字列は、ライブラリのリリースの版（`0.0.20`、
+`OPENEMBEDDEDPROBE_VERSION_STR`）で、Release と上の `version` と同じ。作業中の tree からのビルドは `library.properties`
+の版を返す。OEP は文字列を決めていない（core §7.5）。これはこのリポジトリの決まり。
+
 ## ライセンス
 
 MIT（[LICENSE](LICENSE)）。各ソースファイルにも表記がある（`SPDX-License-Identifier: MIT`）。USB の VID:PID はこれに含まれない:

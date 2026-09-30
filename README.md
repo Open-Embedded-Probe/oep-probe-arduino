@@ -181,6 +181,28 @@ at 0x0) / `.bin` (ESP32, the app image for an update, the P4's DFU) / `.uf2` (RP
 to check them). The probe reports the same version as its describe firmware
 string.
 
+### Release assets
+
+`firmware-<version>.json` is this repository's own (OEP does not define it; oep-spec freeze decision 9):
+
+```json
+{"schema": 1, "library": "OpenEmbeddedProbe", "version": "0.0.20", "firmware": [
+  {"example": "Firmware/OepProbe", "profile": "esp32p4", "file": "OepProbe-esp32p4-0.0.20.bin", "kind": "app",
+   "model": "esp32p4", "fqbn": "esp32:esp32:esp32p4:...", "flash_offset": null, "sha256": "..."}]}
+```
+
+| Field | Meaning |
+|---|---|
+| `schema` | 1. A reader refuses another number; fields are only added |
+| `kind` | `merged` (ESP32, the whole flash from `flash_offset` 0), `app` (ESP32, the app image: an update into the other app partition, the P4's DFU), `uf2` (RP2040 / RP2350) |
+| `model` | the probe's describe model this image reports (`esp32p4`, `esp32`, `rp2040`, `rp2350`): the chip built for. The describe chip TLV is another thing: `<model> v<rev>` of the running part |
+| `fqbn`, `flash_offset` | what it was built with; where a `merged` image goes (`null` for the others) |
+| `sha256` | of the file |
+
+The describe firmware string of every sketch built from this library is the library's release version (`0.0.20`,
+`OPENEMBEDDEDPROBE_VERSION_STR`), the same as the release and `version` above; a build from a work tree reports the
+version in its `library.properties`. OEP itself leaves the string free (core §7.5); this is this repository's rule.
+
 ## License
 
 MIT ([LICENSE](LICENSE)); every source file says so (`SPDX-License-Identifier: MIT`). The USB VID:PID is not covered by

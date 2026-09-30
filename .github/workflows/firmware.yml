@@ -10,8 +10,8 @@
 # yet). Files: <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool),
 # <Example>-<profile>-<version>.bin (ESP32: the app image alone, for an update into the other app partition - the P4's
 # `dfu-util -D`), <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), and firmware-<version>.json ("schema": 1)
-# listing them with their kind (merged / app / uf2), model (the describe model: esp32p4, esp32, rp2040, rp2350), chip
-# and sha256.
+# listing them with their kind (merged / app / uf2), model (the describe model: esp32p4, esp32, rp2040, rp2350) and
+# sha256 (the fields: README "Release assets").
 #
 # One job per (example, profile), all at once: `plan` lists them, `build` compiles one each (the platform's
 # installation cached per platform version, so a job downloads no toolchain after the first run), `attach` gathers
@@ -154,9 +154,9 @@ jobs:
               if src.exists() and (kind != "app" or merged):
                   dst = out / f"{sketch.name}-{profile}-{version}.{ext}"
                   shutil.copy(src, dst)
-                  # model: the describe model the Firmware sketches report (the chip); chip: the part built for
+                  # model: the describe model the Firmware sketches report (the chip built for)
                   files.append({"example": str(sketch.relative_to("examples")), "profile": profile, "file": dst.name,
-                                "kind": kind, "model": chip, "chip": chip, "fqbn": fqbn,
+                                "kind": kind, "model": chip, "fqbn": fqbn,
                                 "flash_offset": 0 if kind == "merged" else None,
                                 "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
           if not any(f["kind"] in ("merged", "uf2") for f in files):
