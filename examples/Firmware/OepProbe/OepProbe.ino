@@ -13,10 +13,13 @@
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart. Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach_under_reset, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
-// max_speed) comes from the host (oep-if-debug §3).
+// max_speed) comes from the host (oep-if-debug §3). oep.probe.config keeps a jig's settings in flash (slots on any pair,
+// a bind of the CDC port - the target's console on the same line as OEP -, labels, idle states).
 #include <USB.h>
 
+#include <OepBind.h>
 #include <OepCh32Dm.h>
+#include <OepConfig.h>
 #include <OepConsole.h>
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
@@ -60,6 +63,8 @@ static oep::TargetArmAdi adi(swd, 1);
 
 static oep::FixtureGpio gpio(pins, 1, 1);
 static oep::FixtureUart uart(pins, Serial1, 1, 2);
+static oep::Binds binds;
+static oep::ProbeConfig config(endpoint, binds);
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
@@ -92,10 +97,18 @@ void setup() {
   endpoint.add(adi);
   endpoint.add(gpio);
   endpoint.add(uart);
+  endpoint.setRawPorts(&binds);
+  endpoint.add(config);   // last: the fns before it keep their numbers
+  config.addPlace(wireRvswd, console);
+  config.addUart(uart);
+  config.setPins(&pins);   // the idle item sets these pins' free state
+  config.load();
+  config.applySaved();
 }
 
 void loop() {
   endpoint.poll();
   console.poll();
   uart.poll();
+  config.poll();
 }
