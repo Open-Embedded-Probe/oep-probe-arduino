@@ -10,7 +10,7 @@
 
 ## ID
 
-`1209:XXXX`（pid.codes。番号は割り当てられたときに埋める）は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
+`1209:4F45`（pid.codes に申請中。まだ割り当てられていない）は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
 USB の device** を指す。ライブラリが対応するどの基板でもよい（ESP32-P4、RP2350、RP2040、後から足すもの）。その device は
 Open Embedded Probe のプロトコル（[oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)）を話す。
 
@@ -39,5 +39,5 @@ probe 自身（confirm、list、describe）から読む。そのためには、�
 
 ## 変更
 
-この文書は、このリポジトリへのレビューを経た pull request でだけ変える。ID の登録は pid.codes の `1209/XXXX/index.md` で、
+この文書は、このリポジトリへのレビューを経た pull request でだけ変える。ID の登録は pid.codes の `1209/4F45/index.md` で、
 持ち主は `Open-Embedded-Probe`。
