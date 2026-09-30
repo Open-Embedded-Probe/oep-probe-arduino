@@ -56,7 +56,7 @@ class SamplerCapture final : public Interface {
   bool subscribed_ = false;
   uint8_t state_ = reg::fixture_capture::kStateUnconfigured;
   uint32_t samples_ = 0, cycles_ = 0, cpu_hz_ = 0;
-  uint64_t start_us_ = 0;
+  uint64_t start_ns_ = 0;   // the probe's clock (esp_timer x 1000)
   uint8_t *buffer_ = nullptr;
   uint32_t masks0_[kMaxChannels] = {}, masks1_[kMaxChannels] = {};
   TaskHandle_t sampler_ = nullptr;

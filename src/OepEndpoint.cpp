@@ -799,6 +799,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
       memcpy(scratch_ + at, v, 4);
       at += 4;
     }
+
     tlv = scratch_;
     tlv_length = at;
   } else if (fn <= count_) {

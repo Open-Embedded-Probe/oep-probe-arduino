@@ -89,7 +89,11 @@ class LogicCapture final : public Interface {
   parlio_rx_delimiter_handle_t delimiter_ = nullptr;
   uint8_t *buffer_ = nullptr;
   volatile bool done_ = false;
-  uint64_t start_us_ = 0;   // µs since boot (esp_timer), u64 like the positions
+  uint64_t start_ns_ = 0;   // the probe's clock: ns since boot (esp_timer x 1000), u64 like the positions
+  // PARLIO's first sample against the start's clock read: an edge landed within 5 us of the GPIO write that made it
+  // (logic-capture §7.4), so +-5 us
+  static constexpr uint32_t kStartUncertaintyNs = 5000;
+  uint64_t nsOf(uint64_t samples) const;   // samples at the actual rate, in ns (no 128-bit arithmetic on the P4)
 
   Result configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query);
   bool open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t &num, uint32_t &den);
@@ -117,8 +121,9 @@ class LogicCapture final : public Interface {
   size_t store_bytes_ = 0;
   // repeat
   struct Chunk { const uint8_t *data; size_t length; };
-  struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_us; uint8_t flags; };
-  static constexpr size_t kInfoBytes = 29;   // serial u32, position u64, samples u32, start_us u64, trigger_index u32, flags u8
+  struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_ns; uint8_t flags; };
+  // serial u32, position u64, samples u32, start_ns u64, start_uncertainty_ns u32, trigger_index u32, flags u8
+  static constexpr size_t kInfoBytes = 33;
   uint8_t mode_ = 1;
   uint32_t segment_bytes_ = 0, segment_count_ = 0;
   uint8_t *ring_ = nullptr, *store_ = nullptr;

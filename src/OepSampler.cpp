@@ -226,17 +226,18 @@ size_t SamplerCapture::segmentInfo(uint8_t *out) const {
   putU32(out, 0);                  // serial
   putU64(out + 4, 0);              // position
   putU32(out + 12, samples_);
-  putU64(out + 16, start_us_);
-  putU32(out + 24, 0xFFFFFFFFu);   // no trigger inside (immediate start)
-  out[28] = slipped_ ? cap::kSegmentFlagSlipped : 0;   // bit2: the time base bent (see samplerTask)
-  return 29;
+  putU64(out + 16, start_ns_);
+  putU32(out + 24, 2000);          // the software pace's first sample against the clock read: +-2 us
+  putU32(out + 28, 0xFFFFFFFFu);   // no trigger inside (immediate start)
+  out[32] = slipped_ ? cap::kSegmentFlagSlipped : 0;   // bit2: the time base bent (see samplerTask)
+  return 33;
 }
 
 void SamplerCapture::poll() {
   if (state_ != cap::kStateCapturing || !done_) return;
   state_ = cap::kStateDone;
   if (subscribed_) {
-    uint8_t seg[29];
+    uint8_t seg[33];
     endpoint_.event(*this, cap::kEventSegment, seg, segmentInfo(seg));
     const uint8_t reason = cap::kStoppedReasonComplete;
     endpoint_.event(*this, cap::kEventStopped, &reason, 1);
@@ -256,7 +257,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       waitIdle();
       done_ = false;
       memset(buffer_, 0, samples_);
-      start_us_ = static_cast<uint64_t>(esp_timer_get_time());
+      start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
       if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, configMAX_PRIORITIES - 1, &sampler_, 0) != pdPASS) {
         sampler_ = nullptr;
         state_ = cap::kStateError;
@@ -313,7 +314,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (n < 4) return rejected(kRejectMalformed);
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 1 + 29) return failed();
+      if (capacity < 1 + 33) return failed();
       poll();
       const bool one = state_ == cap::kStateDone && getU32(p) == 0;
       out[0] = one ? 1 : 0;
