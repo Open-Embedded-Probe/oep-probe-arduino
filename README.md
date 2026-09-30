@@ -65,4 +65,7 @@ The shared [arduino-library-release-toolkit](https://github.com/tanakamasayuki/a
 Record changes under `## Unreleased` in `CHANGELOG.md`, (EN) and (JA), and run the GitHub Actions workflow Release
 (workflow_dispatch): it bumps the version in `library.properties`, writes `src/openembeddedprobe_version.h`, rewrites the
 examples' `sketch.yaml` `dir: ../..` to `OpenEmbeddedProbe (<version>)` on the `release` branch, and makes the ZIP (without
-`tests/`), the tag and the GitHub Release.
+`tests/`), the tag and the GitHub Release. Then the separate `.github/workflows/firmware.yml` (not part of the toolkit)
+builds every example from the tag and attaches `<Example>-<version>.merged.bin` (ESP32, flash at 0x0) / `.uf2` (RP2040 /
+RP2350) and `firmware-<version>.json` (sha256) to the Release. The probe reports the same version as its describe firmware
+string.

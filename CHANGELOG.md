@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The firmware string in oep.core's describe is the library's release version (it was a fixed `3.2.0-v1rc`). Every Release now gets each example's built firmware attached (`<Example>-<version>.merged.bin` for ESP32, flash at 0x0; `.uf2` for RP2040 / RP2350; `firmware-<version>.json` with the sha256), by a separate Firmware workflow after the shared Release workflow.
+- (JA) oep.core の describe の firmware の文字列は、ライブラリのリリースの版になった（前は固定の `3.2.0-v1rc`）。リリースごとに、example ごとのビルド済みの firmware が付く（ESP32 は `<Example>-<version>.merged.bin`、0x0 に書く。RP2040 / RP2350 は `.uf2`。sha256 は `firmware-<version>.json`）。共通の Release の後に、別の Firmware の workflow が作る。
 
 ## 0.0.4
 - (EN) P4 HS sketches receive vendor bulk OUT a packet at a time (`CFG_TUD_VENDOR_RX_NEED_ZLP=0`): a request ending on a 512-byte boundary (+ the host's ZLP) was held until the next OUT, 3 s without an answer.

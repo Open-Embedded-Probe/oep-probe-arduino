@@ -11,6 +11,7 @@
 
 #include "OepResult.h"
 #include "OepRegistry.h"
+#include "openembeddedprobe_version.h"
 
 namespace oep {
 
@@ -78,8 +79,9 @@ inline Result rejectedWith(uint8_t reason, uint8_t *out, size_t capacity, uint8_
   return {kResolutionRejected, reason, 1};
 }
 
-// The firmware string every v1 probe reports (oep.core describe tag 0x40).
-constexpr const char *kFirmwareVersion = "3.2.0-v1rc";
+// The firmware string every probe reports (oep.core describe tag 0x40): the library's release version
+// (openembeddedprobe_version.h, written by the release). A build between releases reports the last release.
+constexpr const char *kFirmwareVersion = OPENEMBEDDEDPROBE_VERSION_STR;
 
 // The TLVs after a request's fixed part (core §2.3). A handler checks the fixed part (shorter = malformed), then:
 //
