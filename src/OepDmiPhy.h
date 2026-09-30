@@ -35,6 +35,11 @@ class DmiPhy {
   // A ceiling on the link speed from the next attach on (and the retunes after it): the host's max_speed, in Hz of the
   // bit clock. 0 = none. false: this backend cannot stay under it (a fixed speed above it).
   virtual bool setMaxHz(uint32_t hz) { return hz == 0; }
+  virtual bool keepsMaxHz(uint32_t hz) const { return hz == 0; }   // setMaxHz(hz) would succeed (nothing changed)
+  // How the bus rests between transactions: SWCLK low instead of both lines high. The target's (oep-if-debug §3): the
+  // host says so at attach (idle_clock) or through a slot. false: this backend cannot rest that way.
+  virtual bool setIdleClockLow(bool low) { return !low; }
+  virtual bool canIdleClockLow() const { return false; }
   // Measured at attach: wall time of one DMI read and the clock rate it implies (0 before attach).
   virtual uint32_t dmiNs() const = 0;
   virtual uint32_t clockHz() const = 0;

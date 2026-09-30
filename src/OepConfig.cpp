@@ -12,8 +12,8 @@ namespace oep {
 namespace cfg = reg::probe_config;
 
 namespace {
-constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items1", *kNvsList = "list1";   // the 2026-09-29 items
-constexpr size_t kSlotFixed = 12;   // slot wire_fn swdio swclk attach retry_s mechanism name_len
+constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items2", *kNvsList = "list1";   // items: the 2026-09-30 slot layout
+constexpr size_t kSlotFixed = 17;   // slot wire_fn swdio swclk attach retry_s max_speed idle_clock mechanism name_len
 bool nameChar(char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'; }
 }  // namespace
 
@@ -92,8 +92,10 @@ size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
     putU16(v + 5, p.port->swclk);
     v[7] = s.attach;
     putU16(v + 8, s.retry_s);
-    v[10] = s.mechanism;
-    v[11] = s.name_length;
+    putU32(v + 10, s.max_hz);
+    v[14] = s.idle_low ? reg::wire_rvswd::kIdleClockLow : reg::wire_rvswd::kIdleClockHigh;
+    v[15] = s.mechanism;
+    v[16] = s.name_length;
     memcpy(v + kSlotFixed, s.name, s.name_length);
     size_t at = kSlotFixed + s.name_length;
     v[at++] = s.lock_scheme;
@@ -189,11 +191,13 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       Slot &s = slots[n];
       s = Slot{};
       if (len == 1) continue;   // slot alone: it goes
-      if (len < kSlotFixed + 1 || len < kSlotFixed + v[11] + 1u) return rejected(kRejectMalformed);
+      if (len < kSlotFixed + 1 || len < kSlotFixed + v[16] + 1u) return rejected(kRejectMalformed);
       const uint16_t wire_fn = getU16(v + 1), swdio = getU16(v + 3), swclk = getU16(v + 5);
-      const uint8_t attach = v[7], mechanism = v[10], name_length = v[11];
+      const uint8_t attach = v[7], idle = v[14], mechanism = v[15], name_length = v[16];
       const uint16_t retry_s = getU16(v + 8);
+      const uint32_t max_hz = getU32(v + 10);
       if (attach > cfg::kSlotAttachAtBoot || (retry_s && attach != cfg::kSlotAttachAtBoot)) return rejected(kRejectMalformed);
+      if (idle > reg::wire_rvswd::kIdleClockLow) return rejected(kRejectMalformed);
       if (name_length < 1 || name_length > kMaxName) return rejected(kRejectMalformed);
       for (uint8_t k = 0; k < name_length; ++k) if (!nameChar(static_cast<char>(v[kSlotFixed + k]))) return rejected(kRejectMalformed);
       int place = -1;   // the place with this wire and pin pair
@@ -201,6 +205,9 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
         if (places_[k].wire_fn == wire_fn && places_[k].port->swdio == swdio && places_[k].port->swclk == swclk)
           place = static_cast<int>(k);
       if (place < 0) return rejected(kRejectUnavailable);
+      DmiPhy &phy = places_[place].port->dm.phy();
+      if (idle && !phy.canIdleClockLow()) return rejected(kRejectMalformed);   // idle_clock low: rvswd's only
+      if (!phy.keepsMaxHz(max_hz)) return rejected(kRejectUnsupported);       // a ceiling this line cannot keep
       if (mechanism > reg::target_console::kMechanismDmseq) return rejected(kRejectUnsupported);
       const uint8_t *lock = v + kSlotFixed + name_length;
       const size_t lock_bytes = len - kSlotFixed - name_length;   // scheme [mask value]
@@ -210,6 +217,8 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       s.place = static_cast<uint8_t>(place);
       s.attach = attach;
       s.retry_s = retry_s;
+      s.max_hz = max_hz;
+      s.idle_low = idle != 0;
       s.mechanism = mechanism;
       s.name_length = name_length;
       memcpy(s.name, v + kSlotFixed, name_length);
@@ -330,7 +339,7 @@ void ProbeConfig::runSlot(uint8_t i) {
       r.tried = true;
       r.last_try_ms = millis();
       uint32_t status = 0;
-      if (attachRunning(port, DebugPort::kUserSlot, status)) {
+      if (attachRunning(port, DebugPort::kUserSlot, status, s.max_hz, s.idle_low)) {
         r.mismatch = lockMatches(s, port.has_tid, port.tid) != 1;
         r.mismatch_has_tid = port.has_tid;
         r.mismatch_tid = port.tid;

@@ -3,8 +3,10 @@
 // backend in OepRvswdPhy.cpp (same frame as the ESP32-P4 probe).
 //
 // oep.core (the probe in its describe), oep.wire.rvswd, oep.target.riscv-dm, oep.target.console,
-// oep.fixture.gpio / uart (all revision 1). GP2 is the target's NRST: a gpio channel labelled NRST and the default reset line for
-// oep.wire.rvswd attach-under-reset (the host may name another channel) - open drain only, never driven high.
+// oep.fixture.gpio / uart (all revision 1). GP2 is the target's NRST: a gpio channel labelled NRST, which oep.wire.rvswd
+// attach-under-reset takes when the host names it (no default reset line, oep-if-debug §3) - open drain only, never
+// driven high. How the line rests and how fast it may go are the CH32L103's, so the host passes them at attach
+// (idle_clock low, max_speed 1 MHz; oep-if-debug §3), or a slot carries them.
 #include <OepCh32Dm.h>
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
@@ -23,13 +25,6 @@
 #endif
 #ifndef OEP_RVSWD_SWCLK
 #define OEP_RVSWD_SWCLK 1
-#endif
-// The speed search takes the fastest period that passes, and on the CH32L103 that is marginal right after a reset,
-// where flashing happens on its slow default clock: with no floor it settled at 680 kHz SWCLK, saw parity retries,
-// and one sketch in 28 failed its flash verify even after rewrites; with 500 ns, 42 of 42 passed (2026-09-25,
-// after the RP2 timing fix and the reset rework). Not the wiring - it is the same as the other targets.
-#ifndef OEP_RVSWD_MIN_HALF_NS
-#define OEP_RVSWD_MIN_HALF_NS 500
 #endif
 
 static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
@@ -79,11 +74,6 @@ void setup() {
   // the target pulls it up.
   pinMode(kNrst, INPUT);
   phy.begin(kSwdio, kSwclk);
-  phy.setMinHalfNs(OEP_RVSWD_MIN_HALF_NS);
-  // A CH32L103 resets its debug link when the bus rests high (2026-09-23). Where this setting belongs - the
-  // jig's profile here, or the host at attach - waits for a measurement (a LinkE -> L103 capture or an OEP
-  // observation, decided 2026-09-24).
-  phy.setIdleClockLow(true);
   // Hi-Z everything the probe does not own. RP2 pads boot with a pull-down, and this jig is only half wired:
   // on the CH32L103 that pull-down held a line the target cares about and the hart would not halt, though its
   // debug module answered normally (2026-09-23).
@@ -92,8 +82,8 @@ void setup() {
   endpoint.setBootId(rp2040.hwrand32());
   endpoint.add(wire);
   endpoint.add(riscvDm);
-  port.reset_default = kNrst;   // attach-under-reset through the L103's NRST unless the host names another channel
-  port.reset_allowed = kFixtures;
+  port.reset_allowed = kFixtures;   // attach-under-reset: the channel the host names (no default), nobody holding it
+  port.pins = &pins;
   endpoint.add(console);
   endpoint.add(gpio);
   endpoint.add(uart);

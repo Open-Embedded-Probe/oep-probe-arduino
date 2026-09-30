@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) No default reset line (oep-if-debug §3): attach_under_reset takes only the channel the host names - one the wire declares (describe role_channels, role reset) and no other interface holds. `DebugPort::reset_default` is gone; a sketch sets `reset_allowed` and `pins`.
+- (JA) 既定の reset 線は無くなった（oep-if-debug §3）: attach_under_reset は host が名指した channel だけを受ける。wire が宣言したもの（describe の role_channels の role reset）で、ほかのインターフェースが持っていないものに限る。`DebugPort::reset_default` は無くなり、スケッチは `reset_allowed` と `pins` を設定する。
+- (EN) The line's settings are the target's and come from the host: rvswd's attach / attach_under_reset take idle_clock (SWCLK low while resting), and a probe.config slot carries max_speed / idle_clock for the probe's own attach. `RvswdPhy::setMinHalfNs` is gone, and Rp2350L103Probe no longer rests the line low or floors its speed by itself. The slot item's layout changed; the settings are saved under a new NVS key, so saved settings from earlier versions are not loaded (set them again).
+- (JA) 線の設定は target のもので、host から来る: rvswd の attach / attach_under_reset は idle_clock（休ませる間の SWCLK を low に）を受け、probe.config のスロットは probe が自分で attach するための max_speed / idle_clock を持つ。`RvswdPhy::setMinHalfNs` は無くなり、Rp2350L103Probe は自分で線を low で休ませたり速さに下限を付けたりしない。スロットの項目の形が変わった。設定は新しい NVS の key に保存するので、前の版で保存した設定は読まれない（設定し直す）。
 - (EN) The plan holds 64 role assignments (was 16), every fn together, and says so in oep.core's describe (plan_roles 0x4B). More than that is rejected unavailable, not malformed (oep-core §8).
 - (JA) plan が持てる role_assignment は 64 個（前は 16）。すべての fn の合計で、oep.core の describe で宣言する（plan_roles 0x4B）。それを超えると malformed ではなく rejected unavailable（oep-core §8）。
 - (EN) A plan the settings put in (probe.config) belongs to the settings (oep-core §8): plan_release leaves it (n = 0 included) and plan_apply naming its fn is rejected unavailable.

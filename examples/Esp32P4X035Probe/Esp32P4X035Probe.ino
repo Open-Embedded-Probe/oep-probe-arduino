@@ -121,8 +121,10 @@ void setup() {
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
   endpoint.add(riscvDm);
-  // attach-under-reset: no NRST is wired on this jig, so no default; the host may name any fixture channel.
+  // attach-under-reset: the host names the reset line every time (no default, oep-if-debug §3); any fixture channel
+  // nobody holds may be it (no NRST is wired on this jig).
   port.reset_allowed = kFixtures;
+  port.pins = &pins;
   endpoint.add(console);
   // The fixture pins are left as the P4 boots them (inputs, nothing driven); the RP2 sketches park theirs because
   // the RP2 pad comes up with a pull-down.

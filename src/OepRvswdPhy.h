@@ -36,14 +36,9 @@ class RvswdPhy final : public DmiPhy {
   void useHalf(uint32_t half_ns) { setHalf(half_ns); }
   void useSafeSpeed() override;
   bool retune() override;
-  // Refuse to attach faster than this. attach() measures the link, but a marginal one
-  // (a bench jig) can pass both the read and the write check at a
-  // period whose longer abstract-command sequences still break, and the period it lands
-  // on then varies run to run. A jig that is known to be provisional says so here rather
-  // than leaving the probe to guess: 0 = no floor.
-  void setMinHalfNs(uint32_t half_ns) { min_half_ns_ = half_ns; }
   // The host's max_speed (v1 attach TLV 0x01): no half period shorter than one SWCLK period of 1 / hz allows. Taken
   // from the nominal period (the measured rate, with the loop overhead, is lower). 0 = no ceiling.
+  bool keepsMaxHz(uint32_t) const override { return true; }
   bool setMaxHz(uint32_t hz) override {
     cap_half_ns_ = hz ? static_cast<uint32_t>((1000000000ull + 2ull * hz - 1) / (2ull * hz)) : 0;
     return true;
@@ -54,8 +49,10 @@ class RvswdPhy final : public DmiPhy {
   // halted hart run again, while resting low keeps both for seconds; a CH32X035 is the
   // other way round - it keeps the link across any idle resting high, and resting low
   // between frames stopped it attaching at all. Telling the two apart at run time means
-  // provoking the reset on the kind that has it, so a probe built for one says so instead.
-  void setIdleClockLow(bool low) { park_low_ = low; }
+  // provoking the reset on the kind that has it, so the host - which knows the target - says which at attach
+  // (idle_clock, oep-if-debug §3; LinkE does the same per target). The probe keeps no default of its own.
+  bool setIdleClockLow(bool low) override { park_low_ = low; return true; }
+  bool canIdleClockLow() const override { return true; }
   void write(uint8_t address, uint32_t value) override;
   uint32_t halfNs() const { return half_ns_; }
   // Measured during attach: wall time of one DMI read at the selected half period,
@@ -68,9 +65,8 @@ class RvswdPhy final : public DmiPhy {
  private:
   int swdio_ = -1, swclk_ = -1;
   bool ready_ = false, attached_ = false;
-  uint32_t min_half_ns_ = 0;
   uint32_t cap_half_ns_ = 0;
-  uint32_t floorNs() const { return min_half_ns_ > cap_half_ns_ ? min_half_ns_ : cap_half_ns_; }
+  uint32_t floorNs() const { return cap_half_ns_; }
   uint32_t half_cycles_ = 0, half_ns_ = 0, retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   // Longest quiet spell the target's debug interface tolerates before the link has to be
   // brought up again. It measured out at about 1 ms; this leaves margin.
