@@ -11,6 +11,7 @@
 #include "OepFrame.h"
 #include "OepBind.h"
 #include "OepEndpoint.h"
+#include "OepCaptureGroup.h"
 
 uint32_t g_millis = 1000;
 
@@ -365,6 +366,73 @@ static void testPlanNotShared() {
   CHECK(ep.replacePlan(both, 2, f13, 2) == kRejectUnavailable);     // in one request
 }
 
+// A capture-group track for the group's own rules: it starts, follows, and is told or tells the trigger's time.
+class FakeTrack final : public Interface, public GroupTrack {
+ public:
+  explicit FakeTrack(bool trigger) : trigger_(trigger) {}
+  const char *name() const override { return "io.github.test.track"; }
+  uint16_t instance() const override { return 0; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  bool trackReady() const override { return state != 2 && state != 3; }
+  uint8_t trackMode() const override { return 1; }
+  bool trackTriggered() const override { return trigger_; }
+  uint32_t trackLoad() const override { return 0; }
+  bool trackStart() override { state = 2; fired = false; ++starts; return true; }   // waiting; the last trigger gone
+  void trackStop() override { state = 1; }
+  uint8_t trackState() const override { return state; }
+  bool trackCanFollow() const override { return !trigger_; }
+  bool trackStartFollowing() override { state = 2; told = ~uint64_t{0}; return true; }
+  void trackTriggerAt(uint64_t ns) override { told = ns; state = 4; }
+  bool trackTriggerNs(uint64_t &ns) const override { if (fired) ns = fired_ns; return fired; }
+  bool trackArmed() const override { return armed; }
+  void fire(uint64_t ns) { fired = true; fired_ns = ns; state = 4; }
+  uint8_t state = 1;   // configured
+  bool fired = false, armed = true;
+  uint64_t fired_ns = 0, told = ~uint64_t{0};
+  int starts = 0;
+
+ private:
+  bool trigger_;
+};
+
+// Two triggered runs in one boot: the second follows its own trigger, not the first's (0.0.17: the group asked the
+// trigger track before starting it, while the followers' pretriggers filled, and took the last run's time).
+static void testGroupSecondRun() {
+  MemStream bulk;
+  static uint8_t rx[1100], tx[1100];
+  Endpoint ep(bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0);
+  FakeTrack logic(true), analog(false);
+  CaptureGroup group(ep);
+  ep.add(logic);    // fn 1
+  ep.add(analog);   // fn 2
+  ep.add(group);    // fn 3
+  group.addTrack(logic, logic);
+  group.addTrack(analog, analog);
+  uint8_t out[64];
+  const uint8_t bind[] = {2, 1, 0, 2, 0, 0x01, 2, 1, 0};   // fns 1, 2; trigger_track fn 1
+  const uint8_t none[] = {0};
+  auto triggerNs = [&]() {
+    group.handle(0x05, nullptr, 0, out, sizeof out);
+    return getU64(out + 9);
+  };
+  for (uint64_t run = 1; run <= 2; ++run) {
+    CHECK(group.handle(0x01, bind, sizeof bind, out, sizeof out).resolution == kResolutionCompleted);
+    analog.armed = false;                                   // its pretrigger is filling
+    CHECK(group.handle(0x02, nullptr, 0, out, sizeof out).resolution == kResolutionCompleted);
+    group.poll();
+    CHECK(logic.starts == static_cast<int>(run) - 1);        // not yet: the follower is not armed
+    CHECK(triggerNs() == ~uint64_t{0} && analog.told == ~uint64_t{0});   // nothing from the last run
+    analog.armed = true;
+    group.poll();
+    CHECK(logic.starts == static_cast<int>(run));
+    CHECK(triggerNs() == ~uint64_t{0});
+    logic.fire(1000 * run);
+    group.poll();
+    CHECK(triggerNs() == 1000 * run && analog.told == 1000 * run);
+    CHECK(group.handle(0x01, none, sizeof none, out, sizeof out).resolution == kResolutionCompleted);   // unbind
+  }
+}
+
 static void testPlanCapacity() {
   MemStream bulk;
   static uint8_t rx[1100], tx[1100];
@@ -394,6 +462,7 @@ static void testPlanCapacity() {
 }
 
 int main() {
+  testGroupSecondRun();
   testPlanCapacity();
   testPlanNotShared();
   testSettingsPlanStays();
