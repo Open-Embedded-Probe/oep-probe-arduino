@@ -40,9 +40,14 @@ class Ch32Dm {
   // hart: after raw dmcontrol writes, use halt()/resume() to bring halted() back in line.
   bool writeDmi(uint8_t address, uint32_t value) {
     if (!attach()) return false;
-    host_raw_ = true;             // the host may be running abstract commands: DATA0 / DATA1 are its operands now
-    kept_ = false;                // and it gives them back itself, if at all (oep-if-debug §4.2)
-    gprs_kept_ = false;
+    // What this helper changed during the stop goes back first: the target's s0, s1, a0, a1 (a block op used them)
+    // and then its DATA0 / DATA1, so the host's raw list starts from the target as it stopped - the host does not know
+    // what the probe did. Dropping them instead left the block op's address in s0 for the target to run on
+    // (halt -> read_block -> a raw write -> resume: mcause 5 at a load through s0, 2026-10-01, ch32rv RTT on the X035).
+    if (gprs_kept_) giveGprs();
+    giveMailbox();
+    host_raw_ = true;             // the host may be running abstract commands: DATA0 / DATA1 are its operands now,
+                                  // and it gives them back itself, if at all (oep-if-debug §4.2)
     phy_.write(address, value);   // a DMI write reports nothing; read back through the list to check
     return true;
   }
