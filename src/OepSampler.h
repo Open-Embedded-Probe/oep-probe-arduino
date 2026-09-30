@@ -13,6 +13,7 @@
 #include <Arduino.h>
 
 #include "Oep.h"
+#include "OepCaptureGroup.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
 #include <freertos/FreeRTOS.h>
@@ -22,7 +23,7 @@ namespace oep {
 
 class Endpoint;
 
-class SamplerCapture final : public Interface {
+class SamplerCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 8;
   static constexpr size_t kBufferBytes = 65408;
@@ -45,8 +46,24 @@ class SamplerCapture final : public Interface {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   void poll();   // from loop(): a finished window becomes the segment and stopped events
+  // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot
+  bool trackReady() const override { return state_ == reg::fixture_capture::kStateConfigured || state_ == reg::fixture_capture::kStateDone; }
+  uint8_t trackMode() const override { return reg::fixture_capture::kModeOneShot; }
+  bool trackTriggered() const override { return false; }   // immediate only
+  uint32_t trackLoad() const override { return cycles_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * cpu_hz_ / cycles_) : 0; }
+  bool trackStart() override { return groupOp(reg::fixture_capture::kOpStart); }
+  void trackStop() override { groupOp(reg::fixture_capture::kOpStop); }
+  uint8_t trackState() const override { return state_; }
 
  private:
+  bool group_op_ = false;
+  bool groupOp(uint8_t op) {
+    uint8_t out[8];
+    group_op_ = true;
+    const Result r = handle(op, nullptr, 0, out, sizeof out);
+    group_op_ = false;
+    return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
+  }
   Endpoint &endpoint_;
   uint64_t reserved_;
   uint16_t instance_;

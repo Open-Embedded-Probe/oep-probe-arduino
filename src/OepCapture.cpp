@@ -733,6 +733,8 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {   // payload: positio
 }
 
 Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
+  if (bound() && !group_op_ && (op == kOpConfigure || op == kOpStart || op == kOpStop || op == kOpForce))
+    return rejected(kRejectUnavailable);   // bound in a capture-group: the group starts and stops it
   if (op == kOpConfigure || op == kOpQuery) return configure(p, n, out, capacity, op == kOpQuery);
   // Every other request: a fixed part (start / stop / force / status: none; read: 8; segments / release: 4), then
   // TLVs, none of which these ops read.

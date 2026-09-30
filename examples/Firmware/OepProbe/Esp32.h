@@ -10,10 +10,13 @@
 //
 // Interfaces (revision 1): oep.core; oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
 // oep.fixture.gpio / uart / capture (the core-0 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C
-// devices io.github.ch32-riscv-ug.esp32.spi-target / i2c-target; oep.probe.config (saved in NVS). The host chooses every
+// devices io.github.ch32-riscv-ug.esp32.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
+// (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below.
 #pragma once
+#include <OepAnalog.h>
 #include <OepBind.h>
+#include <OepCaptureGroup.h>
 #include <OepCh32Dm.h>
 #include <OepConfig.h>
 #include <OepConsole.h>
@@ -60,6 +63,10 @@ static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
 static oep::Binds binds;
 static oep::ProbeConfig config(endpoint, binds);
+// ADC1 in DMA mode on the pins brought out (32-36, 39), and a group that starts it with the sampler
+static constexpr uint64_t kAdc1 = kChannels & (0xffull << 32);
+static oep::AnalogCapture analog(endpoint, kAdc1, 1);
+static oep::CaptureGroup group(endpoint, 1);
 static uint8_t probeTlv[160];
 
 static size_t describeProbe() {
@@ -97,6 +104,10 @@ void setup() {
   config.setPins(&pins);
   config.load();
   config.applySaved();
+  endpoint.add(analog);   // after config: the fns before it keep their numbers
+  endpoint.add(group);
+  group.addTrack(capture, capture);
+  group.addTrack(analog, analog);
 }
 
 void loop() {
@@ -107,4 +118,6 @@ void loop() {
   capture.poll();
   i2c.service();
   spi.service();
+  analog.poll();
+  group.poll();
 }

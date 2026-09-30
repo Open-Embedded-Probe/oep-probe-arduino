@@ -245,6 +245,8 @@ void SamplerCapture::poll() {
 }
 
 Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
+  if (bound() && !group_op_ && (op == cap::kOpConfigure || op == cap::kOpStart || op == cap::kOpStop))
+    return rejected(kRejectUnavailable);   // bound in a capture-group: the group starts and stops it
   Tail tail;
   switch (op) {
     case cap::kOpConfigure: return configure(p, n, out, capacity, false);
