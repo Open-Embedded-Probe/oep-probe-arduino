@@ -532,7 +532,15 @@ void AnalogCapture::drain() {
   // triggered, the values go round the buffer (end_frame_: none after the segment's last frame); immediate, the
   // ring is the segment and end_frame_ its samples, so the index is the plain one
   while (handle_ && adc_continuous_read(handle_, records, sizeof records, &got, 0) == ESP_OK && got) {
-    for (uint32_t at = 0; at + kRecordBytes <= got; at += kRecordBytes) {
+    for (uint32_t k = 0; (k + 1) * kRecordBytes <= got; ++k) {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+      // The I2S DMA puts the two 16-bit records of each 32-bit word the other way round: conversion 2j + 1 comes
+      // before 2j. A 1 kHz square wave read one-channel showed a 0 inside the high run, just after the edge
+      // (0.0.13, the V003 jig, 2026-09-30: 0 0 0 4095 0 4095 4095); swapped back pairwise it is 0 0 0 0 4095 4095 4095.
+      const uint32_t at = ((k ^ 1) + 1) * kRecordBytes <= got ? (k ^ 1) * kRecordBytes : k * kRecordBytes;
+#else
+      const uint32_t at = k * kRecordBytes;
+#endif
       const adc_digi_output_data_t *r = reinterpret_cast<const adc_digi_output_data_t *>(records + at);
 #if defined(CONFIG_IDF_TARGET_ESP32)
       const uint8_t channel = r->type1.channel;

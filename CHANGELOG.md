@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32 analog: the values come in order. The I2S DMA gives each pair of conversions the other way round (a 1 kHz square wave read one-channel had a 0 inside its high run, 0.0.13); drain takes them pairwise swapped. The 0.0.11-0.0.13 analog segments on the classic ESP32 have neighbouring values swapped.
+- (JA) classic ESP32 のアナログ: 値が順に並ぶようにした。I2S の DMA は変換を 2 つずつ逆の順で渡す（1 チャネルで読んだ 1 kHz の矩形波の high の中に 0 が挟まった、0.0.13）。drain は 2 つずつ入れ替えて読む。0.0.11〜0.0.13 の classic ESP32 のアナログの区画は、隣どうしの値が入れ替わっている。
 - (EN) The Firmware workflow builds every (example, profile) in its own job, all at once, with the platform's installation cached per version, and attaches the Firmware builds in a last job; no `--clean` (a fresh runner).
 - (JA) Firmware のワークフローは、(example, profile) ごとに別のジョブで一度にビルドする。platform のインストールは版ごとにキャッシュし、Firmware のビルドは最後のジョブで Release に付ける。`--clean` はしない（毎回新しい runner）。
 
