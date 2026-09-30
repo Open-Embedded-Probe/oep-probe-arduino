@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `oep.fixture.analog` (`AnalogCapture`, oep-if-capture §1.2 / §3.8): up to 4 ADC channels in turn, one-shot, immediate trigger, raw 12-bit values in 16-bit slots, with per-channel frontend (attenuation), scale and skew, the reference, rate_accuracy and the factory calibration as read. ESP32-P4: ADC1 GPIO16-23, 46 kHz in all (the P4 doubles values above), the first value's time corrected by the conversion frame the driver leaves out, pool overflows marked slipped. Classic ESP32: ADC1, 20-100 kHz in all, the eFuse ADC fields. RP2040 / RP2350: GP26-28 by FIFO + DMA, 500 kS/s in all. Unverified on hardware.
+- (JA) `oep.fixture.analog`（`AnalogCapture`、oep-if-capture §1.2 / §3.8）: ADC の 4 チャネルまでを順に、ワンショット、即時のトリガ、16 ビットの枠に 12 ビットの生の値。チャネルごとの frontend（減衰）、scale、skew、基準電圧、rate_accuracy、読んだままの出荷時の較正を返す。ESP32-P4: ADC1 の GPIO16〜23、合計 46 kHz（それより上は値が 2 回ずつ出る）、ドライバが捨てる変換フレームの分を補正した最初の値の時刻、置き場があふれたら slipped。classic ESP32: ADC1、合計 20〜100 kHz、eFuse の ADC のフィールド。RP2040 / RP2350: GP26〜28 を FIFO + DMA で、合計 500 kS/s。実機では未確認。
+- (EN) `oep.fixture.capture-group` (`CaptureGroup`, oep-if-capture §4): binds captures that implement `GroupTrack` (the P4's PARLIO, the classic ESP32's sampler, the analog) and starts them together; each track stamps its own first sample, so its offset is in its segment's start_ns. Firmware/OepProbe has the analog on every chip and the group on the ESP32s (after config: the other fns keep their numbers).
+- (JA) `oep.fixture.capture-group`（`CaptureGroup`、oep-if-capture §4）: `GroupTrack` を持つ capture（P4 の PARLIO、classic ESP32 の sampler、アナログ）を束ね、一緒に始める。各トラックが自分の最初のサンプルの時刻を刻むので、ずれは区画の start_ns に出る。Firmware/OepProbe は、どのチップにもアナログを、ESP32 に組を持つ（config の後: ほかの fn の番号は変わらない）。
 
 ## 0.0.10
 - (EN) Capture segments give their time in ns on the probe's clock with an uncertainty (oep-if-capture §2: `start_ns`, `start_uncertainty_ns`, 33 bytes): +-5 us on the P4's PARLIO (measured against the GPIO write), +-2 us on the classic ESP32's sampler. The P4's one-shot start reads the same clock as the other modes (esp_timer, not micros()).

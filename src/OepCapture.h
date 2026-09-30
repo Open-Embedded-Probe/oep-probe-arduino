@@ -19,6 +19,7 @@
 #include <Arduino.h>
 
 #include "Oep.h"
+#include "OepCaptureGroup.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <driver/parlio_rx.h>
@@ -30,7 +31,7 @@ namespace oep {
 
 class Endpoint;
 
-class LogicCapture final : public Interface {
+class LogicCapture final : public Interface, public GroupTrack {
  public:
   enum : uint8_t {
     kOpConfigure = reg::fixture_capture::kOpConfigure, kOpStart = reg::fixture_capture::kOpStart,
@@ -71,8 +72,24 @@ class LogicCapture final : public Interface {
   size_t pending() override;
   size_t pull(uint8_t *out, size_t capacity) override;
   void poll();   // from loop(): turns a finished capture into events
+  // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot
+  bool trackReady() const override { return state_ == kStateConfigured || state_ == kStateDone; }
+  uint8_t trackMode() const override { return mode_; }
+  bool trackTriggered() const override { return false; }   // immediate only
+  uint32_t trackLoad() const override { return rate_den_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * rate_num_ / rate_den_) : 0; }
+  bool trackStart() override { return groupOp(kOpStart); }
+  void trackStop() override { groupOp(kOpStop); }
+  uint8_t trackState() const override { return state_; }
 
  private:
+  bool group_op_ = false;
+  bool groupOp(uint8_t op) {
+    uint8_t out[8];
+    group_op_ = true;
+    const Result r = handle(op, nullptr, 0, out, sizeof out);
+    group_op_ = false;
+    return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
+  }
   Endpoint &endpoint_;
   uint64_t reserved_;
   uint16_t instance_;

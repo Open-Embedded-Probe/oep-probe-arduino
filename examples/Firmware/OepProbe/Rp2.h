@@ -8,7 +8,8 @@
 // OEP PID is granted (PID-USE.md).
 //
 // Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
-// oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart. Every channel below may be SWDIO / SWCLK of either
+// oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all).
+// Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach_under_reset, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
 // max_speed) comes from the host (oep-if-debug §3). oep.probe.config keeps a jig's settings in flash (slots on any pair,
@@ -16,6 +17,7 @@
 #pragma once
 #include <USB.h>
 
+#include <OepAnalog.h>
 #include <OepBind.h>
 #include <OepCh32Dm.h>
 #include <OepConfig.h>
@@ -64,6 +66,9 @@ static oep::FixtureGpio gpio(pins, 1, 1);
 static oep::FixtureUart uart(pins, Serial1, 1, 2);
 static oep::Binds binds;
 static oep::ProbeConfig config(endpoint, binds);
+// the ADC on GP26-28 (a Pico's GP29 reads VSYS), channels in turn, copied by DMA
+static constexpr uint64_t kAdc = 0x7ull << 26;
+static oep::AnalogCapture analog(endpoint, kAdc, 1);
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
@@ -104,6 +109,7 @@ void setup() {
   config.setPins(&pins);   // the idle item sets these pins' free state
   config.load();
   config.applySaved();
+  endpoint.add(analog);   // after config: the fns before it keep their numbers
 }
 
 void loop() {
@@ -111,4 +117,5 @@ void loop() {
   console.poll();
   uart.poll();
   config.poll();
+  analog.poll();
 }
