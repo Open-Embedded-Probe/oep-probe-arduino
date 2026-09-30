@@ -107,10 +107,12 @@ void setup() {
   config.addPlace(wireRvswd, console);
   config.addUart(uart);
   config.setPins(&pins);   // the idle item sets these pins' free state
-  config.load();
-  config.applySaved();
   analog.setPins(&pins, 7);   // PinTable owners: gpio 1, uart 2, the analog 7 (its pads go analog)
   endpoint.add(analog);   // after config: the fns before it keep their numbers
+  // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
+  // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
+  config.load();
+  config.applySaved();
 }
 
 void loop() {
