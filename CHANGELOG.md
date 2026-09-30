@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `Firmware/OepProbe` builds for the ESP32-P4 too (profile esp32p4): the four transports, RVSWD + riscv-dm + console, gpio, uart x2, capture, the SPI / I2C devices and probe.config, every pin chosen by the host; iProduct "OEP probe (ESP32-P4)" (VID:PID 303a:0002 and serial "<MAC>-hs" as before). Each chip's part is in its own header (Rp2.h, Esp32P4.h). Unverified on hardware.
+- (JA) `Firmware/OepProbe` を ESP32-P4 でもビルドできるようにした（profile esp32p4）: 4 つの経路、RVSWD + riscv-dm + コンソール、gpio、uart x2、capture、SPI / I2C デバイス、probe.config。ピンはすべて host が選ぶ。iProduct は "OEP probe (ESP32-P4)"（VID:PID 303a:0002 と serial "<MAC>-hs" は今までどおり）。チップごとの部分は別のヘッダ（Rp2.h、Esp32P4.h）。実機では未確認。
 - (EN) oep.probe.config on RP2040 / RP2350 too: the settings are saved in the flash's last sector (arduino-pico EEPROM). `Firmware/OepProbe` has it: slots on any pair, a bind of its CDC port, idle states.
 - (JA) oep.probe.config が RP2040 / RP2350 でも使える: 設定は flash の最後の領域に保存する（arduino-pico の EEPROM）。`Firmware/OepProbe` に入れた: 任意の組のスロット、CDC の口の bind、空きのときの状態。
 - (EN) Wires whose pins the host chooses (oep-if-debug §1): `DebugPort` / `SwdPort` `pin_choice` (the channels SWDIO / SWCLK may take, declared as role_channels). scan and attach take any allowed free pair (`RvswdPhy::usePins` moves the link: the P4's dedicated GPIO bundles are made again, the RP2 bit-bang set up again), a live connection holds its pins against plans, count-0 scans skip held pairs and go on with the skip TLV, and with the one seat taken only the live pair is tried. probe.config slots carry their own pair (up to 4 slots, several on one wire, one at boot). Fixed-pair sketches work as before; the fixed-pair helpers are gone.
