@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.12
 - (EN) Capture triggers (oep-if-capture §3.3): level and edge on one channel, one-shot, with a pretrigger and force; the triggered event carries trigger_ns and the segment its trigger_index. ESP32-P4 PARLIO: the repeat's DMA ring is searched (a byte whose samples cannot trigger is skipped whole), the segment copied out of it from pretrigger samples before the trigger (up to 64 KiB of ring back: 32768 samples at 16 channels). Classic ESP32 sampler: searched while sampling, in bursts of at most 250 ms with interrupts off (the watchdog's 300 ms), about 1 ms apart; the pretrigger is kept in each burst, so the segment is always contiguous. A capture-group refuses tracks with a trigger until the group trigger is in. Unverified on hardware.
 - (JA) キャプチャのトリガ（oep-if-capture §3.3）: 1 つのチャネルのレベルとエッジ、ワンショット、プリトリガと force。出来事 triggered は trigger_ns を、区画は trigger_index を持つ。ESP32-P4 の PARLIO: リピートの DMA のリングを探し（トリガの立ちえないバイトは丸ごと飛ばす）、トリガの pretrigger サンプル前から区画に写す（リングを 64 KiB まで戻れる: 16 チャネルで 32768 サンプル）。classic ESP32 の sampler: サンプルしながら探す。割り込みを止めるのは 1 回 250 ms まで（watchdog は 300 ms）、間は約 1 ms。プリトリガはその区切りの中で取るので、区画はいつもつながっている。capture-group は、組のトリガができるまで、トリガを持つトラックを断る。実機では未確認。
 
