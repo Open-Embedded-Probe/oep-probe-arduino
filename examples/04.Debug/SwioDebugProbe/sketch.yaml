@@ -5,5 +5,5 @@ profiles:
       - platform: esp32:esp32 (3.3.12)
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.20)
 default_profile: esp32

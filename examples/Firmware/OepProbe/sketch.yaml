@@ -5,28 +5,28 @@ profiles:
       - platform: rp2040:rp2040 (6.1.1)
         platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.20)
   rp2350:
     fqbn: rp2040:rp2040:rpipico2:usbstack=picosdk
     platforms:
       - platform: rp2040:rp2040 (6.1.1)
         platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.20)
   promicrorp2350:
     fqbn: rp2040:rp2040:sparkfun_promicrorp2350:usbstack=picosdk
     platforms:
       - platform: rp2040:rp2040 (6.1.1)
         platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.20)
   esp32p4:
     fqbn: esp32:esp32:esp32p4:USBMode=hwcdc,CDCOnBoot=cdc
     platforms:
       - platform: esp32:esp32 (3.3.12)
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.20)
       - EspUsbDevice (2.5.1)
   esp32:
     fqbn: esp32:esp32:esp32
@@ -34,5 +34,5 @@ profiles:
       - platform: esp32:esp32 (3.3.12)
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.20)
 default_profile: rp2040
