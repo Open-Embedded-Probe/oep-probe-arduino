@@ -1,4 +1,5 @@
 // Host tests: the serial-port reader (oep-core §3.1, §3.4), the endpoint's serial-port rules (raw bytes, the ports a
+#include <algorithm>
 // session holds, the resume from its last host reset), owner and the transport list, and the binds' modes.
 #include <stdio.h>
 #include <string>
@@ -327,7 +328,36 @@ static void testSettingsPlanStays() {
   CHECK(n == 1 && now[0].function == 1 && now[0].channel == 12);    // the settings' plan stays, the session's went
 }
 
+static void testPlanCapacity() {
+  MemStream bulk;
+  static uint8_t rx[1100], tx[1100];
+  Endpoint ep(bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0);
+  PlanSink a;
+  ep.add(a);
+  auto send = [&](const Bytes &m) {
+    const Bytes f = {uint8_t(m.size()), uint8_t(m.size() >> 8)};
+    bulk.send(f);
+    bulk.send(m);
+    bulk.tx.clear();
+    ep.poll();
+    return bulk.tx;
+  };
+  CHECK(send(request(1, 0, 0x10, openPayload(7, 3000))).size() >= 7);
+  auto plan = [](size_t n) {
+    Bytes p;
+    for (size_t k = 0; k < n; ++k) p.insert(p.end(), {0x90, 5, 1, 0, 1, uint8_t(k), 0});
+    return p;
+  };
+  const Bytes over = send(request(2, 0, 0x04, plan(Endpoint::kMaxRoles + 1), true, 7));
+  CHECK(over.size() >= 7 && over[5] == 0 && over[6] == kRejectUnavailable);   // more than the plan holds: unavailable
+  CHECK(send(request(3, 0, 0x04, plan(Endpoint::kMaxRoles), true, 7))[5] == 1);
+  const Bytes d = send(request(4, 0, 0x03, {0, 0, 0, 0}));                     // describe fn 0
+  const Bytes want = {0x4B, 2, uint8_t(Endpoint::kMaxRoles), 0};
+  CHECK(std::search(d.begin(), d.end(), want.begin(), want.end()) != d.end());   // plan_roles declared
+}
+
 int main() {
+  testPlanCapacity();
   testSettingsPlanStays();
   testLastMarkMissing();
   testReader();

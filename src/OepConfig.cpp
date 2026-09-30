@@ -170,7 +170,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       if (len == 2) continue;   // fn alone: that fn's plan goes
       for (size_t r = 0; r < role_count; ++r)
         if (roles[r].function == fn && roles[r].role == v[2]) return rejected(kRejectMalformed);   // a key twice
-      if (role_count >= Endpoint::kMaxRoles) return rejected(kRejectMalformed);
+      if (role_count >= Endpoint::kMaxRoles) return rejected(kRejectUnavailable);   // over plan_roles (core §8)
       roles[role_count++] = {fn, v[2], getU16(v + 3)};
     } else if (tag == cfg::kTlvItemIdle) {
       if (!pins_) return rejected(kRejectUnsupported);

@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The plan holds 64 role assignments (was 16), every fn together, and says so in oep.core's describe (plan_roles 0x4B). More than that is rejected unavailable, not malformed (oep-core §8).
+- (JA) plan が持てる role_assignment は 64 個（前は 16）。すべての fn の合計で、oep.core の describe で宣言する（plan_roles 0x4B）。それを超えると malformed ではなく rejected unavailable（oep-core §8）。
 - (EN) A plan the settings put in (probe.config) belongs to the settings (oep-core §8): plan_release leaves it (n = 0 included) and plan_apply naming its fn is rejected unavailable.
 - (JA) 設定（probe.config）が入れた plan は設定のもの（oep-core §8）: plan_release はそれを解かず（n = 0 でも）、その fn を挙げた plan_apply は rejected unavailable。
 

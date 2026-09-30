@@ -83,7 +83,7 @@ class Endpoint {
   // The plan (oep-core §8, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
   // a replacement of the fns listed that is all or nothing and outlives sessions (0: applied; else the reject reason,
   // with the plans before it applied again). A listed fn with no role is released.
-  static constexpr size_t kMaxRoles = 16;
+  static constexpr size_t kMaxRoles = 64;   // the plan's role assignments, every fn together (describe plan_roles)
   size_t plan(RoleAssignment *out, size_t max, bool persistent_only = false) const;
   uint8_t replacePlan(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns);
   // The identity of the interface list (oep-if-probe-config §2): CRC-32 of every entry (fn u16, instance u16,
