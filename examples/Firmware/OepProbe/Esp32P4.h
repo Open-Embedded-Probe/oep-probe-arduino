@@ -8,6 +8,14 @@
 //   2 HID              HS port, vendor HID reports                                           OEP only
 //   3 USB CDC          HS port                                                               serial port: OEP + raw
 //
+//   (and a DFU interface on the HS port: the probe's own firmware update, outside OEP)
+//
+// Updating the firmware over the HS port alone: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the release's app image)
+// writes the other app partition, checks it and restarts into it; settings (NVS) stay. The new firmware counts as good
+// once the HS port has enumerated; until then the bootloader goes back to the one before at the next reset. The DFU
+// interface takes no endpoint (EP0 only). A first flash of an empty chip, or a recovery, is esptool on USB-Serial/JTAG
+// with the merged image.
+//
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
 // a slot's console, a fixture UART). The HS device is VID:PID 303a:0002 until the OEP PID is granted (PID-USE.md),
 // iProduct "OEP probe (ESP32-P4)", serial MAC + "-hs" (one usbipd bind lasts across reflashes).
@@ -44,7 +52,7 @@ static constexpr uint16_t kUsbVid = 0x303a, kUsbPid = 0x0002;   // until the OEP
 static constexpr uint16_t kUnset = 0xfffe;                        // no pair chosen yet
 
 // The HS device: functions are created before it starts, interface numbers follow the class order (HID 0, vendor 1,
-// CDC 2-3).
+// CDC 2-3, DFU 4).
 static EspUsbDevice usbDevice;
 static EspUsbDeviceVendor vendor(usbDevice);
 static oep::DirectBulkStream bulk(vendor);
@@ -52,6 +60,12 @@ static EspUsbDeviceHidVendor hid(usbDevice, 511);
 static HidStream hidStream(hid);
 static EspUsbDeviceCdcSerial cdc(usbDevice, "OEP");   // a name to show; every CDC of the probe speaks OEP
 static CdcStream cdcStream(cdc);
+static EspUsbDeviceDfu dfu(usbDevice, EspUsbDeviceDfuMode::Download, "OEP probe firmware");
+
+// The new image after a DFU update is on trial (the bootloader's rollback, CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE):
+// Arduino would confirm it at boot; this confirms it in loop() once the HS port has enumerated - a firmware that got
+// that far can take the next DFU update, so it is never left without a way back.
+extern "C" bool verifyRollbackLater() { return true; }
 
 static uint8_t rxVendor[1024], rxUsj[1100], rxHid[1024], rxCdc[1100];   // serial ports: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
@@ -151,6 +165,11 @@ void setup() {
 }
 
 void loop() {
+  static bool confirmed = false;
+  if (!confirmed && usbDevice.ready()) {   // the HS port enumerated: this firmware is good (see verifyRollbackLater)
+    confirmed = true;
+    EspUsbDeviceFirmwareUpdate::markValid();
+  }
   endpoint.poll();
   console.poll();
   config.poll();
