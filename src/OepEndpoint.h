@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 endpoint: frames in, interfaces by name, the session lock, results out.
 //
 // The lock follows oep-spec docs/session-and-exclusivity.ja.md: a host-chosen u32 session id, a lease

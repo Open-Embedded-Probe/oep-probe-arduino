@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 probe on ESP32-P4 for the CH32X035 fixture (oep-spec docs/oep-core.ja.md, docs/probe-development-guide.ja.md
 // §3.8). One endpoint, four transports (the describe lists them in this order):
 //

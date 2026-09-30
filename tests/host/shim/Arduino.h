@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The little of the Arduino API the portable core of the library uses, for host tests (g++): Stream, millis().
 #pragma once
 #include <stddef.h>

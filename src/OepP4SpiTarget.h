@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // io.github.ch32-riscv-ug.esp32.spi-target revision 1 (a custom OEP v1 interface): an ESP32 hardware SPI target on
 // the ESP-IDF spi_slave driver (SPI2_HOST, no DMA: 64-byte FIFO transactions).
 //   0x01 configure(mode u8 0-3, bit_order u8: 0 MSB first, 1 LSB first)   0x02 arm(length u16, count u16, tx)

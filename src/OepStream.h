@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The position-addressed byte stream behind oep.target.console and oep.fixture.uart (oep-spec
 // docs/oep-if-common.ja.md §1): bytes kept in a ring that reads do not consume,
 // addressed by a u64 position (it does not wrap in practice), and marks with their own u32 serial numbers. One of the

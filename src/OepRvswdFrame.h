@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The RVSWD wire frame, written once for every backend.
 //
 // Sequence as measured in E151-E157 on the CH32X035: START (both lines high,

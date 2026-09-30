@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // What a handler returns (resolution, reject reason or outcome, payload length) and the pin-plan entry (oep-spec
 // oep-core §4.2 / §4.3, §8). The v1-only reject reasons are in Oep.h.
 #pragma once

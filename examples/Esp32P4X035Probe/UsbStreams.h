@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // Streams over the P4 HS port's EspUsbDevice functions: the vendor HID (count(u16) report framing, report ID first on
 // output) and a CDC port that never waits long (a serial port: frames and raw bytes, oep-core §3.4).
 #pragma once

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 logic capture probe on an ESP32-P4 with nothing wired (oep-spec docs/oep-if-capture.ja.md): OEP on the HS
 // OTG vendor bulk interface (EspUsbDevice), direct build (build_opt.h: CFG_TUD_VENDOR_TXRX_BUFFERED=0; compile with
 // --clean): results through oep::DirectBulkStream, capture streaming zero-copy through the same transport (2 ch at

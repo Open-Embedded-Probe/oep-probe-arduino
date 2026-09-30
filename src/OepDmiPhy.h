@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The physical layer under Ch32Dm: one DMI register read/write plus attach and
 // release. Two implementations so far: RvswdPhy (two-wire, X035 and other
 // QingKe V4 parts) and SwioPhy (single-wire, CH32V003). The DM sequences above

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 #pragma once
 #include <stdlib.h>
 #define MALLOC_CAP_DMA 1

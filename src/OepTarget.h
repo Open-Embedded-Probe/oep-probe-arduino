@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 target interfaces over Ch32Dm (oep-spec docs/oep-if-debug.ja.md §1-§4, revision 1):
 //
 //   oep.wire.rvswd       scan / attach / detach / attach_under_reset on the probe's fixed RVSWD pair; the one

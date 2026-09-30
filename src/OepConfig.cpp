@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 #include "OepConfig.h"
 
 #if defined(ARDUINO_ARCH_ESP32)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 #include "OepSwd.h"
 
 #if defined(ARDUINO_ARCH_RP2040)

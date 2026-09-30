@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Open Embedded Probe
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["pyserial>=3.5", "pyusb", "libusb1>=3", "numpy"]

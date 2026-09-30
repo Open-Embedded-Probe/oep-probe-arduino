@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // io.github.ch32-riscv-ug.esp32.i2c-target revision 1 (a custom OEP v1 interface): an ESP32 hardware I2C target on
 // the ESP-IDF slave v1 driver, for testing a DUT's I2C controller.
 //   0x01 configure(address u8, mode u8: 1 fixed rx, 2 framed rx, 3 preloaded tx)   0x02 arm_rx(length u16)

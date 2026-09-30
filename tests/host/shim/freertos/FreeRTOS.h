@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 #pragma once
 typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0

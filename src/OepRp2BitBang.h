@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // SIO bit-bang pins for the RP2040/RP2350 debug PHYs. RVSWD and ARM SWD clock their
 // wires the same way (host drives while SWCLK is low, both sides sample on the rising
 // edge), so they share these primitives and differ only in their frame.

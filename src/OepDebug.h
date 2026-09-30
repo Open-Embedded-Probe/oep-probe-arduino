@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The shared parts of the standard wire / target interfaces (oep-spec docs/oep-if-common.ja.md §3 status,
 // docs/oep-if-debug.ja.md §1 pin pairs). Not the core: only oep.wire.* / oep.target.* use them.
 #pragma once

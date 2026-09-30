@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // Host tests: the vendor bulk stream writes a result frame whole or drops it whole (never half a frame).
 #include <stdio.h>
 #include <vector>

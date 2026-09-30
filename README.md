@@ -154,4 +154,5 @@ string.
 
 ## License
 
-MIT ([LICENSE](LICENSE)). The USB VID:PID is not covered by it: see [PID-USE.md](PID-USE.md).
+MIT ([LICENSE](LICENSE)); every source file says so (`SPDX-License-Identifier: MIT`). The USB VID:PID is not covered by
+it: see [PID-USE.md](PID-USE.md).

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // Stream + zero-copy transport over an EspUsbDevice vendor bulk interface in a direct build
 // (-DCFG_TUD_VENDOR_TXRX_BUFFERED=0 in the sketch's build_opt.h, compiled with --clean). One IN transfer is in flight
 // at a time (writeDirect); the next is armed from the completion callback, so a stream of full buffers runs gapless
