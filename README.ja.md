@@ -21,6 +21,8 @@ UART、ロジックのキャプチャ）を兼ね、どの host（書き込み�
   [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
 - host のライブラリ: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python)（`pip install oep-client-python`、
   `oep` の命令、試験のための偽の probe）。
+- USB の VID:PID: pid.codes の PID が割り当てられるまで、参照の firmware は `303a:0002` と `OEP` で始まる iProduct を使う。割り当て後に
+  OEP の PID を使ってよい条件は [PID-USE.ja.md](PID-USE.ja.md)。
 
 ## このライブラリ
 

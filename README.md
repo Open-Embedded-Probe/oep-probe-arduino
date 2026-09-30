@@ -24,6 +24,8 @@ firmware for the jigs we use.
   (Japanese first; English follows once it settles).
 - Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
   `oep` command, a fake probe for tests).
+- USB VID:PID: until pid.codes grants a PID the reference firmware uses `303a:0002` with an iProduct starting `OEP`; who may use
+  the OEP PID once granted is in [PID-USE.md](PID-USE.md).
 
 ## This library
 
