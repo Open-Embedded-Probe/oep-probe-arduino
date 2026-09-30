@@ -90,13 +90,32 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the custom interfaces `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target` (revision 1, the ESP-IDF I2C / SPI slaves) - examples of extending OEP |
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
-| `examples/01.Basics/`, `examples/02.Interfaces/` | examples to learn from, for any RP2040 / RP2350 or classic ESP32 board: `MinimalProbe` (oep.core alone), `FixtureProbe` (gpio + uart, pins planned by the host), `CustomInterface` (an interface of your own) |
-| `examples/Firmware/OepProbe` | the board firmware, one per chip (profiles rp2040, rp2350, esp32p4, esp32), every pin chosen by the host: RP2 - RVSWD, SWD, gpio, uart; ESP32-P4 - RVSWD, gpio, uart x2, capture, SPI / I2C devices; classic ESP32 - SWIO, gpio, uart, capture, SPI / I2C devices; settings saved |
-| `examples/` | the rest: the RP2350 + CH32L103 and RP2040 Zero jig probes (to go once `Firmware/OepProbe` is checked on their benches), the P4 HS logic capture `Esp32P4CaptureProbe` (with `host/stream_test.py`), `PicoDebugPortSurvey`. The plan: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
+| `examples/` | the board firmware and examples to learn from: see [Examples](#examples) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
 | `docs/` | dated work records (history) |
+
+## Examples
+
+Open them from `File > Examples > OpenEmbeddedProbe` in the Arduino IDE, or build one with its `sketch.yaml` profile
+(`arduino-cli compile --profile <profile> <dir>`). Every sketch starts with a comment that explains it and shows how a host
+uses it.
+
+| Example | Boards (profiles) | What it shows |
+|---|---|---|
+| `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4), classic ESP32 (esp32) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host, a jig = its settings |
+| `01.Basics/MinimalProbe` | RP2040 / RP2350, classic ESP32 | the smallest probe: oep.core alone - the endpoint, a transport, the describe |
+| `01.Basics/FixtureProbe` | RP2040 / RP2350, classic ESP32 | a test fixture: GPIO and a UART on pins the host plans (the pin table, owners, the plan) |
+| `02.Interfaces/CustomInterface` | RP2040 / RP2350, classic ESP32 | **extending OEP**: your own interface under your own name - describe, the plan, ops, TLV tails |
+| `03.Transports/MultipleTransports` | ESP32-P4 | one endpoint on four USB transports at once (HS vendor bulk, HID, CDC, USB-Serial/JTAG), USB identity |
+| `04.Debug/RvswdDebugProbe` | RP2040 / RP2350, ESP32-P4 | a CH32 debugger on RVSWD: wire, riscv-dm, console |
+| `04.Debug/SwioDebugProbe` | classic ESP32 | a CH32V00x debugger on the one-wire SWIO |
+| `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | an ARM debugger on SWD: wire, arm-adi |
+| `05.Capture/LogicCapture` | ESP32-P4 | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2), streaming over HS; `host/stream_test.py` |
+| `06.Settings/ProbeConfig` | RP2040 / RP2350 | a jig that sets itself up at boot: slots, binds (the target's console on the probe's port), plans, idle states, saved in flash |
+| `Tools/SwdPinSurvey` | RP2040 / RP2350 | a bring-up tool (text on Serial, not OEP): which pins are a debug port |
+| `Rp2350L103Probe`, `Rp2040ZeroProbe` | - | the Pico bench's jig firmware, until `Firmware/OepProbe` is checked there |
 
 ## Getting started
 

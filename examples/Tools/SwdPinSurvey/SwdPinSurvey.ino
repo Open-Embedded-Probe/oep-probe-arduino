@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// What is on the wires: a bring-up survey for the Pico bench, for either board.
+// What is on the wires: a bring-up tool for an RP2040 / RP2350 board wired to a target you do not know yet. It does not
+// speak OEP: it prints what it finds on Serial (open the port at 115200 and read). With an OEP probe the same question
+// is a host's scan over every pair (Firmware/OepProbe, `Wire.scan()`); this goes further - pad pulls, timing, the wake
+// sequences - for when a scan finds nothing. The SparkFun Pro Micro RP2350 build adds link-quality passes of the Pico
+// bench (2026-09-23) that other boards skip.
 //
 // Three passes, all read-only apart from briefly driving a pin:
 //   1. which pins are tied to something, told apart from the RP2350's floating-input latch

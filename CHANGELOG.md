@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) More examples: `03.Transports/MultipleTransports` (one endpoint on four USB transports), `04.Debug/RvswdDebugProbe` / `SwioDebugProbe` / `SwdDebugProbe`, `05.Capture/LogicCapture` (was Esp32P4CaptureProbe; now VID:PID 303a:0002, iProduct "OEP capture (ESP32-P4)", its test interface renamed io.github.open-embedded-probe.test-signal, `host/stream_test.py` on the released oep-client-python), `06.Settings/ProbeConfig`, `Tools/SwdPinSurvey` (was PicoDebugPortSurvey). The README lists every example with its boards.
+- (JA) example を増やした: `03.Transports/MultipleTransports`（1 つの endpoint を 4 つの USB の経路で）、`04.Debug/RvswdDebugProbe` / `SwioDebugProbe` / `SwdDebugProbe`、`05.Capture/LogicCapture`（旧 Esp32P4CaptureProbe。VID:PID は 303a:0002、iProduct は "OEP capture (ESP32-P4)"、試験用のインターフェースの名前は io.github.open-embedded-probe.test-signal、`host/stream_test.py` はリリースされた oep-client-python を使う）、`06.Settings/ProbeConfig`、`Tools/SwdPinSurvey`（旧 PicoDebugPortSurvey）。README にすべての example とボードを載せた。
 
 ## 0.0.9
 - (EN) `Esp32P4X035Probe` and `Esp32V003Probe` are gone: their jigs run `Firmware/OepProbe` (esp32p4 / esp32) with their settings, checked on the benches with 0.0.8.

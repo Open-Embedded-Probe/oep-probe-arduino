@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// OEP v1 logic capture probe on an ESP32-P4 with nothing wired (oep-spec docs/oep-if-capture.ja.md): OEP on the HS
-// OTG vendor bulk interface (EspUsbDevice), direct build (build_opt.h: CFG_TUD_VENDOR_TXRX_BUFFERED=0; compile with
-// --clean): results through oep::DirectBulkStream, capture streaming zero-copy through the same transport (2 ch at
-// 160 Msps, logic-capture §7.9). oep.test.signal puts an LEDC square on a pin so the capture has something to see.
-// USB identity 303a:4021, serial = the board MAC + "-hs", so one usbipd bind lasts across reflashes. USB-Serial/JTAG
-// stays for uploads and a status line. Host: host/stream_test.py.
+// A logic analyzer: oep.fixture.capture alone on an ESP32-P4, at the P4's full speed (oep-spec docs/oep-if-capture.ja.md).
+// Up to 16 channels on any pins the host plans, one-shot / repeat / streaming: 2 ch at 160 Msps, 8 ch at 40 Msps, 16 ch
+// at 20 Msps.
+//
+// How it goes that fast:
+//   - OEP runs on the HS OTG vendor bulk interface (EspUsbDevice) in a direct build (build_opt.h:
+//     CFG_TUD_VENDOR_TXRX_BUFFERED=0; compile with --clean): results go through oep::DirectBulkStream, and a streaming
+//     capture's pushes go zero-copy from the PARLIO DMA buffers through the same transport (logic-capture §7.9).
+//   - 16 KiB frames (confirm's max_frame): one bulk transfer per push.
+//
+// With nothing wired, io.github.open-embedded-probe.test-signal (this example's own interface, TestSignal.h) puts an
+// LEDC square on a pin so the capture has something to see. The USB device is VID:PID 303a:0002 until the OEP PID is
+// granted, iProduct "OEP capture (ESP32-P4)", serial = the board MAC + "-hs" (one usbipd bind lasts across reflashes).
+// USB-Serial/JTAG stays for uploads and a status line. Host: host/stream_test.py (streams at a rate, checks every edge).
 #include <esp_mac.h>
 #include <EspUsbDevice.h>
 #include <OepDirectBulkStream.h>
@@ -47,9 +55,9 @@ void setup() {
   snprintf(serial_, sizeof serial_, "%02x%02x%02x%02x%02x%02x-hs", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   EspUsbDeviceConfig config;
   config.vid = 0x303a;
-  config.pid = 0x4021;
-  config.manufacturer = "ch32-riscv-ug";
-  config.product = "OEP probe (P4 HS)";
+  config.pid = 0x0002;
+  config.manufacturer = "Open Embedded Probe";
+  config.product = "OEP capture (ESP32-P4)";   // iProduct "OEP...": how discovery knows it (oep-core §3.3)
   config.serialNumber = serial_;
   config.controller = EspUsbController::HighSpeed;
   const bool ok = usbDevice.begin(config);

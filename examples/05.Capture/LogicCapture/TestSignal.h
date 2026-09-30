@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// oep.test.signal (a test interface of this example, not a standard one): an LEDC square on a pin, for trying
-// captures on an unwired board.
+// io.github.open-embedded-probe.test-signal revision 1 (this example's own interface, not a standard one: its own name,
+// never oep.*): an LEDC square on a pin, for trying captures on an unwired board.
 //   0x01 start(pin u8, hz u32, duty_percent u8)   0x02 stop(pin u8)
 #pragma once
 #include <Oep.h>
 
 class TestSignal final : public oep::Interface {
  public:
-  const char *name() const override { return "oep.test.signal"; }
+  const char *name() const override { return "io.github.open-embedded-probe.test-signal"; }
+  uint8_t revision() const override { return 1; }
   uint16_t instance() const override { return 0; }
   oep::Result handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *, size_t) override {
     if (op == 0x01 && n == 6) {

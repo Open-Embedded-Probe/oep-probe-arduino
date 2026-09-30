@@ -83,13 +83,31 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind。ESP32 は NVS、RP2040 / RP2350 は flash に保存）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 独自インターフェース `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブ）。OEP を拡張する例 |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
-| `examples/01.Basics/`、`examples/02.Interfaces/` | 学ぶための example。どの RP2040 / RP2350、classic ESP32 のボードでも動く: `MinimalProbe`（oep.core だけ）、`FixtureProbe`（gpio + uart、ピンは host が plan で決める）、`CustomInterface`（自分のインターフェース） |
-| `examples/Firmware/OepProbe` | ボードの firmware。チップごとに 1 本（profile rp2040、rp2350、esp32p4、esp32）で、ピンはすべて host が選ぶ。RP2 は RVSWD、SWD、gpio、uart。ESP32-P4 は RVSWD、gpio、uart x2、capture、SPI / I2C デバイス。classic ESP32 は SWIO、gpio、uart、capture、SPI / I2C デバイス。設定は保存できる |
-| `examples/` | そのほか: RP2350 + CH32L103 と RP2040 Zero の治具の probe（`Firmware/OepProbe` がそのベンチで確かめられたら消す）、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`、`PicoDebugPortSurvey`。並べ方の案: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
+| `examples/` | ボードの firmware と学ぶための example: [Example](#example) を参照 |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に写す |
 | `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
 | `docs/` | 日付入りの作業記録（経緯） |
+
+## Example
+
+Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開くか、`sketch.yaml` の profile でビルドする
+（`arduino-cli compile --profile <profile> <dir>`）。どのスケッチも、冒頭のコメントに説明と、host からの使い方がある。
+
+| Example | ボード（profile） | 示すこと |
+|---|---|---|
+| `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）、classic ESP32（esp32） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
+| `01.Basics/MinimalProbe` | RP2040 / RP2350、classic ESP32 | 最小の probe: oep.core だけ。endpoint、経路、describe |
+| `01.Basics/FixtureProbe` | RP2040 / RP2350、classic ESP32 | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
+| `02.Interfaces/CustomInterface` | RP2040 / RP2350、classic ESP32 | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
+| `03.Transports/MultipleTransports` | ESP32-P4 | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
+| `04.Debug/RvswdDebugProbe` | RP2040 / RP2350、ESP32-P4 | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |
+| `04.Debug/SwioDebugProbe` | classic ESP32 | 1 本線の SWIO の CH32V00x のデバッガ |
+| `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | SWD の ARM のデバッガ: wire、arm-adi |
+| `05.Capture/LogicCapture` | ESP32-P4 | 全速のロジアナ（16 ch まで、2 ch で 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
+| `06.Settings/ProbeConfig` | RP2040 / RP2350 | 起動時に自分で準備する治具: スロット、bind（target のコンソールを probe の口に）、plan、空きのときの状態。flash に保存 |
+| `Tools/SwdPinSurvey` | RP2040 / RP2350 | 立ち上げの道具（Serial に文字で出す。OEP ではない）: どのピンが debug port か |
+| `Rp2350L103Probe`、`Rp2040ZeroProbe` | - | Pico のベンチの治具の firmware。そこで `Firmware/OepProbe` を確かめるまで |
 
 ## 使い始める
 
