@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `SwioPhy` takes any GPIO0-31 at run time (`begin(pin)`, `usePins` for host-chosen pins); `SwioPhy::kPin` is gone. The pin's mask is read once per transaction, so the bit timing is the same instructions as with the compile-time pin (one more instruction between bits, about 4 ns). Unverified on hardware.
+- (JA) `SwioPhy` は実行中に GPIO0-31 のどれでも取る（`begin(pin)`、host が選ぶピンには `usePins`）。`SwioPhy::kPin` は無くなった。ピンのマスクは 1 回の転送ごとに 1 度だけ読むので、ビットの時間はコンパイル時のピンのときと同じ命令の並び（ビットの間に 1 命令、約 4 ns 増えるだけ）。実機では未確認。
+- (EN) `Firmware/OepProbe` builds for the classic ESP32 too (profile esp32): a UART bridge; SWIO + riscv-dm + console, gpio, uart, capture (sampler), the SPI / I2C devices and probe.config, every pin chosen by the host.
+- (JA) `Firmware/OepProbe` を classic ESP32 でもビルドできるようにした（profile esp32）: UART bridge。SWIO + riscv-dm + コンソール、gpio、uart、capture（sampler）、SPI / I2C デバイス、probe.config。ピンはすべて host が選ぶ。
 - (EN) `Firmware/OepProbe` builds for the ESP32-P4 too (profile esp32p4): the four transports, RVSWD + riscv-dm + console, gpio, uart x2, capture, the SPI / I2C devices and probe.config, every pin chosen by the host; iProduct "OEP probe (ESP32-P4)" (VID:PID 303a:0002 and serial "<MAC>-hs" as before). Each chip's part is in its own header (Rp2.h, Esp32P4.h). Unverified on hardware.
 - (JA) `Firmware/OepProbe` を ESP32-P4 でもビルドできるようにした（profile esp32p4）: 4 つの経路、RVSWD + riscv-dm + コンソール、gpio、uart x2、capture、SPI / I2C デバイス、probe.config。ピンはすべて host が選ぶ。iProduct は "OEP probe (ESP32-P4)"（VID:PID 303a:0002 と serial "<MAC>-hs" は今までどおり）。チップごとの部分は別のヘッダ（Rp2.h、Esp32P4.h）。実機では未確認。
 - (EN) oep.probe.config on RP2040 / RP2350 too: the settings are saved in the flash's last sector (arduino-pico EEPROM). `Firmware/OepProbe` has it: slots on any pair, a bind of its CDC port, idle states.

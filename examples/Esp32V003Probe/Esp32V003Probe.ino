@@ -45,7 +45,8 @@ static constexpr uint64_t kFixtures = kBonded & ~kReserved;
 // CH32V003 (UIAPduino). The flash layout and the RAM loader are the host's business.
 static oep::SwioPhy phy;
 static oep::Ch32Dm dm(phy);
-static oep::DebugPort port{dm, oep::SwioPhy::kPin, 0xffff};
+static constexpr uint8_t kSwio = 16;   // GPIO16 -> PD1/SWIO
+static oep::DebugPort port{dm, kSwio, 0xffff};
 static oep::WireRvswd wire(port, 1, "oep.wire.swio");
 static oep::TargetRiscvDm riscvDm(port, 1);
 static oep::DmConsole consoleDriver(dm, phy);
@@ -82,7 +83,7 @@ void setup() {
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
-  phy.begin(oep::SwioPhy::kPin);
+  phy.begin(kSwio);
   // E132: every UIAP pin is wired here, including the software-USB pair (PD3/PD4); a permanent
   // ESP32 pull on either USB line breaks enumeration. Idle must be genuinely high impedance.
   oep::platformParkMask(kFixtures);
