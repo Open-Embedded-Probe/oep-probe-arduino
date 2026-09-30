@@ -68,12 +68,15 @@ int main() {
     const uint32_t t0 = g_millis;
     frame(s, 1000, 77);                                              // no room: dropped whole
     CHECK(s.dropped() == 1 && g_millis - t0 >= oep::DirectBulkStream::kWaitMs);
+    const uint32_t t1 = g_millis;
+    frame(s, 1000, 78);                                              // the host is still gone: dropped at once
+    CHECK(s.dropped() == 2 && g_millis - t1 < 10);
     v.complete();                                                    // the host comes back
     frame(s, 10, 88);
     s.flush();
     std::vector<uint8_t> fills;
     CHECK(whole(v, fills) && fills.back() == 88);
-    for (uint8_t f : fills) CHECK(f != 77);                          // not a byte of the dropped frame
+    for (uint8_t f : fills) CHECK(f != 77 && f != 78);                          // not a byte of the dropped frame
   }
   {   // the largest frame (16 KiB + 2) fits one buffer whole
     EspUsbDeviceVendor v;

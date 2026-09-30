@@ -2,6 +2,7 @@
 // output) and a CDC port that never waits long (a serial port: frames and raw bytes, oep-core §3.4).
 #pragma once
 #include <EspUsbDevice.h>
+#include <class/cdc/cdc_device.h>   // EspUsbDevice's TinyUSB: the CDC FIFO's free room
 
 class CdcStream final : public Stream {
  public:
@@ -19,7 +20,9 @@ class CdcStream final : public Stream {
     return done;
   }
   void flush() override { p_.flush(); }
-  int availableForWrite() override { return p_.connected() ? 4096 : 0; }
+  // The FIFO's real free room: the endpoint writes raw bytes only into it, so they never wait (a port that is open but
+  // not read used to take 200 ms per 64-byte chunk, and the loop stopped for seconds).
+  int availableForWrite() override { return p_.connected() ? static_cast<int>(tud_cdc_n_write_available(p_.port())) : 0; }
  private:
   EspUsbDeviceCdcSerial &p_;
 };
@@ -64,8 +67,14 @@ class HidStream final : public Stream {
     if (!fill_) return;
     tx_[0] = fill_ & 0xff; tx_[1] = fill_ >> 8;
     memset(tx_ + 2 + fill_, 0, kPayload - fill_);
-    // a report still in flight makes sendInput return false: wait for it (dropping the report broke the framing)
-    for (uint32_t t = millis(); !h_.sendInput(tx_, kReport, 200) && millis() - t < 500;) delayMicroseconds(50);
+    // a report still in flight makes sendInput return false: wait for it (dropping the report broke the framing) - but
+    // once a report could not go (nobody reads HID), later ones do not wait again until one goes
+    bool sent = h_.sendInput(tx_, kReport, stuck_ ? 0 : 200);
+    for (uint32_t t = millis(); !sent && !stuck_ && millis() - t < 500;) {
+      delayMicroseconds(50);
+      sent = h_.sendInput(tx_, kReport, 200);
+    }
+    stuck_ = !sent;
     fill_ = 0;
   }
   int availableForWrite() override { return 4096; }
@@ -75,4 +84,5 @@ class HidStream final : public Stream {
   volatile size_t head_ = 0, tail_ = 0;
   uint8_t tx_[kReport];
   size_t fill_ = 0;
+  bool stuck_ = false;   // the last report could not go
 };

@@ -145,10 +145,13 @@ class DirectBulkStream final : public Stream, public DirectTransport {
     auto *self = static_cast<DirectBulkStream *>(context);
     for (int i = 0; i < 2; ++i)
       if (buffer == self->result_[i] || buffer == self->tail_[i]) { self->length_[i] = 0; self->busy_[i] = false; }
+    self->stalled_ = false;   // the host takes IN again
   }
+  // Once a frame was dropped (the host stopped taking IN), later ones are dropped at once until a transfer completes:
+  // a host that went away costs one wait, not kWaitMs for every result (the loop would crawl).
   bool waitWritable() {
     for (uint32_t start = millis(); busy_[current_];) {
-      if (!vendor_.mounted() || millis() - start > kWaitMs) return false;
+      if (!vendor_.mounted() || stalled_ || millis() - start > kWaitMs) { stalled_ = true; return false; }
       delayMicroseconds(20);
     }
     return true;
@@ -168,6 +171,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
   uint8_t prefix_[2] = {};
   uint8_t prefix_have_ = 0;
   uint32_t dropped_ = 0;
+  volatile bool stalled_ = false;   // a frame was dropped and no transfer completed since
   bool queue(bool result, const Entry &e) {
     portENTER_CRITICAL(&mux_);
     Entry *q = result ? results_ : data_;
