@@ -19,17 +19,19 @@
 
 namespace oep {
 
+class PinTable;
+
 // What both interfaces share: the one debug connection of this wire.
 struct DebugPort {
   Ch32Dm &dm;
   uint16_t swdio, swclk;   // probe channels, for scan results and the describe pin set (swclk 0xffff: one wire)
   bool connected = false;
   uint32_t resets = 0;     // resets issued through riscv-dm (the console marks them)
-  // The target's reset line for attach-under-reset: the host names the channel (it can find it by pulsing
-  // candidates and watching havereset); a probe with fixed wiring may offer a default. Only channels in
-  // reset_allowed may be pulled (the same idea as the scan allow-list: never drive a pin the jig did not clear).
-  int16_t reset_default = -1;
+  // The target's reset line for attach-under-reset: the host names the channel every time - there is no default
+  // (oep-if-debug §3); it can find it by pulsing candidates and watching where the hart stops. Only channels in
+  // reset_allowed may be pulled (describe role_channels, role reset), and not one another interface holds in `pins`.
   uint64_t reset_allowed = 0;
+  PinTable *pins = nullptr;
   // Who uses the connection (oep-if-common §2): the host through attach, a slot (oep.probe.config) through its
   // automatic attach or the console its bind opened. A host's detach drops only its own use; the link goes when nobody
   // uses it, or on a forced detach. The bits are the connections entry's users (registry connection_users).
@@ -50,7 +52,9 @@ struct DebugPort {
 
 // Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the
 // host's attach, havereset acknowledged. Joins an existing connection. Adds `user`. false: the target did not answer.
-bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus);
+// A new connection takes the line settings given (oep-if-debug §3: a slot's max_speed / idle_clock); an existing one keeps
+// its own.
+bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`).

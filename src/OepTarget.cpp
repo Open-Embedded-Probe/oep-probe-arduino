@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+#include "OepPinTable.h"
 #include "OepPlatform.h"
 
 namespace oep {
@@ -33,6 +34,19 @@ bool maxSpeed(const Tail &tail, uint32_t &hz, bool &critical) {
   return true;
 }
 
+// The idle_clock TLV (0x04, u8 0 high / 1 low; rvswd only) of attach / attach_under_reset: absent = high (oep-if-debug §3).
+// false = malformed.
+bool idleClock(const Tail &tail, bool &low, bool &critical) {
+  low = false;
+  critical = false;
+  uint8_t len = 0;
+  const uint8_t *v = tail.find(reg::wire_rvswd::kTlvAttachIdleClock, len, &critical);
+  if (!v) return true;
+  if (len != 1 || v[0] > reg::wire_rvswd::kIdleClockLow) return false;
+  low = v[0] == reg::wire_rvswd::kIdleClockLow;
+  return true;
+}
+
 }  // namespace
 
 // ---- oep.wire.rvswd / oep.wire.swio ------------------------------------------------------------------
@@ -50,11 +64,16 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   return 7;
 }
 
-bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus) {
+bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz, bool idle_low) {
   if (port.connected) {
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
   } else {
-    if (port.exhausted() || !attachAndRead(port.dm, dmstatus)) return false;
+    if (port.exhausted()) return false;
+    DmiPhy &phy = port.dm.phy();
+    if (!phy.setMaxHz(max_hz)) phy.setMaxHz(0);   // the slot's settings were checked when it was set
+    phy.setIdleClockLow(idle_low);
+    if (max_hz && port.dm.attached() && phy.clockHz() > max_hz) port.dm.detach();
+    if (!attachAndRead(port.dm, dmstatus)) return false;
     port.dm.ackHaveReset();
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
     port.connected = true;
@@ -97,6 +116,8 @@ Result connectionsOf(DebugPort &port, uint32_t speed_hz, uint8_t *out, size_t ca
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.pinGroup(port_.swdio, port_.swclk);       // fixed on this probe
+  static const uint8_t kReset[] = {reg::wire_rvswd::kPinRoleReset};
+  if (port_.reset_allowed) w.roleChannels(kReset, 1, port_.reset_allowed);   // attach_under_reset's channels, no default
   w.u8(kTagImplementation, 1);                // bit-bang
   // Diagnostics (interface-specific tags): the link as it is now - the SWCLK rate the last speed search settled
   // on, DMI retries (parity / no answer) and transactions since boot.
@@ -108,7 +129,10 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
 }
 
 Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  static const uint8_t kAttachTags[] = {reg::wire_rvswd::kTlvAttachMaxSpeed, reg::wire_rvswd::kTlvAttachPins};
+  // idle_clock is rvswd's (oep-if-debug §3): on swio it is an unknown tag (critical: rejected unsupported)
+  static const uint8_t kAttachTags[] = {reg::wire_rvswd::kTlvAttachMaxSpeed, reg::wire_rvswd::kTlvAttachPins,
+                                        reg::wire_rvswd::kTlvAttachIdleClock};
+  const size_t known = strcmp(name_, reg::wire_rvswd::kName) == 0 ? 3 : 2;
   DmiPhy &phy = port_.dm.phy();
   Tail tail;
   switch (op) {
@@ -134,10 +158,10 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       return tail.finish(completed(11), out, capacity);
     }
     case kOpAttach: {
-      // method(u8: 0 leave it running, 1 halt) [TLV 0x01 max_speed]
+      // method(u8: 0 leave it running, 1 halt) [TLV 0x01 max_speed, 0x03 pins, 0x04 idle_clock]
       //   ->  connection(u16) DMSTATUS(u32) flags(u8: bit0 acknowledged a pending havereset, bit1 existing) speed_hz(u32)
       if (length < 1) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity);
+      const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, known, out, capacity);
       if (refused(parsed)) return parsed;
       {
         uint8_t plen = 0;
@@ -145,9 +169,15 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
         if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
       }
       uint32_t max_hz = 0;
-      bool critical = false;
-      if (!maxSpeed(tail, max_hz, critical)) return rejected(kRejectMalformed);
+      bool critical = false, idle_low = false, idle_critical = false;
+      if (!maxSpeed(tail, max_hz, critical) || (known == 3 && !idleClock(tail, idle_low, idle_critical)))
+        return rejected(kRejectMalformed);
       if (payload[0] > reg::wire_rvswd::kAttachMethodHalt) return rejected(kRejectUnsupported);
+      if (!phy.setIdleClockLow(idle_low)) {   // an existing connection takes the new rest level too
+        const Result r = tail.refuse(reg::wire_rvswd::kTlvAttachIdleClock, idle_critical, out, capacity);
+        if (refused(r)) return r;
+        phy.setIdleClockLow(false);
+      }
       if (port_.exhausted()) return rejected(kRejectUnavailable);
       if (capacity < 11) return failed();
       const bool halt = payload[0] == reg::wire_rvswd::kAttachMethodHalt;
@@ -196,9 +226,9 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       return tail.finish(completed(11 + targetId(port_, out + 11, capacity - 11)), out, capacity);
     }
     case kOpAttachUnderReset: {
-      // channel(u16, 0xffff = the probe's default) hold_ms(u16) [TLV 0x01 max_speed]  ->  connection(u16) dpc(u32) speed_hz(u32)
+      // channel(u16) hold_ms(u16) [TLV 0x01 max_speed, 0x03 pins, 0x04 idle_clock]  ->  connection(u16) dpc(u32) speed_hz(u32)
       if (length < 4) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(payload + 4, length - 4, kAttachTags, out, capacity);
+      const Result parsed = tail.parse(payload + 4, length - 4, kAttachTags, known, out, capacity);
       if (refused(parsed)) return parsed;
       {
         uint8_t plen = 0;
@@ -206,13 +236,20 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
         if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
       }
       uint32_t max_hz = 0;
-      bool critical = false;
-      if (!maxSpeed(tail, max_hz, critical)) return rejected(kRejectMalformed);
+      bool critical = false, idle_low = false, idle_critical = false;
+      if (!maxSpeed(tail, max_hz, critical) || (known == 3 && !idleClock(tail, idle_low, idle_critical)))
+        return rejected(kRejectMalformed);
       if (port_.exhausted()) return rejected(kRejectUnavailable);
       if (capacity < 10) return failed();
+      // the host names the reset line (no default, oep-if-debug §3): one the probe allows and nobody holds (core §8.1)
       int channel = getU16(payload);
-      if (channel == 0xffff) channel = port_.reset_default;
-      if (channel < 0 || channel > 63 || !((port_.reset_allowed >> channel) & 1)) return rejected(kRejectUnavailable);
+      if (channel > 63 || !((port_.reset_allowed >> channel) & 1)) return rejected(kRejectUnavailable);
+      if (port_.pins && port_.pins->owner(static_cast<uint16_t>(channel))) return rejected(kRejectUnavailable);
+      if (!phy.setIdleClockLow(idle_low)) {
+        const Result r = tail.refuse(reg::wire_rvswd::kTlvAttachUnderResetIdleClock, idle_critical, out, capacity);
+        if (refused(r)) return r;
+        phy.setIdleClockLow(false);
+      }
       if (!phy.setMaxHz(max_hz)) {
         const Result r = tail.refuse(reg::wire_rvswd::kTlvAttachUnderResetMaxSpeed, critical, out, capacity);
         if (refused(r)) return r;

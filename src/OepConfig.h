@@ -7,7 +7,8 @@
 // Items (TLV, tag u8 len u8 value), each with a key; a set replaces the keys it carries and leaves the others:
 //   0x01 plan fn(u16) role(u8) channel(u16)     key fn: the items of a fn are that fn's plan (fn alone clears)
 //   0x03 idle channel(u16) mode(u8)             key channel: 0 Hi-Z, 1 pull-up, 2 pull-down while free
-//   0x04 slot slot(u8) wire_fn(u16) swdio(u16) swclk(u16) attach(u8) retry_s(u16) mechanism(u8) name_len(u8) name
+//   0x04 slot slot(u8) wire_fn(u16) swdio(u16) swclk(u16) attach(u8) retry_s(u16) max_speed(u32) idle_clock(u8)
+//             mechanism(u8) name_len(u8) name
 //        lock_scheme(u8) [mask(n) value(n)]     key slot: a place a target is wired to (slot alone clears)
 //   0x05 bind port(u8) mode(u8) selected(u8) n(u8) n x (kind(u8) id(u16))   key port: what a serial port carries
 // label (0x02) is not taken (unsupported). No defaults: nothing the host did not set is done. Saved to NVS on ESP32
@@ -67,6 +68,8 @@ class ProbeConfig final : public Interface {
     bool set = false;
     uint8_t place = 0, attach = 0, mechanism = 0, name_length = 0, lock_scheme = 0, lock_length = 0;
     uint16_t retry_s = 0;
+    uint32_t max_hz = 0;           // the line's settings for the probe's own attach (oep-if-debug §3): the target's
+    bool idle_low = false;
     char name[kMaxName + 1] = {};
     uint8_t mask[kMaxLock] = {}, value[kMaxLock] = {};
   };
