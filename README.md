@@ -2,6 +2,31 @@
 
 [日本語](README.ja.md)
 
+## What is OEP?
+
+Open Embedded Probe (OEP) is an open protocol between a **probe** - a small board wired to the chip you develop on - and the
+**host** software on your PC. One probe can be a debugger (RVSWD / SWIO for WCH's CH32, SWD for ARM), a console to the target,
+and a test fixture (GPIO, UART, logic capture) at once, and every host (a flash tool, an IDE monitor, pytest) talks to it
+the same way:
+
+- the probe **declares what it can do** (interfaces found by name, with their pins and limits), so a host needs no table of
+  boards;
+- a **session lock** keeps two programs from driving the probe at the same time;
+- it runs over **USB vendor bulk, HID, USB CDC, USB-Serial/JTAG or a plain UART** bridge; a serial port carries the OEP frames
+  and the target's console on the same line;
+- the probe knows only its wires; **what a target is** (flash layout, loaders) **stays in the host**.
+
+This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into such a probe; `examples/` are ready-made
+firmware for the jigs we use.
+
+- Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) - start with [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md); the protocol
+  core is [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md), the wire numbers [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)
+  (Japanese first; English follows once it settles).
+- Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
+  `oep` command, a fake probe for tests).
+
+## This library
+
 A library for writing Open Embedded Probe (OEP) probes with Arduino, and the firmware of each probe (`examples/`). It speaks
 the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.ja.md` and the standard
 interfaces `docs/oep-if-*.ja.md`, a candidate being settled). This is an experimental stage: breaking changes are expected and
