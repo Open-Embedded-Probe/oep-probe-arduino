@@ -22,7 +22,10 @@ namespace oep {
 class DirectBulkStream final : public Stream, public DirectTransport {
  public:
   // kRxBytes: two whole max_frame requests; the usbd task can land a frame faster than loop() reads it byte by byte
-  static constexpr size_t kResultBytes = 16384 + 64, kRxBytes = 32768, kQueue = 32, kPacket = 512;
+  // kResultBytes: one buffer holds the largest frame whole (16 KiB + its length) with 64 bytes spare for the tail packet
+  static constexpr size_t kResultBytes = 16384 + 128, kRxBytes = 32768, kQueue = 32, kPacket = 512;
+  // A result waits this long for a buffer the host has taken (IN); after it, the result is dropped whole.
+  static constexpr uint32_t kWaitMs = 2000;
 
   explicit DirectBulkStream(EspUsbDeviceVendor &vendor) : vendor_(vendor) {}
 
@@ -62,18 +65,37 @@ class DirectBulkStream final : public Stream, public DirectTransport {
   }
   int peek() override { return rx_head_ == rx_tail_ ? -1 : rx_[rx_tail_]; }
   size_t write(uint8_t c) override { return write(&c, 1); }
+  // The endpoint writes length(u16) then the message: this stream follows those frame boundaries so a frame goes into
+  // one buffer whole, or is dropped whole (dropped()) when no buffer frees up within kWaitMs - never half a frame,
+  // which broke the host's framing and cost it a timeout (2026-09-30, the X035 jig over usbip: 200 ms without the
+  // host taking IN dropped the rest of a result). Every byte is accepted (the caller never sees a short write).
   size_t write(const uint8_t *data, size_t size) override {
-    size_t done = 0;
-    while (done < size) {
-      if (!waitWritable()) return done;
-      const size_t n = min(size - done, kResultBytes - 64 - length_[current_]);
-      memcpy(result_[current_] + length_[current_], data + done, n);
-      length_[current_] += n;
-      done += n;
-      if (length_[current_] >= kResultBytes - 64) flush();
+    size_t at = 0;
+    while (at < size) {
+      if (frame_left_ == 0 && drop_left_ == 0) {          // a frame starts: its length first
+        prefix_[prefix_have_++] = data[at++];
+        if (prefix_have_ < 2) continue;
+        prefix_have_ = 0;
+        const size_t body = prefix_[0] | (prefix_[1] << 8);
+        if (!room(2 + body)) { drop_left_ = body; ++dropped_; continue; }
+        memcpy(result_[current_] + length_[current_], prefix_, 2);
+        length_[current_] += 2;
+        frame_left_ = body;
+        continue;
+      }
+      const size_t n = min(size - at, drop_left_ ? drop_left_ : frame_left_);
+      if (drop_left_) {
+        drop_left_ -= n;
+      } else {
+        memcpy(result_[current_] + length_[current_], data + at, n);
+        length_[current_] += n;
+        frame_left_ -= n;
+      }
+      at += n;
     }
-    return done;
+    return size;
   }
+  uint32_t dropped() const { return dropped_; }   // results dropped whole: no buffer freed up within kWaitMs
   void flush() override {
     const int i = current_;
     const size_t n = length_[i];
@@ -126,11 +148,26 @@ class DirectBulkStream final : public Stream, public DirectTransport {
   }
   bool waitWritable() {
     for (uint32_t start = millis(); busy_[current_];) {
-      if (!vendor_.mounted() || millis() - start > 200) return false;
+      if (!vendor_.mounted() || millis() - start > kWaitMs) return false;
       delayMicroseconds(20);
     }
     return true;
   }
+  // Room for a whole frame of `bytes` in the current buffer: the current one is sent first if the frame does not fit,
+  // and a buffer still in flight is waited for (kWaitMs). false: no room (the frame is dropped whole).
+  bool room(size_t bytes) {
+    if (bytes > kResultBytes - 64) return false;
+    if (!waitWritable()) return false;
+    if (length_[current_] + bytes > kResultBytes - 64) {
+      flush();
+      if (!waitWritable()) return false;
+    }
+    return true;
+  }
+  size_t frame_left_ = 0, drop_left_ = 0;   // bytes of the frame being written, or being dropped
+  uint8_t prefix_[2] = {};
+  uint8_t prefix_have_ = 0;
+  uint32_t dropped_ = 0;
   bool queue(bool result, const Entry &e) {
     portENTER_CRITICAL(&mux_);
     Entry *q = result ? results_ : data_;

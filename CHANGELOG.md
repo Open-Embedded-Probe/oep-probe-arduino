@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Vendor bulk (DirectBulkStream): a result frame goes into one buffer whole or is dropped whole (`dropped()`), after waiting up to 2 s for the host to take IN - it used to drop the rest of a frame after 200 ms, which broke the host's framing (a 3 s timeout, twice in 25 writes over usbip).
+- (JA) vendor bulk（DirectBulkStream）: 結果のフレームは 1 つの buffer に丸ごと入れるか、丸ごと捨てる（`dropped()`）。host が IN を取るのを最大 2 s 待つ。前は 200 ms でフレームの残りを捨てて host のフレームを壊していた（usbip 越しの 25 回の書き込みで 2 回、3 s の時間切れ）。
 
 ## 0.0.3
 - (EN) The console reads again once DMSTATUS shows the hart running after raw DMI writes (a debugger resuming it through dmcontrol), instead of waiting for the probe's own resume (oep-if-console §2).
