@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.4
 - (EN) P4 HS sketches receive vendor bulk OUT a packet at a time (`CFG_TUD_VENDOR_RX_NEED_ZLP=0`): a request ending on a 512-byte boundary (+ the host's ZLP) was held until the next OUT, 3 s without an answer.
 - (JA) P4 の HS のスケッチは vendor bulk の OUT を packet ごとに受ける（`CFG_TUD_VENDOR_RX_NEED_ZLP=0`）。512 byte の境目で終わる要求（+ host の ZLP）が次の OUT まで抱えられ、3 s 答えなかった。
 - (EN) The P4 loop no longer stops for seconds when a USB reader goes away: the HS CDC port reports its real FIFO room (raw bytes never wait; an open port nobody read took 200 ms per 64-byte chunk), and once a vendor bulk frame or a HID report could not go, later ones do not wait again until one goes.
