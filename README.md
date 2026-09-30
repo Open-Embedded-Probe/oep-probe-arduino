@@ -25,6 +25,9 @@ leaves the capabilities open:
 
 This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into such a probe.
 
+- Guides: [Getting started](docs/guide/getting-started.md) (flash, find, use a probe from Python), [Writing a probe](docs/guide/writing-a-probe.md)
+  (the library from the inside, your own interfaces), [Boards](docs/guide/boards.md) (what each chip does, building for
+  another board).
 - Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) - start with [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md); the protocol
   core is [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md), the wire numbers [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)
   (Japanese first; English follows once it settles).
@@ -94,7 +97,8 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
-| `docs/` | dated work records (history) |
+| `docs/guide/` | the guides (English and Japanese): getting started, writing a probe, boards |
+| `docs/` | the rest: the examples plan and dated work records (history) |
 
 ## Examples
 
@@ -118,6 +122,8 @@ uses it.
 | `Rp2350L103Probe`, `Rp2040ZeroProbe` | - | the Pico bench's jig firmware, until `Firmware/OepProbe` is checked there |
 
 ## Getting started
+
+The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / UART, debugging, capture, settings).
 
 1. **Firmware.** Either take a built one from the [Releases](https://github.com/Open-Embedded-Probe/oep-probe-arduino/releases)
    (`OepProbe-rp2040-<version>.uf2` / `OepProbe-rp2350-<version>.uf2` for any RP2040 / RP2350 board - copy it to the

@@ -23,6 +23,8 @@ UART、SPI / I2C のデバイス、ロジックのキャプチャ）を兼ね、
 
 このライブラリは、ESP32-P4、classic ESP32、RP2350、RP2040 をその probe にします。
 
+- 手引き: [使い始める](docs/guide/getting-started.ja.md)（焼く、見つける、Python から使う）、[probe を書く](docs/guide/writing-a-probe.ja.md)
+  （ライブラリの中身、自分のインターフェース）、[ボード](docs/guide/boards.ja.md)（チップごとにできること、ほかのボード向けのビルド）。
 - 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) — まず [レビューの手引き](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md) から。プロトコルの本体は
   [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
 - host のライブラリ: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python)（`pip install oep-client-python`、
@@ -87,7 +89,8 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に写す |
 | `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
-| `docs/` | 日付入りの作業記録（経緯） |
+| `docs/guide/` | 手引き（英語と日本語）: 使い始める、probe を書く、ボード |
+| `docs/` | そのほか: example の並べ方の案と、日付入りの作業記録（経緯） |
 
 ## Example
 
@@ -110,6 +113,8 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | `Rp2350L103Probe`、`Rp2040ZeroProbe` | - | Pico のベンチの治具の firmware。そこで `Firmware/OepProbe` を確かめるまで |
 
 ## 使い始める
+
+短い版です。[手引き](docs/guide/getting-started.ja.md)に続きがあります（GPIO / UART、デバッグ、キャプチャ、設定）。
 
 1. **firmware**: [Releases](https://github.com/Open-Embedded-Probe/oep-probe-arduino/releases) のビルド済みを使う
    （どの RP2040 / RP2350 のボードにも `OepProbe-rp2040-<version>.uf2` / `OepProbe-rp2350-<version>.uf2` を BOOTSEL のボードに
