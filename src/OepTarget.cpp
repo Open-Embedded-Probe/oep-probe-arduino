@@ -172,11 +172,11 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   return w.ok() ? w.length() : 0;
 }
 
-// The attach pins TLV (oep-if-debug §1): the pair to attach on, the link moved there. Absent: the fixed pair, or - pins the
-// host chooses - refused (the host names one). Another pair than the live connection's takes its seat only when a slot
+// The attach pins TLV (oep-if-debug §1): the pair to attach on, the link moved there. Absent: the live connection's pair
+// (join it), else the fixed pair, else - pins the host chooses, nothing live - refused (the host names one). Another pair than the live connection's takes its seat only when a slot
 // alone uses it (the seat rule); else refused. 0, or a reject reason.
 uint8_t WireRvswd::choosePair(const uint8_t *pins, uint8_t len) {
-  if (!pins) return port_.pin_choice ? kRejectUnavailable : 0;
+  if (!pins) return port_.pin_choice && !port_.connected ? kRejectUnavailable : 0;
   if (len != 4) return kRejectMalformed;
   const uint16_t d = getU16(pins), c = getU16(pins + 2);
   if (!pairAllowed(port_, d, c)) return kRejectUnavailable;

@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) An attach without pins joins the wire's live connection on a wire whose pins the host chooses too (oep-if-debug §1): a host that did not name the slot's pair was refused unavailable (0.0.8, the X035 jig with an at-boot slot).
+- (JA) host がピンを選ぶ線でも、pins の無い attach は、その線の生きている接続に乗る（oep-if-debug §1）。スロットの組を名指さない host が unavailable で断られていた（0.0.8、at boot のスロットがある X035 の治具）。
 
 ## 0.0.8
 - (EN) Examples to learn from, for any RP2040 / RP2350 or classic ESP32 board: `01.Basics/MinimalProbe` (oep.core alone), `01.Basics/FixtureProbe` (gpio + uart, pins planned by the host), `02.Interfaces/CustomInterface` (your own interface under your own name: describe, the plan, ops, TLV tails). `refused()` and `platformRandom32()` are public for sketches.

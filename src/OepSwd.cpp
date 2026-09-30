@@ -169,8 +169,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       {
         uint8_t plen = 0;
         const uint8_t *pins = tail.find(reg::wire_swd::kTlvAttachPins, plen);
-        if (!pins) {
-          if (port_.pin_choice) return rejected(kRejectUnavailable);   // the host names the pair
+        if (!pins) {   // the live connection's pair (join it), the fixed pair, else the host names one
+          if (port_.pin_choice && !port_.connected) return rejected(kRejectUnavailable);
         } else {
           if (plen != 4) return rejected(kRejectMalformed);
           const uint16_t d = getU16(pins), c = getU16(pins + 2);
