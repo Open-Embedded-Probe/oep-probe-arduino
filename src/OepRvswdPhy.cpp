@@ -76,6 +76,19 @@ bool ioBegin(int dio, int clk) {
   return true;
 }
 
+// Another pair (host-chosen pins): the bundles are made again on it. The old pins are left Hi-Z inputs, set through the
+// GPIO registers - not pinMode - like everything this backend does to its pins (unverified on hardware, 2026-09-30).
+bool ioMove(int old_dio, int old_clk, int dio, int clk) {
+  if (gOut) { dedic_gpio_del_bundle(gOut); gOut = nullptr; }
+  if (gIn) { dedic_gpio_del_bundle(gIn); gIn = nullptr; }
+  if (old_dio >= 0) {
+    gpio_ll_output_disable(&GPIO, old_dio);
+    gpio_ll_output_disable(&GPIO, old_clk);
+    gpio_ll_pullup_dis(&GPIO, old_dio);
+  }
+  return ioBegin(dio, clk);
+}
+
 void ioDrive(int dio, int clk) { gpio_ll_output_enable(&GPIO, clk); gpio_ll_output_enable(&GPIO, dio); }
 void ioRelease(int dio, int clk) { gpio_ll_output_disable(&GPIO, dio); gpio_ll_output_disable(&GPIO, clk); }
 uint32_t ioSetHalf(uint32_t half_ns) {
@@ -102,6 +115,14 @@ struct Critical {
 };
 
 bool ioBegin(int dio, int clk) { return gIo.setup(dio, clk); }
+bool ioMove(int old_dio, int old_clk, int dio, int clk) {   // the old pins back to plain Hi-Z inputs
+  if (old_dio >= 0) {
+    gIo.releaseBoth();
+    gpio_disable_pulls(old_dio);
+    gpio_disable_pulls(old_clk);
+  }
+  return gIo.setup(dio, clk);
+}
 void ioDrive(int, int) { gIo.driveBoth(); }
 void ioRelease(int, int) { gIo.releaseBoth(); }
 uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
@@ -125,6 +146,17 @@ bool RvswdPhy::begin(int swdio, int swclk) {
   swdio_ = swdio;
   swclk_ = swclk;
   if (!ioBegin(swdio, swclk)) return false;
+  release();
+  ready_ = true;
+  return true;
+}
+
+bool RvswdPhy::usePins(int swdio, int swclk) {
+  if (swdio == swdio_ && swclk == swclk_) return true;
+  if (attached_) return false;
+  if (!ioMove(swdio_, swclk_, swdio, swclk)) { swdio_ = swclk_ = -1; ready_ = false; return false; }
+  swdio_ = swdio;
+  swclk_ = swclk;
   release();
   ready_ = true;
   return true;
@@ -419,6 +451,7 @@ bool RvswdPhy::attach() {
 
 namespace oep {
 bool RvswdPhy::begin(int, int) { return false; }
+bool RvswdPhy::usePins(int, int) { return false; }
 bool RvswdPhy::attach() { return false; }
 void RvswdPhy::release() { attached_ = false; }
 void RvswdPhy::park() { attached_ = false; }

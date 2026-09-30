@@ -83,6 +83,7 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind、NVS への保存。ESP32）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 独自インターフェース `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブ）。OEP を拡張する例 |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
+| `examples/Firmware/OepProbe` | ボードの firmware: どの RP2040 / RP2350 のボードでも、ピンはすべて host が選ぶ（RVSWD、SWD、gpio、uart） |
 | `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`）。使う人が要るものから並べ直し中: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に写す |
@@ -92,8 +93,9 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 ## 使い始める
 
 1. **firmware**: [Releases](https://github.com/Open-Embedded-Probe/oep-probe-arduino/releases) のビルド済みを使う
-   （ESP32 は `<Example>-<version>.merged.bin` を `esptool.py write_flash 0x0 <file>`、RP2040 / RP2350 は `.uf2` を BOOTSEL の
-   ボードにコピー。sha256 は `firmware-<version>.json`）。自分でビルドするなら、Arduino のライブラリマネージャーで
+   （どの RP2040 / RP2350 のボードにも `OepProbe-rp2040-<version>.uf2` / `OepProbe-rp2350-<version>.uf2` を BOOTSEL のボードに
+   コピー。ピンは host が選ぶ。ESP32 は `<Example>-<profile>-<version>.merged.bin` を `esptool.py write_flash 0x0 <file>`。sha256 は
+   `firmware-<version>.json`）。自分でビルドするなら、Arduino のライブラリマネージャーで
    **OpenEmbeddedProbe** を入れ、`ファイル > スケッチ例 > OpenEmbeddedProbe` を開き、その `sketch.yaml` の profile（core の版と
    ライブラリを固定してある）でビルドする:
 
@@ -137,7 +139,7 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 変更は `CHANGELOG.md` の `## Unreleased` に (EN) / (JA) で書き足し、GitHub Actions の Release（workflow_dispatch）を起動すると、
 `library.properties` の版を上げ、`src/openembeddedprobe_version.h` を作り、`release` ブランチで example の `sketch.yaml` の `dir: ../..` を
 `OpenEmbeddedProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。続けて、別の `.github/workflows/firmware.yml`（toolkit のものではない）が
-tag から各 example をビルドし、`<Example>-<version>.merged.bin`（ESP32、0x0 に書く）/ `.uf2`（RP2040 / RP2350）と
+tag から各 example の各 profile をビルドし、`<Example>-<profile>-<version>.merged.bin`（ESP32、0x0 に書く）/ `.uf2`（RP2040 / RP2350）と
 `firmware-<version>.json`（sha256）を Release に付ける。probe は同じ版を describe の firmware の文字列で返す。
 
 ## ライセンス

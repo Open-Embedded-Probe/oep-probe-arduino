@@ -42,6 +42,9 @@ class DmiPhy {
   // How the bus rests between transactions: SWCLK low instead of both lines high. The target's (oep-if-debug §3): the
   // host says so at attach (idle_clock) or through a slot. false: this backend cannot rest that way.
   virtual bool setIdleClockLow(bool low) { return !low; }
+  // Move the link to another pin pair (host-chosen pins, oep-if-debug §1): only while not attached. The old pins are left
+  // released (Hi-Z). false: this backend's pins are fixed, or the pair cannot be used.
+  virtual bool usePins(int swdio, int swclk) { (void)swdio; (void)swclk; return false; }
   virtual bool canIdleClockLow() const { return false; }
   // Measured at attach: wall time of one DMI read and the clock rate it implies (0 before attach).
   virtual uint32_t dmiNs() const = 0;

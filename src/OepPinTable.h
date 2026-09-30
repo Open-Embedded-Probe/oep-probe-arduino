@@ -32,6 +32,12 @@ class PinTable {
     for (uint8_t c = 0; c < kChannels; ++c)
       if (owner_[c] == owner) { owner_[c] = 0; applyIdle(c); }
   }
+  // The same without touching the pads: for an owner that leaves its pins in a safe state itself (a debug wire's PHY
+  // releases them Hi-Z; on the ESP32-P4 a pinMode on its pins would take them out of the dedicated GPIO bundle).
+  void releaseQuiet(uint8_t owner) {
+    for (uint8_t c = 0; c < kChannels; ++c)
+      if (owner_[c] == owner) owner_[c] = 0;
+  }
   uint64_t allowedMask() const { return allowed_; }
   uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
   // Idle states (oep.probe.config idle: 0 Hi-Z, 1 pull-up, 2 pull-down; kIdleUnset = Hi-Z). Applied now to a free

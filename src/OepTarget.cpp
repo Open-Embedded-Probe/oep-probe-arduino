@@ -81,6 +81,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
     port.connected = true;
     port.numberNew();
+    holdPins(port);
     uint8_t tlv[8];
     targetId(port, tlv, sizeof tlv);   // what a slot's lock is checked against
   }
@@ -95,6 +96,42 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force) {
   port.connected = false;
   port.users = 0;
   port.has_tid = false;
+  if (port.pin_choice && port.pins) port.pins->releaseQuiet(port.pin_owner);   // the PHY left them Hi-Z
+}
+
+bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
+  if (!port.pin_choice) return swdio == port.swdio && swclk == port.swclk;
+  const bool one_wire = port.swclk == 0xffff;
+  if (swdio > 63 || !((port.pin_choice >> swdio) & 1)) return false;
+  if (one_wire) return swclk == 0xffff;
+  return swclk <= 63 && swclk != swdio && ((port.pin_choice >> swclk) & 1);
+}
+
+bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
+  if (!port.pin_choice || !port.pins) return true;   // a fixed pair is the wire's own (kept out of the pin table)
+  auto freeFor = [&](uint16_t c) {
+    if (c == 0xffff) return true;
+    const uint8_t owner = port.pins->owner(c);
+    return owner == 0 || (owner == port.pin_owner && port.connected && swdio == port.swdio && swclk == port.swclk);
+  };
+  return freeFor(swdio) && freeFor(swclk);
+}
+
+bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk) {
+  if (swdio == port.swdio && swclk == port.swclk) return true;
+  if (!port.pin_choice || port.connected || !pairAllowed(port, swdio, swclk) || !pairFree(port, swdio, swclk)) return false;
+  if (port.dm.attached()) port.dm.detach();
+  if (!port.dm.phy().usePins(swdio, swclk == 0xffff ? -1 : swclk)) return false;
+  port.swdio = swdio;
+  port.swclk = swclk;
+  return true;
+}
+
+void holdPins(DebugPort &port) {
+  if (!port.pin_choice || !port.pins || !port.connected) return;
+  port.pins->releaseQuiet(port.pin_owner);
+  port.pins->claim(port.swdio, port.pin_owner);
+  if (port.swclk != 0xffff) port.pins->claim(port.swclk, port.pin_owner);
 }
 
 // connections (oep-if-debug §2.1): count(u8), per entry connection(u16) swdio(u16) swclk(u16) speed_hz(u32) users(u8)
@@ -118,7 +155,12 @@ Result connectionsOf(DebugPort &port, uint32_t speed_hz, uint8_t *out, size_t ca
 
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  w.pinGroup(port_.swdio, port_.swclk);       // fixed on this probe
+  if (port_.pin_choice) {                     // any free pair of these (oep-if-debug §1)
+    static const uint8_t kPair[] = {reg::wire_rvswd::kPinRoleSwdio, reg::wire_rvswd::kPinRoleSwclk};
+    w.roleChannels(kPair, port_.swclk == 0xffff ? 1 : 2, port_.pin_choice);
+  } else {
+    w.pinGroup(port_.swdio, port_.swclk);     // fixed on this probe
+  }
   static const uint8_t kReset[] = {reg::wire_rvswd::kPinRoleReset};
   if (port_.reset_allowed) w.roleChannels(kReset, 1, port_.reset_allowed);   // attach_under_reset's channels, no default
   w.u8(kTagImplementation, 1);                // bit-bang
@@ -131,6 +173,29 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   return w.ok() ? w.length() : 0;
 }
 
+// The attach pins TLV (oep-if-debug §1): the pair to attach on, the link moved there. Absent: the fixed pair, or - pins the
+// host chooses - refused (the host names one). Another pair than the live connection's takes its seat only when a slot
+// alone uses it (the seat rule); else refused. 0, or a reject reason.
+uint8_t WireRvswd::choosePair(const uint8_t *pins, uint8_t len) {
+  if (!pins) return port_.pin_choice ? kRejectUnavailable : 0;
+  if (len != 4) return kRejectMalformed;
+  const uint16_t d = getU16(pins), c = getU16(pins + 2);
+  if (!pairAllowed(port_, d, c)) return kRejectUnavailable;
+  if (d == port_.swdio && c == port_.swclk) return 0;          // the pair the link is on (live or not)
+  if (!port_.pins) return kRejectUnavailable;
+  const uint16_t chs[2] = {d, c};
+  for (uint16_t ch : chs) {                                    // held by anything but this wire's own connection
+    if (ch == 0xffff) continue;
+    const uint8_t owner = port_.pins->owner(ch);
+    if (owner != 0 && owner != port_.pin_owner) return kRejectUnavailable;
+  }
+  if (port_.connected) {
+    if (port_.users != DebugPort::kUserSlot) return kRejectUnavailable;   // no seat: the host's connection is on it
+    releaseConnection(port_, DebugPort::kUserSlot, true);     // the seat rule: a slot-only connection makes room
+  }
+  return usePair(port_, d, c) ? 0 : kRejectUnavailable;
+}
+
 Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // idle_clock is rvswd's (oep-if-debug §3): on swio it is an unknown tag (critical: rejected unsupported)
   static const uint8_t kAttachTags[] = {reg::wire_rvswd::kTlvAttachMaxSpeed, reg::wire_rvswd::kTlvAttachPins,
@@ -139,26 +204,74 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
   DmiPhy &phy = port_.dm.phy();
   Tail tail;
   switch (op) {
-    case kOpScan: {   // count(u8) pairs [TLV]  ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32) per answer
-      size_t fixed = 0;
-      if (const uint8_t bad = fixedPairScan(payload, length, port_.swdio, port_.swclk, fixed)) return rejected(bad);
-      const Result parsed = plainTail(tail, payload, length, fixed, out, capacity);
+    case kOpScan: {
+      // count(u8) pairs [TLV 0x01 skip]  ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32)
+      // per answer (oep-if-debug §1)
+      if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
+      const uint8_t count = payload[0];
+      const size_t fixed = 1u + 4u * count;
+      static const uint8_t kScanTags[] = {reg::wire_rvswd::kTlvScanSkip};
+      const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 11) return failed();
-      uint32_t status = 0;
-      out[0] = payload[0] ? payload[0] : 1;   // tried: every pair asked for (they are all the one pair)
-      out[1] = 0;
-      // On a live connection, look through it: re-attaching (and detaching on a miss) would pull the link out from
-      // under the host that holds it.
-      const bool found = port_.connected ? port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu
-                                         : attachAndRead(port_.dm, status);
-      if (!found) return tail.finish(completed(2), out, capacity);
-      out[1] = 1;
-      out[2] = kKindRiscvDm;
-      putU16(out + 3, port_.swdio);
-      putU16(out + 5, port_.swclk);
-      putU32(out + 7, status);
-      return tail.finish(completed(11), out, capacity);
+      uint16_t skip = 0;
+      {
+        uint8_t len = 0;
+        if (const uint8_t *v = tail.find(reg::wire_rvswd::kTlvScanSkip, len)) {
+          if (count || len != 2) return rejected(kRejectMalformed);   // skip goes with count 0 only
+          skip = getU16(v);
+        }
+      }
+      // every pair listed: one this wire allows, whose pins nothing else holds, and - the one seat taken - the live one
+      for (uint8_t k = 0; k < count; ++k) {
+        const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
+        if (!pairAllowed(port_, d, c) || !pairFree(port_, d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
+          return rejected(kRejectUnavailable);
+      }
+      if (capacity < 2) return failed();
+      size_t at = 2;
+      uint8_t tried = 0, found = 0;
+      auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full
+        if (at + 9 > capacity) return false;
+        uint32_t status = 0;
+        bool ok = false;
+        if (port_.connected) {
+          // the live connection: look through it - re-attaching (and detaching on a miss) would pull the link out
+          // from under the host that holds it
+          ok = port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
+        } else if (usePair(port_, d, c)) {
+          ok = attachAndRead(port_.dm, status);
+          if (port_.pin_choice) { port_.dm.detach(); phy.release(); }   // nothing held: leave the pins Hi-Z
+        }
+        if (ok) {
+          out[at] = kKindRiscvDm;
+          putU16(out + at + 1, d);
+          putU16(out + at + 3, c);
+          putU32(out + at + 5, status);
+          at += 9;
+          ++found;
+        }
+        ++tried;
+        return true;
+      };
+      if (count) {
+        for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
+      } else if (port_.connected || !port_.pin_choice) {   // the count-0 list: the live pair, or the fixed one
+        if (skip == 0) tryPair(port_.swdio, port_.swclk);
+      } else {                                            // swdio ascending, then swclk; held pairs left out
+        const bool one_wire = port_.swclk == 0xffff;
+        uint32_t index = 0;
+        bool more = true;
+        auto consider = [&](uint16_t d, uint16_t c) {
+          if (more && tried < 255 && pairAllowed(port_, d, c) && pairFree(port_, d, c) && index++ >= skip) more = tryPair(d, c);
+        };
+        for (uint16_t d = 0; d < 64; ++d) {
+          if (one_wire) consider(d, 0xffff);
+          else for (uint16_t c = 0; c < 64; ++c) consider(d, c);
+        }
+      }
+      out[0] = tried;
+      out[1] = found;
+      return tail.finish(completed(at), out, capacity);
     }
     case kOpAttach: {
       // method(u8: 0 leave it running, 1 halt) [TLV 0x01 max_speed, 0x03 pins, 0x04 idle_clock]
@@ -169,7 +282,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       {
         uint8_t plen = 0;
         const uint8_t *pins = tail.find(reg::wire_rvswd::kTlvAttachPins, plen);
-        if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
+        if (const uint8_t bad = choosePair(pins, plen)) return rejected(bad);
       }
       uint32_t max_hz = 0;
       bool critical = false, idle_low = false, idle_critical = false;
@@ -218,7 +331,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
           if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
           else if (halt && !port_.dm.halt()) failure = kStatusTimeout;
         }
-        if (failure == kStatusOk) { port_.connected = true; port_.numberNew(); }
+        if (failure == kStatusOk) { port_.connected = true; port_.numberNew(); holdPins(port_); }
       }
       if (failure != kStatusOk) return tail.finish(failedStatus(failure, out, capacity), out, capacity);
       port_.users |= DebugPort::kUserHost;
@@ -236,7 +349,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       {
         uint8_t plen = 0;
         const uint8_t *pins = tail.find(reg::wire_rvswd::kTlvAttachUnderResetPins, plen);
-        if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
+        if (const uint8_t bad = choosePair(pins, plen)) return rejected(bad);
       }
       uint32_t max_hz = 0;
       bool critical = false, idle_low = false, idle_critical = false;
@@ -269,6 +382,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       }
       if (!port_.connected) port_.numberNew();
       port_.connected = true;
+      holdPins(port_);
       port_.users |= DebugPort::kUserHost;
       ++port_.resets;
       putU16(out, port_.number);

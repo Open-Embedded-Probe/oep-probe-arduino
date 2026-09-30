@@ -91,7 +91,7 @@ examples/
 
 ## 6. ライブラリに足りないもの（binary を作る前に要る順）
 
-a. **線がピンの組を host から受ける**: 今は決まった 1 組だけ（`fixedPairScan` / `fixedPairPins`）。describe の role_channels で
+a. **線がピンの組を host から受ける**（済: oep-spec 29990da / dfa46d2 / ad43e25、firmware。RP2040 / RP2350 は `Firmware/OepProbe`。SWIO と実機の確認は未）: 今は決まった 1 組だけ（`fixedPairScan` / `fixedPairPins`）。describe の role_channels で
    使えるピンを出し、scan / attach の pins で組を受ける（oep-if-debug §1）。RVSWD（ESP32 の dedicated GPIO、RP2 の SIO）、SWIO、SWD の
    それぞれで、ピンを実行中に替えられるようにする。
 b. **RP2040 / RP2350 の probe.config の保存**（今は ESP32 の NVS だけ）。flash の最後の領域など。

@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
+// OEP probe firmware for any RP2040 / RP2350 board (built for the Raspberry Pi Pico / Pico 2; profiles rp2040 /
+// rp2350). Nothing is wired in: the host chooses every pin at run time (oep-spec docs/oep-if-debug.ja.md §1, the plan
+// of oep-core §8), so one binary serves every jig. A jig is this firmware plus its settings.
+//
+// Transport: USB CDC (Serial), a serial port: COBS frames (oep-core §3.1). The USB device says iProduct "OEP probe
+// (RP2040)" / "(RP2350)" (how discovery knows it, oep-core §3.3), the board's own VID:PID and serial number until the
+// OEP PID is granted (PID-USE.md).
+//
+// Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
+// oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart. Every channel below may be SWDIO / SWCLK of either
+// wire, the reset line of attach_under_reset, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
+// debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
+// max_speed) comes from the host (oep-if-debug §3).
+#include <USB.h>
+
+#include <OepCh32Dm.h>
+#include <OepConsole.h>
+#include <OepDmConsole.h>
+#include <OepEndpoint.h>
+#include <OepFixture.h>
+#include <OepPinTable.h>
+#include <OepRvswdPhy.h>
+#include <OepSwd.h>
+#include <OepTarget.h>
+
+#if defined(ARDUINO_ARCH_RP2350) || defined(PICO_RP2350)
+static constexpr const char *kProduct = "OEP probe (RP2350)", *kModel = "rp2350";
+#else
+static constexpr const char *kProduct = "OEP probe (RP2040)", *kModel = "rp2040";
+#endif
+
+// The pins a Pico / Pico 2 brings out: GP0-GP22, GP26-GP28 (GP23-GP25 and GP29 are the board's own there). Other boards
+// with the same chip run this too; their own parts on these pins (an LED, a PSRAM chip select) are for the host to
+// leave alone.
+static constexpr uint64_t kChannels = ((1ull << 23) - 1) | (0x7ull << 26);
+static constexpr uint64_t kReserved = ((1ull << 30) - 1) & ~kChannels;
+static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
+
+static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
+static uint8_t txBuffer[1024];
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
+                              oep::Endpoint::kUsbCdc, 0);
+
+static oep::PinTable pins(kChannels);
+
+static oep::RvswdPhy phy;
+static oep::Ch32Dm dm(phy);
+static oep::DebugPort rvswd{dm, kUnset, kUnset};
+static oep::WireRvswd wireRvswd(rvswd, 1);
+static oep::TargetRiscvDm riscvDm(rvswd, 1);
+static oep::DmConsole consoleDriver(dm, phy);
+static oep::TargetConsoleStream console(rvswd, consoleDriver, 1);
+
+static oep::SwdPort swd{kUnset, kUnset};
+static oep::WireSwd wireSwd(swd, 1);
+static oep::TargetArmAdi adi(swd, 1);
+
+static oep::FixtureGpio gpio(pins, 1, 1);
+static oep::FixtureUart uart(pins, Serial1, 1, 2);
+static uint8_t probeTlv[200];
+
+static size_t describeProbe() {
+  oep::TlvWriter w(probeTlv, sizeof probeTlv);
+  uint8_t id[8];   // the flash's unique id: the probe says who it is on any transport
+  oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30, kReserved);
+  return w.ok() ? w.length() : 0;
+}
+
+void setup() {
+  USB.disconnect();
+  USB.setManufacturer("Open Embedded Probe");
+  USB.setProduct(kProduct);   // iProduct "OEP...": discovery (oep-core §3.3)
+  USB.connect();
+  Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
+  Serial.begin(115200);
+  // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one.
+  oep::platformParkMask(kChannels);
+  rvswd.pin_choice = kChannels;
+  rvswd.pins = &pins;
+  rvswd.reset_allowed = kChannels;   // attach_under_reset: the channel the host names (no default), nobody holding it
+  swd.pin_choice = kChannels;
+  swd.pins = &pins;
+  endpoint.setProbeDescription(probeTlv, describeProbe());
+  endpoint.setBootId(rp2040.hwrand32());
+  endpoint.add(wireRvswd);
+  endpoint.add(riscvDm);
+  endpoint.add(console);
+  endpoint.add(wireSwd);
+  endpoint.add(adi);
+  endpoint.add(gpio);
+  endpoint.add(uart);
+}
+
+void loop() {
+  endpoint.poll();
+  console.poll();
+  uart.poll();
+}
