@@ -5,6 +5,8 @@
 
 #include "OepEndpoint.h"
 
+#include <algorithm>
+
 #if defined(ARDUINO_ARCH_ESP32)
 #include <esp_timer.h>
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -34,17 +36,22 @@ constexpr uint32_t kMinTotalHz = 20000, kMaxTotalHz = 100000;    // the driver's
 constexpr uint32_t kRatePpm = 20000;                             // not measured on this chip: a wide guess
 constexpr size_t kRecordBytes = 2;
 constexpr bool kFirstFrameLost = false;                          // not measured here: the time is not corrected
+constexpr uint32_t kPretriggerRoom = 129;                        // see configure
 #elif defined(ARDUINO_ARCH_ESP32)
 constexpr Frontend kFrontends[] = {{0, 0, 950, 0}, {1, 0, 1250, 2500}, {2, 0, 1750, 6000}, {3, 0, 3100, 12000}};
 constexpr uint32_t kMinTotalHz = 611, kMaxTotalHz = 46000;       // above 46 kHz the P4 gives each value twice
 constexpr uint32_t kRatePpm = 12000;                             // measured: +0.15 % mostly, +1.2 % at 44.1 kHz
 constexpr size_t kRecordBytes = 4;
 constexpr bool kFirstFrameLost = true;                           // measured on the P4 (logic-capture §7.4)
+// Triggered, the segment's buffer is the ring: one channel's values can run up to a driver read (128 records) ahead
+// of the frame being looked at, into the ring's slots of older frames; the pretrigger leaves them out.
+constexpr uint32_t kPretriggerRoom = 129;
 #else
 constexpr Frontend kFrontends[] = {{0, 0, 3300, 0}};             // ADC_VREF: the supply (3.3 V on a Pico)
 constexpr uint32_t kAdcClockHz = 48000000;
 constexpr uint32_t kMinTotalHz = kAdcClockHz / 65536 + 1, kMaxTotalHz = kAdcClockHz / 96;
 constexpr uint32_t kRatePpm = 100;                               // the crystal's
+constexpr uint32_t kPretriggerRoom = 1;
 #endif
 constexpr size_t kFrontendCount = sizeof kFrontends / sizeof kFrontends[0];
 constexpr uint8_t kWidest = kFrontends[kFrontendCount - 1].number;
@@ -93,7 +100,12 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   }
   const uint8_t channels[2] = {kMaxChannels, 1u << 4};   // 16-bit slots (bit i: s = 2^i)
   w.put(ana::kTlvDescribeChannels, channels, sizeof channels);
-  uint8_t trig[5] = {1u << ana::kTriggerImmediate};      // immediate only, no pretrigger
+  uint8_t trig[5] = {(1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown)};
+#if defined(ARDUINO_ARCH_RP2040)
+  putU32(trig + 1, kRingBytes / 4 - kPretriggerRoom);   // a triggered segment is at most half the ring (one channel)
+#else
+  putU32(trig + 1, static_cast<uint32_t>(kMaxBytes / 2) - kPretriggerRoom);
+#endif
   w.put(ana::kTlvDescribeTrigger, trig, sizeof trig);
   for (const Frontend &f : kFrontends) {
     uint8_t v[13];
@@ -105,7 +117,7 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   }
   w.u32(ana::kTlvDescribeMaxRead, static_cast<uint32_t>(max_read_));
   w.u16(ana::kTlvDescribeSegmentRing, 1);
-  w.u32(kTagFeatures, 1);                                // bit0 query
+  w.u32(kTagFeatures, 0b111);                            // bit0 query, bit1 force, bit2 notifications
   w.u8(kTagImplementation, 3);                           // ADC + DMA
   return w.ok() ? w.length() : 0;
 }
@@ -113,7 +125,7 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
 // ---- the plan: roles 0 .. C-1 on ADC inputs, each once ------------------------------------------------------------
 
 uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
-  if (state_ == ana::kStateCapturing || count > kMaxChannels) return kRejectUnavailable;
+  if (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting || count > kMaxChannels) return kRejectUnavailable;
   uint8_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
     const uint8_t role = roles[i].role;
@@ -133,7 +145,7 @@ bool AnalogCapture::planApply(const RoleAssignment *roles, size_t count) {
 }
 
 void AnalogCapture::planRelease() {
-  if (state_ == ana::kStateCapturing) stopNow();
+  stopNow();
   channels_ = 0;
   state_ = ana::kStateUnconfigured;
 }
@@ -142,7 +154,7 @@ void AnalogCapture::planRelease() {
 
 Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query) {
   if (!query && bound()) return rejected(kRejectUnavailable);   // the group's now
-  if (!query && state_ == ana::kStateCapturing) return rejected(kRejectUnavailable);
+  if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return rejected(kRejectUnavailable);
   static const uint8_t kKnown[] = {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
                                    ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
                                    ana::kTlvConfigureFrontend};
@@ -169,20 +181,33 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     if (len != 4 || getU32(v) == 0) return rejected(kRejectMalformed);
     samples = getU32(v);
   }
-  const uint32_t most = kMaxBytes / (2u * channels_);
-  if (samples > most) samples = most;
+  // type(u8) role(u8) value(u16): the ADC value crossed up (from below to at or above) or down (above to at or below)
+  uint8_t trig_type = ana::kTriggerImmediate, trig_role = 0;
+  uint16_t trig_value = 0;
   if (const uint8_t *v = tail.find(ana::kTlvConfigureTrigger, len, &critical)) {
     if (len != 4) return rejected(kRejectMalformed);
-    if (v[0] != ana::kTriggerImmediate) {
+    const uint16_t value = static_cast<uint16_t>(v[2] | v[3] << 8);
+    const bool ok = v[0] == ana::kTriggerImmediate ||
+                    ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && v[1] < channels_ && value <= kFull);
+    if (ok) { trig_type = v[0]; trig_role = v[1]; trig_value = value; }
+    else {
       const Result r = tail.refuse(ana::kTlvConfigureTrigger, critical, out, capacity);
       if (refused(r)) return r;
     }
   }
-  if (const uint8_t *v = tail.find(ana::kTlvConfigurePretrigger, len, &critical)) {
+  uint32_t most = kMaxBytes / (2u * channels_);
+#if defined(ARDUINO_ARCH_RP2040)
+  if (trig_type) most = kRingBytes / 4 / channels_;   // half the ring: the DMA runs on while poll sees it is full
+#endif
+  if (samples > most) samples = most;
+  uint32_t pretrigger = 0;
+  if (const uint8_t *v = tail.find(ana::kTlvConfigurePretrigger, len, &critical)) {   // with a trigger, in the segment
     if (len != 4) return rejected(kRejectMalformed);
-    if (getU32(v)) {
+    pretrigger = getU32(v);
+    if (pretrigger && (trig_type == ana::kTriggerImmediate || pretrigger + kPretriggerRoom > samples)) {
       const Result r = tail.refuse(ana::kTlvConfigurePretrigger, critical, out, capacity);
       if (refused(r)) return r;
+      pretrigger = 0;
     }
   }
   uint8_t chosen[kMaxChannels];
@@ -216,6 +241,17 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     uint16_t *buffer = static_cast<uint16_t *>(realloc(buffer_, bytes));
     if (!buffer) return failed();
     buffer_ = buffer;
+#if defined(ARDUINO_ARCH_RP2040)
+    if (trig_type && !ring_) ring_ = static_cast<uint16_t *>(aligned_alloc(kRingBytes, kRingBytes));   // the DMA's ring
+    if (trig_type && !ring_) return failed();
+    ring_len_ = trig_type ? kRingBytes / 2 : samples * channels_;
+#else
+    ring_len_ = samples * channels_;
+#endif
+    trig_type_ = trig_type;
+    trig_value_ = trig_value;
+    pretrigger_ = pretrigger;
+    arm_ = pretrigger ? pretrigger : 1;   // a crossing needs the value before it
     samples_ = samples;
     total_hz_ = total_hz;
     rate_num_ = num;
@@ -233,6 +269,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
 #else
     for (uint8_t k = 0; k < kMaxChannels; ++k) order_[k] = k;   // the pattern is in role order
 #endif
+    for (uint8_t m = 0; m < channels_; ++m) if (order_[m] == trig_role) trig_slot_ = m;
     frames_ = 0;
     state_ = ana::kStateConfigured;
   }
@@ -331,9 +368,12 @@ bool AnalogCapture::trackReady() const {
 
 bool AnalogCapture::startNow() {
   if (!trackReady() || !buffer_) return false;
-  frames_ = 0;
-  short_ = false;
+  frames_ = got_ = searched_ = 0;
+  short_ = have_prev_ = force_ = trig_slipped_ = false;
   reported_ = false;
+  trig_reported_ = trig_type_ == 0;
+  phase_ = 0;
+  end_frame_ = trig_type_ ? UINT32_MAX : samples_;
 #if defined(ARDUINO_ARCH_ESP32)
   adc_continuous_handle_cfg_t hc = {};
   hc.max_store_buf_size = 32 * kFrameBytes;   // 8 KiB: tens of ms of conversions between two polls
@@ -364,7 +404,7 @@ bool AnalogCapture::startNow() {
   config.format = kRecordBytes == 2 ? ADC_DIGI_OUTPUT_FORMAT_TYPE1 : ADC_DIGI_OUTPUT_FORMAT_TYPE2;
   adc_continuous_evt_cbs_t callbacks = {};
   callbacks.on_pool_ovf = onOverflow;
-  overflow_ = false;
+  overflow_ = overflow_seen_ = false;
   if (adc_continuous_config(handle_, &config) != ESP_OK ||
       adc_continuous_register_event_callbacks(handle_, &callbacks, this) != ESP_OK) {
     adc_continuous_deinit(handle_);
@@ -390,10 +430,23 @@ bool AnalogCapture::startNow() {
   }
 #else
   if (!gAdcReady) { adc_init(); gAdcReady = true; }
+  for (uint8_t k = 0; k < channels_; ++k) adc_gpio_init(pins_[k]);
+  if (dma_ < 0) dma_ = dma_claim_unused_channel(false);
+  if (dma_ < 0) { state_ = ana::kStateError; return false; }
+  if (trig_type_) armDma(ring_, kRingCount, true);
+  else armDma(buffer_, samples_ * channels_, false);
+#endif
+  state_ = trig_type_ ? ana::kStateWaiting : ana::kStateCapturing;
+  return true;
+}
+
+#if defined(ARDUINO_ARCH_RP2040)
+// The round robin from the lowest input, its FIFO copied by DMA into `to`: `count` values, or on and on round a
+// kRingBytes ring (to aligned to it).
+void AnalogCapture::armDma(uint16_t *to, uint32_t count, bool ring) {
   uint32_t mask = 0;
   int lowest = 99;
   for (uint8_t k = 0; k < channels_; ++k) {
-    adc_gpio_init(pins_[k]);
     const int input = pins_[k] - ADC_BASE_PIN;
     mask |= 1u << input;
     if (input < lowest) lowest = input;
@@ -404,21 +457,18 @@ bool AnalogCapture::startNow() {
   adc_set_round_robin(channels_ > 1 ? mask : 0);
   adc_fifo_setup(true, true, 1, false, false);
   adc_set_clkdiv(static_cast<float>(cycles_ - 1));
-  if (dma_ < 0) dma_ = dma_claim_unused_channel(false);
-  if (dma_ < 0) { state_ = ana::kStateError; return false; }
   dma_channel_config c = dma_channel_get_default_config(dma_);
   channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
   channel_config_set_read_increment(&c, false);
   channel_config_set_write_increment(&c, true);
+  if (ring) channel_config_set_ring(&c, true, 15);   // the write address wraps at 2^15 bytes
   channel_config_set_dreq(&c, DREQ_ADC);
-  dma_channel_configure(dma_, &c, buffer_, &adc_hw->fifo, samples_ * channels_, true);
+  dma_channel_configure(dma_, &c, to, &adc_hw->fifo, count, true);
   start_ns_ = nowNs() + 2000;   // the first conversion ends about 96 cycles (2 us) after the run starts
   uncertainty_ns_ = 5000;
   adc_run(true);
-#endif
-  state_ = ana::kStateCapturing;
-  return true;
 }
+#endif
 
 void AnalogCapture::finish() {
 #if defined(ARDUINO_ARCH_ESP32)
@@ -441,6 +491,22 @@ void AnalogCapture::finish() {
 }
 
 void AnalogCapture::stopNow() {
+  if (trig_type_ && (state_ == ana::kStateWaiting || state_ == ana::kStateCapturing)) {   // no segment: none is whole
+#if defined(ARDUINO_ARCH_ESP32)
+    finish();
+#else
+    adc_run(false);
+    if (dma_ >= 0) dma_channel_abort(dma_);
+    adc_fifo_drain();
+    adc_set_round_robin(0);
+#endif
+    state_ = ana::kStateConfigured;
+    if (subscribed_) {
+      const uint8_t reason = ana::kStoppedReasonHost;
+      endpoint_.event(*this, ana::kEventStopped, &reason, 1);
+    }
+    return;
+  }
   if (state_ != ana::kStateCapturing) return;
 #if defined(ARDUINO_ARCH_ESP32)
   drain();
@@ -463,6 +529,8 @@ bool IRAM_ATTR AnalogCapture::onOverflow(adc_continuous_handle_t, const adc_cont
 void AnalogCapture::drain() {
   uint8_t records[kFrameBytes];
   uint32_t got = 0;
+  // triggered, the values go round the buffer (end_frame_: none after the segment's last frame); immediate, the
+  // ring is the segment and end_frame_ its samples, so the index is the plain one
   while (handle_ && adc_continuous_read(handle_, records, sizeof records, &got, 0) == ESP_OK && got) {
     for (uint32_t at = 0; at + kRecordBytes <= got; at += kRecordBytes) {
       const adc_digi_output_data_t *r = reinterpret_cast<const adc_digi_output_data_t *>(records + at);
@@ -476,21 +544,122 @@ void AnalogCapture::drain() {
 #endif
       for (uint8_t m = 0; m < channels_; ++m) {
         if (adc_channel_[m] != channel) continue;
-        if (counts_[m] < samples_) buffer_[static_cast<size_t>(counts_[m]) * channels_ + m] = value;
+        if (counts_[m] < end_frame_) buffer_[(static_cast<size_t>(counts_[m]) * channels_ + m) % ring_len_] = value;
         ++counts_[m];
         break;
       }
     }
-    uint32_t low = samples_;
+    uint32_t low = UINT32_MAX;
     for (uint8_t m = 0; m < channels_; ++m) if (counts_[m] < low) low = counts_[m];
-    frames_ = low;
-    if (frames_ >= samples_) break;
+    got_ = low;
+    if (trig_type_) {
+      if (overflow_) { overflow_ = false; overflow_seen_ = true; overflow_frame_ = got_; }
+      if (phase_ == 0) search();   // after every read: no channel gets further ahead than one read
+      if (phase_ == 1 && got_ >= end_frame_) break;
+    } else {
+      frames_ = low < samples_ ? low : samples_;
+      if (frames_ >= samples_) break;
+    }
   }
 }
 #endif
 
+uint16_t *AnalogCapture::ring() const {
+#if defined(ARDUINO_ARCH_RP2040)
+  if (trig_type_) return ring_;
+#endif
+  return buffer_;
+}
+
+uint64_t AnalogCapture::framesNs(uint64_t frames) const {   // frames x den / num seconds
+  const uint64_t fd = frames * rate_den_;
+  return fd / rate_num_ * 1000000000ull + fd % rate_num_ * 1000000000ull / rate_num_;
+}
+
+// Frames [searched_, got_) are in the ring: the first at or after arm_ where the value crosses (or force) is the
+// trigger; the segment then runs from pretrigger frames before it.
+void AnalogCapture::search() {
+  const volatile uint16_t *r = ring();   // the RP2's DMA writes it under us
+  const bool up = trig_type_ == ana::kTriggerCrossUp;
+  for (; searched_ < got_; ++searched_) {
+    const uint32_t f = searched_;
+    const uint16_t v = r[(static_cast<size_t>(f) * channels_ + trig_slot_) % ring_len_];
+    bool hit = false;
+    if (f >= arm_)
+      hit = force_ || (have_prev_ && (up ? prev_ < trig_value_ && v >= trig_value_ : prev_ > trig_value_ && v <= trig_value_));
+    prev_ = v;
+    have_prev_ = true;
+    if (hit) {
+      trig_frame_ = f;
+      end_frame_ = f - pretrigger_ + samples_;
+      phase_ = 1;
+      ++searched_;
+      return;
+    }
+  }
+}
+
+void AnalogCapture::pollTriggered() {
+#if defined(ARDUINO_ARCH_ESP32)
+  drain();
+#else
+  const bool running = dma_channel_is_busy(dma_);
+  got_ = (kRingCount - (dma_channel_hw_addr(dma_)->transfer_count & 0x0FFFFFFFu)) / channels_;
+  if (phase_ == 0) {
+    const uint32_t ring_frames = ring_len_ / channels_;
+    if (got_ > searched_ + ring_frames / 2) {   // poll came late: what was not looked at is going; look at the newest
+      searched_ = got_ - ring_frames / 4;
+      have_prev_ = false;
+    }
+    search();
+    if (phase_ == 0 && !running) {              // the run's transfers are used up (minutes): again from the start
+      armDma(ring_, kRingCount, true);
+      got_ = searched_ = 0;
+      have_prev_ = false;
+    }
+  }
+#endif
+  if (phase_ >= 1 && !trig_reported_) {
+    trig_reported_ = true;
+    state_ = ana::kStateCapturing;
+    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64)
+      uint8_t e[16];
+      putU32(e, 0);
+      putU32(e + 4, pretrigger_);
+      putU64(e + 8, start_ns_ + framesNs(trig_frame_));
+      endpoint_.event(*this, ana::kEventTriggered, e, sizeof e);
+    }
+  }
+  if (phase_ == 1 && got_ >= end_frame_) finishTriggered();
+}
+
+// The segment's frames are all in: stop, and put them at the buffer's start in order.
+void AnalogCapture::finishTriggered() {
+  const uint32_t s0 = trig_frame_ - pretrigger_;
+#if defined(ARDUINO_ARCH_ESP32)
+  const bool lost = overflow_;
+  finish();
+  std::rotate(buffer_, buffer_ + static_cast<size_t>(s0 % samples_) * channels_, buffer_ + ring_len_);
+  trig_slipped_ = lost || (overflow_seen_ && overflow_frame_ >= s0);   // values were lost after the segment began
+#else
+  adc_run(false);
+  const uint32_t written = kRingCount - (dma_channel_hw_addr(dma_)->transfer_count & 0x0FFFFFFFu);
+  dma_channel_abort(dma_);
+  adc_fifo_drain();
+  adc_set_round_robin(0);
+  const size_t first = static_cast<size_t>(s0) * channels_, n = static_cast<size_t>(samples_) * channels_;
+  trig_slipped_ = written > first + ring_len_;   // the DMA came round over the segment's start before it stopped
+  for (size_t i = 0; i < n; ++i) buffer_[i] = ring_[(first + i) % ring_len_];
+  state_ = ana::kStateDone;
+#endif
+  phase_ = 2;
+  frames_ = samples_;
+  seg_start_ns_ = start_ns_ + framesNs(s0);
+}
+
 void AnalogCapture::poll() {
-  if (state_ == ana::kStateCapturing) {
+  if (trig_type_ && (state_ == ana::kStateWaiting || state_ == ana::kStateCapturing)) pollTriggered();
+  else if (state_ == ana::kStateCapturing) {
 #if defined(ARDUINO_ARCH_ESP32)
     drain();
     if (frames_ >= samples_) finish();
@@ -516,12 +685,13 @@ size_t AnalogCapture::segmentInfo(uint8_t *out) const {
   putU32(out, 0);                  // serial
   putU64(out + 4, 0);              // position
   putU32(out + 12, frames_);
-  putU64(out + 16, start_ns_);
+  putU64(out + 16, trig_type_ ? seg_start_ns_ : start_ns_);
   putU32(out + 24, uncertainty_ns_);
-  putU32(out + 28, 0xFFFFFFFFu);   // no trigger inside (immediate start)
+  putU32(out + 28, trig_type_ ? pretrigger_ : 0xFFFFFFFFu);   // immediate: no trigger inside
   uint8_t flags = short_ ? ana::kSegmentFlagShort : 0;
+  if (trig_type_ && trig_slipped_) flags |= ana::kSegmentFlagSlipped;
 #if defined(ARDUINO_ARCH_ESP32)
-  if (overflow_) flags |= ana::kSegmentFlagSlipped;   // conversions were lost: the values after it come late
+  if (!trig_type_ && overflow_) flags |= ana::kSegmentFlagSlipped;   // conversions were lost: the values after it come late
 #endif
   out[32] = flags;
   return 33;
@@ -592,8 +762,15 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       const Result r = calibration(out, capacity);
       return refused(r) ? r : tail.finish(r, out, capacity);
     }
+    case ana::kOpForce: {   // waiting for the crossing: take the segment from the next frame on (after the pretrigger)
+      const Result parsed = plainTail(tail, p, n, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (bound()) return rejected(kRejectUnavailable);
+      if (state_ == ana::kStateWaiting) force_ = true;
+      return tail.finish(completed(), out, capacity);
+    }
     default:
-      return rejected(kRejectUnknownOperation);   // force, release: not in one-shot with an immediate trigger
+      return rejected(kRejectUnknownOperation);   // release: not in one-shot
   }
 }
 
