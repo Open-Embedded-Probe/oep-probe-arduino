@@ -1,4 +1,4 @@
-# examples と配布する firmware の見直し（2026-09-30。方向はユーザー了承済み、§7 は相談中）
+# examples と配布する firmware の見直し（2026-09-30。方向はユーザー了承済み）
 
 今の `examples/` は、手元の治具ごとの firmware（「ボード + 治具の target の chip」、例: `Esp32P4X035Probe`）で、治具の配線を
 焼き込んでいる。治具を持たない人には名前も中身も意味を持たない。ここでは、今の治具のためではなく、**これから OEP を使う人・作る人が
@@ -96,12 +96,12 @@ a. **線がピンの組を host から受ける**: 今は決まった 1 組だ�
    それぞれで、ピンを実行中に替えられるようにする。
 b. **RP2040 / RP2350 の probe.config の保存**（今は ESP32 の NVS だけ）。flash の最後の領域など。
 c. **USB の名乗り**: RP2 と ESP32-S3 でも iProduct `OEP…` と個体ごとの serial を出す（今は ESP32-P4 だけ）。
-d. **reset 線に既定は無い**: どの線を reset に使うかを明示しないリセットは危険なので、probe は既定の reset 線を持たない。
-   今の attach_under_reset の channel = 0xFFFF（probe の既定値）と sketch の `port.reset_default` をやめ、host が毎回 channel を
-   渡す。probe が宣言するのは、reset に使ってよい channel だけ。仕様の変更（oep-if-debug）。
-e. **L103 の設定は probe の中に持たない**: CH32L103 の「bus を low で休ませる」「半周期 500 ns 以上」は target の性質で、
-   host が持つ。案は attach の TLV で渡し、host 無しで attach するスロット（at_boot）はスロットの項目に同じ値を持つ。仕様の変更で、
-   形は他のセッション（ベンチ、wch-protocols の測定）と相談中。
+d. **reset 線に既定は無い**（済: oep-spec 5bfe052、firmware 620594c）: attach_under_reset の channel は必須。probe は reset に使ってよい
+   channel を describe の role_channels の role 3 で宣言し、plan が持つ channel は断る。
+e. **線の設定は probe の中に持たない**（済: 同上）: 休ませ方は rvswd の attach の idle_clock、速さの上限は max_speed で host が渡す。
+   host 無しで attach するスロットは、スロットの項目の max_speed / idle_clock に同じ値を持つ。target 系統ごとの値（LinkE も
+   L103 / V203 は SWCLK low、X035 は両線 high）と「reset 直後の遅いクロックの間は遅く」の手順は host が持つ（2026-09-30、
+   ベンチと wch-protocols と相談）。
 f. **ボードの予約ピン**（Pro Micro RP2350 の PSRAM の CS GP19、RP2040-Zero の WS2812 GP16）は、ボードごとの表を
    `Firmware/OepProbe` に持つ（Arduino の board のマクロで選ぶ）。
 g. 後で: RP2 の SWIO（PIO）、ESP32 の SWD。§3 の表の空いたところを埋める。
@@ -109,4 +109,3 @@ g. 後で: RP2 の SWIO（PIO）、ESP32 の SWD。§3 の表の空いたとこ�
 ## 7. 決めること
 
 - binary の名前（`OepProbe-<board>`）と、ベンチが読む asset 名の規則・治具の設定ファイルの形（ベンチと合わせる）。
-- §6 d / e の仕様の形（相談中）。
