@@ -18,8 +18,10 @@
 // (Preferences, namespace "oepcfg") with the identity of the interface list; a saved copy made for another list is
 // not applied.
 //
-// The places a slot may name are the sketch's wires with their consoles (addPlace: one fixed pin pair each, one
-// connection each), the streams a bind may carry are those places' consoles and the fixture UARTs added (addUart).
+// The places a slot may name are the sketch's wires with their consoles (addPlace: one connection each); a slot names
+// a pair its wire allows (the fixed pair, or any pair when the host chooses the pins), and several slots may share a
+// wire on different pairs (one at boot). The streams a bind may carry are those places' consoles and the fixture UARTs
+// added (addUart).
 #pragma once
 
 #include <Arduino.h>
@@ -39,13 +41,13 @@ class Endpoint;
 
 class ProbeConfig final : public Interface {
  public:
-  static constexpr size_t kMaxPlaces = 2, kMaxUarts = 4, kMaxSaved = 512, kMaxLock = 8, kMaxName = 32;
+  static constexpr size_t kMaxPlaces = 2, kMaxSlots = 4, kMaxUarts = 4, kMaxSaved = 512, kMaxLock = 8, kMaxName = 32;
 
   ProbeConfig(Endpoint &endpoint, Binds &binds) : endpoint_(endpoint), binds_(binds) {
     memset(idle_, PinTable::kIdleUnset, sizeof idle_);
     binds_.setNamer(&ProbeConfig::nameOf, this);
   }
-  // A place a slot may name: this wire (its fixed pair) and its console. Add after the endpoint has them.
+  // A place a slot may name: this wire and its console. Add after the endpoint has them.
   bool addPlace(WireRvswd &wire, TargetConsoleStream &console);
   // A fixture UART a bind may carry (after the endpoint has it).
   bool addUart(FixtureUart &uart);
@@ -71,6 +73,7 @@ class ProbeConfig final : public Interface {
     bool set = false;
     uint8_t place = 0, attach = 0, mechanism = 0, name_length = 0, lock_scheme = 0, lock_length = 0;
     uint16_t retry_s = 0;
+    uint16_t swdio = 0, swclk = 0;   // the slot's pair on its place's wire (fixed, or one the host chose)
     uint32_t max_hz = 0;           // the line's settings for the probe's own attach (oep-if-debug §3): the target's
     bool idle_low = false;
     char name[kMaxName + 1] = {};
@@ -90,8 +93,12 @@ class ProbeConfig final : public Interface {
   size_t place_count_ = 0;
   Uart uarts_[kMaxUarts];
   size_t uart_count_ = 0;
-  Slot slots_[kMaxPlaces];         // one slot per place at most
-  SlotRun runs_[kMaxPlaces];
+  Slot slots_[kMaxSlots];          // several per place (each its own pair), at most one at boot per wire
+  SlotRun runs_[kMaxSlots];
+  bool onPair(const Slot &s) const {   // the place's link is on this slot's pair now
+    const DebugPort &p = *places_[s.place].port;
+    return p.swdio == s.swdio && p.swclk == s.swclk;
+  }
   uint8_t idle_[PinTable::kChannels];             // the idle items (kIdleUnset: none)
   uint8_t storage_state_ = reg::probe_config::kStorageStateNone;
   uint32_t saved_hash_ = 0, save_ms_ = 0, saved_list_ = 0;

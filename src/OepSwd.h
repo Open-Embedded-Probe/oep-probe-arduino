@@ -18,6 +18,7 @@
 #include "OepRp2BitBang.h"
 #include "Oep.h"
 #include "OepDebug.h"
+#include "OepPinTable.h"
 
 namespace oep {
 
@@ -32,6 +33,11 @@ struct SwdPort {
   uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
   bool active_targetsel = false;   // the live connection's TARGETSEL (part of its identity, oep-if-debug §5)
   uint32_t targetsel = 0;
+  // Host-chosen pins (oep-if-debug §1), as DebugPort: the channels SWDIO / SWCLK may take (role_channels); 0 = the fixed
+  // pair above. swdio / swclk are then the pair the link is on, held in `pins` under pin_owner while it is live.
+  uint64_t pin_choice = 0;
+  PinTable *pins = nullptr;
+  uint8_t pin_owner = 0xf1;
 };
 
 class WireSwd final : public Interface {
@@ -47,14 +53,16 @@ class WireSwd final : public Interface {
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   // core §9 / oep-if-debug §2: a host that fell away (its lease lapsed) keeps nothing open; the host is this link's only user
   void sessionLapsed() override {
-    if (!port_.connected) return;
-    port_.io.releaseBoth();
-    port_.connected = false;
+    if (port_.connected) close();
   }
 
  private:
   bool wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr, bool &dormant);
   bool xferDpidr(uint32_t &dpidr);   // one DPIDR read on the current, live port
+  void close();                      // the live connection goes: pins released (Hi-Z), let go of in the pin table
+  bool allowed(uint16_t swdio, uint16_t swclk) const;
+  bool free(uint16_t swdio, uint16_t swclk) const;   // nothing but this link's live connection on that pair holds them
+  bool move(uint16_t swdio, uint16_t swclk);          // the link to that pair (no live connection)
   SwdPort &port_;
   uint16_t instance_;
 };

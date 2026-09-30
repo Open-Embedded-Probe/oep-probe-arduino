@@ -4,10 +4,11 @@
 # it. A Release created with GITHUB_TOKEN starts no `release` event, so this follows the Release workflow's run
 # (workflow_run) and finds the tag from the version it committed; workflow_dispatch rebuilds any tag by hand.
 #
-# Each example is built from the tag's sources with its sketch.yaml profile (the platform and libraries pinned there),
-# `--clean`; the library itself is the tag's src/ (the release branch's sketch.yaml names it from the Library Manager,
-# which may not have indexed the new version yet). Files: <Example>-<version>.merged.bin (ESP32: flash at 0x0 with
-# esptool), <Example>-<version>.uf2 (RP2040 / RP2350), and firmware-<version>.json listing them with their sha256.
+# Every example (examples/**/sketch.yaml) is built from the tag's sources with each of its sketch.yaml profiles (the
+# platform and libraries pinned there), `--clean`; the library itself is the tag's src/ (the release branch's
+# sketch.yaml names it from the Library Manager, which may not have indexed the new version yet). Files:
+# <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool), <Example>-<profile>-<version>.uf2
+# (RP2040 / RP2350), and firmware-<version>.json listing them with their sha256.
 name: Firmware
 
 on:
@@ -62,33 +63,36 @@ jobs:
           import hashlib, json, os, pathlib, re, shutil, subprocess
 
           version = os.environ["VERSION"]
+          root = pathlib.Path.cwd()
           lib = re.search(r"(?m)^name=(.+)$", pathlib.Path("library.properties").read_text()).group(1).strip()
           out = pathlib.Path("firmware")
           out.mkdir()
           files = []
-          for yaml in sorted(pathlib.Path("examples").glob("*/sketch.yaml")):
+          for yaml in sorted(pathlib.Path("examples").rglob("sketch.yaml")):
               sketch = yaml.parent
               text = yaml.read_text()
               # the tag's own library sources, not the Library Manager's copy of this version
-              yaml.write_text(re.sub(r"(?m)^(\s*)- " + re.escape(lib) + r" \([^)]*\)\s*$", r"\1- dir: ../..", text))
-              profile = re.search(r"(?m)^default_profile:\s*(\S+)", text).group(1)
-              build = pathlib.Path("build") / sketch.name
-              subprocess.run(["arduino-cli", "compile", "--clean", "--profile", profile, "--output-dir", str(build),
-                              str(sketch)], check=True)
-              fqbn = re.search(r"(?m)^\s*fqbn:\s*(\S+)", text).group(1)
-              made = []
-              for suffix, kind in ((".ino.merged.bin", "merged.bin"), (".ino.uf2", "uf2")):
-                  src = build / f"{sketch.name}{suffix}"
-                  if src.exists():
-                      dst = out / f"{sketch.name}-{version}.{kind}"
-                      shutil.copy(src, dst)
-                      made.append(dst)
-              if not made:
-                  raise SystemExit(f"{sketch.name}: no merged.bin or uf2 in {build}")
-              for dst in made:
-                  files.append({"example": sketch.name, "file": dst.name, "fqbn": fqbn,
-                                "flash_offset": 0 if dst.suffix == ".bin" else None,
-                                "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
+              up = os.path.relpath(root, sketch.resolve())
+              yaml.write_text(re.sub(r"(?m)^(\s*)- " + re.escape(lib) + r" \([^)]*\)\s*$", r"\1- dir: " + up, text))
+              # every profile: a sketch for several chips gives one file per chip
+              profiles = re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\s*$\n\s+fqbn:\s*(\S+)", text)
+              for profile, fqbn in profiles:
+                  build = pathlib.Path("build") / sketch.name / profile
+                  subprocess.run(["arduino-cli", "compile", "--clean", "--profile", profile, "--output-dir", str(build),
+                                  str(sketch)], check=True)
+                  made = []
+                  for suffix, kind in ((".ino.merged.bin", "merged.bin"), (".ino.uf2", "uf2")):
+                      src = build / f"{sketch.name}{suffix}"
+                      if src.exists():
+                          dst = out / f"{sketch.name}-{profile}-{version}.{kind}"
+                          shutil.copy(src, dst)
+                          made.append(dst)
+                  if not made:
+                      raise SystemExit(f"{sketch.name} ({profile}): no merged.bin or uf2 in {build}")
+                  for dst in made:
+                      files.append({"example": str(sketch.relative_to("examples")), "profile": profile, "file": dst.name,
+                                    "fqbn": fqbn, "flash_offset": 0 if dst.suffix == ".bin" else None,
+                                    "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
           (out / f"firmware-{version}.json").write_text(json.dumps(
               {"library": lib, "version": version, "firmware": files}, indent=2) + "\n")
           print("\n".join(f["file"] for f in files))

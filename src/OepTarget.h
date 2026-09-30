@@ -35,6 +35,11 @@ struct DebugPort {
   // reset_allowed may be pulled (describe role_channels, role reset), and not one another interface holds in `pins`.
   uint64_t reset_allowed = 0;
   PinTable *pins = nullptr;
+  // Host-chosen pins (oep-if-debug §1): the channels this wire may take as SWDIO / SWCLK, declared as role_channels;
+  // 0 = the one fixed pair in swdio / swclk (a channel group). swdio / swclk are then the pair the link is on now, and a
+  // live connection holds them in `pins` under pin_owner (core §8.1). A one-wire link keeps swclk 0xffff.
+  uint64_t pin_choice = 0;
+  uint8_t pin_owner = 0xf0;
   // Who uses the connection (oep-if-common §2): the host through attach, a slot (oep.probe.config) through its
   // automatic attach or the console its bind opened. A host's detach drops only its own use; the link goes when nobody
   // uses it, or on a forced detach. The bits are the connections entry's users (registry connection_users).
@@ -62,6 +67,13 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`).
 void releaseConnection(DebugPort &port, uint8_t user, bool force);
+// Host-chosen pins (oep-if-debug §1). pairAllowed: a pair this wire may use at all; pairFree: none of its channels held
+// by anything but this wire's live connection on that pair; usePair: move the link there (no live connection; the pair
+// allowed and free) - the same pair is always fine; holdPins: the live connection takes its pins (after it came up).
+bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk);
+bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk);
+bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk);
+void holdPins(DebugPort &port);
 // The connections answer (oep-if-debug §2.1) for a wire with this one place.
 Result connectionsOf(DebugPort &port, uint32_t speed_hz, uint8_t *out, size_t capacity);
 
@@ -86,6 +98,7 @@ class WireRvswd final : public Interface {
   DebugPort &port_;
   uint16_t instance_;
   const char *name_;
+  uint8_t choosePair(const uint8_t *pins, uint8_t len);
 };
 
 class TargetRiscvDm final : public Interface {

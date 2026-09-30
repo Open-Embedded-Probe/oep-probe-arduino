@@ -90,6 +90,7 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, NVS storage; ESP32). Each file starts with the spec sections it follows |
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the custom interfaces `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target` (revision 1, the ESP-IDF I2C / SPI slaves) - examples of extending OEP |
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
+| `examples/Firmware/OepProbe` | the board firmware: any RP2040 / RP2350 board, every pin chosen by the host (RVSWD, SWD, gpio, uart) |
 | `examples/` | probe firmware: ESP32-P4 + CH32X035, classic ESP32 + CH32V003, RP2350 + CH32L103, RP2040 Zero, the P4 HS logic capture `Esp32P4CaptureProbe` (with `host/stream_test.py`). Being reorganised by what users need: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` |
@@ -99,8 +100,9 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 ## Getting started
 
 1. **Firmware.** Either take a built one from the [Releases](https://github.com/Open-Embedded-Probe/oep-probe-arduino/releases)
-   (`<Example>-<version>.merged.bin` for ESP32: `esptool.py write_flash 0x0 <file>`; `.uf2` for RP2040 / RP2350: copy it
-   to the board in BOOTSEL mode; `firmware-<version>.json` has the sha256), or build an example yourself: install
+   (`OepProbe-rp2040-<version>.uf2` / `OepProbe-rp2350-<version>.uf2` for any RP2040 / RP2350 board - copy it to the
+   board in BOOTSEL mode - the pins are chosen by the host; `<Example>-<profile>-<version>.merged.bin` for ESP32:
+   `esptool.py write_flash 0x0 <file>`; `firmware-<version>.json` has the sha256), or build an example yourself: install
    **OpenEmbeddedProbe** from the Arduino Library Manager, open `File > Examples > OpenEmbeddedProbe`, and build with its
    `sketch.yaml` profile (the core version and libraries pinned there):
 
@@ -148,8 +150,8 @@ Record changes under `## Unreleased` in `CHANGELOG.md`, (EN) and (JA), and run t
 (workflow_dispatch): it bumps the version in `library.properties`, writes `src/openembeddedprobe_version.h`, rewrites the
 examples' `sketch.yaml` `dir: ../..` to `OpenEmbeddedProbe (<version>)` on the `release` branch, and makes the ZIP (without
 `tests/`), the tag and the GitHub Release. Then the separate `.github/workflows/firmware.yml` (not part of the toolkit)
-builds every example from the tag and attaches `<Example>-<version>.merged.bin` (ESP32, flash at 0x0) / `.uf2` (RP2040 /
-RP2350) and `firmware-<version>.json` (sha256) to the Release. The probe reports the same version as its describe firmware
+builds every profile of every example from the tag and attaches `<Example>-<profile>-<version>.merged.bin` (ESP32, flash
+at 0x0) / `.uf2` (RP2040 / RP2350) and `firmware-<version>.json` (sha256) to the Release. The probe reports the same version as its describe firmware
 string.
 
 ## License

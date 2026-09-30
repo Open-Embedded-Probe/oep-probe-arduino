@@ -23,7 +23,12 @@ uint32_t hzOf(uint32_t half_ns) { return half_ns ? static_cast<uint32_t>(5000000
 
 size_t describePins(const SwdPort &port, uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  w.pinGroup(port.swdio, port.swclk);   // fixed on this probe
+  if (port.pin_choice) {                // any free pair of these (oep-if-debug §1)
+    static const uint8_t kPair[] = {reg::wire_swd::kPinRoleSwdio, reg::wire_swd::kPinRoleSwclk};
+    w.roleChannels(kPair, 2, port.pin_choice);
+  } else {
+    w.pinGroup(port.swdio, port.swclk); // fixed on this probe
+  }
   w.u8(kTagImplementation, 1);          // bit-bang
   return w.ok() ? w.length() : 0;
 }
@@ -33,6 +38,35 @@ size_t describePins(const SwdPort &port, uint8_t *out, size_t capacity) {
 // ---- oep.wire.swd --------------------------------------------------------------------------------
 
 size_t WireSwd::describe(uint8_t *out, size_t capacity) { return describePins(port_, out, capacity); }
+
+bool WireSwd::allowed(uint16_t swdio, uint16_t swclk) const {
+  if (!port_.pin_choice) return swdio == port_.swdio && swclk == port_.swclk;
+  return swdio < 64 && swclk < 64 && swdio != swclk && ((port_.pin_choice >> swdio) & 1) && ((port_.pin_choice >> swclk) & 1);
+}
+
+bool WireSwd::free(uint16_t swdio, uint16_t swclk) const {
+  if (!port_.pin_choice || !port_.pins) return true;   // a fixed pair is the wire's own (kept out of the pin table)
+  const bool mine = port_.connected && swdio == port_.swdio && swclk == port_.swclk;
+  auto ok = [&](uint16_t c) { const uint8_t o = port_.pins->owner(c); return o == 0 || (mine && o == port_.pin_owner); };
+  return ok(swdio) && ok(swclk);
+}
+
+bool WireSwd::move(uint16_t swdio, uint16_t swclk) {
+  if (swdio == port_.swdio && swclk == port_.swclk) return true;
+  if (port_.connected || !port_.pin_choice || !allowed(swdio, swclk) || !free(swdio, swclk)) return false;
+  port_.io.releaseBoth();   // the old pair back to plain Hi-Z inputs (setup pulled SWDIO up)
+  gpio_disable_pulls(port_.swdio);
+  gpio_disable_pulls(port_.swclk);
+  port_.swdio = swdio;
+  port_.swclk = swclk;
+  return true;              // wake() sets the new pair up
+}
+
+void WireSwd::close() {
+  port_.io.releaseBoth();
+  port_.connected = false;
+  if (port_.pin_choice && port_.pins) port_.pins->releaseQuiet(port_.pin_owner);
+}
 
 bool WireSwd::xferDpidr(uint32_t &dpidr) {
   uint32_t id = 0;
@@ -66,30 +100,67 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
                                          reg::wire_swd::kTlvAttachPins};
   Tail tail;
   switch (op) {
-    case kOpScan: {   // count(u8) pairs [TLV]  ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) DPIDR(u32) per answer
-      size_t fixed = 0;
-      if (const uint8_t bad = fixedPairScan(payload, length, port_.swdio, port_.swclk, fixed)) return rejected(bad);
-      const Result parsed = plainTail(tail, payload, length, fixed, out, capacity);
+    case kOpScan: {
+      // count(u8) pairs [TLV 0x01 skip]  ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) DPIDR(u32) per
+      // answer (oep-if-debug §1)
+      if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
+      const uint8_t count = payload[0];
+      const size_t fixed = 1u + 4u * count;
+      static const uint8_t kScanTags[] = {reg::wire_swd::kTlvScanSkip};
+      const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 11) return failed();
-      uint32_t dpidr = 0;
-      bool dormant = false;
-      out[0] = payload[0] ? payload[0] : 1;   // tried: every pair asked for (they are all the one pair)
-      out[1] = 0;
-      bool found;
-      if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state
-        found = xferDpidr(dpidr);
-      } else {
-        found = wake(nullptr, port_.half_ns, dpidr, dormant);
-        port_.io.releaseBoth();
+      uint16_t skip = 0;
+      {
+        uint8_t len = 0;
+        if (const uint8_t *v = tail.find(reg::wire_swd::kTlvScanSkip, len)) {
+          if (count || len != 2) return rejected(kRejectMalformed);   // skip goes with count 0 only
+          skip = getU16(v);
+        }
       }
-      if (!found) return tail.finish(completed(2), out, capacity);
-      out[1] = 1;
-      out[2] = kKindArmAdi;
-      putU16(out + 3, port_.swdio);
-      putU16(out + 5, port_.swclk);
-      putU32(out + 7, dpidr);
-      return tail.finish(completed(11), out, capacity);
+      for (uint8_t k = 0; k < count; ++k) {   // allowed, free, and - the one seat taken - the live pair
+        const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
+        if (!allowed(d, c) || !free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
+          return rejected(kRejectUnavailable);
+      }
+      if (capacity < 2) return failed();
+      size_t at = 2;
+      uint8_t tried = 0, found = 0;
+      auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full
+        if (at + 9 > capacity) return false;
+        uint32_t dpidr = 0;
+        bool ok = false;
+        if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state
+          ok = xferDpidr(dpidr);
+        } else if (move(d, c)) {
+          bool dormant = false;
+          ok = wake(nullptr, port_.half_ns, dpidr, dormant);
+          port_.io.releaseBoth();
+        }
+        if (ok) {
+          out[at] = kKindArmAdi;
+          putU16(out + at + 1, d);
+          putU16(out + at + 3, c);
+          putU32(out + at + 5, dpidr);
+          at += 9;
+          ++found;
+        }
+        ++tried;
+        return true;
+      };
+      if (count) {
+        for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
+      } else if (port_.connected || !port_.pin_choice) {   // the count-0 list: the live pair, or the fixed one
+        if (skip == 0) tryPair(port_.swdio, port_.swclk);
+      } else {                                            // swdio ascending, then swclk; held pairs left out
+        uint32_t index = 0;
+        bool more = true;
+        for (uint16_t d = 0; d < 64; ++d)
+          for (uint16_t c = 0; c < 64; ++c)
+            if (more && tried < 255 && allowed(d, c) && free(d, c) && index++ >= skip) more = tryPair(d, c);
+      }
+      out[0] = tried;
+      out[1] = found;
+      return tail.finish(completed(at), out, capacity);
     }
     case kOpAttach: {
       // [TLV 0x01 max_speed u32 Hz, 0x02 targetsel u32]
@@ -99,7 +170,15 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       {
         uint8_t plen = 0;
         const uint8_t *pins = tail.find(reg::wire_swd::kTlvAttachPins, plen);
-        if (const uint8_t bad = fixedPairPins(pins, plen, port_.swdio, port_.swclk)) return rejected(bad);
+        if (!pins) {
+          if (port_.pin_choice) return rejected(kRejectUnavailable);   // the host names the pair
+        } else {
+          if (plen != 4) return rejected(kRejectMalformed);
+          const uint16_t d = getU16(pins), c = getU16(pins + 2);
+          if (!allowed(d, c) || !free(d, c)) return rejected(kRejectUnavailable);
+          if (port_.connected && (d != port_.swdio || c != port_.swclk)) return rejected(kRejectUnavailable);   // no seat
+          if (!move(d, c)) return rejected(kRejectUnavailable);
+        }
       }
       if (port_.exhausted()) return rejected(kRejectUnavailable);
       if (capacity < 11) return failed();
@@ -140,6 +219,10 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         if (ok) {
           port_.connected = true;
           port_.numberNew();
+          if (port_.pin_choice && port_.pins) {   // the live connection holds its pins (core §8.1)
+            port_.pins->claim(port_.swdio, port_.pin_owner);
+            port_.pins->claim(port_.swclk, port_.pin_owner);
+          }
           port_.active_half_ns = half;
           port_.active_targetsel = have_targetsel;
           port_.targetsel = targetsel;
@@ -173,8 +256,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       const Result parsed = tail.parse(payload + 2, length - 2, out, capacity);
       if (refused(parsed)) return parsed;
       if (getU16(payload) != port_.number || !port_.connected) return rejected(kRejectNoConnection);
-      port_.io.releaseBoth();
-      port_.connected = false;
+      close();
       return tail.finish(completed(), out, capacity);
     }
     default:

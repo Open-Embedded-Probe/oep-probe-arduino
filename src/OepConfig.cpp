@@ -45,7 +45,7 @@ bool ProbeConfig::addUart(FixtureUart &uart) {
 
 size_t ProbeConfig::nameOf(void *self, uint8_t kind, uint16_t id, char *out, size_t room) {
   const ProbeConfig &c = *static_cast<ProbeConfig *>(self);
-  if (kind == Binds::kSlotConsole && id < kMaxPlaces && c.slots_[id].set) {
+  if (kind == Binds::kSlotConsole && id < kMaxSlots && c.slots_[id].set) {
     const size_t n = c.slots_[id].name_length < room ? c.slots_[id].name_length : room;
     memcpy(out, c.slots_[id].name, n);
     return n;
@@ -84,15 +84,15 @@ size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
     v[2] = idle_[c];
     w.put(cfg::kTlvItemIdle, v, 3);
   }
-  for (uint8_t i = 0; i < kMaxPlaces; ++i) {   // ascending slot
+  for (uint8_t i = 0; i < kMaxSlots; ++i) {   // ascending slot
     const Slot &s = slots_[i];
     if (!s.set) continue;
     const Place &p = places_[s.place];
     uint8_t v[kSlotFixed + kMaxName + 1 + 2 * kMaxLock];
     v[0] = i;
     putU16(v + 1, p.wire_fn);
-    putU16(v + 3, p.port->swdio);
-    putU16(v + 5, p.port->swclk);
+    putU16(v + 3, s.swdio);
+    putU16(v + 5, s.swclk);
     v[7] = s.attach;
     putU16(v + 8, s.retry_s);
     putU32(v + 10, s.max_hz);
@@ -131,7 +131,7 @@ bool ProbeConfig::sourceFor(const Slot *slots, uint8_t kind, uint16_t id, Binds:
   out.kind = kind;
   out.id = id;
   if (kind == Binds::kSlotConsole) {
-    if (id >= kMaxPlaces || !slots[id].set) return false;
+    if (id >= kMaxSlots || !slots[id].set) return false;
     out.stream = places_[slots[id].place].console;
     return true;
   }
@@ -148,9 +148,9 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
   size_t role_count = 0;
   uint16_t plan_fns[16];
   size_t plan_fn_count = 0;
-  Slot slots[kMaxPlaces];
-  for (size_t i = 0; i < kMaxPlaces; ++i) slots[i] = slots_[i];
-  bool slot_touched[kMaxPlaces] = {};
+  Slot slots[kMaxSlots];
+  for (size_t i = 0; i < kMaxSlots; ++i) slots[i] = slots_[i];
+  bool slot_touched[kMaxSlots] = {};
   struct BindItem { bool touched = false; bool set = false; uint8_t mode = 0, selected = 0, count = 0;
                     uint8_t kinds[Binds::kMaxStreams] = {}; uint16_t ids[Binds::kMaxStreams] = {}; };
   BindItem binds[Binds::kMaxPorts];
@@ -189,7 +189,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
     } else if (tag == cfg::kTlvItemSlot) {
       if (len < 1) return rejected(kRejectMalformed);
       const uint8_t n = v[0];
-      if (n >= place_count_ || slot_touched[n]) return rejected(kRejectMalformed);   // slots_max = the places
+      if (n >= kMaxSlots || slot_touched[n]) return rejected(kRejectMalformed);   // slots_max
       slot_touched[n] = true;
       Slot &s = slots[n];
       s = Slot{};
@@ -203,10 +203,9 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       if (idle > reg::wire_rvswd::kIdleClockLow) return rejected(kRejectMalformed);
       if (name_length < 1 || name_length > kMaxName) return rejected(kRejectMalformed);
       for (uint8_t k = 0; k < name_length; ++k) if (!nameChar(static_cast<char>(v[kSlotFixed + k]))) return rejected(kRejectMalformed);
-      int place = -1;   // the place with this wire and pin pair
+      int place = -1;   // the place of this wire, with a pair it allows (fixed, or any the host may choose)
       for (size_t k = 0; k < place_count_; ++k)
-        if (places_[k].wire_fn == wire_fn && places_[k].port->swdio == swdio && places_[k].port->swclk == swclk)
-          place = static_cast<int>(k);
+        if (places_[k].wire_fn == wire_fn && pairAllowed(*places_[k].port, swdio, swclk)) place = static_cast<int>(k);
       if (place < 0) return rejected(kRejectUnavailable);
       DmiPhy &phy = places_[place].port->dm.phy();
       if (idle && !phy.canIdleClockLow()) return rejected(kRejectMalformed);   // idle_clock low: rvswd's only
@@ -218,6 +217,8 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
         return rejected(kRejectMalformed);
       s.set = true;
       s.place = static_cast<uint8_t>(place);
+      s.swdio = swdio;
+      s.swclk = swclk;
       s.attach = attach;
       s.retry_s = retry_s;
       s.max_hz = max_hz;
@@ -253,9 +254,18 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
     }
   }
   // the whole: one slot per place, at most one at-boot slot per wire (max_connections 1), every bind's streams there
-  for (size_t a = 0; a < kMaxPlaces; ++a)
-    for (size_t b = a + 1; b < kMaxPlaces; ++b)
-      if (slots[a].set && slots[b].set && slots[a].place == slots[b].place) return rejected(kRejectUnavailable);
+  // the whole: no two slots on one place with the same pair, at most one at-boot slot per wire (max_connections 1),
+  // every bind's streams there
+  for (size_t a = 0; a < kMaxSlots; ++a) {
+    if (!slots[a].set) continue;
+    uint8_t at_boot = 0;
+    for (size_t b = 0; b < kMaxSlots; ++b) {
+      if (!slots[b].set || slots[b].place != slots[a].place) continue;
+      if (b > a && slots[b].swdio == slots[a].swdio && slots[b].swclk == slots[a].swclk) return rejected(kRejectUnavailable);
+      at_boot += slots[b].attach == cfg::kSlotAttachAtBoot;
+    }
+    if (at_boot > 1) return rejected(kRejectUnavailable);
+  }
   Binds::Spec specs[Binds::kMaxPorts];
   for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {
     specs[port] = binds_.spec(port);
@@ -288,7 +298,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
     memcpy(idle_, idle, sizeof idle_);
     for (uint16_t c = 0; c < PinTable::kChannels; ++c) if ((idle_touched >> c) & 1) pins_->setIdle(c, idle_[c]);
   }
-  for (size_t i = 0; i < kMaxPlaces; ++i) {
+  for (size_t i = 0; i < kMaxSlots; ++i) {
     if (!slot_touched[i]) continue;
     slots_[i] = slots[i];
     runs_[i] = SlotRun{};
@@ -296,10 +306,6 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
   }
   for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {
     if (binds[port].touched) binds_.set(port, specs[port]);
-  }
-  for (size_t k = 0; k < place_count_; ++k) {   // the connections entry's slot
-    places_[k].port->slot = 0xff;
-    for (uint8_t i = 0; i < kMaxPlaces; ++i) if (slots_[i].set && slots_[i].place == k) places_[k].port->slot = i;
   }
   poll();
   return completed();
@@ -342,7 +348,8 @@ void ProbeConfig::runSlot(uint8_t i) {
       r.tried = true;
       r.last_try_ms = millis();
       uint32_t status = 0;
-      if (attachRunning(port, DebugPort::kUserSlot, status, s.max_hz, s.idle_low)) {
+      // the link to the slot's pair first (host-chosen pins; a fixed pair is always there), unless its pins are held
+      if (usePair(port, s.swdio, s.swclk) && attachRunning(port, DebugPort::kUserSlot, status, s.max_hz, s.idle_low)) {
         r.mismatch = lockMatches(s, port.has_tid, port.tid) != 1;
         r.mismatch_has_tid = port.has_tid;
         r.mismatch_tid = port.tid;
@@ -350,7 +357,7 @@ void ProbeConfig::runSlot(uint8_t i) {
       }
     }
   }
-  if (!port.connected) return;
+  if (!port.connected || !onPair(s)) return;   // no link, or the link is on another pair (another slot, the host)
   if (lockMatches(s, port.has_tid, port.tid) == 1 && (at_boot || bound(i))) {
     port.users |= DebugPort::kUserSlot;
     r.mismatch = false;
@@ -361,12 +368,13 @@ void ProbeConfig::runSlot(uint8_t i) {
 }
 
 void ProbeConfig::poll() {
-  for (size_t k = 0; k < place_count_; ++k) {   // a place with no slot keeps no slot use
-    bool any = false;
-    for (uint8_t i = 0; i < kMaxPlaces; ++i) any |= slots_[i].set && slots_[i].place == k;
-    if (!any && (places_[k].port->users & DebugPort::kUserSlot)) releaseConnection(*places_[k].port, DebugPort::kUserSlot, false);
+  for (size_t k = 0; k < place_count_; ++k) {   // the slot on the pair the link is on now: the connections entry's slot
+    DebugPort &port = *places_[k].port;
+    port.slot = 0xff;
+    for (uint8_t i = 0; i < kMaxSlots; ++i) if (slots_[i].set && slots_[i].place == k && onPair(slots_[i])) port.slot = i;
+    if (port.slot == 0xff && (port.users & DebugPort::kUserSlot)) releaseConnection(port, DebugPort::kUserSlot, false);
   }
-  for (uint8_t i = 0; i < kMaxPlaces; ++i) if (slots_[i].set) runSlot(i);
+  for (uint8_t i = 0; i < kMaxSlots; ++i) if (slots_[i].set) runSlot(i);
 }
 
 // ---- storage -------------------------------------------------------------------------------------------------------
@@ -408,9 +416,9 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {
   w.put(cfg::kTlvDescribeStorage, st, sizeof st);
   static const uint8_t kItems[] = {cfg::kTlvItemPlan, cfg::kTlvItemSlot, cfg::kTlvItemBind, cfg::kTlvItemIdle};
   w.put(cfg::kTlvDescribeItems, kItems, pins_ ? sizeof kItems : sizeof kItems - 1);
-  w.u8(cfg::kTlvDescribeSlotsMax, static_cast<uint8_t>(place_count_));
+  w.u8(cfg::kTlvDescribeSlotsMax, place_count_ ? static_cast<uint8_t>(kMaxSlots) : 0);
   w.u8(cfg::kTlvDescribeBindModes, 0b111);   // last-reset, manual, mixed
-  for (uint8_t i = 0; i < kMaxPlaces; ++i) {   // slot_state (probe.config §3.2), lock-free
+  for (uint8_t i = 0; i < kMaxSlots; ++i) {   // slot_state (probe.config §3.2), lock-free
     const Slot &s = slots_[i];
     if (!s.set) continue;
     const SlotRun &r = runs_[i];
@@ -418,7 +426,7 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {
     uint8_t v[14] = {i};
     bool has_tid = false;
     uint32_t tid = 0;
-    if (port.connected) {
+    if (port.connected && onPair(s)) {
       has_tid = port.has_tid;
       tid = port.tid;
       const int m = lockMatches(s, has_tid, tid);
