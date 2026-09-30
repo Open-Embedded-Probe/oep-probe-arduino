@@ -70,6 +70,7 @@ static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[8];   // the flash's unique id: the probe says who it is on any transport
   oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30, kReserved);
+  oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }
 

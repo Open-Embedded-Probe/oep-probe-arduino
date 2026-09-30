@@ -66,6 +66,7 @@ static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[8];
   oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40, kReserved);
+  oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }
 

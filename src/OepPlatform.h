@@ -12,6 +12,8 @@
 
 #include <Arduino.h>
 
+#include "Oep.h"
+
 #if defined(ARDUINO_ARCH_RP2040)
 #include <hardware/gpio.h>
 #include <pico/unique_id.h>
@@ -98,6 +100,34 @@ inline size_t platformUnitId(uint8_t *out, size_t capacity) {
   (void)out; (void)capacity;
   return 0;
 #endif
+}
+
+// The MCU's part and revision for oep.core's describe chip (core §7.5): "esp32p4 v1.0", "rp2350 v2" (the SDK's chip
+// version number, not a stepping letter). -> bytes written, 0 when unknown.
+inline size_t platformChip(char *out, size_t room) {
+  int n = 0;
+#if defined(ARDUINO_ARCH_RP2040)
+#if defined(PICO_RP2350)
+  n = snprintf(out, room, "rp2350 v%u", static_cast<unsigned>(rp2350_chip_version()));
+#else
+  n = snprintf(out, room, "rp2040 v%u", static_cast<unsigned>(rp2040_chip_version()));
+#endif
+#elif defined(ARDUINO_ARCH_ESP32)
+  const unsigned rev = ESP.getChipRevision();   // major x 100 + minor
+  n = snprintf(out, room, "%s v%u.%u", ESP.getChipModel(), rev / 100, rev % 100);
+  for (int i = 0; i < n && static_cast<size_t>(i) < room; ++i)
+    if (out[i] >= 'A' && out[i] <= 'Z') out[i] = static_cast<char>(out[i] - 'A' + 'a');   // "ESP32-P4" -> "esp32-p4"
+#else
+  (void)out; (void)room;
+#endif
+  return n < 0 ? 0 : (static_cast<size_t>(n) < room ? static_cast<size_t>(n) : room);
+}
+
+// oep.core's describe chip (core §7.5, optional): a sketch's describe calls it after describeCore.
+inline bool describeChip(TlvWriter &w) {
+  char chip[32];
+  const size_t n = platformChip(chip, sizeof chip);
+  return n ? w.put(reg::core::kTlvDescribeChip, chip, n) : true;
 }
 
 // A hardware random number (the endpoint's boot id, core §7.1).

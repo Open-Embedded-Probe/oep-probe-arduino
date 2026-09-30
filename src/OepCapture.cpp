@@ -87,7 +87,7 @@ void LogicCapture::harvest(const Chunk &chunk) {
       info.serial = completed_;
       info.position = mode_ == 3 ? captured_ : static_cast<uint64_t>(completed_) * segment_bytes_;
       const uint64_t first_sample = captured_ * 8 / width_;
-      info.start_us = start_us_ + first_sample * rate_den_ * 1000000ull / rate_num_;
+      info.start_ns = start_ns_ + nsOf(first_sample);
       info.flags = gap_pending_ ? 1 : 0;
       gap_pending_ = false;
     }
@@ -604,7 +604,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
   if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
-  start_us_ = static_cast<uint64_t>(esp_timer_get_time());
+  start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
   if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
   state_ = kStateCapturing;
   putU32(out, 0);
@@ -625,13 +625,20 @@ void LogicCapture::stopRepeat() {
   if (fill_ && completed_ - released_ < segment_count_) finishSegment(fill_, infos_[completed_ % kInfos].flags | 2);
 }
 
+uint64_t LogicCapture::nsOf(uint64_t samples) const {
+  // samples x den / num seconds: split so that no product leaves u64 (num <= 160e6, den <= 255)
+  const uint64_t whole = samples / rate_num_, part = samples % rate_num_ * rate_den_;
+  return whole * rate_den_ * 1000000000ull + part / rate_num_ * 1000000000ull + part % rate_num_ * 1000000000ull / rate_num_;
+}
+
 size_t LogicCapture::infoBytes(const Info &info, uint8_t *out) const {
   putU32(out, info.serial);
   putU64(out + 4, info.position);
   putU32(out + 12, info.samples);
-  putU64(out + 16, info.start_us);
-  putU32(out + 24, 0xFFFFFFFFu);
-  out[28] = info.flags;
+  putU64(out + 16, info.start_ns);
+  putU32(out + 24, kStartUncertaintyNs);
+  putU32(out + 28, 0xFFFFFFFFu);
+  out[32] = info.flags;
   return kInfoBytes;
 }
 
@@ -639,9 +646,10 @@ size_t LogicCapture::segmentInfo(uint8_t *out) const {
   putU32(out, 0);                  // serial
   putU64(out + 4, 0);              // position
   putU32(out + 12, samples_);
-  putU64(out + 16, start_us_);
-  putU32(out + 24, 0xFFFFFFFFu);   // no trigger inside (immediate start)
-  out[28] = 0;
+  putU64(out + 16, start_ns_);
+  putU32(out + 24, kStartUncertaintyNs);
+  putU32(out + 28, 0xFFFFFFFFu);   // no trigger inside (immediate start)
+  out[32] = 0;
   return kInfoBytes;
 }
 
@@ -747,7 +755,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       parlio_receive_config_t rc = {};
       rc.delimiter = delimiter_;
       if (parlio_rx_unit_receive(unit_, buffer_, bytes_, &rc) != ESP_OK) { state_ = kStateError; return failed(); }
-      start_us_ = micros();
+      start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
       if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { state_ = kStateError; return failed(); }
       state_ = kStateCapturing;
       putU32(out, 0);              // blocking_ms: DMA, the probe keeps answering
