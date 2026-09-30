@@ -83,6 +83,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   void trackTriggerAt(uint64_t ns) override;
   bool trackTriggerNs(uint64_t &ns) const override;
   void trackForce() override { groupOp(kOpForce); }
+  bool trackArmed() const override { return static_cast<uint64_t>(produced_) * 8 / (width_ ? width_ : 1) >= pretrigger_; }
   uint32_t trackLoad() const override { return rate_den_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * rate_num_ / rate_den_) : 0; }
   bool trackStart() override { return groupOp(kOpStart); }
   void trackStop() override { groupOp(kOpStop); }
@@ -165,7 +166,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint64_t ext_sample_ = 0;
   uint32_t rate_hz_ = 0;                     // as asked (a follower opens the ring at it)
   void harvestTriggered(const Chunk &chunk);
-  bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at);
+  bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at, uint64_t min_at);
   Result startTriggered(uint8_t *out, size_t capacity);
   bool openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
   void pollTriggered();

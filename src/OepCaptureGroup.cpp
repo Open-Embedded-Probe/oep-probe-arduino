@@ -77,6 +77,7 @@ void CaptureGroup::unbind() {
   running_ = started_ = false;
   start_ns_ = trigger_ns_ = ~uint64_t{0};
   trigger_ = -1;
+  trigger_pending_ = false;
 }
 
 uint8_t CaptureGroup::state() const {
@@ -152,13 +153,17 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       if (capacity < 12) return failed();
       start_ns_ = nowNs();
       trigger_ns_ = ~uint64_t{0};
-      for (size_t k = 0; k < bound_count_; ++k) {   // the followers first: their rings run before the trigger can come
+      // The followers first: their rings run before the trigger can come. The trigger track starts once each of them
+      // holds its pretrigger (poll): a trigger right at the start found the analog with no values yet (0.0.15, the P4).
+      for (size_t k = 0; k < bound_count_; ++k) {
         GroupTrack &t = *tracks_[bound_[k]].track;
+        if (static_cast<int>(bound_[k]) == trigger_) continue;
         if (!(t.following_ ? t.trackStartFollowing() : t.trackStart())) {   // the rest must not run alone
-          for (size_t j = 0; j < k; ++j) tracks_[bound_[j]].track->trackStop();
+          for (size_t j = 0; j < bound_count_; ++j) tracks_[bound_[j]].track->trackStop();
           return failed();
         }
       }
+      trigger_pending_ = trigger_ >= 0;
       running_ = started_ = true;
       putU32(out, 0);   // blocking_ms: every track keeps the probe answering
       putU64(out + 4, start_ns_);
@@ -167,6 +172,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
     case grp::kOpStop: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      trigger_pending_ = false;
       for (size_t k = 0; k < bound_count_; ++k) tracks_[bound_[k]].track->trackStop();
       if (running_ && subscribed_) {
         const uint8_t reason = cap::kStoppedReasonHost;
@@ -178,7 +184,10 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
     case grp::kOpForce: {   // the trigger track starts now; the others follow it as for a trigger
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (trigger_ >= 0 && running_ && trigger_ns_ == ~uint64_t{0}) tracks_[trigger_].track->trackForce();
+      if (trigger_ >= 0 && running_ && trigger_ns_ == ~uint64_t{0}) {
+        if (trigger_pending_ && !startTrigger()) return failed();   // now, with what pretrigger the followers have
+        tracks_[trigger_].track->trackForce();
+      }
       return tail.finish(completed(), out, capacity);
     }
     case grp::kOpStatus: {   // -> state(u8) start_ns(u64) trigger_ns(u64) trigger_fn(u16)
@@ -197,7 +206,21 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
   }
 }
 
+bool CaptureGroup::startTrigger() {
+  trigger_pending_ = false;
+  if (tracks_[trigger_].track->trackStart()) return true;
+  for (size_t k = 0; k < bound_count_; ++k) tracks_[bound_[k]].track->trackStop();
+  running_ = false;
+  return false;
+}
+
 void CaptureGroup::poll() {
+  if (running_ && trigger_pending_) {
+    bool armed = true;
+    for (size_t k = 0; k < bound_count_; ++k)
+      if (static_cast<int>(bound_[k]) != trigger_) armed &= tracks_[bound_[k]].track->trackArmed();
+    if (armed) startTrigger();
+  }
   uint64_t ns = 0;
   if (running_ && trigger_ >= 0 && trigger_ns_ == ~uint64_t{0} && tracks_[trigger_].track->trackTriggerNs(ns)) {
     trigger_ns_ = ns;
