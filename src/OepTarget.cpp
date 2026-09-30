@@ -301,9 +301,7 @@ size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   // bit0 block read/write (progbuf + autoexec), bit1 run until halt, bit2 reset (ndmreset), bit3 step
   w.u32(kTagFeatures, 0b1111);
-  // block read / write leave a0, a1 (buffer addresses), s0, s1 (pointer, word) changed (oep-if-debug §4.5)
-  static const uint8_t kClobbers[] = {0x0a, 0x10, 0x0b, 0x10, 0x08, 0x10, 0x09, 0x10};
-  w.put(reg::target_riscv_dm::kTlvDescribeClobbers, kClobbers, sizeof kClobbers);
+  // block read / write use a0, a1, s0, s1 and put them back before the hart runs again (oep-if-debug §4.5)
   w.u8(kTagImplementation, 1);
   // One block operation's data in bytes: the word buffer, and what fits a frame - write_block's request (header 6,
   // session 4, connection 2, address, count = 18) and read_block's result (header 5, done, status = 8).
