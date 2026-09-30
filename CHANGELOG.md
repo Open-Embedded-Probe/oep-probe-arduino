@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.8
 - (EN) Examples to learn from, for any RP2040 / RP2350 or classic ESP32 board: `01.Basics/MinimalProbe` (oep.core alone), `01.Basics/FixtureProbe` (gpio + uart, pins planned by the host), `02.Interfaces/CustomInterface` (your own interface under your own name: describe, the plan, ops, TLV tails). `refused()` and `platformRandom32()` are public for sketches.
 - (JA) 学ぶための example（どの RP2040 / RP2350、classic ESP32 のボードでも）: `01.Basics/MinimalProbe`（oep.core だけ）、`01.Basics/FixtureProbe`（gpio + uart、ピンは host が plan で決める）、`02.Interfaces/CustomInterface`（自分の名前で自分のインターフェース: describe、plan、op、TLV の後ろの部分）。`refused()` と `platformRandom32()` をスケッチから使えるようにした。
 - (EN) Releases attach only `examples/Firmware/`'s builds; every other example is built to check it.
