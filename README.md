@@ -92,7 +92,7 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
 | `examples/01.Basics/`, `examples/02.Interfaces/` | examples to learn from, for any RP2040 / RP2350 or classic ESP32 board: `MinimalProbe` (oep.core alone), `FixtureProbe` (gpio + uart, pins planned by the host), `CustomInterface` (an interface of your own) |
 | `examples/Firmware/OepProbe` | the board firmware, one per chip (profiles rp2040, rp2350, esp32p4, esp32), every pin chosen by the host: RP2 - RVSWD, SWD, gpio, uart; ESP32-P4 - RVSWD, gpio, uart x2, capture, SPI / I2C devices; classic ESP32 - SWIO, gpio, uart, capture, SPI / I2C devices; settings saved |
-| `examples/` | probe firmware: ESP32-P4 + CH32X035, classic ESP32 + CH32V003, RP2350 + CH32L103, RP2040 Zero, the P4 HS logic capture `Esp32P4CaptureProbe` (with `host/stream_test.py`). Being reorganised by what users need: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
+| `examples/` | the rest: the RP2350 + CH32L103 and RP2040 Zero jig probes (to go once `Firmware/OepProbe` is checked on their benches), the P4 HS logic capture `Esp32P4CaptureProbe` (with `host/stream_test.py`), `PicoDebugPortSurvey`. The plan: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
@@ -109,8 +109,8 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
    `sketch.yaml` profile (the core version and libraries pinned there):
 
    ```sh
-   arduino-cli compile --clean examples/Esp32P4X035Probe
-   arduino-cli upload -p <port> examples/Esp32P4X035Probe
+   arduino-cli compile --clean --profile esp32p4 examples/Firmware/OepProbe
+   arduino-cli upload -p <port> --profile esp32p4 examples/Firmware/OepProbe
    ```
 
    Flash the firmware before using a probe: you cannot tell what is on a board.

@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `Esp32P4X035Probe` and `Esp32V003Probe` are gone: their jigs run `Firmware/OepProbe` (esp32p4 / esp32) with their settings, checked on the benches with 0.0.8.
+- (JA) `Esp32P4X035Probe` と `Esp32V003Probe` を消した: その治具は `Firmware/OepProbe`（esp32p4 / esp32）と設定で動き、0.0.8 でベンチを通った。
 - (EN) An attach without pins joins the wire's live connection on a wire whose pins the host chooses too (oep-if-debug §1): a host that did not name the slot's pair was refused unavailable (0.0.8, the X035 jig with an at-boot slot).
 - (JA) host がピンを選ぶ線でも、pins の無い attach は、その線の生きている接続に乗る（oep-if-debug §1）。スロットの組を名指さない host が unavailable で断られていた（0.0.8、at boot のスロットがある X035 の治具）。
 

@@ -88,6 +88,9 @@ examples/
 | `Esp32P4CaptureProbe` | capture、試験の信号、303a:4021 | `05.Capture/LogicCapture`（USB の ID は他と同じにする） |
 | `PicoDebugPortSurvey` | 走査 | `Tools/SwdPinSurvey` |
 
+状態（2026-09-30）: X035 の治具（esp32p4）と V003 の治具（esp32）は、0.0.8 の `Firmware/OepProbe` + 設定でベンチを通ったので、
+`Esp32P4X035Probe` と `Esp32V003Probe` は消した。RP2 の 2 本は、RP2350 のベンチに給電されてから。
+
 ベンチ（ArduinoCore-CH32 の `tests/benches/*.toml`）は、example の名前の代わりに binary と設定のファイルを持つ。切り替えは、
 各治具で新しい binary と設定がベンチの確認を通った版で、古い example を消して行う（途中の二重持ちはしない）。
 

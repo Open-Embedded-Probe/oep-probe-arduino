@@ -85,7 +85,7 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
 | `examples/01.Basics/`、`examples/02.Interfaces/` | 学ぶための example。どの RP2040 / RP2350、classic ESP32 のボードでも動く: `MinimalProbe`（oep.core だけ）、`FixtureProbe`（gpio + uart、ピンは host が plan で決める）、`CustomInterface`（自分のインターフェース） |
 | `examples/Firmware/OepProbe` | ボードの firmware。チップごとに 1 本（profile rp2040、rp2350、esp32p4、esp32）で、ピンはすべて host が選ぶ。RP2 は RVSWD、SWD、gpio、uart。ESP32-P4 は RVSWD、gpio、uart x2、capture、SPI / I2C デバイス。classic ESP32 は SWIO、gpio、uart、capture、SPI / I2C デバイス。設定は保存できる |
-| `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`）。使う人が要るものから並べ直し中: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
+| `examples/` | そのほか: RP2350 + CH32L103 と RP2040 Zero の治具の probe（`Firmware/OepProbe` がそのベンチで確かめられたら消す）、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`、`PicoDebugPortSurvey`。並べ方の案: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に写す |
 | `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
@@ -101,8 +101,8 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
    ライブラリを固定してある）でビルドする:
 
    ```sh
-   arduino-cli compile --clean examples/Esp32P4X035Probe
-   arduino-cli upload -p <port> examples/Esp32P4X035Probe
+   arduino-cli compile --clean --profile esp32p4 examples/Firmware/OepProbe
+   arduino-cli upload -p <port> --profile esp32p4 examples/Firmware/OepProbe
    ```
 
    firmware は**使う前に転送する**（ボードに何が入っているかは分からない）。
