@@ -91,8 +91,8 @@ class Blink final : public oep::Interface {
 | `TargetConsoleStream` + `DmConsole` | `oep.target.console` | debug module を通した target のコンソール（dmseq、DMDATA、SDI） |
 | `WireSwd` + `SwdPort`、`TargetArmAdi` | `oep.wire.swd`、`oep.target.arm-adi` | ARM の SWD。RP2040 / RP2350 |
 | `FixtureGpio`、`FixtureUart` | `oep.fixture.gpio` / `uart` | plan で決めたピンで |
-| `LogicCapture` / `SamplerCapture` | `oep.fixture.capture` | ESP32-P4 の PARLIO / classic ESP32 の GPIO の sampler |
-| `AnalogCapture` | `oep.fixture.analog` | ADC のチャネルを順に、ワンショット、生の値（ESP32 は連続変換、RP2 は FIFO + DMA）。frontend、基準電圧、出荷時の較正 |
+| `LogicCapture` / `SamplerCapture` | `oep.fixture.capture` | ESP32-P4 の PARLIO / classic ESP32 の GPIO の sampler。レベル / エッジのトリガ |
+| `AnalogCapture` | `oep.fixture.analog` | ADC のチャネルを順に、ワンショット、生の値、しきい値のトリガ（ESP32 は連続変換、RP2 は FIFO + DMA）。frontend、基準電圧、出荷時の較正 |
 | `CaptureGroup`（+ `GroupTrack`） | `oep.fixture.capture-group` | トラックを一緒に始める。`GroupTrack` を持つ capture を束ねられる |
 | `P4I2cTarget`、`P4SpiTarget` | `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target` | ESP-IDF の I2C / SPI スレーブ。独自のインターフェースの組 |
 | `ProbeConfig` + `Binds` | `oep.probe.config` | flash に保存し、起動時に行う設定（§7） |

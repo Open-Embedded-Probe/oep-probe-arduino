@@ -92,8 +92,8 @@ class Blink final : public oep::Interface {
 | `TargetConsoleStream` + `DmConsole` | `oep.target.console` | the target's console through the debug module (dmseq, DMDATA, SDI) |
 | `WireSwd` + `SwdPort`, `TargetArmAdi` | `oep.wire.swd`, `oep.target.arm-adi` | ARM SWD, RP2040 / RP2350 |
 | `FixtureGpio`, `FixtureUart` | `oep.fixture.gpio` / `uart` | on planned pins |
-| `LogicCapture` / `SamplerCapture` | `oep.fixture.capture` | ESP32-P4 PARLIO / classic ESP32 GPIO sampler |
-| `AnalogCapture` | `oep.fixture.analog` | ADC channels in turn, one-shot, raw values (ESP32 continuous mode, RP2 FIFO + DMA); frontends, reference, factory calibration |
+| `LogicCapture` / `SamplerCapture` | `oep.fixture.capture` | ESP32-P4 PARLIO / classic ESP32 GPIO sampler; level / edge triggers |
+| `AnalogCapture` | `oep.fixture.analog` | ADC channels in turn, one-shot, raw values, a threshold trigger (ESP32 continuous mode, RP2 FIFO + DMA); frontends, reference, factory calibration |
 | `CaptureGroup` (+ `GroupTrack`) | `oep.fixture.capture-group` | tracks started together; a capture that implements `GroupTrack` can be bound |
 | `P4I2cTarget`, `P4SpiTarget` | `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target` | ESP-IDF I2C / SPI slaves: a custom interface pair |
 | `ProbeConfig` + `Binds` | `oep.probe.config` | settings saved in flash, applied at boot (§7) |
