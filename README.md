@@ -178,7 +178,7 @@ Record changes under `## Unreleased` in `CHANGELOG.md`, (EN) and (JA), and run t
 examples' `sketch.yaml` `dir: ../..` to `OpenEmbeddedProbe (<version>)` on the `release` branch, and makes the ZIP (without
 `tests/`), the tag and the GitHub Release. Then the separate `.github/workflows/firmware.yml` (not part of the toolkit)
 builds every profile of every example from the tag and attaches `<Example>-<profile>-<version>.merged.bin` (ESP32, flash
-at 0x0) / `.uf2` (RP2040 / RP2350) of `examples/Firmware/` and `firmware-<version>.json` (sha256) to the Release (the other examples are built only
+at 0x0) / `.bin` (ESP32, the app image for an update, the P4's DFU) / `.uf2` (RP2040 / RP2350) of `examples/Firmware/` and `firmware-<version>.json` (sha256) to the Release (the other examples are built only
 to check them). The probe reports the same version as its describe firmware
 string.
 

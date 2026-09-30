@@ -22,6 +22,12 @@ jig. Other chips (ESP32-S3, C3, C6, ...) have no released firmware yet: build on
 
 Flash before you use a board: you cannot tell what is on it.
 
+Updating an ESP32-P4 that runs OepProbe needs only its HS port: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the app
+image, not the merged one) writes the other app partition, checks it and restarts into it; the settings stay (clear
+them with `oep config erase <port>` when you want a fresh probe). If the new firmware does not get as far as enumerating, the
+next reset goes back to the one before. A chip that was never flashed, or one that does not start, is flashed with
+esptool on USB-Serial/JTAG as above.
+
 ## 2. Install the host library
 
 ```sh
