@@ -56,6 +56,21 @@ void Ch32Dm::settleHalted(bool ack_reset) {
   halted_ = true;
 }
 
+// The target's mailbox across a stop (oep-if-debug §4.2). A client's halt -> read_block -> resume left the abstract
+// command's word in DATA0; the target, missing its dmseq frame, read that as silence and waited out its timeout, and
+// the console went quiet for seconds (2026-09-30, CH32X035, ch32rv monitor + another client).
+void Ch32Dm::keepMailbox() {
+  if (kept_) return;
+  kept_ = phy_.read(kData0, kept0_) && phy_.read(kData1, kept1_);
+}
+
+void Ch32Dm::giveMailbox() {   // abstractauto is off here: writing DATA0 runs no command
+  if (!kept_) return;
+  phy_.write(kData1, kept1_);   // the order the target writes them in (dmseq: DATA1 before DATA0)
+  phy_.write(kData0, kept0_);
+  kept_ = false;
+}
+
 bool Ch32Dm::halt() {
   if (!attach()) return false;
   // Already stopped: nothing to do (v1 riscv-dm halt is idempotent). Asked of the debug module rather than halted_,
@@ -65,6 +80,7 @@ bool Ch32Dm::halt() {
     uint32_t status = 0;
     if (phy_.read(kDmStatus, status) && (status & 0xf) == 2 && (status & (1u << 9)) && !(status & (3u << 18))) {
       if (!halted_) settleHalted(false);
+      keepMailbox();   // stopped by itself (a breakpoint) or by the host: still the target's, unless the host wrote them
       return true;
     }
   }
@@ -86,6 +102,7 @@ bool Ch32Dm::halt() {
         // on this part, and the first word of the first memory read after a halt came back as the previous
         // operation's leftover (2026-09-23): settleHalted starts the caller from a freshly brought-up bus.
         settleHalted(status & (3u << 18));
+        keepMailbox();
         return true;
       }
     }
@@ -99,6 +116,7 @@ bool Ch32Dm::hostLetGo() {
   if (!attached() || !phy_.read(kDmStatus, status) || (status & 0xf) != 2) return false;   // version 2: a real read
   if (!(status & (1u << 11)) || (status & (1u << 8))) return false;                         // allrunning, !anyhalted
   host_raw_ = false;
+  kept_ = false;   // it ran without us: what was kept is stale
   halted_ = false;
   return true;
 }
@@ -112,6 +130,7 @@ bool Ch32Dm::resume() {
   // once (a breakpoint straight ahead on a CH32L103) comes back as not ok: the host, which knows the part, reads dpc and
   // asks again (the CH32 rule lives in the host, not in this generic operation).
   relink();                                                      // a change of state drops the CH32's link
+  giveMailbox();                                                 // the target's DATA0 / DATA1 back first
   phy_.write(kDmControl, 0x40000001);                            // resumereq, once
   bool ok = false;
   int halted_reads = 0;
@@ -377,6 +396,7 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   // sketch: 0 of 28 at the vector; at the slowest period 28 of 28, as through a WCH-LinkE). So run the reset at
   // the slowest period and tune the link again once the hart has stopped. A DMSTATUS without version 2 is noise.
   phy_.useSafeSpeed();
+  kept_ = false;                           // the target starts over: its old mailbox is not wanted back
   phy_.write(kDmControl, 0x80000003);      // haltreq | ndmreset | dmactive
   phy_.write(kDmControl, 0x80000001);
   // Out of reset the hart may be unavailable for a while; it should then come up halted at the reset vector.
@@ -407,6 +427,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved) {
   if (!readRegister(0x07b1, dpc_before) || !readRegister(0x07b0, dcsr)) return false;
   if (!writeRegister(0x07b0, dcsr | 0x4u)) return false;   // dcsr.step, the privilege level as it is
   phy_.write(kAbstractAuto, 0);
+  giveMailbox();                           // the one instruction may be the target's mailbox code
   phy_.write(kDmControl, 0x40000001);      // resumereq, once
   bool halted = false;
   const uint32_t started = micros();
@@ -422,6 +443,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved) {
     halted_ = false;
     if (!halt()) return false;
   }
+  keepMailbox();                           // before the dpc / dcsr reads below overwrite them again
   const bool ok = readRegister(0x07b1, dpc_after) && writeRegister(0x07b0, dcsr & ~0x4u);
   moved = dpc_after != dpc_before;
   return ok;
@@ -431,6 +453,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
                               uint32_t &dpc) {
   dpc = 0;
   halted_ = false;
+  kept_ = false;                           // the target starts over
   hold(ctx);
   delay(hold_ms);
   // Bring the link up while the target is held (it may or may not answer yet), queue the halt request, then let

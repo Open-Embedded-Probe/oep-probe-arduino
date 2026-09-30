@@ -38,6 +38,7 @@ class Ch32Dm {
   bool writeDmi(uint8_t address, uint32_t value) {
     if (!attach()) return false;
     host_raw_ = true;             // the host may be running abstract commands: DATA0 / DATA1 are its operands now
+    kept_ = false;                // and it gives them back itself, if at all (oep-if-debug §4.2)
     phy_.write(address, value);   // a DMI write reports nothing; read back through the list to check
     return true;
   }
@@ -75,6 +76,12 @@ class Ch32Dm {
   DmiPhy &phy_;
   bool halted_ = false;
   bool host_raw_ = false;
+  // DATA0 / DATA1 as the hart left them when it stopped (oep-if-debug §4.2): the target's (a dmseq frame or the
+  // answer to one). Abstract commands overwrite them while it is halted; they go back before it runs again.
+  bool kept_ = false;
+  uint32_t kept0_ = 0, kept1_ = 0;
+  void keepMailbox();                     // at a halt: remember them (once per stop)
+  void giveMailbox();                     // before resumereq: write them back (DATA1, then DATA0)
   uint8_t cmderr_ = 0;
   bool waitAbstract();
   void relink();                          // PHY re-sync + abstract-command block back to a known state
