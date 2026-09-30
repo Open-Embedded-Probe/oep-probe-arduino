@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.10
 - (EN) Capture segments give their time in ns on the probe's clock with an uncertainty (oep-if-capture §2: `start_ns`, `start_uncertainty_ns`, 33 bytes): +-5 us on the P4's PARLIO (measured against the GPIO write), +-2 us on the classic ESP32's sampler. The P4's one-shot start reads the same clock as the other modes (esp_timer, not micros()).
 - (JA) キャプチャの区画は、probe の時計の ns と不確かさで時刻を返す（oep-if-capture §2: `start_ns`、`start_uncertainty_ns`、33 byte）。P4 の PARLIO は ±5 µs（GPIO を書いた時刻と比べた実測）、classic ESP32 の sampler は ±2 µs。P4 のワンショットの開始は、ほかのモードと同じ時計（micros() ではなく esp_timer）を読む。
 - (EN) oep.core's describe carries the MCU and its revision (`chip`, core §7.5) in the Firmware and LogicCapture sketches: `describeChip(w)` after `describeCore`.
