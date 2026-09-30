@@ -2,6 +2,28 @@
 
 [English](README.md)
 
+## OEP とは
+
+Open Embedded Probe（OEP）は、**probe**（開発中のチップにつなぐ小さな基板）と、PC の **host** のソフトウェアの間の、オープンな
+プロトコルです。1 つの probe が、デバッガ（WCH の CH32 の RVSWD / SWIO、ARM の SWD）、target のコンソール、試験の治具（GPIO、
+UART、ロジックのキャプチャ）を兼ね、どの host（書き込みの道具、IDE のモニタ、pytest）も同じ方法で話します。
+
+- probe は**自分にできることを宣言する**（名前で探すインターフェースと、そのピンや上限）ので、host はボードの表を持たなくてよい。
+- **セッションのロック**で、2 つのプログラムが同時に probe を動かすのを防ぐ。
+- **USB の vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge** のどれでも運べる。シリアルの口は、OEP のフレームと target の
+  コンソールを 1 本で運ぶ。
+- probe は線のことだけを知り、**target が何か**（flash の配置、ローダー）は **host が持つ**。
+
+このライブラリは、ESP32-P4、classic ESP32、RP2350、RP2040 をその probe にします。`examples/` は、手元の治具のための、そのまま
+使える firmware です。
+
+- 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) — まず [レビューの手引き](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md) から。プロトコルの本体は
+  [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
+- host のライブラリ: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python)（`pip install oep-client-python`、
+  `oep` の命令、試験のための偽の probe）。
+
+## このライブラリ
+
 Open Embedded Probe（OEP）の probe を Arduino で書くためのライブラリと、各 probe のファームウェア（`examples/`）。
 v1（oep-spec の `docs/oep-core.ja.md` と標準インターフェースの `docs/oep-if-*.ja.md`、固める候補の形）を話す。破壊的変更を前提とする実験段階で、互換は約束しない。
 
