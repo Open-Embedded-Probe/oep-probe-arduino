@@ -35,7 +35,8 @@ constexpr Frontend kFrontends[] = {{0, 100, 950, 0}, {1, 100, 1250, 2500}, {2, 1
 constexpr uint32_t kMinTotalHz = 20000, kMaxTotalHz = 100000;    // the driver's floor; a ceiling kept low (DMA to RAM)
 constexpr uint32_t kRatePpm = 20000;                             // not measured on this chip: a wide guess
 constexpr size_t kRecordBytes = 2;
-constexpr bool kFirstFrameLost = false;                          // not measured here: the time is not corrected
+constexpr bool kFirstFrameLost = false;                          // the first value is kept (see startNow)
+constexpr uint32_t kStartLagNs = 100000;                         // measured: the first value ~100 us after the start
 constexpr uint32_t kPretriggerRoom = 129;                        // see configure
 #elif defined(ARDUINO_ARCH_ESP32)
 constexpr Frontend kFrontends[] = {{0, 0, 950, 0}, {1, 0, 1250, 2500}, {2, 0, 1750, 6000}, {3, 0, 3100, 12000}};
@@ -431,12 +432,19 @@ bool AnalogCapture::startNow() {
     return false;
   }
   // The P4's driver leaves out the first conversion frame: its first value is one frame after the start. Corrected,
-  // it matched to about 0.1 ms (logic-capture §7.4). Uncorrected (the classic ESP32, not measured), up to a frame off.
+  // it matched to about 0.1 ms (logic-capture §7.4). The classic ESP32 keeps it, but its values came about 100 us
+  // before the logic's for the same edge, at 10, 20 and 40 kS/s alike (50-200 us: a time, not a count of samples,
+  // within one sample either way; a capture-group on the V003 jig, 0.0.16, 2026-09-30).
   if (kFirstFrameLost) {
     start_ns_ += frame_ns;
     uncertainty_ns_ = 200000;
   } else {
+#if defined(CONFIG_IDF_TARGET_ESP32)
+    start_ns_ += kStartLagNs;
+    uncertainty_ns_ = static_cast<uint32_t>(kStartLagNs + static_cast<uint64_t>(channels_) * 1000000000u / total_hz_);
+#else
     uncertainty_ns_ = static_cast<uint32_t>(frame_ns + 100000);
+#endif
   }
 #else
   if (!gAdcReady) { adc_init(); gAdcReady = true; }
