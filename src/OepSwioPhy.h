@@ -4,9 +4,9 @@
 // Single-wire SWIO physical layer for QingKe V2 (CH32V003) on the classic
 // ESP32, ported from the E123-E137 experiments: software bit timing with a
 // cycle coefficient (8 = 262.5/862.5 ns, the closest to the WCH-LinkE's
-// 240/860 ns), read recharge pulses, DMCFGR/SHDWCFGR unlock at attach. The
-// hot path constant-folds the pin, so the pin is fixed at compile time
-// (GPIO16 on the UIAPduino jig). Other architectures get a stub.
+// 240/860 ns), read recharge pulses, DMCFGR/SHDWCFGR unlock at attach. Any
+// GPIO0-31 (begin, or usePins for host-chosen pins); the hot path keeps the
+// pin's mask in a register. Other architectures get a stub.
 #pragma once
 
 #include <Arduino.h>
@@ -17,8 +17,8 @@ namespace oep {
 
 class SwioPhy final : public DmiPhy {
  public:
-  static constexpr int kPin = 16;
-  bool begin(int swio);   // must be kPin
+  bool begin(int swio);   // GPIO0-31
+  bool usePins(int swdio, int swclk) override;   // swclk -1: one wire
   bool attach() override;
   void release() override;
   bool attached() const override { return attached_; }
