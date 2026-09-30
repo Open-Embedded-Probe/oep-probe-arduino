@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.7
 - (EN) Every source file carries its license (`SPDX-License-Identifier: MIT` and the copyright line); `tools/sync_registry.sh` puts them on the copied registry header too. Stale header comments fixed (the frame formats in OepFrame.h, the RP sketches' transport).
 - (JA) すべてのソースファイルにライセンスの表記（`SPDX-License-Identifier: MIT` と著作権の行）を入れた。`tools/sync_registry.sh` は写した registry のヘッダにも付ける。古くなった冒頭の説明を直した（OepFrame.h のフレームの形、RP のスケッチの経路）。
 - (EN) riscv-dm puts back the GPRs its block / word ops use (s0, s1, a0, a1) before the hart runs again (oep-if-debug §4.5); the describe no longer lists clobbers. A sketch stopped over and over by halt -> read_block -> resume died when they were left changed.
