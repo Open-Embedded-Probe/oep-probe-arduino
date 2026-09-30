@@ -600,7 +600,8 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   const uint8_t *v = nullptr;
   while (tail.next(at, raw, v, len)) {
     if ((raw & ~kTagCritical) != (kTagRoleAssignment & ~kTagCritical)) continue;
-    if (len != 5 || count >= kMaxRoles) return rejected(kRejectMalformed);
+    if (len != 5) return rejected(kRejectMalformed);
+    if (count >= kMaxRoles) return rejected(kRejectUnavailable);   // more than the plan holds (core §8)
     roles[count] = {getU16(v), v[2], getU16(v + 3)};
     if (roles[count].function == 0 || roles[count].function > count_) return rejected(kRejectUnknownFunction);
     ++count;
@@ -668,7 +669,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
     for (size_t r = 0; r < old_count && plan_count_ < kMaxRoles; ++r) plan_roles_[plan_count_++] = old[r];
     for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = old_persistent[i];
   };
-  if (plan_count_ + count > kMaxRoles) { undo(); return kRejectMalformed; }
+  if (plan_count_ + count > kMaxRoles) { undo(); return kRejectUnavailable; }   // over plan_roles (core §8)
   if (const uint16_t reason = applyAll(roles, count, true)) { undo(); return reason; }
   if (const uint16_t reason = applyAll(roles, count, false)) { undo(); return reason; }
   for (size_t r = 0; r < count; ++r) plan_roles_[plan_count_++] = roles[r];
@@ -777,7 +778,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   const uint16_t first = getU16(payload + 2);
   const uint8_t *tlv = nullptr;
   size_t tlv_length = 0;
-  if (fn == 0) {   // the sketch's part, then the transports and oep_pid (core §7.5)
+  if (fn == 0) {   // the sketch's part, then the transports, oep_pid and plan_roles (core §7.5)
     if (probe_tlv_length_ <= sizeof scratch_) { memcpy(scratch_, probe_tlv_, probe_tlv_length_); }
     size_t at = probe_tlv_length_ <= sizeof scratch_ ? probe_tlv_length_ : 0;
     for (size_t i = 0; i < transport_count_ && at + 5 <= sizeof scratch_; ++i) {
@@ -790,6 +791,11 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
       const uint8_t v[3] = {reg::core::kTlvDescribeOepPid, 1, 1};
       memcpy(scratch_ + at, v, 3);
       at += 3;
+    }
+    if (at + 4 <= sizeof scratch_) {
+      const uint8_t v[4] = {reg::core::kTlvDescribePlanRoles, 2, kMaxRoles & 0xff, kMaxRoles >> 8};
+      memcpy(scratch_ + at, v, 4);
+      at += 4;
     }
     tlv = scratch_;
     tlv_length = at;
