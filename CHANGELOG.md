@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) capture-group: a second triggered run in one boot follows its own trigger. The group asked the trigger track for its trigger's time while it waited for the followers' pretriggers - before that track had started, so it still held the last run's - and the followers cut their segments at that old time at once (ti 0; the group's trigger_ns the last run's, 0.0.17, both jigs).
+- (JA) capture-group: 1 回の起動の中の 2 回目以降のトリガ付きの取得も、自分のトリガに従う。組は、従う側のプリトリガを待つ間（トリガのトラックを始める前）もトリガの時刻を聞いていたため、前回のトリガの時刻を受け取り、従う側がその古い時刻ですぐ区画を切っていた（ti 0。組の trigger_ns が前回のもの、0.0.17、両方の治具）。
 - (EN) Classic ESP32 analog: the segment's start_ns is 100 us later, measured against the logic's edge in a capture-group at 10, 20 and 40 kS/s (the analog came 50-200 us early, a time rather than a count of samples); start_uncertainty_ns is 100 us plus one sample (it was a whole conversion frame and 100 us).
 - (JA) classic ESP32 のアナログ: 区画の start_ns を 100 µs 後ろにした。capture-group でロジックのエッジと比べ、10、20、40 kS/s で測った（アナログが 50〜200 µs 早かった。サンプル数ではなく時間で一定）。start_uncertainty_ns は 100 µs + 1 サンプル（以前は変換フレーム 1 つ + 100 µs）。
 

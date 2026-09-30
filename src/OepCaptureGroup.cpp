@@ -222,7 +222,10 @@ void CaptureGroup::poll() {
     if (armed) startTrigger();
   }
   uint64_t ns = 0;
-  if (running_ && trigger_ >= 0 && trigger_ns_ == ~uint64_t{0} && tracks_[trigger_].track->trackTriggerNs(ns)) {
+  // not before the trigger track has started: until then it still holds the last run's trigger (the second run in one
+  // boot took that time and the followers cut at once, 0.0.17)
+  if (running_ && trigger_ >= 0 && !trigger_pending_ && trigger_ns_ == ~uint64_t{0} &&
+      tracks_[trigger_].track->trackTriggerNs(ns)) {
     trigger_ns_ = ns;
     for (size_t k = 0; k < bound_count_; ++k)
       if (tracks_[bound_[k]].track->following_) tracks_[bound_[k]].track->trackTriggerAt(ns);
