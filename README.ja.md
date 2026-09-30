@@ -60,4 +60,6 @@ oep config show <probe>
 [arduino-library-release-toolkit](https://github.com/tanakamasayuki/arduino-library-release-toolkit) の共通の仕組みをそのまま使う。
 変更は `CHANGELOG.md` の `## Unreleased` に (EN) / (JA) で書き足し、GitHub Actions の Release（workflow_dispatch）を起動すると、
 `library.properties` の版を上げ、`src/openembeddedprobe_version.h` を作り、`release` ブランチで example の `sketch.yaml` の `dir: ../..` を
-`OpenEmbeddedProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。
+`OpenEmbeddedProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。続けて、別の `.github/workflows/firmware.yml`（toolkit のものではない）が
+tag から各 example をビルドし、`<Example>-<version>.merged.bin`（ESP32、0x0 に書く）/ `.uf2`（RP2040 / RP2350）と
+`firmware-<version>.json`（sha256）を Release に付ける。probe は同じ版を describe の firmware の文字列で返す。
