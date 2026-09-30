@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.17
 - (EN) Firmware/OepProbe: the saved settings are applied again after a reboot. The sketches loaded and applied them before adding the analog and the group, so the interface list they were checked against never matched the one they were saved with: storage "unreadable" after every reboot since 0.0.11 (found after a DFU update, X035 jig). `ProbeConfig::load()` / `applySaved()` belong after the last `endpoint.add()`.
 - (JA) Firmware/OepProbe: 保存した設定が、再起動の後にまた入るようにした。スケッチはアナログと組を足す前に設定を読んで入れていたので、確かめる相手のインターフェースの一覧が、保存したときの一覧と一致しなかった。0.0.11 から、再起動のたびに storage が「unreadable」になっていた（DFU で更新した後に見つかった、X035 の治具）。`ProbeConfig::load()` / `applySaved()` は、最後の `endpoint.add()` の後に呼ぶ。
 - (EN) P4 one-shot without a trigger: when no 64 KiB of internal DMA RAM is left for the segment (the ring a trigger or repeat keeps allocated), the ring is freed and the allocation tried again, then PSRAM. 5 MHz x 4 ch x 130816 samples failed configure after triggered captures (0.0.15, X035 jig).
