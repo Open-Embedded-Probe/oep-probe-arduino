@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.15
 - (EN) The capture-group's trigger (oep-if-capture §4.1): bound with trigger_track, that track waits for its own trigger and the others follow it - they run into their rings from the start, and when the trigger's time is known the group hands it to them, each cutting its segment around its sample nearest to it with its own pretrigger (a pretrigger with an immediate trigger is kept for this). The group's status and triggered event carry trigger_ns and trigger_fn, its state is waiting until then, and force goes to the trigger track. P4: the PARLIO logic and the analog follow and trigger; classic ESP32: the sampler triggers (it cannot follow: its search leaves gaps), the analog follows and triggers; RP2 analog follows up to 8192 values. A follower that cannot is refused at bind. Unverified on hardware.
 - (JA) capture-group のトリガ（oep-if-capture §4.1）: trigger_track を付けて束ねると、そのトラックは自分のトリガを待ち、ほかのトラックはそれに従う。従うトラックは始めからリングに取り続け、トリガの時刻が分かると組がそれを渡し、各トラックはその時刻に最も近い自分のサンプルの周りで、自分の pretrigger で区画を切る（このため、即時のトリガでも pretrigger を覚えておく）。組の status と出来事 triggered は trigger_ns と trigger_fn を返し、それまで state は waiting。force はトリガのトラックへ送る。P4: PARLIO のロジックとアナログは、従うこともトリガになることもできる。classic ESP32: sampler はトリガになれる（探し方にすき間があるので従えない）。アナログは従うこともトリガになることもできる。RP2 のアナログは 8192 値まで従える。従えないトラックは bind で断る。実機では未確認。
 
