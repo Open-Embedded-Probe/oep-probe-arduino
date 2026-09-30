@@ -17,7 +17,7 @@
 | SWD（ARM） | あり | 無し | 無し | 無し |
 | target のコンソール（debug module 経由） | あり | あり | あり | あり |
 | GPIO、UART の fixture | あり | あり（UART 2 つ） | あり | あり |
-| ロジックのキャプチャ | 無し | PARLIO: 16 ch まで、2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps | GPIO の sampler: 8 ch、0.4〜2 MHz、ワンショット | 無し |
+| ロジックのキャプチャ | 無し | PARLIO: 16 ch まで、2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps。ワンショットのレベル / エッジのトリガ、プリトリガは 32 Ki サンプルまで（16 ch） | GPIO の sampler: 8 ch、0.4〜2 MHz、ワンショット。レベル / エッジのトリガを区切りごとに探す | 無し |
 | アナログのキャプチャ（ワンショット、生の値） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | 無し（ビルドしていない） |
 | トラックを一緒に始める（capture-group） | 無し | ロジック + アナログ | ロジック（sampler）+ アナログ | 無し |
 | SPI / I2C のデバイス（target の相手） | 無し | あり | あり | あり（未確認） |

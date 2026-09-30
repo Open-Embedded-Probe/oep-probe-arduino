@@ -116,6 +116,20 @@ hst.end()
 16 チャネルまで、どのピンでも取れます。ほかのインターフェースが持っているピンでも取れるので（capture は聞くだけ）、試験中の
 SPI デバイスを見ながら取れます。2 チャネルで 160 Msps、8 で 40 Msps、16 で 20 Msps です。
 
+出来事を捕まえるには、ワンショットにトリガ（1 つのチャネルのレベルかエッジ）と、その前にどれだけ残すかを渡します:
+
+```python
+lc.configure(rate=20_000_000, samples=200_000,
+             trigger=(capture.EDGE, 1, 1),   # チャネル 1 の立ち下がり（value 0 立ち上がり、1 立ち下がり、2 両方）
+             pretrigger=1_000)               # その前の 1000 サンプルを残す
+lc.start()                                   # トリガを待つ
+(segment,) = lc.wait(timeout=30)             # lc.force() でトリガなしに始められる
+data = lc.read_segment(segment)              # トリガは segment.trigger_index 番目のサンプル
+```
+
+classic ESP32 の sampler もトリガを取れます（8 チャネル、2 MHz まで）。割り込みを止めてサンプルするので、250 ms までの
+区切りで探します。区切りの間のすき間（約 1 ms）に来たエッジは見逃します。
+
 ## 5. 治具の設定を probe に持たせる
 
 治具 = firmware + その設定です。一度書いて保存すれば、probe は起動のたびにそれを行います。

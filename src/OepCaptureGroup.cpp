@@ -120,8 +120,11 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         for (uint8_t k = 0; k < n; ++k) in |= chosen[k] == trigger;
         if (!in) return rejected(kRejectUnavailable);
       }
-      for (uint8_t k = 0; k < n; ++k)   // only the trigger track may have a trigger (none here has one)
-        if (chosen[k] != trigger && tracks_[chosen[k]].track->trackTriggered()) return rejected(kRejectUnavailable);
+      // Only the trigger track may have a trigger - and this implementation starts every track at once, so none may
+      // yet: a logic track waiting for its trigger while the others ran would not start together.
+      (void)trigger;
+      for (uint8_t k = 0; k < n; ++k)
+        if (tracks_[chosen[k]].track->trackTriggered()) return rejected(kRejectUnavailable);
       for (size_t b = 0; b < budget_count_; ++b) {
         uint64_t load = 0;
         for (uint8_t k = 0; k < n; ++k)
