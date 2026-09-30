@@ -18,15 +18,17 @@
 //   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32   0x03 stop   0x04 force   0x05 status   0x06 read
 //   0x07 segments   0x09 query(TLV) -> TLV (no lock)   0x0A calibration -> TLV (no lock)   (0x08 release: unknown)
 //
-// Channel k is plan role k (0..3); a pin is an ADC input the sketch offers. A capture only listens: its pins are not
-// claimed in the pin table, but the pads go to their analog function while it runs - their digital input is cut, so a
-// logic capture of the same pad reads 0 then (the classic ESP32: GPIO32 as logic and analog at once, 0 edges against
-// 129 alone, 2026-09-30).
+// Channel k is plan role k (0..3); a pin is an ADC input the sketch offers. The pads go to their analog function while
+// it runs, which cuts their digital input and output (the classic ESP32: GPIO32 as logic and analog at once gave 0
+// edges against 129 alone, 2026-09-30), so a planned channel is shared with nothing (oep-if-capture §1.2): no other
+// fn's plan (planShares: the endpoint refuses the overlap, a logic capture's too), and with setPins no wire connection
+// or setting either (it is claimed in the pin table).
 #pragma once
 #include <Arduino.h>
 
 #include "Oep.h"
 #include "OepCaptureGroup.h"
+#include "OepPinTable.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <esp_adc/adc_continuous.h>
@@ -54,6 +56,8 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   void poll();   // from loop(): collects the conversions, a finished capture becomes the segment and stopped events
+  bool planShares() const override { return false; }
+  void setPins(PinTable *pins, uint8_t owner) { table_ = pins; owner_ = owner; }
 
   // GroupTrack (oep.fixture.capture-group)
   bool trackReady() const override;
@@ -76,6 +80,8 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint16_t instance_;
   int pins_[kMaxChannels] = {-1, -1, -1, -1};   // by role
   uint8_t channels_ = 0;
+  PinTable *table_ = nullptr;
+  uint8_t owner_ = 0;
   uint8_t frontend_[kMaxChannels] = {};           // by role
   uint8_t order_[kMaxChannels] = {0, 1, 2, 3};    // frame slot m -> role
   size_t max_read_ = 1000;

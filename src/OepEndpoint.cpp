@@ -672,6 +672,18 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
     for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = old_persistent[i];
   };
   if (plan_count_ + count > kMaxRoles) { undo(); return kRejectUnavailable; }   // over plan_roles (core §8)
+  // a channel of an interface that shares none may be in no other fn's plan, old (kept) or new (core §8.1)
+  for (size_t r = 0; r < count; ++r) {
+    const uint16_t f = roles[r].function;
+    if (f < 1 || f > count_) continue;
+    const bool shares = interfaces_[f - 1]->planShares();
+    auto clash = [&](const RoleAssignment &o) {
+      return o.function != f && o.channel == roles[r].channel &&
+             (!shares || (o.function >= 1 && o.function <= count_ && !interfaces_[o.function - 1]->planShares()));
+    };
+    for (size_t k = 0; k < plan_count_; ++k) if (clash(plan_roles_[k])) { undo(); return kRejectUnavailable; }
+    for (size_t k = 0; k < count; ++k) if (clash(roles[k])) { undo(); return kRejectUnavailable; }
+  }
   if (const uint16_t reason = applyAll(roles, count, true)) { undo(); return reason; }
   if (const uint16_t reason = applyAll(roles, count, false)) { undo(); return reason; }
   for (size_t r = 0; r < count; ++r) plan_roles_[plan_count_++] = roles[r];

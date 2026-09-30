@@ -55,7 +55,7 @@ static oep::TargetRiscvDm riscvDm(swio, 1);
 static oep::DmConsole consoleDriver(dm, phy);
 static oep::TargetConsoleStream console(swio, consoleDriver, 1);
 static oep::PinTable pins(kChannels);
-// PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0)
+// PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0, the analog 7)
 static oep::FixtureGpio gpio(pins, 1, 1);
 static oep::FixtureUart uart(pins, Serial2, 1, 2);
 static oep::SamplerCapture capture(endpoint, kReserved);
@@ -104,6 +104,7 @@ void setup() {
   config.setPins(&pins);
   config.load();
   config.applySaved();
+  analog.setPins(&pins, 7);   // its pads go analog: claimed against wires and settings
   endpoint.add(analog);   // after config: the fns before it keep their numbers
   endpoint.add(group);
   group.addTrack(capture, capture);

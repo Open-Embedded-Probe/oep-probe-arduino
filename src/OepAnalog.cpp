@@ -131,6 +131,7 @@ uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
     const uint8_t role = roles[i].role;
     const uint16_t ch = roles[i].channel;
     if (role >= count || ((seen >> role) & 1) || ch > 63 || !((adc_pins_ >> ch) & 1)) return kRejectUnavailable;
+    if (table_ && table_->owner(ch) != 0 && table_->owner(ch) != owner_) return kRejectUnavailable;   // a wire, a slot
     seen |= 1u << role;
   }
   return 0;
@@ -138,7 +139,11 @@ uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
 
 bool AnalogCapture::planApply(const RoleAssignment *roles, size_t count) {
   for (size_t i = 0; i < kMaxChannels; ++i) pins_[i] = -1;
-  for (size_t i = 0; i < count; ++i) pins_[roles[i].role] = roles[i].channel;
+  if (table_) table_->releaseQuiet(owner_);
+  for (size_t i = 0; i < count; ++i) {
+    pins_[roles[i].role] = roles[i].channel;
+    if (table_ && table_->allowed(roles[i].channel)) table_->claim(roles[i].channel, owner_);
+  }
   channels_ = static_cast<uint8_t>(count);
   state_ = ana::kStateUnconfigured;   // the plan changed: configure again
   return true;
@@ -146,6 +151,7 @@ bool AnalogCapture::planApply(const RoleAssignment *roles, size_t count) {
 
 void AnalogCapture::planRelease() {
   stopNow();
+  if (table_) table_->release(owner_);   // to their idle state, now that the ADC is off them
   channels_ = 0;
   state_ = ana::kStateUnconfigured;
 }
