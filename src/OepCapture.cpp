@@ -281,7 +281,12 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
   if (trig_phase_ == 0) {
     const uint64_t first = base * 8 / width_;
     uint64_t t = first;
-    if (force_) force_ = false;
+    if (follow_) {   // the group's trigger, at sample ext_sample_: once it is known and captured
+      if (!ext_ready_) return;
+      __atomic_thread_fence(__ATOMIC_ACQUIRE);
+      t = ext_sample_;
+      if (t >= (base + chunk.length) * 8 / width_) return;
+    } else if (force_) force_ = false;
     else if (!findTrigger(chunk.data, chunk.length, first, t)) return;
     uint64_t s0 = t > pretrigger_ ? t - pretrigger_ : 0;
     // not before the oldest byte the ring still holds (with a margin for the DMA running on)
@@ -290,7 +295,8 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
     if (s0 * width_ / 8 < oldest) s0 = (oldest * 8 + width_ - 1) / width_;
     if (width_ < 8) s0 -= s0 % (8 / width_);         // a whole byte
     seg_first_sample_ = s0;
-    trigger_index_ = static_cast<uint32_t>(t - s0);
+    trigger_index_ = t >= s0 ? static_cast<uint32_t>(t - s0) : 0xFFFFFFFFu;   // before the ring's oldest: gone
+    if (t < s0) trig_overrun_ = true;
     from = s0 * width_ / 8;
     filled_ = 0;
     trig_phase_ = 1;
@@ -314,10 +320,11 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
 Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   if (capacity < 4) return failed();
   trig_phase_ = 0;
-  force_ = have_level_ = trig_overrun_ = false;
+  have_level_ = trig_overrun_ = ext_ready_ = false;
+  force_ = trig_type_ == cap::kTriggerImmediate && !follow_;   // a ring left by following: start at once
   filled_ = fill_ = 0;
   trigger_index_ = 0xFFFFFFFFu;
-  reported_trigger_ = false;
+  reported_trigger_ = follow_;   // a follower's trigger is the group's event
   done_ = false;
   produced_ = queue_overflow_ = overruns_ = 0;
   captured_ = 0;
@@ -606,7 +613,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // the pretrigger is what the ring can give back, before the trigger inside the segment; only with a trigger. The
   // segment starts on a whole byte, up to 7 samples earlier (w < 8): the trigger stays inside it.
   const uint32_t max_pretrigger = static_cast<uint32_t>(kPretriggerBytes * 8 / width);
-  if (pretrigger && (trig_type == cap::kTriggerImmediate || pretrigger + 8 > samples || pretrigger > max_pretrigger)) {
+  // with an immediate trigger it is kept for a group that makes this track follow another's trigger
+  if (pretrigger && (mode != cap::kModeOneShot || pretrigger + 8 > samples || pretrigger > max_pretrigger)) {
     const Result r = tail.refuse(kTagPretrigger, pretrigger_critical, out, capacity);
     if (refused(r)) return r;
     pretrigger = 0;
@@ -669,6 +677,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     trig_role_ = trig_role;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
+    rate_hz_ = rate;
     mode_ = mode;
     width_ = width;
     samples_ = samples;
@@ -790,6 +799,34 @@ void LogicCapture::stopRepeat() {
   if (fill_ && completed_ - released_ < segment_count_) finishSegment(fill_, infos_[completed_ % kInfos].flags | 2);
 }
 
+// A group's follower: the one-shot through the ring (opened now if configure did not), cut around the group's trigger.
+bool LogicCapture::trackStartFollowing() {
+  if (!trackCanFollow()) return false;
+  if (!triggered_) {
+    uint32_t num = 0, den = 1;
+    close();
+    if (!openTriggered(rate_hz_, width_, bytes_, num, den)) { close(); state_ = kStateError; return false; }
+    triggered_ = true;
+  }
+  follow_ = true;
+  uint8_t out[4];
+  const Result r = startTriggered(out, sizeof out);
+  return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
+}
+
+void LogicCapture::trackTriggerAt(uint64_t ns) {
+  ext_sample_ = samplesIn(ns > start_ns_ ? ns - start_ns_ : 0, rate_num_, rate_den_);
+  __atomic_thread_fence(__ATOMIC_RELEASE);   // the harvest task (the other core) reads it once ext_ready_ is set
+  ext_ready_ = true;
+}
+
+bool LogicCapture::trackTriggerNs(uint64_t &ns) const {
+  if (!triggered_ || follow_ || trig_phase_ < 1) return false;
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  ns = start_ns_ + nsOf(seg_first_sample_ + trigger_index_);
+  return true;
+}
+
 uint64_t LogicCapture::nsOf(uint64_t samples) const {
   // samples x den / num seconds: split so that no product leaves u64 (num <= 160e6, den <= 255)
   const uint64_t whole = samples / rate_num_, part = samples % rate_num_ * rate_den_;
@@ -819,9 +856,9 @@ size_t LogicCapture::segmentInfo(uint8_t *out) const {
 }
 
 void LogicCapture::pollTriggered() {
+  if (trig_phase_ >= 1 && state_ == kStateWaiting) state_ = kStateCapturing;
   if (trig_phase_ >= 1 && !reported_trigger_) {
     reported_trigger_ = true;
-    if (state_ == kStateWaiting) state_ = kStateCapturing;
     if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64)
       uint8_t e[16];
       putU32(e, 0);
@@ -938,6 +975,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (state_ != kStateConfigured && state_ != kStateDone) return rejected(kRejectUnavailable);
       if (mode_ == 3 && !subscribed_) return rejected(kRejectUnavailable);   // streaming pushes: subscribe first
       if (mode_ == 2 || mode_ == 3) return tail.finish(startRepeat(out, capacity), out, capacity);
+      follow_ = false;
       if (triggered_) return tail.finish(startTriggered(out, capacity), out, capacity);
       if (capacity < 4) return failed();
       if (state_ == kStateDone) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);

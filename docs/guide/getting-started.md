@@ -129,6 +129,24 @@ data = lc.read_segment(segment)              # the trigger is sample segment.tri
 The classic ESP32's sampler takes triggers too (8 channels, up to 2 MHz). It samples with interrupts off, so it
 searches in bursts of up to 250 ms: an edge that falls in the gap between two bursts (about 1 ms) is missed.
 
+Logic and analog together, on the logic's trigger (the capture-group): the analog follows it, and each track's segment
+marks the same instant.
+
+```python
+an = capture.AnalogCapture(hst)
+grp = capture.CaptureGroup(hst)
+core.plan_apply(hst, [(lc.fn, 0, 20), (lc.fn, 1, 21), (an.fn, 0, 16)])
+lc.configure(rate=20_000_000, samples=200_000, trigger=(capture.EDGE, 1, 1), pretrigger=1_000)
+an.configure(rate=40_000, samples=4_000, pretrigger=40)    # no trigger of its own: it follows the logic's
+grp.bind([lc, an], trigger=lc)
+grp.start()
+st = grp.wait(timeout=30)                                   # st.trigger_ns: when it fired
+(logic,), (analog,) = lc.segments(), an.segments()          # logic.trigger_index, analog.trigger_index: that instant
+```
+
+A track that follows starts with the group and keeps converting until the trigger; its pretrigger counts its own
+samples. The classic ESP32's sampler can be the trigger but not follow one (its bursts leave gaps).
+
 ## 5. Keep a jig's settings in the probe
 
 A jig is the firmware plus its settings. Write them once and save them; the probe applies them at every boot:

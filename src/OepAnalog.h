@@ -57,8 +57,13 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool trackReady() const override;
   uint8_t trackMode() const override { return reg::fixture_analog::kModeOneShot; }
   bool trackTriggered() const override { return trig_type_ != 0; }
+  bool trackCanFollow() const override;
+  bool trackStartFollowing() override;
+  void trackTriggerAt(uint64_t ns) override;
+  bool trackTriggerNs(uint64_t &ns) const override;
+  void trackForce() override { if (state_ == reg::fixture_analog::kStateWaiting) force_ = true; }
   uint32_t trackLoad() const override { return total_hz_; }
-  bool trackStart() override { return startNow(); }
+  bool trackStart() override { follow_ = false; return startNow(); }
   void trackStop() override { stopNow(); }
   uint8_t trackState() const override { return state_; }
 
@@ -87,6 +92,10 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint32_t ring_len_ = 0;                                 // values
   uint32_t got_ = 0, searched_ = 0;                       // complete frames so far; frames looked at
   uint32_t trig_frame_ = 0, end_frame_ = 0;               // the crossing; the segment's end (the stream's frames)
+  uint32_t seg_first_ = 0;                                // the segment's first frame
+  bool follow_ = false, ext_ready_ = false;               // following a group's trigger, at frame ext_frame_
+  uint32_t ext_frame_ = 0;
+  bool ringMode() const { return trig_type_ != 0 || follow_; }
   uint8_t phase_ = 0;                                     // 0 searching, 1 filling after the crossing, 2 done
   uint16_t prev_ = 0;
   bool have_prev_ = false, force_ = false, trig_reported_ = true, trig_slipped_ = false;
@@ -94,6 +103,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint16_t *ring() const;
   uint64_t framesNs(uint64_t frames) const;               // frames x the frame period, in ns
   void search();
+  void hitAt(uint32_t t);
   void pollTriggered();
   void finishTriggered();
   Result configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query);

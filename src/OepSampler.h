@@ -52,6 +52,13 @@ class SamplerCapture final : public Interface, public GroupTrack {
   bool trackReady() const override { return state_ == reg::fixture_capture::kStateConfigured || state_ == reg::fixture_capture::kStateDone; }
   uint8_t trackMode() const override { return reg::fixture_capture::kModeOneShot; }
   bool trackTriggered() const override { return trig_type_ != 0; }
+  // the trigger track of a group (it cannot follow one: its search runs in bursts, with gaps)
+  bool trackTriggerNs(uint64_t &ns) const override {
+    if (!trig_type_ || !trig_seen_) return false;
+    ns = trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_;
+    return true;
+  }
+  void trackForce() override { groupOp(reg::fixture_capture::kOpForce); }
   uint32_t trackLoad() const override { return cycles_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * cpu_hz_ / cycles_) : 0; }
   bool trackStart() override { return groupOp(reg::fixture_capture::kOpStart); }
   void trackStop() override { groupOp(reg::fixture_capture::kOpStop); }
