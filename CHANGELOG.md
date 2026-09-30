@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm keeps the target's DATA0 / DATA1 from the moment the hart stops and writes them back before resume / step (oep-if-debug §4.2): after another client's halt -> read_block -> resume, a dmseq console no longer goes quiet for seconds (the abstract commands had wiped the target's frame).
+- (JA) riscv-dm は hart が止まったときの target の DATA0 / DATA1 を覚え、resume / step の前に書き戻す（oep-if-debug §4.2）: 別の client の halt → read_block → resume の後に、dmseq のコンソールが数秒黙らなくなった（abstract command が target のフレームを消していた）。
 - (EN) No default reset line (oep-if-debug §3): attach_under_reset takes only the channel the host names - one the wire declares (describe role_channels, role reset) and no other interface holds. `DebugPort::reset_default` is gone; a sketch sets `reset_allowed` and `pins`.
 - (JA) 既定の reset 線は無くなった（oep-if-debug §3）: attach_under_reset は host が名指した channel だけを受ける。wire が宣言したもの（describe の role_channels の role reset）で、ほかのインターフェースが持っていないものに限る。`DebugPort::reset_default` は無くなり、スケッチは `reset_allowed` と `pins` を設定する。
 - (EN) The line's settings are the target's and come from the host: rvswd's attach / attach_under_reset take idle_clock (SWCLK low while resting), and a probe.config slot carries max_speed / idle_clock for the probe's own attach. `RvswdPhy::setMinHalfNs` is gone, and Rp2350L103Probe no longer rests the line low or floors its speed by itself. The slot item's layout changed; the settings are saved under a new NVS key, so saved settings from earlier versions are not loaded (set them again).
