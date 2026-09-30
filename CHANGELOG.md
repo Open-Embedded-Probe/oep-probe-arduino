@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm puts back the GPRs its block / word ops use (s0, s1, a0, a1) before the hart runs again (oep-if-debug §4.5); the describe no longer lists clobbers. A sketch stopped over and over by halt -> read_block -> resume died when they were left changed.
+- (JA) riscv-dm は、block / 語の op が使う GPR（s0、s1、a0、a1）を、hart を走らせる前に元に戻す（oep-if-debug §4.5）。describe の clobbers は無くなった。halt → read_block → resume を何度も挟まれた sketch は、それらが変わったままで死んでいた。
 
 ## 0.0.6
 - (EN) riscv-dm keeps the target's DATA0 / DATA1 from the moment the hart stops and writes them back before resume / step (oep-if-debug §4.2): after another client's halt -> read_block -> resume, a dmseq console no longer goes quiet for seconds (the abstract commands had wiped the target's frame).

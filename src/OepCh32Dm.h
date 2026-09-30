@@ -39,6 +39,7 @@ class Ch32Dm {
     if (!attach()) return false;
     host_raw_ = true;             // the host may be running abstract commands: DATA0 / DATA1 are its operands now
     kept_ = false;                // and it gives them back itself, if at all (oep-if-debug §4.2)
+    gprs_kept_ = false;
     phy_.write(address, value);   // a DMI write reports nothing; read back through the list to check
     return true;
   }
@@ -82,6 +83,12 @@ class Ch32Dm {
   uint32_t kept0_ = 0, kept1_ = 0;
   void keepMailbox();                     // at a halt: remember them (once per stop)
   void giveMailbox();                     // before resumereq: write them back (DATA1, then DATA0)
+  // s0, s1, a0, a1 as the target had them, kept the first time a block / word op uses them during a stop and written
+  // back before it runs again (oep-if-debug §4.5): halt -> read_block -> resume leaves the target as it was.
+  bool gprs_kept_ = false;
+  uint32_t gprs_[4] = {};
+  bool keepGprs();
+  void giveGprs();
   uint8_t cmderr_ = 0;
   bool waitAbstract();
   void relink();                          // PHY re-sync + abstract-command block back to a known state
