@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32 analog: the segment's start_ns is 100 us later, measured against the logic's edge in a capture-group at 10, 20 and 40 kS/s (the analog came 50-200 us early, a time rather than a count of samples); start_uncertainty_ns is 100 us plus one sample (it was a whole conversion frame and 100 us).
+- (JA) classic ESP32 のアナログ: 区画の start_ns を 100 µs 後ろにした。capture-group でロジックのエッジと比べ、10、20、40 kS/s で測った（アナログが 50〜200 µs 早かった。サンプル数ではなく時間で一定）。start_uncertainty_ns は 100 µs + 1 サンプル（以前は変換フレーム 1 つ + 100 µs）。
 
 ## 0.0.17
 - (EN) Firmware/OepProbe: the saved settings are applied again after a reboot. The sketches loaded and applied them before adding the analog and the group, so the interface list they were checked against never matched the one they were saved with: storage "unreadable" after every reboot since 0.0.11 (found after a DFU update, X035 jig). `ProbeConfig::load()` / `applySaved()` belong after the last `endpoint.add()`.
