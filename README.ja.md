@@ -110,7 +110,6 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | `05.Capture/LogicCapture` | ESP32-P4 | 全速のロジアナ（16 ch まで、2 ch で 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
 | `06.Settings/ProbeConfig` | RP2040 / RP2350 | 起動時に自分で準備する治具: スロット、bind（target のコンソールを probe の口に）、plan、空きのときの状態。flash に保存 |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | 立ち上げの道具（Serial に文字で出す。OEP ではない）: どのピンが debug port か |
-| `Rp2350L103Probe`、`Rp2040ZeroProbe` | - | Pico のベンチの治具の firmware。そこで `Firmware/OepProbe` を確かめるまで |
 
 ## 使い始める
 

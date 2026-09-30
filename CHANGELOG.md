@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `Rp2350L103Probe` and `Rp2040ZeroProbe` are gone: the Pro Micro RP2350 bench runs `Firmware/OepProbe` (profile promicrorp2350) with its settings - the L103 found by scan on GP0 / GP1, attached, read and kept as an at-boot slot on 0.0.19.
+- (JA) `Rp2350L103Probe` と `Rp2040ZeroProbe` を消した: Pro Micro RP2350 のベンチは `Firmware/OepProbe`（profile promicrorp2350）と設定で動く。0.0.19 で、L103 を GP0 / GP1 に scan で見つけ、attach して読み、at boot のスロットとして保存した。
 
 ## 0.0.19
 - (EN) The pre-freeze decisions (oep-spec docs/v1-freeze-decisions.ja.md), on the probe:

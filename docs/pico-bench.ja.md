@@ -1,5 +1,8 @@
 # Pico bench（RP2040-Zero + Pro Micro RP2350）2026-09-23
 
+（記録。2026-09-30 に、ここの `examples/Rp2350L103Probe` は `examples/Firmware/OepProbe` の profile `promicrorp2350` に
+置き換わって消えた。L103 の RVSWD は GP0 / GP1（0.0.19 で scan と attach を確かめた）。）
+
 ## 機材と配線（暫定）
 
 | 役割 | board | 識別 | 配線 |

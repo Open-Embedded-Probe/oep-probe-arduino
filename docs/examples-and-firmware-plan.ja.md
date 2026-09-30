@@ -79,6 +79,9 @@ examples/
 
 ## 5. 今の example の行き先
 
+（2026-09-30: 下の表はすべて済んだ。最後の `Rp2350L103Probe` と `Rp2040ZeroProbe` は、Pro Micro RP2350 の L103 のベンチで
+`Firmware/OepProbe` の `promicrorp2350` を確かめて消した。）
+
 | 今 | 焼き込んでいるもの | 行き先 |
 |---|---|---|
 | `Esp32P4X035Probe` | RVSWD の組、4 経路、スロット 1 つ、capture | `Firmware/OepProbe` の esp32p4 + 治具の設定（slot、bind） |
