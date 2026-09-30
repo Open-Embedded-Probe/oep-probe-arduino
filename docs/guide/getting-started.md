@@ -115,6 +115,20 @@ hst.end()
 Up to 16 channels, on any pins - also pins another interface holds (a capture only listens), so you can watch the SPI
 device you are testing: 2 channels at 160 Msps, 8 at 40 Msps, 16 at 20 Msps.
 
+To catch an event, give the one-shot a trigger - a level or an edge on one channel - and how much to keep before it:
+
+```python
+lc.configure(rate=20_000_000, samples=200_000,
+             trigger=(capture.EDGE, 1, 1),   # channel 1 falling (value 0 rising, 1 falling, 2 either)
+             pretrigger=1_000)               # keep 1000 samples before it
+lc.start()                                   # waiting for the trigger
+(segment,) = lc.wait(timeout=30)             # lc.force() starts it without the trigger
+data = lc.read_segment(segment)              # the trigger is sample segment.trigger_index
+```
+
+The classic ESP32's sampler takes triggers too (8 channels, up to 2 MHz). It samples with interrupts off, so it
+searches in bursts of up to 250 ms: an edge that falls in the gap between two bursts (about 1 ms) is missed.
+
 ## 5. Keep a jig's settings in the probe
 
 A jig is the firmware plus its settings. Write them once and save them; the probe applies them at every boot:

@@ -2,8 +2,10 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // oep.fixture.capture revision 1 (oep-spec docs/oep-if-capture.ja.md), on the ESP32-P4
-// PARLIO RX. This implementation picks: one-shot, repeat and streaming, immediate trigger only, pushes events when
-// subscribed. Repeat (as wch-protocols E078): PARLIO fills a 64 KiB internal DMA ring by partial receive; the ISR
+// PARLIO RX. This implementation picks: one-shot, repeat and streaming, pushes events when subscribed. Triggers (one-shot
+// only): level or edge on a channel, with a pretrigger - the samples go through the repeat's DMA ring and the harvest task
+// looks for the condition as they come (a byte at a time, the channel's bits masked), then keeps the pretrigger from
+// the ring and fills the segment. Repeat (as wch-protocols E078): PARLIO fills a 64 KiB internal DMA ring by partial receive; the ISR
 // queues each finished chunk; a harvest task on core 0 copies it into K segments in PSRAM before the ring comes round
 // again. Streaming uses the same segments, sends them as data pushes (role 0x06) and reuses a segment once it is sent;
 // with every segment unsent, new bytes are dropped and the stream position skips them (the host sees the jump).
@@ -75,7 +77,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot
   bool trackReady() const override { return state_ == kStateConfigured || state_ == kStateDone; }
   uint8_t trackMode() const override { return mode_; }
-  bool trackTriggered() const override { return false; }   // immediate only
+  bool trackTriggered() const override { return trig_type_ != 0; }
   uint32_t trackLoad() const override { return rate_den_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * rate_num_ / rate_den_) : 0; }
   bool trackStart() override { return groupOp(kOpStart); }
   void trackStop() override { groupOp(kOpStop); }
@@ -138,6 +140,26 @@ class LogicCapture final : public Interface, public GroupTrack {
   size_t store_bytes_ = 0;
   // repeat
   struct Chunk { const uint8_t *data; size_t length; };
+  // one-shot with a trigger (or a pretrigger): the ring and the harvest task, searching
+  static constexpr size_t kPretriggerBytes = 64 * 1024;   // history the ring can give back (half of it)
+  bool triggered_ = false;           // this one-shot goes through the ring
+  uint8_t trig_type_ = 0, trig_role_ = 0;
+  uint16_t trig_value_ = 0;
+  uint32_t pretrigger_ = 0;
+  volatile uint8_t trig_phase_ = 0;  // 0 waiting, 1 filling, 2 done
+  volatile bool force_ = false;      // force: the trigger is now
+  bool have_level_ = false;
+  uint8_t last_level_ = 0;
+  uint32_t filled_ = 0;              // bytes in buffer_
+  uint64_t seg_first_sample_ = 0;
+  uint32_t trigger_index_ = 0xFFFFFFFFu;
+  volatile bool trig_overrun_ = false;   // the DMA came round while filling: the segment is not contiguous
+  bool reported_trigger_ = true;
+  void harvestTriggered(const Chunk &chunk);
+  bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at);
+  Result startTriggered(uint8_t *out, size_t capacity);
+  bool openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
+  void pollTriggered();
   struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_ns; uint8_t flags; };
   // serial u32, position u64, samples u32, start_ns u64, start_uncertainty_ns u32, trigger_index u32, flags u8
   static constexpr size_t kInfoBytes = 33;
