@@ -7,6 +7,10 @@
 extern uint32_t g_millis;
 inline uint32_t millis() { return g_millis; }
 inline void delay(uint32_t ms) { g_millis += ms; }
+// A busy wait in the code under test: time goes on, and a test may complete USB transfers meanwhile.
+extern void (*g_on_wait)();
+inline void delayMicroseconds(uint32_t us) { static uint32_t acc = 0; acc += us; if (acc >= 1000) { g_millis += acc / 1000; acc %= 1000; } if (g_on_wait) g_on_wait(); }
+template <class A, class B> inline auto min(A a, B b) -> decltype(a < b ? a : b) { return a < b ? a : b; }
 
 class Print {
  public:
