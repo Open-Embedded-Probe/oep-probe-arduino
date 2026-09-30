@@ -119,7 +119,6 @@ uses it.
 | `05.Capture/LogicCapture` | ESP32-P4 | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2), streaming over HS; `host/stream_test.py` |
 | `06.Settings/ProbeConfig` | RP2040 / RP2350 | a jig that sets itself up at boot: slots, binds (the target's console on the probe's port), plans, idle states, saved in flash |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | a bring-up tool (text on Serial, not OEP): which pins are a debug port |
-| `Rp2350L103Probe`, `Rp2040ZeroProbe` | - | the Pico bench's jig firmware, until `Firmware/OepProbe` is checked there |
 
 ## Getting started
 
