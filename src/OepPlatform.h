@@ -100,6 +100,17 @@ inline size_t platformUnitId(uint8_t *out, size_t capacity) {
 #endif
 }
 
+// A hardware random number (the endpoint's boot id, core §7.1).
+inline uint32_t platformRandom32() {
+#if defined(ARDUINO_ARCH_RP2040)
+  return rp2040.hwrand32();
+#elif defined(ARDUINO_ARCH_ESP32)
+  return esp_random();
+#else
+  return static_cast<uint32_t>(micros());
+#endif
+}
+
 // Sizes are hints: a core that cannot resize its buffers keeps its default.
 inline void platformUartBuffers(OepUart &serial, size_t rx, size_t tx) {
 #if defined(ARDUINO_ARCH_RP2040)

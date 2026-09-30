@@ -90,6 +90,7 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the custom interfaces `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target` (revision 1, the ESP-IDF I2C / SPI slaves) - examples of extending OEP |
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
+| `examples/01.Basics/`, `examples/02.Interfaces/` | examples to learn from, for any RP2040 / RP2350 or classic ESP32 board: `MinimalProbe` (oep.core alone), `FixtureProbe` (gpio + uart, pins planned by the host), `CustomInterface` (an interface of your own) |
 | `examples/Firmware/OepProbe` | the board firmware, one per chip (profiles rp2040, rp2350, esp32p4, esp32), every pin chosen by the host: RP2 - RVSWD, SWD, gpio, uart; ESP32-P4 - RVSWD, gpio, uart x2, capture, SPI / I2C devices; classic ESP32 - SWIO, gpio, uart, capture, SPI / I2C devices; settings saved |
 | `examples/` | probe firmware: ESP32-P4 + CH32X035, classic ESP32 + CH32V003, RP2350 + CH32L103, RP2040 Zero, the P4 HS logic capture `Esp32P4CaptureProbe` (with `host/stream_test.py`). Being reorganised by what users need: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
@@ -152,7 +153,8 @@ Record changes under `## Unreleased` in `CHANGELOG.md`, (EN) and (JA), and run t
 examples' `sketch.yaml` `dir: ../..` to `OpenEmbeddedProbe (<version>)` on the `release` branch, and makes the ZIP (without
 `tests/`), the tag and the GitHub Release. Then the separate `.github/workflows/firmware.yml` (not part of the toolkit)
 builds every profile of every example from the tag and attaches `<Example>-<profile>-<version>.merged.bin` (ESP32, flash
-at 0x0) / `.uf2` (RP2040 / RP2350) and `firmware-<version>.json` (sha256) to the Release. The probe reports the same version as its describe firmware
+at 0x0) / `.uf2` (RP2040 / RP2350) of `examples/Firmware/` and `firmware-<version>.json` (sha256) to the Release (the other examples are built only
+to check them). The probe reports the same version as its describe firmware
 string.
 
 ## License

@@ -5,7 +5,7 @@
 # (workflow_run) and finds the tag from the version it committed; workflow_dispatch rebuilds any tag by hand.
 #
 # Every example (examples/**/sketch.yaml) is built from the tag's sources with each of its sketch.yaml profiles (the
-# platform and libraries pinned there), `--clean`; the library itself is the tag's src/ (the release branch's
+# platform and libraries pinned there), `--clean`, and those under examples/Firmware/ are attached; the library itself is the tag's src/ (the release branch's
 # sketch.yaml names it from the Library Manager, which may not have indexed the new version yet). Files:
 # <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool), <Example>-<profile>-<version>.uf2
 # (RP2040 / RP2350), and firmware-<version>.json listing them with their sha256.
@@ -80,6 +80,8 @@ jobs:
                   build = pathlib.Path("build") / sketch.name / profile
                   subprocess.run(["arduino-cli", "compile", "--clean", "--profile", profile, "--output-dir", str(build),
                                   str(sketch)], check=True)
+                  if sketch.parts[1] != "Firmware":
+                      continue   # the other examples are built to check them, not released
                   made = []
                   for suffix, kind in ((".ino.merged.bin", "merged.bin"), (".ino.uf2", "uf2")):
                       src = build / f"{sketch.name}{suffix}"

@@ -23,7 +23,6 @@ bool attachAndRead(Ch32Dm &dm, uint32_t &status) {
   return false;
 }
 constexpr uint8_t kKindRiscvDm = 0x01;
-inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 
 // The max_speed TLV (0x01, u32 Hz) of attach / attach_under_reset: 0 when absent. false = malformed.
 bool maxSpeed(const Tail &tail, uint32_t &hz, bool &critical) {

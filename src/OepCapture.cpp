@@ -29,7 +29,6 @@ enum : uint8_t { kTagActualRate = cap::kTlvConfigureAnswerActualRate, kTagLayout
 enum : uint8_t { kEventSegment = cap::kEventSegment, kEventStopped = cap::kEventStopped };
 enum : uint8_t { kStoppedComplete = cap::kStoppedReasonComplete, kStoppedHost = cap::kStoppedReasonHost,
                  kStoppedNoFreeSegment = cap::kStoppedReasonNoFreeSegment };
-inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 
 uint8_t widthFor(uint8_t channels) {
   uint8_t w = 1;

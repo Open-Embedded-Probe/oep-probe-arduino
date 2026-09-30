@@ -21,7 +21,6 @@ enum : uint8_t { kTagMode = cap::kTlvConfigureMode, kTagRate = cap::kTlvConfigur
                  kTagSamples = cap::kTlvConfigureSamples, kTagSegments = cap::kTlvConfigureSegments,
                  kTagTrigger = cap::kTlvConfigureTrigger, kTagPretrigger = cap::kTlvConfigurePretrigger };
 
-inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 
 uint32_t gcd(uint32_t a, uint32_t b) {
   while (b) { const uint32_t t = a % b; a = b; b = t; }

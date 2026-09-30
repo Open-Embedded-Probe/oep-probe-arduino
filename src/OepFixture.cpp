@@ -6,7 +6,6 @@
 namespace oep {
 namespace {
 
-inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 
 // Wire mode (v1 table, 0-6) -> the platform's pin mode.
 uint8_t platformMode(uint8_t mode) {
