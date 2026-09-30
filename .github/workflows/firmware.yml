@@ -5,10 +5,14 @@
 # (workflow_run) and finds the tag from the version it committed; workflow_dispatch rebuilds any tag by hand.
 #
 # Every example (examples/**/sketch.yaml) is built from the tag's sources with each of its sketch.yaml profiles (the
-# platform and libraries pinned there), `--clean`, and those under examples/Firmware/ are attached; the library itself is the tag's src/ (the release branch's
-# sketch.yaml names it from the Library Manager, which may not have indexed the new version yet). Files:
-# <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool), <Example>-<profile>-<version>.uf2
-# (RP2040 / RP2350), and firmware-<version>.json listing them with their sha256.
+# platform and libraries pinned there), and those under examples/Firmware/ are attached; the library itself is the tag's
+# src/ (the release branch's sketch.yaml names it from the Library Manager, which may not have indexed the new version
+# yet). Files: <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool),
+# <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), and firmware-<version>.json listing them with their sha256.
+#
+# One job per (example, profile), all at once: `plan` lists them, `build` compiles one each (the platform's
+# installation cached per platform version, so a job downloads no toolchain after the first run), `attach` gathers
+# the Firmware builds and uploads them. A fresh runner has no stale build, so no --clean is needed.
 name: Firmware
 
 on:
@@ -25,9 +29,14 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  plan:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      library: ${{ steps.list.outputs.library }}
+      builds: ${{ steps.list.outputs.builds }}
     steps:
       - name: Checkout the default branch (the version the release committed)
         uses: actions/checkout@v5
@@ -49,52 +58,135 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "Building $TAG"
 
+      - name: List every (example, profile)
+        id: list
+        run: |
+          git checkout --quiet "${{ steps.tag.outputs.tag }}"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, pathlib, re
+
+          builds = []
+          for yaml in sorted(pathlib.Path("examples").rglob("sketch.yaml")):
+              text = yaml.read_text()
+              # a profile: its name, its fqbn, the platforms it pins (up to the next profile)
+              for block in re.split(r"(?m)^(?=  [A-Za-z0-9_-]+:\s*$)", text):
+                  head = re.match(r"  ([A-Za-z0-9_-]+):\s*\n\s+fqbn:\s*(\S+)", block)
+                  if not head:
+                      continue
+                  platforms = re.findall(r"(?m)^\s+- platform:\s*(.+?)\s*$", block)
+                  sketch = yaml.parent
+                  builds.append({
+                      "sketch": str(sketch), "name": sketch.name, "profile": head.group(1), "fqbn": head.group(2),
+                      "release": sketch.parts[1] == "Firmware",
+                      "id": re.sub(r"[^A-Za-z0-9]+", "-", f"{sketch.relative_to('examples')}-{head.group(1)}"),
+                      # the cache holds the platforms this profile installs, so it is keyed by them
+                      "cache": re.sub(r"[^A-Za-z0-9.]+", "-", "_".join(sorted(platforms))),
+                  })
+          print("builds=" + json.dumps(builds))
+          print("library=" + re.search(r"(?m)^name=(.+)$", pathlib.Path("library.properties").read_text()).group(1).strip())
+          PY
+
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.builds) }}
+    name: ${{ matrix.name }} (${{ matrix.profile }})
+    steps:
       - name: Checkout the tag
-        run: git checkout --quiet "${{ steps.tag.outputs.tag }}"
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
 
       - name: Set up Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
-      - name: Build every example
+      - name: Restore the platform
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            !~/.arduino15/staging
+          key: arduino15-${{ runner.os }}-${{ matrix.cache }}
+
+      - name: Build
         env:
-          VERSION: ${{ steps.tag.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          SKETCH: ${{ matrix.sketch }}
+          PROFILE: ${{ matrix.profile }}
+          FQBN: ${{ matrix.fqbn }}
+          RELEASE: ${{ matrix.release }}
         run: |
           python3 - <<'PY'
           import hashlib, json, os, pathlib, re, shutil, subprocess
 
-          version = os.environ["VERSION"]
+          version, profile, fqbn = os.environ["VERSION"], os.environ["PROFILE"], os.environ["FQBN"]
+          sketch = pathlib.Path(os.environ["SKETCH"])
           root = pathlib.Path.cwd()
           lib = re.search(r"(?m)^name=(.+)$", pathlib.Path("library.properties").read_text()).group(1).strip()
+          yaml = sketch / "sketch.yaml"
+          # the tag's own library sources, not the Library Manager's copy of this version
+          up = os.path.relpath(root, sketch.resolve())
+          yaml.write_text(re.sub(r"(?m)^(\s*)- " + re.escape(lib) + r" \([^)]*\)\s*$", r"\1- dir: " + up, yaml.read_text()))
+          build = pathlib.Path("build")
+          subprocess.run(["arduino-cli", "compile", "--profile", profile, "--output-dir", str(build), str(sketch)],
+                         check=True)
+          if os.environ["RELEASE"] != "true":
+              raise SystemExit(0)   # the other examples are built to check them, not released
           out = pathlib.Path("firmware")
           out.mkdir()
           files = []
-          for yaml in sorted(pathlib.Path("examples").rglob("sketch.yaml")):
-              sketch = yaml.parent
-              text = yaml.read_text()
-              # the tag's own library sources, not the Library Manager's copy of this version
-              up = os.path.relpath(root, sketch.resolve())
-              yaml.write_text(re.sub(r"(?m)^(\s*)- " + re.escape(lib) + r" \([^)]*\)\s*$", r"\1- dir: " + up, text))
-              # every profile: a sketch for several chips gives one file per chip
-              profiles = re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\s*$\n\s+fqbn:\s*(\S+)", text)
-              for profile, fqbn in profiles:
-                  build = pathlib.Path("build") / sketch.name / profile
-                  subprocess.run(["arduino-cli", "compile", "--clean", "--profile", profile, "--output-dir", str(build),
-                                  str(sketch)], check=True)
-                  if sketch.parts[1] != "Firmware":
-                      continue   # the other examples are built to check them, not released
-                  made = []
-                  for suffix, kind in ((".ino.merged.bin", "merged.bin"), (".ino.uf2", "uf2")):
-                      src = build / f"{sketch.name}{suffix}"
-                      if src.exists():
-                          dst = out / f"{sketch.name}-{profile}-{version}.{kind}"
-                          shutil.copy(src, dst)
-                          made.append(dst)
-                  if not made:
-                      raise SystemExit(f"{sketch.name} ({profile}): no merged.bin or uf2 in {build}")
-                  for dst in made:
-                      files.append({"example": str(sketch.relative_to("examples")), "profile": profile, "file": dst.name,
-                                    "fqbn": fqbn, "flash_offset": 0 if dst.suffix == ".bin" else None,
-                                    "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
+          for suffix, kind in ((".ino.merged.bin", "merged.bin"), (".ino.uf2", "uf2")):
+              src = build / f"{sketch.name}{suffix}"
+              if src.exists():
+                  dst = out / f"{sketch.name}-{profile}-{version}.{kind}"
+                  shutil.copy(src, dst)
+                  files.append({"example": str(sketch.relative_to("examples")), "profile": profile, "file": dst.name,
+                                "fqbn": fqbn, "flash_offset": 0 if kind == "merged.bin" else None,
+                                "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
+          if not files:
+              raise SystemExit(f"{sketch.name} ({profile}): no merged.bin or uf2 in {build}")
+          (out / "files.json").write_text(json.dumps(files))
+          print("\n".join(f["file"] for f in files))
+          PY
+
+      - name: Keep the firmware
+        if: ${{ matrix.release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.id }}
+          path: firmware/
+          retention-days: 1
+
+  attach:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gather the firmware
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          path: parts
+
+      - name: List them
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          LIBRARY: ${{ needs.plan.outputs.library }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, shutil
+
+          version, lib = os.environ["VERSION"], os.environ["LIBRARY"]
+          out = pathlib.Path("firmware")
+          out.mkdir()
+          files = []
+          for listing in sorted(pathlib.Path("parts").glob("*/files.json")):
+              for f in json.loads(listing.read_text()):
+                  shutil.copy(listing.parent / f["file"], out / f["file"])
+                  files.append(f)
+          files.sort(key=lambda f: (f["example"], f["profile"], f["file"]))
           (out / f"firmware-{version}.json").write_text(json.dumps(
               {"library": lib, "version": version, "firmware": files}, indent=2) + "\n")
           print("\n".join(f["file"] for f in files))
@@ -103,4 +195,4 @@ jobs:
       - name: Attach to the Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.tag.outputs.tag }}" firmware/* --clobber
+        run: gh release upload "${{ needs.plan.outputs.tag }}" firmware/* --clobber --repo "${{ github.repository }}"

@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The Firmware workflow builds every (example, profile) in its own job, all at once, with the platform's installation cached per version, and attaches the Firmware builds in a last job; no `--clean` (a fresh runner).
+- (JA) Firmware のワークフローは、(example, profile) ごとに別のジョブで一度にビルドする。platform のインストールは版ごとにキャッシュし、Firmware のビルドは最後のジョブで Release に付ける。`--clean` はしない（毎回新しい runner）。
 
 ## 0.0.13
 - (EN) Analog triggers (oep.fixture.analog): the ADC value of one channel crossed up (from below to at or above) or down, with a pretrigger and force. ESP32: the segment's buffer is the ring the driver's reads fill, looked at after every read, turned to order at the end; the pretrigger leaves 129 frames for a channel running ahead (up to 16255 at one channel), a pool overflow after the segment's start marks it slipped. RP2040 / RP2350: the DMA runs round a 32 KiB write ring (allocated on the first triggered configure), poll looks at it and copies the segment out; a triggered segment is at most 8192 values (half the ring), and a DMA that came round over its start marks it slipped. A stop while waiting or filling gives no segment. Unverified on hardware.
