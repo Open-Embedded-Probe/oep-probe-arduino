@@ -11,6 +11,8 @@
 namespace oep {
 namespace {
 
+constexpr uint32_t kScanBudgetMs = 500;   // the longest one scan answer takes (the host asks again for the rest)
+
 constexpr uint8_t kDmStatus = 0x11;
 
 // A cold CH32 ignores the first wake now and then (the CH32L103 answered on the fifth, 2026-09-23), and one that
@@ -133,23 +135,25 @@ void holdPins(DebugPort &port) {
   if (port.swclk != 0xffff) port.pins->claim(port.swclk, port.pin_owner);
 }
 
-// connections (oep-if-debug §2.1): count(u8), per entry connection(u16) swdio(u16) swclk(u16) speed_hz(u32) users(u8)
+// connections (oep-if-debug §2.1): count(u8), per entry len(u8) then connection(u16) swdio(u16) swclk(u16) speed_hz(u32) users(u8)
 // slot(u8) tid_scheme(u8) tid_len(u8) tid. One place per wire here: at most one entry.
 Result connectionsOf(DebugPort &port, uint32_t speed_hz, uint8_t *out, size_t capacity) {
-  if (capacity < 1 + 20) return failed();
+  if (capacity < 2 + 20) return failed();
   out[0] = 0;
   if (!port.connected) return completed(1);
   out[0] = 1;
-  putU16(out + 1, port.number);
-  putU16(out + 3, port.swdio);
-  putU16(out + 5, port.swclk);
-  putU32(out + 7, speed_hz);
-  out[11] = port.users;
-  out[12] = port.slot;
-  out[13] = port.has_tid ? reg::wire_rvswd::kTargetIdSchemeWchDmi7f : 0;
-  out[14] = port.has_tid ? 4 : 0;
-  if (port.has_tid) putU32(out + 15, port.tid);
-  return completed(port.has_tid ? 19 : 15);
+  uint8_t *e = out + 2;   // after the entry's len(u8) (core §2.3)
+  putU16(e, port.number);
+  putU16(e + 2, port.swdio);
+  putU16(e + 4, port.swclk);
+  putU32(e + 6, speed_hz);
+  e[10] = port.users;
+  e[11] = port.slot;
+  e[12] = port.has_tid ? reg::wire_rvswd::kTargetIdSchemeWchDmi7f : 0;
+  e[13] = port.has_tid ? 4 : 0;
+  if (port.has_tid) putU32(e + 14, port.tid);
+  out[1] = port.has_tid ? 18 : 14;
+  return completed(2u + out[1]);
 }
 
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
@@ -205,7 +209,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
   switch (op) {
     case kOpScan: {
       // count(u8) pairs [TLV 0x01 skip]  ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32)
-      // per answer (oep-if-debug §1)
+      // per answer, each after its len(u8) (oep-if-debug §1)
       if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
       const uint8_t count = payload[0];
       const size_t fixed = 1u + 4u * count;
@@ -229,8 +233,11 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (capacity < 2) return failed();
       size_t at = 2;
       uint8_t tried = 0, found = 0;
-      auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full
-        if (at + 9 > capacity) return false;
+      // One answer takes at most kScanBudgetMs: the host goes on with the rest (count 0 with skip, or the pairs after
+      // tried). 26 free pins bit-banged pair by pair kept an RP2350 from answering for seconds (0.0.18).
+      const uint32_t began = millis();
+      auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full, or its time is up
+        if (at + 10 > capacity || (tried && millis() - began >= kScanBudgetMs)) return false;
         uint32_t status = 0;
         bool ok = false;
         if (port_.connected) {
@@ -242,11 +249,12 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
           if (port_.pin_choice) { port_.dm.detach(); phy.release(); }   // nothing held: leave the pins Hi-Z
         }
         if (ok) {
-          out[at] = kKindRiscvDm;
-          putU16(out + at + 1, d);
-          putU16(out + at + 3, c);
-          putU32(out + at + 5, status);
-          at += 9;
+          out[at] = 9;   // the element's length (core §2.3)
+          out[at + 1] = kKindRiscvDm;
+          putU16(out + at + 2, d);
+          putU16(out + at + 4, c);
+          putU32(out + at + 6, status);
+          at += 10;
           ++found;
         }
         ++tried;

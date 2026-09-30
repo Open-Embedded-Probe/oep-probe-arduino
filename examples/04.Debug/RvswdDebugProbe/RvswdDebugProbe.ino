@@ -57,7 +57,7 @@ static uint8_t probeTlv[64];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
+  uint8_t id[17];
   // the pair is the probe's own: reserved, so no plan takes it
   oep::describeCore(w, "rvswd-debug-probe", id, oep::platformUnitId(id, sizeof id), 64,
                     (1ull << kSwdio) | (1ull << kSwclk));

@@ -58,7 +58,7 @@ static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];   // the flash's unique id: the probe says who it is on any transport
+  uint8_t id[17];   // the flash's unique id: the probe says who it is on any transport
   oep::describeCore(w, "sparkfun-promicro-rp2350", id, oep::platformUnitId(id, sizeof id), 30, kReserved);
   w.text(oep::kCoreProfile, "io.github.ch32-riscv-ug.rp2350-l103");
   w.label(kSwdio, "SWDIO");

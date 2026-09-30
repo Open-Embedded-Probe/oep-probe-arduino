@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// oep.fixture.capture revision 1 (oep-spec docs/oep-if-capture.ja.md), on the ESP32-P4
+// oep.fixture.logic revision 1 (oep-spec docs/oep-if-capture.ja.md), on the ESP32-P4
 // PARLIO RX. This implementation picks: one-shot, repeat and streaming, pushes events when subscribed. Triggers (one-shot
 // only): level or edge on a channel, with a pretrigger - the samples go through the repeat's DMA ring and the harvest task
 // looks for the condition as they come (a byte at a time, the channel's bits masked), then keeps the pretrigger from
@@ -36,17 +36,17 @@ class Endpoint;
 class LogicCapture final : public Interface, public GroupTrack {
  public:
   enum : uint8_t {
-    kOpConfigure = reg::fixture_capture::kOpConfigure, kOpStart = reg::fixture_capture::kOpStart,
-    kOpStop = reg::fixture_capture::kOpStop, kOpForce = reg::fixture_capture::kOpForce,
-    kOpStatus = reg::fixture_capture::kOpStatus, kOpRead = reg::fixture_capture::kOpRead,
-    kOpSegments = reg::fixture_capture::kOpSegments, kOpRelease = reg::fixture_capture::kOpRelease,
-    kOpQuery = reg::fixture_capture::kOpQuery,
+    kOpConfigure = reg::fixture_logic::kOpConfigure, kOpStart = reg::fixture_logic::kOpStart,
+    kOpStop = reg::fixture_logic::kOpStop, kOpForce = reg::fixture_logic::kOpForce,
+    kOpStatus = reg::fixture_logic::kOpStatus, kOpRead = reg::fixture_logic::kOpRead,
+    kOpSegments = reg::fixture_logic::kOpSegments, kOpRelease = reg::fixture_logic::kOpRelease,
+    kOpQuery = reg::fixture_logic::kOpQuery,
   };
   enum : uint8_t {
-    kStateUnconfigured = reg::fixture_capture::kStateUnconfigured, kStateConfigured = reg::fixture_capture::kStateConfigured,
-    kStateWaiting = reg::fixture_capture::kStateWaiting, kStateCapturing = reg::fixture_capture::kStateCapturing,
-    kStateDone = reg::fixture_capture::kStateDone, kStatePaused = reg::fixture_capture::kStatePaused,
-    kStateError = reg::fixture_capture::kStateError,
+    kStateUnconfigured = reg::fixture_logic::kStateUnconfigured, kStateConfigured = reg::fixture_logic::kStateConfigured,
+    kStateWaiting = reg::fixture_logic::kStateWaiting, kStateCapturing = reg::fixture_logic::kStateCapturing,
+    kStateDone = reg::fixture_logic::kStateDone, kStatePaused = reg::fixture_logic::kStatePaused,
+    kStateError = reg::fixture_logic::kStateError,
   };
   static constexpr uint8_t kMaxChannels = 16;
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
@@ -60,11 +60,11 @@ class LogicCapture final : public Interface, public GroupTrack {
 
   LogicCapture(Endpoint &endpoint, uint64_t reserved_pins, uint16_t instance = 0)
       : endpoint_(endpoint), reserved_(reserved_pins), instance_(instance) {}
-  const char *name() const override { return reg::fixture_capture::kName; }
+  const char *name() const override { return reg::fixture_logic::kName; }
   uint16_t instance() const override { return instance_; }
-  uint8_t revision() const override { return reg::fixture_capture::kRevision; }
+  uint8_t revision() const override { return reg::fixture_logic::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
-  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_capture::kLockFreeOps, op); }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   bool planApply(const RoleAssignment *roles, size_t count) override;
@@ -78,7 +78,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool trackReady() const override { return state_ == kStateConfigured || state_ == kStateDone; }
   uint8_t trackMode() const override { return mode_; }
   bool trackTriggered() const override { return trig_type_ != 0; }
-  bool trackCanFollow() const override { return mode_ == reg::fixture_capture::kModeOneShot && trackReady(); }
+  bool trackCanFollow() const override { return mode_ == reg::fixture_logic::kModeOneShot && trackReady(); }
   bool trackStartFollowing() override;
   void trackTriggerAt(uint64_t ns) override;
   bool trackTriggerNs(uint64_t &ns) const override;

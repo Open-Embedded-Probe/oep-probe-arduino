@@ -48,18 +48,26 @@ void FixtureGpio::planRelease() {
   pins_.release(owner_);   // each channel to its idle state
 }
 
+namespace {
+// set / read refused: the channel and its position in the list (fixture §1: TLV 0x40 index after core §4.3's)
+Result refusedAt(size_t index, uint16_t channel, uint8_t *out, size_t capacity) {
+  const uint8_t extra[3] = {reg::fixture_gpio::kTlvUnavailablePayloadIndex, 1, static_cast<uint8_t>(index)};
+  return unavailable(out, capacity, 0, channel, 0xFFFF, 0, extra, sizeof extra);
+}
+}  // namespace
+
 Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   if (length < 1) return rejected(kRejectMalformed);
   const uint8_t n = payload[0];
   switch (op) {
     case kOpSet: {   // n(u8) n x (channel u16, mode u8) [TLV]: in order; nothing done if any entry cannot be
-      // (a channel not planned or a mode not handled: unavailable, payload = its position)
+      // (a channel not planned or a mode not handled: unavailable with the channel and its position, fixture §1)
       const Result parsed = plainTail(tail, payload, length, 1u + 3u * n, out, capacity);
       if (refused(parsed)) return parsed;
       for (uint8_t i = 0; i < n; ++i)
         if (!planned(getU16(payload + 1 + 3 * i)) || payload[3 + 3 * i] > reg::fixture_gpio::kModeInputPullupPulldown)
-          return rejectedWith(kRejectUnavailable, out, capacity, i);
+          return refusedAt(i, getU16(payload + 1 + 3 * i), out, capacity);
       for (uint8_t i = 0; i < n; ++i) platformGpio(getU16(payload + 1 + 3 * i), platformMode(payload[3 + 3 * i]));
       return tail.finish(completed(), out, capacity);
     }
@@ -68,7 +76,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       if (refused(parsed)) return parsed;
       if (capacity < n) return failed();
       for (uint8_t i = 0; i < n; ++i)
-        if (!planned(getU16(payload + 1 + 2 * i))) return rejectedWith(kRejectUnavailable, out, capacity, i);
+        if (!planned(getU16(payload + 1 + 2 * i))) return refusedAt(i, getU16(payload + 1 + 2 * i), out, capacity);
       for (uint8_t i = 0; i < n; ++i) out[i] = digitalRead(getU16(payload + 1 + 2 * i)) ? 1 : 0;
       return tail.finish(completed(n), out, capacity);
     }

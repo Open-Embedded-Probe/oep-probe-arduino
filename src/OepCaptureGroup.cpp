@@ -11,7 +11,7 @@
 
 namespace oep {
 namespace grp = reg::fixture_capture_group;
-namespace cap = reg::fixture_capture;
+namespace cap = reg::fixture_logic;
 
 namespace {
 uint64_t nowNs() {   // the probe's one clock (the captures stamp their segments with it)

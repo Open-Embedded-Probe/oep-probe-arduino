@@ -159,14 +159,18 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       }
       return tail.finish(completed(7 + data), out, capacity);
     }
-    case kOpStatus: {   // [TLV] -> flags(u8) transactions(u32) errors(u16)
+    case kOpStatus: {   // [TLV] -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u16)
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 7) return failed();
-      out[0] = static_cast<uint8_t>((started_ ? 1 : 0) | (armed_ ? 2 : 0) | (mode_ << 2) | (bit_order_ << 4) | (queue_count_ << 5));
-      putU32(out + 1, transactions_);
-      putU16(out + 5, errors_);
-      return tail.finish(completed(7), out, capacity);
+      if (capacity < 11) return failed();
+      out[0] = started_ ? 1 : 0;   // state: 0 not configured, 1 running
+      out[1] = mode_;
+      out[2] = bit_order_;
+      out[3] = armed_ ? 1 : 0;
+      out[4] = static_cast<uint8_t>(queue_count_);
+      putU32(out + 5, transactions_);
+      putU16(out + 9, errors_);
+      return tail.finish(completed(11), out, capacity);
     }
     case kOpReset: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);

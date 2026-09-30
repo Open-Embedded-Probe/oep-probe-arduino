@@ -1,6 +1,26 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The pre-freeze decisions (oep-spec docs/v1-freeze-decisions.ja.md), on the probe:
+  - `oep.fixture.capture` is `oep.fixture.logic` (the registry's `reg::fixture_logic`); the I2C / SPI targets are the standard `oep.fixture.i2c-target` / `spi-target`: status as separate fields (state, mode, armed, queued, counts), `read_hw` gone, stretch is op 0x07.
+  - Answer lists put each element's length first (core §2.3): list, scan, connections, marks, capture segments.
+  - A scan answer takes at most 500 ms (the host asks again for the rest): an RP2350 bit-banging 26 free pins did not answer for seconds (0.0.18).
+  - probe.config: the slot's lock is length-prefixed (lock_len); settings are saved with the (name, instance, revision) of each interface they name and renumbered at boot - another interface added or moved leaves them in force - and the storage says why it is unreadable (its last byte). The saved form changed (NVS "items3", EEPROM "OEP3"): settings saved by 0.0.18 or before are not read; set and save them again. Label items are taken and show in oep.core's describe.
+  - rejected unavailable carries core §4.3's TLVs where the endpoint refuses a plan (the channel another plan holds, a settings' plan, over plan_roles) and gpio's set / read (the channel, its position as TLV 0x40). An unknown console stream is no_connection.
+  - The unit id is text, lowercase hex (the ESP32's MAC, the RP2's flash unique id), and the USB serial number is the unit id: the P4's HS port drops "-hs", the RP2 sets it (USB.setSerialNumber).
+  - describe model: `esp32p4` (was `esp32-p4`), `esp32`, `rp2040`, `rp2350`; chip `<part> v<rev>` without hyphens (`esp32p4 v1.3`). The capture status flags: bit0 the probe dropped data, bit1 the time base bent.
+  - firmware-<version>.json: `"schema": 1`, each file's `model` and `chip` (from the profile's build.chip / build.mcu).
+  - A SparkFun Pro Micro RP2350 profile (`promicrorp2350`, released as OepProbe-promicrorp2350): every GPIO but GP19 (its PSRAM select); the Pico 2 build kept GP23-25 / 29 from the L103 bench's RVSWD on GP24 / 23.
+- (JA) 凍結前の決定（oep-spec docs/v1-freeze-decisions.ja.md）を probe に入れた:
+  - `oep.fixture.capture` は `oep.fixture.logic`（registry の `reg::fixture_logic`）。I2C / SPI の target は標準の `oep.fixture.i2c-target` / `spi-target`: status は分けたフィールド（state、mode、armed、queued、数）、`read_hw` は無くなり、stretch は op 0x07。
+  - 応答の並びは要素の前に長さを置く（core §2.3）: list、scan、connections、marks、capture の segments。
+  - scan の 1 回の応答は 500 ms まで（残りは host がもう一度聞く）。空いた 26 本を bit-bang で試す RP2350 が、数秒答えなかった（0.0.18）。
+  - probe.config: スロットの錠は長さ付き（lock_len）。設定は、指すインターフェースの (name、instance、revision) と一緒に保存し、起動時に番号を読み替える（ほかのインターフェースを足しても動かしても効いたまま）。storage は読めない理由を返す（最後のバイト）。保存の形が変わった（NVS "items3"、EEPROM "OEP3"）: 0.0.18 までに保存した設定は読まない。もう一度 set して save する。label の項目を受け、oep.core の describe に出す。
+  - rejected unavailable は、endpoint が plan を断るとき（ほかの plan が持つ channel、設定の plan、plan_roles を超える）と gpio の set / read（channel と、並びの位置を TLV 0x40）で、core §4.3 の TLV を付ける。知らない console の stream は no_connection。
+  - unit id は text で小文字の 16 進（ESP32 は MAC、RP2 は flash の unique id）。USB の serial number は unit id: P4 の HS の口は "-hs" を外し、RP2 は設定する（USB.setSerialNumber）。
+  - describe の model: `esp32p4`（以前は `esp32-p4`）、`esp32`、`rp2040`、`rp2350`。chip は `<型番> v<rev>`、ハイフンなし（`esp32p4 v1.3`）。capture の status の flags: bit0 probe の中で落とした、bit1 時間の基準が曲がった。
+  - firmware-<version>.json: `"schema": 1`、各ファイルの `model` と `chip`（profile の build.chip / build.mcu から）。
+  - SparkFun Pro Micro RP2350 の profile（`promicrorp2350`、OepProbe-promicrorp2350 として出す）: GP19（PSRAM の選択）以外のすべての GPIO。Pico 2 のビルドは GP23〜25 / 29 を持っていて、L103 のベンチの RVSWD（GP24 / 23）を使えなかった。
 
 ## 0.0.18
 - (EN) capture-group: a second triggered run in one boot follows its own trigger. The group asked the trigger track for its trigger's time while it waited for the followers' pretriggers - before that track had started, so it still held the last run's - and the followers cut their segments at that old time at once (ti 0; the group's trigger_ns the last run's, 0.0.17, both jigs).

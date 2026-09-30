@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// OEP v1 logic capture (oep.fixture.capture revision 1, oep-spec logic-capture.ja.md §5) on the classic ESP32: the
+// OEP v1 logic capture (oep.fixture.logic revision 1, oep-spec logic-capture.ja.md §5) on the classic ESP32: the
 // software GPIO sampler of the v0 FixtureCapture, one-shot only. Core 0 does nothing else on this probe, so it samples
 // with interrupts off, paced by the cycle counter (one register read per sample); OEP keeps answering on core 1.
 // A sample is one byte (w = 8), channel k on bit k (logic-capture §3.0), up to 8 channels; bits of unused channels are 0.
@@ -36,11 +36,11 @@ class SamplerCapture final : public Interface, public GroupTrack {
 
   SamplerCapture(Endpoint &endpoint, uint64_t reserved_pins, uint16_t instance = 0)
       : endpoint_(endpoint), reserved_(reserved_pins), instance_(instance) {}
-  const char *name() const override { return reg::fixture_capture::kName; }
+  const char *name() const override { return reg::fixture_logic::kName; }
   uint16_t instance() const override { return instance_; }
-  uint8_t revision() const override { return reg::fixture_capture::kRevision; }
+  uint8_t revision() const override { return reg::fixture_logic::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
-  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_capture::kLockFreeOps, op); }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   bool planApply(const RoleAssignment *roles, size_t count) override;
@@ -49,8 +49,8 @@ class SamplerCapture final : public Interface, public GroupTrack {
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   void poll();   // from loop(): a finished window becomes the segment and stopped events
   // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot
-  bool trackReady() const override { return state_ == reg::fixture_capture::kStateConfigured || state_ == reg::fixture_capture::kStateDone; }
-  uint8_t trackMode() const override { return reg::fixture_capture::kModeOneShot; }
+  bool trackReady() const override { return state_ == reg::fixture_logic::kStateConfigured || state_ == reg::fixture_logic::kStateDone; }
+  uint8_t trackMode() const override { return reg::fixture_logic::kModeOneShot; }
   bool trackTriggered() const override { return trig_type_ != 0; }
   // the trigger track of a group (it cannot follow one: its search runs in bursts, with gaps)
   bool trackTriggerNs(uint64_t &ns) const override {
@@ -58,10 +58,10 @@ class SamplerCapture final : public Interface, public GroupTrack {
     ns = trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_;
     return true;
   }
-  void trackForce() override { groupOp(reg::fixture_capture::kOpForce); }
+  void trackForce() override { groupOp(reg::fixture_logic::kOpForce); }
   uint32_t trackLoad() const override { return cycles_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * cpu_hz_ / cycles_) : 0; }
-  bool trackStart() override { return groupOp(reg::fixture_capture::kOpStart); }
-  void trackStop() override { groupOp(reg::fixture_capture::kOpStop); }
+  bool trackStart() override { return groupOp(reg::fixture_logic::kOpStart); }
+  void trackStop() override { groupOp(reg::fixture_logic::kOpStop); }
   uint8_t trackState() const override { return state_; }
 
  private:
@@ -80,7 +80,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   uint8_t channels_ = 0;
   size_t max_read_ = 1000;
   bool subscribed_ = false;
-  uint8_t state_ = reg::fixture_capture::kStateUnconfigured;
+  uint8_t state_ = reg::fixture_logic::kStateUnconfigured;
   uint32_t samples_ = 0, cycles_ = 0, cpu_hz_ = 0;
   uint64_t start_ns_ = 0;   // the probe's clock (esp_timer x 1000)
   uint8_t *buffer_ = nullptr;

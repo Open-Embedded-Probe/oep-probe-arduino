@@ -10,6 +10,8 @@
 namespace oep {
 namespace {
 
+constexpr uint32_t kScanBudgetMs = 500;   // the longest one scan answer takes (the host asks again for the rest)
+
 constexpr uint8_t kKindArmAdi = 0x02;
 constexpr int kWaitRetries = 100;
 
@@ -101,7 +103,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
   switch (op) {
     case kOpScan: {
       // count(u8) pairs [TLV 0x01 skip]  ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) DPIDR(u32) per
-      // answer (oep-if-debug §1)
+      // answer, each after its len(u8) (oep-if-debug §1)
       if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
       const uint8_t count = payload[0];
       const size_t fixed = 1u + 4u * count;
@@ -124,8 +126,11 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (capacity < 2) return failed();
       size_t at = 2;
       uint8_t tried = 0, found = 0;
-      auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full
-        if (at + 9 > capacity) return false;
+      // One answer takes at most kScanBudgetMs: the host goes on with the rest (count 0 with skip, or the pairs after
+      // tried). 26 free pins bit-banged pair by pair kept an RP2350 from answering for seconds (0.0.18).
+      const uint32_t began = millis();
+      auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full, or its time is up
+        if (at + 10 > capacity || (tried && millis() - began >= kScanBudgetMs)) return false;
         uint32_t dpidr = 0;
         bool ok = false;
         if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state
@@ -136,11 +141,12 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           port_.io.releaseBoth();
         }
         if (ok) {
-          out[at] = kKindArmAdi;
-          putU16(out + at + 1, d);
-          putU16(out + at + 3, c);
-          putU32(out + at + 5, dpidr);
-          at += 9;
+          out[at] = 9;   // the element's length (core §2.3)
+          out[at + 1] = kKindArmAdi;
+          putU16(out + at + 2, d);
+          putU16(out + at + 4, c);
+          putU32(out + at + 6, dpidr);
+          at += 10;
           ++found;
         }
         ++tried;
@@ -238,17 +244,18 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
     case kOpConnections: {   // [TLV] -> count(u8), the live connection (users: the host only; no target_id scheme)
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 15) return failed();
+      if (capacity < 16) return failed();
       out[0] = port_.connected ? 1 : 0;
       if (!port_.connected) return tail.finish(completed(1), out, capacity);
-      putU16(out + 1, port_.number);
-      putU16(out + 3, port_.swdio);
-      putU16(out + 5, port_.swclk);
-      putU32(out + 7, port_.active_half_ns ? 500000000u / port_.active_half_ns : 0);
-      out[11] = reg::wire_swd::kConnectionUsersHostSession;
-      out[12] = 0xff;   // no slot
-      out[13] = out[14] = 0;
-      return tail.finish(completed(15), out, capacity);
+      out[1] = 14;   // the entry's length (core §2.3)
+      putU16(out + 2, port_.number);
+      putU16(out + 4, port_.swdio);
+      putU16(out + 6, port_.swclk);
+      putU32(out + 8, port_.active_half_ns ? 500000000u / port_.active_half_ns : 0);
+      out[12] = reg::wire_swd::kConnectionUsersHostSession;
+      out[13] = 0xff;   // no slot
+      out[14] = out[15] = 0;
+      return tail.finish(completed(16), out, capacity);
     }
     case kOpDetach: {   // connection(u16) [TLV]
       if (length < 2) return rejected(kRejectMalformed);

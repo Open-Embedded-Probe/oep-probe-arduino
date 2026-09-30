@@ -43,6 +43,7 @@ class Endpoint;
 class ProbeConfig final : public Interface {
  public:
   static constexpr size_t kMaxPlaces = 2, kMaxSlots = 4, kMaxUarts = 4, kMaxSaved = 512, kMaxLock = 8, kMaxName = 32;
+  static constexpr size_t kMaxLabels = 8, kMaxLabel = 24;   // label items: channel names in oep.core's describe
 
   ProbeConfig(Endpoint &endpoint, Binds &binds) : endpoint_(endpoint), binds_(binds) {
     memset(idle_, PinTable::kIdleUnset, sizeof idle_);
@@ -55,9 +56,9 @@ class ProbeConfig final : public Interface {
   // The pins whose idle state the idle item sets (without it, idle items are refused).
   void setPins(PinTable *pins) { pins_ = pins; }
 
-  // Read what was saved, then apply it: both after the sketch's last endpoint.add(). The saved items are kept for one
-  // interface list (their fns name functions); an interface added later changes the list, and the saved items are
-  // then left unapplied (storage unreadable).
+  // Read what was saved, then apply it: both after the sketch's last endpoint.add(). The saved items keep the
+  // (name, instance, revision) of every interface they name and are renumbered to where those are now; one gone (or of
+  // another revision) leaves them unapplied (storage unreadable, probe.config §2).
   void load();
   void applySaved();
   void poll();   // from loop(): the slots' automatic attach, retries, the bound consoles
@@ -103,10 +104,17 @@ class ProbeConfig final : public Interface {
     return p.swdio == s.swdio && p.swclk == s.swclk;
   }
   uint8_t idle_[PinTable::kChannels];             // the idle items (kIdleUnset: none)
+  struct Label { bool set = false; uint16_t channel = 0; uint8_t length = 0; char text[kMaxLabel] = {}; };
+  Label labels_[kMaxLabels];
   uint8_t storage_state_ = reg::probe_config::kStorageStateNone;
-  uint32_t saved_hash_ = 0, save_ms_ = 0, saved_list_ = 0;
-  uint8_t saved_[kMaxSaved];
+  uint8_t unreadable_ = 0;                        // why the saved items were not applied (probe.config §4)
+  uint32_t saved_hash_ = 0, save_ms_ = 0;
+  uint8_t saved_[kMaxSaved];                      // the saved items (canonical, as saved)
   size_t saved_length_ = 0;
+  uint8_t ids_[kMaxSaved / 2];                    // their interfaces: count, then fn(u16) instance(u16) revision name_len name
+  size_t ids_length_ = 0;
+  size_t identities(const uint8_t *items, size_t length, uint8_t *out, size_t capacity) const;
+  static size_t labelsTlv(void *self, uint8_t *out, size_t capacity);
 
   size_t canonical(uint8_t *out, size_t capacity) const;   // the items in their canonical order (the hash's input)
   uint32_t hash() const;

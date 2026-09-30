@@ -9,8 +9,9 @@
 # src/ (the release branch's sketch.yaml names it from the Library Manager, which may not have indexed the new version
 # yet). Files: <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool),
 # <Example>-<profile>-<version>.bin (ESP32: the app image alone, for an update into the other app partition - the P4's
-# `dfu-util -D`), <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), and firmware-<version>.json listing them with
-# their kind (merged / app / uf2) and sha256.
+# `dfu-util -D`), <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), and firmware-<version>.json ("schema": 1)
+# listing them with their kind (merged / app / uf2), model (the describe model: esp32p4, esp32, rp2040, rp2350), chip
+# and sha256.
 #
 # One job per (example, profile), all at once: `plan` lists them, `build` compiles one each (the platform's
 # installation cached per platform version, so a job downloads no toolchain after the first run), `attach` gathers
@@ -137,6 +138,11 @@ jobs:
                          check=True)
           if os.environ["RELEASE"] != "true":
               raise SystemExit(0)   # the other examples are built to check them, not released
+          # the chip the profile builds for (RP2: build.chip, ESP32: build.mcu): the Firmware sketches' describe model
+          props = subprocess.run(["arduino-cli", "compile", "--profile", profile, "--show-properties", str(sketch)],
+                                 check=True, capture_output=True, text=True).stdout
+          found = dict(re.findall(r"(?m)^build\.(chip|mcu)=(\S+)$", props))
+          chip = found.get("chip") or found.get("mcu") or profile
           out = pathlib.Path("firmware")
           out.mkdir()
           files = []
@@ -148,8 +154,10 @@ jobs:
               if src.exists() and (kind != "app" or merged):
                   dst = out / f"{sketch.name}-{profile}-{version}.{ext}"
                   shutil.copy(src, dst)
+                  # model: the describe model the Firmware sketches report (the chip); chip: the part built for
                   files.append({"example": str(sketch.relative_to("examples")), "profile": profile, "file": dst.name,
-                                "kind": kind, "fqbn": fqbn, "flash_offset": 0 if kind == "merged" else None,
+                                "kind": kind, "model": chip, "chip": chip, "fqbn": fqbn,
+                                "flash_offset": 0 if kind == "merged" else None,
                                 "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
           if not any(f["kind"] in ("merged", "uf2") for f in files):
               raise SystemExit(f"{sketch.name} ({profile}): no merged.bin or uf2 in {build}")
@@ -193,7 +201,7 @@ jobs:
                   files.append(f)
           files.sort(key=lambda f: (f["example"], f["profile"], f["file"]))
           (out / f"firmware-{version}.json").write_text(json.dumps(
-              {"library": lib, "version": version, "firmware": files}, indent=2) + "\n")
+              {"schema": 1, "library": lib, "version": version, "firmware": files}, indent=2) + "\n")
           print("\n".join(f["file"] for f in files))
           PY
 

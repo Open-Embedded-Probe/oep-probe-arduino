@@ -84,7 +84,7 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     return tail.finish(completed(3), out, capacity);
   }
   if (length < 2) return rejected(kRejectMalformed);
-  if (getU16(payload) != stream_number_ || !exists_) return rejected(kRejectUnavailable);   // the current stream only
+  if (getU16(payload) != stream_number_ || !exists_) return rejected(kRejectNoConnection);   // a number it does not know (core §4.3)
   const uint8_t *p = payload + 2;
   const size_t n = length - 2;
   switch (op) {

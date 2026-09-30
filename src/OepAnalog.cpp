@@ -799,7 +799,11 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       out[0] = state_;
       putU32(out + 1, state_ == ana::kStateDone ? 1 : 0);
       putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
-      out[13] = 0;
+#if defined(ARDUINO_ARCH_ESP32)
+      out[13] = (overflow_ || overflow_seen_ || trig_slipped_) ? 1 : 0;   // bit0 conversions were lost
+#else
+      out[13] = trig_slipped_ ? 1 : 0;
+#endif
       return tail.finish(completed(14), out, capacity);
     }
     case ana::kOpRead: {   // position(u64) max(u32) -> position(u64) flags(u8: bit0 more) data
@@ -821,11 +825,12 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (n < 4) return rejected(kRejectMalformed);
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 1 + 33) return failed();
+      if (capacity < 2 + 33) return failed();
       poll();
       const bool one = state_ == ana::kStateDone && getU32(p) == 0;
       out[0] = one ? 1 : 0;
-      return tail.finish(completed(1 + (one ? segmentInfo(out + 1) : 0)), out, capacity);
+      if (one) out[1] = static_cast<uint8_t>(segmentInfo(out + 2));   // len(u8) then the info (core §2.3)
+      return tail.finish(completed(one ? 2u + out[1] : 1u), out, capacity);
     }
     case ana::kOpCalibration: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);

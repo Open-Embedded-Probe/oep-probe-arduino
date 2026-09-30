@@ -19,48 +19,46 @@ namespace oep {
 namespace cfg = reg::probe_config;
 
 namespace {
-constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items2", *kNvsList = "list1";   // items: the 2026-09-30 slot layout
+// "items3": the interfaces the items name, then the items (2026-09-30: saved by interface identity, the slot's lock_len)
+constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items3";
 constexpr size_t kSlotFixed = 17;   // slot wire_fn swdio swclk attach retry_s max_speed idle_clock mechanism name_len
 
-// Where the saved items live: ESP32 NVS (Preferences), RP2040 / RP2350 the arduino-pico EEPROM (the flash's last
-// sector): magic, the interface list's identity, length, then the items. read: false = nothing saved.
+// Where the saved blob lives: ESP32 NVS (Preferences), RP2040 / RP2350 the arduino-pico EEPROM (the flash's last
+// sector: magic, length, the blob). The blob: the interfaces the items name, then the items. read: false = nothing.
+constexpr size_t kMaxBlob = ProbeConfig::kMaxSaved + ProbeConfig::kMaxSaved / 2;
 #if defined(ARDUINO_ARCH_ESP32)
-bool storeRead(uint8_t *items, size_t capacity, size_t &length, uint32_t &list) {
+bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
   Preferences p;
   if (!p.begin(kNvsNamespace, true)) return false;
   length = p.getBytesLength(kNvsItems);
-  const bool ok = length > 0 && length <= capacity && p.getBytes(kNvsItems, items, length) == length;
-  list = p.getUInt(kNvsList, 0);
+  const bool ok = length > 0 && length <= capacity && p.getBytes(kNvsItems, blob, length) == length;
   p.end();
   return ok;
 }
-bool storeWrite(const uint8_t *items, size_t length, uint32_t list) {   // length 0: nothing saved
+bool storeWrite(const uint8_t *blob, size_t length) {   // length 0: nothing saved
   Preferences p;
   if (!p.begin(kNvsNamespace, false)) return false;
-  const size_t written = length ? p.putBytes(kNvsItems, items, length) : (p.remove(kNvsItems), 0);
-  p.putUInt(kNvsList, list);
+  const size_t written = length ? p.putBytes(kNvsItems, blob, length) : (p.remove(kNvsItems), 0);
   p.end();
   return written == length;
 }
 #else
-constexpr uint32_t kEepromMagic = 0x4f455032;   // "OEP2": the 2026-09-30 slot layout
-constexpr size_t kEepromHeader = 10;            // magic(u32) list(u32) length(u16)
-bool storeRead(uint8_t *items, size_t capacity, size_t &length, uint32_t &list) {
-  EEPROM.begin(kEepromHeader + ProbeConfig::kMaxSaved);
+constexpr uint32_t kEepromMagic = 0x4f455033;   // "OEP3": saved by interface identity (2026-09-30)
+constexpr size_t kEepromHeader = 6;             // magic(u32) length(u16)
+bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
+  EEPROM.begin(kEepromHeader + kMaxBlob);
   const uint8_t *e = EEPROM.getConstDataPtr();
-  length = getU16(e + 8);
-  list = getU32(e + 4);
+  length = getU16(e + 4);
   if (getU32(e) != kEepromMagic || length == 0 || length > capacity) return false;
-  memcpy(items, e + kEepromHeader, length);
+  memcpy(blob, e + kEepromHeader, length);
   return true;
 }
-bool storeWrite(const uint8_t *items, size_t length, uint32_t list) {
-  EEPROM.begin(kEepromHeader + ProbeConfig::kMaxSaved);
+bool storeWrite(const uint8_t *blob, size_t length) {
+  EEPROM.begin(kEepromHeader + kMaxBlob);
   uint8_t *e = EEPROM.getDataPtr();
   putU32(e, length ? kEepromMagic : 0);
-  putU32(e + 4, list);
-  putU16(e + 8, static_cast<uint16_t>(length));
-  if (length) memcpy(e + kEepromHeader, items, length);
+  putU16(e + 4, static_cast<uint16_t>(length));
+  if (length) memcpy(e + kEepromHeader, blob, length);
   return EEPROM.commit();
 }
 #endif
@@ -124,6 +122,22 @@ size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
     if (next == 0xffffffff) break;
     key = next;
   }
+  for (uint32_t c = 0; c <= 0xffff; ) {   // labels, ascending channel
+    uint32_t next = 0x10000;
+    for (const Label &l : labels_) {
+      if (!l.set) continue;
+      if (l.channel == c) {
+        uint8_t v[2 + kMaxLabel];
+        putU16(v, l.channel);
+        memcpy(v + 2, l.text, l.length);
+        w.put(cfg::kTlvItemLabel, v, 2u + l.length);
+      } else if (l.channel > c && l.channel < next) {
+        next = l.channel;
+      }
+    }
+    if (next == 0x10000) break;
+    c = next;
+  }
   for (uint16_t c = 0; c < PinTable::kChannels; ++c) {
     if (idle_[c] == PinTable::kIdleUnset) continue;
     uint8_t v[3];
@@ -135,7 +149,7 @@ size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
     const Slot &s = slots_[i];
     if (!s.set) continue;
     const Place &p = places_[s.place];
-    uint8_t v[kSlotFixed + kMaxName + 1 + 2 * kMaxLock];
+    uint8_t v[kSlotFixed + kMaxName + 2 + 2 * kMaxLock];
     v[0] = i;
     putU16(v + 1, p.wire_fn);
     putU16(v + 3, s.swdio);
@@ -148,8 +162,9 @@ size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
     v[16] = s.name_length;
     memcpy(v + kSlotFixed, s.name, s.name_length);
     size_t at = kSlotFixed + s.name_length;
-    v[at++] = s.lock_scheme;
+    v[at++] = s.lock_scheme ? static_cast<uint8_t>(1 + 2 * s.lock_length) : 0;   // lock_len (probe.config §1.1)
     if (s.lock_scheme) {
+      v[at++] = s.lock_scheme;
       memcpy(v + at, s.mask, s.lock_length);
       memcpy(v + at + s.lock_length, s.value, s.lock_length);
       at += 2u * s.lock_length;
@@ -205,6 +220,9 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
   memcpy(idle, idle_, sizeof idle);
   uint64_t idle_touched = 0;
   bool has_idle = false;
+  Label labels[kMaxLabels];
+  for (size_t i = 0; i < kMaxLabels; ++i) labels[i] = labels_[i];
+  bool labels_touched = false;
   for (size_t at = 0; at < length;) {
     if (length - at < 2 || length - at - 2 < items[at + 1]) return rejected(kRejectMalformed);
     const uint8_t tag = items[at] & 0x7f, len = items[at + 1];   // kept and hashed without the critical bit (§2)
@@ -224,6 +242,20 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
         if (roles[r].function == fn && roles[r].role == v[2]) return rejected(kRejectMalformed);   // a key twice
       if (role_count >= Endpoint::kMaxRoles) return rejected(kRejectUnavailable);   // over plan_roles (core §8)
       roles[role_count++] = {fn, v[2], getU16(v + 3)};
+    } else if (tag == cfg::kTlvItemLabel) {   // channel(u16) text; the channel alone: its label goes
+      if (len < 2 || len > 2 + kMaxLabel) return rejected(kRejectMalformed);
+      const uint16_t c = getU16(v);
+      int slot = -1;
+      for (size_t k = 0; k < kMaxLabels; ++k)
+        if (labels[k].set && labels[k].channel == c) slot = static_cast<int>(k);
+      if (len == 2) { if (slot >= 0) labels[slot] = Label{}; labels_touched = true; continue; }
+      if (slot < 0) for (size_t k = 0; k < kMaxLabels && slot < 0; ++k) if (!labels[k].set) slot = static_cast<int>(k);
+      if (slot < 0) return rejected(kRejectUnavailable);   // no room for another
+      labels[slot].set = true;
+      labels[slot].channel = c;
+      labels[slot].length = static_cast<uint8_t>(len - 2);
+      memcpy(labels[slot].text, v + 2, len - 2);
+      labels_touched = true;
     } else if (tag == cfg::kTlvItemIdle) {
       if (!pins_) return rejected(kRejectUnsupported);
       if (len != 2 && len != 3) return rejected(kRejectMalformed);
@@ -241,7 +273,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       Slot &s = slots[n];
       s = Slot{};
       if (len == 1) continue;   // slot alone: it goes
-      if (len < kSlotFixed + 1 || len < kSlotFixed + v[16] + 1u) return rejected(kRejectMalformed);
+      if (len < kSlotFixed + 1 || len < kSlotFixed + v[16] + 1u) return rejected(kRejectMalformed);   // up to lock_len
       const uint16_t wire_fn = getU16(v + 1), swdio = getU16(v + 3), swclk = getU16(v + 5);
       const uint8_t attach = v[7], idle = v[14], mechanism = v[15], name_length = v[16];
       const uint16_t retry_s = getU16(v + 8);
@@ -258,9 +290,11 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       if (idle && !phy.canIdleClockLow()) return rejected(kRejectMalformed);   // idle_clock low: rvswd's only
       if (!phy.keepsMaxHz(max_hz)) return rejected(kRejectUnsupported);       // a ceiling this line cannot keep
       if (mechanism > reg::target_console::kMechanismDmseq) return rejected(kRejectUnsupported);
-      const uint8_t *lock = v + kSlotFixed + name_length;
-      const size_t lock_bytes = len - kSlotFixed - name_length;   // scheme [mask value]
-      if (lock[0] == 0 ? lock_bytes != 1 : (lock_bytes < 3 || (lock_bytes - 1) % 2 || (lock_bytes - 1) / 2 > kMaxLock))
+      // lock_len(u8) then scheme mask value (lock_len 0: none); what follows the lock is for later fields: skipped
+      const uint8_t lock_len = v[kSlotFixed + name_length];
+      const uint8_t *lock = v + kSlotFixed + name_length + 1;
+      if (len < kSlotFixed + name_length + 1u + lock_len) return rejected(kRejectMalformed);
+      if (lock_len && (lock_len < 3 || lock_len % 2 == 0 || lock[0] == 0 || (lock_len - 1) / 2 > kMaxLock))
         return rejected(kRejectMalformed);
       s.set = true;
       s.place = static_cast<uint8_t>(place);
@@ -274,8 +308,8 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       s.name_length = name_length;
       memcpy(s.name, v + kSlotFixed, name_length);
       s.name[name_length] = 0;
-      s.lock_scheme = lock[0];
-      s.lock_length = static_cast<uint8_t>(lock[0] ? (lock_bytes - 1) / 2 : 0);
+      s.lock_scheme = lock_len ? lock[0] : 0;
+      s.lock_length = static_cast<uint8_t>(lock_len ? (lock_len - 1) / 2 : 0);
       memcpy(s.mask, lock + 1, s.lock_length);
       memcpy(s.value, lock + 1 + s.lock_length, s.lock_length);
     } else if (tag == cfg::kTlvItemBind) {
@@ -284,7 +318,8 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       b.touched = true;
       if (len == 1) continue;   // port alone: that bind goes
       if (!endpoint_.isSerialPort(v[0])) return rejected(kRejectUnavailable);
-      if (len < 4 || v[3] < 1 || v[3] > Binds::kMaxStreams || len != 4u + 3u * v[3]) return rejected(kRejectMalformed);
+      // what follows the streams is for later fields (core §2.3): skipped
+      if (len < 4 || v[3] < 1 || v[3] > Binds::kMaxStreams || len < 4u + 3u * v[3]) return rejected(kRejectMalformed);
       if (v[1] > Binds::kMixed) return rejected(kRejectUnsupported);
       if (v[1] == Binds::kManual && v[2] >= v[3]) return rejected(kRejectMalformed);
       b.set = true;
@@ -297,7 +332,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
         if (b.kinds[k] != Binds::kSlotConsole && b.kinds[k] != Binds::kFixtureUart) return rejected(kRejectMalformed);
       }
     } else {
-      return rejected(kRejectUnsupported);   // label: not taken here; others unknown
+      return rejected(kRejectUnsupported);   // an item this probe does not know
     }
   }
   // the whole: one slot per place, at most one at-boot slot per wire (max_connections 1), every bind's streams there
@@ -341,6 +376,7 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
     if (reason) return rejected(reason);
   }
   // accepted: make it current
+  if (labels_touched) memcpy(labels_, labels, sizeof labels_);
   if (has_idle) {
     memcpy(idle_, idle, sizeof idle_);
     for (uint16_t c = 0; c < PinTable::kChannels; ++c) if ((idle_touched >> c) & 1) pins_->setIdle(c, idle_[c]);
@@ -426,41 +462,134 @@ void ProbeConfig::poll() {
 
 // ---- storage -------------------------------------------------------------------------------------------------------
 
-void ProbeConfig::load() {
-  size_t length = 0;
-  uint32_t list = 0;
-  if (storeRead(saved_, sizeof saved_, length, list)) {
-    saved_length_ = length;
-    saved_hash_ = crc32Ieee(saved_, saved_length_);
-    saved_list_ = list;
-    storage_state_ = cfg::kStorageStateApplied;   // until applySaved says otherwise
-  } else {
-    saved_length_ = 0;
+// The interfaces `items` name (plan fns, slot wire_fns, the fixture UARTs binds carry), each once:
+// count(u8), then fn(u16) instance(u16) revision(u8) name_len(u8) name. 0: no room.
+size_t ProbeConfig::identities(const uint8_t *items, size_t length, uint8_t *out, size_t capacity) const {
+  uint16_t fns[16];
+  size_t n = 0;
+  auto note = [&](uint16_t fn) {
+    for (size_t k = 0; k < n; ++k) if (fns[k] == fn) return;
+    if (n < 16) fns[n++] = fn;
+  };
+  for (size_t at = 0; at + 2 <= length && at + 2u + items[at + 1] <= length; at += 2u + items[at + 1]) {
+    const uint8_t tag = items[at], len = items[at + 1];
+    const uint8_t *v = items + at + 2;
+    if (tag == cfg::kTlvItemPlan && len >= 2) note(getU16(v));
+    if (tag == cfg::kTlvItemSlot && len >= 3) note(getU16(v + 1));
+    if (tag == cfg::kTlvItemBind && len >= 4)
+      for (uint8_t k = 0; k < v[3] && 4u + 3u * k + 3u <= len; ++k)
+        if (v[4 + 3 * k] == Binds::kFixtureUart) note(getU16(v + 5 + 3 * k));
   }
+  if (capacity < 1) return 0;
+  size_t used = 1;
+  out[0] = static_cast<uint8_t>(n);
+  for (size_t k = 0; k < n; ++k) {
+    const Interface *it = endpoint_.interfaceAt(fns[k]);
+    const char *name = it ? it->name() : "";
+    const size_t name_len = strlen(name);
+    if (used + 6 + name_len > capacity) return 0;
+    putU16(out + used, fns[k]);
+    putU16(out + used + 2, it ? it->instance() : 0);
+    out[used + 4] = it ? it->revision() : 0;
+    out[used + 5] = static_cast<uint8_t>(name_len);
+    memcpy(out + used + 6, name, name_len);
+    used += 6 + name_len;
+  }
+  return used;
+}
+
+void ProbeConfig::load() {
+  endpoint_.setProbeExtra(&ProbeConfig::labelsTlv, this);   // the label items in oep.core's describe
+  uint8_t blob[kMaxBlob];
+  size_t length = 0;
+  saved_length_ = ids_length_ = 0;
+  if (!storeRead(blob, sizeof blob, length)) return;
+  // the identities, then the items
+  size_t at = 1;
+  for (uint8_t k = 0; blob[0] && k < blob[0] && at + 6 <= length; ++k) at += 6u + blob[at + 5];
+  if (at > length || at > sizeof ids_ || length - at > sizeof saved_) {
+    storage_state_ = cfg::kStorageStateUnreadable;
+    unreadable_ = cfg::kStorageUnreadableForm;
+    return;
+  }
+  memcpy(ids_, blob, at);
+  ids_length_ = at;
+  memcpy(saved_, blob + at, length - at);
+  saved_length_ = length - at;
+  saved_hash_ = crc32Ieee(saved_, saved_length_);
+  storage_state_ = cfg::kStorageStateApplied;   // until applySaved says otherwise
 }
 
 void ProbeConfig::applySaved() {
   if (!saved_length_) return;
-  // Saved for another interface list (another firmware): its fn numbers may name other functions - leave it unapplied.
-  if (saved_list_ != endpoint_.listHash()) {
-    storage_state_ = cfg::kStorageStateUnreadable;
-    return;
+  // Each interface the items name, found again by (name, instance, revision): the fn it has in this firmware.
+  uint16_t from[16], to[16];
+  size_t n = 0;
+  for (size_t at = 1, k = 0; k < ids_[0] && n < 16; ++k) {
+    const uint16_t fn = getU16(ids_ + at), instance = getU16(ids_ + at + 2);
+    const uint8_t revision = ids_[at + 4], name_len = ids_[at + 5];
+    const char *name = reinterpret_cast<const char *>(ids_ + at + 6);
+    at += 6u + name_len;
+    uint16_t now = 0;
+    for (uint16_t f = 1; f <= 255 && !now; ++f) {
+      const Interface *it = endpoint_.interfaceAt(f);
+      if (!it) break;
+      if (it->instance() == instance && it->revision() == revision && strlen(it->name()) == name_len &&
+          memcmp(it->name(), name, name_len) == 0) now = f;
+    }
+    if (!now) {   // gone, or another revision: nothing is applied (a jig half set up is worse than none)
+      storage_state_ = cfg::kStorageStateUnreadable;
+      unreadable_ = cfg::kStorageUnreadableInterface;
+      return;
+    }
+    from[n] = fn;
+    to[n++] = now;
   }
-  const Result r = apply(saved_, saved_length_);
-  if (r.resolution != kResolutionCompleted || r.detail != kOutcomeSuccess) storage_state_ = cfg::kStorageStateUnreadable;
+  auto map = [&](uint16_t fn) { for (size_t k = 0; k < n; ++k) if (from[k] == fn) return to[k]; return fn; };
+  uint8_t items[kMaxSaved];
+  memcpy(items, saved_, saved_length_);
+  for (size_t at = 0; at + 2 <= saved_length_; at += 2u + items[at + 1]) {   // renumber in place
+    const uint8_t tag = items[at], len = items[at + 1];
+    uint8_t *v = items + at + 2;
+    if (tag == cfg::kTlvItemPlan && len >= 2) putU16(v, map(getU16(v)));
+    if (tag == cfg::kTlvItemSlot && len >= 3) putU16(v + 1, map(getU16(v + 1)));
+    if (tag == cfg::kTlvItemBind && len >= 4)
+      for (uint8_t k = 0; k < v[3] && 4u + 3u * k + 3u <= len; ++k)
+        if (v[4 + 3 * k] == Binds::kFixtureUart) putU16(v + 5 + 3 * k, map(getU16(v + 5 + 3 * k)));
+  }
+  const Result r = apply(items, saved_length_);
+  if (r.resolution != kResolutionCompleted || r.detail != kOutcomeSuccess) {
+    storage_state_ = cfg::kStorageStateUnreadable;
+    unreadable_ = cfg::kStorageUnreadableRefused;
+  }
+}
+
+size_t ProbeConfig::labelsTlv(void *self, uint8_t *out, size_t capacity) {   // core describe label (0x46)
+  const ProbeConfig &c = *static_cast<ProbeConfig *>(self);
+  TlvWriter w(out, capacity);
+  for (const Label &l : c.labels_) {
+    if (!l.set) continue;
+    uint8_t v[2 + kMaxLabel];
+    putU16(v, l.channel);
+    memcpy(v + 2, l.text, l.length);
+    w.put(reg::core::kTlvDescribeLabel, v, 2u + l.length);
+  }
+  return w.ok() ? w.length() : 0;
 }
 
 // ---- describe and the operations -------------------------------------------------------------------------------------
 
 size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  uint8_t st[13];
+  uint8_t st[14];
   putU32(st, kMaxSaved);
   st[4] = storage_state_;
   putU32(st + 5, saved_length_ ? saved_hash_ : 0);
   putU32(st + 9, save_ms_ > 200 ? save_ms_ : 200);
+  st[13] = storage_state_ == cfg::kStorageStateUnreadable ? unreadable_ : 0;   // why (probe.config §4)
   w.put(cfg::kTlvDescribeStorage, st, sizeof st);
-  static const uint8_t kItems[] = {cfg::kTlvItemPlan, cfg::kTlvItemSlot, cfg::kTlvItemBind, cfg::kTlvItemIdle};
+  static const uint8_t kItems[] = {cfg::kTlvItemPlan, cfg::kTlvItemLabel, cfg::kTlvItemSlot, cfg::kTlvItemBind,
+                                   cfg::kTlvItemIdle};
   w.put(cfg::kTlvDescribeItems, kItems, pins_ ? sizeof kItems : sizeof kItems - 1);
   w.u8(cfg::kTlvDescribeSlotsMax, place_count_ ? static_cast<uint8_t>(kMaxSlots) : 0);
   w.u8(cfg::kTlvDescribeBindModes, 0b111);   // last-reset, manual, mixed
@@ -536,15 +665,21 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       uint8_t items[kMaxSaved];
       const size_t n = canonical(items, sizeof items);
       const uint32_t h = crc32Ieee(items, n);
-      if (!(saved_length_ == n && saved_hash_ == h && saved_list_ == endpoint_.listHash())) {   // the same is not written again
+      uint8_t blob[kMaxBlob];
+      const size_t ids = identities(items, n, blob, sizeof ids_);
+      if (!ids) return rejected(kRejectUnavailable);
+      if (!(saved_length_ == n && saved_hash_ == h && ids_length_ == ids && memcmp(ids_, blob, ids) == 0)) {
+        memcpy(blob + ids, items, n);   // the same is not written again
         const uint32_t t0 = millis();
-        const bool written = storeWrite(items, n, endpoint_.listHash());
+        const bool written = storeWrite(blob, n ? ids + n : 0);
         save_ms_ = millis() - t0;
         if (!written) return failed();
         memcpy(saved_, items, n);
         saved_length_ = n;
         saved_hash_ = h;
-        saved_list_ = endpoint_.listHash();
+        memcpy(ids_, blob, ids);
+        ids_length_ = ids;
+        unreadable_ = 0;
         storage_state_ = n ? cfg::kStorageStateApplied : cfg::kStorageStateNone;
       }
       if (capacity < 4) return failed();
@@ -553,8 +688,9 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
     }
     case cfg::kOpErase: {
       if (length) return rejected(kRejectMalformed);
-      if (!storeWrite(nullptr, 0, endpoint_.listHash())) return failed();
-      saved_length_ = 0;
+      if (!storeWrite(nullptr, 0)) return failed();
+      saved_length_ = ids_length_ = 0;
+      unreadable_ = 0;
       saved_hash_ = 0;
       storage_state_ = cfg::kStorageStateNone;
       return completed();

@@ -54,7 +54,7 @@ static char serial_[20];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
+  uint8_t id[17];
   oep::describeCore(w, "multiple-transports", id, oep::platformUnitId(id, sizeof id), 55, ~kChannels & ((1ull << 55) - 1));
   return w.ok() ? w.length() : 0;
 }
@@ -65,9 +65,7 @@ void setup() {
   Serial.setTxTimeoutMs(0);   // a port nobody reads never stops loop()
   Serial.begin(115200);
 
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_BASE);
-  snprintf(serial_, sizeof serial_, "%02x%02x%02x%02x%02x%02x-hs", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig usb;
   usb.vid = 0x303a;   // until the OEP PID is granted (PID-USE.md)
   usb.pid = 0x0002;

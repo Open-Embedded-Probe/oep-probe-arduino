@@ -48,8 +48,8 @@ One ESP32-P4 board, wired to a CH32L103 on every pin you want to watch, is the w
 - **Read its console** through the debug module (`oep.target.console`, no UART needed) or a UART (`oep.fixture.uart`).
 - **Check what the target's code does with its pins**: the P4 answers as the device on the other end - an SPI device, an
   I2C device - so a test sees the bytes the target's driver really sent, and drives GPIOs and UARTs back
-  (`oep.fixture.gpio` / `uart`, `io.github.ch32-riscv-ug.esp32.spi-target` / `i2c-target`).
-- **Capture up to 16 pins at the same time**, while it acts as that SPI device (`oep.fixture.capture`, the P4's PARLIO):
+  (`oep.fixture.gpio` / `uart` / `spi-target` / `i2c-target`).
+- **Capture up to 16 pins at the same time**, while it acts as that SPI device (`oep.fixture.logic`, the P4's PARLIO):
 
   | Channels | Sample rate |
   |---:|---:|
@@ -91,7 +91,7 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 | `src/OepBind.*` | what each serial port carries (binds: last-reset / manual / mixed, held during a session and resumed from its last reset) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
-| `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the custom interfaces `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target` (revision 1, the ESP-IDF I2C / SPI slaves) - examples of extending OEP |
+| `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1) on the ESP-IDF I2C / SPI slaves (custom `io.github.ch32-riscv-ug.esp32.*` until 2026-09-30) |
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
 | `examples/` | the board firmware and examples to learn from: see [Examples](#examples) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |

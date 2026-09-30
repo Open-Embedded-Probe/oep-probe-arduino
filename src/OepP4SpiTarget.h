@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// io.github.ch32-riscv-ug.esp32.spi-target revision 1 (a custom OEP v1 interface): an ESP32 hardware SPI target on
-// the ESP-IDF spi_slave driver (SPI2_HOST, no DMA: 64-byte FIFO transactions).
+// oep.fixture.spi-target revision 1 (oep-spec oep-if-fixture §4), on an ESP32's hardware SPI target (the ESP-IDF
+// spi_slave driver, SPI2_HOST, no DMA: 64-byte FIFO transactions).
 //   0x01 configure(mode u8 0-3, bit_order u8: 0 MSB first, 1 LSB first)   0x02 arm(length u16, count u16, tx)
-//   0x03 read_rx -> pending(u8) bits(u32) count(u16) data   0x04 status -> flags(u8) transactions(u32) errors(u16)
-//   (no lock)   0x05 reset.   Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
+//   0x03 read_rx -> pending(u8) bits(u32) count(u16) data
+//   0x04 status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u16) (no lock)   0x05 reset.   Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
 // One CS-framed transaction is armed at a time with the MISO bytes to send;
 // after the master raises CS the result (MOSI bytes, length in bits) is queued
 // for read_rx. Polled from service() in loop(); nothing runs in an ISR.
@@ -32,9 +32,9 @@ class P4SpiTarget final : public Interface {
   enum : uint8_t { kOpConfigure = 0x01, kOpArm = 0x02, kOpReadRx = 0x03, kOpStatus = 0x04, kOpReset = 0x05 };
 
   P4SpiTarget(PinTable &pins, uint16_t instance = 0) : pins_(pins), instance_(instance) {}
-  const char *name() const override { return "io.github.ch32-riscv-ug.esp32.spi-target"; }
+  const char *name() const override { return reg::fixture_spi_target::kName; }
   uint16_t instance() const override { return instance_; }
-  uint8_t revision() const override { return 1; }
+  uint8_t revision() const override { return reg::fixture_spi_target::kRevision; }
   bool lockFree(uint8_t op) const override { return op == kOpStatus; }
   Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   size_t describe(uint8_t *out, size_t capacity) override;

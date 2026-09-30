@@ -138,7 +138,7 @@ static uint8_t probeTlv[64];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
+  uint8_t id[17];
   oep::describeCore(w, "custom-interface", id, oep::platformUnitId(id, sizeof id), kChannelCount,
                     ((1ull << kChannelCount) - 1) & ~kChannels);
   return w.ok() ? w.length() : 0;

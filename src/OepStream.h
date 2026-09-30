@@ -89,8 +89,9 @@ class PositionStream {
     size_t used = 2;
     bool more = false;
     for (uint32_t s = from; static_cast<int32_t>(s - serial_) < 0; ++s) {
-      if (used + kMarkBytes > capacity || count == 255) { more = true; break; }
+      if (used + 1 + kMarkBytes > capacity || count == 255) { more = true; break; }
       const Mark &mk = marks_[s % mark_capacity_];
+      out[used++] = kMarkBytes;   // the element's length (core §2.3)
       putU32(out + used, mk.serial);
       putU64(out + used + 4, mk.position);
       out[used + 12] = mk.kind;
