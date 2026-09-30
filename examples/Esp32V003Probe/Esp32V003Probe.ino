@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 probe on the classic ESP32 for the UIAPduino CH32V003 jig (E132 wiring).
 // Transport: UART0 through the board's USB-UART bridge at 115200, fixed (probe guide §3.5) - the probe's one transport,
 // serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-core §3.4). Target link:

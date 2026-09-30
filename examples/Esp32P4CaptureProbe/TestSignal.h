@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // oep.test.signal (a test interface of this example, not a standard one): an LEDC square on a pin, for trying
 // captures on an unwired board.
 //   0x01 start(pin u8, hz u32, duty_percent u8)   0x02 stop(pin u8)

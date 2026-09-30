@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // oep.target.console revision 1 (oep-spec docs/oep-if-console.ja.md): a stream opened on
 // the debug connection (SDI / DMDATA / dmseq through the DmConsole driver), kept in a position-addressed buffer that
 // reads do not consume, with marks for what happened.

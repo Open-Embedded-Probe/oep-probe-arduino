@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 core (oep-spec docs/oep-core.ja.md, frozen candidate 2026-09-26): interfaces found by name, the probe
 // described by oep.core, a lock held by a host-chosen session id. The standard interfaces' shared parts are in
 // OepStream.h (position streams) and OepDebug.h (wire / target status, pin pairs). Every number comes from the registry

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 oep.probe.config (oep-spec docs/oep-if-probe-config.ja.md, revision 1): the probe's settings, set by the host
 // and kept only when the host saves them. No modes, no reboot: everything set takes effect at once.
 //

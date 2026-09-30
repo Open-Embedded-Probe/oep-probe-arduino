@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 ARM SWD interfaces (oep-spec docs/oep-if-debug.ja.md §1, §5-§6, revision 1):
 //
 //   oep.wire.swd         scan / attach / detach on the probe's fixed SWD pair; attach wakes the port (JTAG-to-SWD,

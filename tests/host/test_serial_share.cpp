@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // Host tests: the serial-port reader (oep-core §3.1, §3.4), the endpoint's serial-port rules (raw bytes, the ports a
 #include <algorithm>
 // session holds, the resume from its last host reset), owner and the transport list, and the binds' modes.

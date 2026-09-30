@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Open Embedded Probe
 # Host tests of the portable core (serial-port framing, the endpoint's serial-port rules, the binds): g++ and a shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)

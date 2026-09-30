@@ -1,6 +1,10 @@
-// Length-prefixed frame for reliable byte streams (USB CDC, USB-Serial/JTAG, TCP).
-//   len lo | len hi | message
-// UART bindings add COBS + CRC in a separate reader; this one trusts the stream.
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
+// The two framings of oep-core §3.1:
+//   FrameReader / writeFrame        len lo | len hi | message, on the message transports (vendor bulk, HID, TCP)
+//   SerialReader / writeCobsFrame   0x00 <COBS(message + CRC-16)> 0x00 on every serial port (USB CDC, USB-Serial/JTAG,
+//                                   a UART bridge), which also carries raw bytes outside the frames (core §3.4)
 #pragma once
 
 #include <Arduino.h>

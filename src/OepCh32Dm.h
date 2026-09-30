@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // RISC-V debug module operations for WCH CH32 over a DmiPhy: attach, halt / resume with the CH32 quirks, the reset
 // sequences, abstract register access, the autoexec block reader / writer (E156), running host code until its ebreak,
 // single step, attach under reset. Nothing chip-specific beyond the debug module: flashing is the host's job

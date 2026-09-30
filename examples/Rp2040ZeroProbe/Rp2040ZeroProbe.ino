@@ -1,8 +1,11 @@
-// OEP v1 probe on a Waveshare RP2040-Zero (oep-spec docs/v1-core-wire-delta.ja.md): the ordinary-ARM counterpart
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
+// OEP v1 probe on a Waveshare RP2040-Zero (oep-spec docs/oep-core.ja.md, docs/oep-if-debug.ja.md): the ordinary-ARM counterpart
 // of the CH32 probes. Its GP0/GP1 reach the Pro Micro RP2350's SWD port (SWCLK = GP0, SWDIO = GP1, DPIDR 0x4c013477,
 // measured 2026-09-23).
 //
-// Transport: USB CDC (Serial, length-prefixed frames).
+// Transport: USB CDC (Serial), a serial port: COBS frames (oep-core §3.1).
 // oep.core (the probe in its describe), oep.wire.swd, oep.target.arm-adi, oep.fixture.gpio / uart (revision 1).
 #include <OepPinTable.h>
 #include <OepEndpoint.h>

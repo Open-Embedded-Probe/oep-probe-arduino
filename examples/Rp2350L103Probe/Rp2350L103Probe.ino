@@ -1,5 +1,8 @@
-// OEP v1 probe on a SparkFun Pro Micro RP2350 for the CH32L103 jig (oep-spec docs/v1-core-wire-delta.ja.md).
-// Transport: USB CDC (Serial, length-prefixed frames). Target link: RVSWD on two GPIOs through the SIO
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
+// OEP v1 probe on a SparkFun Pro Micro RP2350 for the CH32L103 jig (oep-spec docs/oep-core.ja.md, docs/oep-if-debug.ja.md).
+// Transport: USB CDC (Serial), a serial port: COBS frames (oep-core §3.1). Target link: RVSWD on two GPIOs through the SIO
 // backend in OepRvswdPhy.cpp (same frame as the ESP32-P4 probe).
 //
 // oep.core (the probe in its describe), oep.wire.rvswd, oep.target.riscv-dm, oep.target.console,

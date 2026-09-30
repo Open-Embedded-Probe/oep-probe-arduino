@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 logic capture (oep.fixture.capture revision 1, oep-spec logic-capture.ja.md §5) on the classic ESP32: the
 // software GPIO sampler of the v0 FixtureCapture, one-shot only. Core 0 does nothing else on this probe, so it samples
 // with interrupts off, paced by the cycle counter (one register read per sample); OEP keeps answering on core 1.

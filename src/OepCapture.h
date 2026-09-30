@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // oep.fixture.capture revision 1 (oep-spec docs/oep-if-capture.ja.md), on the ESP32-P4
 // PARLIO RX. This implementation picks: one-shot, repeat and streaming, immediate trigger only, pushes events when
 // subscribed. Repeat (as wch-protocols E078): PARLIO fills a 64 KiB internal DMA ring by partial receive; the ISR

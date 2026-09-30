@@ -142,4 +142,5 @@ tag から各 example をビルドし、`<Example>-<version>.merged.bin`（ESP32
 
 ## ライセンス
 
-MIT（[LICENSE](LICENSE)）。USB の VID:PID はこれに含まれない: [PID-USE.ja.md](PID-USE.ja.md)。
+MIT（[LICENSE](LICENSE)）。各ソースファイルにも表記がある（`SPDX-License-Identifier: MIT`）。USB の VID:PID はこれに含まれない:
+[PID-USE.ja.md](PID-USE.ja.md)。

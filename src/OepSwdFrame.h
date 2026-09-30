@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The ordinary ARM SWD (ADIv5) wire frame, over the same bit-bang Io as the CH32 RVSWD
 // frame: the host drives while SWCLK is low and both sides sample on the rising edge.
 //

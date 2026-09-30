@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // OEP v1 fixtures on the probe's own pins (oep-spec docs/oep-if-fixture.ja.md, revision 1):
 //
 //   oep.fixture.gpio   plan role 1 = a line (any number of them). Only planned channels may be set or read.

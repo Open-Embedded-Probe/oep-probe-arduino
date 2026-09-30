@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The probe channels a sketch may hand to interfaces, who holds each one, and the state a free channel rests in
 // (oep-spec oep-core §8: a released pin goes to its idle state, Hi-Z unless set otherwise). Shared by every
 // interface that takes pins, so two of them never drive the same channel. Per-core pin modes live in OepPlatform.h.

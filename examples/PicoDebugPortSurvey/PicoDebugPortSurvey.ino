@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // What is on the wires: a bring-up survey for the Pico bench, for either board.
 //
 // Three passes, all read-only apart from briefly driving a pin:

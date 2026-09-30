@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // Single-wire SWIO physical layer for QingKe V2 (CH32V003) on the classic
 // ESP32, ported from the E123-E137 experiments: software bit timing with a
 // cycle coefficient (8 = 262.5/862.5 ns, the closest to the WCH-LinkE's

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // Host-test stand-in for the EspUsbDevice vendor class DirectBulkStream uses: IN transfers complete when the test says.
 #pragma once
 #include <functional>

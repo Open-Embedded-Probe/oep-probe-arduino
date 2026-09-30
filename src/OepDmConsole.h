@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Open Embedded Probe
+
 // The target's console through the debug module's data registers (SerialSDI, SerialDMDATA, dmseq), over Ch32Dm.
-// The v1 oep.target.console stream (OepV1Console) drives it and owns the only buffer: every byte goes straight into
+// The oep.target.console stream (TargetConsoleStream) drives it and owns the only buffer: every byte goes straight into
 // the stream's sink.
 #pragma once
 
