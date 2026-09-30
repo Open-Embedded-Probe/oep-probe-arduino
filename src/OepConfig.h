@@ -15,7 +15,8 @@
 //        lock_scheme(u8) [mask(n) value(n)]     key slot: a place a target is wired to (slot alone clears)
 //   0x05 bind port(u8) mode(u8) selected(u8) n(u8) n x (kind(u8) id(u16))   key port: what a serial port carries
 // label (0x02) is not taken (unsupported). No defaults: nothing the host did not set is done. Saved to NVS on ESP32
-// (Preferences, namespace "oepcfg") with the identity of the interface list; a saved copy made for another list is
+// (Preferences, namespace "oepcfg") or the flash's last sector on RP2040 / RP2350 (EEPROM), with the identity of the
+// interface list; a saved copy made for another list is
 // not applied.
 //
 // The places a slot may name are the sketch's wires with their consoles (addPlace: one connection each); a slot names
@@ -33,7 +34,7 @@
 #include "OepFixture.h"
 #include "OepTarget.h"
 
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
 
 namespace oep {
 

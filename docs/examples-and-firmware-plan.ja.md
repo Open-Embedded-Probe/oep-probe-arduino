@@ -94,8 +94,8 @@ examples/
 a. **線がピンの組を host から受ける**（済: oep-spec 29990da / dfa46d2 / ad43e25、firmware。RP2040 / RP2350 は `Firmware/OepProbe`。SWIO と実機の確認は未）: 今は決まった 1 組だけ（`fixedPairScan` / `fixedPairPins`）。describe の role_channels で
    使えるピンを出し、scan / attach の pins で組を受ける（oep-if-debug §1）。RVSWD（ESP32 の dedicated GPIO、RP2 の SIO）、SWIO、SWD の
    それぞれで、ピンを実行中に替えられるようにする。
-b. **RP2040 / RP2350 の probe.config の保存**（今は ESP32 の NVS だけ）。flash の最後の領域など。
-c. **USB の名乗り**: RP2 と ESP32-S3 でも iProduct `OEP…` と個体ごとの serial を出す（今は ESP32-P4 だけ）。
+b. **RP2040 / RP2350 の probe.config の保存**（済: flash の最後の領域、arduino-pico の EEPROM）（今は ESP32 の NVS だけ）。flash の最後の領域など。
+c. **USB の名乗り**（RP2 は済: `Firmware/OepProbe` が `USB.setProduct`）: RP2 と ESP32-S3 でも iProduct `OEP…` と個体ごとの serial を出す（今は ESP32-P4 だけ）。
 d. **reset 線に既定は無い**（済: oep-spec 5bfe052、firmware 620594c）: attach_under_reset の channel は必須。probe は reset に使ってよい
    channel を describe の role_channels の role 3 で宣言し、plan が持つ channel は断る。
 e. **線の設定は probe の中に持たない**（済: 同上）: 休ませ方は rvswd の attach の idle_clock、速さの上限は max_speed で host が渡す。

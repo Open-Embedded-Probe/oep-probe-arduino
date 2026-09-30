@@ -3,9 +3,13 @@
 
 #include "OepConfig.h"
 
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
 
+#if defined(ARDUINO_ARCH_ESP32)
 #include <Preferences.h>
+#else
+#include <EEPROM.h>
+#endif
 #include <stdio.h>
 
 #include "OepEndpoint.h"
@@ -17,6 +21,49 @@ namespace cfg = reg::probe_config;
 namespace {
 constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items2", *kNvsList = "list1";   // items: the 2026-09-30 slot layout
 constexpr size_t kSlotFixed = 17;   // slot wire_fn swdio swclk attach retry_s max_speed idle_clock mechanism name_len
+
+// Where the saved items live: ESP32 NVS (Preferences), RP2040 / RP2350 the arduino-pico EEPROM (the flash's last
+// sector): magic, the interface list's identity, length, then the items. read: false = nothing saved.
+#if defined(ARDUINO_ARCH_ESP32)
+bool storeRead(uint8_t *items, size_t capacity, size_t &length, uint32_t &list) {
+  Preferences p;
+  if (!p.begin(kNvsNamespace, true)) return false;
+  length = p.getBytesLength(kNvsItems);
+  const bool ok = length > 0 && length <= capacity && p.getBytes(kNvsItems, items, length) == length;
+  list = p.getUInt(kNvsList, 0);
+  p.end();
+  return ok;
+}
+bool storeWrite(const uint8_t *items, size_t length, uint32_t list) {   // length 0: nothing saved
+  Preferences p;
+  if (!p.begin(kNvsNamespace, false)) return false;
+  const size_t written = length ? p.putBytes(kNvsItems, items, length) : (p.remove(kNvsItems), 0);
+  p.putUInt(kNvsList, list);
+  p.end();
+  return written == length;
+}
+#else
+constexpr uint32_t kEepromMagic = 0x4f455032;   // "OEP2": the 2026-09-30 slot layout
+constexpr size_t kEepromHeader = 10;            // magic(u32) list(u32) length(u16)
+bool storeRead(uint8_t *items, size_t capacity, size_t &length, uint32_t &list) {
+  EEPROM.begin(kEepromHeader + ProbeConfig::kMaxSaved);
+  const uint8_t *e = EEPROM.getConstDataPtr();
+  length = getU16(e + 8);
+  list = getU32(e + 4);
+  if (getU32(e) != kEepromMagic || length == 0 || length > capacity) return false;
+  memcpy(items, e + kEepromHeader, length);
+  return true;
+}
+bool storeWrite(const uint8_t *items, size_t length, uint32_t list) {
+  EEPROM.begin(kEepromHeader + ProbeConfig::kMaxSaved);
+  uint8_t *e = EEPROM.getDataPtr();
+  putU32(e, length ? kEepromMagic : 0);
+  putU32(e + 4, list);
+  putU16(e + 8, static_cast<uint16_t>(length));
+  if (length) memcpy(e + kEepromHeader, items, length);
+  return EEPROM.commit();
+}
+#endif
 bool nameChar(char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'; }
 }  // namespace
 
@@ -380,17 +427,16 @@ void ProbeConfig::poll() {
 // ---- storage -------------------------------------------------------------------------------------------------------
 
 void ProbeConfig::load() {
-  Preferences p;
-  if (!p.begin(kNvsNamespace, true)) return;
-  saved_length_ = p.getBytesLength(kNvsItems);
-  if (saved_length_ > 0 && saved_length_ <= sizeof saved_ && p.getBytes(kNvsItems, saved_, saved_length_) == saved_length_) {
+  size_t length = 0;
+  uint32_t list = 0;
+  if (storeRead(saved_, sizeof saved_, length, list)) {
+    saved_length_ = length;
     saved_hash_ = crc32Ieee(saved_, saved_length_);
-    saved_list_ = p.getUInt(kNvsList, 0);
+    saved_list_ = list;
     storage_state_ = cfg::kStorageStateApplied;   // until applySaved says otherwise
   } else {
     saved_length_ = 0;
   }
-  p.end();
 }
 
 void ProbeConfig::applySaved() {
@@ -492,13 +538,9 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       const uint32_t h = crc32Ieee(items, n);
       if (!(saved_length_ == n && saved_hash_ == h && saved_list_ == endpoint_.listHash())) {   // the same is not written again
         const uint32_t t0 = millis();
-        Preferences p;
-        if (!p.begin(kNvsNamespace, false)) return failed();
-        const size_t written = n ? p.putBytes(kNvsItems, items, n) : (p.remove(kNvsItems), 0);
-        p.putUInt(kNvsList, endpoint_.listHash());
-        p.end();
+        const bool written = storeWrite(items, n, endpoint_.listHash());
         save_ms_ = millis() - t0;
-        if (written != n) return failed();
+        if (!written) return failed();
         memcpy(saved_, items, n);
         saved_length_ = n;
         saved_hash_ = h;
@@ -511,10 +553,7 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
     }
     case cfg::kOpErase: {
       if (length) return rejected(kRejectMalformed);
-      Preferences p;
-      if (!p.begin(kNvsNamespace, false)) return failed();
-      p.remove(kNvsItems);
-      p.end();
+      if (!storeWrite(nullptr, 0, endpoint_.listHash())) return failed();
       saved_length_ = 0;
       saved_hash_ = 0;
       storage_state_ = cfg::kStorageStateNone;
