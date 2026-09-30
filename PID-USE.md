@@ -11,7 +11,7 @@ file does, under the conditions it states.
 
 ## The ID
 
-`1209:XXXX` (pid.codes; the number is filled in when it is granted) identifies **a USB device running firmware built from the
+`1209:4F45` (pid.codes, applied for; not granted yet) identifies **a USB device running firmware built from the
 OpenEmbeddedProbe library** - on any board the library supports (ESP32-P4, RP2350, RP2040, and later ones) - that speaks the
 Open Embedded Probe protocol ([oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)).
 
@@ -42,4 +42,4 @@ You may ship firmware with this VID:PID - your own board, your own jig, a change
 ## Changes
 
 This file changes only through a reviewed pull request to this repository. The ID's entry is pid.codes'
-`1209/XXXX/index.md`, owned by `Open-Embedded-Probe`.
+`1209/4F45/index.md`, owned by `Open-Embedded-Probe`.
