@@ -19,6 +19,17 @@ namespace oep {
 namespace cfg = reg::probe_config;
 
 namespace {
+
+// Where a bind's k-th stream (kind, id) starts, or 0 when the list is cut short or an element's len is under 3
+// (probe.config §1.2: n × (len, kind, id); what follows the 3 bytes is for later fields, skipped).
+size_t bindStreamAt(const uint8_t *v, uint8_t len, uint8_t k) {
+  size_t at = 4;
+  for (uint8_t i = 0;; ++i) {
+    if (at >= len || v[at] < 3 || at + 1u + v[at] > len) return 0;
+    if (i == k) return at + 1;
+    at += 1u + v[at];
+  }
+}
 // "items3": the interfaces the items name, then the items (2026-09-30: saved by interface identity, the slot's lock_len)
 constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items3";
 constexpr size_t kSlotFixed = 17;   // slot wire_fn swdio swclk attach retry_s max_speed idle_clock mechanism name_len
@@ -174,12 +185,13 @@ size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
   for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {   // ascending port
     const Binds::Spec &b = binds_.spec(port);
     if (!b.set) continue;
-    uint8_t v[4 + 3 * Binds::kMaxStreams] = {port, b.mode, b.mode == Binds::kManual ? b.selected : uint8_t{0}, b.count};
-    for (uint8_t i = 0; i < b.count; ++i) {
-      v[4 + 3 * i] = b.sources[i].kind;
-      putU16(v + 5 + 3 * i, b.sources[i].id);
+    uint8_t v[4 + 4 * Binds::kMaxStreams] = {port, b.mode, b.mode == Binds::kManual ? b.selected : uint8_t{0}, b.count};
+    for (uint8_t i = 0; i < b.count; ++i) {   // len, kind, id
+      v[4 + 4 * i] = 3;
+      v[5 + 4 * i] = b.sources[i].kind;
+      putU16(v + 6 + 4 * i, b.sources[i].id);
     }
-    w.put(cfg::kTlvItemBind, v, 4u + 3u * b.count);
+    w.put(cfg::kTlvItemBind, v, 4u + 4u * b.count);
   }
   return w.ok() ? w.length() : 0;
 }
@@ -318,8 +330,10 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       b.touched = true;
       if (len == 1) continue;   // port alone: that bind goes
       if (!endpoint_.isSerialPort(v[0])) return rejected(kRejectUnavailable);
-      // what follows the streams is for later fields (core §2.3): skipped
-      if (len < 4 || v[3] < 1 || v[3] > Binds::kMaxStreams || len < 4u + 3u * v[3]) return rejected(kRejectMalformed);
+      // what follows the streams, and each stream's own tail, is for later fields (core §2.3): skipped
+      if (len < 4 || v[3] < 1 || v[3] > Binds::kMaxStreams) return rejected(kRejectMalformed);
+      for (uint8_t k = 0; k < v[3]; ++k)
+        if (!bindStreamAt(v, len, k)) return rejected(kRejectMalformed);
       if (v[1] > Binds::kMixed) return rejected(kRejectUnsupported);
       if (v[1] == Binds::kManual && v[2] >= v[3]) return rejected(kRejectMalformed);
       b.set = true;
@@ -327,8 +341,9 @@ Result ProbeConfig::apply(const uint8_t *items, size_t length) {
       b.selected = v[1] == Binds::kManual ? v[2] : 0;
       b.count = v[3];
       for (uint8_t k = 0; k < b.count; ++k) {
-        b.kinds[k] = v[4 + 3 * k];
-        b.ids[k] = getU16(v + 5 + 3 * k);
+        const size_t at = bindStreamAt(v, len, k);
+        b.kinds[k] = v[at];
+        b.ids[k] = getU16(v + at + 1);
         if (b.kinds[k] != Binds::kSlotConsole && b.kinds[k] != Binds::kFixtureUart) return rejected(kRejectMalformed);
       }
     } else {
@@ -477,8 +492,9 @@ size_t ProbeConfig::identities(const uint8_t *items, size_t length, uint8_t *out
     if (tag == cfg::kTlvItemPlan && len >= 2) note(getU16(v));
     if (tag == cfg::kTlvItemSlot && len >= 3) note(getU16(v + 1));
     if (tag == cfg::kTlvItemBind && len >= 4)
-      for (uint8_t k = 0; k < v[3] && 4u + 3u * k + 3u <= len; ++k)
-        if (v[4 + 3 * k] == Binds::kFixtureUart) note(getU16(v + 5 + 3 * k));
+      for (uint8_t k = 0; k < v[3]; ++k)
+        if (const size_t s = bindStreamAt(v, len, k))
+          if (v[s] == Binds::kFixtureUart) note(getU16(v + s + 1));
   }
   if (capacity < 1) return 0;
   size_t used = 1;
@@ -554,8 +570,9 @@ void ProbeConfig::applySaved() {
     if (tag == cfg::kTlvItemPlan && len >= 2) putU16(v, map(getU16(v)));
     if (tag == cfg::kTlvItemSlot && len >= 3) putU16(v + 1, map(getU16(v + 1)));
     if (tag == cfg::kTlvItemBind && len >= 4)
-      for (uint8_t k = 0; k < v[3] && 4u + 3u * k + 3u <= len; ++k)
-        if (v[4 + 3 * k] == Binds::kFixtureUart) putU16(v + 5 + 3 * k, map(getU16(v + 5 + 3 * k)));
+      for (uint8_t k = 0; k < v[3]; ++k)
+        if (const size_t s = bindStreamAt(v, len, k))
+          if (v[s] == Binds::kFixtureUart) putU16(v + s + 1, map(getU16(v + s + 1)));
   }
   const Result r = apply(items, saved_length_);
   if (r.resolution != kResolutionCompleted || r.detail != kOutcomeSuccess) {

@@ -59,22 +59,22 @@ static oep::PinTable pins(kChannels);
 static oep::RvswdPhy phy;
 static oep::Ch32Dm dm(phy);
 static oep::DebugPort rvswd{dm, kUnset, kUnset};
-static oep::WireRvswd wireRvswd(rvswd, 1);
-static oep::TargetRiscvDm riscvDm(rvswd, 1);
+static oep::WireRvswd wireRvswd(rvswd, 0);
+static oep::TargetRiscvDm riscvDm(rvswd, 0);
 static oep::DmConsole consoleDriver(dm, phy);
-static oep::TargetConsoleStream console(rvswd, consoleDriver, 1);
+static oep::TargetConsoleStream console(rvswd, consoleDriver, 0);
 
 static oep::SwdPort swd{kUnset, kUnset};
-static oep::WireSwd wireSwd(swd, 1);
-static oep::TargetArmAdi adi(swd, 1);
+static oep::WireSwd wireSwd(swd, 0);
+static oep::TargetArmAdi adi(swd, 0);
 
-static oep::FixtureGpio gpio(pins, 1, 1);
-static oep::FixtureUart uart(pins, Serial1, 1, 2);
+static oep::FixtureGpio gpio(pins, 0, 1);
+static oep::FixtureUart uart(pins, Serial1, 0, 2);
 static oep::Binds binds;
 static oep::ProbeConfig config(endpoint, binds);
 // the ADC on GP26-28 (a Pico's GP29 reads VSYS), channels in turn, copied by DMA
 static constexpr uint64_t kAdc = 0x7ull << 26;
-static oep::AnalogCapture analog(endpoint, kAdc, 1);
+static oep::AnalogCapture analog(endpoint, kAdc, 0);
 static uint8_t probeTlv[200];
 
 static size_t describeProbe() {

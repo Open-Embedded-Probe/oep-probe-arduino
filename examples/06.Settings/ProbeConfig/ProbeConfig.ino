@@ -49,13 +49,13 @@ static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeo
 static oep::RvswdPhy phy;
 static oep::Ch32Dm dm(phy);
 static oep::DebugPort port{dm, kSwdio, kSwclk};
-static oep::WireRvswd wire(port, 1);
-static oep::TargetRiscvDm riscvDm(port, 1);
+static oep::WireRvswd wire(port, 0);
+static oep::TargetRiscvDm riscvDm(port, 0);
 static oep::DmConsole consoleDriver(dm, phy);
-static oep::TargetConsoleStream console(port, consoleDriver, 1);
+static oep::TargetConsoleStream console(port, consoleDriver, 0);
 static oep::PinTable pins(kChannels);
-static oep::FixtureGpio gpio(pins, 1, 1);
-static oep::FixtureUart uart(pins, Serial1, 1, 2);
+static oep::FixtureGpio gpio(pins, 0, 1);
+static oep::FixtureUart uart(pins, Serial1, 0, 2);
 
 // Binds: what the serial ports carry outside the frames. ProbeConfig: the settings, their storage, the slots' attach.
 static oep::Binds binds;

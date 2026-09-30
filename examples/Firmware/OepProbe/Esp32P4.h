@@ -80,23 +80,23 @@ static oep::PinTable pins(kChannels);
 static oep::RvswdPhy phy;
 static oep::Ch32Dm dm(phy);
 static oep::DebugPort rvswd{dm, kUnset, kUnset};
-static oep::WireRvswd wire(rvswd, 1);
-static oep::TargetRiscvDm riscvDm(rvswd, 1);
+static oep::WireRvswd wire(rvswd, 0);
+static oep::TargetRiscvDm riscvDm(rvswd, 0);
 static oep::DmConsole consoleDriver(dm, phy);   // the DM console framings (SDI / DMDATA / dmseq)
-static oep::TargetConsoleStream console(rvswd, consoleDriver, 1);
+static oep::TargetConsoleStream console(rvswd, consoleDriver, 0);
 
-static oep::FixtureGpio gpio(pins, 1, 1);
+static oep::FixtureGpio gpio(pins, 0, 1);
 // PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the analog 7)
-static oep::FixtureUart uart1(pins, Serial1, 1, 2), uart2(pins, Serial2, 2, 5);
-static oep::LogicCapture capture(endpoint, kReserved, 4);   // PARLIO RX; its lines are never driven
+static oep::FixtureUart uart1(pins, Serial1, 0, 2), uart2(pins, Serial2, 1, 5);
+static oep::LogicCapture capture(endpoint, kReserved, 0);   // PARLIO RX; its lines are never driven
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
 static oep::Binds binds;
 static oep::ProbeConfig config(endpoint, binds);
 // ADC1 (GPIO16-23) in continuous mode, and a group that starts it with the PARLIO capture
 static constexpr uint64_t kAdc1 = 0xffull << 16;
-static oep::AnalogCapture analog(endpoint, kAdc1, 1);
-static oep::CaptureGroup group(endpoint, 1);
+static oep::AnalogCapture analog(endpoint, kAdc1, 0);
+static oep::CaptureGroup group(endpoint, 0);
 static uint8_t probeTlv[160];
 static char serial_[20];
 

@@ -48,7 +48,7 @@ static oep::Endpoint endpoint(bulk, rxVendor, sizeof rxVendor, txBuffer, sizeof 
 
 static constexpr uint64_t kChannels = ((1ull << 55) - 1) & ~((1ull << 24) | (1ull << 25));   // not the USJ pair
 static oep::PinTable pins(kChannels);
-static oep::FixtureGpio gpio(pins, 1);
+static oep::FixtureGpio gpio(pins, 0);
 static uint8_t probeTlv[64];
 static char serial_[20];
 

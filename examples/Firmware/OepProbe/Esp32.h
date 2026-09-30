@@ -50,14 +50,14 @@ static constexpr uint16_t kUnset = 0xfffe;                           // no pin c
 static oep::SwioPhy phy;
 static oep::Ch32Dm dm(phy);
 static oep::DebugPort swio{dm, kUnset, 0xffff};   // one wire: swclk stays 0xffff
-static oep::WireRvswd wire(swio, 1, "oep.wire.swio");
-static oep::TargetRiscvDm riscvDm(swio, 1);
+static oep::WireRvswd wire(swio, 0, "oep.wire.swio");
+static oep::TargetRiscvDm riscvDm(swio, 0);
 static oep::DmConsole consoleDriver(dm, phy);
-static oep::TargetConsoleStream console(swio, consoleDriver, 1);
+static oep::TargetConsoleStream console(swio, consoleDriver, 0);
 static oep::PinTable pins(kChannels);
 // PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0, the analog 7)
-static oep::FixtureGpio gpio(pins, 1, 1);
-static oep::FixtureUart uart(pins, Serial2, 1, 2);
+static oep::FixtureGpio gpio(pins, 0, 1);
+static oep::FixtureUart uart(pins, Serial2, 0, 2);
 static oep::SamplerCapture capture(endpoint, kReserved);
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
@@ -65,8 +65,8 @@ static oep::Binds binds;
 static oep::ProbeConfig config(endpoint, binds);
 // ADC1 in DMA mode on the pins brought out (32-36, 39), and a group that starts it with the sampler
 static constexpr uint64_t kAdc1 = kChannels & (0xffull << 32);
-static oep::AnalogCapture analog(endpoint, kAdc1, 1);
-static oep::CaptureGroup group(endpoint, 1);
+static oep::AnalogCapture analog(endpoint, kAdc1, 0);
+static oep::CaptureGroup group(endpoint, 0);
 static uint8_t probeTlv[160];
 
 static size_t describeProbe() {
