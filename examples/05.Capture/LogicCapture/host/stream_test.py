@@ -2,10 +2,11 @@
 # Copyright (c) 2026 Open Embedded Probe
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyserial>=3.5", "pyusb", "libusb1>=3", "numpy"]
+# dependencies = ["oep-client-python", "numpy"]
 # ///
-"""Capture streaming on Esp32P4CaptureProbe over HS (oep-spec oep-if-capture §3.4, logic-capture §7.9): LEDC squares
-of 1 MHz and 250 kHz on GPIO 4 / 5 (oep.test.signal), captured as 2 channels in mode 3 at each rate for some seconds.
+"""Capture streaming on the LogicCapture example over HS (oep-spec oep-if-capture §3.4, logic-capture §7.9): LEDC squares
+of 1 MHz and 250 kHz on GPIO 4 / 5 (io.github.open-embedded-probe.test-signal), captured as 2 channels in mode 3 at
+each rate for some seconds.
 Checks per rate: the bytes received up to status's write position, position jumps (probe-side drops), push frames
 missing by seq, and every rising edge on the ideal grid (±1 sample: LEDC and PARLIO share a source clock, so an edge
 on the sampling instant lands on either side). A gap breaks the phase, so each contiguous run is checked alone.
@@ -18,8 +19,7 @@ import time
 
 import numpy as np
 
-sys.path.insert(0, "/home/mt/dev_oep/oep-client-python/src")
-from oep_client.v1 import capture, core, link  # noqa: E402
+from oep_client import capture, core, link  # noqa: E402
 
 SIGNALS = ((4, 1_000_000), (5, 250_000))
 
@@ -61,7 +61,7 @@ def main() -> int:
     print(f"# transport {lk.transport}")
     hst.open(lease_ms=3000)
     fn = core.find(hst, capture.LogicCapture.NAME)
-    sig = core.find(hst, "oep.test.signal")
+    sig = core.find(hst, "io.github.open-embedded-probe.test-signal")
     core.plan_apply(hst, [(fn, 0, SIGNALS[0][0]), (fn, 1, SIGNALS[1][0])])
     for pin, hz in SIGNALS:
         hst.call(sig, 0x01, bytes([pin]) + hz.to_bytes(4, "little") + bytes([50]))
