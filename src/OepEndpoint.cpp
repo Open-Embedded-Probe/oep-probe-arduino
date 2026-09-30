@@ -524,9 +524,16 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
         const size_t n = payload[0];
         const Result parsed = plainTail(tail, payload, length, 1 + 2 * n, out, capacity);
         if (refused(parsed)) return parsed;
-        uint16_t fns[256];
-        for (size_t k = 0; k < n; ++k) fns[k] = getU16(payload + 1 + 2 * k);
-        planRelease(fns, n);
+        // the session's plans only: a plan the settings put in stays (core §8), n = 0 included
+        uint16_t fns[kMaxInterfaces];
+        size_t m = 0;
+        for (size_t i = 0; i < count_; ++i) {
+          if (!planned_[i] || persistent_[i]) continue;
+          bool hit = n == 0;
+          for (size_t k = 0; k < n; ++k) hit |= getU16(payload + 1 + 2 * k) == i + 1;
+          if (hit) fns[m++] = static_cast<uint16_t>(i + 1);
+        }
+        if (m) planRelease(fns, m);   // m == 0 must not reach it: there an empty list means every fn
         return tail.finish(completed(), out, capacity);
       }
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -606,6 +613,9 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     for (size_t k = 0; k < nfns; ++k) seen |= fns[k] == roles[r].function;
     if (!seen) fns[nfns++] = roles[r].function;
   }
+  // a fn whose plan the settings put in is the settings' to change (core §8)
+  for (size_t k = 0; k < nfns; ++k)
+    if (persistent_[fns[k] - 1]) return rejected(kRejectUnavailable);
   const uint16_t reason = replaceFns(roles, count, fns, nfns, false);
   if (reason > 0xff) return failed();
   if (reason) return rejected(static_cast<uint8_t>(reason));
