@@ -13,7 +13,6 @@
 namespace oep {
 
 namespace {
-inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 }  // namespace
 
 uint8_t P4I2cTarget::planCheck(const RoleAssignment *roles, size_t count) {

@@ -461,7 +461,6 @@ uint32_t Endpoint::crc32(const uint8_t *data, size_t length) {   // IEEE, reflec
 }
 
 namespace {
-inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 }  // namespace
 
 Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,

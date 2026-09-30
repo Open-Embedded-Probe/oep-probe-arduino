@@ -50,6 +50,8 @@ profile を足す方法、ボードの予約ピン（§6 f）の足し方、焼�
 
 ## 4. sketch（学ぶ順）
 
+状態（2026-09-30）: 01.Basics（MinimalProbe、FixtureProbe）と 02.Interfaces（CustomInterface）を作った。03 以降と Tools はまだ。
+
 ```
 examples/
   01.Basics/

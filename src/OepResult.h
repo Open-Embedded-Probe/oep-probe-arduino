@@ -27,6 +27,8 @@ inline Result completed(size_t length = 0) { return {kResolutionCompleted, kOutc
 inline Result failed(size_t length = 0) { return {kResolutionCompleted, kOutcomeFailed, length}; }
 inline Result partial(size_t length = 0) { return {kResolutionCompleted, kOutcomePartial, length}; }
 inline Result rejected(uint8_t reason) { return {kResolutionRejected, reason, 0}; }
+// Not run: rejected (or any resolution but completed) - a parse step's result to return as it is.
+inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 
 // One entry of a plan: this connection asks `function` to use probe `channel` in `role`.
 struct RoleAssignment {

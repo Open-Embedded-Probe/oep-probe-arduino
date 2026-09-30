@@ -83,6 +83,7 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind。ESP32 は NVS、RP2040 / RP2350 は flash に保存）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 独自インターフェース `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブ）。OEP を拡張する例 |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
+| `examples/01.Basics/`、`examples/02.Interfaces/` | 学ぶための example。どの RP2040 / RP2350、classic ESP32 のボードでも動く: `MinimalProbe`（oep.core だけ）、`FixtureProbe`（gpio + uart、ピンは host が plan で決める）、`CustomInterface`（自分のインターフェース） |
 | `examples/Firmware/OepProbe` | ボードの firmware。チップごとに 1 本（profile rp2040、rp2350、esp32p4、esp32）で、ピンはすべて host が選ぶ。RP2 は RVSWD、SWD、gpio、uart。ESP32-P4 は RVSWD、gpio、uart x2、capture、SPI / I2C デバイス。classic ESP32 は SWIO、gpio、uart、capture、SPI / I2C デバイス。設定は保存できる |
 | `examples/` | probe のファームウェア（ESP32-P4 + X035、classic ESP32 + V003、RP2350 / RP2040、P4 HS のキャプチャ `Esp32P4CaptureProbe` と `host/stream_test.py`）。使う人が要るものから並べ直し中: [docs/examples-and-firmware-plan.ja.md](docs/examples-and-firmware-plan.ja.md) |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
@@ -140,7 +141,7 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 `library.properties` の版を上げ、`src/openembeddedprobe_version.h` を作り、`release` ブランチで example の `sketch.yaml` の `dir: ../..` を
 `OpenEmbeddedProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。続けて、別の `.github/workflows/firmware.yml`（toolkit のものではない）が
 tag から各 example の各 profile をビルドし、`<Example>-<profile>-<version>.merged.bin`（ESP32、0x0 に書く）/ `.uf2`（RP2040 / RP2350）と
-`firmware-<version>.json`（sha256）を Release に付ける。probe は同じ版を describe の firmware の文字列で返す。
+`firmware-<version>.json`（sha256）を Release に付ける（付けるのは `examples/Firmware/` の分だけ。ほかの example は確かめるためにビルドする）。probe は同じ版を describe の firmware の文字列で返す。
 
 ## ライセンス
 

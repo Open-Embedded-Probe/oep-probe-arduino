@@ -7,7 +7,6 @@
 
 namespace oep {
 namespace {
-inline bool refused(const Result &r) { return r.resolution != kResolutionCompleted; }
 }  // namespace
 
 size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {

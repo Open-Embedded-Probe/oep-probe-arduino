@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Examples to learn from, for any RP2040 / RP2350 or classic ESP32 board: `01.Basics/MinimalProbe` (oep.core alone), `01.Basics/FixtureProbe` (gpio + uart, pins planned by the host), `02.Interfaces/CustomInterface` (your own interface under your own name: describe, the plan, ops, TLV tails). `refused()` and `platformRandom32()` are public for sketches.
+- (JA) 学ぶための example（どの RP2040 / RP2350、classic ESP32 のボードでも）: `01.Basics/MinimalProbe`（oep.core だけ）、`01.Basics/FixtureProbe`（gpio + uart、ピンは host が plan で決める）、`02.Interfaces/CustomInterface`（自分の名前で自分のインターフェース: describe、plan、op、TLV の後ろの部分）。`refused()` と `platformRandom32()` をスケッチから使えるようにした。
+- (EN) Releases attach only `examples/Firmware/`'s builds; every other example is built to check it.
+- (JA) Release に付けるのは `examples/Firmware/` のビルドだけ。ほかの example は確かめるためにビルドする。
 - (EN) `SwioPhy` takes any GPIO0-31 at run time (`begin(pin)`, `usePins` for host-chosen pins); `SwioPhy::kPin` is gone. The pin's mask is read once per transaction, so the bit timing is the same instructions as with the compile-time pin (one more instruction between bits, about 4 ns). Unverified on hardware.
 - (JA) `SwioPhy` は実行中に GPIO0-31 のどれでも取る（`begin(pin)`、host が選ぶピンには `usePins`）。`SwioPhy::kPin` は無くなった。ピンのマスクは 1 回の転送ごとに 1 度だけ読むので、ビットの時間はコンパイル時のピンのときと同じ命令の並び（ビットの間に 1 命令、約 4 ns 増えるだけ）。実機では未確認。
 - (EN) `Firmware/OepProbe` builds for the classic ESP32 too (profile esp32): a UART bridge; SWIO + riscv-dm + console, gpio, uart, capture (sampler), the SPI / I2C devices and probe.config, every pin chosen by the host.
