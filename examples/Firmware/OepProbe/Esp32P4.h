@@ -86,7 +86,7 @@ static oep::DmConsole consoleDriver(dm, phy);   // the DM console framings (SDI 
 static oep::TargetConsoleStream console(rvswd, consoleDriver, 1);
 
 static oep::FixtureGpio gpio(pins, 1, 1);
-// PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0)
+// PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the analog 7)
 static oep::FixtureUart uart1(pins, Serial1, 1, 2), uart2(pins, Serial2, 2, 5);
 static oep::LogicCapture capture(endpoint, kReserved, 4);   // PARLIO RX; its lines are never driven
 static oep::P4I2cTarget i2c(pins);
@@ -158,6 +158,7 @@ void setup() {
   config.setPins(&pins);   // the idle item sets these pins' free state
   config.load();
   config.applySaved();
+  analog.setPins(&pins, 7);   // its pads go analog: claimed against wires and settings
   endpoint.add(analog);   // after config: the fns before it keep their numbers
   endpoint.add(group);
   group.addTrack(capture, capture);

@@ -109,6 +109,7 @@ void setup() {
   config.setPins(&pins);   // the idle item sets these pins' free state
   config.load();
   config.applySaved();
+  analog.setPins(&pins, 7);   // PinTable owners: gpio 1, uart 2, the analog 7 (its pads go analog)
   endpoint.add(analog);   // after config: the fns before it keep their numbers
 }
 

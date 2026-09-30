@@ -27,8 +27,9 @@ no released firmware.
 classic-ESP32 cycles, SWD's bit-bang is the RP2's, the capture drivers are the P4's PARLIO and the classic ESP32's
 sampler.
 
-An analog capture takes its pads to their analog function while it runs, which cuts their digital input: a logic
-capture (or a GPIO fixture) on the same pad reads 0 meanwhile. Watch one signal as logic and analog on two pads.
+An analog capture takes its pads to their analog function while it runs, which cuts their digital input and output, so
+an analog channel is shared with nothing: a plan that puts a logic capture, a fixture or a wire on it (or the analog on
+their pin) is refused. Watch one signal as logic and analog on two pads.
 
 All of them are 3.3 V parts. The library does not shift levels: see the README's electrical notes.
 

@@ -331,6 +331,40 @@ static void testSettingsPlanStays() {
   CHECK(n == 1 && now[0].function == 1 && now[0].channel == 12);    // the settings' plan stays, the session's went
 }
 
+// An interface whose channels are shared with no other plan (an analog input, oep-if-capture §1.2).
+class PlanAlone final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.alone"; }
+  uint16_t instance() const override { return 0; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
+  bool planApply(const RoleAssignment *, size_t) override { return true; }
+  bool planShares() const override { return false; }
+};
+
+static void testPlanNotShared() {
+  MemStream bulk;
+  static uint8_t rx[1100], tx[1100];
+  Endpoint ep(bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0);
+  PlanSink a, b;
+  PlanAlone alone;
+  ep.add(a);       // fn 1
+  ep.add(b);       // fn 2
+  ep.add(alone);   // fn 3
+  const uint16_t f1[] = {1}, f2[] = {2}, f3[] = {3}, f13[] = {1, 3};
+  const RoleAssignment a12[] = {{1, 0, 12}}, b12[] = {{2, 0, 12}}, alone12[] = {{3, 0, 12}}, alone13[] = {{3, 0, 13}};
+  CHECK(ep.replacePlan(a12, 1, f1, 1) == 0);
+  CHECK(ep.replacePlan(b12, 1, f2, 1) == 0);               // two that share: fine
+  CHECK(ep.replacePlan(alone12, 1, f3, 1) == kRejectUnavailable);   // onto a planned channel: refused
+  CHECK(ep.replacePlan(alone13, 1, f3, 1) == 0);
+  const RoleAssignment a13[] = {{1, 0, 13}};
+  CHECK(ep.replacePlan(a13, 1, f1, 1) == kRejectUnavailable);       // onto its channel: refused too
+  RoleAssignment now[4];
+  CHECK(ep.plan(now, 4) == 3);                                      // nothing changed (a still on 12)
+  const RoleAssignment both[] = {{1, 0, 14}, {3, 0, 14}};
+  CHECK(ep.replacePlan(both, 2, f13, 2) == kRejectUnavailable);     // in one request
+}
+
 static void testPlanCapacity() {
   MemStream bulk;
   static uint8_t rx[1100], tx[1100];
@@ -361,6 +395,7 @@ static void testPlanCapacity() {
 
 int main() {
   testPlanCapacity();
+  testPlanNotShared();
   testSettingsPlanStays();
   testLastMarkMissing();
   testReader();

@@ -266,6 +266,9 @@ class Interface {
   }
   virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
   virtual void planRelease() {}
+  // false: this interface's planned channels are shared with no other fn's plan (core §8.1) - an analog input that
+  // takes its pad from the digital side (oep-if-capture §1.2). The endpoint refuses the overlap whichever comes second.
+  virtual bool planShares() const { return true; }
   // The lock holder's lease lapsed (core §9): drop what that session used (a wire: the host's use of its
   // connection). An explicit end does not come here.
   virtual void sessionLapsed() {}
