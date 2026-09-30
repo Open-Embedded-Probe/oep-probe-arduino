@@ -130,6 +130,24 @@ data = lc.read_segment(segment)              # トリガは segment.trigger_inde
 classic ESP32 の sampler もトリガを取れます（8 チャネル、2 MHz まで）。割り込みを止めてサンプルするので、250 ms までの
 区切りで探します。区切りの間のすき間（約 1 ms）に来たエッジは見逃します。
 
+ロジックとアナログを一緒に、ロジックのトリガで取るには capture-group を使います。アナログはロジックのトリガに従い、どちらの
+区画も同じ瞬間に印を付けます。
+
+```python
+an = capture.AnalogCapture(hst)
+grp = capture.CaptureGroup(hst)
+core.plan_apply(hst, [(lc.fn, 0, 20), (lc.fn, 1, 21), (an.fn, 0, 16)])
+lc.configure(rate=20_000_000, samples=200_000, trigger=(capture.EDGE, 1, 1), pretrigger=1_000)
+an.configure(rate=40_000, samples=4_000, pretrigger=40)    # 自分のトリガは無し: ロジックのトリガに従う
+grp.bind([lc, an], trigger=lc)
+grp.start()
+st = grp.wait(timeout=30)                                   # st.trigger_ns: トリガが立った時刻
+(logic,), (analog,) = lc.segments(), an.segments()          # logic.trigger_index、analog.trigger_index: その瞬間
+```
+
+従うトラックは組と一緒に始まり、トリガまで取り続けます。その pretrigger は、そのトラック自身のサンプル数です。classic ESP32 の
+sampler はトリガのトラックにはなれますが、ほかのトリガには従えません（区切りの間にすき間があるため）。
+
 ## 5. 治具の設定を probe に持たせる
 
 治具 = firmware + その設定です。一度書いて保存すれば、probe は起動のたびにそれを行います。

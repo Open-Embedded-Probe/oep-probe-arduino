@@ -9,8 +9,10 @@
 //   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn]) -> -   0x02 start -> blocking_ms u32, start_ns u64
 //   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16 (no lock)
 //
-// The tracks of this library take immediate triggers only, so a group starts at once: trigger_track may name a track
-// (its trigger is immediate) and trigger_ns stays unknown.
+// With trigger_track, that track waits for its own trigger and the others follow: they run into their rings from the
+// start, and when the trigger's time is known (trackTriggerNs) the group hands it to them (trackTriggerAt), and each
+// cuts its segment around the sample nearest to it, with its own pretrigger. A track that cannot follow (no ring)
+// is refused at bind.
 #pragma once
 #include <Arduino.h>
 #include "Oep.h"
@@ -31,12 +33,30 @@ class GroupTrack {
   virtual bool trackStart() = 0;              // start now; false: it could not
   virtual void trackStop() = 0;
   virtual uint8_t trackState() const = 0;     // the capture state (oep-if-capture §3.2)
-  void setBound(bool on) { bound_ = on; }
+  // Following another track's trigger (the group's trigger_track): trackCanFollow at bind (no side effects; false:
+  // this track cannot, as configured), trackStartFollowing at start (running into its ring, waiting for
+  // trackTriggerAt), trackTriggerAt(ns) with the trigger's time on the probe's clock. The trigger track:
+  // trackTriggerNs once its trigger is found, trackForce.
+  virtual bool trackCanFollow() const { return false; }
+  virtual bool trackStartFollowing() { return false; }
+  virtual void trackTriggerAt(uint64_t ns) { (void)ns; }
+  virtual bool trackTriggerNs(uint64_t &ns) const { (void)ns; return false; }
+  virtual void trackForce() {}
+  void setBound(bool on) { bound_ = on; if (!on) following_ = false; }
   bool bound() const { return bound_; }
 
  protected:
   bool bound_ = false;
+  bool following_ = false;   // bound as a follower: start with trackStartFollowing
+  friend class CaptureGroup;
 };
+
+// The sample (of a rate num / den a second) nearest to dns ns after the first one.
+inline uint64_t samplesIn(uint64_t dns, uint32_t num, uint32_t den) {
+  const uint64_t q = dns / 1000000000u, r = dns % 1000000000u;
+  const uint64_t a = q * num;   // whole seconds' samples x den
+  return a / den + ((a % den) * 1000000000u + r * num + static_cast<uint64_t>(den) * 500000000u) / (static_cast<uint64_t>(den) * 1000000000u);
+}
 
 class CaptureGroup final : public Interface {
  public:
@@ -71,6 +91,8 @@ class CaptureGroup final : public Interface {
   bool subscribed_ = false;
   bool started_ = false;   // started since the bind: the state is the tracks' (done once all are)
   bool running_ = false;   // the stopped event is still to come
+  int trigger_ = -1;       // the trigger track (index into tracks_), or none
+  uint64_t trigger_ns_ = ~uint64_t{0};
   int indexOf(uint16_t fn) const;
   int indexOf(const GroupTrack &track) const;
   uint8_t state() const;

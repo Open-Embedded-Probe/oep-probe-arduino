@@ -78,6 +78,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool trackReady() const override { return state_ == kStateConfigured || state_ == kStateDone; }
   uint8_t trackMode() const override { return mode_; }
   bool trackTriggered() const override { return trig_type_ != 0; }
+  bool trackCanFollow() const override { return mode_ == reg::fixture_capture::kModeOneShot && trackReady(); }
+  bool trackStartFollowing() override;
+  void trackTriggerAt(uint64_t ns) override;
+  bool trackTriggerNs(uint64_t &ns) const override;
+  void trackForce() override { groupOp(kOpForce); }
   uint32_t trackLoad() const override { return rate_den_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * rate_num_ / rate_den_) : 0; }
   bool trackStart() override { return groupOp(kOpStart); }
   void trackStop() override { groupOp(kOpStop); }
@@ -155,6 +160,10 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint32_t trigger_index_ = 0xFFFFFFFFu;
   volatile bool trig_overrun_ = false;   // the DMA came round while filling: the segment is not contiguous
   bool reported_trigger_ = true;
+  bool follow_ = false;                      // started by a group to follow another track's trigger
+  volatile bool ext_ready_ = false;          // ... whose sample is known (ext_sample_ written first)
+  uint64_t ext_sample_ = 0;
+  uint32_t rate_hz_ = 0;                     // as asked (a follower opens the ring at it)
   void harvestTriggered(const Chunk &chunk);
   bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at);
   Result startTriggered(uint8_t *out, size_t capacity);
