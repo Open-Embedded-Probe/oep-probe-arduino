@@ -1,4 +1,4 @@
-# examples と配布する firmware の見直し（案、2026-09-30）
+# examples と配布する firmware の見直し（2026-09-30。方向はユーザー了承済み、§7 は相談中）
 
 今の `examples/` は、手元の治具ごとの firmware（「ボード + 治具の target の chip」、例: `Esp32P4X035Probe`）で、治具の配線を
 焼き込んでいる。治具を持たない人には名前も中身も意味を持たない。ここでは、今の治具のためではなく、**これから OEP を使う人・作る人が
@@ -19,8 +19,9 @@
 
 1. **binary は 1 ボード 1 本**。そのボードでできることを全部入れ、どのピンを使うかは host が決める（oep-if-debug §1 のピンの組:
    describe の role_channels、scan の count = 0 はすべての組、attach の pins。fixture は plan）。仕様はすでにこれを許している。
-2. **ボードは手に入りやすい定番**: Raspberry Pi Pico（RP2040）、Pico 2（RP2350）、ESP32-S3 DevKitC、classic ESP32 DevKitC、
-   ESP32-P4。RP2040 / RP2350 は、ピンの番号が同じ他のボード（RP2040-Zero、Pro Micro RP2350 など）でも動く 1 本にする。
+2. **binary を出すのは、ベンチで確かめられるボードだけ**: ESP32-P4、classic ESP32、RP2350、RP2040。RP2040 / RP2350 は、ピンの
+   番号が同じ他のボード（Pico、Pico 2、RP2040-Zero、Pro Micro RP2350 など）でも動く 1 本にする。**ベンチの無いボード**
+   （ESP32-S3、C3、C6 など）には binary を出さず、自分でビルドする手引き（§3.1）を用意する。確かめていない binary は配らない。
 3. **名前**: binary はボード（`OepProbe-rp2040.uf2`）、sketch はやること（`SwdDebugProbe`）。target の chip の名前は入れない。
 4. **sketch は 1 つのことだけを示す**。ピンは冒頭の定数。読んで写して変えるためのもの。
 5. **治具に固有の事情は firmware から出す**。今 sketch に焼き込んでいるもの（§5）は、ボードの事実、target の事実、治具の設定の
@@ -32,7 +33,6 @@
 |---|---|---|---|---|---|
 | `OepProbe-rp2040` | Pico、RP2040-Zero ほか | USB CDC | rvswd、swd | gpio、uart | console |
 | `OepProbe-rp2350` | Pico 2、Pro Micro RP2350 ほか | USB CDC | rvswd、swd | gpio、uart | console |
-| `OepProbe-esp32s3` | ESP32-S3 DevKitC ほか | USB CDC（OTG。USB-Serial/JTAG と PHY を共有するのでどちらか 1 つ） | rvswd | gpio、uart | console、probe.config |
 | `OepProbe-esp32` | ESP32 DevKitC ほか | UART bridge | swio | gpio、uart | console、probe.config |
 | `OepProbe-esp32p4` | ESP32-P4 | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | rvswd | gpio、uart、capture | console、probe.config、I2C / SPI target |
 
@@ -41,6 +41,12 @@
 
 Firmware の workflow は、`examples/Firmware/` の各 sketch の sketch.yaml の profile ごとに作って付ける
 （`<sketch>-<profile>-<version>.uf2` / `.merged.bin`）。他の example は CI でビルドが通るかだけを確かめる。
+
+### 3.1 ベンチの無いボードの手引き
+
+`Firmware/OepProbe` を自分のボードでビルドする手順を書く（docs か README）: board の選び方（arduino-cli の FQBN）、sketch.yaml に
+profile を足す方法、ボードの予約ピン（§6 f）の足し方、焼いた後に `oep dump` で確かめること。ボードが動いたと報告があり、ベンチで
+確かめられるようになったら §3 に足す。
 
 ## 4. sketch（学ぶ順）
 
@@ -74,8 +80,8 @@ examples/
 | 今 | 焼き込んでいるもの | 行き先 |
 |---|---|---|
 | `Esp32P4X035Probe` | RVSWD の組、4 経路、スロット 1 つ、capture | `Firmware/OepProbe` の esp32p4 + 治具の設定（slot、bind） |
-| `Esp32V003Probe` | SWIO GPIO16、NRST GPIO23 | `Firmware/OepProbe` の esp32 + 設定（label NRST）。NRST を既定の reset 線にするのは §6 d |
-| `Rp2350L103Probe` | RVSWD GP0/1、NRST GP2、ch12 の pull-up、bus を low で休ませる、半周期 500 ns、GP19（PSRAM の CS） | `Firmware/OepProbe` の rp2350 + 設定（label、idle）。bus と速さは target の事実（§6 e）、GP19 はボードの事実（§6 f） |
+| `Esp32V003Probe` | SWIO GPIO16、NRST GPIO23 | `Firmware/OepProbe` の esp32 + 設定（label NRST）。reset 線は host が明示する（§6 d） |
+| `Rp2350L103Probe` | RVSWD GP0/1、NRST GP2、ch12 の pull-up、bus を low で休ませる、半周期 500 ns、GP19（PSRAM の CS） | `Firmware/OepProbe` の rp2350 + 設定（label、idle）。bus と速さは host が持つ（§6 e）、GP19 はボードの事実（§6 f） |
 | `Rp2040ZeroProbe` | SWD GP0/1 | `Firmware/OepProbe` の rp2040 |
 | `Esp32P4CaptureProbe` | capture、試験の信号、303a:4021 | `05.Capture/LogicCapture`（USB の ID は他と同じにする） |
 | `PicoDebugPortSurvey` | 走査 | `Tools/SwdPinSurvey` |
@@ -90,17 +96,17 @@ a. **線がピンの組を host から受ける**: 今は決まった 1 組だ�
    それぞれで、ピンを実行中に替えられるようにする。
 b. **RP2040 / RP2350 の probe.config の保存**（今は ESP32 の NVS だけ）。flash の最後の領域など。
 c. **USB の名乗り**: RP2 と ESP32-S3 でも iProduct `OEP…` と個体ごとの serial を出す（今は ESP32-P4 だけ）。
-d. **既定の reset 線**を設定で決める（今は sketch の `port.reset_default`）。probe.config の slot か label の役に入れるなら
-   仕様の変更（probe.config）。
-e. **target の事実**: CH32L103 の「bus を low で休ませる」「半周期 500 ns 以上」は target の性質で、probe の sketch に置く
-   ものではない。host が attach で渡す（oep-if-debug の TLV に足す）か、スロットの設定にする。どちらも仕様の変更で、
-   L103 の測定（2026-09-24 に保留）を待つ。
+d. **reset 線に既定は無い**: どの線を reset に使うかを明示しないリセットは危険なので、probe は既定の reset 線を持たない。
+   今の attach_under_reset の channel = 0xFFFF（probe の既定値）と sketch の `port.reset_default` をやめ、host が毎回 channel を
+   渡す。probe が宣言するのは、reset に使ってよい channel だけ。仕様の変更（oep-if-debug）。
+e. **L103 の設定は probe の中に持たない**: CH32L103 の「bus を low で休ませる」「半周期 500 ns 以上」は target の性質で、
+   host が持つ。案は attach の TLV で渡し、host 無しで attach するスロット（at_boot）はスロットの項目に同じ値を持つ。仕様の変更で、
+   形は他のセッション（ベンチ、wch-protocols の測定）と相談中。
 f. **ボードの予約ピン**（Pro Micro RP2350 の PSRAM の CS GP19、RP2040-Zero の WS2812 GP16）は、ボードごとの表を
    `Firmware/OepProbe` に持つ（Arduino の board のマクロで選ぶ）。
 g. 後で: RP2 の SWIO（PIO）、ESP32 の SWD。§3 の表の空いたところを埋める。
 
 ## 7. 決めること
 
-- §3 のボードの組（ESP32-C3 / C6 など、USB が CDC だけのボードを足すか）。
-- binary の名前（`OepProbe-<board>`）。
-- §6 d / e を仕様に足すか（slot の設定か、attach の TLV か）。
+- binary の名前（`OepProbe-<board>`）と、ベンチが読む asset 名の規則・治具の設定ファイルの形（ベンチと合わせる）。
+- §6 d / e の仕様の形（相談中）。
