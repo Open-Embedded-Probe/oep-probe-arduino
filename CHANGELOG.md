@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) P4 HS sketches receive vendor bulk OUT a packet at a time (`CFG_TUD_VENDOR_RX_NEED_ZLP=0`): a request ending on a 512-byte boundary (+ the host's ZLP) was held until the next OUT, 3 s without an answer.
+- (JA) P4 の HS のスケッチは vendor bulk の OUT を packet ごとに受ける（`CFG_TUD_VENDOR_RX_NEED_ZLP=0`）。512 byte の境目で終わる要求（+ host の ZLP）が次の OUT まで抱えられ、3 s 答えなかった。
 - (EN) The P4 loop no longer stops for seconds when a USB reader goes away: the HS CDC port reports its real FIFO room (raw bytes never wait; an open port nobody read took 200 ms per 64-byte chunk), and once a vendor bulk frame or a HID report could not go, later ones do not wait again until one goes.
 - (JA) USB の読み手が居なくなったときに P4 の loop が数秒止まらないようにした: HS の CDC は FIFO の本当の空きを返す（生のバイトは待たない。開いたまま読まれない口では 64 byte ごとに 200 ms 待っていた）。vendor bulk のフレームや HID の report が一度出せなかったら、次に出せるまで待たない。
 - (EN) Vendor bulk (DirectBulkStream): a result frame goes into one buffer whole or is dropped whole (`dropped()`), after waiting up to 2 s for the host to take IN - it used to drop the rest of a frame after 200 ms, which broke the host's framing (a 3 s timeout, twice in 25 writes over usbip).

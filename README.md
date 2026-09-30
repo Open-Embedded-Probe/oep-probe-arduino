@@ -55,6 +55,9 @@ oep config show <probe>
   bundle for good (a chip reset is needed).
 - Sketches with a direct build (`build_opt.h`, EspUsbDevice's vendor written directly) are built with `--clean` after
   `build_opt.h` changes.
+- Vendor bulk OUT is received a packet at a time (`CFG_TUD_VENDOR_RX_NEED_ZLP=0`). Receiving 16 KiB transfers ended by a
+  ZLP (`=1`) delayed, on the P4, the completion of a request that ends on a 512-byte boundary (a 1024-byte write_block)
+  until the next OUT: the probe did not answer for 3 s (2026-09-30, the X035 jig).
 
 ## Releases
 
