@@ -9,6 +9,7 @@
 
 extern uint32_t g_millis;
 inline uint32_t millis() { return g_millis; }
+inline uint32_t micros() { return g_millis * 1000u; }
 inline void delay(uint32_t ms) { g_millis += ms; }
 // A busy wait in the code under test: time goes on, and a test may complete USB transfers meanwhile.
 extern void (*g_on_wait)();
