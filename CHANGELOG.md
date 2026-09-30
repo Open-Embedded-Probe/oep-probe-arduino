@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) A plan the settings put in (probe.config) belongs to the settings (oep-core §8): plan_release leaves it (n = 0 included) and plan_apply naming its fn is rejected unavailable.
+- (JA) 設定（probe.config）が入れた plan は設定のもの（oep-core §8）: plan_release はそれを解かず（n = 0 でも）、その fn を挙げた plan_apply は rejected unavailable。
 
 ## 0.0.5
 - (EN) The firmware string in oep.core's describe is the library's release version (it was a fixed `3.2.0-v1rc`). Every Release now gets each example's built firmware attached (`<Example>-<version>.merged.bin` for ESP32, flash at 0x0; `.uf2` for RP2040 / RP2350; `firmware-<version>.json` with the sha256), by a separate Firmware workflow after the shared Release workflow.

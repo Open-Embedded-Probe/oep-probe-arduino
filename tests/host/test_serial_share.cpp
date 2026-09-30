@@ -288,7 +288,47 @@ static void testLastMarkMissing() {
   CHECK(r.length == 9 && getU64(out) == 10);                      // no reset mark: from now (common §1.2)
 }
 
+// An interface that takes any plan (for the plan rules).
+class PlanSink final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.plan"; }
+  uint16_t instance() const override { return 0; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
+  bool planApply(const RoleAssignment *, size_t) override { return true; }
+};
+
+static void testSettingsPlanStays() {
+  MemStream bulk;
+  static uint8_t rx[1100], tx[1100];
+  Endpoint ep(bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0);
+  PlanSink a, b;
+  ep.add(a);                                   // fn 1: its plan from the settings
+  ep.add(b);                                   // fn 2: a session's plan
+  const RoleAssignment saved[] = {{1, 1, 12}};
+  const uint16_t fn1[] = {1};
+  CHECK(ep.replacePlan(saved, 1, fn1, 1) == 0);
+  auto send = [&](const Bytes &m) {
+    const Bytes f = {uint8_t(m.size()), uint8_t(m.size() >> 8)};
+    bulk.send(f);
+    bulk.send(m);
+    bulk.tx.clear();
+    ep.poll();
+    return bulk.tx.size() >= 7 ? bulk.tx[5] : 0xff;   // the resolution (after length(2) role corr(2))
+  };
+  CHECK(send(request(1, 0, 0x10, openPayload(7, 3000))) == 1);
+  const Bytes plan2 = {0x90, 5, 2, 0, 1, 20, 0};
+  CHECK(send(request(2, 0, 0x04, plan2, true, 7)) == 1);            // fn 2 planned by the session
+  const Bytes plan1 = {0x90, 5, 1, 0, 1, 13, 0};
+  CHECK(send(request(3, 0, 0x04, plan1, true, 7)) == 0);            // fn 1 is the settings': refused
+  CHECK(send(request(4, 0, 0x05, {0}, true, 7)) == 1);              // release every fn
+  RoleAssignment now[4];
+  const size_t n = ep.plan(now, 4);
+  CHECK(n == 1 && now[0].function == 1 && now[0].channel == 12);    // the settings' plan stays, the session's went
+}
+
 int main() {
+  testSettingsPlanStays();
   testLastMarkMissing();
   testReader();
   testEndpointSerialPort();
