@@ -10,7 +10,7 @@
 //
 // Interfaces (revision 1): oep.core; oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
 // oep.fixture.gpio / uart / capture (the core-0 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C
-// devices io.github.ch32-riscv-ug.esp32.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
+// devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
 // (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below.
 #pragma once
@@ -71,7 +71,7 @@ static uint8_t probeTlv[160];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
+  uint8_t id[17];
   oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40, kReserved);
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;

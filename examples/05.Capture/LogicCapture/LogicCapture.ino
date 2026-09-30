@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// A logic analyzer: oep.fixture.capture alone on an ESP32-P4, at the P4's full speed (oep-spec docs/oep-if-capture.ja.md).
+// A logic analyzer: oep.fixture.logic alone on an ESP32-P4, at the P4's full speed (oep-spec docs/oep-if-capture.ja.md).
 // Up to 16 channels on any pins the host plans, one-shot / repeat / streaming: 2 ch at 160 Msps, 8 ch at 40 Msps, 16 ch
 // at 20 Msps.
 //
@@ -13,7 +13,7 @@
 //
 // With nothing wired, io.github.open-embedded-probe.test-signal (this example's own interface, TestSignal.h) puts an
 // LEDC square on a pin so the capture has something to see. The USB device is VID:PID 303a:0002 until the OEP PID is
-// granted, iProduct "OEP capture (ESP32-P4)", serial = the board MAC + "-hs" (one usbipd bind lasts across reflashes).
+// granted, iProduct "OEP capture (ESP32-P4)", serial = the unit id (the board MAC, lowercase hex; one usbipd bind lasts across reflashes).
 // USB-Serial/JTAG stays for uploads and a status line. Host: host/stream_test.py (streams at a rate, checks every edge).
 #include <esp_mac.h>
 #include <EspUsbDevice.h>
@@ -40,8 +40,8 @@ static char serial_[20];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
-  oep::describeCore(w, "esp32-p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
+  uint8_t id[17];
+  oep::describeCore(w, "logic-capture", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   w.label(51, "LED");
   return w.ok() ? w.length() : 0;
@@ -51,9 +51,7 @@ void setup() {
   esp_log_level_set("*", ESP_LOG_NONE);
   Serial.setTxTimeoutMs(0);   // nobody may be reading USB-Serial/JTAG: a write there must never stall loop()
   Serial.begin(115200);
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_BASE);   // the same MAC board-identify names the board by
-  snprintf(serial_, sizeof serial_, "%02x%02x%02x%02x%02x%02x-hs", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig config;
   config.vid = 0x303a;
   config.pid = 0x0002;

@@ -36,10 +36,16 @@ static constexpr const char *kProduct = "OEP probe (RP2350)", *kModel = "rp2350"
 static constexpr const char *kProduct = "OEP probe (RP2040)", *kModel = "rp2040";
 #endif
 
+#if defined(ARDUINO_SPARKFUN_PROMICRO_RP2350)
+// SparkFun Pro Micro RP2350 (profile promicrorp2350): GP0-GP29 are pins, but GP19, its PSRAM's chip select. The L103
+// bench's RVSWD is GP24 / GP23 - the Pico 2 build kept those as the Pico's own (0.0.18).
+static constexpr uint64_t kChannels = ((1ull << 30) - 1) & ~(1ull << 19);
+#else
 // The pins a Pico / Pico 2 brings out: GP0-GP22, GP26-GP28 (GP23-GP25 and GP29 are the board's own there). Other boards
 // with the same chip run this too; their own parts on these pins (an LED, a PSRAM chip select) are for the host to
 // leave alone.
 static constexpr uint64_t kChannels = ((1ull << 23) - 1) | (0x7ull << 26);
+#endif
 static constexpr uint64_t kReserved = ((1ull << 30) - 1) & ~kChannels;
 static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
 
@@ -73,7 +79,7 @@ static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];   // the flash's unique id: the probe says who it is on any transport
+  uint8_t id[17];   // the flash's unique id: the probe says who it is on any transport
   oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30, kReserved);
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
@@ -83,6 +89,9 @@ void setup() {
   USB.disconnect();
   USB.setManufacturer("Open Embedded Probe");
   USB.setProduct(kProduct);   // iProduct "OEP...": discovery (oep-core §3.3)
+  static uint8_t serial[17];
+  oep::platformUnitId(serial, sizeof serial);
+  USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (core §3.3)
   USB.connect();
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);

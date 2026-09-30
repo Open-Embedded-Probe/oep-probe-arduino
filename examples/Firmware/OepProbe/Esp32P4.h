@@ -18,11 +18,11 @@
 //
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
 // a slot's console, a fixture UART). The HS device is VID:PID 303a:0002 until the OEP PID is granted (PID-USE.md),
-// iProduct "OEP probe (ESP32-P4)", serial MAC + "-hs" (one usbipd bind lasts across reflashes).
+// iProduct "OEP probe (ESP32-P4)", serial = the unit id (the MAC, lowercase hex; one usbipd bind lasts across reflashes).
 //
 // Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.fixture.gpio /
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
-// devices io.github.ch32-riscv-ug.esp32.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
+// devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
 // (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic). Every GPIO but the
 // USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the reset line, or any fixture's pin - the host chooses.
 #pragma once
@@ -102,8 +102,8 @@ static char serial_[20];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
-  oep::describeCore(w, "esp32-p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
+  uint8_t id[17];
+  oep::describeCore(w, "esp32p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }
@@ -117,9 +117,7 @@ void setup() {
   Serial.setTxTimeoutMs(0);   // a port nobody reads never stops loop()
   Serial.begin(115200);
 
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_BASE);
-  snprintf(serial_, sizeof serial_, "%02x%02x%02x%02x%02x%02x-hs", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig usb;
   usb.vid = kUsbVid;
   usb.pid = kUsbPid;

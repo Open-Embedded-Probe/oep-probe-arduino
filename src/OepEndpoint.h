@@ -94,6 +94,9 @@ class Endpoint {
   uint32_t listHash() const;
   // oep.core's describe: the probe itself, as TLV bytes (kept by the caller).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
+  // More of oep.core's describe, written when it is asked for (the settings' label items): TLVs -> bytes written.
+  using ProbeExtra = size_t (*)(void *context, uint8_t *out, size_t capacity);
+  void setProbeExtra(ProbeExtra extra, void *context) { probe_extra_ = extra; probe_extra_context_ = context; }
   // A random-ish value per boot; 0 = unknown (then hosts treat every no-session as a possible reboot).
   void setBootId(uint32_t boot_id) { boot_id_ = boot_id; }
   // Experimental event from an interface (sent to the lock holder if it subscribed to that interface), after
@@ -151,6 +154,9 @@ class Endpoint {
   size_t count_ = 0;
   const uint8_t *probe_tlv_ = nullptr;
   size_t probe_tlv_length_ = 0;
+  ProbeExtra probe_extra_ = nullptr;
+  uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
+  void *probe_extra_context_ = nullptr;
   uint32_t boot_id_ = 0;
   volatile bool locked_ = false;
   uint32_t holder_ = 0, last_ = 0;

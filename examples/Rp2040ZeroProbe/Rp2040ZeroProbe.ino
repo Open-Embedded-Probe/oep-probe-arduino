@@ -32,7 +32,7 @@ static uint8_t probeTlv[200];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
+  uint8_t id[17];
   oep::describeCore(w, "waveshare-rp2040-zero", id, oep::platformUnitId(id, sizeof id), 30, kReserved);
   w.text(oep::kCoreProfile, "io.github.ch32-riscv-ug.rp2040zero-rp2350-swd");
   w.label(kSwclk, "SWCLK");

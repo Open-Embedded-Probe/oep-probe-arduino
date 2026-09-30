@@ -84,22 +84,30 @@ inline void platformParkMask(uint64_t mask) {
 
 // This probe's own unit id, the same on any transport: the eFuse MAC on the ESP32 family, the flash's unique id on
 // the RP2040 / RP2350. -> bytes written (at most `capacity`).
+// The unit id (oep-core §7.5): the chip's own number as lowercase hex text - the RP2's flash unique id (16), the
+// ESP32's base MAC (12) - the same on every transport, and the USB serial number (core §3.3). Needs 17 bytes of out
+// with the 0 after it. -> the text's length.
 inline size_t platformUnitId(uint8_t *out, size_t capacity) {
+  uint8_t raw[8];
+  size_t n = 0;
 #if defined(ARDUINO_ARCH_RP2040)
   pico_unique_board_id_t id;
   pico_get_unique_board_id(&id);
-  const size_t n = sizeof id.id < capacity ? sizeof id.id : capacity;
-  memcpy(out, id.id, n);
-  return n;
+  n = sizeof id.id < sizeof raw ? sizeof id.id : sizeof raw;
+  memcpy(raw, id.id, n);
 #elif defined(ARDUINO_ARCH_ESP32)
   const uint64_t mac = ESP.getEfuseMac();
-  const size_t n = capacity < 6 ? capacity : 6;
-  for (size_t i = 0; i < n; ++i) out[i] = static_cast<uint8_t>(mac >> (8 * i));
-  return n;
-#else
-  (void)out; (void)capacity;
-  return 0;
+  n = 6;
+  for (size_t i = 0; i < n; ++i) raw[i] = static_cast<uint8_t>(mac >> (8 * i));
 #endif
+  static const char kHex[] = "0123456789abcdef";
+  size_t at = 0;
+  for (size_t i = 0; i < n && at + 2 < capacity; ++i) {
+    out[at++] = static_cast<uint8_t>(kHex[raw[i] >> 4]);
+    out[at++] = static_cast<uint8_t>(kHex[raw[i] & 15]);
+  }
+  if (at < capacity) out[at] = 0;
+  return at;
 }
 
 // The MCU's part and revision for oep.core's describe chip (core §7.5): "esp32p4 v1.0", "rp2350 v2" (the SDK's chip
@@ -114,9 +122,12 @@ inline size_t platformChip(char *out, size_t room) {
 #endif
 #elif defined(ARDUINO_ARCH_ESP32)
   const unsigned rev = ESP.getChipRevision();   // major x 100 + minor
-  n = snprintf(out, room, "%s v%u.%u", ESP.getChipModel(), rev / 100, rev % 100);
-  for (int i = 0; i < n && static_cast<size_t>(i) < room; ++i)
-    if (out[i] >= 'A' && out[i] <= 'Z') out[i] = static_cast<char>(out[i] - 'A' + 'a');   // "ESP32-P4" -> "esp32-p4"
+  // the part lowercase without its hyphens (core §7.5): "ESP32-P4" -> "esp32p4", "ESP32-D0WD-V3" -> "esp32d0wdv3"
+  const char *model = ESP.getChipModel();
+  size_t at = 0;
+  for (const char *c = model; *c && at + 1 < room; ++c)
+    if (*c != '-') out[at++] = (*c >= 'A' && *c <= 'Z') ? static_cast<char>(*c - 'A' + 'a') : *c;
+  n = static_cast<int>(at) + snprintf(out + at, room > at ? room - at : 0, " v%u.%u", rev / 100, rev % 100);
 #else
   (void)out; (void)room;
 #endif

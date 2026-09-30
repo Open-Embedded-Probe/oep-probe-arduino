@@ -17,7 +17,7 @@
 namespace oep {
 namespace {
 
-namespace cap = reg::fixture_capture;
+namespace cap = reg::fixture_logic;
 // configure / query TLVs (oep-spec logic-capture §5.3); bit 7 of the tag = critical
 enum : uint8_t { kTagMode = cap::kTlvConfigureMode, kTagRate = cap::kTlvConfigureRate,
                  kTagSamples = cap::kTlvConfigureSamples, kTagSegments = cap::kTlvConfigureSegments,
@@ -1031,12 +1031,13 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (mode_ == 2 || mode_ == 3) {
         putU32(out + 1, completed_);
         putU64(out + 5, mode_ == 3 ? captured_ : static_cast<uint64_t>(completed_) * segment_bytes_ + fill_);
-        out[13] = (queue_overflow_ ? 1 : 0) | (overruns_ ? 2 : 0) | (stage_drops_ ? 4 : 0);   // bit0 chunk queue full,
-                                                                     // bit1 DMA ring overrun, bit2 no free stage
+        // flags (oep-if-capture §3.2): bit0 the probe dropped data - the chunk queue full, the DMA ring overrun, no free
+        // stage (the PARLIO keeps its clock: bit1 slipped never)
+        out[13] = (queue_overflow_ || overruns_ || stage_drops_) ? 1 : 0;
       } else if (triggered_) {
         putU32(out + 1, state_ == kStateDone ? 1 : 0);
         putU64(out + 5, filled_);
-        out[13] = (queue_overflow_ ? 1 : 0) | (overruns_ ? 2 : 0);
+        out[13] = (queue_overflow_ || overruns_ || trig_overrun_) ? 1 : 0;
       } else {
         putU32(out + 1, state_ == kStateDone ? 1 : 0);                // segments done
         putU64(out + 5, state_ == kStateDone ? bytes_ : 0);           // write position
@@ -1097,8 +1098,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (count) memcpy(out + 9, buffer_ + position, count);
       return completed(9 + count);
     }
-    case kOpSegments: {   // from_serial(u32) [TLV]  ->  count(u8) segment infos
-      if (capacity < 1 + kInfoBytes) return failed();
+    case kOpSegments: {   // from_serial(u32) [TLV]  ->  count(u8) count x (len(u8) segment info)
+      if (capacity < 2 + kInfoBytes) return failed();
       poll();
       const size_t room = tail.anyIgnored() && capacity > 2 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
       if (mode_ == 2 || mode_ == 3) {
@@ -1107,14 +1108,17 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (from < oldest) from = oldest;
         uint8_t count = 0;
         size_t used = 1;
-        for (uint32_t k = from; k < completed_ && used + kInfoBytes <= room && count < 255; ++k, ++count)
-          used += infoBytes(infos_[k % kInfos], out + used);
+        for (uint32_t k = from; k < completed_ && used + 1 + kInfoBytes <= room && count < 255; ++k, ++count) {
+          out[used] = static_cast<uint8_t>(infoBytes(infos_[k % kInfos], out + used + 1));   // len(u8) first (core §2.3)
+          used += 1u + out[used];
+        }
         out[0] = count;
         return tail.finish(completed(used), out, capacity);
       }
       const bool one = state_ == kStateDone && getU32(p) == 0;
       out[0] = one ? 1 : 0;
-      return tail.finish(completed(1 + (one ? segmentInfo(out + 1) : 0)), out, capacity);
+      if (one) out[1] = static_cast<uint8_t>(segmentInfo(out + 2));   // len(u8) then the info (core §2.3)
+      return tail.finish(completed(one ? 2u + out[1] : 1u), out, capacity);
     }
     case kOpRelease:   // serial(u32) [TLV]: that segment and the ones before it may be reused
       if (mode_ != 2) return rejected(kRejectUnavailable);

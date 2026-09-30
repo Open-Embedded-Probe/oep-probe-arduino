@@ -44,8 +44,8 @@ ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につない�
 - **コンソールを読む**: debug module 経由（`oep.target.console`、UART 不要）か UART（`oep.fixture.uart`）。
 - **target のコードがピンで何をしているかを確かめる**: P4 が相手側のデバイス（SPI のデバイス、I2C のデバイス）として受けるので、
   target のドライバが本当に送ったバイトを試験で見られる。GPIO や UART で target に返すこともできる（`oep.fixture.gpio` / `uart`、
-  `io.github.ch32-riscv-ug.esp32.spi-target` / `i2c-target`）。
-- **最大 16 ピンを同時にキャプチャ**: SPI のデバイスとして動かしながらでも取れる（`oep.fixture.capture`、P4 の PARLIO）。
+  `oep.fixture.spi-target` / `i2c-target`）。
+- **最大 16 ピンを同時にキャプチャ**: SPI のデバイスとして動かしながらでも取れる（`oep.fixture.logic`、P4 の PARLIO）。
 
   | ch 数 | サンプリング |
   |---:|---:|
@@ -83,7 +83,7 @@ wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で�
 | `src/OepBind.*` | シリアルの口に流すもの（bind: last-reset / manual / mixed、セッション中の停止と最後の reset からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind。ESP32 は NVS、RP2040 / RP2350 は flash に保存）。各ファイルの冒頭に対応する仕様の節がある |
-| `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 独自インターフェース `io.github.ch32-riscv-ug.esp32.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブ）。OEP を拡張する例 |
+| `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブで実装。2026-09-30 までは独自の `io.github.ch32-riscv-ug.esp32.*`） |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
 | `examples/` | ボードの firmware と学ぶための example: [Example](#example) を参照 |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |

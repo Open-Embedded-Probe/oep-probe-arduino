@@ -18,7 +18,7 @@
 namespace oep {
 namespace {
 
-namespace cap = reg::fixture_capture;
+namespace cap = reg::fixture_logic;
 enum : uint8_t { kTagMode = cap::kTlvConfigureMode, kTagRate = cap::kTlvConfigureRate,
                  kTagSamples = cap::kTlvConfigureSamples, kTagSegments = cap::kTlvConfigureSegments,
                  kTagTrigger = cap::kTlvConfigureTrigger, kTagPretrigger = cap::kTlvConfigurePretrigger };
@@ -384,7 +384,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       const bool finished = state_ == cap::kStateDone;
       putU32(out + 1, finished ? 1 : 0);
       putU64(out + 5, finished ? samples_ : 0);
-      out[13] = 0;
+      out[13] = slipped_ ? 2 : 0;   // bit1 the time base bent (a sample taken late)
       return tail.finish(completed(14), out, capacity);
     }
     case cap::kOpRead: {           // position(u64) max(u32) -> position(u64) flags data (closed tail)
@@ -412,11 +412,12 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (n < 4) return rejected(kRejectMalformed);
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 1 + 33) return failed();
+      if (capacity < 2 + 33) return failed();
       poll();
       const bool one = state_ == cap::kStateDone && getU32(p) == 0;
       out[0] = one ? 1 : 0;
-      return tail.finish(completed(1 + (one ? segmentInfo(out + 1) : 0)), out, capacity);
+      if (one) out[1] = static_cast<uint8_t>(segmentInfo(out + 2));   // len(u8) then the info (core §2.3)
+      return tail.finish(completed(one ? 2u + out[1] : 1u), out, capacity);
     }
     case cap::kOpForce: {          // waiting for the trigger: take the segment from the next sample on
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);

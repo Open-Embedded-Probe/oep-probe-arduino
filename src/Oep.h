@@ -75,7 +75,7 @@ inline void putU64(uint8_t *p, uint64_t v) { putU32(p, static_cast<uint32_t>(v))
 // bit n of a registry kLockFreeOps mask = op n needs no lock
 inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> op) & 1); }
 
-// A rejection with a one-byte payload (unsupported: the tag as received; gpio unavailable: the position).
+// A rejection with a one-byte payload (unsupported: the tag as received).
 inline Result rejectedWith(uint8_t reason, uint8_t *out, size_t capacity, uint8_t value) {
   if (capacity < 1) return rejected(reason);
   out[0] = value;
@@ -311,6 +311,21 @@ inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id
   const size_t bytes = (channels + 7) / 8 < 8 ? (channels + 7) / 8 : 8;
   for (size_t i = 0; i < bytes; ++i) bitmap[2 + i] = static_cast<uint8_t>(reserved >> (8 * i));
   return w.put(kCoreReserved, bitmap, 2 + bytes);
+}
+
+// rejected unavailable with core §4.3's payload: why (cause, 0 = left out), the channel it met and who holds it
+// (0xFFFF / 0 = left out), then an interface's own TLVs (`extra`, 0x40 and up). Hosts may ignore all of it.
+inline Result unavailable(uint8_t *out, size_t capacity, uint8_t cause, uint16_t channel = 0xFFFF,
+                          uint16_t holder_fn = 0xFFFF, uint8_t holder_kind = 0, const uint8_t *extra = nullptr,
+                          size_t extra_length = 0) {
+  TlvWriter w(out, capacity);
+  if (cause) w.u8(reg::core::kTlvUnavailablePayloadCause, cause);
+  if (channel != 0xFFFF) w.u16(reg::core::kTlvUnavailablePayloadChannel, channel);
+  if (holder_fn != 0xFFFF) w.u16(reg::core::kTlvUnavailablePayloadHolderFn, holder_fn);
+  if (holder_kind) w.u8(reg::core::kTlvUnavailablePayloadHolderKind, holder_kind);
+  if (extra && extra_length && w.length() + extra_length <= capacity) { memcpy(out + w.length(), extra, extra_length); }
+  const size_t n = w.ok() ? w.length() + (extra && w.length() + extra_length <= capacity ? extra_length : 0) : 0;
+  return {kResolutionRejected, kRejectUnavailable, n};
 }
 
 }  // namespace oep

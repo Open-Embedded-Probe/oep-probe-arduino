@@ -603,7 +603,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   while (tail.next(at, raw, v, len)) {
     if ((raw & ~kTagCritical) != (kTagRoleAssignment & ~kTagCritical)) continue;
     if (len != 5) return rejected(kRejectMalformed);
-    if (count >= kMaxRoles) return rejected(kRejectUnavailable);   // more than the plan holds (core §8)
+    if (count >= kMaxRoles) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // over plan_roles (core §8)
     roles[count] = {getU16(v), v[2], getU16(v + 3)};
     if (roles[count].function == 0 || roles[count].function > count_) return rejected(kRejectUnknownFunction);
     ++count;
@@ -618,9 +618,15 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   }
   // a fn whose plan the settings put in is the settings' to change (core §8)
   for (size_t k = 0; k < nfns; ++k)
-    if (persistent_[fns[k] - 1]) return rejected(kRejectUnavailable);
+    if (persistent_[fns[k] - 1])
+      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, 0xFFFF, fns[k],
+                         reg::core::kHolderKindSettingsPlan);
+  clash_fn_ = 0;
   const uint16_t reason = replaceFns(roles, count, fns, nfns, false);
   if (reason > 0xff) return failed();
+  if (reason == kRejectUnavailable && clash_fn_)   // a channel another plan has, where one of them shares none
+    return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, clash_channel_, clash_fn_,
+                       reg::core::kHolderKindPlan);
   if (reason) return rejected(static_cast<uint8_t>(reason));
   return tail.finish(completed(), out, capacity);
 }
@@ -681,8 +687,20 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
       return o.function != f && o.channel == roles[r].channel &&
              (!shares || (o.function >= 1 && o.function <= count_ && !interfaces_[o.function - 1]->planShares()));
     };
-    for (size_t k = 0; k < plan_count_; ++k) if (clash(plan_roles_[k])) { undo(); return kRejectUnavailable; }
-    for (size_t k = 0; k < count; ++k) if (clash(roles[k])) { undo(); return kRejectUnavailable; }
+    for (size_t k = 0; k < plan_count_; ++k)
+      if (clash(plan_roles_[k])) {
+        clash_channel_ = roles[r].channel;
+        clash_fn_ = plan_roles_[k].function;
+        undo();
+        return kRejectUnavailable;
+      }
+    for (size_t k = 0; k < count; ++k)
+      if (clash(roles[k])) {
+        clash_channel_ = roles[r].channel;
+        clash_fn_ = roles[k].function;
+        undo();
+        return kRejectUnavailable;
+      }
   }
   if (const uint16_t reason = applyAll(roles, count, true)) { undo(); return reason; }
   if (const uint16_t reason = applyAll(roles, count, false)) { undo(); return reason; }
@@ -741,7 +759,7 @@ uint32_t Endpoint::listHash() const {
 }
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // flags(u8, bit0 exact) first(u16) prefix_len(u8) prefix [TLV]  ->  total(u16) count(u8) entries
+  // flags(u8, bit0 exact) first(u16) prefix_len(u8) prefix [TLV]  ->  total(u16) count(u8) count x (len(u8) entry)
   // entry: fn(u16) instance(u16) revision(u8) flags(u8) name_len(u8) name; oep.core (fn 0) is the first one
   if (length < 4 || length < 4u + payload[3] || capacity < 3) return rejected(kRejectMalformed);
   Tail tail;
@@ -761,15 +779,16 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
     if (!nameMatches(name, prefix, n, exact)) return;
     if (total++ < first || full) return;
     const size_t name_len = strlen(name);
-    if (used + 7 + name_len > room || count == 255) { full = true; return; }
-    uint8_t *e = out + used;
+    if (used + 8 + name_len > room || count == 255) { full = true; return; }
+    out[used] = static_cast<uint8_t>(7 + name_len);   // the element's length (core §2.3)
+    uint8_t *e = out + used + 1;
     putU16(e, fn);
     putU16(e + 2, instance);
     e[4] = revision;
     e[5] = flags;
     e[6] = static_cast<uint8_t>(name_len);
     memcpy(e + 7, name, name_len);
-    used += 7 + name_len;
+    used += 8 + name_len;
     ++count;
   };
   consider(0, 0, reg::core::kRevision, 0, reg::core::kName);
@@ -811,6 +830,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
       memcpy(scratch_ + at, v, 4);
       at += 4;
     }
+    if (probe_extra_) at += probe_extra_(probe_extra_context_, scratch_ + at, sizeof scratch_ - at);
 
     tlv = scratch_;
     tlv_length = at;

@@ -231,29 +231,20 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       out[0] = tx_slots_;
       return tail.finish(completed(1), out, capacity);
     }
-    case kOpStatus: {   // [TLV] -> flags(u8) rx_frames(u32) tx_slots(u8) errors(u16)
+    case kOpStatus: {   // [TLV] -> state mode armed queued (u8 each) rx_frames(u32) tx_slots(u8) errors(u16)
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 8) return failed();
-      out[0] = static_cast<uint8_t>((started_ ? 1 : 0) | (mode_ << 1) | (armed_ ? 0x10 : 0) | (queue_count_ << 5));
-      putU32(out + 1, rx_frames_);
-      out[5] = tx_slots_;
-      putU16(out + 6, errors_);
-      return tail.finish(completed(8), out, capacity);
+      if (capacity < 11) return failed();
+      out[0] = started_ ? 1 : 0;   // state: 0 not configured, 1 running
+      out[1] = mode_;
+      out[2] = armed_ ? 1 : 0;
+      out[3] = queue_count_;
+      putU32(out + 4, rx_frames_);
+      out[8] = tx_slots_;
+      putU16(out + 9, errors_);
+      return tail.finish(completed(11), out, capacity);
     }
-    case kOpReadHw: {   // [TLV] -> sr int_raw fifo_st ctr slave_addr filter_cfg scl_stretch_conf (u32 each; zeros off the P4)
-      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
-      if (refused(parsed)) return parsed;
-      if (capacity < 28) return failed();
-      memset(out, 0, 28);
-#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)   // register images of the P4 I2C block only
-      const uint32_t regs[7] = {I2C0.sr.val, I2C0.int_raw.val, I2C0.fifo_st.val, I2C0.ctr.val, I2C0.slave_addr.val,
-                                I2C0.filter_cfg.val, I2C0.scl_stretch_conf.val};
-      for (int i = 0; i < 7; ++i) putU32(out + 4 * i, regs[i]);
-#endif
-      return tail.finish(completed(28), out, capacity);
-    }
-    case kOpSetStretch: {   // stretch_us(u32) [TLV]
+    case kOpStretch: {   // stretch_us(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
       if (refused(parsed)) return parsed;
       const uint32_t us = getU32(payload);

@@ -34,7 +34,7 @@ static uint8_t probeTlv[64];
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
-  uint8_t id[8];
+  uint8_t id[17];
   oep::describeCore(w, "swd-debug-probe", id, oep::platformUnitId(id, sizeof id), 30,
                     (1ull << kSwclk) | (1ull << kSwdio));
   return w.ok() ? w.length() : 0;
