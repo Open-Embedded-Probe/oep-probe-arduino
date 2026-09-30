@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Firmware/OepProbe: the saved settings are applied again after a reboot. The sketches loaded and applied them before adding the analog and the group, so the interface list they were checked against never matched the one they were saved with: storage "unreadable" after every reboot since 0.0.11 (found after a DFU update, X035 jig). `ProbeConfig::load()` / `applySaved()` belong after the last `endpoint.add()`.
+- (JA) Firmware/OepProbe: 保存した設定が、再起動の後にまた入るようにした。スケッチはアナログと組を足す前に設定を読んで入れていたので、確かめる相手のインターフェースの一覧が、保存したときの一覧と一致しなかった。0.0.11 から、再起動のたびに storage が「unreadable」になっていた（DFU で更新した後に見つかった、X035 の治具）。`ProbeConfig::load()` / `applySaved()` は、最後の `endpoint.add()` の後に呼ぶ。
 - (EN) P4 one-shot without a trigger: when no 64 KiB of internal DMA RAM is left for the segment (the ring a trigger or repeat keeps allocated), the ring is freed and the allocation tried again, then PSRAM. 5 MHz x 4 ch x 130816 samples failed configure after triggered captures (0.0.15, X035 jig).
 - (JA) トリガの無い P4 のワンショット: 区画のための 64 KiB の内部の DMA の RAM が残っていなければ（トリガやリピートが確保したままのリング）、リングを返してもう一度取り、次に PSRAM を使う。トリガ付きのキャプチャの後、5 MHz × 4 ch × 130816 サンプルの configure が失敗していた（0.0.15、X035 の治具）。
 - (EN) The P4 logic trigger is looked for once its pretrigger has filled (as the sampler and the analog do): a trigger 133 us after the start gave 266 samples of a pretrigger of 1000. A capture-group starts its trigger track once every follower holds its pretrigger (the analog had no values yet at a trigger right after the start); force starts it at once.

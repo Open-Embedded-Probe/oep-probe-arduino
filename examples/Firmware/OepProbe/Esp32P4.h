@@ -156,13 +156,15 @@ void setup() {
   config.addUart(uart1);
   config.addUart(uart2);
   config.setPins(&pins);   // the idle item sets these pins' free state
-  config.load();
-  config.applySaved();
   analog.setPins(&pins, 7);   // its pads go analog: claimed against wires and settings
   endpoint.add(analog);   // after config: the fns before it keep their numbers
   endpoint.add(group);
   group.addTrack(capture, capture);
   group.addTrack(analog, analog, 1400000);   // its first value comes a conversion frame after the start
+  // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
+  // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
+  config.load();
+  config.applySaved();
 }
 
 void loop() {

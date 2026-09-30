@@ -55,7 +55,9 @@ class ProbeConfig final : public Interface {
   // The pins whose idle state the idle item sets (without it, idle items are refused).
   void setPins(PinTable *pins) { pins_ = pins; }
 
-  // Before the interfaces are used: read what was saved, then applySaved() once they are all added.
+  // Read what was saved, then apply it: both after the sketch's last endpoint.add(). The saved items are kept for one
+  // interface list (their fns name functions); an interface added later changes the list, and the saved items are
+  // then left unapplied (storage unreadable).
   void load();
   void applySaved();
   void poll();   // from loop(): the slots' automatic attach, retries, the bound consoles
