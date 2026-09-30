@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.20
 - (EN) CH32 riscv-dm: a raw DMI write from the host first puts back what the probe changed during the stop (s0, s1, a0, a1 used by a block op, then DATA0 / DATA1). They were dropped, so halt -> read_block -> a raw write -> resume let the target run with the block address in s0 (mcause 5 on the X035, reported by ch32rv).
 - (JA) CH32 riscv-dm: host の raw DMI 書き込みの前に、停止中に probe が変えたもの（block op が使った s0, s1, a0, a1、次に DATA0 / DATA1）を戻すようにした。捨てていたため、halt → read_block → raw 書き込み → resume で target が s0 に block のアドレスを持ったまま動いた（X035 で mcause 5、ch32rv の報告）。
 - (EN) `Rp2350L103Probe` and `Rp2040ZeroProbe` are gone: the Pro Micro RP2350 bench runs `Firmware/OepProbe` (profile promicrorp2350) with its settings - the L103 found by scan on GP0 / GP1, attached, read and kept as an at-boot slot on 0.0.19.
