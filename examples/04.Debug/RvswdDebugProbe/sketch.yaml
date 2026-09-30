@@ -13,4 +13,12 @@ profiles:
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     libraries:
       - dir: ../../..
+  # esp32s3: built, not checked on a bench (there is no S3 bench)
+  esp32s3:
+    fqbn: esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc
+    platforms:
+      - platform: esp32:esp32 (3.3.12)
+        platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+    libraries:
+      - dir: ../../..
 default_profile: rp2040
