@@ -39,7 +39,7 @@ UART、SPI / I2C のデバイス、ロジックのキャプチャ）を兼ね、
 ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につないでおけば、それだけで試験台になります。
 
 - **target の書き込みとデバッグ**: RVSWD で書き込み、止める・走らせる・1 命令ずつ進める、メモリを読み書きする
-  （`oep.wire.rvswd`、`oep.target.riscv-dm`）。[ArduinoCore-CH32](https://github.com/ch32-riscv-ug/ArduinoCore-CH32) なら、Arduino IDE から
+  （`oep.wire.rvswd`、`oep.target.riscv-dm`）。[ArduinoCore-CH32RV](https://github.com/ch32-riscv-ug/ArduinoCore-CH32RV) なら、Arduino IDE から
   probe 経由で書き込める（`oep://...` のポート）。
 - **コンソールを読む**: debug module 経由（`oep.target.console`、UART 不要）か UART（`oep.fixture.uart`）。
 - **target のコードがピンで何をしているかを確かめる**: P4 が相手側のデバイス（SPI のデバイス、I2C のデバイス）として受けるので、

@@ -37,7 +37,7 @@ arduino-cli upload --profile esp32p4 -p "$(readlink -f /run/board-identify/by-id
 ## 使い方
 
 host は oep-client-python の `oep_client.v1`（README に例）。書き込みの知識（RAM ローダー、ページ）は host 側に
-ある（`ch32_flash`）。実機の一通りの確認は ArduinoCore-CH32 の `tests/manual/oep_smoke/`:
+ある（`ch32_flash`）。実機の一通りの確認は ArduinoCore-CH32RV の `tests/manual/oep_smoke/`:
 
 ```sh
 uv run tests/manual/oep_smoke/oep_smoke.py --target x035 --sketch all

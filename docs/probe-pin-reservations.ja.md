@@ -87,4 +87,4 @@ P4 は「適当に繋いでよい」のが長所で、実際 55 本中 51 本を
 - **プローブ側で予約した pin は `probe.identity` の reserved mask に必ず入れる。** host は fixture channel を
   そこから決めるので、宣言さえすれば誤用は起きない。
 - **DUT 側にも同じ注意がある**（CH32 の SWDIO/SWCLK、USB pad、BOOT pin）。DUT 側の制約は
-  ArduinoCore-CH32 の `docs/upload-and-fixture.ja.md` の errata 節にまとまっている。
+  ArduinoCore-CH32RV の `docs/upload-and-fixture.ja.md` の errata 節にまとまっている。
