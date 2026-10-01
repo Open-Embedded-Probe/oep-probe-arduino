@@ -569,7 +569,8 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
 //   ->  baud(u32: the rate that applies). Only the UART bridge the request came in on (else unavailable cause 6); a
 // baud this UART cannot make is unsupported. try: answered at the old speed, then switched; verify_ms later the probe
 // goes back unless a commit came (on the new speed), and a broken candidate before that sends it back at once. commit:
-// that baud, trying, on that port (else cause 6); then idle_ms (this request's; 0: never) with no good frame, or
+// that baud, trying, on that port (else cause 6); then idle_ms (this request's, at most kPortSpeedIdleMaxMs: 0 and
+// anything longer count as that maximum, so a host that died leaves the port at its boot speed soon) with no good frame, or
 // kSpeedBadMax broken candidates within kSpeedBadWindowMs, revert. revert: answered (the boot speed) at the speed now,
 // then back.
 Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out,
@@ -597,7 +598,7 @@ Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *pa
   } else if (step == reg::core::kPortSpeedStepCommit) {
     if (speed_state_ == kSpeedBase || port != speed_port_ || baud != speed_asked_) return wrongState(out, capacity);
     speed_state_ = kSpeedCommitted;   // a commit sent again (committed already) only sets idle_ms again
-    speed_idle_ms_ = idle;
+    speed_idle_ms_ = (idle == 0 || idle > reg::kPortSpeedIdleMaxMs) ? reg::kPortSpeedIdleMaxMs : idle;
     speed_good_ms_ = millis();
     speed_bad_n_ = 0;
     answer = speed_rate_;
@@ -641,7 +642,7 @@ void Endpoint::speedPoll() {
   if (speed_pending_ == kSpeedRevert) { speed_pending_ = kSpeedNone; speedRevert(); }
   const uint32_t now = millis();
   if (speed_state_ == kSpeedTry && static_cast<int32_t>(now - speed_until_) >= 0) speedRevert();   // no commit in time
-  else if (speed_state_ == kSpeedCommitted && speed_idle_ms_ && now - speed_good_ms_ >= speed_idle_ms_) speedRevert();
+  else if (speed_state_ == kSpeedCommitted && now - speed_good_ms_ >= speed_idle_ms_) speedRevert();
 }
 
 void Endpoint::speedBad() {

@@ -174,7 +174,7 @@ class Endpoint {
   uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
   uint32_t boot_id_ = 0;
   // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed, any
-  // broken candidate reverts) or committed (idle_ms with no good frame, or kSpeedBadMax broken candidates within
+  // broken candidate reverts) or committed (idle_ms, at most kPortSpeedIdleMaxMs, with no good frame, or kSpeedBadMax broken candidates within
   // kSpeedBadWindowMs, revert). A switch or a revert asked by a request happens after its answer is out.
   enum : uint8_t { kSpeedBase, kSpeedTry, kSpeedCommitted };
   enum : uint8_t { kSpeedNone, kSpeedSwitch, kSpeedRevert };

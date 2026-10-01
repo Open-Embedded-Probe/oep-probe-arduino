@@ -733,8 +733,10 @@ static void testPortSpeed() {
   g_millis += 500;
   r = u.send(request(9, 0, 0x14, speedReq(0, 1500000, 1, 0, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000 && u.ep.portSpeedCommitted());
-  g_millis += 5000;   // idle_ms 0: never reverts while the session lives
-  u.send(request(10, 0, 0x12, {}, true, 5));
+  g_millis += 2999;   // idle_ms 0: the maximum (port_speed_idle_max_ms), not never
+  u.ep.poll();
+  CHECK(g_baud == 1500000);
+  u.send(request(10, 0, 0x12, {}, true, 5));   // a good frame restarts the count
   CHECK(g_baud == 1500000);
   // two broken candidates in a second are tolerated, the third reverts
   u.noise();
@@ -811,6 +813,31 @@ static void testPortSpeed() {
   force[8] = 1;
   r = u.sendBulk(request(28, 0, 0x10, force));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200);
+  // taken back by force on the UART for the idle limit's cases
+  force = openPayload(8, 60000);
+  force[8] = 1;
+  r = u.send(request(40, 0, 0x10, force));
+  CHECK(r.size() >= 1 && r[0] == 1);
+  // committed, idle_ms 0: reverts after port_speed_idle_max_ms with no good frame
+  u.send(request(41, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 8));
+  u.send(request(42, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 8));
+  CHECK(u.ep.portSpeedCommitted());
+  g_millis += reg::kPortSpeedIdleMaxMs - 1;
+  u.ep.poll();
+  CHECK(g_baud == 500000);
+  g_millis += 1;
+  u.ep.poll();
+  CHECK(g_baud == 115200);
+  // committed, an idle_ms longer than the maximum is clamped to it (a host that died is not waited for)
+  u.send(request(43, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 8));
+  u.send(request(44, 0, 0x14, speedReq(0, 500000, 1, 0, 600000), true, 8));
+  CHECK(u.ep.portSpeedCommitted());
+  g_millis += reg::kPortSpeedIdleMaxMs - 1;
+  u.ep.poll();
+  CHECK(g_baud == 500000);
+  g_millis += 1;
+  u.ep.poll();
+  CHECK(g_baud == 115200);
 }
 
 int main() {
