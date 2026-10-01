@@ -46,7 +46,7 @@ docs/logic-capture.ja.md §2.7、docs/probe-cdc-and-persistence.ja.md §5.3 / §
 任意のシリアルの口を開くと、その先にあるもの（DTR でリセットするボード、モデム、ほかのツールのデバイス）を乱しうるので、host が
 すべての口について自動で試すことはできず、利用者がその口を明示的に選ぶ必要があります。
 さらに上のリンクには、シリアルの口でない USB のデバイスが要ります（速さのための vendor bulk、ソフトウェア USB とブラウザのための
-HID）。それを認識させるには、専用の VID:PID が要ります。pid.codes から割り当てを受けるまで、参照の firmware は `303a:0002` を使い、
+HID）。それを認識させるには、専用の VID:PID が要ります。独自の PID を取得できるまで、参照の firmware は `303a:0002` を使い、
 host は iProduct が `OEP` で始まることで probe を見分けます（oep-spec docs/usb-identity.ja.md）。
 
 UART の 115200 baud は、どのボードと変換チップでも通る速さです。それより速い速さを probe は前提にできません（921600 を安定して
@@ -60,7 +60,7 @@ UART の 115200 baud は、どのボードと変換チップでも通る速さ�
   [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
 - host のライブラリ: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python)（`pip install oep-client-python`、
   `oep` の命令、試験のための偽の probe）。
-- USB の VID:PID: pid.codes の PID が割り当てられるまで、参照の firmware は `303a:0002` と `OEP` で始まる iProduct を使う。割り当て後に
+- USB の VID:PID: 独自の PID を取得できるまで、参照の firmware は `303a:0002` と `OEP` で始まる iProduct を使う。割り当て後に
   OEP の PID を使ってよい条件は [PID-USE.ja.md](PID-USE.ja.md)。
 
 ## 利用例: ESP32-P4 で CH32L103 を試験する
