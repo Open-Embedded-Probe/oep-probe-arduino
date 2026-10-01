@@ -759,9 +759,13 @@ static void testPortSpeed() {
   r = u.send(request(12, 0, 0x14, speedReq(0, 750000, 1, 0, 0), true, 5));   // too late to commit
   CHECK(r.size() >= 5 && r[4] == 6);
 
-  // a broken candidate while trying: back at once
+  // a broken candidate while trying: the switch-over's own (before any good frame) is ignored; one after a good frame
+  // at the new speed takes it back at once
   r = u.send(request(13, 0, 0x14, speedReq(0, 230400, 0, 5000, 0), true, 5));
   CHECK(r[0] == 1 && g_baud == 230400);
+  u.noise();
+  CHECK(g_baud == 230400);
+  u.send(request(16, 0, 0x01, std::vector<uint8_t>{'O', 'E', 'P', '?', 1, 1}, false, 1));   // a good frame at 230400
   u.noise();
   CHECK(g_baud == 115200);
 

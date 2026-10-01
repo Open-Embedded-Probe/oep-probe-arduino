@@ -184,6 +184,7 @@ class Endpoint {
   uint32_t speed_base_ = 115200;
   uint8_t speed_state_ = kSpeedBase, speed_port_ = 0xff;
   uint32_t speed_asked_ = 0, speed_rate_ = 0, speed_until_ = 0, speed_idle_ms_ = 0, speed_good_ms_ = 0;
+  bool speed_heard_ = false;   // a good frame came at the new speed (until then a broken candidate is the switch-over's)
   uint32_t speed_bad_ms_[kSpeedBadMax] = {};
   uint8_t speed_bad_n_ = 0;
   uint8_t speed_pending_ = kSpeedNone, speed_pending_port_ = 0xff;
