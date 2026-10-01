@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.21
 - (EN) Breaking: a bind's streams carry a length each (oep-spec probe.config §1.2, freeze decision 1, missed until now): `n × (len, kind, id)`. The probe skips a longer one's tail, refuses one under 3 as malformed, and returns len 3. A bind saved by 0.0.20 is refused on load (storage unreadable: set it again).
 - (JA) 破壊的変更: bind のストリームの並びの各要素の前に長さを置く（oep-spec probe.config §1.2。凍結の決定 1 で漏れていた）: `n × (len、kind、id)`。probe は長い要素の後ろを飛ばし、3 未満は malformed で断り、返すときは len 3。0.0.20 で保存した bind は読み込みで断る（storage は unreadable。設定し直す）。
 - (EN) Breaking: every example numbers its interfaces' instance from 0 per name, as core §7.2 says (they started at 1; the P4's second UART is instance 1, its logic capture 0). Saved settings name interfaces by (name, instance, revision), so those saved before load as unreadable (interface): set them again.
