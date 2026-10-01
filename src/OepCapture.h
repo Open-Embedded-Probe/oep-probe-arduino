@@ -10,8 +10,11 @@
 // again. Streaming uses the same segments, sends them as data pushes (role 0x06) and reuses a segment once it is sent;
 // with every segment unsent, new bytes are dropped and the stream position skips them (the host sees the jump).
 //
-//   0x01 configure(TLV)  -> TLV     0x02 start -> blocking_ms u32     0x03 stop     0x05 status     0x06 read
-//   0x07 segments(from u32)   0x08 release(serial u32) (repeat)   0x09 query(TLV) -> TLV, no lock   (0x04 force: no)
+//   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32, generation u32   0x03 stop   0x04 force   0x05 status
+//   0x06 read(generation, position, max u32) -> position flags len(u32) data   0x07 segments(from u32) -> more count ...
+//   0x08 release(generation, serial) (repeat)   0x09 query(TLV) -> TLV, no lock
+// Every start makes a new generation; read and release name it (another one is rejected unavailable cause 6), the
+// segment records and the streaming data frames (TLV 0x01) carry it.
 // Every request takes a TLV tail after its fixed part (core §2.3); configure / query answer unhandled non-critical
 // TLVs in ignored (0x7F) and refuse unhandled critical ones (rejected unsupported, the tag).
 //
@@ -88,9 +91,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool trackStart() override { return groupOp(kOpStart); }
   void trackStop() override { groupOp(kOpStop); }
   uint8_t trackState() const override { return state_; }
+  uint32_t trackGeneration() const override { return generation_; }
 
  private:
   bool group_op_ = false;
+  uint32_t generation_ = 0;   // one up at every start
   bool groupOp(uint8_t op) {
     uint8_t out[8];
     group_op_ = true;
@@ -127,7 +132,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   size_t storeBudget(uint32_t &caps) const;   // bytes the segments may take now (counting the store already held)
   // streaming through the endpoint's zero-copy transport: the harvest copies straight from the DMA ring into stages
   // (internal RAM, one whole push frame each: length prefix, push header, data) and hands full ones to the transport
-  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + kPushHeader + 8;   // length, core push header, position(u64)
+  // length, core push header, position(u64), len(u16); after the data the generation TLV (kPushTail, oep-if-capture §3.4)
+  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + kPushHeader + 8 + 2, kPushTail = 6;
   bool direct_ = false;
   uint8_t *stage_[kStagesMax] = {};
   uint8_t stage_count_ = 0;
@@ -150,7 +156,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr size_t kPretriggerBytes = 64 * 1024;   // history the ring can give back (half of it)
   bool triggered_ = false;           // this one-shot goes through the ring
   uint8_t trig_type_ = 0, trig_role_ = 0;
-  uint16_t trig_value_ = 0;
+  uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
   volatile uint8_t trig_phase_ = 0;  // 0 waiting, 1 filling, 2 done
   volatile bool force_ = false;      // force: the trigger is now
@@ -171,8 +177,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
   void pollTriggered();
   struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_ns; uint8_t flags; };
-  // serial u32, position u64, samples u32, start_ns u64, start_uncertainty_ns u32, trigger_index u32, flags u8
-  static constexpr size_t kInfoBytes = 33;
+  // serial u32, position u64, samples u32, start_ns u64, start_uncertainty_ns u32, trigger_index u32, flags u8, generation u32
+  static constexpr size_t kInfoBytes = 37;
+  size_t storeMax() const;   // the most bytes the segment store can ever take (describe mode: the maximum, not the free)
   uint8_t mode_ = 1;
   uint32_t segment_bytes_ = 0, segment_count_ = 0;
   uint8_t *ring_ = nullptr, *store_ = nullptr;
@@ -190,7 +197,6 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint32_t sent_off_ = 0;
   uint32_t segmentLength(uint32_t serial) const;
   bool findSegment(uint64_t position, uint32_t &serial, uint32_t &offset) const;
-  bool paused_reported_ = false;
   Info infos_[kInfos];
   static bool partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *, void *context);
   static void harvestTask(void *context);

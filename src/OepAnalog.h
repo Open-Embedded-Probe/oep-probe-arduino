@@ -15,8 +15,9 @@
 // A trigger keeps the ADC converting into a ring while it is looked for (ESP32: the segment's buffer, filled by the
 // driver's reads; RP2: a 32 KiB DMA write ring) and takes the segment from pretrigger frames before the crossing.
 //
-//   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32   0x03 stop   0x04 force   0x05 status   0x06 read
-//   0x07 segments   0x09 query(TLV) -> TLV (no lock)   0x0A calibration -> TLV (no lock)   (0x08 release: unknown)
+//   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32, generation u32   0x03 stop   0x04 force   0x05 status
+//   0x06 read(generation, position, max)   0x07 segments   0x08 release (nothing to do in one-shot)   0x09 query (no lock)
+//   0x0A calibration -> TLV (no lock)
 //
 // Channel k is plan role k (0..3); a pin is an ADC input the sketch offers. The pads go to their analog function while
 // it runs, which cuts their digital input and output (the classic ESP32: GPIO32 as logic and analog at once gave 0
@@ -73,9 +74,11 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool trackStart() override { follow_ = false; return startNow(); }
   void trackStop() override { stopNow(); }
   uint8_t trackState() const override { return state_; }
+  uint32_t trackGeneration() const override { return generation_; }
 
  private:
   Endpoint &endpoint_;
+  uint32_t generation_ = 0;   // one up at every start
   uint64_t adc_pins_;
   uint16_t instance_;
   int pins_[kMaxChannels] = {-1, -1, -1, -1};   // by role
@@ -96,7 +99,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   // the trigger (configure) and the search (start .. the crossing): frame f's value of frame slot m is at
   // ring[(f x channels + m) % ring_len_]
   uint8_t trig_type_ = 0, trig_slot_ = 0;
-  uint16_t trig_value_ = 0;
+  uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0, arm_ = 0;
   uint32_t ring_len_ = 0;                                 // values
   uint32_t got_ = 0, searched_ = 0;                       // complete frames so far; frames looked at

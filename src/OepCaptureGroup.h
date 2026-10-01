@@ -6,13 +6,15 @@
 // and says when it started. Every track stamps its own first sample on the probe's one clock (segment start_ns), so a
 // track's offset is its first segment's start_ns minus the group's.
 //
-//   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn]) -> -   0x02 start -> blocking_ms u32, start_ns u64
+//   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn, critical]) -> -
+//   0x02 start -> blocking_ms u32, start_ns u64, [TLV 0x01 generations: n x (fn u16, generation u32)]
 //   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16 (no lock)
+//   events: 0x03 triggered (trigger_fn u16, trigger_ns u64), 0x02 stopped (reason u8, error u8)
 //
 // With trigger_track, that track waits for its own trigger and the others follow: they run into their rings from the
-// start (the trigger track starts once each holds its pretrigger), and when the trigger's time is known (trackTriggerNs) the group hands it to them (trackTriggerAt), and each
-// cuts its segment around the sample nearest to it, with its own pretrigger. A track that cannot follow (no ring)
-// is refused at bind.
+// start (the trigger track starts once each holds its pretrigger), and when the trigger's time is known (trackTriggerNs)
+// the group hands it to them (trackTriggerAt), and each cuts its segment around the sample nearest to it, with its own
+// pretrigger. A track that cannot follow (no ring) is refused at bind.
 #pragma once
 #include <Arduino.h>
 #include "Oep.h"
@@ -22,7 +24,7 @@ namespace oep {
 class Endpoint;
 
 // What a capture interface gives a group: whether it can be bound, and a start / stop that the group drives. While
-// bound, the interface refuses its own configure / start / stop / force (rejected unavailable).
+// bound, the interface refuses its own configure / start / stop / force (rejected unavailable cause 4).
 class GroupTrack {
  public:
   virtual ~GroupTrack() = default;
@@ -33,6 +35,7 @@ class GroupTrack {
   virtual bool trackStart() = 0;              // start now; false: it could not
   virtual void trackStop() = 0;
   virtual uint8_t trackState() const = 0;     // the capture state (oep-if-capture §3.2)
+  virtual uint32_t trackGeneration() const { return 0; }   // the generation the last start made (the start answer's TLV)
   // Following another track's trigger (the group's trigger_track): trackCanFollow at bind (no side effects; false:
   // this track cannot, as configured), trackStartFollowing at start (running into its ring, waiting for
   // trackTriggerAt), trackTriggerAt(ns) with the trigger's time on the probe's clock. The trigger track:
@@ -43,14 +46,22 @@ class GroupTrack {
   virtual bool trackTriggerNs(uint64_t &ns) const { (void)ns; return false; }
   virtual void trackForce() {}
   virtual bool trackArmed() const { return true; }   // following: it holds its pretrigger's worth of samples
-  void setBound(bool on) { bound_ = on; if (!on) following_ = false; }
+  void setBound(bool on, uint16_t group_fn = 0) { bound_ = on; group_fn_ = on ? group_fn : 0; if (!on) following_ = false; }
   bool bound() const { return bound_; }
+  uint16_t groupFn() const { return group_fn_; }   // the fn holding it (rejected unavailable cause 4's holder_fn)
 
  protected:
   bool bound_ = false;
+  uint16_t group_fn_ = 0;
   bool following_ = false;   // bound as a follower: start with trackStartFollowing
   friend class CaptureGroup;
 };
+
+// A bound track's own configure / start / stop / force, and plan changes of its fn: rejected unavailable cause 4 with the
+// group's fn (oep-if-capture §4.1).
+inline Result boundInGroup(const GroupTrack &track, uint8_t *out, size_t capacity) {
+  return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup, 0xFFFF, track.groupFn());
+}
 
 // The sample (of a rate num / den a second) nearest to dns ns after the first one.
 inline uint64_t samplesIn(uint64_t dns, uint32_t num, uint32_t den) {
@@ -75,6 +86,8 @@ class CaptureGroup final : public Interface {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_capture_group::kLockFreeOps, op); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool subscribe(bool on) override { subscribed_ = on; return true; }
+  // The bind is the session's (core §9): a lapse or a takeover unbinds; an end keeps it for the next session.
+  void sessionLapsed() override { unbind(); }
   void poll();   // from loop(): the stopped event once every bound track is done
 
  private:
@@ -96,10 +109,12 @@ class CaptureGroup final : public Interface {
   bool trigger_pending_ = false;   // started, the trigger track not yet: the followers' pretriggers are filling
   bool startTrigger();
   uint64_t trigger_ns_ = ~uint64_t{0};
+  bool forced_ = false;    // the trigger was forced: triggered says trigger_fn 0
   int indexOf(uint16_t fn) const;
   int indexOf(const GroupTrack &track) const;
   uint8_t state() const;
   void unbind();
+  void stopAll(uint8_t reason, uint8_t error);
 };
 
 }  // namespace oep
