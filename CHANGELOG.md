@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixture UART (ESP32): the receive errors the UART driver reports - its FIFO or buffer overflowing, a framing error or break, a parity error - are marked lost (detail 1 / 2 / 3) at the stream's position, as fixture §2 says. A byte lost at 2 Mbaud on the X035 jig's P4 left no mark at all (2026-10-01, seen on 0.0.23 and 0.0.24 alike: not a regression). RP2: the core reports none.
+- (JA) fixture UART（ESP32）: UART のドライバが知らせる受信の誤り（FIFO やバッファのあふれ、framing の誤りと break、parity の誤り）を、ストリームの位置に lost（detail 1 / 2 / 3）のマークとして付ける（fixture §2 のとおり）。X035 のジグの P4 で 2 Mbaud のときに byte が落ちても、マークが何も付かなかった（2026-10-01。0.0.23 でも 0.0.24 でも起き、退行ではない）。RP2 は core が知らせない。
 
 ## 0.0.24
 - (EN) port_speed's try state ignores a broken candidate until a good frame has come at the new speed: the bytes in flight while both ends switch closed as one on every switch on an M5Stack ATOM's FTDI, and reverting on it threw away rates that verified cleanly (dogfooding, 2026-10-01). A rate that never carries a good frame still runs out its verify_ms.
