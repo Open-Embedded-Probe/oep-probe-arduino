@@ -145,6 +145,8 @@ class TargetRiscvDm final : public Interface {
  private:
   static constexpr size_t kMaxRegs = 16;
   size_t max_frame_ = 0;
+  // describe's max_length (oep-if-debug §4.5): bytes of one block op that fit the frame and the word buffer
+  uint16_t maxLength() const { return blockMaxLength(max_frame_, sizeof words_); }
   Result dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   Result dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity);
   uint8_t failure(uint8_t otherwise);   // line when the link does not answer (the connection then closes), else `otherwise`

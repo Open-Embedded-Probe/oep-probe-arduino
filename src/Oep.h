@@ -124,6 +124,22 @@ inline Result unsupportedAt(uint8_t *out, size_t capacity, uint16_t channel, uin
   return {kResolutionRejected, kRejectUnsupported, 8};
 }
 
+// One read_block / write_block's length (core §7.4 max_length; oep-if-debug §4.5, §6): bytes, a multiple of 4. The
+// value a target declares must let both the read_block answer (header 5, done 2, status 1, words) and the write_block
+// request (header 10, connection 2, address 4, count 2, words) fit the endpoint's max_frame - the spec's bound is
+// max_frame - 24 - and fit the target's own word buffer (`buffer_bytes`; 0 = none, the words go straight through).
+// Before the endpoint has told the frame limit (max_frame 0) the buffer alone bounds it.
+inline uint16_t blockMaxLength(size_t max_frame, size_t buffer_bytes) {
+  size_t bytes = max_frame ? (max_frame > 24 ? max_frame - 24 : 0) : 0xFFFC;
+  if (buffer_bytes && bytes > buffer_bytes) bytes = buffer_bytes;
+  if (bytes > 0xFFFC) bytes = 0xFFFC;
+  return static_cast<uint16_t>(bytes / 4 * 4);
+}
+// A block op's count against the declared max_length: count x 4 over it is rejected unsupported with the fixed
+// part's tag (unsupportedValue, payload 0x00); count 0 fits (success, done 0). An address that is not a multiple of 4
+// is malformed, which the caller checks first (core §4.3's order).
+inline bool blockCountFits(uint16_t count, uint16_t max_length) { return 4u * count <= max_length; }
+
 // The firmware string every probe reports (oep.core describe tag 0x40): the library's release version
 // (openembeddedprobe_version.h, written by the release). A build between releases reports the last release.
 constexpr const char *kFirmwareVersion = OPENEMBEDDEDPROBE_VERSION_STR;

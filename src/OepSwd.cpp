@@ -324,7 +324,14 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
 
 // ---- oep.target.arm-adi --------------------------------------------------------------------------
 
-size_t TargetArmAdi::describe(uint8_t *out, size_t capacity) { return describePins(port_, out, capacity); }
+size_t TargetArmAdi::describe(uint8_t *out, size_t capacity) {
+  const size_t n = describePins(port_, out, capacity);
+  if (!n) return 0;
+  // One block op's bytes (oep-if-debug §6): read_block's answer and write_block's request both fit the frame
+  TlvWriter w(out + n, capacity - n);
+  w.u16(kTagMaxLength, maxLength());
+  return w.ok() ? n + w.length() : 0;
+}
 
 uint8_t TargetArmAdi::xfer(bool ap, bool read, uint8_t a23, uint32_t &data) {
   uint8_t ack = swd::kNoReply;
@@ -390,7 +397,9 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       if (refused(parsed)) return parsed;
       uint32_t address = getU32(p);
       const uint16_t count = getU16(p + 4);
-      if (address & 3 || 3 + size_t(count) * 4 > capacity) return rejected(kRejectMalformed);
+      if (address & 3) return rejected(kRejectMalformed);
+      // count x 4 over the declared max_length: unsupported, payload 0x00 (oep-if-debug §6); the answer's room too
+      if (!blockCountFits(count, maxLength()) || 3 + size_t(count) * 4 > capacity) return unsupportedValue(out, capacity);
       if (capacity < 3) return failed();
       size_t o = 3;
       uint16_t left = count;
@@ -427,6 +436,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       const Result parsed = plainTail(tail, p, n, 6u + 4u * count, out, capacity);
       if (refused(parsed)) return parsed;
       if (address & 3) return rejected(kRejectMalformed);
+      if (!blockCountFits(count, maxLength())) return unsupportedValue(out, capacity);   // over max_length (oep-if-debug §6)
       if (capacity < 3) return failed();
       size_t index = 0;
       uint16_t done = 0;

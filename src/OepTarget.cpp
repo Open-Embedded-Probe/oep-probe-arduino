@@ -529,10 +529,9 @@ size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
                           reg::target_riscv_dm::kFeaturesReset | reg::target_riscv_dm::kFeaturesStep);
   // block read / write use a0, a1, s0, s1 and put them back before answering (oep-if-debug §4.5)
   w.u8(kTagImplementation, 1);
-  // One block operation's data in bytes: the word buffer, and what fits a frame - write_block's request (header 6,
-  // session 4, connection 2, address, count = 18) and read_block's result (header 5, done, status = 8).
-  const size_t fits = max_frame_ > 18 ? (max_frame_ - 18) / 4 * 4 : 0;
-  w.u16(kTagMaxLength, static_cast<uint16_t>(fits && fits < sizeof words_ ? fits : sizeof words_));
+  // One block operation's data in bytes (oep-if-debug §4.5): what fits the endpoint's frame - write_block's request
+  // and read_block's answer both, max_frame - 24 - and the word buffer. The host takes count from this, not from max_frame.
+  w.u16(kTagMaxLength, maxLength());
   return w.ok() ? w.length() : 0;
 }
 
@@ -638,12 +637,14 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       if (refused(parsed)) return parsed;
       const uint32_t address = getU32(p);
       const uint16_t count = getU16(p + 4);
-      if ((address & 3) || count > sizeof words_ / 4 || 3u + 4u * count > capacity) return rejected(kRejectMalformed);
+      if (address & 3) return rejected(kRejectMalformed);
+      // count x 4 over the declared max_length: unsupported, payload 0x00 (oep-if-debug §4.5); the answer's room too
+      if (!blockCountFits(count, maxLength()) || 3u + 4u * count > capacity) return unsupportedValue(out, capacity);
       if (capacity < 3) return failed();
       uint8_t status = kStatusState;
       uint16_t done = 0;
       if (count == 0) {
-        status = kStatusOk;   // nothing to read: success, done 0 (oep-if-debug §4)
+        status = kStatusOk;   // nothing to read: success, done 0 (oep-if-debug §4.5)
       } else if (dm.checkHalted() && dm.halted()) {
         uint8_t cmderr = 0;
         if (dm.readWords(address, words_, count, &cmderr)) {
@@ -666,12 +667,13 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       const uint16_t count = getU16(p + 4);
       const Result parsed = plainTail(tail, p, n, 6u + 4u * count, out, capacity);
       if (refused(parsed)) return parsed;
-      if ((address & 3) || count > sizeof words_ / 4) return rejected(kRejectMalformed);
+      if (address & 3) return rejected(kRejectMalformed);
+      if (!blockCountFits(count, maxLength())) return unsupportedValue(out, capacity);   // over max_length (oep-if-debug §4.5)
       if (capacity < 3) return failed();
       uint8_t status = kStatusState;
       uint16_t done = 0;
       if (count == 0) {
-        status = kStatusOk;
+        status = kStatusOk;   // nothing to write: success, done 0
       } else if (dm.checkHalted() && dm.halted()) {
         for (size_t i = 0; i < count; ++i) words_[i] = getU32(p + 6 + 4 * i);
         if (dm.writeWordsFast(address, words_, count)) {
