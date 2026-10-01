@@ -191,6 +191,17 @@ void FixtureUart::clearItem() {
   if (!session_configured_) applySettings();
 }
 
+void FixtureUart::markReceiveErrors() {
+  struct { volatile uint16_t &seen; uint16_t &marked; uint8_t detail; } kinds[] = {
+      {rx_overflows_, marked_overflows_, reg::common::kMarkDetailLostOverflow},
+      {rx_framing_, marked_framing_, reg::common::kMarkDetailLostFraming},
+      {rx_parity_, marked_parity_, reg::common::kMarkDetailLostParity}};
+  for (auto &k : kinds) {
+    const uint16_t now = k.seen;
+    if (now != k.marked) { stream_.mark(reg::common::kMarkKindLost, k.detail); k.marked = now; }
+  }
+}
+
 void FixtureUart::poll() {
   if (!running_) return;
   uint8_t chunk[256];   // in chunks: a byte at a time through the UART driver capped a 2 Mbaud bridge near 88 kB/s (P7)
@@ -199,6 +210,7 @@ void FixtureUart::poll() {
     if (!k) break;
     for (size_t i = 0; i < k; ++i) stream_.put(chunk[i]);
   }
+  markReceiveErrors();
 }
 
 size_t FixtureUart::bindInput(const uint8_t *data, size_t length) {
@@ -223,6 +235,13 @@ bool FixtureUart::begin(uint32_t baud, uint8_t format) {
   const uint8_t parity = (format & ua::kFormatFieldParityMask) >> 2;
   const uint8_t stop_bits = (format & ua::kFormatFieldStopBits2) ? 2 : 1;
   if (!platformUartBegin(serial_, baud, rx_, tx_, platformUartConfig(data_bits, parity, stop_bits))) return false;
+#if defined(ARDUINO_ARCH_ESP32)
+  serial_.onReceiveError([this](hardwareSerial_error_t e) {
+    if (e == UART_FIFO_OVF_ERROR || e == UART_BUFFER_FULL_ERROR) ++rx_overflows_;
+    else if (e == UART_FRAME_ERROR || e == UART_BREAK_ERROR) ++rx_framing_;
+    else if (e == UART_PARITY_ERROR) ++rx_parity_;
+  });
+#endif
   const uint32_t actual = platformUartBaud(serial_, baud);
   const uint64_t diff = actual > baud ? actual - baud : baud - actual;
   if (diff * 100 > static_cast<uint64_t>(baud) * 5) { serial_.end(); idleHigh(); return false; }
