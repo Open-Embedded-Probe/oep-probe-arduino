@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) port_speed: once committed, the probe goes back to the boot speed after at most `port_speed_idle_max_ms` (3000 ms, oep-spec 877cf01, core §3.5 items 5 and 6; registry synced) with no good frame on that port. idle_ms 0 and anything longer count as that maximum (0 used to mean never): a host that raised the speed and died no longer leaves the port at a rate the next host cannot reach, however long the lease. A host keeps the line alive with keepalives (or other requests) more often than every 3 s. Host tests: idle 0 reverts after 3000 ms, a large idle_ms is clamped.
+- (JA) port_speed: 決めた後は、その口に正しいフレームが来ないまま最長 `port_speed_idle_max_ms`（3000 ms、oep-spec 877cf01、core §3.5 の 5 と 6。registry を写し直した）で起動時の速さに戻る。idle_ms の 0 とそれより長い値はその最長として扱う（0 はこれまで戻らないだった）: 速さを上げた host が落ちても、lease が長くても、次の host が届かない速さに口が残らない。host は keepalive（や他の要求）を 3 秒より短い間隔で送って線を保つ。host テスト: idle 0 は 3000 ms で戻る、大きな idle_ms は最長に切り詰める。
 - (EN) Fixture UART (ESP32): the receive errors the UART driver reports - its FIFO or buffer overflowing, a framing error or break, a parity error - are marked lost (detail 1 / 2 / 3) at the stream's position, as fixture §2 says. A byte lost at 2 Mbaud on the X035 jig's P4 left no mark at all (2026-10-01, seen on 0.0.23 and 0.0.24 alike: not a regression). RP2: the core reports none.
 - (JA) fixture UART（ESP32）: UART のドライバが知らせる受信の誤り（FIFO やバッファのあふれ、framing の誤りと break、parity の誤り）を、ストリームの位置に lost（detail 1 / 2 / 3）のマークとして付ける（fixture §2 のとおり）。X035 のジグの P4 で 2 Mbaud のときに byte が落ちても、マークが何も付かなかった（2026-10-01。0.0.23 でも 0.0.24 でも起き、退行ではない）。RP2 は core が知らせない。
 
