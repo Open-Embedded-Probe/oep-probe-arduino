@@ -4,7 +4,7 @@
 // What each serial port carries outside the frames (oep-spec docs/oep-if-probe-config.ja.md §1.2, core §3.4): the
 // binds. A bind is a list of streams (a slot's console, a fixture UART's receive side) and a mode:
 //
-//   last-reset  the stream of the target the host reset last (riscv-dm reset, attach_under_reset); the first at first
+//   last-reset  the stream of the target the host reset last (riscv-dm reset, attach's reset TLV); the first at first
 //   manual      the selected one (changed only by setting the bind again)
 //   mixed       all of them, line by line, each line as "[name] line\n"; the port's raw bytes are dropped
 //

@@ -22,7 +22,7 @@ namespace {
 
 // Where a bind's k-th stream (kind, id) starts, or 0 when the list is cut short or an element's len is under 3
 // (probe.config §1.2: n × (len, kind, id); what follows the 3 bytes is for later fields, skipped).
-size_t bindStreamAt(const uint8_t *v, uint8_t len, uint8_t k) {
+size_t bindStreamAt(const uint8_t *v, size_t len, uint8_t k) {
   size_t at = 4;
   for (uint8_t i = 0;; ++i) {
     if (at >= len || v[at] < 3 || at + 1u + v[at] > len) return 0;
@@ -30,13 +30,15 @@ size_t bindStreamAt(const uint8_t *v, uint8_t len, uint8_t k) {
     at += 1u + v[at];
   }
 }
-// "items3": the interfaces the items name, then the items (2026-09-30: saved by interface identity, the slot's lock_len)
-constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items3";
-constexpr size_t kSlotFixed = 17;   // slot wire_fn swdio swclk attach retry_s max_speed idle_clock mechanism name_len
+// "items4": the interfaces the items name, then the items (2026-10-01: retry_ms / max_speed_hz u32 in the slot, the
+// uart item, the long TLV form - a blob of 0.0.21 ("items3") is not read)
+constexpr const char *kNvsNamespace = "oepcfg", *kNvsItems = "items4";
+constexpr size_t kSlotFixed = 19;   // slot wire_fn swdio swclk attach retry_ms max_speed_hz idle_clock mechanism name_len
 
 // Where the saved blob lives: ESP32 NVS (Preferences), RP2040 / RP2350 the arduino-pico EEPROM (the flash's last
 // sector: magic, length, the blob). The blob: the interfaces the items name, then the items. read: false = nothing.
-constexpr size_t kMaxBlob = ProbeConfig::kMaxSaved + ProbeConfig::kMaxSaved / 2;
+// A write replaces the whole blob (NVS writes a key whole; the EEPROM's commit rewrites its sector).
+constexpr size_t kMaxBlob = ProbeConfig::kMaxItems + ProbeConfig::kMaxIds;
 #if defined(ARDUINO_ARCH_ESP32)
 bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
   Preferences p;
@@ -54,7 +56,7 @@ bool storeWrite(const uint8_t *blob, size_t length) {   // length 0: nothing sav
   return written == length;
 }
 #else
-constexpr uint32_t kEepromMagic = 0x4f455033;   // "OEP3": saved by interface identity (2026-09-30)
+constexpr uint32_t kEepromMagic = 0x4f455034;   // "OEP4"
 constexpr size_t kEepromHeader = 6;             // magic(u32) length(u16)
 bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
   EEPROM.begin(kEepromHeader + kMaxBlob);
@@ -74,6 +76,15 @@ bool storeWrite(const uint8_t *blob, size_t length) {
 }
 #endif
 bool nameChar(char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_'; }
+
+// The next item of a store: false at the end (a store holds only whole items it wrote itself).
+bool nextItem(const uint8_t *store, size_t length, size_t &at, uint8_t &tag, const uint8_t *&value, size_t &vlen) {
+  size_t next = 0;
+  if (!tlvAt(store, length, at, tag, value, vlen, next)) return false;
+  at = next;
+  return true;
+}
+
 }  // namespace
 
 uint32_t crc32Ieee(const uint8_t *data, size_t length) {
@@ -84,6 +95,7 @@ uint32_t crc32Ieee(const uint8_t *data, size_t length) {
   }
   return ~crc;
 }
+uint32_t ProbeConfig::crc32Of(const uint8_t *data, size_t length) { return crc32Ieee(data, length); }
 
 bool ProbeConfig::addPlace(WireRvswd &wire, TargetConsoleStream &console) {
   const uint16_t fn = endpoint_.fnOf(wire);
@@ -99,6 +111,8 @@ bool ProbeConfig::addUart(FixtureUart &uart) {
   return true;
 }
 
+// The mark in front of a mixed line (probe.config §1.2): a slot's name; a fixture UART's RX channel label when the
+// settings give one, else name#instance.
 size_t ProbeConfig::nameOf(void *self, uint8_t kind, uint16_t id, char *out, size_t room) {
   const ProbeConfig &c = *static_cast<ProbeConfig *>(self);
   if (kind == Binds::kSlotConsole && id < kMaxSlots && c.slots_[id].set) {
@@ -106,99 +120,285 @@ size_t ProbeConfig::nameOf(void *self, uint8_t kind, uint16_t id, char *out, siz
     memcpy(out, c.slots_[id].name, n);
     return n;
   }
-  const int n = snprintf(out, room, "uart%u", static_cast<unsigned>(id));   // no label items here (probe.config §1.2)
-  return n < 0 ? 0 : (static_cast<size_t>(n) < room ? static_cast<size_t>(n) : room);
+  if (kind == Binds::kFixtureUart) {
+    RoleAssignment roles[Endpoint::kMaxRoles];
+    const size_t n = c.endpoint_.plan(roles, Endpoint::kMaxRoles);
+    for (size_t i = 0; i < n; ++i) {
+      if (roles[i].function != id || roles[i].role != reg::fixture_uart::kRoleRx) continue;
+      size_t at = 0, vlen = 0;
+      uint8_t tag = 0;
+      const uint8_t *v = nullptr;
+      while (nextItem(c.items_, c.items_length_, at, tag, v, vlen)) {
+        if (tag != cfg::kTlvItemLabel || vlen < 2 || getU16(v) != roles[i].channel) continue;
+        size_t k = 0;
+        for (size_t j = 2; j < vlen && k < room; ++j) {
+          const uint8_t ch = v[j];
+          out[k++] = (ch == ']' || ch < 0x20) ? '_' : static_cast<char>(ch);
+        }
+        return k;
+      }
+    }
+    const Interface *it = c.endpoint_.interfaceAt(id);
+    const int n2 = snprintf(out, room, "%s#%u", it ? it->name() : "?", it ? static_cast<unsigned>(it->instance()) : 0u);
+    return n2 < 0 ? 0 : (static_cast<size_t>(n2) < room ? static_cast<size_t>(n2) : room);
+  }
+  const int n = snprintf(out, room, "?");
+  return n < 0 ? 0 : static_cast<size_t>(n);
+}
+
+// ---- the item store ------------------------------------------------------------------------------------------------
+
+size_t ProbeConfig::keyLength(uint8_t tag) {
+  switch (tag) {
+    case cfg::kTlvItemPlan: return 5;    // fn role channel (an unset's key is the fn alone: 2)
+    case cfg::kTlvItemLabel: return 2;
+    case cfg::kTlvItemIdle: return 2;
+    case cfg::kTlvItemSlot: return 1;
+    case cfg::kTlvItemBind: return 1;
+    case cfg::kTlvItemUart: return 2;
+    default: return 0;
+  }
+}
+
+// The key as a number, for the canonical order (plan: fn, then role, then channel).
+uint64_t ProbeConfig::keyValue(uint8_t tag, const uint8_t *v, size_t length) {
+  switch (tag) {
+    case cfg::kTlvItemPlan:
+      return length >= 5 ? (static_cast<uint64_t>(getU16(v)) << 24) | (static_cast<uint64_t>(v[2]) << 16) | getU16(v + 3) : 0;
+    case cfg::kTlvItemLabel:
+    case cfg::kTlvItemIdle:
+    case cfg::kTlvItemUart:
+      return length >= 2 ? getU16(v) : 0;
+    default:
+      return length >= 1 ? v[0] : 0;
+  }
+}
+
+bool ProbeConfig::itemBefore(uint8_t tag_a, const uint8_t *a, size_t alen, uint8_t tag_b, const uint8_t *b, size_t blen) {
+  if (tag_a != tag_b) return tag_a < tag_b;
+  return keyValue(tag_a, a, alen) < keyValue(tag_b, b, blen);
+}
+
+// Insert one item at its canonical place. false: no room.
+bool ProbeConfig::insertItem(uint8_t *store, size_t &length, size_t capacity, uint8_t tag, const uint8_t *value, size_t vlen) {
+  const size_t size = tlvSize(vlen);
+  if (length + size > capacity) return false;
+  size_t at = 0, insert_at = length;
+  uint8_t t = 0;
+  const uint8_t *v = nullptr;
+  size_t l = 0;
+  while (nextItem(store, length, at, t, v, l)) {
+    if (itemBefore(tag, value, vlen, t, v, l)) { insert_at = static_cast<size_t>(v - store) - (l < 255 ? 2 : 4); break; }
+  }
+  memmove(store + insert_at + size, store + insert_at, length - insert_at);
+  size_t hlen = 0;
+  store[insert_at] = tag;
+  if (vlen < 255) { store[insert_at + 1] = static_cast<uint8_t>(vlen); hlen = 2; }
+  else { store[insert_at + 1] = reg::kTlvLenLong; putU16(store + insert_at + 2, static_cast<uint16_t>(vlen)); hlen = 4; }
+  memcpy(store + insert_at + hlen, value, vlen);
+  length += size;
+  return true;
+}
+
+// Remove every item of `tag` whose key begins with `key` (key_length bytes: a plan's fn alone takes the fn's whole plan).
+void ProbeConfig::removeItems(uint8_t *store, size_t &length, uint8_t tag, const uint8_t *key, size_t key_length) {
+  size_t at = 0;
+  while (at < length) {
+    uint8_t t = 0;
+    const uint8_t *v = nullptr;
+    size_t l = 0, start = at;
+    if (!nextItem(store, length, at, t, v, l)) break;
+    if (t == tag && l >= key_length && memcmp(v, key, key_length) == 0) {
+      memmove(store + start, store + at, length - at);
+      length -= at - start;
+      at = start;
+    }
+  }
 }
 
 // ---- the items -----------------------------------------------------------------------------------------------------
 
-size_t ProbeConfig::canonical(uint8_t *out, size_t capacity) const {
-  TlvWriter w(out, capacity);
-  RoleAssignment roles[Endpoint::kMaxRoles];
-  const size_t n = endpoint_.plan(roles, Endpoint::kMaxRoles, true);   // the settings' plans only
-  for (uint32_t key = 0; key <= 0xffffff; ) {                         // ascending (fn, role)
-    uint32_t next = 0xffffffff;
-    for (size_t i = 0; i < n; ++i) {
-      const uint32_t k = uint32_t(roles[i].function) << 8 | roles[i].role;
-      if (k == key) {
-        uint8_t v[5];
-        putU16(v, roles[i].function);
-        v[2] = roles[i].role;
-        putU16(v + 3, roles[i].channel);
-        w.put(cfg::kTlvItemPlan, v, 5);
-      } else if (k > key && k < next) {
-        next = k;
+// One item on its own (probe.config §1, the table in §2): its shape and the values this probe has.
+Result ProbeConfig::checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t *out, size_t capacity) const {
+  switch (tag) {
+    case cfg::kTlvItemPlan: {
+      if (len < 5) return rejected(kRejectMalformed);
+      const uint16_t fn = getU16(v);
+      if (fn == 0) return rejected(kRejectMalformed);
+      if (!endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
+      return completed();
+    }
+    case cfg::kTlvItemLabel:
+      if (len < 3) return rejected(kRejectMalformed);   // a channel and at least one byte of text
+      return completed();
+    case cfg::kTlvItemIdle: {
+      if (len < 3) return rejected(kRejectMalformed);
+      if (v[2] > PinTable::kIdlePullDown) return rejected(kRejectMalformed);
+      if (!pins_) return unsupportedValue(out, capacity);
+      if (getU16(v) >= PinTable::kChannels || !pins_->allowed(getU16(v))) return unsupportedValue(out, capacity);
+      return completed();
+    }
+    case cfg::kTlvItemSlot: {
+      if (len < kSlotFixed) return rejected(kRejectMalformed);
+      const uint8_t n = v[0], attach = v[7], idle = v[16], mechanism = v[17], name_length = v[18];
+      const uint16_t wire_fn = getU16(v + 1), swdio = getU16(v + 3), swclk = getU16(v + 5);
+      const uint32_t retry_ms = getU32(v + 8), max_hz = getU32(v + 12);
+      if (len < kSlotFixed + name_length + 1u) return rejected(kRejectMalformed);   // up to lock_len
+      if (n >= kMaxSlots || !place_count_) return rejected(kRejectMalformed);   // slots_max
+      if (attach > cfg::kSlotAttachAtBoot || (retry_ms && attach != cfg::kSlotAttachAtBoot)) return rejected(kRejectMalformed);
+      if (idle > reg::wire_rvswd::kIdleClockLow) return rejected(kRejectMalformed);
+      if (name_length < 1 || name_length > kMaxName) return rejected(kRejectMalformed);
+      for (uint8_t k = 0; k < name_length; ++k) if (!nameChar(static_cast<char>(v[kSlotFixed + k]))) return rejected(kRejectMalformed);
+      const uint8_t lock_len = v[kSlotFixed + name_length];
+      const uint8_t *lock = v + kSlotFixed + name_length + 1;
+      if (len < kSlotFixed + name_length + 1u + lock_len) return rejected(kRejectMalformed);
+      if (lock_len && (lock_len < 3 || lock_len % 2 == 0 || lock[0] == 0)) return rejected(kRejectMalformed);
+      if (lock_len && lock[0] != reg::wire_rvswd::kTargetIdSchemeWchDmi7f && lock[0] != reg::wire_swd::kTargetIdSchemeTargetsel)
+        return rejected(kRejectMalformed);   // not a scheme of the table
+      if (lock_len && (lock_len - 1) / 2 != reg::wire_rvswd::kTargetIdLenWchDmi7f) return rejected(kRejectMalformed);   // n = the scheme's length (4)
+      if (lock_len && lock[0] != reg::wire_rvswd::kTargetIdSchemeWchDmi7f) return unsupportedValue(out, capacity);   // a scheme these wires do not read
+      if (!endpoint_.interfaceAt(wire_fn)) return rejected(kRejectUnknownFunction);
+      int place = -1;
+      for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) place = static_cast<int>(k);
+      if (place < 0) return unsupportedValue(out, capacity);                                  // a wire without a target id scheme (swd), or not a wire
+      if (!pairAllowed(*places_[place].port, swdio, swclk)) return unsupportedValue(out, capacity);   // not a pair that wire allows
+      DmiPhy &phy = places_[place].port->dm.phy();
+      if (idle && !phy.canIdleClockLow()) return unsupportedValue(out, capacity);   // idle_clock low: rvswd's only
+      if (!phy.keepsMaxHz(max_hz) || (max_hz && phy.minClockHz() && max_hz < phy.minClockHz())) return unsupportedValue(out, capacity);
+      if (mechanism != reg::target_console::kMechanismNone && mechanism > reg::target_console::kMechanismDmseq)
+        return unsupportedValue(out, capacity);
+      return completed();
+    }
+    case cfg::kTlvItemBind: {
+      if (len < 4 || v[3] < 1) return rejected(kRejectMalformed);
+      if (v[3] > Binds::kMaxStreams) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+      for (uint8_t k = 0; k < v[3]; ++k) {
+        const size_t at = bindStreamAt(v, len, k);
+        if (!at) return rejected(kRejectMalformed);
+        if (v[at] != Binds::kSlotConsole && v[at] != Binds::kFixtureUart) return rejected(kRejectMalformed);
+        if (v[at] == Binds::kFixtureUart) {
+          const uint16_t fn = getU16(v + at + 1);
+          if (!endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
+          bool is_uart = false;
+          for (size_t i = 0; i < uart_count_; ++i) is_uart |= uarts_[i].fn == fn;
+          if (!is_uart) return unsupportedValue(out, capacity);
+        }
       }
+      if (v[1] > Binds::kMixed) return unsupportedValue(out, capacity);
+      if (v[1] == Binds::kManual && v[2] >= v[3]) return rejected(kRejectMalformed);
+      if (v[0] >= Binds::kMaxPorts || !endpoint_.isSerialPort(v[0])) return unsupportedValue(out, capacity);
+      return completed();
     }
-    if (next == 0xffffffff) break;
-    key = next;
-  }
-  for (uint32_t c = 0; c <= 0xffff; ) {   // labels, ascending channel
-    uint32_t next = 0x10000;
-    for (const Label &l : labels_) {
-      if (!l.set) continue;
-      if (l.channel == c) {
-        uint8_t v[2 + kMaxLabel];
-        putU16(v, l.channel);
-        memcpy(v + 2, l.text, l.length);
-        w.put(cfg::kTlvItemLabel, v, 2u + l.length);
-      } else if (l.channel > c && l.channel < next) {
-        next = l.channel;
-      }
+    case cfg::kTlvItemUart: {
+      if (len < 7) return rejected(kRejectMalformed);
+      if (!FixtureUart::formatDefined(v[6])) return rejected(kRejectMalformed);
+      const uint16_t fn = getU16(v);
+      if (!endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
+      bool is_uart = false;
+      for (size_t i = 0; i < uart_count_; ++i) is_uart |= uarts_[i].fn == fn;
+      if (!is_uart || !FixtureUart::baudWithinReach(getU32(v + 2))) return unsupportedValue(out, capacity);
+      return completed();
     }
-    if (next == 0x10000) break;
-    c = next;
+    default:
+      return unsupportedValue(out, capacity);   // an item this probe does not take (describe items)
   }
-  for (uint16_t c = 0; c < PinTable::kChannels; ++c) {
-    if (idle_[c] == PinTable::kIdleUnset) continue;
-    uint8_t v[3];
-    putU16(v, c);
-    v[2] = idle_[c];
-    w.put(cfg::kTlvItemIdle, v, 3);
-  }
-  for (uint8_t i = 0; i < kMaxSlots; ++i) {   // ascending slot
-    const Slot &s = slots_[i];
-    if (!s.set) continue;
-    const Place &p = places_[s.place];
-    uint8_t v[kSlotFixed + kMaxName + 2 + 2 * kMaxLock];
-    v[0] = i;
-    putU16(v + 1, p.wire_fn);
-    putU16(v + 3, s.swdio);
-    putU16(v + 5, s.swclk);
-    v[7] = s.attach;
-    putU16(v + 8, s.retry_s);
-    putU32(v + 10, s.max_hz);
-    v[14] = s.idle_low ? reg::wire_rvswd::kIdleClockLow : reg::wire_rvswd::kIdleClockHigh;
-    v[15] = s.mechanism;
-    v[16] = s.name_length;
-    memcpy(v + kSlotFixed, s.name, s.name_length);
-    size_t at = kSlotFixed + s.name_length;
-    v[at++] = s.lock_scheme ? static_cast<uint8_t>(1 + 2 * s.lock_length) : 0;   // lock_len (probe.config §1.1)
-    if (s.lock_scheme) {
-      v[at++] = s.lock_scheme;
-      memcpy(v + at, s.mask, s.lock_length);
-      memcpy(v + at + s.lock_length, s.value, s.lock_length);
-      at += 2u * s.lock_length;
-    }
-    w.put(cfg::kTlvItemSlot, v, at);
-  }
-  for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {   // ascending port
-    const Binds::Spec &b = binds_.spec(port);
-    if (!b.set) continue;
-    uint8_t v[4 + 4 * Binds::kMaxStreams] = {port, b.mode, b.mode == Binds::kManual ? b.selected : uint8_t{0}, b.count};
-    for (uint8_t i = 0; i < b.count; ++i) {   // len, kind, id
-      v[4 + 4 * i] = 3;
-      v[5 + 4 * i] = b.sources[i].kind;
-      putU16(v + 6 + 4 * i, b.sources[i].id);
-    }
-    w.put(cfg::kTlvItemBind, v, 4u + 4u * b.count);
-  }
-  return w.ok() ? w.length() : 0;
 }
 
-uint32_t ProbeConfig::hash() const {
-  uint8_t buf[kMaxSaved];
-  return crc32Ieee(buf, canonical(buf, sizeof buf));
+// Everything the items say, and the rules between them (probe.config §1: no two slots on one wire and pair, names
+// unique, at most max_connections at-boot slots a wire, binds naming slots that exist and have a console).
+Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint8_t *out, size_t capacity) const {
+  d.role_count = 0;
+  memset(d.idle, PinTable::kIdleUnset, sizeof d.idle);
+  for (Slot &s : d.slots) s = Slot{};
+  for (Binds::Spec &b : d.binds) b = Binds::Spec{};
+  for (UartItem &u : d.uarts) u = UartItem{};
+  for (Label &l : d.labels) l = Label{};
+  size_t at = 0, vlen = 0;
+  uint8_t tag = 0;
+  const uint8_t *v = nullptr;
+  size_t labels = 0;
+  while (nextItem(items, length, at, tag, v, vlen)) {
+    switch (tag) {
+      case cfg::kTlvItemPlan:
+        if (d.role_count >= Endpoint::kMaxRoles) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+        d.roles[d.role_count++] = {getU16(v), v[2], getU16(v + 3)};
+        break;
+      case cfg::kTlvItemLabel:
+        if (labels < kMaxLabels) d.labels[labels++] = {true, getU16(v)};
+        break;
+      case cfg::kTlvItemIdle:
+        d.idle[getU16(v)] = v[2];
+        break;
+      case cfg::kTlvItemSlot: {
+        Slot &s = d.slots[v[0]];
+        const uint16_t wire_fn = getU16(v + 1);
+        for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) s.place = static_cast<uint8_t>(k);
+        s.set = true;
+        s.swdio = getU16(v + 3);
+        s.swclk = getU16(v + 5);
+        s.attach = v[7];
+        s.retry_ms = getU32(v + 8);
+        s.max_hz = getU32(v + 12);
+        s.idle_low = v[16] != 0;
+        s.mechanism = v[17];
+        s.name_length = v[18];
+        memcpy(s.name, v + kSlotFixed, s.name_length);
+        s.name[s.name_length] = 0;
+        const uint8_t lock_len = v[kSlotFixed + s.name_length];
+        const uint8_t *lock = v + kSlotFixed + s.name_length + 1;
+        s.lock_scheme = lock_len ? lock[0] : 0;
+        s.lock_length = static_cast<uint8_t>(lock_len ? (lock_len - 1) / 2 : 0);
+        memcpy(s.mask, lock + 1, s.lock_length);
+        memcpy(s.value, lock + 1 + s.lock_length, s.lock_length);
+        break;
+      }
+      case cfg::kTlvItemBind: {
+        Binds::Spec &b = d.binds[v[0]];
+        b.set = true;
+        b.mode = v[1];
+        b.selected = v[1] == Binds::kManual ? v[2] : 0;
+        b.count = v[3];
+        for (uint8_t k = 0; k < b.count; ++k) {
+          const size_t s = bindStreamAt(v, vlen, k);
+          b.sources[k].kind = v[s];
+          b.sources[k].id = getU16(v + s + 1);
+        }
+        break;
+      }
+      case cfg::kTlvItemUart:
+        for (size_t i = 0; i < uart_count_; ++i)
+          if (uarts_[i].fn == getU16(v)) d.uarts[i] = {true, getU32(v + 2), v[6]};
+        break;
+      default:
+        break;
+    }
+  }
+  // the whole: no two slots on one place with the same pair, names unique, at most one at-boot slot a wire
+  // (max_connections 1), every bind's streams there (a slot with a console)
+  for (size_t a = 0; a < kMaxSlots; ++a) {
+    if (!d.slots[a].set) continue;
+    uint8_t at_boot = 0;
+    for (size_t b = 0; b < kMaxSlots; ++b) {
+      if (!d.slots[b].set) continue;
+      if (b != a && strcmp(d.slots[a].name, d.slots[b].name) == 0) return rejected(kRejectMalformed);
+      if (d.slots[b].place != d.slots[a].place) continue;
+      if (b > a && d.slots[b].swdio == d.slots[a].swdio && d.slots[b].swclk == d.slots[a].swclk) return rejected(kRejectMalformed);
+      at_boot += d.slots[b].attach == cfg::kSlotAttachAtBoot;
+    }
+    if (at_boot > 1) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+  }
+  for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {
+    Binds::Spec &b = d.binds[port];
+    for (uint8_t k = 0; b.set && k < b.count; ++k) {
+      if (b.sources[k].kind == Binds::kSlotConsole) {
+        const uint16_t id = b.sources[k].id;
+        if (id >= kMaxSlots || !d.slots[id].set || d.slots[id].mechanism == reg::target_console::kMechanismNone)
+          return rejected(kRejectMalformed);   // a slot that is not there, or has no console: the settings disagree
+      }
+      if (!sourceFor(d.slots, b.sources[k].kind, b.sources[k].id, b.sources[k])) return rejected(kRejectMalformed);
+    }
+  }
+  return completed();
 }
 
 bool ProbeConfig::sourceFor(const Slot *slots, uint8_t kind, uint16_t id, Binds::Source &out) const {
@@ -215,198 +415,148 @@ bool ProbeConfig::sourceFor(const Slot *slots, uint8_t kind, uint16_t id, Binds:
   return false;
 }
 
-// Checks every item first, then changes: plans (the endpoint's, the fns named, all or nothing), idle states, slots
-// and binds. A refusal leaves everything as it was. Keys a set does not carry keep their items (probe.config §2).
-Result ProbeConfig::apply(const uint8_t *items, size_t length) {
-  RoleAssignment roles[Endpoint::kMaxRoles];
-  size_t role_count = 0;
-  uint16_t plan_fns[16];
-  size_t plan_fn_count = 0;
-  Slot slots[kMaxSlots];
-  for (size_t i = 0; i < kMaxSlots; ++i) slots[i] = slots_[i];
-  bool slot_touched[kMaxSlots] = {};
-  struct BindItem { bool touched = false; bool set = false; uint8_t mode = 0, selected = 0, count = 0;
-                    uint8_t kinds[Binds::kMaxStreams] = {}; uint16_t ids[Binds::kMaxStreams] = {}; };
-  BindItem binds[Binds::kMaxPorts];
-  uint8_t idle[PinTable::kChannels];
-  memcpy(idle, idle_, sizeof idle);
-  uint64_t idle_touched = 0;
-  bool has_idle = false;
-  Label labels[kMaxLabels];
-  for (size_t i = 0; i < kMaxLabels; ++i) labels[i] = labels_[i];
-  bool labels_touched = false;
-  for (size_t at = 0; at < length;) {
-    if (length - at < 2 || length - at - 2 < items[at + 1]) return rejected(kRejectMalformed);
-    const uint8_t tag = items[at] & 0x7f, len = items[at + 1];   // kept and hashed without the critical bit (§2)
-    const uint8_t *v = items + at + 2;
-    at += 2u + len;
-    if (tag == cfg::kTlvItemPlan) {
-      if (len != 2 && len != 5) return rejected(kRejectMalformed);
-      const uint16_t fn = getU16(v);
-      bool listed = false;
-      for (size_t k = 0; k < plan_fn_count; ++k) listed |= plan_fns[k] == fn;
-      if (!listed) {
-        if (plan_fn_count >= 16) return rejected(kRejectMalformed);
-        plan_fns[plan_fn_count++] = fn;
-      }
-      if (len == 2) continue;   // fn alone: that fn's plan goes
-      for (size_t r = 0; r < role_count; ++r)
-        if (roles[r].function == fn && roles[r].role == v[2]) return rejected(kRejectMalformed);   // a key twice
-      if (role_count >= Endpoint::kMaxRoles) return rejected(kRejectUnavailable);   // over plan_roles (core §8)
-      roles[role_count++] = {fn, v[2], getU16(v + 3)};
-    } else if (tag == cfg::kTlvItemLabel) {   // channel(u16) text; the channel alone: its label goes
-      if (len < 2 || len > 2 + kMaxLabel) return rejected(kRejectMalformed);
-      const uint16_t c = getU16(v);
-      int slot = -1;
-      for (size_t k = 0; k < kMaxLabels; ++k)
-        if (labels[k].set && labels[k].channel == c) slot = static_cast<int>(k);
-      if (len == 2) { if (slot >= 0) labels[slot] = Label{}; labels_touched = true; continue; }
-      if (slot < 0) for (size_t k = 0; k < kMaxLabels && slot < 0; ++k) if (!labels[k].set) slot = static_cast<int>(k);
-      if (slot < 0) return rejected(kRejectUnavailable);   // no room for another
-      labels[slot].set = true;
-      labels[slot].channel = c;
-      labels[slot].length = static_cast<uint8_t>(len - 2);
-      memcpy(labels[slot].text, v + 2, len - 2);
-      labels_touched = true;
-    } else if (tag == cfg::kTlvItemIdle) {
-      if (!pins_) return rejected(kRejectUnsupported);
-      if (len != 2 && len != 3) return rejected(kRejectMalformed);
-      const uint16_t c = getU16(v);
-      if (c >= PinTable::kChannels || !pins_->allowed(c) || ((idle_touched >> c) & 1)) return rejected(kRejectMalformed);
-      if (len == 3 && v[2] > PinTable::kIdlePullDown) return rejected(kRejectMalformed);
-      idle_touched |= uint64_t{1} << c;
-      idle[c] = len == 3 ? v[2] : PinTable::kIdleUnset;
-      has_idle = true;
-    } else if (tag == cfg::kTlvItemSlot) {
-      if (len < 1) return rejected(kRejectMalformed);
-      const uint8_t n = v[0];
-      if (n >= kMaxSlots || slot_touched[n]) return rejected(kRejectMalformed);   // slots_max
-      slot_touched[n] = true;
-      Slot &s = slots[n];
-      s = Slot{};
-      if (len == 1) continue;   // slot alone: it goes
-      if (len < kSlotFixed + 1 || len < kSlotFixed + v[16] + 1u) return rejected(kRejectMalformed);   // up to lock_len
-      const uint16_t wire_fn = getU16(v + 1), swdio = getU16(v + 3), swclk = getU16(v + 5);
-      const uint8_t attach = v[7], idle = v[14], mechanism = v[15], name_length = v[16];
-      const uint16_t retry_s = getU16(v + 8);
-      const uint32_t max_hz = getU32(v + 10);
-      if (attach > cfg::kSlotAttachAtBoot || (retry_s && attach != cfg::kSlotAttachAtBoot)) return rejected(kRejectMalformed);
-      if (idle > reg::wire_rvswd::kIdleClockLow) return rejected(kRejectMalformed);
-      if (name_length < 1 || name_length > kMaxName) return rejected(kRejectMalformed);
-      for (uint8_t k = 0; k < name_length; ++k) if (!nameChar(static_cast<char>(v[kSlotFixed + k]))) return rejected(kRejectMalformed);
-      int place = -1;   // the place of this wire, with a pair it allows (fixed, or any the host may choose)
-      for (size_t k = 0; k < place_count_; ++k)
-        if (places_[k].wire_fn == wire_fn && pairAllowed(*places_[k].port, swdio, swclk)) place = static_cast<int>(k);
-      if (place < 0) return rejected(kRejectUnavailable);
-      DmiPhy &phy = places_[place].port->dm.phy();
-      if (idle && !phy.canIdleClockLow()) return rejected(kRejectMalformed);   // idle_clock low: rvswd's only
-      if (!phy.keepsMaxHz(max_hz)) return rejected(kRejectUnsupported);       // a ceiling this line cannot keep
-      if (mechanism > reg::target_console::kMechanismDmseq) return rejected(kRejectUnsupported);
-      // lock_len(u8) then scheme mask value (lock_len 0: none); what follows the lock is for later fields: skipped
-      const uint8_t lock_len = v[kSlotFixed + name_length];
-      const uint8_t *lock = v + kSlotFixed + name_length + 1;
-      if (len < kSlotFixed + name_length + 1u + lock_len) return rejected(kRejectMalformed);
-      if (lock_len && (lock_len < 3 || lock_len % 2 == 0 || lock[0] == 0 || (lock_len - 1) / 2 > kMaxLock))
-        return rejected(kRejectMalformed);
-      s.set = true;
-      s.place = static_cast<uint8_t>(place);
-      s.swdio = swdio;
-      s.swclk = swclk;
-      s.attach = attach;
-      s.retry_s = retry_s;
-      s.max_hz = max_hz;
-      s.idle_low = idle != 0;
-      s.mechanism = mechanism;
-      s.name_length = name_length;
-      memcpy(s.name, v + kSlotFixed, name_length);
-      s.name[name_length] = 0;
-      s.lock_scheme = lock_len ? lock[0] : 0;
-      s.lock_length = static_cast<uint8_t>(lock_len ? (lock_len - 1) / 2 : 0);
-      memcpy(s.mask, lock + 1, s.lock_length);
-      memcpy(s.value, lock + 1 + s.lock_length, s.lock_length);
-    } else if (tag == cfg::kTlvItemBind) {
-      if (len < 1 || v[0] >= Binds::kMaxPorts || binds[v[0]].touched) return rejected(kRejectMalformed);
-      BindItem &b = binds[v[0]];
-      b.touched = true;
-      if (len == 1) continue;   // port alone: that bind goes
-      if (!endpoint_.isSerialPort(v[0])) return rejected(kRejectUnavailable);
-      // what follows the streams, and each stream's own tail, is for later fields (core §2.3): skipped
-      if (len < 4 || v[3] < 1 || v[3] > Binds::kMaxStreams) return rejected(kRejectMalformed);
-      for (uint8_t k = 0; k < v[3]; ++k)
-        if (!bindStreamAt(v, len, k)) return rejected(kRejectMalformed);
-      if (v[1] > Binds::kMixed) return rejected(kRejectUnsupported);
-      if (v[1] == Binds::kManual && v[2] >= v[3]) return rejected(kRejectMalformed);
-      b.set = true;
-      b.mode = v[1];
-      b.selected = v[1] == Binds::kManual ? v[2] : 0;
-      b.count = v[3];
-      for (uint8_t k = 0; k < b.count; ++k) {
-        const size_t at = bindStreamAt(v, len, k);
-        b.kinds[k] = v[at];
-        b.ids[k] = getU16(v + at + 1);
-        if (b.kinds[k] != Binds::kSlotConsole && b.kinds[k] != Binds::kFixtureUart) return rejected(kRejectMalformed);
-      }
-    } else {
-      return rejected(kRejectUnsupported);   // an item this probe does not know
-    }
-  }
-  // the whole: one slot per place, at most one at-boot slot per wire (max_connections 1), every bind's streams there
-  // the whole: no two slots on one place with the same pair, at most one at-boot slot per wire (max_connections 1),
-  // every bind's streams there
-  for (size_t a = 0; a < kMaxSlots; ++a) {
-    if (!slots[a].set) continue;
-    uint8_t at_boot = 0;
-    for (size_t b = 0; b < kMaxSlots; ++b) {
-      if (!slots[b].set || slots[b].place != slots[a].place) continue;
-      if (b > a && slots[b].swdio == slots[a].swdio && slots[b].swclk == slots[a].swclk) return rejected(kRejectUnavailable);
-      at_boot += slots[b].attach == cfg::kSlotAttachAtBoot;
-    }
-    if (at_boot > 1) return rejected(kRejectUnavailable);
-  }
-  Binds::Spec specs[Binds::kMaxPorts];
-  for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {
-    specs[port] = binds_.spec(port);
-    const BindItem &b = binds[port];
-    if (b.touched) {
-      specs[port] = Binds::Spec{};
-      if (b.set) {
-        specs[port].set = true;
-        specs[port].mode = b.mode;
-        specs[port].selected = b.selected;
-        specs[port].count = b.count;
-      }
-    }
-    Binds::Spec &sp = specs[port];
-    for (uint8_t k = 0; sp.set && k < sp.count; ++k) {
-      const uint8_t kind = b.touched ? b.kinds[k] : sp.sources[k].kind;
-      const uint16_t id = b.touched ? b.ids[k] : sp.sources[k].id;
-      if (!sourceFor(slots, kind, id, sp.sources[k])) return rejected(kRejectUnavailable);   // a slot gone, a fn not a UART
-    }
-  }
-  RoleAssignment before[Endpoint::kMaxRoles];
-  const size_t had = endpoint_.plan(before, Endpoint::kMaxRoles, true);
-  (void)had;
-  if (plan_fn_count) {
-    const uint8_t reason = endpoint_.replacePlan(roles, role_count, plan_fns, plan_fn_count);
+// A candidate store checked as a whole, its plans put in through the endpoint (all or nothing; a refusal changes
+// nothing), then made current: idle states, slots (a replaced or removed one lets go of its connection and console,
+// probe.config §1.1), binds, the UARTs' items.
+Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *plan_fns, size_t plan_fn_count, uint8_t *out,
+                           size_t capacity) {
+  static Derived d;   // large: not on the stack
+  const Result whole = derive(candidate, length, d, out, capacity);
+  if (refused(whole)) return whole;
+  if (plan_fn_count) {   // the plans of the fns touched, as the candidate has them
+    RoleAssignment roles[Endpoint::kMaxRoles];
+    size_t n = 0;
+    for (size_t r = 0; r < d.role_count; ++r)
+      for (size_t k = 0; k < plan_fn_count; ++k)
+        if (d.roles[r].function == plan_fns[k]) roles[n++] = d.roles[r];
+    const uint8_t reason = endpoint_.replacePlan(roles, n, plan_fns, plan_fn_count);
+    if (reason == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
     if (reason) return rejected(reason);
   }
   // accepted: make it current
-  if (labels_touched) memcpy(labels_, labels, sizeof labels_);
-  if (has_idle) {
-    memcpy(idle_, idle, sizeof idle_);
-    for (uint16_t c = 0; c < PinTable::kChannels; ++c) if ((idle_touched >> c) & 1) pins_->setIdle(c, idle_[c]);
+  memcpy(items_, candidate, length);
+  items_length_ = length;
+  if (pins_) {
+    for (uint16_t c = 0; c < PinTable::kChannels; ++c)
+      if (d.idle[c] != idle_[c]) { idle_[c] = d.idle[c]; pins_->setIdle(c, idle_[c]); }
   }
-  for (size_t i = 0; i < kMaxSlots; ++i) {
-    if (!slot_touched[i]) continue;
-    slots_[i] = slots[i];
+  for (uint8_t i = 0; i < kMaxSlots; ++i) {
+    const Slot &was = slots_[i], &now = d.slots[i];
+    const bool changed = was.set != now.set || (now.set && memcmp(&was, &now, sizeof(Slot)) != 0);
+    if (!changed) continue;
+    if (was.set) dropSlot(i, reg::common::kMarkDetailClosedSlotChanged);   // replaced or removed: its shares go
+    slots_[i] = now;
     runs_[i] = SlotRun{};
-    runs_[i].due = slots[i].set && slots[i].attach == cfg::kSlotAttachAtBoot;   // an at-boot slot set: attach now
+    runs_[i].due = now.set && now.attach == cfg::kSlotAttachAtBoot;   // an at-boot slot set: attach now
   }
   for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {
-    if (binds[port].touched) binds_.set(port, specs[port]);
+    const Binds::Spec &was = binds_.spec(port), &now = d.binds[port];
+    bool same = was.set == now.set && was.mode == now.mode && was.selected == now.selected && was.count == now.count;
+    for (uint8_t k = 0; same && k < now.count; ++k)
+      same = was.sources[k].kind == now.sources[k].kind && was.sources[k].id == now.sources[k].id;
+    if (!same) binds_.set(port, now);
+  }
+  for (size_t i = 0; i < uart_count_; ++i) {
+    if (d.uarts[i].set) uarts_[i].uart->setItem(d.uarts[i].baud, d.uarts[i].format);
+    else uarts_[i].uart->clearItem();
   }
   poll();
   return completed();
+}
+
+// set: the items given replace the keys they carry (a fn's plan items replace that fn's whole plan); the rest stay.
+Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  static uint8_t candidate[kMaxItems];
+  memcpy(candidate, items_, items_length_);
+  size_t clen = items_length_;
+  uint16_t plan_fns[16];
+  size_t plan_fn_count = 0;
+  // first pass: every item's shape and what this probe has; the same key twice is malformed
+  size_t at = 0, vlen = 0;
+  uint8_t tag = 0;
+  const uint8_t *v = nullptr;
+  while (at < length) {
+    size_t next = 0;
+    if (!tlvAt(payload, length, at, tag, v, vlen, next)) return rejected(kRejectMalformed);
+    tag &= ~kTagCritical;
+    if (tag == kTagValue || tag == kTagIgnored || tag == kTagInvalid) return rejected(kRejectMalformed);
+    const Result r = checkItem(tag, v, vlen, out, capacity);
+    if (refused(r)) return r;
+    const size_t klen = keyLength(tag);
+    size_t at2 = 0, vlen2 = 0;
+    uint8_t tag2 = 0;
+    const uint8_t *v2 = nullptr;
+    while (at2 < at) {   // the items before this one: the same key twice?
+      size_t next2 = 0;
+      tlvAt(payload, length, at2, tag2, v2, vlen2, next2);
+      at2 = next2;
+      if ((tag2 & ~kTagCritical) == tag && memcmp(v, v2, klen) == 0) return rejected(kRejectMalformed);
+    }
+    if (tag == cfg::kTlvItemPlan) {
+      bool listed = false;
+      for (size_t k = 0; k < plan_fn_count; ++k) listed |= plan_fns[k] == getU16(v);
+      if (!listed) {
+        if (plan_fn_count >= 16) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+        plan_fns[plan_fn_count++] = getU16(v);
+      }
+    }
+    at = next;
+  }
+  // second pass: the keys replaced come out (a plan's fn: its whole plan), the items go in
+  for (size_t k = 0; k < plan_fn_count; ++k) {
+    uint8_t fn[2];
+    putU16(fn, plan_fns[k]);
+    removeItems(candidate, clen, cfg::kTlvItemPlan, fn, 2);
+  }
+  at = 0;
+  while (nextItem(payload, length, at, tag, v, vlen)) {
+    tag &= ~kTagCritical;
+    if (tag != cfg::kTlvItemPlan) removeItems(candidate, clen, tag, v, keyLength(tag));
+    if (!insertItem(candidate, clen, sizeof candidate, tag, v, vlen)) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+  }
+  return commit(candidate, clen, plan_fns, plan_fn_count, out, capacity);
+}
+
+// unset: n(u8), n x (len(u8), tag(u8), key). A key that is not there does nothing; the rest is as set.
+Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (length < 1) return rejected(kRejectMalformed);
+  const uint8_t n = payload[0];
+  size_t at = 1;
+  for (uint8_t i = 0; i < n; ++i) {   // the shape first
+    if (at >= length || at + 1u + payload[at] > length || payload[at] < 1) return rejected(kRejectMalformed);
+    const uint8_t tag = payload[at + 1] & ~kTagCritical;
+    const size_t klen = tag == cfg::kTlvItemPlan ? 2 : keyLength(tag);
+    if (!klen) return unsupportedValue(out, capacity);   // not an item this probe takes
+    if (payload[at] < 1u + klen) return rejected(kRejectMalformed);
+    at += 1u + payload[at];
+  }
+  Tail tail;
+  const Result parsed = tail.parse(payload + at, length - at, out, capacity);
+  if (refused(parsed)) return parsed;
+  static uint8_t candidate[kMaxItems];
+  memcpy(candidate, items_, items_length_);
+  size_t clen = items_length_;
+  uint16_t plan_fns[16];
+  size_t plan_fn_count = 0;
+  at = 1;
+  for (uint8_t i = 0; i < n; ++i) {
+    const uint8_t tag = payload[at + 1] & ~kTagCritical;
+    const uint8_t *key = payload + at + 2;
+    if (tag == cfg::kTlvItemPlan) {
+      bool listed = false;
+      for (size_t k = 0; k < plan_fn_count; ++k) listed |= plan_fns[k] == getU16(key);
+      if (!listed && plan_fn_count < 16) plan_fns[plan_fn_count++] = getU16(key);
+      removeItems(candidate, clen, tag, key, 2);
+    } else {
+      removeItems(candidate, clen, tag, key, keyLength(tag));
+    }
+    at += 1u + payload[at];
+  }
+  const Result r = commit(candidate, clen, plan_fns, plan_fn_count, out, capacity);
+  if (refused(r)) return r;
+  if (capacity < 4) return failed();
+  putU32(out, hash());
+  return tail.finish(completed(4), out, capacity);
 }
 
 // ---- the slots -----------------------------------------------------------------------------------------------------
@@ -430,9 +580,21 @@ int ProbeConfig::lockMatches(const Slot &s, bool has_tid, uint32_t tid) const {
   return 1;
 }
 
+// The slot's share of its connection and of the console its bind opened goes (probe.config §1.1: replaced or removed,
+// detail 3; no longer in any bind, detail 1). Nothing else of the target is touched (oep-if-debug §2).
+void ProbeConfig::dropSlot(uint8_t i, uint8_t detail) {
+  const Slot &s = slots_[i];
+  if (!s.set) return;
+  const Place &p = places_[s.place];
+  if (!p.port->connected || !onPair(s)) return;
+  p.console->bindClose(detail);
+  releaseConnection(*p.port, DebugPort::kUserSlot, false);
+}
+
 // One slot (probe.config §3): a bound slot rides any connection on its place when the lock matches, with its console
-// open; an at-boot slot attaches by itself (without stopping the hart) at boot, when set, and every retry_s while the
-// target is not there. Nothing else uses the connection for the slot.
+// open; an at-boot slot attaches by itself (without stopping the hart) at boot, when set, and every retry_ms while the
+// target is not there, and - connected - reads DMSTATUS every retry_ms to see that it still answers (§3.1: the line lost
+// closes the connection and the retries start).
 void ProbeConfig::runSlot(uint8_t i) {
   const Slot &s = slots_[i];
   SlotRun &r = runs_[i];
@@ -440,11 +602,12 @@ void ProbeConfig::runSlot(uint8_t i) {
   DebugPort &port = *p.port;
   const bool at_boot = s.attach == cfg::kSlotAttachAtBoot;
   if (!port.connected && at_boot) {
-    const bool retry = s.retry_s && r.tried && static_cast<uint32_t>(millis() - r.last_try_ms) >= 1000u * s.retry_s;
+    const bool retry = s.retry_ms && r.tried && static_cast<uint32_t>(millis() - r.last_try_ms) >= s.retry_ms;
     if (r.due || retry) {
       r.due = false;
       r.tried = true;
       r.last_try_ms = millis();
+      r.last_try_ns = nowNs();
       uint32_t status = 0;
       // the link to the slot's pair first (host-chosen pins; a fixed pair is always there), unless its pins are held
       if (usePair(port, s.swdio, s.swclk) && attachRunning(port, DebugPort::kUserSlot, status, s.max_hz, s.idle_low)) {
@@ -453,14 +616,21 @@ void ProbeConfig::runSlot(uint8_t i) {
         r.mismatch_tid = port.tid;
         if (r.mismatch) releaseConnection(port, DebugPort::kUserSlot, false);   // found, not the chip: let go of it
       }
+      r.last_check_ms = millis();
     }
   }
   if (!port.connected || !onPair(s)) return;   // no link, or the link is on another pair (another slot, the host)
+  if (at_boot && s.retry_ms && static_cast<uint32_t>(millis() - r.last_check_ms) >= s.retry_ms) {   // liveness
+    r.last_check_ms = millis();
+    if (!checkConnection(port)) { r.last_try_ms = millis(); return; }   // gone: the retries begin after retry_ms
+  }
   if (lockMatches(s, port.has_tid, port.tid) == 1 && (at_boot || bound(i))) {
     port.users |= DebugPort::kUserSlot;
     r.mismatch = false;
-    if (bound(i) && !p.console->isOpen()) p.console->bindOpen(s.mechanism);
+    if (bound(i) && s.mechanism != reg::target_console::kMechanismNone && !p.console->isOpen()) p.console->bindOpen(s.mechanism);
+    if (!bound(i) && (p.console->users() & TargetConsoleStream::kUserSlot)) p.console->bindClose();
   } else if (port.users & DebugPort::kUserSlot) {
+    p.console->bindClose();
     releaseConnection(port, DebugPort::kUserSlot, false);
   }
 }
@@ -470,14 +640,17 @@ void ProbeConfig::poll() {
     DebugPort &port = *places_[k].port;
     port.slot = 0xff;
     for (uint8_t i = 0; i < kMaxSlots; ++i) if (slots_[i].set && slots_[i].place == k && onPair(slots_[i])) port.slot = i;
-    if (port.slot == 0xff && (port.users & DebugPort::kUserSlot)) releaseConnection(port, DebugPort::kUserSlot, false);
+    if (port.slot == 0xff && (port.users & DebugPort::kUserSlot)) {
+      places_[k].console->bindClose();
+      releaseConnection(port, DebugPort::kUserSlot, false);
+    }
   }
   for (uint8_t i = 0; i < kMaxSlots; ++i) if (slots_[i].set) runSlot(i);
 }
 
 // ---- storage -------------------------------------------------------------------------------------------------------
 
-// The interfaces `items` name (plan fns, slot wire_fns, the fixture UARTs binds carry), each once:
+// The interfaces `items` name (plan fns, slot wire_fns, the fixture UARTs binds carry and uart items set), each once:
 // count(u8), then fn(u16) instance(u16) revision(u8) name_len(u8) name. 0: no room.
 size_t ProbeConfig::identities(const uint8_t *items, size_t length, uint8_t *out, size_t capacity) const {
   uint16_t fns[16];
@@ -486,14 +659,15 @@ size_t ProbeConfig::identities(const uint8_t *items, size_t length, uint8_t *out
     for (size_t k = 0; k < n; ++k) if (fns[k] == fn) return;
     if (n < 16) fns[n++] = fn;
   };
-  for (size_t at = 0; at + 2 <= length && at + 2u + items[at + 1] <= length; at += 2u + items[at + 1]) {
-    const uint8_t tag = items[at], len = items[at + 1];
-    const uint8_t *v = items + at + 2;
-    if (tag == cfg::kTlvItemPlan && len >= 2) note(getU16(v));
-    if (tag == cfg::kTlvItemSlot && len >= 3) note(getU16(v + 1));
-    if (tag == cfg::kTlvItemBind && len >= 4)
+  size_t at = 0, vlen = 0;
+  uint8_t tag = 0;
+  const uint8_t *v = nullptr;
+  while (nextItem(items, length, at, tag, v, vlen)) {
+    if ((tag == cfg::kTlvItemPlan || tag == cfg::kTlvItemUart) && vlen >= 2) note(getU16(v));
+    if (tag == cfg::kTlvItemSlot && vlen >= 3) note(getU16(v + 1));
+    if (tag == cfg::kTlvItemBind && vlen >= 4)
       for (uint8_t k = 0; k < v[3]; ++k)
-        if (const size_t s = bindStreamAt(v, len, k))
+        if (const size_t s = bindStreamAt(v, vlen, k))
           if (v[s] == Binds::kFixtureUart) note(getU16(v + s + 1));
   }
   if (capacity < 1) return 0;
@@ -515,15 +689,23 @@ size_t ProbeConfig::identities(const uint8_t *items, size_t length, uint8_t *out
 }
 
 void ProbeConfig::load() {
-  endpoint_.setProbeExtra(&ProbeConfig::labelsTlv, this);   // the label items in oep.core's describe
   uint8_t blob[kMaxBlob];
   size_t length = 0;
   saved_length_ = ids_length_ = 0;
+  saved_hash_ = 0;
   if (!storeRead(blob, sizeof blob, length)) return;
-  // the identities, then the items
+  // the identities, then the items (whole TLVs: anything else is another form)
   size_t at = 1;
   for (uint8_t k = 0; blob[0] && k < blob[0] && at + 6 <= length; ++k) at += 6u + blob[at + 5];
-  if (at > length || at > sizeof ids_ || length - at > sizeof saved_) {
+  bool whole = at <= length && at <= sizeof ids_ && length - at <= sizeof saved_;
+  for (size_t p = at; whole && p < length;) {
+    uint8_t tag = 0;
+    const uint8_t *v = nullptr;
+    size_t vlen = 0, next = 0;
+    whole = tlvAt(blob, length, p, tag, v, vlen, next);
+    p = next;
+  }
+  if (!whole) {
     storage_state_ = cfg::kStorageStateUnreadable;
     unreadable_ = cfg::kStorageUnreadableForm;
     return;
@@ -532,7 +714,6 @@ void ProbeConfig::load() {
   ids_length_ = at;
   memcpy(saved_, blob + at, length - at);
   saved_length_ = length - at;
-  saved_hash_ = crc32Ieee(saved_, saved_length_);
   storage_state_ = cfg::kStorageStateApplied;   // until applySaved says otherwise
 }
 
@@ -562,155 +743,204 @@ void ProbeConfig::applySaved() {
     to[n++] = now;
   }
   auto map = [&](uint16_t fn) { for (size_t k = 0; k < n; ++k) if (from[k] == fn) return to[k]; return fn; };
-  uint8_t items[kMaxSaved];
+  static uint8_t items[kMaxItems];
   memcpy(items, saved_, saved_length_);
-  for (size_t at = 0; at + 2 <= saved_length_; at += 2u + items[at + 1]) {   // renumber in place
-    const uint8_t tag = items[at], len = items[at + 1];
-    uint8_t *v = items + at + 2;
-    if (tag == cfg::kTlvItemPlan && len >= 2) putU16(v, map(getU16(v)));
-    if (tag == cfg::kTlvItemSlot && len >= 3) putU16(v + 1, map(getU16(v + 1)));
-    if (tag == cfg::kTlvItemBind && len >= 4)
+  size_t at = 0, vlen = 0;
+  uint8_t tag = 0;
+  const uint8_t *cv = nullptr;
+  while (nextItem(items, saved_length_, at, tag, cv, vlen)) {   // renumber in place
+    uint8_t *v = items + (cv - items);
+    if ((tag == cfg::kTlvItemPlan || tag == cfg::kTlvItemUart) && vlen >= 2) putU16(v, map(getU16(v)));
+    if (tag == cfg::kTlvItemSlot && vlen >= 3) putU16(v + 1, map(getU16(v + 1)));
+    if (tag == cfg::kTlvItemBind && vlen >= 4)
       for (uint8_t k = 0; k < v[3]; ++k)
-        if (const size_t s = bindStreamAt(v, len, k))
+        if (const size_t s = bindStreamAt(v, vlen, k))
           if (v[s] == Binds::kFixtureUart) putU16(v + s + 1, map(getU16(v + s + 1)));
   }
-  const Result r = apply(items, saved_length_);
+  // the renumbered items may be out of the canonical order (fns moved): sorted into a fresh store, then set as a whole
+  uint8_t scratch[64];
+  static uint8_t candidate[kMaxItems];
+  size_t clen = 0;
+  uint16_t plan_fns[16];
+  size_t plan_fn_count = 0;
+  at = 0;
+  while (nextItem(items, saved_length_, at, tag, cv, vlen)) {
+    const Result r = checkItem(tag, cv, vlen, scratch, sizeof scratch);
+    if (refused(r) || !insertItem(candidate, clen, sizeof candidate, tag, cv, vlen)) {
+      storage_state_ = cfg::kStorageStateUnreadable;
+      unreadable_ = r.resolution == kResolutionRejected && r.detail == kRejectUnknownFunction ? cfg::kStorageUnreadableInterface
+                                                                                              : cfg::kStorageUnreadableRefused;
+      return;
+    }
+    if (tag == cfg::kTlvItemPlan) {
+      bool listed = false;
+      for (size_t k = 0; k < plan_fn_count; ++k) listed |= plan_fns[k] == getU16(cv);
+      if (!listed && plan_fn_count < 16) plan_fns[plan_fn_count++] = getU16(cv);
+    }
+  }
+  const Result r = commit(candidate, clen, plan_fns, plan_fn_count, scratch, sizeof scratch);
   if (r.resolution != kResolutionCompleted || r.detail != kOutcomeSuccess) {
     storage_state_ = cfg::kStorageStateUnreadable;
     unreadable_ = cfg::kStorageUnreadableRefused;
+    return;
   }
-}
-
-size_t ProbeConfig::labelsTlv(void *self, uint8_t *out, size_t capacity) {   // core describe label (0x46)
-  const ProbeConfig &c = *static_cast<ProbeConfig *>(self);
-  TlvWriter w(out, capacity);
-  for (const Label &l : c.labels_) {
-    if (!l.set) continue;
-    uint8_t v[2 + kMaxLabel];
-    putU16(v, l.channel);
-    memcpy(v + 2, l.text, l.length);
-    w.put(reg::core::kTlvDescribeLabel, v, 2u + l.length);
-  }
-  return w.ok() ? w.length() : 0;
+  saved_hash_ = hash();   // the saved items as they read in this boot (probe.config §3.3)
 }
 
 // ---- describe and the operations -------------------------------------------------------------------------------------
 
-size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {
+size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {   // declarations only (core §7.3); the state is op 0x06
   TlvWriter w(out, capacity);
-  uint8_t st[14];
-  putU32(st, kMaxSaved);
-  st[4] = storage_state_;
-  putU32(st + 5, saved_length_ ? saved_hash_ : 0);
-  putU32(st + 9, save_ms_ > 200 ? save_ms_ : 200);
-  st[13] = storage_state_ == cfg::kStorageStateUnreadable ? unreadable_ : 0;   // why (probe.config §4)
-  w.put(cfg::kTlvDescribeStorage, st, sizeof st);
+  w.u32(cfg::kTlvDescribeStorage, kMaxItems);
   static const uint8_t kItems[] = {cfg::kTlvItemPlan, cfg::kTlvItemLabel, cfg::kTlvItemSlot, cfg::kTlvItemBind,
-                                   cfg::kTlvItemIdle};
+                                   cfg::kTlvItemUart, cfg::kTlvItemIdle};
   w.put(cfg::kTlvDescribeItems, kItems, pins_ ? sizeof kItems : sizeof kItems - 1);
   w.u8(cfg::kTlvDescribeSlotsMax, place_count_ ? static_cast<uint8_t>(kMaxSlots) : 0);
-  w.u8(cfg::kTlvDescribeBindModes, 0b111);   // last-reset, manual, mixed
-  for (uint8_t i = 0; i < kMaxSlots; ++i) {   // slot_state (probe.config §3.2), lock-free
-    const Slot &s = slots_[i];
-    if (!s.set) continue;
-    const SlotRun &r = runs_[i];
-    const DebugPort &port = *places_[s.place].port;
-    uint8_t v[14] = {i};
-    bool has_tid = false;
-    uint32_t tid = 0;
-    if (port.connected && onPair(s)) {
-      has_tid = port.has_tid;
-      tid = port.tid;
-      const int m = lockMatches(s, has_tid, tid);
-      v[1] = m == 1 ? cfg::kSlotStateConnected : (m < 0 ? cfg::kSlotStateNoTargetId : cfg::kSlotStateLockMismatch);
-      putU16(v + 2, port.number);
-    } else {
-      has_tid = r.mismatch && r.mismatch_has_tid;
-      tid = r.mismatch_tid;
-      v[1] = r.mismatch ? (r.mismatch_has_tid ? cfg::kSlotStateLockMismatch : cfg::kSlotStateNoTargetId)
-                        : cfg::kSlotStateAbsent;
-      putU16(v + 2, 0);
-    }
-    putU32(v + 4, r.tried ? static_cast<uint32_t>(millis() - r.last_try_ms) : 0xffffffffu);
-    v[8] = has_tid ? reg::wire_rvswd::kTargetIdSchemeWchDmi7f : 0;
-    v[9] = has_tid ? 4 : 0;
-    putU32(v + 10, tid);
-    w.put(cfg::kTlvDescribeSlotState, v, has_tid ? 14 : 10);
+  w.u32(cfg::kTlvDescribeBindModes, (1u << cfg::kBindModeLastReset) | (1u << cfg::kBindModeManual) | (1u << cfg::kBindModeMixed));
+  return w.ok() ? w.length() : 0;
+}
+
+// slot_state (probe.config §3.3): slot(u8) state(u8) connection(u16) last_try_at_ns(u64) tid_scheme(u8) tid_len(u8) tid
+size_t ProbeConfig::slotState(uint8_t i, uint8_t *out) const {
+  const Slot &s = slots_[i];
+  const SlotRun &r = runs_[i];
+  const DebugPort &port = *places_[s.place].port;
+  out[0] = i;
+  bool has_tid = false;
+  uint32_t tid = 0;
+  if (port.connected && onPair(s)) {
+    has_tid = port.has_tid;
+    tid = port.tid;
+    const int m = lockMatches(s, has_tid, tid);
+    out[1] = m == 1 ? cfg::kSlotStateConnected : (m < 0 ? cfg::kSlotStateNoTargetId : cfg::kSlotStateLockMismatch);
+    putU16(out + 2, port.number);
+  } else {
+    has_tid = r.mismatch && r.mismatch_has_tid;
+    tid = r.mismatch_tid;
+    out[1] = r.mismatch ? (r.mismatch_has_tid ? cfg::kSlotStateLockMismatch : cfg::kSlotStateNoTargetId) : cfg::kSlotStateAbsent;
+    putU16(out + 2, 0);
   }
-  for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {   // bind_state
+  putU64(out + 4, r.tried ? r.last_try_ns : kNeverNs);
+  out[12] = has_tid ? reg::wire_rvswd::kTargetIdSchemeWchDmi7f : 0;
+  out[13] = has_tid ? reg::wire_rvswd::kTargetIdLenWchDmi7f : 0;
+  if (has_tid) putU32(out + 14, tid);
+  return has_tid ? 18 : 14;
+}
+
+// state(first_slot u8, first_bind u8) -> more(u8) storage_state(u8) storage_hash(u32) unreadable_reason(u8)
+//   n_slots(u8) n_slots x (len, slot_state) n_binds(u8) n_binds x (len, bind_state) [TLV]
+Result ProbeConfig::state(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  Tail tail;
+  const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+  if (refused(parsed)) return parsed;
+  if (capacity < 9) return failed();
+  const size_t room = tail.anyIgnored() && capacity > 9 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
+  out[1] = storage_state_;
+  putU32(out + 2, storage_state_ == cfg::kStorageStateApplied ? saved_hash_ : 0);
+  out[6] = storage_state_ == cfg::kStorageStateUnreadable ? unreadable_ : 0;
+  bool more = false;
+  size_t used = 8;
+  uint8_t n = 0, index = 0;
+  for (uint8_t i = 0; i < kMaxSlots; ++i) {
+    if (!slots_[i].set) continue;
+    if (index++ < payload[0]) continue;
+    if (used + 1 + 18 + 1 > room) { more = true; break; }
+    out[used] = static_cast<uint8_t>(slotState(i, out + used + 1));
+    used += 1u + out[used];
+    ++n;
+  }
+  out[7] = n;
+  const size_t binds_at = used++;
+  n = index = 0;
+  for (uint8_t port = 0; port < Binds::kMaxPorts && !more; ++port) {
     const Binds::Spec &b = binds_.spec(port);
     if (!b.set) continue;
-    const uint8_t flow = endpoint_.held(port) ? cfg::kBindFlowHeld
-                         : binds_.streaming(port) ? cfg::kBindFlowStreaming : cfg::kBindFlowIdle;
-    const uint8_t v[4] = {port, b.mode, b.mode == Binds::kMixed ? uint8_t{0xff} : binds_.selected(port), flow};
-    w.put(cfg::kTlvDescribeBindState, v, sizeof v);
+    if (index++ < payload[1]) continue;
+    if (used + 5 > room) { more = true; break; }
+    const uint8_t flow = endpoint_.held(port) ? cfg::kBindFlowHeld : binds_.streaming(port) ? cfg::kBindFlowStreaming : cfg::kBindFlowIdle;
+    out[used] = 4;
+    out[used + 1] = port;
+    out[used + 2] = b.mode;
+    out[used + 3] = b.mode == Binds::kMixed ? uint8_t{0xff} : binds_.selected(port);
+    out[used + 4] = flow;
+    used += 5;
+    ++n;
   }
-  return w.ok() ? w.length() : 0;
+  out[binds_at] = n;
+  out[0] = more ? 1 : 0;
+  return tail.finish(completed(used), out, capacity);
 }
 
 Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   switch (op) {
-    case cfg::kOpGet: {   // first(u16) -> more(u8) hash(u32) items from the first-th on
-      if (length != 2) return rejected(kRejectMalformed);
-      uint8_t items[kMaxSaved];
-      const size_t n = canonical(items, sizeof items);
+    case cfg::kOpGet: {   // first(u16) [TLV] -> more(u8) hash(u32) items from the first-th on (the canonical order)
+      Tail tail;
+      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+      if (refused(parsed)) return parsed;
       if (capacity < 5) return failed();
+      const size_t room = tail.anyIgnored() && capacity > 5 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
       size_t at = 0, index = 0, put = 5;
       const uint16_t first = getU16(payload);
       bool more = false;
-      while (at < n) {
-        const size_t item = 2u + items[at + 1];
+      while (at < items_length_) {
+        uint8_t tag = 0;
+        const uint8_t *v = nullptr;
+        size_t vlen = 0, next = 0;
+        if (!tlvAt(items_, items_length_, at, tag, v, vlen, next)) break;
+        const size_t item = next - at;
         if (index++ >= first) {
-          if (put + item > capacity) { more = true; break; }
-          memcpy(out + put, items + at, item);
+          if (put + item > room) { more = true; break; }
+          memcpy(out + put, items_ + at, item);
           put += item;
         }
-        at += item;
+        at = next;
       }
       out[0] = more ? 1 : 0;
-      putU32(out + 1, crc32Ieee(items, n));
-      return completed(put);
+      putU32(out + 1, hash());
+      return tail.finish(completed(put), out, capacity);
     }
     case cfg::kOpSet: {
-      const Result r = apply(payload, length);
+      const Result r = set(payload, length, out, capacity);
       if (r.resolution != kResolutionCompleted || r.detail != kOutcomeSuccess || capacity < 4) return r;
       putU32(out, hash());
       return completed(4);
     }
+    case cfg::kOpUnset: return unset(payload, length, out, capacity);
+    case cfg::kOpState: return state(payload, length, out, capacity);
     case cfg::kOpSave: {
-      if (length) return rejected(kRejectMalformed);
-      uint8_t items[kMaxSaved];
-      const size_t n = canonical(items, sizeof items);
-      const uint32_t h = crc32Ieee(items, n);
+      Tail tail;
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      const uint32_t h = hash();
       uint8_t blob[kMaxBlob];
-      const size_t ids = identities(items, n, blob, sizeof ids_);
-      if (!ids) return rejected(kRejectUnavailable);
-      if (!(saved_length_ == n && saved_hash_ == h && ids_length_ == ids && memcmp(ids_, blob, ids) == 0)) {
-        memcpy(blob + ids, items, n);   // the same is not written again
-        const uint32_t t0 = millis();
-        const bool written = storeWrite(blob, n ? ids + n : 0);
-        save_ms_ = millis() - t0;
-        if (!written) return failed();
-        memcpy(saved_, items, n);
-        saved_length_ = n;
-        saved_hash_ = h;
+      const size_t ids = identities(items_, items_length_, blob, sizeof ids_);
+      if (!ids) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+      if (!(saved_length_ == items_length_ && memcmp(saved_, items_, items_length_) == 0 && ids_length_ == ids &&
+            memcmp(ids_, blob, ids) == 0)) {
+        memcpy(blob + ids, items_, items_length_);   // the same is not written again; the whole blob is replaced
+        if (!storeWrite(blob, items_length_ ? ids + items_length_ : 0)) return failed();
+        memcpy(saved_, items_, items_length_);
+        saved_length_ = items_length_;
         memcpy(ids_, blob, ids);
         ids_length_ = ids;
         unreadable_ = 0;
-        storage_state_ = n ? cfg::kStorageStateApplied : cfg::kStorageStateNone;
+        storage_state_ = items_length_ ? cfg::kStorageStateApplied : cfg::kStorageStateNone;
       }
+      saved_hash_ = items_length_ ? h : 0;
       if (capacity < 4) return failed();
       putU32(out, h);
-      return completed(4);
+      return tail.finish(completed(4), out, capacity);
     }
     case cfg::kOpErase: {
-      if (length) return rejected(kRejectMalformed);
+      Tail tail;
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
       if (!storeWrite(nullptr, 0)) return failed();
       saved_length_ = ids_length_ = 0;
       unreadable_ = 0;
       saved_hash_ = 0;
       storage_state_ = cfg::kStorageStateNone;
-      return completed();
+      return tail.finish(completed(), out, capacity);
     }
     default:
       return rejected(kRejectUnknownOperation);
