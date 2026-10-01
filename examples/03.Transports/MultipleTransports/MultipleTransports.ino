@@ -82,7 +82,7 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setFlushAfterBurst(true);
-  endpoint.setOepPid(true);   // describe: this probe is on the OEP discovery list (the iProduct, until the PID)
+  endpoint.setDiscoverable(true);   // describe discoverable: this probe is on the OEP discovery list (the iProduct starts "OEP")
 
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(oep::platformRandom32());

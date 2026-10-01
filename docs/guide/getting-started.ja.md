@@ -97,8 +97,9 @@ hst.end()
 ```
 
 target が線に求めるもの（休ませ方、速さ）は host が言います。CH32L103 には attach で `idle_clock="low"` と
-`max_speed=1_000_000` を渡します。NRST のピンで target を reset するときは、その channel を名指します
-（`wire.attach_under_reset(channel)`）。既定の reset 線はありません。
+`max_speed=1_000_000` を渡します（max_speed は必須）。NRST のピンで target を reset するときは、attach の reset TLV で
+その channel を名指します（`wire.attach(halt=True, reset=(channel, hold_ms))`: 最初の命令の前で止める。`halt=False` なら
+走ったまま）。既定の reset 線はありません。
 
 書き込み、コンソールなどは host の道具の仕事です。ch32rv と ArduinoCore-CH32RV の書き込みが OEP で行います。
 

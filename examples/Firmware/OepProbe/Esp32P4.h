@@ -19,6 +19,9 @@
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
 // a slot's console, a fixture UART). The HS device is VID:PID 303a:0002 until the OEP PID is granted (PID-USE.md),
 // iProduct "OEP probe (ESP32-P4)", serial = the unit id (the MAC, lowercase hex; one usbipd bind lasts across reflashes).
+// How a host tells the ports apart (core §3.3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
+// ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
+// and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
 //
 // Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.fixture.gpio /
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
@@ -51,12 +54,41 @@
 static constexpr uint16_t kUsbVid = 0x303a, kUsbPid = 0x0002;   // until the OEP PID (pid.codes) is granted
 static constexpr uint16_t kUnset = 0xfffe;                        // no pair chosen yet
 
+// The vendor bulk function with OEP's subclass / protocol in its interface descriptor (core §3.3).
+class OepVendor final : public EspUsbDeviceVendor {
+ public:
+  using EspUsbDeviceVendor::EspUsbDeviceVendor;
+  uint16_t configurationDescriptor(uint8_t *dst, uint8_t interfaceNumber, uint8_t endpointNumber, uint16_t endpointSize) override {
+    const uint16_t n = EspUsbDeviceVendor::configurationDescriptor(dst, interfaceNumber, endpointNumber, endpointSize);
+    if (n >= 9) { dst[6] = oep::reg::kUsbVendorBulkSubclass; dst[7] = oep::reg::kUsbVendorBulkProtocol; }   // bInterfaceSubClass, bInterfaceProtocol
+    return n;
+  }
+};
+// The vendor HID with OEP's usage page / usage at the top of its report descriptor (core §3.3).
+class OepHid final : public EspUsbDeviceHidVendor {
+ public:
+  using EspUsbDeviceHidVendor::EspUsbDeviceHidVendor;
+  const uint8_t *hidReportDescriptor() const override {
+    const uint8_t *base = EspUsbDeviceHidVendor::hidReportDescriptor();
+    const uint16_t n = EspUsbDeviceHidVendor::hidReportDescriptorLength();
+    if (!base || n < 5 || n > sizeof patched_) return base;
+    memcpy(patched_, base, n);
+    patched_[1] = oep::reg::kUsbHidUsagePage & 0xff;   // 0x06 page(u16): the library's 0xFF00 becomes 0xFF4F
+    patched_[2] = oep::reg::kUsbHidUsagePage >> 8;
+    patched_[4] = oep::reg::kUsbHidUsage;              // 0x09 usage: 0x45
+    return patched_;
+  }
+
+ private:
+  mutable uint8_t patched_[64];
+};
+
 // The HS device: functions are created before it starts, interface numbers follow the class order (HID 0, vendor 1,
 // CDC 2-3, DFU 4).
 static EspUsbDevice usbDevice;
-static EspUsbDeviceVendor vendor(usbDevice);
+static OepVendor vendor(usbDevice);
 static oep::DirectBulkStream bulk(vendor);
-static EspUsbDeviceHidVendor hid(usbDevice, 511);
+static OepHid hid(usbDevice, 511);
 static HidStream hidStream(hid);
 static EspUsbDeviceCdcSerial cdc(usbDevice, "OEP");   // a name to show; every CDC of the probe speaks OEP
 static CdcStream cdcStream(cdc);
@@ -132,11 +164,11 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
-  endpoint.setOepPid(true);   // describe oep_pid: listed by discovery (until the PID: by the iProduct starting "OEP")
+  endpoint.setDiscoverable(true);   // describe discoverable: the iProduct starts "OEP", the vendor bulk carries 0x4F / 0x45
 
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;
-  rvswd.reset_allowed = kChannels;   // attach_under_reset: the channel the host names (no default), nobody holding it
+  rvswd.reset_allowed = kChannels;   // attach's reset TLV: the channel the host names (no default), nobody holding it
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(esp_random());
   endpoint.add(wire);

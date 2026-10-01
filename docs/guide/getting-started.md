@@ -97,8 +97,9 @@ hst.end()
 ```
 
 What a target needs of its line is the host's to say: a CH32L103 wants `idle_clock="low"` and `max_speed=1_000_000`
-at attach. To reset a target through its NRST pin, name the channel: `wire.attach_under_reset(channel)` - there is no
-default reset line.
+at attach (max_speed is required). To reset a target through its NRST pin, name the channel in attach's reset TLV
+(`wire.attach(halt=True, reset=(channel, hold_ms))`: stopped before its first instruction; `halt=False`: left running) -
+there is no default reset line.
 
 Flashing, the console and the rest are the host tools' job: ch32rv and the ArduinoCore-CH32RV upload do it over OEP.
 

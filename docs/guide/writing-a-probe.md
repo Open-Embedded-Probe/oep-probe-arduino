@@ -36,7 +36,8 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   encoded frame: a little more than max_frame (`cobsFrameMax`).
 - oep.core's **describe** is yours to fill: `describeCore(w, model, unit_id, ...)` writes the firmware version, the model,
   a unit id that is the same on every transport (`platformUnitId`), the channel count and the reserved channels. Hand it
-  over with `setProbeDescription`. Transports and `oep_pid` are added by the endpoint.
+  over with `setProbeDescription`. The transports, `discoverable`, `plan_roles` and `max_op_ms` are added by the endpoint.
+  describe is declarations only (core §7.3): nothing that changes while the probe runs goes in it.
 - `setBootId(platformRandom32())` once: a host sees that the probe restarted.
 - `poll()` from `loop()`: it never blocks long. Neither may your interfaces.
 
@@ -105,7 +106,7 @@ Each source file starts with the spec sections it follows.
 - A fixed pair: `DebugPort port{dm, swdio, swclk}` and `phy.begin(swdio, swclk)` (`04.Debug/*`).
 - Host-chosen pins: `port.pin_choice = mask; port.pins = &pins;` with the pair unset. The wire declares the channels as
   role_channels, takes any free pair a host names in scan / attach, moves the PHY there (`usePins`), and a live connection
-  holds its pins in the table. `reset_allowed` is the channels attach_under_reset may pull - always named by the host.
+  holds its pins in the table. `reset_allowed` is the channels attach's reset TLV may pull - always named by the host.
 - The line's settings (how it rests, how fast it may go) are the target's: the host passes them at attach; the probe
   keeps no per-chip defaults.
 
@@ -114,9 +115,10 @@ Each source file starts with the spec sections it follows.
 - A serial port carries OEP frames and, between them, raw bytes: what its **bind** says (a slot's console, a fixture
   UART, several marked by name). `endpoint.setRawPorts(&binds)` turns it on; while a session holds the lock the raw
   transfer on the port it uses waits, and resumes afterwards from the target's last reset (core §3.4).
-- `ProbeConfig` keeps slots, binds, plans and idle states, saves them (NVS on ESP32, the flash's last sector on RP2) and
-  applies them at boot. Add it last (`add(config)`), then `addPlace(wire, console)`, `addUart(uart)`, `setPins(&pins)`,
-  `load()`, `applySaved()` (`06.Settings/ProbeConfig`).
+- `ProbeConfig` keeps slots, binds, plans, labels, idle states and the fixture UARTs' settings (the uart item), saves
+  them (NVS on ESP32, the flash's last sector on RP2) and applies them at boot; `state` (op 0x06) tells how the slots and
+  binds are doing, `unset` (0x05) removes items by key. Add it last (`add(config)`), then `addPlace(wire, console)`,
+  `addUart(uart)`, `setPins(&pins)`, `load()`, `applySaved()` (`06.Settings/ProbeConfig`).
 
 ## 8. Pushes and events
 
@@ -128,7 +130,9 @@ fixture UART and the capture do this.
 
 A USB probe says iProduct starting `OEP` (how hosts discover it), a serial number unique per unit, and the VID:PID:
 `303a:0002` / the board's own until pid.codes grants the OEP PID (`1209:4F45`, [PID-USE.md](../../PID-USE.md)).
-`endpoint.setOepPid(true)` says so in describe.
+The vendor bulk interface carries bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45 and a vendor HID says usage page
+0xFF4F, usage 0x45 (core §3.3; `Firmware/OepProbe/Esp32P4.h` patches EspUsbDevice's descriptors for that).
+`endpoint.setDiscoverable(true)` says so in describe.
 
 ## 10. Testing
 

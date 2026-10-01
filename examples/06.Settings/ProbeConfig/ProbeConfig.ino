@@ -5,7 +5,7 @@
 // (oep-spec docs/oep-if-probe-config.ja.md). Nothing about the jig is in this sketch; its settings say:
 //
 //   slot   a place a target is wired to (a wire and its pins), with a name - attach at boot and retry, the console's
-//          framing, the line's settings (max_speed, idle_clock), a lock on the chip id
+//          mechanism, the line's settings (max_speed_hz, idle_clock), a lock on the chip id
 //   bind   what a serial port carries outside the OEP frames: the slot's console (so a terminal on the probe's port
 //          shows the target's output, on the same line as OEP), a fixture UART, or several, marked by name
 //   plan   pins an interface keeps (a fixture UART on the DUT's TX / RX)

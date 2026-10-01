@@ -86,7 +86,7 @@ void setup() {
   endpoint.setRawPorts(&binds);
   swio.pin_choice = kSwioChoice;
   swio.pins = &pins;
-  swio.reset_allowed = kChannels;   // attach_under_reset: the channel the host names (no default), nobody holding it
+  swio.reset_allowed = kChannels;   // attach's reset TLV: the channel the host names (no default), nobody holding it
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
