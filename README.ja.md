@@ -41,6 +41,10 @@ docs/logic-capture.ja.md §2.7、docs/probe-cdc-and-persistence.ja.md §5.3 / §
 
 **なぜ probe に自分の USB の ID が要るのか**: host は USB のデバイスを 1 つずつ開かずに OEP の probe を見つけ、probe が持つどの
 リンク（vendor bulk、HID、CDC）でも、同じ probe を 1 つのデバイス・1 つの serial number（= probe の `unit_id`）として扱います。
+見分けのつかない既存のシリアルの口（USB-UART の変換チップの口、USB-Serial/JTAG の口、ほかのデバイスの VID:PID の CDC）は違います。
+後ろに OEP の probe がいるかは、口を開いて OEP のフレームが返るかを試す（ネゴシエーションする）ほかに知る方法がありません。
+任意のシリアルの口を開くと、その先にあるもの（DTR でリセットするボード、モデム、ほかのツールのデバイス）を乱しうるので、host が
+すべての口について自動で試すことはできず、利用者がその口を明示的に選ぶ必要があります。
 さらに上のリンクには、シリアルの口でない USB のデバイスが要ります（速さのための vendor bulk、ソフトウェア USB とブラウザのための
 HID）。それを認識させるには、専用の VID:PID が要ります。pid.codes から割り当てを受けるまで、参照の firmware は `303a:0002` を使い、
 host は iProduct が `OEP` で始まることで probe を見分けます（oep-spec docs/usb-identity.ja.md）。
