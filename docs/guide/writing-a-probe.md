@@ -115,10 +115,14 @@ Each source file starts with the spec sections it follows.
 - A serial port carries OEP frames and, between them, raw bytes: what its **bind** says (a slot's console, a fixture
   UART, several marked by name). `endpoint.setRawPorts(&binds)` turns it on; while a session holds the lock the raw
   transfer on the port it uses waits, and resumes afterwards from the target's last reset (core §3.4).
-- `ProbeConfig` keeps slots, binds, plans, labels, idle states and the fixture UARTs' settings (the uart item), saves
-  them (NVS on ESP32, the flash's last sector on RP2) and applies them at boot; `state` (op 0x06) tells how the slots and
-  binds are doing, `unset` (0x05) removes items by key. Add it last (`add(config)`), then `addPlace(wire, console)`,
-  `addUart(uart)`, `setPins(&pins)`, `load()`, `applySaved()` (`06.Settings/ProbeConfig`).
+- `ProbeConfig` keeps slots, binds, plans, labels, idle states, the fixture UARTs' settings (the uart item) and the
+  disabled channels (the disable item), saves them (NVS on ESP32, the flash's last sector on RP2) and applies them at
+  boot; `state` (op 0x06) tells how the slots and binds are doing, `unset` (0x05) removes items by key. Add it last
+  (`add(config)`), then `addPlace(wire, console)`, `addUart(uart)`, `setPins(&pins)`, `applySaved()`
+  (`06.Settings/ProbeConfig`). Call `load()` before the sketch parks its pins and leave out what the saved settings
+  disable: `config.load(); pins.setDisabled(config.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());`
+  (a disabled channel is never touched, not even at boot). The PinTable keeps the settings' disabled channels apart
+  from `forbid` (the firmware's own, permanent): no item gives a forbidden pin back.
 
 ## 8. Pushes and events
 

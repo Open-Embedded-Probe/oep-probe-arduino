@@ -113,10 +113,13 @@ class Blink final : public oep::Interface {
 - シリアルの口は OEP のフレームと、その間の生のバイトを運びます。生のバイトは **bind** のとおり（スロットのコンソール、fixture の
   UART、名前の印つきの複数）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
   生の流れは止まり、終わった後に target の最後の reset から続きます（core §3.4）。
-- `ProbeConfig` はスロット、bind、plan、label、空きのときの状態、fixture UART の設定（uart の項目）を持ち、保存し（ESP32 は
-  NVS、RP2 は flash の最後の領域）、起動時に行います。`state`（op 0x06）がスロットと bind の状態を、`unset`（0x05）がキーでの
-  削除です。最後に `add(config)` し、`addPlace(wire, console)`、`addUart(uart)`、`setPins(&pins)`、`load()`、`applySaved()`
-  （`06.Settings/ProbeConfig`）。
+- `ProbeConfig` はスロット、bind、plan、label、空きのときの状態、fixture UART の設定（uart の項目）、無効にした channel
+  （disable の項目）を持ち、保存し（ESP32 は NVS、RP2 は flash の最後の領域）、起動時に行います。`state`（op 0x06）がスロットと
+  bind の状態を、`unset`（0x05）がキーでの削除です。最後に `add(config)` し、`addPlace(wire, console)`、`addUart(uart)`、
+  `setPins(&pins)`、`applySaved()`（`06.Settings/ProbeConfig`）。`load()` はスケッチがピンを空きの状態にする前に呼び、保存が無効に
+  した channel を除きます: `config.load(); pins.setDisabled(config.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());`
+  （無効にした channel には起動時も触れない）。PinTable は設定の無効（外せる）と `forbid`（firmware のもの、ずっと）を分けて持ち、
+  どの項目も forbid したピンを使えるようにはしません。
 
 ## 8. push と出来事
 

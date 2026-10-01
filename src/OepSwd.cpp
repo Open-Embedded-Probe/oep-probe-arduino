@@ -48,7 +48,13 @@ bool WireSwd::allowed(uint16_t swdio, uint16_t swclk) const {
   return swdio < 64 && swclk < 64 && swdio != swclk && ((port_.pin_choice >> swdio) & 1) && ((port_.pin_choice >> swclk) & 1);
 }
 
+uint16_t WireSwd::disabledOf(uint16_t swdio, uint16_t swclk) const {
+  if (!port_.pins) return 0xffff;
+  return port_.pins->disabled(swdio) ? swdio : port_.pins->disabled(swclk) ? swclk : 0xffff;
+}
+
 bool WireSwd::free(uint16_t swdio, uint16_t swclk) const {
+  if (disabledOf(swdio, swclk) != 0xffff) return false;   // the settings disable it (probe.config §1): never used
   if (!port_.pin_choice || !port_.pins) return true;   // a fixed pair is the wire's own (kept out of the pin table)
   const bool mine = port_.connected && swdio == port_.swdio && swclk == port_.swclk;
   auto ok = [&](uint16_t c) { const uint8_t o = port_.pins->owner(c); return o == 0 || (mine && o == port_.pin_owner); };
@@ -140,6 +146,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       for (uint8_t k = 0; k < count; ++k) {   // allowed, free, and - the one seat taken - the live pair
         const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
         if (!allowed(d, c)) return unsupportedValue(out, capacity);
+        const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
+        if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
         if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
           return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
       }
@@ -179,8 +187,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (count) {
         for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
       } else if (port_.connected || !port_.pin_choice) {   // the count-0 list: the live pair, or the fixed one
-        if (skip == 0) tryPair(port_.swdio, port_.swclk);
-      } else {                                            // swdio ascending, then swclk; held pairs left out
+        if (skip == 0 && disabledOf(port_.swdio, port_.swclk) == 0xffff) tryPair(port_.swdio, port_.swclk);
+      } else {                                            // swdio ascending, then swclk; held and disabled pairs left out
         uint32_t index = 0;
         bool more = true;
         for (uint16_t d = 0; d < 64; ++d)
@@ -219,10 +227,14 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         const uint8_t *pins = tail.find(sw::kTlvAttachPins, plen);
         if (!pins) {   // the live connection's pair (join it), the fixed pair, else the host names one
           if (port_.pin_choice && !port_.connected) return unavailable(out, capacity, reg::core::kUnavailableCauseWrongState);
+          const uint16_t off = port_.connected ? 0xffff : disabledOf(port_.swdio, port_.swclk);
+          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
         } else {
           if (plen != 4) return rejected(kRejectMalformed);
           const uint16_t d = getU16(pins), c = getU16(pins + 2);
           if (!allowed(d, c)) return unsupportedTag(out, capacity, sw::kTlvAttachPins | kTagCritical);
+          const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
+          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
           if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))   // held, or no seat
             return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
           if (!move(d, c)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);

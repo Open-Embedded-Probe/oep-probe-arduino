@@ -608,7 +608,34 @@ static void testPlanCapacity() {
   CHECK(std::search(d.begin(), d.end(), want.begin(), want.end()) != d.end());   // plan_roles (u32) declared
 }
 
+// probe.config disable (§1): a plan_apply naming a disabled channel is unavailable cause 5 with the channel.
+static void testDisabledChannel() {
+  MemStream bulk;
+  static uint8_t rx[1100], tx[1100];
+  Endpoint ep(bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0);
+  PlanSink a;
+  ep.add(a);
+  auto send = [&](const Bytes &m) {
+    const Bytes f = {uint8_t(m.size()), uint8_t(m.size() >> 8)};
+    bulk.send(f);
+    bulk.send(m);
+    bulk.tx.clear();
+    ep.poll();
+    return bulk.tx;
+  };
+  send(request(1, 0, 0x10, openPayload(7, 3000)));
+  ep.setDisabled(uint64_t{1} << 12);
+  const Bytes r = send(request(2, 0, 0x04, {0x90, 5, 1, 0, 1, 12, 0}, true, 7));
+  const Bytes cause5 = {0x01, 1, 5, 0x02, 2, 12, 0};   // cause 5, channel 12 (core §4.3)
+  CHECK(r.size() >= 7 && r[5] == 0 && r[6] == kRejectUnavailable);
+  CHECK(std::search(r.begin(), r.end(), cause5.begin(), cause5.end()) != r.end());
+  CHECK(send(request(3, 0, 0x04, {0x90, 5, 1, 0, 1, 13, 0}, true, 7))[5] == 1);   // another channel: as before
+  ep.setDisabled(0);
+  CHECK(send(request(4, 0, 0x04, {0x90, 5, 1, 0, 1, 12, 0}, true, 7))[5] == 1);   // enabled again
+}
+
 int main() {
+  testDisabledChannel();
   testTlvLongForm();
   testSessionTable();
   testSubscriptions();

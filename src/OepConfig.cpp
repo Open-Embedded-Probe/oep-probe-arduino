@@ -156,6 +156,7 @@ size_t ProbeConfig::keyLength(uint8_t tag) {
     case cfg::kTlvItemSlot: return 1;
     case cfg::kTlvItemBind: return 1;
     case cfg::kTlvItemUart: return 2;
+    case cfg::kTlvItemDisable: return 2;
     default: return 0;
   }
 }
@@ -168,6 +169,7 @@ uint64_t ProbeConfig::keyValue(uint8_t tag, const uint8_t *v, size_t length) {
     case cfg::kTlvItemLabel:
     case cfg::kTlvItemIdle:
     case cfg::kTlvItemUart:
+    case cfg::kTlvItemDisable:
       return length >= 2 ? getU16(v) : 0;
     default:
       return length >= 1 ? v[0] : 0;
@@ -299,6 +301,10 @@ Result ProbeConfig::checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t
       if (!is_uart || !FixtureUart::baudWithinReach(getU32(v + 2))) return unsupportedValue(out, capacity);
       return completed();
     }
+    case cfg::kTlvItemDisable:
+      if (len < 2) return rejected(kRejectMalformed);
+      if (!pins_) return unsupportedValue(out, capacity);
+      return completed();   // any channel: it only takes away (a channel the firmware does not offer stays unusable)
     default:
       return unsupportedValue(out, capacity);   // an item this probe does not take (describe items)
   }
@@ -308,6 +314,7 @@ Result ProbeConfig::checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t
 // unique, at most max_connections at-boot slots a wire, binds naming slots that exist and have a console).
 Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint8_t *out, size_t capacity) const {
   d.role_count = 0;
+  d.disabled = 0;
   memset(d.idle, PinTable::kIdleUnset, sizeof d.idle);
   for (Slot &s : d.slots) s = Slot{};
   for (Binds::Spec &b : d.binds) b = Binds::Spec{};
@@ -369,10 +376,16 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
         for (size_t i = 0; i < uart_count_; ++i)
           if (uarts_[i].fn == getU16(v)) d.uarts[i] = {true, getU32(v + 2), v[6]};
         break;
+      case cfg::kTlvItemDisable:
+        if (getU16(v) < PinTable::kChannels) d.disabled |= uint64_t{1} << getU16(v);
+        break;
       default:
         break;
     }
   }
+  // idle and disable for one channel contradict (probe.config §1)
+  for (uint8_t c = 0; c < PinTable::kChannels; ++c)
+    if (((d.disabled >> c) & 1) && d.idle[c] != PinTable::kIdleUnset) return rejected(kRejectMalformed);
   // the whole: no two slots on one place with the same pair, names unique, at most one at-boot slot a wire
   // (max_connections 1), every bind's streams there (a slot with a console)
   for (size_t a = 0; a < kMaxSlots; ++a) {
@@ -423,6 +436,48 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
   static Derived d;   // large: not on the stack
   const Result whole = derive(candidate, length, d, out, capacity);
   if (refused(whole)) return whole;
+  // disable (probe.config §1): a channel in use now - a plan this change keeps, a pin something holds (a plan, a
+  // connection), a slot this change keeps - cannot be disabled (cause 1); an item naming a disabled channel (a plan, a
+  // slot's pins) is cause 5 with the channel
+  if (pins_ && d.disabled) {
+    RoleAssignment now[Endpoint::kMaxRoles];
+    const size_t nnow = endpoint_.plan(now, Endpoint::kMaxRoles);
+    bool kept[256] = {};   // fns whose plan the settings put in
+    {
+      RoleAssignment mine[Endpoint::kMaxRoles];
+      const size_t n = endpoint_.plan(mine, Endpoint::kMaxRoles, true);
+      for (size_t r = 0; r < n; ++r) kept[mine[r].function & 0xff] = true;
+    }
+    auto listed = [&](uint16_t fn) {
+      for (size_t k = 0; k < plan_fn_count; ++k) if (plan_fns[k] == fn) return true;
+      return false;
+    };
+    const uint64_t newly = d.disabled & ~pins_->disabledMask();
+    for (uint16_t c = 0; c < PinTable::kChannels; ++c) {
+      if (!((newly >> c) & 1)) continue;
+      bool replaced = false;   // in the old plan of a fn this change replaces: its holder goes
+      for (size_t r = 0; r < nnow; ++r) {
+        if (now[r].channel != c) continue;
+        if (listed(now[r].function)) { replaced = true; continue; }
+        return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, c, now[r].function,
+                           kept[now[r].function & 0xff] ? reg::core::kHolderKindSettingsPlan : reg::core::kHolderKindPlan);
+      }
+      if (!replaced && pins_->owner(c)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, c);
+      for (uint8_t i = 0; i < kMaxSlots; ++i)
+        if (slots_[i].set && d.slots[i].set && memcmp(&slots_[i], &d.slots[i], sizeof(Slot)) == 0 &&
+            (slots_[i].swdio == c || slots_[i].swclk == c))
+          return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, c, 0xFFFF, reg::core::kHolderKindSlot);
+    }
+    auto off = [&](uint16_t c) { return c < PinTable::kChannels && ((d.disabled >> c) & 1); };
+    for (size_t r = 0; r < d.role_count; ++r)
+      if (off(d.roles[r].channel))
+        return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.roles[r].channel);
+    for (uint8_t i = 0; i < kMaxSlots; ++i) {
+      if (!d.slots[i].set) continue;
+      if (off(d.slots[i].swdio)) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.slots[i].swdio);
+      if (off(d.slots[i].swclk)) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.slots[i].swclk);
+    }
+  }
   if (plan_fn_count) {   // the plans of the fns touched, as the candidate has them
     RoleAssignment roles[Endpoint::kMaxRoles];
     size_t n = 0;
@@ -436,6 +491,7 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
   // accepted: make it current
   memcpy(items_, candidate, length);
   items_length_ = length;
+  setDisabled(d.disabled);   // first: a channel disabled now is not set to an idle state below
   if (pins_) {
     for (uint16_t c = 0; c < PinTable::kChannels; ++c)
       if (d.idle[c] != idle_[c]) { idle_[c] = d.idle[c]; pins_->setIdle(c, idle_[c]); }
@@ -717,7 +773,28 @@ void ProbeConfig::load() {
   storage_state_ = cfg::kStorageStateApplied;   // until applySaved says otherwise
 }
 
+uint64_t ProbeConfig::disabledIn(const uint8_t *items, size_t length) {
+  uint64_t mask = 0;
+  size_t at = 0, vlen = 0;
+  uint8_t tag = 0;
+  const uint8_t *v = nullptr;
+  while (nextItem(items, length, at, tag, v, vlen))
+    if (tag == cfg::kTlvItemDisable && vlen >= 2 && getU16(v) < PinTable::kChannels) mask |= uint64_t{1} << getU16(v);
+  return mask;
+}
+
+void ProbeConfig::setDisabled(uint64_t mask) {
+  if (!pins_) return;
+  pins_->setDisabled(mask);   // a channel enabled again goes to its idle state there
+  endpoint_.setDisabled(mask);
+}
+
 void ProbeConfig::applySaved() {
+  applySavedItems();
+  setDisabled(disabledIn(items_, items_length_));   // not applied: the channels load() kept aside are free again
+}
+
+void ProbeConfig::applySavedItems() {
   if (!saved_length_) return;
   // Each interface the items name, found again by (name, instance, revision): the fn it has in this firmware.
   uint16_t from[16], to[16];
@@ -793,8 +870,8 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {   // declarations 
   TlvWriter w(out, capacity);
   w.u32(cfg::kTlvDescribeStorage, kMaxItems);
   static const uint8_t kItems[] = {cfg::kTlvItemPlan, cfg::kTlvItemLabel, cfg::kTlvItemSlot, cfg::kTlvItemBind,
-                                   cfg::kTlvItemUart, cfg::kTlvItemIdle};
-  w.put(cfg::kTlvDescribeItems, kItems, pins_ ? sizeof kItems : sizeof kItems - 1);
+                                   cfg::kTlvItemUart, cfg::kTlvItemIdle, cfg::kTlvItemDisable};
+  w.put(cfg::kTlvDescribeItems, kItems, pins_ ? sizeof kItems : sizeof kItems - 2);   // idle and disable need the pins
   w.u8(cfg::kTlvDescribeSlotsMax, place_count_ ? static_cast<uint8_t>(kMaxSlots) : 0);
   w.u32(cfg::kTlvDescribeBindModes, (1u << cfg::kBindModeLastReset) | (1u << cfg::kBindModeManual) | (1u << cfg::kBindModeMixed));
   return w.ok() ? w.length() : 0;

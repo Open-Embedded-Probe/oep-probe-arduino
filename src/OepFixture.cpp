@@ -18,9 +18,11 @@ uint8_t platformMode(uint8_t mode) {
 
 // set / read refused for a channel not planned: unavailable with the channel and its position in the list (fixture §1:
 // TLV 0x40 index after core §4.3's)
-Result refusedAt(size_t index, uint16_t channel, uint8_t *out, size_t capacity) {
+// A channel the settings disable says cause 5 (held by settings, probe.config §1).
+Result refusedAt(const PinTable &pins, size_t index, uint16_t channel, uint8_t *out, size_t capacity) {
   const uint8_t extra[3] = {gp::kTlvUnavailablePayloadIndex, 1, static_cast<uint8_t>(index)};
-  return unavailable(out, capacity, 0, channel, 0xFFFF, 0, extra, sizeof extra);
+  const uint8_t cause = pins.disabled(channel) ? reg::core::kUnavailableCauseHeldBySettings : 0;
+  return unavailable(out, capacity, cause, channel, 0xFFFF, 0, extra, sizeof extra);
 }
 
 }  // namespace
@@ -73,7 +75,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       for (uint8_t i = 0; i < n; ++i)
         if (!((kModes >> payload[3 + 3 * i]) & 1)) return unsupportedAt(out, capacity, getU16(payload + 1 + 3 * i), i);
       for (uint8_t i = 0; i < n; ++i)
-        if (!planned(getU16(payload + 1 + 3 * i))) return refusedAt(i, getU16(payload + 1 + 3 * i), out, capacity);
+        if (!planned(getU16(payload + 1 + 3 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 3 * i), out, capacity);
       for (uint8_t i = 0; i < n; ++i) platformGpio(getU16(payload + 1 + 3 * i), platformMode(payload[3 + 3 * i]));
       return tail.finish(completed(), out, capacity);
     }
@@ -82,7 +84,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       if (refused(parsed)) return parsed;
       if (capacity < 1u + n) return failed();
       for (uint8_t i = 0; i < n; ++i)
-        if (!planned(getU16(payload + 1 + 2 * i))) return refusedAt(i, getU16(payload + 1 + 2 * i), out, capacity);
+        if (!planned(getU16(payload + 1 + 2 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 2 * i), out, capacity);
       out[0] = n;
       for (uint8_t i = 0; i < n; ++i) out[1 + i] = digitalRead(getU16(payload + 1 + 2 * i)) ? 1 : 0;
       return tail.finish(completed(1u + n), out, capacity);
