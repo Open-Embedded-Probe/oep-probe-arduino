@@ -97,6 +97,9 @@ class Ch32Dm {
   bool keepGprs();
   void giveGprs();
   uint8_t cmderr_ = 0;
+  bool auto_on_ = true;     // ABSTRACTAUTO may be set: autoOff() writes 0 only then (a block op's fixed cost is DMI round trips)
+  void autoOff() { if (auto_on_) { phy_.write(0x18, 0); auto_on_ = false; } }
+  void autoOn() { phy_.write(0x18, 1); auto_on_ = true; }
   uint32_t restarts_ = 0;
   bool waitAbstract();
   void relink();                          // PHY re-sync + abstract-command block back to a known state
