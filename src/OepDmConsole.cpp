@@ -13,28 +13,49 @@ void DmConsole::push(uint8_t byte) {
   if (!discarding_ && sink_) sink_(sink_ctx_, byte);
 }
 
-void DmConsole::poll() {
-  // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless
-  // the target is attached and running its own code - and not while the host drives the debug
-  // module through raw DMI writes, which halted() does not see.
-  if (!enabled_ || dm_.halted()) return;
-  if (dm_.hostRaw()) {
-    // The host drove the debug module through raw DMI: DATA0 / DATA1 may be its operands. Read again once the hart
-    // runs (a debugger that resumed it by writing dmcontrol itself), checked at most every 20 ms.
-    if (millis() - last_raw_check_ms_ < 20) return;
-    last_raw_check_ms_ = millis();
-    if (!dm_.hostLetGo()) return;
+// A DMI read of the mailbox that keeps the line-lost clock: an answer within kLostMs of the last keeps the line alive.
+bool DmConsole::readData(uint8_t address, uint32_t &value) {
+  if (!phy_.read(address, value)) {
+    if (millis() - last_answer_ms_ >= kLostMs) lost_ = true;
+    return false;
   }
+  last_answer_ms_ = millis();
+  return true;
+}
+
+void DmConsole::poll() {
+  // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless the target is attached and
+  // running its own code. What the hart does is asked of DMSTATUS every kStatusMs (oep-if-console §2: the host may have
+  // halted or resumed it through raw DMI, which halted() does not see); a reset it did by itself (havereset) is
+  // acknowledged there too (oep-if-debug §4.6: the stream marks a restart, dmseq starts over).
+  if (!enabled_ || lost_) return;
   if (!phy_.attached()) {
     // A reset detaches, and the console has to outlive that: the point of it is to watch
     // a target through its own restarts. Retry at a slow rate so a target that is simply
     // gone does not turn every loop into a full attach.
     if (millis() - last_attach_ms_ < 250) return;
     last_attach_ms_ = millis();
-    if (!dm_.attach()) return;
+    if (!dm_.attach()) {
+      if (millis() - last_answer_ms_ >= kLostMs) lost_ = true;
+      return;
+    }
   }
-  if (framing_ == 1) pollDmdata();
-  else if (framing_ == 2) pollSeq();
+  if (dm_.halted()) return;
+  if (millis() - last_status_ms_ >= kStatusMs) {
+    last_status_ms_ = millis();
+    uint32_t status = 0;
+    if (!readData(0x11, status)) return;
+    if ((status & 0xf) != 2) return;
+    if (status & (3u << 18)) {   // havereset: the target restarted on its own
+      dm_.ackHaveReset();
+      unsync();
+      return;
+    }
+    hart_halted_ = (status & (1u << 9)) != 0;
+  }
+  if (hart_halted_) return;
+  if (mechanism_ == 1) pollDmdata();
+  else if (mechanism_ == 2) pollSeq();
   else pollSdi();
 }
 
@@ -42,11 +63,11 @@ void DmConsole::poll() {
 // DATA0 = length | bytes 0..2 << 8, and we zero DATA0 once we have the frame.
 void DmConsole::pollSdi() {
   uint32_t data0 = 0;
-  if (!phy_.read(0x04, data0)) return;
+  if (!readData(0x04, data0)) return;
   const uint8_t length = static_cast<uint8_t>(data0 & 0xff);
   if (length == 0 || length > 7) return;       // 0 = nothing waiting; anything else is not a frame
   uint32_t data1 = 0;
-  if (!phy_.read(0x05, data1)) return;
+  if (!readData(0x05, data1)) return;
   const uint8_t bytes[7] = {
       static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
       static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
@@ -61,14 +82,14 @@ void DmConsole::pollSdi() {
 // bytes at a time, since only DATA0 carries host payload - or zero when there is not.
 void DmConsole::pollDmdata() {
   uint32_t data0 = 0;
-  if (!phy_.read(0x04, data0)) return;
+  if (!readData(0x04, data0)) return;
   if (data0 & 0x80u) {                         // the target's word
     uint32_t count = data0 & 0x3fu;
     if (count > 4u) {
       count -= 4u;
       if (count > 7u) count = 7u;
       uint32_t data1 = 0;
-      if (!phy_.read(0x05, data1)) return;
+      if (!readData(0x05, data1)) return;
       const uint8_t bytes[7] = {
           static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
           static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
@@ -120,7 +141,7 @@ void DmConsole::sendOrClear() {
                        (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 24));
 }
 
-// dmseq (framing 2), oep-spec docs/target-console-dmseq.ja.md. SerialDMDATA's carrier with
+// dmseq (mechanism 2), oep-spec docs/target-console-dmseq.ja.md. SerialDMDATA's carrier with
 // 1-bit sequence numbers both ways and a CRC-8 on every word, so a DMI access that goes
 // astray - a lost answer, a corrupted word - neither duplicates nor drops a byte.
 //
@@ -159,11 +180,11 @@ void DmConsole::pollSeq() {
   // answered, the target may post its next frame and overwrite DATA1.
   uint32_t w0 = 0, w1 = 0;
   ++stats_.polls;
-  if (!phy_.read(0x04, w0)) return;
+  if (!readData(0x04, w0)) return;
   if (!(w0 & 0x80u)) return;                   // our answer still there, or nothing yet
   ++stats_.frames;
   const uint8_t n = w0 & 0x07u;
-  if (n >= 3 && !phy_.read(0x05, w1)) return;
+  if (n >= 3 && !readData(0x05, w1)) return;
   if (seqFault()) w0 ^= 1u << (8 + (w0 & 7));  // test hook: a frame read corrupted
   const uint8_t b[8] = {static_cast<uint8_t>(w0), static_cast<uint8_t>(w0 >> 8), static_cast<uint8_t>(w0 >> 16),
                         static_cast<uint8_t>(w0 >> 24), static_cast<uint8_t>(w1), static_cast<uint8_t>(w1 >> 8),
@@ -231,8 +252,8 @@ void DmConsole::seqAnswer(uint8_t k, bool with_data) {
 // Every start is a fresh session, even over one that is still open: a runner that moves from one
 // sketch to the next reprograms the target in between, and bytes queued for the last sketch must
 // not be delivered to this one.
-bool DmConsole::start(uint8_t framing) {
-  if (framing > 2 || !dm_.attach()) return false;
+bool DmConsole::start(uint8_t mechanism) {
+  if (mechanism > 2 || !dm_.attach()) return false;
   tx_head_ = tx_tail_ = 0;
   saw_empty_ = false;
   seq_synced_ = false;
@@ -241,13 +262,16 @@ bool DmConsole::start(uint8_t framing) {
   seq_chunk_len_ = 0;
   seq_resyncs_ = 0;
   enabled_ = true;
-  framing_ = framing;
+  lost_ = false;
+  hart_halted_ = false;
+  last_answer_ms_ = last_status_ms_ = millis();
+  mechanism_ = mechanism;
   // dmseq writes DATA0 only while bit 7 is set (a target frame is there): zeroing it at the start broke the frame the
   // target had out, which then waited out its timeout (up to 1 s per try) before posting again - the console took
   // 1-6 s to come back after a refused automatic attach (oep-spec probe-cdc-and-persistence §7.5, ch32rv's review).
   // Its framing sorts out an earlier session by itself: a leftover word fails the target's answer check, the target
   // posts again every 20 ms, and the first frame seen is accepted whatever its sequence bit.
-  if (framing == 2) return true;
+  if (mechanism == 2) return true;
   // SDI / DMDATA: whatever an earlier session left in the mailbox would read as a frame - including SerialDMDATA's
   // latched timeout, which a host clears by taking the word. Claim it, then let a couple of rounds go by and throw
   // those away, so the first exchange the caller sees is not the tail of somebody else's.
@@ -259,7 +283,7 @@ bool DmConsole::start(uint8_t framing) {
 }
 
 size_t DmConsole::queue(const uint8_t *data, size_t length) {
-  if (!enabled_ || framing_ == 0) return 0;
+  if (!enabled_ || mechanism_ == 0) return 0;
   size_t queued = 0;
   while (queued < length) {
     const uint16_t next = static_cast<uint16_t>((tx_head_ + 1) % kTxCapacity);

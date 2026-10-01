@@ -21,8 +21,8 @@ inline Result outcome(uint8_t status, size_t done, size_t length) {
   return done ? partial(length) : failed(length);
 }
 
-// A wire op that failed before it had anything of its success shape to report (scan, attach, attach_under_reset,
-// detach): completed failed with the status byte alone.
+// A wire op whose success shape has no done / status (scan, attach, detach) and failed: completed failed with the
+// payload status(u8) [TLV] (oep-if-common §3).
 inline Result failedStatus(uint8_t status, uint8_t *out, size_t capacity) {
   if (capacity < 1) return failed();
   out[0] = status;
