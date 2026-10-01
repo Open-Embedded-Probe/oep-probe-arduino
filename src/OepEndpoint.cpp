@@ -640,7 +640,8 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
                          reg::core::kHolderKindSettingsPlan);
   for (size_t r = 0; r < count; ++r)   // a channel the settings disable (probe.config §1)
     if (disabled(roles[r].channel))
-      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, roles[r].channel);
+      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, roles[r].channel, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
   clash_fn_ = 0;
   const uint16_t reason = replaceFns(roles, count, fns, nfns, false);
   if (reason > 0xff) return failed();

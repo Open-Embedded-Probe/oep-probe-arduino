@@ -626,7 +626,7 @@ static void testDisabledChannel() {
   send(request(1, 0, 0x10, openPayload(7, 3000)));
   ep.setDisabled(uint64_t{1} << 12);
   const Bytes r = send(request(2, 0, 0x04, {0x90, 5, 1, 0, 1, 12, 0}, true, 7));
-  const Bytes cause5 = {0x01, 1, 5, 0x02, 2, 12, 0};   // cause 5, channel 12 (core §4.3)
+  const Bytes cause5 = {0x01, 1, 5, 0x02, 2, 12, 0, 0x04, 1, 6};   // cause 5, channel 12, holder_kind 6 disabled
   CHECK(r.size() >= 7 && r[5] == 0 && r[6] == kRejectUnavailable);
   CHECK(std::search(r.begin(), r.end(), cause5.begin(), cause5.end()) != r.end());
   CHECK(send(request(3, 0, 0x04, {0x90, 5, 1, 0, 1, 13, 0}, true, 7))[5] == 1);   // another channel: as before

@@ -268,7 +268,8 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
     if (!pairAllowed(port_, d, c)) return unsupportedValue(out, capacity);
     const uint16_t off = pairDisabled(port_, d, c);   // the settings disable it: cause 5 (probe.config §1)
-    if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+    if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
     if (!pairFree(port_, d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
       return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, port_.pins && port_.pins->owner(d) ? d : c);
   }
@@ -382,7 +383,8 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       off = pairDisabled(port_, port_.swdio, port_.swclk);
     if (off == 0xffff && with_reset && port_.pins && port_.pins->disabled(static_cast<uint16_t>(reset_channel)))
       off = static_cast<uint16_t>(reset_channel);
-    if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+    if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
     if (const uint8_t bad = choosePair(pins, plen)) {
       if (bad == kRejectUnsupported) return unsupportedTag(out, capacity, wire::kTlvAttachPins | kTagCritical);
       if (bad == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);

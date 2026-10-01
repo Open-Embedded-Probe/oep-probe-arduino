@@ -22,7 +22,7 @@ uint8_t platformMode(uint8_t mode) {
 Result refusedAt(const PinTable &pins, size_t index, uint16_t channel, uint8_t *out, size_t capacity) {
   const uint8_t extra[3] = {gp::kTlvUnavailablePayloadIndex, 1, static_cast<uint8_t>(index)};
   const uint8_t cause = pins.disabled(channel) ? reg::core::kUnavailableCauseHeldBySettings : 0;
-  return unavailable(out, capacity, cause, channel, 0xFFFF, 0, extra, sizeof extra);
+  return unavailable(out, capacity, cause, channel, 0xFFFF, cause ? reg::core::kHolderKindDisabled : 0, extra, sizeof extra);
 }
 
 }  // namespace

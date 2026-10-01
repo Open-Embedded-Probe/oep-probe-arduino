@@ -147,7 +147,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
         if (!allowed(d, c)) return unsupportedValue(out, capacity);
         const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
-        if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+        if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
         if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
           return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
       }
@@ -228,13 +229,15 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         if (!pins) {   // the live connection's pair (join it), the fixed pair, else the host names one
           if (port_.pin_choice && !port_.connected) return unavailable(out, capacity, reg::core::kUnavailableCauseWrongState);
           const uint16_t off = port_.connected ? 0xffff : disabledOf(port_.swdio, port_.swclk);
-          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
         } else {
           if (plen != 4) return rejected(kRejectMalformed);
           const uint16_t d = getU16(pins), c = getU16(pins + 2);
           if (!allowed(d, c)) return unsupportedTag(out, capacity, sw::kTlvAttachPins | kTagCritical);
           const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
-          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
           if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))   // held, or no seat
             return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
           if (!move(d, c)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);

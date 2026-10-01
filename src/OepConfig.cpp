@@ -303,8 +303,8 @@ Result ProbeConfig::checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t
     }
     case cfg::kTlvItemDisable:
       if (len < 2) return rejected(kRejectMalformed);
-      if (!pins_) return unsupportedValue(out, capacity);
-      return completed();   // any channel: it only takes away (a channel the firmware does not offer stays unusable)
+      if (!pins_ || !pins_->allowed(getU16(v))) return unsupportedValue(out, capacity);   // not declared: as idle
+      return completed();
     default:
       return unsupportedValue(out, capacity);   // an item this probe does not take (describe items)
   }
@@ -471,11 +471,14 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
     auto off = [&](uint16_t c) { return c < PinTable::kChannels && ((d.disabled >> c) & 1); };
     for (size_t r = 0; r < d.role_count; ++r)
       if (off(d.roles[r].channel))
-        return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.roles[r].channel);
+        return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.roles[r].channel, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
     for (uint8_t i = 0; i < kMaxSlots; ++i) {
       if (!d.slots[i].set) continue;
-      if (off(d.slots[i].swdio)) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.slots[i].swdio);
-      if (off(d.slots[i].swclk)) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.slots[i].swclk);
+      if (off(d.slots[i].swdio)) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.slots[i].swdio, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
+      if (off(d.slots[i].swclk)) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, d.slots[i].swclk, 0xFFFF,
+                                           reg::core::kHolderKindDisabled);
     }
   }
   if (plan_fn_count) {   // the plans of the fns touched, as the candidate has them
