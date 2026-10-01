@@ -295,7 +295,7 @@ void Endpoint::poll() {
           const bool message = t.serial.feed(p, n, rawSink, &t);
           if (i == speed_port_ && speed_state_ != kSpeedBase) {   // the sped-up port's line (core §3.5)
             if (t.serial.badCandidates() != bad) speedBad();
-            if (message && i == speed_port_) { speed_good_ms_ = millis(); speed_heard_ = true; }
+            if (message) { speed_good_ms_ = millis(); speed_heard_ = true; speed_bad_run_ = 0; }   // a good frame: the run ends
           }
           if (message) handleMessage(t.serial.message(), t.serial.length());
         }
@@ -435,6 +435,9 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     held_ |= uint32_t{1} << current_;
   // The lease runs from when the holder's request completed (a long verify must not lapse its own lock).
   if (has_session && locked_ && session == holder_) expires_ms_ = millis() + lease_ms_;
+  // core §3.5 condition 3: idle_ms is not counted while a request runs (the same rule as the lease) - it runs from
+  // the answer.
+  if (speed_state_ == kSpeedCommitted) speed_good_ms_ = millis();
   tx_[0] = kRoleResult;
   putU16(tx_ + 1, corr);
   tx_[3] = result.resolution;
@@ -566,13 +569,15 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
 }
 
 // port_speed (core §3.5): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
-//   ->  baud(u32: the rate that applies). Only the UART bridge the request came in on (else unavailable cause 6); a
-// baud this UART cannot make is unsupported. try: answered at the old speed, then switched; verify_ms later the probe
-// goes back unless a commit came (on the new speed), and a broken candidate before that sends it back at once. commit:
-// that baud, trying, on that port (else cause 6); then idle_ms (this request's, at most kPortSpeedIdleMaxMs: 0 and
-// anything longer count as that maximum, so a host that died leaves the port at its boot speed soon) with no good frame, or
-// kSpeedBadMax broken candidates within kSpeedBadWindowMs, revert. revert: answered (the boot speed) at the speed now,
-// then back.
+//   ->  baud(u32: the rate that applies). A step over 2 is malformed. Only the UART bridge the request came in on
+// (else unavailable cause 6); a baud this UART cannot make is unsupported. The port is in one of three states - boot,
+// trying, committed - and a step that does not fit its state is unavailable cause 6 too (the same refusal as the wrong
+// port): try is taken at the boot speed only, commit while trying (that baud, that port), revert while trying or
+// committed. try: answered at the old speed, then switched; verify_ms later the probe goes back unless a commit came
+// (on the new speed), and a broken candidate after the first good frame at the new speed sends it back at once.
+// commit: then idle_ms (this request's, at most kPortSpeedIdleMaxMs: 0 and anything longer count as that maximum, so a
+// host that died leaves the port at its boot speed soon) with no good frame, or kSpeedBadRun broken candidates in a row
+// with no good frame between, revert. revert: answered (the boot speed) at the speed now, then back.
 Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out,
                            size_t capacity) {
   if (!port_speed_) return rejected(kRejectUnknownOperation);   // the feature off (no describe port_speed)
@@ -585,10 +590,12 @@ Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *pa
   const uint8_t port = payload[0], step = payload[5];
   const uint32_t baud = getU32(payload + 1), idle = getU32(payload + 8);
   const uint16_t verify = getU16(payload + 6);
-  if (step > reg::core::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
+  if (step > reg::core::kPortSpeedStepRevert) return rejected(kRejectMalformed);   // outside the value range (core §4.3 5)
   if (port != current_ || transports_[port].kind != kUartBridge) return wrongState(out, capacity);
+  const bool this_port = speed_state_ != kSpeedBase && speed_port_ == port;   // this port is off its boot speed
   uint32_t answer = 0;
   if (step == reg::core::kPortSpeedStepTry) {
+    if (this_port) return wrongState(out, capacity);   // trying or committed already: revert first
     answer = port_speed_(port, baud, false);
     if (!answer) return unsupportedValue(out, capacity);
     speed_pending_ = kSpeedSwitch;
@@ -596,13 +603,15 @@ Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *pa
     speed_pending_baud_ = baud;
     speed_pending_verify_ = verify;
   } else if (step == reg::core::kPortSpeedStepCommit) {
-    if (speed_state_ == kSpeedBase || port != speed_port_ || baud != speed_asked_) return wrongState(out, capacity);
-    speed_state_ = kSpeedCommitted;   // a commit sent again (committed already) only sets idle_ms again
+    // at the boot speed, or committed already, or another baud than the one trying: not the state for it
+    if (!this_port || speed_state_ != kSpeedTry || baud != speed_asked_) return wrongState(out, capacity);
+    speed_state_ = kSpeedCommitted;
     speed_idle_ms_ = (idle == 0 || idle > reg::kPortSpeedIdleMaxMs) ? reg::kPortSpeedIdleMaxMs : idle;
     speed_good_ms_ = millis();
-    speed_bad_n_ = 0;
+    speed_bad_run_ = 0;
     answer = speed_rate_;
   } else {
+    if (!this_port) return wrongState(out, capacity);   // at the boot speed already: nothing to go back from
     speed_pending_ = kSpeedRevert;
     answer = speed_base_;
   }
@@ -625,7 +634,7 @@ void Endpoint::speedApply() {
   speed_until_ = millis() + speed_pending_verify_;
   speed_good_ms_ = millis();
   speed_heard_ = false;
-  speed_bad_n_ = 0;
+  speed_bad_run_ = 0;
 }
 
 void Endpoint::speedRevert() {
@@ -635,7 +644,7 @@ void Endpoint::speedRevert() {
   speed_state_ = kSpeedBase;
   speed_port_ = 0xff;
   speed_rate_ = speed_asked_ = 0;
-  speed_bad_n_ = 0;
+  speed_bad_run_ = 0;
 }
 
 void Endpoint::speedPoll() {
@@ -651,13 +660,10 @@ void Endpoint::speedBad() {
   // cleanly (2026-10-01). So in the try state only a broken candidate after a good frame at the new speed counts; a
   // rate that never carries a good frame runs out its verify_ms instead.
   if (speed_state_ == kSpeedTry) { if (speed_heard_) speedRevert(); return; }   // the new speed breaks frames: not this one
-  const uint32_t now = millis();
-  if (speed_bad_n_ == kSpeedBadMax) {   // the oldest goes
-    memmove(speed_bad_ms_, speed_bad_ms_ + 1, sizeof speed_bad_ms_[0] * (kSpeedBadMax - 1));
-    --speed_bad_n_;
-  }
-  speed_bad_ms_[speed_bad_n_++] = now;
-  if (speed_bad_n_ == kSpeedBadMax && now - speed_bad_ms_[0] < kSpeedBadWindowMs) speedRevert();
+  // committed (condition 4): kSpeedBadRun broken candidates in a row, no good frame between them (poll() resets the
+  // run on each good frame). No time window: a host back at the boot speed sends confirms that arrive as broken
+  // candidates, and the third takes the port back whatever their spacing (host duty 5).
+  if (++speed_bad_run_ >= kSpeedBadRun) speedRevert();
 }
 
 // session_id(u32) lease_ms(u32) force(u8) [TLV 0x01 owner]  ->  lease_ms(u32) boot_id(u32) resumed(u8: 0 new, 1 the same

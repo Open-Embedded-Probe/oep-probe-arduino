@@ -173,20 +173,20 @@ class Endpoint {
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
   uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
   uint32_t boot_id_ = 0;
-  // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed, any
-  // broken candidate reverts) or committed (idle_ms, at most kPortSpeedIdleMaxMs, with no good frame, or kSpeedBadMax broken candidates within
-  // kSpeedBadWindowMs, revert). A switch or a revert asked by a request happens after its answer is out.
+  // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed; one
+  // broken candidate after the first good frame at the new speed reverts) or committed (idle_ms, at most
+  // kPortSpeedIdleMaxMs, with no good frame - not counted while a request runs, like the lease - or kSpeedBadRun broken
+  // candidates in a row with no good frame between them, revert). A step that does not fit the port's state is
+  // unavailable cause 6. A switch or a revert asked by a request happens after its answer is out.
   enum : uint8_t { kSpeedBase, kSpeedTry, kSpeedCommitted };
   enum : uint8_t { kSpeedNone, kSpeedSwitch, kSpeedRevert };
-  static constexpr uint8_t kSpeedBadMax = 3;
-  static constexpr uint32_t kSpeedBadWindowMs = 1000;
+  static constexpr uint8_t kSpeedBadRun = 3;
   PortSpeedFn port_speed_ = nullptr;
   uint32_t speed_base_ = 115200;
   uint8_t speed_state_ = kSpeedBase, speed_port_ = 0xff;
   uint32_t speed_asked_ = 0, speed_rate_ = 0, speed_until_ = 0, speed_idle_ms_ = 0, speed_good_ms_ = 0;
   bool speed_heard_ = false;   // a good frame came at the new speed (until then a broken candidate is the switch-over's)
-  uint32_t speed_bad_ms_[kSpeedBadMax] = {};
-  uint8_t speed_bad_n_ = 0;
+  uint8_t speed_bad_run_ = 0;  // broken candidates since the last good frame on the sped-up port (committed)
   uint8_t speed_pending_ = kSpeedNone, speed_pending_port_ = 0xff;
   uint32_t speed_pending_baud_ = 0, speed_pending_verify_ = 0;
   Result portSpeed(bool has_session, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);

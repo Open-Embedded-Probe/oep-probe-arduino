@@ -679,6 +679,14 @@ struct Uart {
   }
   void noise() { stream.send({0, 0x31, 0x32, 0x33, 0}); ep.poll(); }   // a candidate whose CRC does not match
 };
+// An interface whose one op takes `takes_ms` of the clock to answer (a long verify, a block op on a slow line).
+class SlowSink final : public Interface {
+ public:
+  uint32_t takes_ms = 0;
+  const char *name() const override { return "io.github.test.slow"; }
+  uint16_t instance() const override { return 0; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { g_millis += takes_ms; return completed(); }
+};
 static Bytes speedReq(uint8_t port, uint32_t baud, uint8_t step, uint16_t verify_ms, uint32_t idle_ms) {
   Bytes p = {port};
   const Bytes b = u32(baud), i = u32(idle_ms);
@@ -719,38 +727,54 @@ static void testPortSpeed() {
   CHECK(r.size() >= 5 && r[0] == 0 && r[1] == kRejectUnavailable && r[4] == 6);
   r = u.send(request(5, 0, 0x14, speedReq(0, 9000000, 0, 2000, 0), true, 5));   // a baud the UART cannot make
   CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
-  r = u.send(request(6, 0, 0x14, speedReq(0, 1500000, 1, 2000, 0), true, 5));   // commit with no try
-  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[4] == 6);
+  r = u.send(request(6, 0, 0x14, speedReq(0, 1500000, 1, 2000, 0), true, 5));   // commit at the boot speed: cause 6
+  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[4] == 6);
+  r = u.send(request(7, 0, 0x14, speedReq(0, 0, 2, 0, 0), true, 5));   // revert at the boot speed: cause 6
+  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[4] == 6);
+  r = u.send(request(8, 0, 0x14, speedReq(0, 1500000, 3, 2000, 0), true, 5));   // step 3: outside the value range
+  CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);
+  r = u.send(request(9, 0, 0x14, speedReq(0, 1500000, 0xff, 2000, 0), true, 5));
+  CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);
   CHECK(g_switches == 0);
 
   // try -> commit: answered at the old speed (the hook not yet called when the answer was written), then switched
-  r = u.send(request(7, 0, 0x14, speedReq(0, 1500000, 0, 2000, 0), true, 5));
+  r = u.send(request(10, 0, 0x14, speedReq(0, 1500000, 0, 2000, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000);
   CHECK(g_tx_at_switch == u.stream.tx.size());   // the whole answer was out before the switch
   CHECK(g_baud == 1500000 && !u.ep.portSpeedCommitted() && u.ep.portSpeedNow() == 1500000);
-  r = u.send(request(8, 0, 0x14, speedReq(0, 1000000, 1, 0, 0), true, 5));   // commit of another baud: cause 6
+  r = u.send(request(11, 0, 0x14, speedReq(0, 1000000, 1, 0, 0), true, 5));   // commit of another baud: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[4] == 6);
+  r = u.send(request(12, 0, 0x14, speedReq(0, 2000000, 0, 2000, 0), true, 5));   // try while trying: cause 6, no switch
+  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[4] == 6);
+  CHECK(g_baud == 1500000 && g_switches == 1 && !u.ep.portSpeedCommitted());
   g_millis += 500;
-  r = u.send(request(9, 0, 0x14, speedReq(0, 1500000, 1, 0, 0), true, 5));
+  r = u.send(request(13, 0, 0x14, speedReq(0, 1500000, 1, 0, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000 && u.ep.portSpeedCommitted());
+  r = u.send(request(14, 0, 0x14, speedReq(0, 1500000, 1, 0, 0), true, 5));   // commit while committed: cause 6
+  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[4] == 6);
+  r = u.send(request(15, 0, 0x14, speedReq(0, 2000000, 0, 2000, 0), true, 5));   // try while committed: cause 6
+  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[4] == 6);
+  CHECK(g_baud == 1500000 && g_switches == 1 && u.ep.portSpeedCommitted());
   g_millis += 2999;   // idle_ms 0: the maximum (port_speed_idle_max_ms), not never
   u.ep.poll();
   CHECK(g_baud == 1500000);
-  u.send(request(10, 0, 0x12, {}, true, 5));   // a good frame restarts the count
+  u.send(request(16, 0, 0x12, {}, true, 5));   // a good frame restarts the count
   CHECK(g_baud == 1500000);
-  // two broken candidates in a second are tolerated, the third reverts
+  // condition 4: three broken candidates in a row revert, with no time window; a good frame between them ends the run
   u.noise();
-  g_millis += 300;
   u.noise();
-  g_millis += 800;
-  u.noise();   // the first is 1.1 s old now
   CHECK(g_baud == 1500000);
-  g_millis += 100;
+  u.send(request(17, 0, 0x12, {}, true, 5));   // a good frame: the two do not count any more
   u.noise();
+  g_millis += 1200;
+  u.noise();
+  CHECK(g_baud == 1500000);   // four broken in all, never three in a row
+  g_millis += 1200;
+  u.noise();   // the third in a row, 2.4 s after the first (no 1 s window)
   CHECK(g_baud == 115200 && u.ep.portSpeedNow() == 0);
 
   // try timeout: no commit within verify_ms
-  r = u.send(request(11, 0, 0x14, speedReq(0, 750000, 0, 1000, 0), true, 5));
+  r = u.send(request(18, 0, 0x14, speedReq(0, 750000, 0, 1000, 0), true, 5));
   CHECK(r[0] == 1 && g_baud == 750000);
   g_millis += 999;
   u.ep.poll();
@@ -758,12 +782,12 @@ static void testPortSpeed() {
   g_millis += 1;
   u.ep.poll();
   CHECK(g_baud == 115200);
-  r = u.send(request(12, 0, 0x14, speedReq(0, 750000, 1, 0, 0), true, 5));   // too late to commit
+  r = u.send(request(19, 0, 0x14, speedReq(0, 750000, 1, 0, 0), true, 5));   // too late to commit
   CHECK(r.size() >= 5 && r[4] == 6);
 
   // a broken candidate while trying: the switch-over's own (before any good frame) is ignored; one after a good frame
   // at the new speed takes it back at once
-  r = u.send(request(13, 0, 0x14, speedReq(0, 230400, 0, 5000, 0), true, 5));
+  r = u.send(request(20, 0, 0x14, speedReq(0, 230400, 0, 5000, 0), true, 5));
   CHECK(r[0] == 1 && g_baud == 230400);
   u.noise();
   CHECK(g_baud == 230400);
@@ -772,8 +796,8 @@ static void testPortSpeed() {
   CHECK(g_baud == 115200);
 
   // committed, idle_ms: no good frame for that long reverts; a good frame restarts the count
-  u.send(request(14, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(15, 0, 0x14, speedReq(0, 500000, 1, 0, 1500), true, 5));
+  u.send(request(21, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(22, 0, 0x14, speedReq(0, 500000, 1, 0, 1500), true, 5));
   CHECK(u.ep.portSpeedCommitted());
   g_millis += 1000;
   u.send(request(16, 0, 0x13, {}));   // any good frame (lock_state, no session)
@@ -785,33 +809,33 @@ static void testPortSpeed() {
   CHECK(g_baud == 115200);
 
   // step 2: answered (the boot speed) at the speed now, then back
-  u.send(request(17, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(18, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
+  u.send(request(23, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(24, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
   const int before = g_switches;
   u.stream.tx.clear();
-  r = u.send(request(19, 0, 0x14, speedReq(0, 0, 2, 0, 0), true, 5));
+  r = u.send(request(25, 0, 0x14, speedReq(0, 0, 2, 0, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 115200 && g_baud == 115200 && g_switches == before + 1);
   CHECK(g_tx_at_switch == u.stream.tx.size());
 
   // the session's end: its answer at the fast speed, then back; a lapse too
-  u.send(request(20, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(21, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
-  r = u.send(request(22, 0, 0x11, {}, true, 5));
+  u.send(request(26, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(27, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
+  r = u.send(request(28, 0, 0x11, {}, true, 5));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200 && g_tx_at_switch == u.stream.tx.size());
-  u.send(request(23, 0, 0x10, openPayload(5, 1000)));
-  u.send(request(24, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(25, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
+  u.send(request(29, 0, 0x10, openPayload(5, 1000)));
+  u.send(request(30, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(31, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
   CHECK(g_baud == 500000);
   g_millis += 1100;   // the lease lapses
   u.ep.poll();
   CHECK(!u.ep.locked() && g_baud == 115200);
   // taken by force from the other transport
-  u.send(request(26, 0, 0x10, openPayload(6, 5000)));
-  u.send(request(27, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 6));
+  u.send(request(32, 0, 0x10, openPayload(6, 5000)));
+  u.send(request(33, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 6));
   CHECK(g_baud == 500000);
   Bytes force = openPayload(7, 5000);
   force[8] = 1;
-  r = u.sendBulk(request(28, 0, 0x10, force));
+  r = u.sendBulk(request(34, 0, 0x10, force));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200);
   // taken back by force on the UART for the idle limit's cases
   force = openPayload(8, 60000);
@@ -833,6 +857,23 @@ static void testPortSpeed() {
   u.send(request(44, 0, 0x14, speedReq(0, 500000, 1, 0, 600000), true, 8));
   CHECK(u.ep.portSpeedCommitted());
   g_millis += reg::kPortSpeedIdleMaxMs - 1;
+  u.ep.poll();
+  CHECK(g_baud == 500000);
+  g_millis += 1;
+  u.ep.poll();
+  CHECK(g_baud == 115200);
+  // condition 3: idle_ms is not counted while a request runs (like the lease, it runs from the answer). A request
+  // that takes longer than idle_ms itself leaves the port at the raised speed, and the count starts over after it.
+  SlowSink slow;
+  CHECK(u.ep.add(slow));   // fn 1
+  u.send(request(45, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 8));
+  u.send(request(46, 0, 0x14, speedReq(0, 500000, 1, 0, 1000), true, 8));
+  CHECK(u.ep.portSpeedCommitted());
+  g_millis += 900;
+  slow.takes_ms = 2500;   // longer than idle_ms
+  r = u.send(request(47, 1, 0x01, {}, true, 8));
+  CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 500000 && u.ep.portSpeedCommitted());
+  g_millis += 999;   // the count runs from the answer
   u.ep.poll();
   CHECK(g_baud == 500000);
   g_millis += 1;
