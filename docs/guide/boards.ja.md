@@ -42,7 +42,7 @@ ESP32 のサイクル数でビットの時間を数え、SWD の bit-bang は RP
 | RP2040 / RP2350 | GP0〜GP22、GP26〜GP28 | GP23〜GP25、GP29（Pico の SMPS、VBUS の検出、LED、VSYS）。ほかのボードで、出すピンにつながった部品（LED、PSRAM の chip select）は、host が触らないようにする |
 | SparkFun Pro Micro RP2350（`promicrorp2350`） | GP0〜GP18、GP20〜GP29 | GP19（PSRAM の chip select） |
 | ESP32-P4 | GPIO0〜GPIO54（24、25 以外） | GPIO24 / 25（USB-Serial/JTAG） |
-| classic ESP32 | GPIO4、5、13、14、16〜19（16 / 17 は PICO-D4 / PICO-V3 / D2WD / D0WDR2 と PSRAM のあるボードでは起動時に外す）、21〜23、25〜27、32、33、34〜36、39（34〜39 は入力だけ）。SWIO は 32 未満の出力のピン | 1、3（UART0: 経路）、6〜11（flash）、0、2、12、15（起動のストラップ） |
+| classic ESP32 | GPIO4、5、13、14、16〜19（16 / 17 は PICO-D4 / PICO-V3 / D2WD と、ビルドで PSRAM を有効にしたときは起動時に外す）、21〜23、25〜27、32、33、34〜36、39（34〜39 は入力だけ）。SWIO は 32 未満の出力のピン | 1、3（UART0: 経路）、6〜11（flash）、0、2、12、15（起動のストラップ） |
 
 RP2 の UART の fixture は UART0 で、RX / TX は GP1/0、GP13/12、GP17/16、GP29/28 のどれかです。ESP32 はどのピンでも使えます
 （GPIO の行列）。
