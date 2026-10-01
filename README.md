@@ -23,6 +23,33 @@ leaves the capabilities open:
 - the probe knows only its wires; **what a target is** (flash layout, loaders, how its debug line wants to be driven) **stays
   in the host**.
 
+## Transports: why OEP runs over several kinds of link
+
+OEP's frames are the same on every link; only the framing around them differs (COBS on serial ports, a length on USB bulk and
+HID). A probe carries OEP on whichever links its chip has - several at once, sharing one session and lock - and the host picks
+the fastest it finds. Each kind exists because some probe needs it:
+
+| Link | What it is good for | Probe → host | Host → probe | Round trip | Chips in this library |
+|---|---|---|---|---|---|
+| **USB vendor bulk** (high speed) | Logic and analog capture streamed live, big flash images: the only link fast enough for a 2-channel 150 Msample/s logic capture (37.5 MB/s) | 33-37 MB/s | 5.5-10 MB/s | 0.37 ms | ESP32-P4 (HS port) |
+| **USB HID** (vendor-defined reports) | No driver on any OS, opens from a browser (WebHID). The one class a **software (bit-banged) USB device** can offer: a low-speed device has no bulk endpoints, so a probe built on a chip without a USB peripheral can still be an OEP probe over HID | 0.8-1.1 MB/s (HS); a low-speed device about 8 KB/s | 1.0 MB/s (HS) | 0.66 ms | ESP32-P4 (HS port) |
+| **USB CDC** (serial port) | Shows up as a COM port: the Arduino IDE's port and serial monitor work as they are, and the target's console shares the line with OEP | 8.1 MB/s (HS) | 6.7 MB/s (HS) | 0.60 ms | ESP32-P4 (HS port), RP2040 / RP2350 (full speed) |
+| **USB-Serial/JTAG** (ESP32's built-in serial port) | Needs no USB stack in the firmware; the same port flashes the probe (esptool) | about 0.8 MB/s (full speed) | - | - | ESP32-P4 (FS port), ESP32-S3 / C3 / C6 |
+| **UART** through a USB-UART bridge (CP2102, CH340, ...) | Any board with a UART and a bridge chip - most cheap boards - can be a probe; slow, but enough for flashing and debugging small targets | about 11 KB/s (115200 baud) | about 11 KB/s | about 5 ms | classic ESP32 |
+
+Figures are what the bench measured (ESP32-P4 through usbipd, 2026-09-25 / 26; classic ESP32 at 115200 baud;
+oep-spec docs/logic-capture.ja.md §2.7, docs/probe-cdc-and-persistence.ja.md §5.3 / §7). The low-speed HID figure is the
+class's own ceiling (8-byte reports, one per millisecond), not a measurement.
+
+**Why a probe needs its own USB identity**: a host finds OEP probes among all the USB devices without opening each one, and
+the same probe is seen on every link it has (vendor bulk, HID, CDC) as one device with one serial number (= the probe's
+`unit_id`). The links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
+browsers - and those need a VID:PID of their own to be recognised. Until pid.codes grants one, the reference firmware
+uses `303a:0002` and hosts recognise the probe by an iProduct starting with `OEP` (oep-spec docs/usb-identity.ja.md).
+
+A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume
+(some bridges and boards do not run 921600 reliably), so a host stays at 115200 unless the probe and the host agree on more.
+
 This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into such a probe.
 
 - Guides: [Getting started](docs/guide/getting-started.md) (flash, find, use a probe from Python), [Writing a probe](docs/guide/writing-a-probe.md)

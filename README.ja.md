@@ -21,6 +21,33 @@ UART、SPI / I2C のデバイス、ロジックのキャプチャ）を兼ね、
   コンソールを 1 本で運ぶ。
 - probe は線のことだけを知り、**target が何か**（flash の配置、ローダー、debug の線をどう動かすか）は **host が持つ**。
 
+## 経路: なぜ OEP はいくつもの種類のリンクで動くのか
+
+OEP のフレームはどのリンクでも同じで、違うのは包み方だけです（シリアルの口は COBS、USB の bulk と HID は長さ）。probe は自分の
+チップが持つリンクのどれでも OEP を運べ（同時に複数でもよく、セッションとロックは 1 つを共有する）、host は見つかった中で一番速い
+ものを選びます。どの種類も、それが要る probe があるので用意しています。
+
+| リンク | 何に向くか | probe → host | host → probe | 往復 | このライブラリのチップ |
+|---|---|---|---|---|---|
+| **USB vendor bulk**（high speed） | ロジック・アナログのキャプチャのストリーミング、大きな flash の書き込み。2 チャネル 150 Msample/s のロジック（37.5 MB/s）に足りる唯一のリンク | 33〜37 MB/s | 5.5〜10 MB/s | 0.37 ms | ESP32-P4（HS の口） |
+| **USB HID**（vendor 定義の report） | どの OS でもドライバ不要、ブラウザ（WebHID）からも開ける。**ソフトウェア（bit-bang）の USB デバイス**が出せる唯一の class: low speed のデバイスには bulk の endpoint が無いので、USB のペリフェラルを持たないチップで作った probe も HID なら OEP の probe になれる | 0.8〜1.1 MB/s（HS）。low speed のデバイスなら約 8 KB/s | 1.0 MB/s（HS） | 0.66 ms | ESP32-P4（HS の口） |
+| **USB CDC**（シリアルの口） | COM ポートとして見える: Arduino IDE のポートとシリアルモニターがそのまま使え、target のコンソールが OEP と 1 本の線を共有する | 8.1 MB/s（HS） | 6.7 MB/s（HS） | 0.60 ms | ESP32-P4（HS の口）、RP2040 / RP2350（full speed） |
+| **USB-Serial/JTAG**（ESP32 の内蔵のシリアルの口） | firmware に USB のスタックが要らない。同じ口で probe 自身を書き込める（esptool） | 約 0.8 MB/s（full speed） | — | — | ESP32-P4（FS の口）、ESP32-S3 / C3 / C6 |
+| **UART**（USB-UART の変換チップ経由: CP2102、CH340 など） | UART と変換チップがあるボード（安いボードのほとんど）なら probe になれる。遅いが、小さな target の書き込みとデバッグには足りる | 約 11 KB/s（115200 baud） | 約 11 KB/s | 約 5 ms | classic ESP32 |
+
+数値は試験台で測ったもの（ESP32-P4 は usbipd 経由、2026-09-25 / 26。classic ESP32 は 115200 baud。oep-spec の
+docs/logic-capture.ja.md §2.7、docs/probe-cdc-and-persistence.ja.md §5.3 / §7）。low speed の HID の値は class そのものの上限
+（8 byte の report、1 ms に 1 つ）で、測った値ではありません。
+
+**なぜ probe に自分の USB の ID が要るのか**: host は USB のデバイスを 1 つずつ開かずに OEP の probe を見つけ、probe が持つどの
+リンク（vendor bulk、HID、CDC）でも、同じ probe を 1 つのデバイス・1 つの serial number（= probe の `unit_id`）として扱います。
+さらに上のリンクには、シリアルの口でない USB のデバイスが要ります（速さのための vendor bulk、ソフトウェア USB とブラウザのための
+HID）。それを認識させるには、専用の VID:PID が要ります。pid.codes から割り当てを受けるまで、参照の firmware は `303a:0002` を使い、
+host は iProduct が `OEP` で始まることで probe を見分けます（oep-spec docs/usb-identity.ja.md）。
+
+UART の 115200 baud は、どのボードと変換チップでも通る速さです。それより速い速さを probe は前提にできません（921600 を安定して
+通せない変換チップやボードがある）。host は、probe と host が合意しない限り 115200 のままにします。
+
 このライブラリは、ESP32-P4、classic ESP32、RP2350、RP2040 をその probe にします。
 
 - 手引き: [使い始める](docs/guide/getting-started.ja.md)（焼く、見つける、Python から使う）、[probe を書く](docs/guide/writing-a-probe.ja.md)
