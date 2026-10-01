@@ -19,6 +19,9 @@
 //              mechanism(u8: 0xFF none) name_len(u8) name lock_len(u8) [lock_scheme(u8) mask(n) value(n)]   key slot
 //   0x05 bind  port(u8) mode(u8) selected(u8) n(u8) n x (len(u8) kind(u8) id(u16))                       key port
 //   0x06 uart  fn(u16) baud(u32) format(u8)              key fn: a fixture UART's settings, in force when its plan has pins
+//   0x07 disable channel(u16)                            key channel: never used, driven or configured (not on this
+//                                                        board): every request naming it is unavailable cause 5, and
+//                                                        the pin is never parked; describe still offers it
 // The probe keeps every item's bytes as the host sent them (the critical bit cleared, unknown tails kept) in the
 // canonical order (tag, then key), which is what get pages and the hash (CRC-32) covers. Saved to NVS on ESP32
 // (Preferences "oepcfg" / "items4") or the flash's last sector on RP2040 / RP2350 (EEPROM, "OEP4"), with the identity of
@@ -61,13 +64,18 @@ class ProbeConfig final : public Interface {
   bool addPlace(WireRvswd &wire, TargetConsoleStream &console);
   // A fixture UART a bind may carry and the uart item sets (after the endpoint has it).
   bool addUart(FixtureUart &uart);
-  // The pins whose idle state the idle item sets (without it, idle items are refused).
+  // The pins whose idle state the idle item sets and the disable item takes away (without it, both are refused).
   void setPins(PinTable *pins) { pins_ = pins; }
 
   // Read what was saved, then apply it: both after the sketch's last endpoint.add(). The saved items keep the
   // (name, instance, revision) of every interface they name and are renumbered to where those are now; one gone (or of
   // another revision) leaves them unapplied (storage unreadable, probe.config §2).
+  // load() only reads the storage (no interface is needed): a sketch that parks its free pins at start-up loads first
+  // and leaves the saved disable items' channels alone (savedDisabled, probe.config §2: they apply before any idle /
+  // park). applySaved then sets the PinTable's disabled channels from what was applied (none when it was not, those
+  // pins then going to their idle state).
   void load();
+  uint64_t savedDisabled() const { return disabledIn(saved_, saved_length_); }
   void applySaved();
   void poll();   // from loop(): the slots' automatic attach, retries, liveness, the bound consoles
 
@@ -110,6 +118,7 @@ class ProbeConfig final : public Interface {
     Binds::Spec binds[Binds::kMaxPorts];
     UartItem uarts[kMaxUarts];
     Label labels[kMaxLabels];
+    uint64_t disabled = 0;         // the disable items' channels (under 64; a higher one names no pin here)
   };
   Endpoint &endpoint_;
   Binds &binds_;
@@ -144,6 +153,9 @@ class ProbeConfig final : public Interface {
   static bool insertItem(uint8_t *store, size_t &length, size_t capacity, uint8_t tag, const uint8_t *value, size_t vlen);
   static void removeItems(uint8_t *store, size_t &length, uint8_t tag, const uint8_t *key, size_t key_length);
   uint32_t hash() const { return crc32Of(items_, items_length_); }
+  static uint64_t disabledIn(const uint8_t *items, size_t length);
+  void setDisabled(uint64_t mask);   // the PinTable's and the endpoint's
+  void applySavedItems();
   static uint32_t crc32Of(const uint8_t *data, size_t length);
 
   // One item's own checks (probe.config §1 / §2's table) - its shape and what this probe has; nothing of the whole.

@@ -93,6 +93,10 @@ class Endpoint {
   static constexpr size_t kMaxRoles = 64;   // the plan's role assignments, every fn together (describe plan_roles)
   size_t plan(RoleAssignment *out, size_t max, bool persistent_only = false) const;
   uint8_t replacePlan(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns);
+  // The channels oep.probe.config's disable items take away (channel < 64): a plan_apply naming one is refused
+  // unavailable cause 5 (held by settings) with the channel (probe.config §1).
+  void setDisabled(uint64_t mask) { disabled_ = mask; }
+  bool disabled(uint16_t channel) const { return channel < 64 && (disabled_ >> channel) & 1; }
   // The identity of the interface list (oep-if-probe-config §2): CRC-32 of every entry (fn u16, instance u16,
   // revision u8, name) in fn order, oep.core first.
   uint32_t listHash() const;
@@ -156,6 +160,7 @@ class Endpoint {
   size_t count_ = 0;
   const uint8_t *probe_tlv_ = nullptr;
   size_t probe_tlv_length_ = 0;
+  uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
   uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
   uint32_t boot_id_ = 0;
   volatile bool locked_ = false;

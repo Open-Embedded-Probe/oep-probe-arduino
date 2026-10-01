@@ -83,9 +83,13 @@ void setup() {
   Serial.begin(115200);
   // Every channel genuinely Hi-Z until the host takes it (a pull on a target's USB line breaks its enumeration, E132).
   // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
+  // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied
+  // before any idle / park; applySaved below gives them back if the settings are not applied).
   const uint64_t unusable = oep::platformUnusablePins();
   pins.forbid(unusable);
-  oep::platformParkMask(kChannels & ~unusable);
+  config.load();
+  pins.setDisabled(config.savedDisabled());
+  oep::platformParkMask(kChannels & ~unusable & ~pins.disabledMask());
   endpoint.setRawPorts(&binds);
   swio.pin_choice = kSwioChoice & ~unusable;
   swio.pins = &pins;
@@ -112,8 +116,7 @@ void setup() {
   group.addTrack(analog, analog);
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
-  config.load();
-  config.applySaved();
+  config.applySaved();   // read by config.load() at the top
 }
 
 void loop() {

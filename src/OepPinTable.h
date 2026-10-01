@@ -4,6 +4,11 @@
 // The probe channels a sketch may hand to interfaces, who holds each one, and the state a free channel rests in
 // (oep-spec oep-core §8: a released pin goes to its idle state, Hi-Z unless set otherwise). Shared by every
 // interface that takes pins, so two of them never drive the same channel. Per-core pin modes live in OepPlatform.h.
+//
+// Two ways a channel is taken away: forbid (the firmware's: a pin the chip in this package uses itself; permanent,
+// describe never offers it) and setDisabled (oep.probe.config's disable item: the user's board does not wire it; the
+// settings can give it back). A disabled channel is never claimed, parked or set to its idle state - the probe leaves
+// it as the reset left it - and describe still offers it (declarations only, core §7.3).
 #pragma once
 
 #include <Arduino.h>
@@ -22,7 +27,17 @@ class PinTable {
   bool allowed(uint16_t channel) const { return channel < kChannels && (allowed_ >> channel) & 1; }
   // Channels taken away at start-up (pins the chip in this package uses itself: platformUnusablePins).
   void forbid(uint64_t mask) { allowed_ &= ~mask; }
-  bool free(uint16_t channel) const { return allowed(channel) && owner_[channel] == 0; }
+  // The settings' disabled channels (probe.config §1 disable). A channel enabled again is free: it goes to its idle
+  // state now. One disabled is left as it is (the settings refuse to disable a channel in use).
+  void setDisabled(uint64_t mask) {
+    const uint64_t back = disabled_ & ~mask;
+    disabled_ = mask;
+    for (uint8_t c = 0; c < kChannels; ++c)
+      if (((back >> c) & 1) && allowed(c) && owner_[c] == 0) applyIdle(c);
+  }
+  bool disabled(uint16_t channel) const { return channel < kChannels && (disabled_ >> channel) & 1; }
+  uint64_t disabledMask() const { return disabled_; }
+  bool free(uint16_t channel) const { return allowed(channel) && !disabled(channel) && owner_[channel] == 0; }
   bool claim(uint16_t channel, uint8_t owner) {
     if (!free(channel)) return false;
     owner_[channel] = owner;
@@ -32,7 +47,7 @@ class PinTable {
   // say pull-up / pull-down. Nothing keeps driving a pin nobody owns.
   void release(uint8_t owner) {
     for (uint8_t c = 0; c < kChannels; ++c)
-      if (owner_[c] == owner) { owner_[c] = 0; applyIdle(c); }
+      if (owner_[c] == owner) { owner_[c] = 0; if (!disabled(c)) applyIdle(c); }
   }
   // The same without touching the pads: for an owner that leaves its pins in a safe state itself (a debug wire's PHY
   // releases them Hi-Z; on the ESP32-P4 a pinMode on its pins would take them out of the dedicated GPIO bundle).
@@ -48,13 +63,14 @@ class PinTable {
   bool setIdle(uint16_t channel, uint8_t mode) {
     if (!allowed(channel) || (mode > kIdlePullDown && mode != kIdleUnset)) return false;
     idle_[channel] = mode;
-    if (owner_[channel] == 0) applyIdle(static_cast<uint8_t>(channel));
+    if (owner_[channel] == 0 && !disabled(channel)) applyIdle(static_cast<uint8_t>(channel));
     return true;
   }
   uint8_t idle(uint16_t channel) const { return channel < kChannels ? idle_[channel] : kIdleUnset; }
 
  private:
   uint64_t allowed_ = 0;
+  uint64_t disabled_ = 0;   // the settings' disable items
   uint8_t owner_[kChannels] = {};
   uint8_t idle_[kChannels] = {kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,

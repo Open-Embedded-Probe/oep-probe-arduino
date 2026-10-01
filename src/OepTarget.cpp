@@ -137,7 +137,16 @@ bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   return swclk <= 63 && swclk != swdio && ((port.pin_choice >> swclk) & 1);
 }
 
+// A channel of the pair the settings disable (probe.config §1), or 0xFFFF.
+uint16_t pairDisabled(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
+  if (!port.pins) return 0xffff;
+  if (port.pins->disabled(swdio)) return swdio;
+  if (swclk != 0xffff && port.pins->disabled(swclk)) return swclk;
+  return 0xffff;
+}
+
 bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
+  if (pairDisabled(port, swdio, swclk) != 0xffff) return false;   // never used, the fixed pair included
   if (!port.pin_choice || !port.pins) return true;   // a fixed pair is the wire's own (kept out of the pin table)
   auto freeFor = [&](uint16_t c) {
     if (c == 0xffff) return true;
@@ -258,6 +267,8 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   for (uint8_t k = 0; k < count; ++k) {
     const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
     if (!pairAllowed(port_, d, c)) return unsupportedValue(out, capacity);
+    const uint16_t off = pairDisabled(port_, d, c);   // the settings disable it: cause 5 (probe.config §1)
+    if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
     if (!pairFree(port_, d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
       return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, port_.pins && port_.pins->owner(d) ? d : c);
   }
@@ -301,7 +312,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   if (count) {
     for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
   } else if (port_.connected || !port_.pin_choice) {   // the count-0 list: the live pair, or the fixed one
-    if (skip == 0) tryPair(port_.swdio, port_.swclk);
+    if (skip == 0 && pairDisabled(port_, port_.swdio, port_.swclk) == 0xffff) tryPair(port_.swdio, port_.swclk);
   } else {                                            // swdio ascending, then swclk; held pairs left out
     uint32_t index = 0;
     bool more = true;
@@ -362,6 +373,16 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   {
     size_t plen = 0;
     const uint8_t *pins = tail.find(wire::kTlvAttachPins, plen);
+    // a channel the settings disable - the pins asked for, the fixed pair, the reset line: cause 5 with the channel
+    // (probe.config §1), before choosePair moves anything
+    uint16_t off = 0xffff;
+    if (pins && plen == 4 && pairAllowed(port_, getU16(pins), getU16(pins + 2)))
+      off = pairDisabled(port_, getU16(pins), getU16(pins + 2));
+    else if (!pins && !port_.pin_choice)
+      off = pairDisabled(port_, port_.swdio, port_.swclk);
+    if (off == 0xffff && with_reset && port_.pins && port_.pins->disabled(static_cast<uint16_t>(reset_channel)))
+      off = static_cast<uint16_t>(reset_channel);
+    if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
     if (const uint8_t bad = choosePair(pins, plen)) {
       if (bad == kRejectUnsupported) return unsupportedTag(out, capacity, wire::kTlvAttachPins | kTagCritical);
       if (bad == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);

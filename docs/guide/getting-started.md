@@ -163,6 +163,7 @@ A jig is the firmware plus its settings. Write them once and save them; the prob
 oep config slot /dev/ttyACM0 --name dut --wire rvswd --pins 2,3 --attach at-boot --retry 1 --mechanism dmseq
 oep config bind /dev/ttyACM0 --port 0 --mode last-reset --stream slot:dut      # the target's console on this port
 oep config idle /dev/ttyACM0 5 pull-up --save
+oep config disable /dev/ttyACM0 28 29 --save            # not on this board: never used or touched
 oep config show /dev/ttyACM0
 ```
 

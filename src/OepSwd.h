@@ -65,6 +65,7 @@ class WireSwd final : public Interface {
   void close();                      // the live connection goes: pins released (Hi-Z), let go of in the pin table
   bool allowed(uint16_t swdio, uint16_t swclk) const;
   bool free(uint16_t swdio, uint16_t swclk) const;   // nothing but this link's live connection on that pair holds them
+  uint16_t disabledOf(uint16_t swdio, uint16_t swclk) const;   // a channel the settings disable, or 0xFFFF
   bool move(uint16_t swdio, uint16_t swclk);          // the link to that pair (no live connection)
   SwdPort &port_;
   uint16_t instance_;

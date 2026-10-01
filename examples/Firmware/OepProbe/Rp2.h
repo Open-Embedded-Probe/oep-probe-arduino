@@ -96,7 +96,11 @@ void setup() {
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one.
-  oep::platformParkMask(kChannels);
+  // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied
+  // before any idle / park; applySaved below gives them back if the settings are not applied).
+  config.load();
+  pins.setDisabled(config.savedDisabled());
+  oep::platformParkMask(kChannels & ~pins.disabledMask());
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;
   rvswd.reset_allowed = kChannels;   // attach's reset TLV: the channel the host names (no default), nobody holding it
@@ -121,8 +125,7 @@ void setup() {
   endpoint.add(analog);   // after config: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
-  config.load();
-  config.applySaved();
+  config.applySaved();   // read by config.load() at the top
 }
 
 void loop() {

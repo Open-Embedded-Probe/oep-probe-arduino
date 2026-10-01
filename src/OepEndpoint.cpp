@@ -638,6 +638,9 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     if (persistent_[fns[k] - 1])
       return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, 0xFFFF, fns[k],
                          reg::core::kHolderKindSettingsPlan);
+  for (size_t r = 0; r < count; ++r)   // a channel the settings disable (probe.config §1)
+    if (disabled(roles[r].channel))
+      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, roles[r].channel);
   clash_fn_ = 0;
   const uint16_t reason = replaceFns(roles, count, fns, nfns, false);
   if (reason > 0xff) return failed();
