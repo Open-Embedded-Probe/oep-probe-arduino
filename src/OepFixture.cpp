@@ -158,27 +158,35 @@ void FixtureUart::planRelease() {
   rx_ = tx_ = -1;
   running_ = false;
   session_configured_ = false;   // the next plan starts from the item (or the default) again
+  configured_ = ua::kUartConfiguredDefault;
 }
 
 // The settings the UART starts with when its plan gives it pins (oep-if-probe-config §1): a session's configure since
 // the plan, else the probe.config uart item, else 115200 8N1.
 void FixtureUart::applySettings() {
   if (rx_ < 0 && tx_ < 0) return;
-  if (session_configured_) begin(baud_, format_);
-  else if (item_set_) begin(item_baud_, item_format_);
-  else begin(kDefaultBaud, 0);
+  if (session_configured_) {
+    configured_ = ua::kUartConfiguredSession;
+    begin(baud_, format_);
+  } else if (item_set_) {   // the item; a baud the divider cannot make within 5 % falls back to the default (status 3)
+    configured_ = begin(item_baud_, item_format_) ? ua::kUartConfiguredItem : ua::kUartConfiguredItemFallback;
+    if (configured_ == ua::kUartConfiguredItemFallback) begin(kDefaultBaud, 0);
+  } else {
+    configured_ = ua::kUartConfiguredDefault;
+    begin(kDefaultBaud, 0);
+  }
 }
 
 void FixtureUart::setItem(uint32_t baud, uint8_t format) {
   item_set_ = true;
   item_baud_ = baud;
   item_format_ = format;
-  if ((rx_ >= 0 || tx_ >= 0) && !session_configured_) begin(baud, format);
+  if (!session_configured_) applySettings();
 }
 
 void FixtureUart::clearItem() {
   item_set_ = false;
-  if ((rx_ >= 0 || tx_ >= 0) && !session_configured_) begin(kDefaultBaud, 0);
+  if (!session_configured_) applySettings();
 }
 
 void FixtureUart::poll() {
@@ -247,14 +255,15 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
         return unsupportedValue(out, capacity);
       }
       session_configured_ = true;
+      configured_ = ua::kUartConfiguredSession;
       putU32(out, baud_);
       return tail.finish(completed(4), out, capacity);
     }
-    case kOpStatus: {   // [TLV]  ->  configured(u8) baud(u32) format(u8) [TLV]
+    case kOpStatus: {   // [TLV]  ->  configured(u8: uart_configured) baud(u32) format(u8) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (capacity < 6) return failed();
-      out[0] = running_ && (session_configured_ || item_set_) ? 1 : 0;
+      out[0] = running_ ? configured_ : ua::kUartConfiguredDefault;
       putU32(out + 1, running_ ? baud_ : 0);
       out[5] = running_ ? format_ : 0;
       return tail.finish(completed(6), out, capacity);
