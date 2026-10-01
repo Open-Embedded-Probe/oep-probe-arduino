@@ -83,6 +83,9 @@ class SerialReader {
   const uint8_t *message() const { return dec_; }
   size_t length() const { return length_; }
   uint32_t crcErrors() const { return crc_errors_; }
+  // Candidates closed by a 0x00 that were not a frame (no valid COBS, or the CRC did not match): the line's noise. The
+  // endpoint's port_speed watches it on a port it sped up (core §3.5).
+  uint32_t badCandidates() const { return bad_; }
   static constexpr uint32_t kGapMs = 200;
 
  private:
@@ -91,7 +94,7 @@ class SerialReader {
   bool open_ = false;       // a candidate started (its leading 0x00 is implied, not stored)
   size_t have_ = 0;         // encoded bytes of the candidate
   size_t length_ = 0;
-  uint32_t last_ms_ = 0, crc_errors_ = 0;
+  uint32_t last_ms_ = 0, crc_errors_ = 0, bad_ = 0;
   bool close();             // the candidate ends at a 0x00: true = a message in dec_
   void spill(RawSink sink, void *context);   // the open candidate as raw bytes (0x00 first)
 };

@@ -105,6 +105,16 @@ class Endpoint {
   // A value that changes every boot (a 32-bit random number does; 0 is as good as any other), returned by confirm and
   // open (core §6.5).
   void setBootId(uint32_t boot_id) { boot_id_ = boot_id; }
+  // The optional port_speed (core §3.5, fn 0 op 0x14): a host raises a UART bridge's baud for its session. Setting a
+  // handler turns the feature on (describe port_speed 1, the op taken; without one the op is unknown_operation).
+  // fn(port, baud, apply): apply false = the rate the port would run at for `baud` (0: this UART cannot make it, the
+  // request is unsupported); apply true = switch the port to `baud` (its output already flushed) and return the rate it
+  // runs at. `base` is the boot speed every revert goes back to.
+  using PortSpeedFn = uint32_t (*)(uint8_t port, uint32_t baud, bool apply);
+  void setPortSpeed(PortSpeedFn fn, uint32_t base) { port_speed_ = fn; speed_base_ = base; }
+  // The rate a sped-up port runs at now (0: every port at its boot speed), and whether it is committed (else trying).
+  uint32_t portSpeedNow() const { return speed_state_ == kSpeedBase ? 0 : speed_rate_; }
+  bool portSpeedCommitted() const { return speed_state_ == kSpeedCommitted; }
   // Experimental event from an interface (sent to the lock holder if it subscribed to that interface), after
   // results; kept in a small queue until then (oldest dropped when full - the seq gap shows it).
   bool event(Interface &from, uint8_t kind, const uint8_t *payload, size_t length);
@@ -163,6 +173,26 @@ class Endpoint {
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
   uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
   uint32_t boot_id_ = 0;
+  // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed, any
+  // broken candidate reverts) or committed (idle_ms with no good frame, or kSpeedBadMax broken candidates within
+  // kSpeedBadWindowMs, revert). A switch or a revert asked by a request happens after its answer is out.
+  enum : uint8_t { kSpeedBase, kSpeedTry, kSpeedCommitted };
+  enum : uint8_t { kSpeedNone, kSpeedSwitch, kSpeedRevert };
+  static constexpr uint8_t kSpeedBadMax = 3;
+  static constexpr uint32_t kSpeedBadWindowMs = 1000;
+  PortSpeedFn port_speed_ = nullptr;
+  uint32_t speed_base_ = 115200;
+  uint8_t speed_state_ = kSpeedBase, speed_port_ = 0xff;
+  uint32_t speed_asked_ = 0, speed_rate_ = 0, speed_until_ = 0, speed_idle_ms_ = 0, speed_good_ms_ = 0;
+  uint32_t speed_bad_ms_[kSpeedBadMax] = {};
+  uint8_t speed_bad_n_ = 0;
+  uint8_t speed_pending_ = kSpeedNone, speed_pending_port_ = 0xff;
+  uint32_t speed_pending_baud_ = 0, speed_pending_verify_ = 0;
+  Result portSpeed(bool has_session, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  void speedApply();             // the switch or revert a request asked for, after its answer
+  void speedRevert();            // back to the boot speed (nothing when there already)
+  void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
+  void speedBad();               // a broken candidate on the sped-up port
   volatile bool locked_ = false;
   uint32_t holder_ = 0, last_ = 0;
   bool have_last_ = false;

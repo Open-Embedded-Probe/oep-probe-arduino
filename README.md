@@ -53,6 +53,9 @@ uses `303a:0002` and hosts recognise the probe by an iProduct starting with `OEP
 
 A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume
 (some bridges and boards do not run 921600 reliably), so a host stays at 115200 unless the probe and the host agree on more.
+The classic ESP32 firmware offers the optional `port_speed` (oep-core §3.5): a host that asks tries a rate, checks it with
+a sized transfer both ways, and commits it for its session; the probe goes back to 115200 by itself when the check never
+comes, frames break, the line goes quiet or the session ends (build with `-DOEP_PORT_SPEED=0` to leave it out).
 
 This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into such a probe.
 
