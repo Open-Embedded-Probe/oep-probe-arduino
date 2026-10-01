@@ -36,7 +36,7 @@ pip install oep-client-python
 ```
 
 This gives the `oep` command and the Python package `oep_client`. Other hosts speak the same protocol (ch32rv, the
-ArduinoCore-CH32 upload tool); this guide uses the Python one.
+ArduinoCore-CH32RV upload tool); this guide uses the Python one.
 
 ## 3. Find the probe and see what it offers
 
@@ -100,7 +100,7 @@ What a target needs of its line is the host's to say: a CH32L103 wants `idle_clo
 at attach. To reset a target through its NRST pin, name the channel: `wire.attach_under_reset(channel)` - there is no
 default reset line.
 
-Flashing, the console and the rest are the host tools' job: ch32rv and the ArduinoCore-CH32 upload do it over OEP.
+Flashing, the console and the rest are the host tools' job: ch32rv and the ArduinoCore-CH32RV upload do it over OEP.
 
 ### Capture signals (ESP32-P4)
 

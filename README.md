@@ -43,7 +43,7 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
 One ESP32-P4 board, wired to a CH32L103 on every pin you want to watch, is the whole test bench:
 
 - **Write and debug the target** over RVSWD: flash it, halt / resume / step it, read and write its memory
-  (`oep.wire.rvswd`, `oep.target.riscv-dm`). [ArduinoCore-CH32](https://github.com/ch32-riscv-ug/ArduinoCore-CH32) uploads
+  (`oep.wire.rvswd`, `oep.target.riscv-dm`). [ArduinoCore-CH32RV](https://github.com/ch32-riscv-ug/ArduinoCore-CH32RV) uploads
   through the probe from the Arduino IDE (an `oep://...` port).
 - **Read its console** through the debug module (`oep.target.console`, no UART needed) or a UART (`oep.fixture.uart`).
 - **Check what the target's code does with its pins**: the P4 answers as the device on the other end - an SPI device, an

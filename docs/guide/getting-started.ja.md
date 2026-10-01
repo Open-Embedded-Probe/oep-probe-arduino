@@ -34,7 +34,7 @@ app の image）が、もう一方の app の領域に書き、確かめてか�
 pip install oep-client-python
 ```
 
-`oep` の命令と Python の `oep_client` が入ります。ほかの host（ch32rv、ArduinoCore-CH32 の書き込み）も同じプロトコルを
+`oep` の命令と Python の `oep_client` が入ります。ほかの host（ch32rv、ArduinoCore-CH32RV の書き込み）も同じプロトコルを
 話します。この手引きでは Python のものを使います。
 
 ## 3. probe を見つけて、何を持つかを見る
@@ -100,7 +100,7 @@ target が線に求めるもの（休ませ方、速さ）は host が言いま�
 `max_speed=1_000_000` を渡します。NRST のピンで target を reset するときは、その channel を名指します
 （`wire.attach_under_reset(channel)`）。既定の reset 線はありません。
 
-書き込み、コンソールなどは host の道具の仕事です。ch32rv と ArduinoCore-CH32 の書き込みが OEP で行います。
+書き込み、コンソールなどは host の道具の仕事です。ch32rv と ArduinoCore-CH32RV の書き込みが OEP で行います。
 
 ### 信号をキャプチャする（ESP32-P4）
 
