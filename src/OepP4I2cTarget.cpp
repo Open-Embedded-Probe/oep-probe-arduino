@@ -55,6 +55,7 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagMaxClockHz, 1000000u);
   w.u32(kTagFeatures, 0b11);   // bit0 preloaded tx, bit1 clock stretching (set_stretch)
   w.u8(kTagImplementation, 2);   // a dedicated peripheral
+  w.u8(reg::fixture_i2c_target::kTlvDescribeQueueDepth, kQueueDepth);
   return w.ok() ? w.length() : 0;
 }
 
@@ -164,9 +165,8 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
     case kOpConfigure: {   // address(u8) mode(u8) [TLV]
       const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] > 0x7f) return rejected(kRejectMalformed);
-      if (payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return rejected(kRejectUnsupported);
-      if (sda_ < 0) return rejected(kRejectUnavailable);  // needs a plan
+      if (payload[0] > 0x7f || payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return rejected(kRejectMalformed);
+      if (sda_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §3: unavailable cause 6)
       stop();
       address_ = payload[0]; mode_ = payload[1]; framed_header_ = true;
       if (!start()) return failed();
@@ -177,8 +177,9 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
       if (refused(parsed)) return parsed;
       const uint16_t want = getU16(payload);
-      if (!started_ || mode_ != kModeFixedRx) return rejected(kRejectUnavailable);
-      if (!want || want > kMaxFrame) return rejected(kRejectMalformed);
+      if (!want) return rejected(kRejectMalformed);
+      if (want > kMaxFrame) return unsupportedValue(out, capacity);   // over max_length (fixture §3)
+      if (!started_ || mode_ != kModeFixedRx) return wrongState(out, capacity);
       if (armed_) {
         // The v1 driver has no cancel for a pending receive job; a second
         // i2c_slave_receive() while one is armed took the P4 down. Recreate the
@@ -193,7 +194,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
     case kOpReadRx: {   // [TLV] -> pending(u8) count(u16) data: the oldest received frame, then the ones still queued
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (!started_) return rejected(kRejectUnavailable);
+      if (!started_) return wrongState(out, capacity);
       const size_t data = queue_count_ ? queue_length_[0] : 0;
       if (capacity < 3 + data) return failed();
       if (data) memcpy(out + 3, queue_[0], data);
@@ -210,8 +211,9 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       const uint16_t count = getU16(payload);
       const Result parsed = plainTail(tail, payload, length, 2u + count, out, capacity);
       if (refused(parsed)) return parsed;
-      if (!started_ || mode_ != kModePreloadedTx) return rejected(kRejectUnavailable);
-      if (!count || count > kMaxFrame) return rejected(kRejectMalformed);
+      if (!count) return rejected(kRejectMalformed);
+      if (count > kMaxFrame) return unsupportedValue(out, capacity);
+      if (!started_ || mode_ != kModePreloadedTx) return wrongState(out, capacity);
       if (capacity < 1) return failed();
 #if defined(ARDUINO_ARCH_ESP32)
       uint8_t slot[kMaxFrame + 1];
@@ -231,24 +233,24 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       out[0] = tx_slots_;
       return tail.finish(completed(1), out, capacity);
     }
-    case kOpStatus: {   // [TLV] -> state mode armed queued (u8 each) rx_frames(u32) tx_slots(u8) errors(u16)
+    case kOpStatus: {   // [TLV] -> state mode armed queued (u8 each) rx_frames(u32) tx_slots(u8) errors(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 11) return failed();
+      if (capacity < 13) return failed();
       out[0] = started_ ? 1 : 0;   // state: 0 not configured, 1 running
       out[1] = mode_;
       out[2] = armed_ ? 1 : 0;
       out[3] = queue_count_;
       putU32(out + 4, rx_frames_);
       out[8] = tx_slots_;
-      putU16(out + 9, errors_);
-      return tail.finish(completed(11), out, capacity);
+      putU32(out + 9, errors_);
+      return tail.finish(completed(13), out, capacity);
     }
     case kOpStretch: {   // stretch_us(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
       if (refused(parsed)) return parsed;
       const uint32_t us = getU32(payload);
-      if (us > 100000) return rejected(kRejectUnsupported);  // spins in the ISR; keep under the interrupt watchdog
+      if (us > 100000) return unsupportedValue(out, capacity);  // spins in the ISR; keep under the interrupt watchdog
       stretch_us_ = us;
       stretch_events_ = 0;
       return tail.finish(completed(), out, capacity);
@@ -256,7 +258,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
     case kOpReset: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (!started_) return rejected(kRejectUnavailable);
+      if (!started_) return wrongState(out, capacity);   // state 0 (fixture §3)
       const uint8_t mode = mode_, address = address_;
       stop();
       rx_frames_ = 0; errors_ = 0; mode_ = mode; address_ = address; framed_header_ = true;

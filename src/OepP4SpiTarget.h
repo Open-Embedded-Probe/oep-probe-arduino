@@ -5,7 +5,7 @@
 // spi_slave driver, SPI2_HOST, no DMA: 64-byte FIFO transactions).
 //   0x01 configure(mode u8 0-3, bit_order u8: 0 MSB first, 1 LSB first)   0x02 arm(length u16, count u16, tx)
 //   0x03 read_rx -> pending(u8) bits(u32) count(u16) data
-//   0x04 status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u16) (no lock)   0x05 reset.   Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
+//   0x04 status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) (no lock)   0x05 reset.   Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
 // One CS-framed transaction is armed at a time with the MISO bytes to send;
 // after the master raises CS the result (MOSI bytes, length in bits) is queued
 // for read_rx. Polled from service() in loop(); nothing runs in an ISR.
@@ -50,7 +50,7 @@ class P4SpiTarget final : public Interface {
   uint8_t mode_ = 0, bit_order_ = 0;
   bool started_ = false, armed_ = false;
   uint32_t transactions_ = 0;
-  uint16_t errors_ = 0;
+  uint32_t errors_ = 0;
   // the one in-flight transaction (word aligned for the driver)
   alignas(4) uint8_t tx_buffer_[kMaxFrame];
   alignas(4) uint8_t rx_buffer_[kMaxFrame];
