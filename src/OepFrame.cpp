@@ -148,6 +148,7 @@ bool SerialReader::feed(const uint8_t *&data, size_t &n, RawSink sink, void *con
       if (have_ == 0) { ++data; --n; continue; }   // 0x00 0x00: an empty frame; this 0x00 starts the next candidate
       const bool message = close();
       if (!message) {                              // not a frame: raw, its leading 0x00 too
+        ++bad_;
         static const uint8_t kZero = 0;
         sink(context, &kZero, 1);
         sink(context, enc_, have_);

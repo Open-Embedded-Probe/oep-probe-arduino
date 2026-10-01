@@ -117,6 +117,7 @@ void Endpoint::rawOut() {
 
 // The session ended (end, lapse, force): the ports it held take up the raw transfer again (from its last host reset).
 void Endpoint::sessionEnded() {
+  if (speed_state_ != kSpeedBase) speed_pending_ = kSpeedRevert;   // core §3.5: after the answer that ended it, if any
   if (raw_) raw_->sessionOver(held_);
   held_ = 0;
 }
@@ -290,7 +291,13 @@ void Endpoint::poll() {
         if (!n) break;
         const uint8_t *p = chunk;
         while (n) {
-          if (t.serial.feed(p, n, rawSink, &t)) handleMessage(t.serial.message(), t.serial.length());
+          const uint32_t bad = t.serial.badCandidates();
+          const bool message = t.serial.feed(p, n, rawSink, &t);
+          if (i == speed_port_ && speed_state_ != kSpeedBase) {   // the sped-up port's line (core §3.5)
+            if (t.serial.badCandidates() != bad) speedBad();
+            if (message && i == speed_port_) speed_good_ms_ = millis();
+          }
+          if (message) handleMessage(t.serial.message(), t.serial.length());
         }
       }
       t.serial.idle(rawSink, &t);
@@ -309,9 +316,11 @@ void Endpoint::poll() {
       }
     }
   }
+  speedPoll();
   current_ = push_;
   push();   // after the results for everything that has arrived, on the subscriber's transport
   rawOut();   // then the serial ports' raw bytes, never inside a frame
+  speedPoll();   // a lapse push() found: back to the boot speed
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
     if (t.flush_after_burst && t.wrote) t.stream->flush();
@@ -446,6 +455,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     if (d.kept) memcpy(d.result, tx_, total);
   }
   send(total);
+  speedApply();   // port_speed: the answer went out at the old speed; now switch (or revert)
 }
 
 void Endpoint::sendReject(uint16_t corr, uint8_t reason) {
@@ -550,8 +560,98 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       if (op == kOpEnd) { locked_ = false; swept_ = false; endSubscriptions(); sessionEnded(); }   // the last id stays: it may resume
       return tail.finish(completed(), out, capacity);
     }
+    case reg::core::kOpPortSpeed: return portSpeed(has_session, session, payload, length, out, capacity);
     default: return rejected(kRejectUnknownOperation);
   }
+}
+
+// port_speed (core §3.5): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
+//   ->  baud(u32: the rate that applies). Only the UART bridge the request came in on (else unavailable cause 6); a
+// baud this UART cannot make is unsupported. try: answered at the old speed, then switched; verify_ms later the probe
+// goes back unless a commit came (on the new speed), and a broken candidate before that sends it back at once. commit:
+// that baud, trying, on that port (else cause 6); then idle_ms (this request's; 0: never) with no good frame, or
+// kSpeedBadMax broken candidates within kSpeedBadWindowMs, revert. revert: answered (the boot speed) at the speed now,
+// then back.
+Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out,
+                           size_t capacity) {
+  if (!port_speed_) return rejected(kRejectUnknownOperation);   // the feature off (no describe port_speed)
+  const Result check = checkSession(has_session, session, out, capacity);
+  if (refused(check)) return check;
+  Tail tail;
+  const Result parsed = plainTail(tail, payload, length, 12, out, capacity);
+  if (refused(parsed)) return parsed;
+  if (capacity < 4) return failed();
+  const uint8_t port = payload[0], step = payload[5];
+  const uint32_t baud = getU32(payload + 1), idle = getU32(payload + 8);
+  const uint16_t verify = getU16(payload + 6);
+  if (step > reg::core::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
+  if (port != current_ || transports_[port].kind != kUartBridge) return wrongState(out, capacity);
+  uint32_t answer = 0;
+  if (step == reg::core::kPortSpeedStepTry) {
+    answer = port_speed_(port, baud, false);
+    if (!answer) return unsupportedValue(out, capacity);
+    speed_pending_ = kSpeedSwitch;
+    speed_pending_port_ = port;
+    speed_pending_baud_ = baud;
+    speed_pending_verify_ = verify;
+  } else if (step == reg::core::kPortSpeedStepCommit) {
+    if (speed_state_ == kSpeedBase || port != speed_port_ || baud != speed_asked_) return wrongState(out, capacity);
+    speed_state_ = kSpeedCommitted;   // a commit sent again (committed already) only sets idle_ms again
+    speed_idle_ms_ = idle;
+    speed_good_ms_ = millis();
+    speed_bad_n_ = 0;
+    answer = speed_rate_;
+  } else {
+    speed_pending_ = kSpeedRevert;
+    answer = speed_base_;
+  }
+  putU32(out, answer);
+  return tail.finish(completed(4), out, capacity);
+}
+
+void Endpoint::speedApply() {
+  const uint8_t pending = speed_pending_;
+  speed_pending_ = kSpeedNone;
+  if (pending == kSpeedRevert) { speedRevert(); return; }
+  if (pending != kSpeedSwitch || !port_speed_) return;
+  if (speed_state_ != kSpeedBase && speed_port_ != speed_pending_port_) speedRevert();   // one port at a time
+  Transport &t = transports_[speed_pending_port_];
+  t.stream->flush();   // the answer out at the old speed first
+  speed_rate_ = port_speed_(speed_pending_port_, speed_pending_baud_, true);
+  speed_port_ = speed_pending_port_;
+  speed_asked_ = speed_pending_baud_;
+  speed_state_ = kSpeedTry;
+  speed_until_ = millis() + speed_pending_verify_;
+  speed_good_ms_ = millis();
+  speed_bad_n_ = 0;
+}
+
+void Endpoint::speedRevert() {
+  if (speed_state_ == kSpeedBase) return;
+  transports_[speed_port_].stream->flush();
+  port_speed_(speed_port_, speed_base_, true);
+  speed_state_ = kSpeedBase;
+  speed_port_ = 0xff;
+  speed_rate_ = speed_asked_ = 0;
+  speed_bad_n_ = 0;
+}
+
+void Endpoint::speedPoll() {
+  if (speed_pending_ == kSpeedRevert) { speed_pending_ = kSpeedNone; speedRevert(); }
+  const uint32_t now = millis();
+  if (speed_state_ == kSpeedTry && static_cast<int32_t>(now - speed_until_) >= 0) speedRevert();   // no commit in time
+  else if (speed_state_ == kSpeedCommitted && speed_idle_ms_ && now - speed_good_ms_ >= speed_idle_ms_) speedRevert();
+}
+
+void Endpoint::speedBad() {
+  if (speed_state_ == kSpeedTry) { speedRevert(); return; }   // the new speed breaks frames: not this one
+  const uint32_t now = millis();
+  if (speed_bad_n_ == kSpeedBadMax) {   // the oldest goes
+    memmove(speed_bad_ms_, speed_bad_ms_ + 1, sizeof speed_bad_ms_[0] * (kSpeedBadMax - 1));
+    --speed_bad_n_;
+  }
+  speed_bad_ms_[speed_bad_n_++] = now;
+  if (speed_bad_n_ == kSpeedBadMax && now - speed_bad_ms_[0] < kSpeedBadWindowMs) speedRevert();
 }
 
 // session_id(u32) lease_ms(u32) force(u8) [TLV 0x01 owner]  ->  lease_ms(u32) boot_id(u32) resumed(u8: 0 new, 1 the same
@@ -843,6 +943,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
     if (discoverable_) w.u8(reg::core::kTlvDescribeDiscoverable, 1);
     w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);
     w.u32(reg::core::kTlvDescribeMaxOpMs, kMaxOpMs);
+    if (port_speed_) w.u8(reg::core::kTlvDescribePortSpeed, 1);   // the optional port_speed is on (core §3.5)
     tlv = scratch_;
     tlv_length = sketch + w.length();
   } else if (fn <= count_) {

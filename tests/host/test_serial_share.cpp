@@ -634,7 +634,183 @@ static void testDisabledChannel() {
   CHECK(send(request(4, 0, 0x04, {0x90, 5, 1, 0, 1, 12, 0}, true, 7))[5] == 1);   // enabled again
 }
 
+// ---- port_speed (core §3.5) ---------------------------------------------------------------------------------------------
+
+static uint32_t g_baud = 115200;
+static int g_switches = 0;
+static MemStream *g_speed_stream = nullptr;
+static size_t g_tx_at_switch = 0;   // what the port had sent when it switched
+static uint32_t speedHook(uint8_t, uint32_t baud, bool apply) {
+  if (baud < 1200 || baud > 5000000) return 0;   // this "UART" cannot make it
+  if (apply) { g_baud = baud; ++g_switches; g_tx_at_switch = g_speed_stream->tx.size(); }
+  return baud;
+}
+
+// A UART bridge (transport 0) and a vendor bulk (transport 1); the result's resolution, detail and payload.
+struct Uart {
+  MemStream stream, bulk;
+  uint8_t rx[1100], rx2[1100], tx[1100];
+  Endpoint ep{stream, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kUartBridge};
+  Uart(bool on = true) {
+    ep.addTransport(bulk, rx2, sizeof rx2, Endpoint::kVendorBulk, 0);
+    if (on) ep.setPortSpeed(speedHook, 115200);
+    g_baud = 115200;
+    g_switches = 0;
+    g_speed_stream = &stream;
+  }
+  Bytes send(const Bytes &m) {
+    stream.send(frame(m));
+    stream.tx.clear();
+    ep.poll();
+    std::vector<Bytes> frames;
+    Bytes raw;
+    split(stream.tx, frames, raw);
+    if (frames.empty() || frames.back().size() < 5) return {};
+    return Bytes(frames.back().begin() + 3, frames.back().end());
+  }
+  Bytes sendBulk(const Bytes &m) {
+    const Bytes f = {uint8_t(m.size()), uint8_t(m.size() >> 8)};
+    bulk.send(f);
+    bulk.send(m);
+    bulk.tx.clear();
+    ep.poll();
+    if (bulk.tx.size() < 7) return {};
+    return Bytes(bulk.tx.begin() + 5, bulk.tx.end());
+  }
+  void noise() { stream.send({0, 0x31, 0x32, 0x33, 0}); ep.poll(); }   // a candidate whose CRC does not match
+};
+static Bytes speedReq(uint8_t port, uint32_t baud, uint8_t step, uint16_t verify_ms, uint32_t idle_ms) {
+  Bytes p = {port};
+  const Bytes b = u32(baud), i = u32(idle_ms);
+  p.insert(p.end(), b.begin(), b.end());
+  p.push_back(step);
+  p.push_back(uint8_t(verify_ms));
+  p.push_back(uint8_t(verify_ms >> 8));
+  p.insert(p.end(), i.begin(), i.end());
+  return p;
+}
+static bool describesPortSpeed(Uart &u) {
+  const Bytes r = u.send(request(90, 0, 0x03, {0, 0, 0, 0}));
+  if (r.size() < 3 || r[0] != 1) return false;
+  size_t at = 3;   // after resolution, detail, more
+  while (at + 2 <= r.size()) {
+    if (r[at] == reg::core::kTlvDescribePortSpeed) return r[at + 1] == 1 && r[at + 2] == 1;
+    at += 2 + r[at + 1];
+  }
+  return false;
+}
+
+static void testPortSpeed() {
+  {   // off: no describe tag, the op unknown
+    Uart u(false);
+    CHECK(!describesPortSpeed(u));
+    u.send(request(1, 0, 0x10, openPayload(5, 5000)));
+    const Bytes r = u.send(request(2, 0, 0x14, speedReq(0, 1500000, 0, 2000, 0), true, 5));
+    CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectUnknownOperation);
+  }
+  Uart u;
+  CHECK(describesPortSpeed(u));
+  Bytes r = u.send(request(1, 0, 0x14, speedReq(0, 1500000, 0, 2000, 0)));   // the lock is needed
+  CHECK(r.size() >= 2 && r[0] == 0 && r[1] == kRejectSessionRequired);
+  u.send(request(2, 0, 0x10, openPayload(5, 60000)));
+  r = u.send(request(3, 0, 0x14, speedReq(1, 1500000, 0, 2000, 0), true, 5));   // not the port it came in on
+  CHECK(r.size() >= 2 && r[0] == 0 && r[1] == kRejectUnavailable && r.size() >= 5 && r[2] == 0x01 && r[4] == 6);
+  r = u.sendBulk(request(4, 0, 0x14, speedReq(1, 1500000, 0, 2000, 0), true, 5));   // the bulk is no UART bridge
+  CHECK(r.size() >= 5 && r[0] == 0 && r[1] == kRejectUnavailable && r[4] == 6);
+  r = u.send(request(5, 0, 0x14, speedReq(0, 9000000, 0, 2000, 0), true, 5));   // a baud the UART cannot make
+  CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
+  r = u.send(request(6, 0, 0x14, speedReq(0, 1500000, 1, 2000, 0), true, 5));   // commit with no try
+  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[4] == 6);
+  CHECK(g_switches == 0);
+
+  // try -> commit: answered at the old speed (the hook not yet called when the answer was written), then switched
+  r = u.send(request(7, 0, 0x14, speedReq(0, 1500000, 0, 2000, 0), true, 5));
+  CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000);
+  CHECK(g_tx_at_switch == u.stream.tx.size());   // the whole answer was out before the switch
+  CHECK(g_baud == 1500000 && !u.ep.portSpeedCommitted() && u.ep.portSpeedNow() == 1500000);
+  r = u.send(request(8, 0, 0x14, speedReq(0, 1000000, 1, 0, 0), true, 5));   // commit of another baud: cause 6
+  CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[4] == 6);
+  g_millis += 500;
+  r = u.send(request(9, 0, 0x14, speedReq(0, 1500000, 1, 0, 0), true, 5));
+  CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000 && u.ep.portSpeedCommitted());
+  g_millis += 5000;   // idle_ms 0: never reverts while the session lives
+  u.send(request(10, 0, 0x12, {}, true, 5));
+  CHECK(g_baud == 1500000);
+  // two broken candidates in a second are tolerated, the third reverts
+  u.noise();
+  g_millis += 300;
+  u.noise();
+  g_millis += 800;
+  u.noise();   // the first is 1.1 s old now
+  CHECK(g_baud == 1500000);
+  g_millis += 100;
+  u.noise();
+  CHECK(g_baud == 115200 && u.ep.portSpeedNow() == 0);
+
+  // try timeout: no commit within verify_ms
+  r = u.send(request(11, 0, 0x14, speedReq(0, 750000, 0, 1000, 0), true, 5));
+  CHECK(r[0] == 1 && g_baud == 750000);
+  g_millis += 999;
+  u.ep.poll();
+  CHECK(g_baud == 750000);
+  g_millis += 1;
+  u.ep.poll();
+  CHECK(g_baud == 115200);
+  r = u.send(request(12, 0, 0x14, speedReq(0, 750000, 1, 0, 0), true, 5));   // too late to commit
+  CHECK(r.size() >= 5 && r[4] == 6);
+
+  // a broken candidate while trying: back at once
+  r = u.send(request(13, 0, 0x14, speedReq(0, 230400, 0, 5000, 0), true, 5));
+  CHECK(r[0] == 1 && g_baud == 230400);
+  u.noise();
+  CHECK(g_baud == 115200);
+
+  // committed, idle_ms: no good frame for that long reverts; a good frame restarts the count
+  u.send(request(14, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(15, 0, 0x14, speedReq(0, 500000, 1, 0, 1500), true, 5));
+  CHECK(u.ep.portSpeedCommitted());
+  g_millis += 1000;
+  u.send(request(16, 0, 0x13, {}));   // any good frame (lock_state, no session)
+  g_millis += 1000;
+  u.ep.poll();
+  CHECK(g_baud == 500000);
+  g_millis += 600;
+  u.ep.poll();
+  CHECK(g_baud == 115200);
+
+  // step 2: answered (the boot speed) at the speed now, then back
+  u.send(request(17, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(18, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
+  const int before = g_switches;
+  u.stream.tx.clear();
+  r = u.send(request(19, 0, 0x14, speedReq(0, 0, 2, 0, 0), true, 5));
+  CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 115200 && g_baud == 115200 && g_switches == before + 1);
+  CHECK(g_tx_at_switch == u.stream.tx.size());
+
+  // the session's end: its answer at the fast speed, then back; a lapse too
+  u.send(request(20, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(21, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
+  r = u.send(request(22, 0, 0x11, {}, true, 5));
+  CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200 && g_tx_at_switch == u.stream.tx.size());
+  u.send(request(23, 0, 0x10, openPayload(5, 1000)));
+  u.send(request(24, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 5));
+  u.send(request(25, 0, 0x14, speedReq(0, 500000, 1, 0, 0), true, 5));
+  CHECK(g_baud == 500000);
+  g_millis += 1100;   // the lease lapses
+  u.ep.poll();
+  CHECK(!u.ep.locked() && g_baud == 115200);
+  // taken by force from the other transport
+  u.send(request(26, 0, 0x10, openPayload(6, 5000)));
+  u.send(request(27, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 6));
+  CHECK(g_baud == 500000);
+  Bytes force = openPayload(7, 5000);
+  force[8] = 1;
+  r = u.sendBulk(request(28, 0, 0x10, force));
+  CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200);
+}
+
 int main() {
+  testPortSpeed();
   testDisabledChannel();
   testTlvLongForm();
   testSessionTable();

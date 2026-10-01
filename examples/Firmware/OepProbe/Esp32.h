@@ -3,8 +3,8 @@
 
 // Classic ESP32 (profile esp32), on a board with a USB-UART bridge (DevKitC and the like).
 //
-// Transport: UART0 through the bridge at 115200, fixed (probe guide §3.5) - the probe's one transport, serial port 0:
-// OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-core §3.4). The bridge's auto-reset
+// Transport: UART0 through the bridge at 115200 (probe guide §3.5; a host may raise it for its session: port_speed,
+// below) - the probe's one transport, serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-core §3.4). The bridge's auto-reset
 // circuit resets the ESP32 when the port is opened with DTR / RTS in the wrong order: a host opens it with both on
 // (host guide §1). A UART has no iProduct: a host finds this probe by opening the port and asking (confirm).
 //
@@ -31,11 +31,37 @@
 #include <OepTarget.h>
 
 // UART0 runs through the board's USB-UART bridge (no flow control): long bursts of pipelined responses lost bytes
-// (2026-09-22, 2026-09-24). One 512-byte frame in flight keeps the outstanding data small.
+// (2026-09-22, 2026-09-24), so few 512-byte frames are in flight. Two (window 1024) rather than one: with port_speed
+// raised the link waits on the bridge's round trip, and a second frame in flight nearly doubles what moves (1500000:
+// 58-65 -> 78 KB/s on an ATOM's FTDI); at 115200 it changes nothing (9.3 -> 9.5 KB/s, no more broken frames) (oep-spec
+// docs/uart-speed-negotiation.ja.md §3b, 2026-10-01).
 static uint8_t rxBuffer[1024];   // the encoded candidate: cobsFrameMax(512)
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 512, 1},
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 1024, 2},
                               oep::Endpoint::kUartBridge);
+
+// port_speed (oep-core §3.5): the host may raise UART0's baud for its session; every revert goes back to 115200, the
+// boot speed. On unless built with -DOEP_PORT_SPEED=0 (then no describe port_speed, the op unknown_operation).
+#ifndef OEP_PORT_SPEED
+#define OEP_PORT_SPEED 1
+#endif
+static constexpr uint32_t kBootBaud = 115200;
+#if OEP_PORT_SPEED
+// The rate UART0 runs at for `baud`, as arduino-esp32 3.3 sets it: the 1 MHz REF_TICK up to 250000, the 80 MHz APB
+// above, a 20.4 fixed-point divider (0: not makeable; 5 Mbaud is the UART's limit).
+static uint32_t uartRate(uint32_t baud) {
+  if (baud < 300 || baud > 5000000) return 0;
+  const uint32_t sclk = baud <= 250000 ? 1000000 : 80000000;
+  const uint32_t div = (sclk << 4) / baud;
+  if (div < 16 || (div >> 4) > 0xFFFFF) return 0;
+  return (sclk << 4) / div;
+}
+static uint32_t portSpeed(uint8_t, uint32_t baud, bool apply) {   // port 0, UART0: the only UART bridge
+  if (!apply) return uartRate(baud);
+  Serial.updateBaudRate(baud);
+  return Serial.baudRate();
+}
+#endif
 
 // The GPIOs a DevKitC brings out, less UART0 (1, 3: the transport), the SPI flash (6-11) and the boot straps (0, 2, 12,
 // 15). 34-39 are inputs only.
@@ -80,7 +106,7 @@ static size_t describeProbe() {
 void setup() {
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
-  Serial.begin(115200);
+  Serial.begin(kBootBaud);
   // Every channel genuinely Hi-Z until the host takes it (a pull on a target's USB line breaks its enumeration, E132).
   // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
   // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied
@@ -96,6 +122,9 @@ void setup() {
   swio.reset_allowed = kChannels & ~unusable;   // attach's reset TLV: the channel the host names (no default), nobody holding it
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(esp_random());
+#if OEP_PORT_SPEED
+  endpoint.setPortSpeed(portSpeed, kBootBaud);
+#endif
   endpoint.add(wire);
   endpoint.add(riscvDm);
   console.setMaxRead(480);   // 512-byte frames
