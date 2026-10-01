@@ -16,7 +16,9 @@
 //                      (PinTable, default Hi-Z).
 //     0x01 configure(baud u32) [TLV 0x01 format, critical] -> baud (actual) [TLV]
 //     0x02 read(from, arg, max) -> start flags len data [TLV] (no lock)   0x03 marks(from_serial) (no lock)
-//     0x04 clear   0x05 mark(value)   0x06 write(count u16, data) -> accepted   0x07 status -> configured baud format (no lock)
+//     0x04 clear   0x05 mark(value)   0x06 write(count u16, data) -> accepted
+//     0x07 status -> configured(u8: 0 default, 1 session configure, 2 settings item, 3 item whose baud could not be made,
+//                    the default applied) baud format (no lock)
 //
 // The ESP32 I2C / SPI targets are in OepP4I2cTarget.h / OepP4SpiTarget.h.
 #pragma once
@@ -107,6 +109,7 @@ class FixtureUart final : public Interface, public BindSource {
   int rx_ = -1, tx_ = -1;
   bool running_ = false;            // the UART runs (planned and begun)
   bool session_configured_ = false; // configure since the plan: it wins over the item until the plan is released
+  uint8_t configured_ = reg::fixture_uart::kUartConfiguredDefault;   // what the running settings came from (status)
   bool item_set_ = false;
   uint32_t item_baud_ = kDefaultBaud;
   uint8_t item_format_ = 0;
