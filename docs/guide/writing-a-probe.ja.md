@@ -36,7 +36,8 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   入れるので max_frame より少し大きくします（`cobsFrameMax`）。
 - oep.core の **describe** は自分で書きます。`describeCore(w, model, unit_id, ...)` が、firmware の版、model、どの経路でも同じ
   unit id（`platformUnitId`）、channel の数、予約の channel を書きます。`setProbeDescription` で渡します。経路の一覧と
-  `oep_pid` は endpoint が足します。
+  transport、`discoverable`、`plan_roles`、`max_op_ms` は endpoint が足します。describe は宣言だけです（core §7.3）:
+  動いている間に変わるものは入れません。
 - `setBootId(platformRandom32())` を 1 度。host は probe が起動し直したことを知ります。
 - `loop()` から `poll()`。長く止まりません。インターフェースも止まってはいけません。
 
@@ -104,7 +105,7 @@ class Blink final : public oep::Interface {
 - 決まった組: `DebugPort port{dm, swdio, swclk}` と `phy.begin(swdio, swclk)`（`04.Debug/*`）。
 - host が選ぶピン: 組を決めずに `port.pin_choice = mask; port.pins = &pins;`。線は channel を role_channels で宣言し、scan / attach
   で host が名指した空いている組ならどれでも受けて、PHY をそこへ動かし（`usePins`）、生きている接続はそのピンを表で持ちます。
-  `reset_allowed` は attach_under_reset が引いてよい channel で、いつも host が名指します。
+  `reset_allowed` は attach の reset TLV が引いてよい channel で、いつも host が名指します。
 - 線の設定（休ませ方、速さの上限）は target のもので、host が attach で渡します。probe はチップごとの既定を持ちません。
 
 ## 7. シリアルの口、bind、設定
@@ -112,8 +113,9 @@ class Blink final : public oep::Interface {
 - シリアルの口は OEP のフレームと、その間の生のバイトを運びます。生のバイトは **bind** のとおり（スロットのコンソール、fixture の
   UART、名前の印つきの複数）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
   生の流れは止まり、終わった後に target の最後の reset から続きます（core §3.4）。
-- `ProbeConfig` はスロット、bind、plan、空きのときの状態を持ち、保存し（ESP32 は NVS、RP2 は flash の最後の領域）、起動時に
-  行います。最後に `add(config)` し、`addPlace(wire, console)`、`addUart(uart)`、`setPins(&pins)`、`load()`、`applySaved()`
+- `ProbeConfig` はスロット、bind、plan、label、空きのときの状態、fixture UART の設定（uart の項目）を持ち、保存し（ESP32 は
+  NVS、RP2 は flash の最後の領域）、起動時に行います。`state`（op 0x06）がスロットと bind の状態を、`unset`（0x05）がキーでの
+  削除です。最後に `add(config)` し、`addPlace(wire, console)`、`addUart(uart)`、`setPins(&pins)`、`load()`、`applySaved()`
   （`06.Settings/ProbeConfig`）。
 
 ## 8. push と出来事
@@ -126,7 +128,9 @@ class Blink final : public oep::Interface {
 
 USB の probe は、`OEP` で始まる iProduct（host の発見の手がかり）、個体ごとに違う serial number、VID:PID を名乗ります。
 pid.codes が OEP の PID（`1209:4F45`、[PID-USE.ja.md](../../PID-USE.ja.md)）を割り当てるまでは `303a:0002` / ボードの既定です。
-`endpoint.setOepPid(true)` で describe にもそう書きます。
+vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /
+usage 0x45 を持ちます（core §3.3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
+`endpoint.setDiscoverable(true)` で describe にもそう書きます。
 
 ## 10. 試す
 

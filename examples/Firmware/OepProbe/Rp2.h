@@ -10,7 +10,7 @@
 // Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all).
 // Every channel below may be SWDIO / SWCLK of either
-// wire, the reset line of attach_under_reset, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
+// wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
 // max_speed) comes from the host (oep-if-debug §3). oep.probe.config keeps a jig's settings in flash (slots on any pair,
 // a bind of the CDC port - the target's console on the same line as OEP -, labels, idle states).
@@ -99,11 +99,12 @@ void setup() {
   oep::platformParkMask(kChannels);
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;
-  rvswd.reset_allowed = kChannels;   // attach_under_reset: the channel the host names (no default), nobody holding it
+  rvswd.reset_allowed = kChannels;   // attach's reset TLV: the channel the host names (no default), nobody holding it
   swd.pin_choice = kChannels;
   swd.pins = &pins;
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(rp2040.hwrand32());
+  endpoint.setDiscoverable(true);   // describe discoverable: the USB device's iProduct starts "OEP" (core §3.3)
   endpoint.add(wireRvswd);
   endpoint.add(riscvDm);
   endpoint.add(console);
