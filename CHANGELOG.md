@@ -1,8 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
-- (EN) Classic ESP32: the pins the chip's own package uses are found at start-up and left out of every channel set (and declared reserved): GPIO16 / 17 on an ESP32-PICO-D4 / PICO-V3 / D2WD / D0WDR2 or with PSRAM. The released `OepProbe-esp32` image parked them Hi-Z and an M5Stack ATOM (PICO-D4) reset at boot over and over (TG1WDT); it now runs there. `PinTable::forbid`, `platformUnusablePins()`.
-- (JA) classic ESP32: チップのパッケージ自身が使うピンを起動時に調べ、どのチャンネルの集合からも外す（reserved として宣言する）: ESP32-PICO-D4 / PICO-V3 / D2WD / D0WDR2、または PSRAM があるときの GPIO16 / 17。リリースの `OepProbe-esp32` はそれを Hi-Z にして、M5Stack ATOM（PICO-D4）が起動のたびにリセットした（TG1WDT）。今はそこで動く。`PinTable::forbid`、`platformUnusablePins()`。
+- (EN) Classic ESP32: the pins the chip's own package uses are found at start-up and left out of every channel set (and declared reserved): GPIO16 / 17 on an ESP32-PICO-D4 / PICO-V3 / D2WD (their in-package flash), or with a PSRAM the build enabled (a build with PSRAM off leaves them free). The released `OepProbe-esp32` image parked them Hi-Z and an M5Stack ATOM (PICO-D4) reset at boot over and over (TG1WDT); it now runs there. `PinTable::forbid`, `platformUnusablePins()`.
+- (JA) classic ESP32: チップのパッケージ自身が使うピンを起動時に調べ、どのチャンネルの集合からも外す（reserved として宣言する）: ESP32-PICO-D4 / PICO-V3 / D2WD（パッケージ内の flash）、またはビルドで有効にした PSRAM があるときの GPIO16 / 17（PSRAM を無効にしたビルドでは使える）。リリースの `OepProbe-esp32` はそれを Hi-Z にして、M5Stack ATOM（PICO-D4）が起動のたびにリセットした（TG1WDT）。今はそこで動く。`PinTable::forbid`、`platformUnusablePins()`。
 
 ## 0.0.23
 - (EN) The retry table keeps answers up to a whole 1 KiB frame (8 entries; was 72 bytes × 16): a read_block answer corrupted on the link is answered from the table when the host sends the request again, instead of rejected result_lost (the V003 jig's CP2102 link dropped bytes in long frames, 2026-10-01).

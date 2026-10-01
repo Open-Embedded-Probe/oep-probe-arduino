@@ -80,14 +80,15 @@ inline void platformParkPins(const uint8_t *pins, size_t count) {
 // The same, for every channel set in `mask`.
 // Pins this very chip uses itself and a sketch must never touch, found at start-up from what the chip says it is: one
 // firmware image runs on every board of a chip family, so the pin list cannot be fixed at build time. ESP32: the
-// ESP32-PICO-D4 / PICO-V3 / PICO-V3-02 and the D2WD wire their in-package flash or PSRAM to GPIO16 / 17, and a board with
-// PSRAM (WROVER, D0WDR2) uses them for the PSRAM; parking them Hi-Z crashed the PICO-D4 of an M5Stack ATOM at boot
-// (TG1WDT, 2026-10-01). Other chips: none found so far.
+// ESP32-PICO-D4 / PICO-V3 / PICO-V3-02 and the D2WD wire their in-package flash to GPIO16 / 17 (always taken), and a
+// PSRAM in use (WROVER, D0WDR2) takes them too - only when the build enabled it: psramFound() is false on a build with
+// PSRAM off, and the pins are then free. Parking them Hi-Z crashed the PICO-D4 of an M5Stack ATOM at boot (TG1WDT,
+// 2026-10-01). Other chips: none found so far.
 inline uint64_t platformUnusablePins() {
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
   const char *model = ESP.getChipModel();
-  const bool package = model && (strstr(model, "PICO") || strstr(model, "D2WD") || strstr(model, "R2"));
-  if (package || psramFound()) return (uint64_t{1} << 16) | (uint64_t{1} << 17);
+  const bool flash = model && (strstr(model, "PICO") || strstr(model, "D2WD"));
+  if (flash || psramFound()) return (uint64_t{1} << 16) | (uint64_t{1} << 17);
 #endif
   return 0;
 }
