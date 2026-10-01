@@ -72,7 +72,7 @@ static uint8_t probeTlv[160];
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40, kReserved);
+  oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40, kReserved | oep::platformUnusablePins());
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }
@@ -82,11 +82,14 @@ void setup() {
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
   // Every channel genuinely Hi-Z until the host takes it (a pull on a target's USB line breaks its enumeration, E132).
-  oep::platformParkMask(kChannels);
+  // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
+  const uint64_t unusable = oep::platformUnusablePins();
+  pins.forbid(unusable);
+  oep::platformParkMask(kChannels & ~unusable);
   endpoint.setRawPorts(&binds);
-  swio.pin_choice = kSwioChoice;
+  swio.pin_choice = kSwioChoice & ~unusable;
   swio.pins = &pins;
-  swio.reset_allowed = kChannels;   // attach's reset TLV: the channel the host names (no default), nobody holding it
+  swio.reset_allowed = kChannels & ~unusable;   // attach's reset TLV: the channel the host names (no default), nobody holding it
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
