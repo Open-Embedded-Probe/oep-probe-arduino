@@ -34,7 +34,7 @@ UART、SPI / I2C のデバイス、ロジックのキャプチャ）を兼ね、
 
 ## 利用例: ESP32-P4 で CH32L103 を試験する
 
-<!-- ここに ESP32-P4 と CH32L103 のフル結線の写真を入れる。 -->
+<img src="docs/images/p4-ch32l103-bench.jpg" alt="ESP32-P4 の基板と CH32L103 の基板をジャンパ線でつないだ所: RVSWD、UART、GPIO、ADC の入力" width="420">
 
 ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につないでおけば、それだけで試験台になります。
 

@@ -38,7 +38,7 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
 
 ## An example: an ESP32-P4 testing a CH32L103
 
-<!-- A photo of the full wiring (ESP32-P4 <-> CH32L103) goes here. -->
+<img src="docs/images/p4-ch32l103-bench.jpg" alt="An ESP32-P4 board wired to a CH32L103 board: RVSWD, UART, GPIO and the ADC inputs on jumper wires" width="420">
 
 One ESP32-P4 board, wired to a CH32L103 on every pin you want to watch, is the whole test bench:
 
