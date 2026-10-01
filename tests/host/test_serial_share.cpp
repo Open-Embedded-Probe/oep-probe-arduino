@@ -881,7 +881,31 @@ static void testPortSpeed() {
   CHECK(g_baud == 115200);
 }
 
+// The block ops' length rule (core §7.4 max_length, oep-if-debug §4.5 / §6), shared by riscv-dm and arm-adi through
+// blockMaxLength / blockCountFits: what each profile declares, that both frames fit it, and the refusal over it.
+static void testBlockLength() {
+  CHECK(blockMaxLength(512, 1024) == 488);     // Esp32.h: max_frame 512, riscv-dm's 1 KiB word buffer (was 492)
+  CHECK(blockMaxLength(1024, 1024) == 1000);   // Esp32P4.h / Rp2.h: max_frame 1024 (was 1004)
+  CHECK(blockMaxLength(1024, 0) == 1000);      // Rp2.h arm-adi: no buffer of its own, the frame alone bounds it
+  CHECK(blockMaxLength(4096, 1024) == 1024);   // a wider frame: the buffer bounds it
+  CHECK(blockMaxLength(0, 1024) == 1024);      // the frame limit not told yet
+  CHECK(blockMaxLength(27, 0) == 0 && blockMaxLength(30, 0) == 4 && blockMaxLength(0x20000, 0) == 0xFFFC);
+  for (size_t max_frame : {size_t(512), size_t(1024), size_t(2048)}) {   // the spec's two frames at the declared length
+    const uint16_t length = blockMaxLength(max_frame, 1024);
+    CHECK(length % 4 == 0 && length <= max_frame - 24);
+    CHECK(5u + 2u + 1u + length <= max_frame);               // read_block's answer
+    CHECK(10u + 2u + 4u + 2u + length <= max_frame);         // write_block's request
+  }
+  CHECK(blockCountFits(0, 488) && blockCountFits(122, 488) && !blockCountFits(123, 488));
+  CHECK(blockCountFits(250, 1000) && !blockCountFits(251, 1000) && blockCountFits(0, 0) && !blockCountFits(1, 0));
+  CHECK(!blockCountFits(0xFFFF, 0xFFFC));
+  uint8_t out[8];
+  const Result r = unsupportedValue(out, sizeof out);   // the refusal the targets send for count x 4 > max_length
+  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && r.length == 1 && out[0] == 0x00);
+}
+
 int main() {
+  testBlockLength();
   testPortSpeed();
   testDisabledChannel();
   testTlvLongForm();

@@ -81,11 +81,16 @@ class TargetArmAdi final : public Interface {
   uint8_t revision() const override { return reg::target_arm_adi::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  void setFrameLimit(size_t max_frame) override { max_frame_ = max_frame; }
 
  private:
   uint8_t xfer(bool ap, bool read, uint8_t a23, uint32_t &data);   // with WAIT retries; returns the last ACK
+  // describe's max_length (oep-if-debug §6): bytes of one block op that fit the frame (the words go straight
+  // between the frame and the line, no buffer of this interface's own)
+  uint16_t maxLength() const { return blockMaxLength(max_frame_, 0); }
   SwdPort &port_;
   uint16_t instance_;
+  size_t max_frame_ = 0;
 };
 
 }  // namespace oep
