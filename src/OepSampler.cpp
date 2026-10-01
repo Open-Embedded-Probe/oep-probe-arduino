@@ -159,13 +159,15 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   range[8] = 0;                                    // not any value: whole CPU cycles per sample
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   const uint32_t list[] = {400000, 500000, 1000000, 2000000};
-  uint8_t l[sizeof list];
-  for (size_t i = 0; i < 4; ++i) putU32(l + 4 * i, list[i]);
+  uint8_t l[1 + sizeof list] = {4};                // n(u8) n x rate_hz(u32)
+  for (size_t i = 0; i < 4; ++i) putU32(l + 1 + 4 * i, list[i]);
   w.put(cap::kTlvDescribeRateList, l, sizeof l);
-  uint8_t ch[2] = {kMaxChannels, 0b1000};          // w = 8 only
+  uint8_t ch[5] = {kMaxChannels};                  // max(u8) layouts(u32): w = 8 only (bit 3)
+  putU32(ch + 1, 1u << 3);
   w.put(cap::kTlvDescribeChannels, ch, sizeof ch);
-  uint8_t trig[5] = {(1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge)};
-  putU32(trig + 1, kBufferBytes - 1);              // the pretrigger: less than the segment's samples
+  uint8_t trig[8];                                 // types(u32) max_pretrigger(u32)
+  putU32(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge));
+  putU32(trig + 4, kBufferBytes - 1);              // the pretrigger: less than the segment's samples
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
   w.u32(cap::kTlvDescribeMaxRead, static_cast<uint32_t>(max_read_));
   w.u16(cap::kTlvDescribeSegmentRing, 1);
@@ -207,7 +209,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   const Result parsed = tail.parse(p, n, kKnown, out, capacity);
   if (refused(parsed)) return parsed;
   uint32_t rate = 1000000, samples = 0;
-  uint8_t len = 0;
+  size_t len = 0;
   bool critical = false;
   if (const uint8_t *v = tail.find(kTagMode, len, &critical)) {   // one-shot only
     if (len != 1) return rejected(kRejectMalformed);
@@ -229,12 +231,12 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     samples = getU32(v);
   }
   if (tail.find(kTagSegments, len) && len != 4) return rejected(kRejectMalformed);
-  if (channels_ == 0) return rejected(kRejectUnavailable);   // plan first
+  if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
   uint8_t trig_type = cap::kTriggerImmediate, trig_role = 0;
-  uint16_t trig_value = 0;
-  if (const uint8_t *v = tail.find(kTagTrigger, len, &critical)) {   // type(u8) role(u8) value(u16)
-    if (len != 4) return rejected(kRejectMalformed);
-    const uint16_t value = static_cast<uint16_t>(v[2] | v[3] << 8);
+  uint32_t trig_value = 0;
+  if (const uint8_t *v = tail.find(kTagTrigger, len, &critical)) {   // type(u8) role(u8) value(u32)
+    if (len != 6) return rejected(kRejectMalformed);
+    const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == cap::kTriggerImmediate ||
                     (v[1] < channels_ && ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2)));
     if (ok) { trig_type = v[0]; trig_role = v[1]; trig_value = value; }
@@ -243,7 +245,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
       if (refused(r)) return r;
     }
   }
-  if (state_ == cap::kStateCapturing && !query) return rejected(kRejectBusy);
+  if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   if (samples == 0 || samples > kBufferBytes) samples = kBufferBytes;
   uint32_t pretrigger = 0;
   if (const uint8_t *v = tail.find(kTagPretrigger, len, &critical)) {   // only with a trigger, inside the segment
@@ -299,7 +301,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   return w.ok() ? tail.finish(completed(w.length()), out, capacity) : failed();
 }
 
-size_t SamplerCapture::segmentInfo(uint8_t *out) const {
+size_t SamplerCapture::segmentInfo(uint8_t *out) const {   // the segment record (oep-if-capture §2), 37 bytes
   putU32(out, 0);                  // serial
   putU64(out + 4, 0);              // position
   putU32(out + 12, samples_);
@@ -307,7 +309,8 @@ size_t SamplerCapture::segmentInfo(uint8_t *out) const {
   putU32(out + 24, 2000);          // the software pace's first sample against the clock read: +-2 us
   putU32(out + 28, trig_type_ ? pretrigger_ : 0xFFFFFFFFu);   // immediate: no trigger inside
   out[32] = slipped_ ? cap::kSegmentFlagSlipped : 0;   // bit2: the time base bent (see samplerTask)
-  return 33;
+  putU32(out + 33, generation_);
+  return 37;
 }
 
 void SamplerCapture::poll() {
@@ -324,25 +327,25 @@ void SamplerCapture::poll() {
   if (state_ != cap::kStateCapturing || !done_) return;
   state_ = cap::kStateDone;
   if (subscribed_) {
-    uint8_t seg[33];
+    uint8_t seg[37];
     endpoint_.event(*this, cap::kEventSegment, seg, segmentInfo(seg));
-    const uint8_t reason = cap::kStoppedReasonComplete;
-    endpoint_.event(*this, cap::kEventStopped, &reason, 1);
+    const uint8_t stopped[2] = {cap::kStoppedReasonComplete, 0};
+    endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
   }
 }
 
 Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
   if (bound() && !group_op_ && (op == cap::kOpConfigure || op == cap::kOpStart || op == cap::kOpStop || op == cap::kOpForce))
-    return rejected(kRejectUnavailable);   // bound in a capture-group: the group starts and stops it
+    return boundInGroup(*this, out, capacity);   // bound in a capture-group: the group starts and stops it (cause 4)
   Tail tail;
   switch (op) {
     case cap::kOpConfigure: return configure(p, n, out, capacity, false);
     case cap::kOpQuery: return configure(p, n, out, capacity, true);
-    case cap::kOpStart: {
+    case cap::kOpStart: {   // -> blocking_ms(u32) generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (state_ != cap::kStateConfigured && state_ != cap::kStateDone) return rejected(kRejectUnavailable);
-      if (capacity < 4) return failed();
+      if (state_ != cap::kStateConfigured && state_ != cap::kStateDone && state_ != cap::kStateError) return wrongState(out, capacity);
+      if (capacity < 8) return failed();
       waitIdle();
       done_ = trig_seen_ = aborted_ = false;
       control_ = 0;
@@ -354,8 +357,10 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
         return failed();
       }
       state_ = trig_type_ ? cap::kStateWaiting : cap::kStateCapturing;
+      ++generation_;
       putU32(out, 0);              // blocking_ms: the probe keeps answering
-      return tail.finish(completed(4), out, capacity);
+      putU32(out + 4, generation_);
+      return tail.finish(completed(8), out, capacity);
     }
     case cap::kOpStop: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
@@ -365,59 +370,69 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
         waitIdle();
         poll();                             // it may have come while the search ended
       }
+      const uint8_t stopped[2] = {cap::kStoppedReasonHost, 0};
       if (state_ == cap::kStateWaiting) {
         state_ = cap::kStateConfigured;
-        if (subscribed_) { const uint8_t reason = cap::kStoppedReasonHost; endpoint_.event(*this, cap::kEventStopped, &reason, 1); }
+        if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
       } else if (state_ == cap::kStateCapturing) {
         waitIdle();                // the window ends by itself; its data stay readable
         state_ = cap::kStateDone;
-        if (subscribed_) { const uint8_t reason = cap::kStoppedReasonHost; endpoint_.event(*this, cap::kEventStopped, &reason, 1); }
+        if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
       }
       return tail.finish(completed(), out, capacity);
     }
-    case cap::kOpStatus: {
+    case cap::kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u64) flags(u8) generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 14) return failed();
+      if (capacity < 18) return failed();
       poll();
       out[0] = state_;
       const bool finished = state_ == cap::kStateDone;
       putU32(out + 1, finished ? 1 : 0);
       putU64(out + 5, finished ? samples_ : 0);
-      out[13] = slipped_ ? 2 : 0;   // bit1 the time base bent (a sample taken late)
-      return tail.finish(completed(14), out, capacity);
+      out[13] = slipped_ ? cap::kStatusFlagSlipped : 0;   // bit1 the time base bent (a sample taken late)
+      putU32(out + 14, generation_);
+      return tail.finish(completed(18), out, capacity);
     }
-    case cap::kOpRead: {           // position(u64) max(u32) -> position(u64) flags data (closed tail)
-      if (n < 12) return rejected(kRejectMalformed);
-      const Result parsed = plainTail(tail, p, n, 12, out, capacity);
+    case cap::kOpRead: {   // generation(u32) position(u64) max(u32) -> position(u64) flags(u8) len(u32) data [TLV]
+      const Result parsed = plainTail(tail, p, n, 16, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 9) return failed();
+      if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
+      if (capacity < 13) return failed();
       poll();
       const uint64_t have = state_ == cap::kStateDone ? samples_ : 0;
-      uint64_t position = getU64(p);
-      uint32_t max = getU32(p + 8);
+      uint64_t position = getU64(p + 4);
+      uint32_t max = getU32(p + 12);
       if (position > have) position = have;
       uint32_t count = static_cast<uint32_t>(have - position);
-      size_t room = capacity - 9;
+      const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
+      size_t room = capacity - 13 - reserve;
       if (room > max_read_) room = max_read_;
       if (max > room) max = static_cast<uint32_t>(room);
       uint8_t flags = 0;
-      if (count > max) { count = max; flags |= 1; }   // more
+      if (count > max) { count = max; flags |= reg::common::kReadFlagsMore; }
       putU64(out, position);
       out[8] = flags;
-      if (count) memcpy(out + 9, buffer_ + position, count);
-      return completed(9 + count);
+      putU32(out + 9, count);
+      if (count) memcpy(out + 13, buffer_ + position, count);
+      return tail.finish(completed(13 + count), out, capacity);
     }
-    case cap::kOpSegments: {
-      if (n < 4) return rejected(kRejectMalformed);
+    case cap::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x (len(u8) segment) [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 2 + 33) return failed();
+      if (capacity < 3 + 37) return failed();
       poll();
       const bool one = state_ == cap::kStateDone && getU32(p) == 0;
-      out[0] = one ? 1 : 0;
-      if (one) out[1] = static_cast<uint8_t>(segmentInfo(out + 2));   // len(u8) then the info (core §2.3)
-      return tail.finish(completed(one ? 2u + out[1] : 1u), out, capacity);
+      out[0] = 0;
+      out[1] = one ? 1 : 0;
+      if (one) out[2] = static_cast<uint8_t>(segmentInfo(out + 3));   // len(u8) then the info (core §2.3)
+      return tail.finish(completed(one ? 3u + out[2] : 2u), out, capacity);
+    }
+    case cap::kOpRelease: {   // generation(u32) serial(u32): nothing to release in one-shot (success)
+      const Result parsed = plainTail(tail, p, n, 8, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (getU32(p) != generation_) return wrongState(out, capacity);
+      return tail.finish(completed(), out, capacity);
     }
     case cap::kOpForce: {          // waiting for the trigger: take the segment from the next sample on
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
@@ -426,7 +441,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       return tail.finish(completed(), out, capacity);
     }
     default:
-      return rejected(kRejectUnknownOperation);   // release: not in one-shot
+      return rejected(kRejectUnknownOperation);
   }
 }
 

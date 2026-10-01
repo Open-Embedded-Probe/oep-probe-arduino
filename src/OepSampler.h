@@ -8,8 +8,8 @@
 // Triggers: immediate, level and edge on one channel, with a pretrigger inside the segment; the search runs in bursts
 // with interrupts on between them (see run()).
 //
-//   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32   0x03 stop   0x04 force   0x05 status   0x06 read
-//   0x07 segments   0x09 query(TLV) -> TLV, no lock          (0x08 release: not in one-shot, unknown operation)
+//   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32, generation u32   0x03 stop   0x04 force   0x05 status
+//   0x06 read(generation, position, max)   0x07 segments   0x08 release (nothing to do in one-shot)   0x09 query (no lock)
 #pragma once
 
 #include <Arduino.h>
@@ -63,9 +63,11 @@ class SamplerCapture final : public Interface, public GroupTrack {
   bool trackStart() override { return groupOp(reg::fixture_logic::kOpStart); }
   void trackStop() override { groupOp(reg::fixture_logic::kOpStop); }
   uint8_t trackState() const override { return state_; }
+  uint32_t trackGeneration() const override { return generation_; }
 
  private:
   bool group_op_ = false;
+  uint32_t generation_ = 0;   // one up at every start (oep-if-capture: generation)
   bool groupOp(uint8_t op) {
     uint8_t out[8];
     group_op_ = true;
@@ -93,7 +95,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   static constexpr uint64_t kOffNs = 250000000;   // the longest a burst keeps interrupts off (watchdog: 300 ms)
   static constexpr uint8_t kControlForce = 1, kControlAbort = 2;
   uint8_t trig_type_ = 0, trig_role_ = 0;
-  uint16_t trig_value_ = 0;
+  uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
   volatile uint8_t control_ = 0;          // from core 1: force, abort the search
   volatile bool trig_seen_ = false, aborted_ = false;

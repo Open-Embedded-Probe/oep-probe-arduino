@@ -67,14 +67,6 @@ const Frontend *frontendOf(uint8_t number) {
   return nullptr;
 }
 
-uint64_t nowNs() {
-#if defined(ARDUINO_ARCH_ESP32)
-  return static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-#else
-  return time_us_64() * 1000u;
-#endif
-}
-
 #if defined(ARDUINO_ARCH_RP2040)
 bool gAdcReady = false;
 #endif
@@ -99,13 +91,15 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
     putU32(limit + 2, kMaxTotalHz / c);
     w.put(ana::kTlvDescribeRateLimit, limit, sizeof limit);
   }
-  const uint8_t channels[2] = {kMaxChannels, 1u << 4};   // 16-bit slots (bit i: s = 2^i)
+  uint8_t channels[5] = {kMaxChannels};   // max(u8) layouts(u32): 16-bit slots (bit i: s = 2^i)
+  putU32(channels + 1, 1u << 4);
   w.put(ana::kTlvDescribeChannels, channels, sizeof channels);
-  uint8_t trig[5] = {(1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown)};
+  uint8_t trig[8];   // types(u32) max_pretrigger(u32)
+  putU32(trig, (1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown));
 #if defined(ARDUINO_ARCH_RP2040)
-  putU32(trig + 1, kRingBytes / 4 - kPretriggerRoom);   // a triggered segment is at most half the ring (one channel)
+  putU32(trig + 4, kRingBytes / 4 - kPretriggerRoom);   // a triggered segment is at most half the ring (one channel)
 #else
-  putU32(trig + 1, static_cast<uint32_t>(kMaxBytes / 2) - kPretriggerRoom);
+  putU32(trig + 4, static_cast<uint32_t>(kMaxBytes / 2) - kPretriggerRoom);
 #endif
   w.put(ana::kTlvDescribeTrigger, trig, sizeof trig);
   for (const Frontend &f : kFrontends) {
@@ -160,16 +154,16 @@ void AnalogCapture::planRelease() {
 // ---- configure ----------------------------------------------------------------------------------------------------
 
 Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query) {
-  if (!query && bound()) return rejected(kRejectUnavailable);   // the group's now
-  if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return rejected(kRejectUnavailable);
+  if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
+  if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return wrongState(out, capacity);
   static const uint8_t kKnown[] = {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
                                    ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
                                    ana::kTlvConfigureFrontend};
   Tail tail;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity);
   if (refused(parsed)) return parsed;
-  if (!channels_) return rejected(kRejectUnavailable);   // plan the channels first
-  uint8_t len = 0;
+  if (!channels_) return wrongState(out, capacity);   // plan the channels first (cause 6)
+  size_t len = 0;
   bool critical = false;
   if (const uint8_t *v = tail.find(ana::kTlvConfigureMode, len, &critical)) {
     if (len != 1) return rejected(kRejectMalformed);
@@ -188,12 +182,12 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     if (len != 4 || getU32(v) == 0) return rejected(kRejectMalformed);
     samples = getU32(v);
   }
-  // type(u8) role(u8) value(u16): the ADC value crossed up (from below to at or above) or down (above to at or below)
+  // type(u8) role(u8) value(u32): the ADC value crossed up (from below to at or above) or down (above to at or below)
   uint8_t trig_type = ana::kTriggerImmediate, trig_role = 0;
-  uint16_t trig_value = 0;
+  uint32_t trig_value = 0;
   if (const uint8_t *v = tail.find(ana::kTlvConfigureTrigger, len, &critical)) {
-    if (len != 4) return rejected(kRejectMalformed);
-    const uint16_t value = static_cast<uint16_t>(v[2] | v[3] << 8);
+    if (len != 6) return rejected(kRejectMalformed);
+    const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == ana::kTriggerImmediate ||
                     ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && v[1] < channels_ && value <= kFull);
     if (ok) { trig_type = v[0]; trig_role = v[1]; trig_value = value; }
@@ -222,12 +216,14 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   for (uint8_t k = 0; k < kMaxChannels; ++k) chosen[k] = kWidest;
   {   // frontend(role u8, frontend u8), once per channel
     size_t at = 0;
-    uint8_t raw = 0, vlen = 0;
+    uint8_t raw = 0;
+    size_t vlen = 0;
     const uint8_t *v = nullptr;
     while (tail.next(at, raw, v, vlen)) {
       if ((raw & ~kTagCritical) != ana::kTlvConfigureFrontend) continue;
       if (vlen != 2) return rejected(kRejectMalformed);
-      if (v[0] >= channels_ || !frontendOf(v[1])) return rejected(kRejectUnavailable);
+      if (v[0] >= channels_) return rejected(kRejectMalformed);
+      if (!frontendOf(v[1])) return unsupportedTag(out, capacity, raw);   // not a frontend this probe declares
       chosen[v[0]] = v[1];
     }
   }
@@ -332,11 +328,12 @@ Result AnalogCapture::calibration(uint8_t *out, size_t capacity) const {
   for (const Frontend &f : kFrontends) {
     uint32_t digi = 0, mv = 0;
     if (esp_efuse_rtc_calib_get_cal_voltage(ver, 0, f.number, &digi, &mv) != ESP_OK) continue;
-    uint8_t v[2 + sizeof kScheme - 1 + 13];
+    uint8_t v[2 + sizeof kScheme - 1 + 2 + 13];   // frontend scheme_len scheme raw_len(u16) raw
     v[0] = f.number;
     v[1] = sizeof kScheme - 1;
     memcpy(v + 2, kScheme, sizeof kScheme - 1);
-    uint8_t *raw = v + 2 + sizeof kScheme - 1;   // version(u8) init_code(u32) digi(u32) mv(u32)
+    putU16(v + 2 + sizeof kScheme - 1, 13);
+    uint8_t *raw = v + 2 + sizeof kScheme - 1 + 2;   // version(u8) init_code(u32) digi(u32) mv(u32)
     raw[0] = static_cast<uint8_t>(ver);
     putU32(raw + 1, esp_efuse_rtc_calib_get_init_code(ver, 0, f.number));
     putU32(raw + 5, digi);
@@ -351,11 +348,12 @@ Result AnalogCapture::calibration(uint8_t *out, size_t capacity) const {
   esp_efuse_read_field_blob(ESP_EFUSE_ADC_VREF, &vref, 5);
   esp_efuse_read_field_blob(ESP_EFUSE_ADC1_TP_LOW, &low, 7);
   esp_efuse_read_field_blob(ESP_EFUSE_ADC1_TP_HIGH, &high, 9);
-  uint8_t v[2 + sizeof kScheme - 1 + 4];
+  uint8_t v[2 + sizeof kScheme - 1 + 2 + 4];   // frontend scheme_len scheme raw_len(u16) raw
   v[0] = 0xff;   // not per frontend
   v[1] = sizeof kScheme - 1;
   memcpy(v + 2, kScheme, sizeof kScheme - 1);
-  uint8_t *raw = v + 2 + sizeof kScheme - 1;     // vref(u8) tp_low(u8) tp_high(u16)
+  putU16(v + 2 + sizeof kScheme - 1, 4);
+  uint8_t *raw = v + 2 + sizeof kScheme - 1 + 2;     // vref(u8) tp_low(u8) tp_high(u16)
   raw[0] = vref;
   raw[1] = low;
   putU16(raw + 2, high);
@@ -372,7 +370,8 @@ bool AnalogCapture::trackReady() const {
 }
 
 bool AnalogCapture::startNow() {
-  if (!trackReady() || !buffer_) return false;
+  if (!(trackReady() || state_ == ana::kStateError) || !buffer_) return false;
+  ++generation_;
   frames_ = got_ = searched_ = 0;
   short_ = have_prev_ = force_ = trig_slipped_ = false;
   reported_ = false;
@@ -520,8 +519,8 @@ void AnalogCapture::stopNow() {
 #endif
     state_ = ana::kStateConfigured;
     if (subscribed_) {
-      const uint8_t reason = ana::kStoppedReasonHost;
-      endpoint_.event(*this, ana::kEventStopped, &reason, 1);
+      const uint8_t stopped[2] = {ana::kStoppedReasonHost, 0};
+      endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
     }
     return;
   }
@@ -532,8 +531,8 @@ void AnalogCapture::stopNow() {
   finish();
   short_ = frames_ < samples_;
   if (subscribed_ && !reported_) {
-    const uint8_t reason = ana::kStoppedReasonHost;
-    endpoint_.event(*this, ana::kEventStopped, &reason, 1);
+    const uint8_t stopped[2] = {ana::kStoppedReasonHost, 0};
+    endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
     reported_ = true;
   }
 }
@@ -743,15 +742,15 @@ void AnalogCapture::poll() {
   if (state_ == ana::kStateDone && !reported_) {
     reported_ = true;
     if (subscribed_) {
-      uint8_t seg[33];
+      uint8_t seg[37];
       endpoint_.event(*this, ana::kEventSegment, seg, segmentInfo(seg));
-      const uint8_t reason = ana::kStoppedReasonComplete;
-      endpoint_.event(*this, ana::kEventStopped, &reason, 1);
+      const uint8_t stopped[2] = {ana::kStoppedReasonComplete, 0};
+      endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
     }
   }
 }
 
-size_t AnalogCapture::segmentInfo(uint8_t *out) const {
+size_t AnalogCapture::segmentInfo(uint8_t *out) const {   // the segment record (oep-if-capture §2), 37 bytes
   putU32(out, 0);                  // serial
   putU64(out + 4, 0);              // position
   putU32(out + 12, frames_);
@@ -764,7 +763,8 @@ size_t AnalogCapture::segmentInfo(uint8_t *out) const {
   if (!ringMode() && overflow_) flags |= ana::kSegmentFlagSlipped;   // conversions were lost: the values after it come late
 #endif
   out[32] = flags;
-  return 33;
+  putU32(out + 33, generation_);
+  return 37;
 }
 
 // ---- the operations -----------------------------------------------------------------------------------------------
@@ -774,63 +774,83 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
   switch (op) {
     case ana::kOpConfigure: return configure(p, n, out, capacity, false);
     case ana::kOpQuery: return configure(p, n, out, capacity, true);
-    case ana::kOpStart: {
+    case ana::kOpStart: {   // -> blocking_ms(u32) generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (bound()) return rejected(kRejectUnavailable);   // the group starts it
-      if (!trackReady() || capacity < 4) return rejected(kRejectUnavailable);
+      if (bound()) return boundInGroup(*this, out, capacity);   // the group starts it (cause 4)
+      if (!trackReady() && state_ != ana::kStateError) return wrongState(out, capacity);
+      if (capacity < 8) return failed();
       follow_ = false;
       if (!startNow()) return failed();
       putU32(out, 0);   // blocking_ms: DMA, the probe keeps answering
-      return tail.finish(completed(4), out, capacity);
+      putU32(out + 4, generation_);
+      return tail.finish(completed(8), out, capacity);
     }
     case ana::kOpStop: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (bound()) return rejected(kRejectUnavailable);
+      if (bound()) return boundInGroup(*this, out, capacity);
       stopNow();
       return tail.finish(completed(), out, capacity);
     }
-    case ana::kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u64) flags(u8)
+    case ana::kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u64) flags(u8) generation(u32) [TLV error]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 14) return failed();
+      if (capacity < 21) return failed();
       poll();
       out[0] = state_;
       putU32(out + 1, state_ == ana::kStateDone ? 1 : 0);
       putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
 #if defined(ARDUINO_ARCH_ESP32)
-      out[13] = (overflow_ || overflow_seen_ || trig_slipped_) ? 1 : 0;   // bit0 conversions were lost
+      out[13] = (overflow_ || overflow_seen_ || trig_slipped_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions were lost
 #else
-      out[13] = trig_slipped_ ? 1 : 0;
+      out[13] = trig_slipped_ ? ana::kStatusFlagDropped : 0;
 #endif
-      return tail.finish(completed(14), out, capacity);
+      putU32(out + 14, generation_);
+      size_t used = 18;
+      if (state_ == ana::kStateError) {   // why (TLV 0x01 error): the driver would not start
+        out[18] = ana::kTlvStatusAnswerError;
+        out[19] = 1;
+        out[20] = ana::kErrorPeripheral;
+        used = 21;
+      }
+      return tail.finish(completed(used), out, capacity);
     }
-    case ana::kOpRead: {   // position(u64) max(u32) -> position(u64) flags(u8: bit0 more) data
-      if (n < 12) return rejected(kRejectMalformed);
-      const uint64_t position = getU64(p);
-      const uint32_t most = getU32(p + 8);
+    case ana::kOpRead: {   // generation(u32) position(u64) max(u32) -> position(u64) flags(u8: bit0 more) len(u32) data [TLV]
+      const Result parsed = plainTail(tail, p, n, 16, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
+      const uint64_t position = getU64(p + 4);
+      const uint32_t most = getU32(p + 12);
       const uint64_t end = static_cast<uint64_t>(frames_) * channels_ * 2u;
-      if (capacity < 9) return failed();
+      const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
+      if (capacity < 13 + reserve) return failed();
       size_t take = position < end ? static_cast<size_t>(end - position) : 0;
       if (take > most) take = most;
       if (take > max_read_) take = max_read_;
-      if (take > capacity - 9) take = capacity - 9;
+      if (take > capacity - 13 - reserve) take = capacity - 13 - reserve;
       putU64(out, position);
-      out[8] = position + take < end ? 1 : 0;
-      if (take) memcpy(out + 9, reinterpret_cast<const uint8_t *>(buffer_) + position, take);   // little endian
-      return completed(9 + take);
+      out[8] = position + take < end ? reg::common::kReadFlagsMore : 0;
+      putU32(out + 9, static_cast<uint32_t>(take));
+      if (take) memcpy(out + 13, reinterpret_cast<const uint8_t *>(buffer_) + position, take);   // little endian
+      return tail.finish(completed(13 + take), out, capacity);
     }
-    case ana::kOpSegments: {   // from_serial(u32) -> count(u8) segments
-      if (n < 4) return rejected(kRejectMalformed);
+    case ana::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x (len(u8) segment) [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 2 + 33) return failed();
+      if (capacity < 3 + 37) return failed();
       poll();
       const bool one = state_ == ana::kStateDone && getU32(p) == 0;
-      out[0] = one ? 1 : 0;
-      if (one) out[1] = static_cast<uint8_t>(segmentInfo(out + 2));   // len(u8) then the info (core §2.3)
-      return tail.finish(completed(one ? 2u + out[1] : 1u), out, capacity);
+      out[0] = 0;
+      out[1] = one ? 1 : 0;
+      if (one) out[2] = static_cast<uint8_t>(segmentInfo(out + 3));   // len(u8) then the info (core §2.3)
+      return tail.finish(completed(one ? 3u + out[2] : 2u), out, capacity);
+    }
+    case ana::kOpRelease: {   // generation(u32) serial(u32): nothing to release in one-shot (success)
+      const Result parsed = plainTail(tail, p, n, 8, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (getU32(p) != generation_) return wrongState(out, capacity);
+      return tail.finish(completed(), out, capacity);
     }
     case ana::kOpCalibration: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
@@ -841,12 +861,12 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
     case ana::kOpForce: {   // waiting for the crossing: take the segment from the next frame on (after the pretrigger)
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (bound()) return rejected(kRejectUnavailable);
+      if (bound()) return boundInGroup(*this, out, capacity);
       if (state_ == ana::kStateWaiting) force_ = true;
       return tail.finish(completed(), out, capacity);
     }
     default:
-      return rejected(kRejectUnknownOperation);   // release: not in one-shot
+      return rejected(kRejectUnknownOperation);
   }
 }
 
