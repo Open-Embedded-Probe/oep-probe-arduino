@@ -295,7 +295,7 @@ void Endpoint::poll() {
           const bool message = t.serial.feed(p, n, rawSink, &t);
           if (i == speed_port_ && speed_state_ != kSpeedBase) {   // the sped-up port's line (core §3.5)
             if (t.serial.badCandidates() != bad) speedBad();
-            if (message && i == speed_port_) speed_good_ms_ = millis();
+            if (message && i == speed_port_) { speed_good_ms_ = millis(); speed_heard_ = true; }
           }
           if (message) handleMessage(t.serial.message(), t.serial.length());
         }
@@ -623,6 +623,7 @@ void Endpoint::speedApply() {
   speed_state_ = kSpeedTry;
   speed_until_ = millis() + speed_pending_verify_;
   speed_good_ms_ = millis();
+  speed_heard_ = false;
   speed_bad_n_ = 0;
 }
 
@@ -644,7 +645,11 @@ void Endpoint::speedPoll() {
 }
 
 void Endpoint::speedBad() {
-  if (speed_state_ == kSpeedTry) { speedRevert(); return; }   // the new speed breaks frames: not this one
+  // The bytes in flight while both ends switch (the host's last write at the old speed, the line settling) close as a
+  // broken candidate: the ATOM's FTDI gave one on every switch, and reverting on it threw away rates that verified
+  // cleanly (2026-10-01). So in the try state only a broken candidate after a good frame at the new speed counts; a
+  // rate that never carries a good frame runs out its verify_ms instead.
+  if (speed_state_ == kSpeedTry) { if (speed_heard_) speedRevert(); return; }   // the new speed breaks frames: not this one
   const uint32_t now = millis();
   if (speed_bad_n_ == kSpeedBadMax) {   // the oldest goes
     memmove(speed_bad_ms_, speed_bad_ms_ + 1, sizeof speed_bad_ms_[0] * (kSpeedBadMax - 1));
