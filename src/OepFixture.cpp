@@ -98,7 +98,8 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
 
 size_t FixtureUart::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  w.roleChannels(kUartRoles, sizeof kUartRoles, pins_.allowedMask());
+  w.roleChannels(&kUartRoles[0], 1, pins_.allowedMask() & rx_mask_);   // RX: the pins the peripheral can listen on
+  w.roleChannels(&kUartRoles[1], 1, pins_.allowedMask() & tx_mask_);   // TX
   w.put(kImplementationPeripheral[0], kImplementationPeripheral + 2, kImplementationPeripheral[1]);
   // formats: data bits 8 / 7 (bits 0-1), parity none / even / odd (bits 2-3), stop 1 / 2 (bit 4) - every combination
   uint8_t formats[12], n = 0;
@@ -118,10 +119,12 @@ uint8_t FixtureUart::planCheck(const RoleAssignment *roles, size_t count) {
   if (count == 0 || count > 2) return kRejectUnsupported;
   int rx = -1, tx = -1;
   for (size_t i = 0; i < count; ++i) {
-    if (roles[i].role == ua::kRoleRx && rx < 0) rx = roles[i].channel;
-    else if (roles[i].role == ua::kRoleTx && tx < 0) tx = roles[i].channel;
+    const uint16_t c = roles[i].channel;
+    const uint64_t role_mask = roles[i].role == ua::kRoleRx ? rx_mask_ : tx_mask_;
+    if (roles[i].role == ua::kRoleRx && rx < 0) rx = c;
+    else if (roles[i].role == ua::kRoleTx && tx < 0) tx = c;
     else return kRejectUnsupported;
-    if (!pins_.allowed(roles[i].channel)) return kRejectUnsupported;
+    if (!pins_.allowed(c) || c > 63 || !((role_mask >> c) & 1)) return kRejectUnsupported;   // not a pin this role can take
   }
   if (rx >= 0 && tx >= 0 && rx == tx) return kRejectUnsupported;
   if ((rx >= 0 && !pins_.free(rx)) || (tx >= 0 && !pins_.free(tx)) || rx_ >= 0 || tx_ >= 0) return kRejectUnavailable;

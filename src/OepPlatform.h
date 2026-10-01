@@ -181,8 +181,42 @@ inline void platformUartBuffers(OepUart &serial, size_t rx, size_t tx) {
 }
 
 // config: the core's SERIAL_xyz frame format (8N1 unless told otherwise).
+#if defined(ARDUINO_ARCH_RP2040)
+// The pins an RP2 UART (uart_index 0 = Serial1, 1 = Serial2) reaches as RX / TX, per chip (arduino-pico's SerialUART
+// tables). Anything else makes the core panic() in setRX / setTX, so the fixture must never ask.
+inline uint64_t platformUartMask(const uint8_t *pins, size_t n) {
+  uint64_t m = 0;
+  for (size_t i = 0; i < n; ++i) m |= uint64_t{1} << pins[i];
+  return m;
+}
+inline uint64_t platformUartRxMask(int uart_index) {
+#if defined(PICO_RP2350) && !PICO_RP2350A
+  static const uint8_t k0[] = {1, 3, 13, 15, 17, 19, 29, 31, 33, 35, 45, 47}, k1[] = {5, 7, 9, 11, 21, 23, 25, 27, 37, 39, 41, 43};
+#elif defined(PICO_RP2350)
+  static const uint8_t k0[] = {1, 3, 13, 15, 17, 19, 29}, k1[] = {5, 7, 9, 11, 21, 23, 25, 27};
+#else
+  static const uint8_t k0[] = {1, 13, 17, 29}, k1[] = {5, 9, 21, 25};
+#endif
+  return uart_index ? platformUartMask(k1, sizeof k1) : platformUartMask(k0, sizeof k0);
+}
+inline uint64_t platformUartTxMask(int uart_index) {
+#if defined(PICO_RP2350) && !PICO_RP2350A
+  static const uint8_t k0[] = {0, 2, 12, 14, 16, 18, 28, 30, 32, 34, 44, 46}, k1[] = {4, 6, 8, 10, 20, 22, 24, 26, 36, 38, 40, 42};
+#elif defined(PICO_RP2350)
+  static const uint8_t k0[] = {0, 2, 12, 14, 16, 18, 28}, k1[] = {4, 6, 8, 10, 20, 22, 24, 26};
+#else
+  static const uint8_t k0[] = {0, 12, 16, 28}, k1[] = {4, 8, 20, 24};
+#endif
+  return uart_index ? platformUartMask(k1, sizeof k1) : platformUartMask(k0, sizeof k0);
+}
+#endif
+
 inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, uint32_t config = SERIAL_8N1) {
 #if defined(ARDUINO_ARCH_RP2040)
+  // Only pins the UART reaches (setRX / setTX panic otherwise; the fixture's role masks keep them out upstream).
+  const int index = &serial == &Serial1 ? 0 : 1;   // Serial1 = uart0, Serial2 = uart1 in arduino-pico
+  if (rx < 0 || tx < 0 || rx > 63 || tx > 63) return false;
+  if (!((platformUartRxMask(index) >> rx) & 1) || !((platformUartTxMask(index) >> tx) & 1)) return false;
   if (!serial.setRX(rx) || !serial.setTX(tx)) return false;
   serial.begin(baud, static_cast<uint16_t>(config));
   return true;
