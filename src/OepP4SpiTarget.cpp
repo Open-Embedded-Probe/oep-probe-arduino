@@ -60,6 +60,7 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagMaxClockHz, kMaxClockHz);
   w.u32(kTagFeatures, 1);   // bit0 LSB first
   w.u8(kTagImplementation, 2);   // a dedicated peripheral
+  w.u8(reg::fixture_spi_target::kTlvDescribeQueueDepth, kQueueDepth);
   return w.ok() ? w.length() : 0;
 }
 
@@ -124,8 +125,8 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
     case kOpConfigure: {   // mode(u8) bit_order(u8) [TLV]
       const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] > 3 || payload[1] > 1) return rejected(kRejectUnsupported);
-      if (sck_ < 0) return rejected(kRejectUnavailable);  // needs a plan
+      if (payload[0] > 3 || payload[1] > 1) return rejected(kRejectMalformed);   // not a mode / order of the table
+      if (sck_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §4: unavailable cause 6)
       stop();
       mode_ = payload[0]; bit_order_ = payload[1];
       if (!start()) return failed();
@@ -136,9 +137,9 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       const uint16_t want = getU16(payload), count = getU16(payload + 2);
       const Result parsed = plainTail(tail, payload, length, 4u + count, out, capacity);
       if (refused(parsed)) return parsed;
-      if (!started_) return rejected(kRejectUnavailable);
-      if (want == 0 || want > kMaxFrame || count > want) return rejected(kRejectMalformed);
-      if (armed_) return rejected(kRejectUnavailable);
+      if (want == 0 || count > want) return rejected(kRejectMalformed);
+      if (want > kMaxFrame) return unsupportedValue(out, capacity);   // over max_length
+      if (!started_ || armed_) return wrongState(out, capacity);       // not configured, or one is waiting already
       if (!arm(payload + 4, count, want)) return failed();
       return tail.finish(completed(), out, capacity);
     }
@@ -159,23 +160,23 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       }
       return tail.finish(completed(7 + data), out, capacity);
     }
-    case kOpStatus: {   // [TLV] -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u16)
+    case kOpStatus: {   // [TLV] -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 11) return failed();
+      if (capacity < 13) return failed();
       out[0] = started_ ? 1 : 0;   // state: 0 not configured, 1 running
       out[1] = mode_;
       out[2] = bit_order_;
       out[3] = armed_ ? 1 : 0;
       out[4] = static_cast<uint8_t>(queue_count_);
       putU32(out + 5, transactions_);
-      putU16(out + 9, errors_);
-      return tail.finish(completed(11), out, capacity);
+      putU32(out + 9, errors_);
+      return tail.finish(completed(13), out, capacity);
     }
     case kOpReset: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (!started_) return rejected(kRejectUnavailable);
+      if (!started_) return wrongState(out, capacity);   // state 0 (fixture §4)
       stop(); transactions_ = 0; errors_ = 0;
       if (!start()) return failed();
       return tail.finish(completed(), out, capacity);

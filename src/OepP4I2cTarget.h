@@ -5,7 +5,7 @@
 // slave v1 driver), for testing a DUT's I2C controller.
 //   0x01 configure(address u8, mode u8: 1 fixed rx, 2 framed rx, 3 preloaded tx)   0x02 arm_rx(length u16)
 //   0x03 read_rx -> pending(u8) count(u16) data          0x04 preload_tx(count u16, data) -> slots(u8)
-//   0x05 status -> state(u8) mode(u8) armed(u8) queued(u8) rx_frames(u32) tx_slots(u8) errors(u16)   (no lock)
+//   0x05 status -> state(u8) mode(u8) armed(u8) queued(u8) rx_frames(u32) tx_slots(u8) errors(u32)   (no lock)
 //   0x06 reset   0x07 stretch(stretch_us u32)
 // Every request takes a TLV tail (oep-core §2.3). Roles: 1 SDA, 2 SCL.
 // Contract measured in E147-E150 (wch-protocols): Contract measured in E147-E150: a receive job is
@@ -56,7 +56,7 @@ class P4I2cTarget final : public Interface {
   uint8_t address_ = 0, mode_ = kModeNone;
   bool started_ = false;
   uint32_t rx_frames_ = 0;
-  uint16_t errors_ = 0;
+  uint32_t errors_ = 0;
   uint8_t tx_slots_ = 0;
   // receive job
   uint8_t rx_buffer_[kMaxFrame];
