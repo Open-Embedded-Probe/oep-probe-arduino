@@ -6,10 +6,12 @@
 // addressed by a u64 position (it does not wrap in practice), and marks with their own u32 serial numbers. One of the
 // standard interfaces' shared forms (the capture uses the same u64 positions).
 //
-//   read(from u8, arg u64, max u16)  ->  start(u64) flags(u8: bit0 more, bit1 gap) data        (closed tail)
+//   read(from u8, arg u64, max u16)  ->  start(u64) flags(u8: bit0 more, bit1 gap) len(u16) data [TLV]
 //        from: 0 position = arg, 1 oldest, 2 now, 3 the last mark of kind arg (0 = any)
-//   marks(from_serial u32)           ->  more(u8) count(u8) count x (serial u32, position u64, kind u8, time_ms u32,
-//                                        detail u8)
+//   marks(from_serial u32)           ->  more(u8) count(u8) count x (len u8, serial u32, position u64, kind u8,
+//                                        time_ns u64, detail u8) [TLV]
+// Positions and mark serials never go back within a boot: a stream closed and made again at the same place goes on
+// from where it was (common §1.1), so the ring and its counters are the interface's for good.
 #pragma once
 
 #include <Arduino.h>
@@ -20,9 +22,10 @@ namespace oep {
 
 class PositionStream {
  public:
-  struct Mark { uint32_t serial; uint64_t position; uint8_t kind; uint32_t time_ms; uint8_t detail; };
-  static constexpr size_t kMarkBytes = 18;
+  struct Mark { uint32_t serial; uint64_t position; uint8_t kind; uint64_t time_ns; uint8_t detail; };
+  static constexpr size_t kMarkBytes = 22;
   static constexpr size_t kReadRequest = 11;   // from(u8) arg(u64) max(u16)
+  static constexpr size_t kReadHeader = 11;    // start(u64) flags(u8) len(u16)
 
   // capacity: a power of two (the ring index is position & (capacity - 1)).
   PositionStream(uint8_t *buffer, size_t capacity, Mark *marks, size_t mark_capacity)
@@ -39,25 +42,26 @@ class PositionStream {
   }
   uint64_t oldest() const { return total_ - base_ > capacity_ ? total_ - capacity_ : base_; }
   void mark(uint8_t kind, uint8_t detail = 0) {
-    marks_[serial_ % mark_capacity_] = {serial_, total_, kind, static_cast<uint32_t>(millis()), detail};
+    marks_[serial_ % mark_capacity_] = {serial_, total_, kind, nowNs(), detail};
     ++serial_;
   }
   void clear() {   // nothing before now is kept
     base_ = total_;
-    mark(reg::target_console::kMarkKindClear);
+    mark(reg::common::kMarkKindClear);
   }
 
-  // p: from(u8) arg(u64) max(u16). from > 3 is the caller's to refuse (unknown value).
-  Result read(const uint8_t *p, uint8_t *out, size_t capacity, uint16_t max_read) const {
-    if (capacity < 9) return failed();
+  // p: from(u8) arg(u64) max(u16). from > 3 is the caller's to refuse (unknown value). The answer leaves `reserve` bytes
+  // of the capacity for what the caller appends (an ignored TLV).
+  Result read(const uint8_t *p, uint8_t *out, size_t capacity, uint16_t max_read, size_t reserve = 0) const {
+    if (capacity < kReadHeader + reserve) return failed();
     const uint8_t from = p[0];
     const uint64_t arg = getU64(p + 1);
     uint64_t start = total_;
-    if (from == reg::target_console::kReadFromPosition) {
+    if (from == reg::common::kReadFromPosition) {
       start = arg;
-    } else if (from == reg::target_console::kReadFromOldest) {
+    } else if (from == reg::common::kReadFromOldest) {
       start = oldest();
-    } else if (from == reg::target_console::kReadFromLastMark) {
+    } else if (from == reg::common::kReadFromLastMark) {
       start = total_;   // no such mark kept (never, or pushed out of the ring): from now (common §1.2)
       const uint32_t kept = serial_ < mark_capacity_ ? serial_ : static_cast<uint32_t>(mark_capacity_);
       for (uint32_t k = 0; k < kept; ++k) {
@@ -66,18 +70,19 @@ class PositionStream {
       }
     }
     uint8_t flags = 0;
-    if (start < oldest()) { start = oldest(); flags |= 2; }   // gap: pushed out or cleared
+    if (start < oldest()) { start = oldest(); flags |= reg::common::kReadFlagsGap; }   // gap: pushed out or cleared
     if (start > total_) start = total_;
     uint32_t count = static_cast<uint32_t>(total_ - start);
-    uint32_t room = static_cast<uint32_t>(capacity - 9);
+    uint32_t room = static_cast<uint32_t>(capacity - kReadHeader - reserve);
     uint16_t max = getU16(p + 9);
     if (max > max_read) max = max_read;
     if (room > max) room = max;
-    if (count > room) { count = room; flags |= 1; }
+    if (count > room) { count = room; flags |= reg::common::kReadFlagsMore; }
     putU64(out, start);
     out[8] = flags;
-    for (uint32_t i = 0; i < count; ++i) out[9 + i] = buffer_[(start + i) & (capacity_ - 1)];
-    return completed(9 + count);
+    putU16(out + 9, static_cast<uint16_t>(count));
+    for (uint32_t i = 0; i < count; ++i) out[kReadHeader + i] = buffer_[(start + i) & (capacity_ - 1)];
+    return completed(kReadHeader + count);
   }
 
   // Marks from serial `from` on (serial arithmetic; an older one starts at the oldest kept). -> bytes written.
@@ -95,8 +100,8 @@ class PositionStream {
       putU32(out + used, mk.serial);
       putU64(out + used + 4, mk.position);
       out[used + 12] = mk.kind;
-      putU32(out + used + 13, mk.time_ms);
-      out[used + 17] = mk.detail;
+      putU64(out + used + 13, mk.time_ns);
+      out[used + 21] = mk.detail;
       used += kMarkBytes;
       ++count;
     }
@@ -121,9 +126,9 @@ class PositionStream {
 class BindSource {
  public:
   virtual const PositionStream *bindStream() const = 0;      // nullptr: nothing to carry now
-  virtual uint16_t bindStreamNumber() const = 0;             // another number: a new stream (positions start over)
+  virtual uint16_t bindStreamNumber() const = 0;             // the stream's number (a console's; a UART's is fixed)
   virtual size_t bindInput(const uint8_t *data, size_t length) = 0;   // the port's raw bytes: how many were taken
-  // Resets of this stream's target that last-reset counts (riscv-dm reset, attach_under_reset); 0 for a UART.
+  // Resets of this stream's target that last-reset counts (riscv-dm reset, attach's reset TLV); 0 for a UART.
   virtual uint32_t hostResets() const { return 0; }
 
  protected:

@@ -3,10 +3,11 @@
 
 // OEP v1 endpoint: frames in, interfaces by name, the session lock, results out.
 //
-// The lock follows oep-spec docs/session-and-exclusivity.ja.md: a host-chosen u32 session id, a lease
-// extended by every request of its holder and counted from when that request completed; when it lapses
-// or ends the last id is remembered and may resume. Losing the host changes nothing else - no detach,
-// no pin release, no target reset (the v0 idle abandon is gone on purpose).
+// The lock follows oep-core §6: a host-chosen u32 session id, a lease extended by every request of its holder and
+// counted from when that request completed (a long request never lapses its own lock). An explicit end keeps the
+// session's resources for the next open (the same id resumes them); a lapse sweeps them, and the next request with
+// that id is rejected expired until it opens again (resumed 2); a takeover by force sweeps them too and forgets the id
+// (the taken host meets locked, then no_session).
 #pragma once
 
 #include <Arduino.h>
@@ -38,7 +39,7 @@ class RawPorts {
 class Endpoint {
  public:
   static constexpr size_t kMaxInterfaces = 16;
-  static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMaxMs = 600000;
+  static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMinMs = reg::kLimitLeaseMinMs, kLeaseMaxMs = reg::kLimitLeaseMaxMs;
 
   // A transport's kind (core §7.5, registry transport_kind): the serial ports (UART bridge, USB CDC, USB-Serial/JTAG)
   // frame as 0x00 <COBS> 0x00 and share the line with raw bytes (core §3.4); vendor bulk, HID and TCP are
@@ -73,8 +74,11 @@ class Endpoint {
   // A session holds the lock / holds serial port `port` (its raw transfer is stopped, core §3.4).
   bool locked() const { return locked_; }
   bool held(size_t port) const { return locked_ && ((held_ >> port) & 1); }
-  // The probe also enumerates under the OEP VID:PID (describe oep_pid, probe guide §3.8).
-  void setOepPid(bool on) { oep_pid_ = on; }
+  // The probe also enumerates as a USB device discovery lists (iProduct starting "OEP", the vendor bulk's subclass /
+  // protocol; describe discoverable, core §3.3).
+  void setDiscoverable(bool on) { discoverable_ = on; }
+  // The longest one request takes (describe max_op_ms, core §7.5): what every interface's long op is bounded by.
+  static constexpr uint32_t kMaxOpMs = oep::kMaxOpMs;
   // fn of an interface added (0: not added), and the interface at a fn (nullptr: none).
   uint16_t fnOf(const Interface &interface) const {
     for (size_t i = 0; i < count_; ++i) if (interfaces_[i] == &interface) return static_cast<uint16_t>(i + 1);
@@ -92,12 +96,10 @@ class Endpoint {
   // The identity of the interface list (oep-if-probe-config §2): CRC-32 of every entry (fn u16, instance u16,
   // revision u8, name) in fn order, oep.core first.
   uint32_t listHash() const;
-  // oep.core's describe: the probe itself, as TLV bytes (kept by the caller).
+  // oep.core's describe: the probe itself, as TLV bytes (kept by the caller). Declarations only (core §7.3).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
-  // More of oep.core's describe, written when it is asked for (the settings' label items): TLVs -> bytes written.
-  using ProbeExtra = size_t (*)(void *context, uint8_t *out, size_t capacity);
-  void setProbeExtra(ProbeExtra extra, void *context) { probe_extra_ = extra; probe_extra_context_ = context; }
-  // A random-ish value per boot; 0 = unknown (then hosts treat every no-session as a possible reboot).
+  // A value that changes every boot (a 32-bit random number does; 0 is as good as any other), returned by confirm and
+  // open (core §6.5).
   void setBootId(uint32_t boot_id) { boot_id_ = boot_id; }
   // Experimental event from an interface (sent to the lock holder if it subscribed to that interface), after
   // results; kept in a small queue until then (oldest dropped when full - the seq gap shows it).
@@ -119,7 +121,7 @@ class Endpoint {
   DirectTransport *direct() const {
     return push_ == 0 && !serialKind(transports_[0].kind) ? direct_ : nullptr;
   }
-  bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint16_t &max_delay_ms) const;
+  bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint32_t &max_delay_ms) const;
   uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&push_seq_[fn - 1], 1, __ATOMIC_RELAXED); }
   void poll();
 
@@ -138,7 +140,7 @@ class Endpoint {
   void sessionEnded();
   RawPorts *raw_ = nullptr;
   uint32_t held_ = 0;   // serial ports the lock holder's requests came in on (core §3.4)
-  bool oep_pid_ = false;
+  bool discoverable_ = false;
   uint8_t decode_[kMaxSerialFrame + 2];
   uint8_t owner_[32];   // the lock holder's owner text (core §6.4)
   uint8_t owner_length_ = 0;
@@ -154,13 +156,12 @@ class Endpoint {
   size_t count_ = 0;
   const uint8_t *probe_tlv_ = nullptr;
   size_t probe_tlv_length_ = 0;
-  ProbeExtra probe_extra_ = nullptr;
   uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
-  void *probe_extra_context_ = nullptr;
   uint32_t boot_id_ = 0;
   volatile bool locked_ = false;
   uint32_t holder_ = 0, last_ = 0;
   bool have_last_ = false;
+  bool swept_ = false;   // the last session's lock lapsed and its resources went (core §6.2: expired until it opens again)
   uint32_t lease_ms_ = kLeaseDefaultMs, expires_ms_ = 0;
   uint8_t scratch_[512];   // one interface's full describe before paging
 
@@ -179,11 +180,12 @@ class Endpoint {
   volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;
   uint16_t push_seq_[kMaxInterfaces] = {};
-  uint16_t min_bytes_[kMaxInterfaces] = {}, max_delay_ms_[kMaxInterfaces] = {};
+  uint16_t min_bytes_[kMaxInterfaces] = {};
+  uint32_t max_delay_ms_[kMaxInterfaces] = {};
   uint32_t waiting_since_[kMaxInterfaces] = {};
   bool waiting_[kMaxInterfaces] = {};
   // events: fn (0 = core), seq per fn shared with data frames
-  struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[24]; };
+  struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[40]; };
   static constexpr size_t kEvents = 32;
   Event events_[kEvents];
   uint32_t event_head_ = 0, event_tail_ = 0;
