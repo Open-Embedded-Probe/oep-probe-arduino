@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) CH32 riscv-dm: a block op's fixed cost is smaller (ABSTRACTAUTO is written only when it may be set; the four GPR restores share one completion check; cmderr is cleared only when one was raised): about 42 DMI round trips around a read_block instead of about 70 (X035 measured 5.1 ms of fixed cost per read_block at 777 kHz, 2026-10-01).
+- (JA) CH32 riscv-dm: block op の固定のコストを減らした（ABSTRACTAUTO は立っている可能性があるときだけ書く、GPR 4 本の復元は完了の確認を 1 回にまとめる、cmderr は出たときだけ消す）。read_block 1 回あたりの DMI の往復が約 70 回から約 42 回に（X035 で 777 kHz のとき固定分 5.1 ms を測った、2026-10-01）。
 
 ## 0.0.22
 - (EN) Breaking: the probe follows the rewritten OEP v1 spec of 2026-10-01 (oep-spec docs/v1-zero-base-proposal.ja.md §3 / §7; registry ec281256). Every answer that ended in raw data carries a length (read: `start flags len(u16) data`, capture read `position flags len(u32) data`, gpio read `n n x level`, dmi `done status nvals(u16) values`, arm-adi transfer `done status ack nvals values`, run `status stopped dpc elapsed_us nvals(u8) values`); data frames are `position len(u16) data [TLV]`; TLVs of 255 bytes and more use the long form (`tag 0xFF len(u16)`); confirm answers `boot_id`; subscribe's max_delay_ms is u32; a time is always ns since boot (marks `time_ns`, the heartbeat `uptime_ns`, the slot's `last_try_at_ns`).

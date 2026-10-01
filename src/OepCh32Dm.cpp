@@ -31,6 +31,7 @@ bool Ch32Dm::attach() {
   // Leave the abstract-command block in a known state. A session that ended mid-sequence can leave autoexec armed
   // on DATA0 or a sticky cmderr behind (2026-09-23).
   phy_.write(kAbstractAuto, 0);
+  auto_on_ = false;
   phy_.write(kAbstractCs, 0x700);
   return true;
 }
@@ -49,6 +50,7 @@ bool Ch32Dm::probe(uint32_t &dmstatus) {
 void Ch32Dm::relink() {
   phy_.reinit();
   phy_.write(kAbstractAuto, 0);
+  auto_on_ = false;
   phy_.write(kAbstractCs, 0x700);
 }
 
@@ -57,6 +59,7 @@ void Ch32Dm::relink() {
 void Ch32Dm::retune() {
   phy_.retune();
   phy_.write(kAbstractAuto, 0);
+  auto_on_ = false;
   phy_.write(kAbstractCs, 0x700);
 }
 
@@ -111,17 +114,24 @@ bool Ch32Dm::keepGprs() {
 
 void Ch32Dm::giveGprs() {   // while still halted, before the mailbox (these writes go through DATA0)
   if (!gprs_kept_) return;
-  for (uint16_t k = 0; k < 4; ++k) writeRegister(0x1008 + k, gprs_[k]);
+  // Four register writes, one completion check at the end (E156: an abstract command finishes within one DMI
+  // transaction, and nothing here acts on a failure beyond clearing cmderr). 9 round trips instead of 16.
+  autoOff();
+  for (uint16_t k = 0; k < 4; ++k) {
+    phy_.write(kData0, gprs_[k]);
+    phy_.write(kCommand, 0x00230000u | (0x1008 + k));
+  }
+  waitAbstract();
   gprs_kept_ = false;
 }
 
 // A block op's exit, whatever happened inside it: the GPRs back, autoexec off, cmderr clear, then the mailbox
 // (oep-if-debug §4 table: the probe carries nothing past the answer).
 void Ch32Dm::restoreBlock() {
-  phy_.write(kAbstractAuto, 0);
+  autoOff();
   giveGprs();
-  phy_.write(kAbstractAuto, 0);
-  phy_.write(kAbstractCs, 0x700);
+  autoOff();
+  if (cmderr_) phy_.write(kAbstractCs, 0x700);
   giveMailbox();
 }
 
@@ -240,7 +250,7 @@ bool Ch32Dm::loadRegisters(uint32_t &data0_address) {
   uint32_t info = 0;
   if (!phy_.read(kDmHartInfo, info)) return false;
   data0_address = 0xe0000000u | (info & 0x7ff);
-  phy_.write(kAbstractAuto, 0);
+  autoOff();
   phy_.write(kData0, data0_address);     phy_.write(kCommand, 0x0023100a);  // a0 = &DATA0
   if (!waitAbstract()) return false;
   phy_.write(kData0, data0_address + 4); phy_.write(kCommand, 0x0023100b);  // a1 = &DATA1
@@ -261,7 +271,7 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
     if (!loadRegisters(data0_address)) { relink(); continue; }
     for (size_t i = 0; i < sizeof kReader / sizeof kReader[0]; ++i) phy_.write(kProgBuf0 + i, kReader[i]);
     phy_.write(kData1, address);
-    phy_.write(kAbstractAuto, 1);
+    autoOn();
     phy_.write(kCommand, 0x00240000);  // first run
     bool ok = true;
     for (size_t i = 0; i < words; ++i) {
@@ -278,7 +288,7 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
       err = (cs >> 8) & 7;
       break;
     }
-    phy_.write(kAbstractAuto, 0);
+    autoOff();
     if (err) phy_.write(kAbstractCs, 0x700);
     cmderr_ = err;
     if (cmderr) *cmderr = err;
@@ -304,7 +314,7 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
 
 bool Ch32Dm::readRegister(uint16_t regno, uint32_t &value) {
   if (!halted_) return false;
-  phy_.write(kAbstractAuto, 0);
+  autoOff();
   phy_.write(kCommand, 0x00220000u | regno);  // aarsize=32, transfer, read
   if (!waitAbstract()) return false;
   return phy_.read(kData0, value);
@@ -312,7 +322,7 @@ bool Ch32Dm::readRegister(uint16_t regno, uint32_t &value) {
 
 bool Ch32Dm::writeRegister(uint16_t regno, uint32_t value) {
   if (!halted_) return false;
-  phy_.write(kAbstractAuto, 0);
+  autoOff();
   phy_.write(kData0, value);
   phy_.write(kCommand, 0x00230000u | regno);  // aarsize=32, transfer, write
   return waitAbstract();
@@ -333,10 +343,10 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
     phy_.write(kCommand, 0x00240000);  // run the writer for word 0 (also arms autoexec's command)
     bool ok = waitAbstract();
     if (ok && count > 1) {
-      phy_.write(kAbstractAuto, 1);
+      autoOn();
       for (size_t i = 1; i < count; ++i) phy_.write(kData0, words[i]);
       ok = waitAbstract();
-      phy_.write(kAbstractAuto, 0);
+      autoOff();
     }
     uint32_t next = 0;
     done = ok && phy_.read(kData1, next) && next == address + 4u * static_cast<uint32_t>(count);
