@@ -442,7 +442,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     d.op = op;
     d.crc = crc;
     d.kept = total <= kDedupBytes;
-    d.length = d.kept ? static_cast<uint8_t>(total) : 0;
+    d.length = d.kept ? static_cast<uint16_t>(total) : 0;
     if (d.kept) memcpy(d.result, tx_, total);
   }
   send(total);
