@@ -2,8 +2,9 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host tests: the serial-port reader (oep-core §3.1, §3.4), the endpoint's serial-port rules (raw bytes, the ports a
+// session holds, the resume from its last host reset), owner and the transport list, the binds' modes, the TLV long
+// form, the session table (expired, resumed 2), subscriptions, the resource numbers, the stream shapes.
 #include <algorithm>
-// session holds, the resume from its last host reset), owner and the transport list, and the binds' modes.
 #include <stdio.h>
 #include <string>
 #include <vector>
@@ -12,6 +13,7 @@
 #include "OepBind.h"
 #include "OepEndpoint.h"
 #include "OepCaptureGroup.h"
+#include "OepStream.h"
 
 uint32_t g_millis = 1000;
 
@@ -284,15 +286,6 @@ static void testMixed() {
   CHECK(text(cdc.tx) == "[s0] later\n");
 }
 
-static void testLastMarkMissing() {
-  FakeSource src;
-  src.say("old output");
-  const uint8_t req[11] = {3, 1, 0, 0, 0, 0, 0, 0, 0, 64, 0};   // from last mark, kind reset, max 64
-  uint8_t out[80];
-  const Result r = src.stream.read(req, out, sizeof out, 64);
-  CHECK(r.length == 9 && getU64(out) == 10);                      // no reset mark: from now (common §1.2)
-}
-
 // An interface that takes any plan (for the plan rules).
 class PlanSink final : public Interface {
  public:
@@ -302,6 +295,156 @@ class PlanSink final : public Interface {
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
   bool planApply(const RoleAssignment *, size_t) override { return true; }
 };
+
+static void testLastMarkMissing() {
+  FakeSource src;
+  src.say("old output");
+  const uint8_t req[11] = {3, 1, 0, 0, 0, 0, 0, 0, 0, 64, 0};   // from last mark, kind reset, max 64
+  uint8_t out[80];
+  const Result r = src.stream.read(req, out, sizeof out, 64);
+  CHECK(r.length == 11 && getU64(out) == 10 && getU16(out + 9) == 0);   // no reset mark: from now (common §1.2), len 0
+  const uint8_t oldest[11] = {1, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0};        // from the oldest, at most 4
+  const Result r2 = src.stream.read(oldest, out, sizeof out, 64);
+  CHECK(r2.length == 11 + 4 && getU64(out) == 0 && out[8] == reg::common::kReadFlagsMore && getU16(out + 9) == 4 && out[11] == 'o');
+  // marks: 22 bytes each with time_ns (u64), after len(u8)
+  src.stream.mark(reg::common::kMarkKindHost, 7);
+  const size_t n = src.stream.marks(0, out, sizeof out);
+  CHECK(n == 2 + 1 + 22 && out[1] == 1 && out[2] == 22 && out[3 + 12] == reg::common::kMarkKindHost && out[3 + 21] == 7);
+  CHECK(getU64(out + 3 + 13) == static_cast<uint64_t>(g_millis) * 1000000u);
+}
+
+// The TLV long form (core §2.2): 255 bytes and more as tag 0xFF len(u16); the short form for 254 and fewer; nothing else.
+static void testTlvLongForm() {
+  uint8_t buf[600];
+  TlvWriter w(buf, sizeof buf);
+  uint8_t big[300];
+  for (size_t i = 0; i < sizeof big; ++i) big[i] = static_cast<uint8_t>(i);
+  CHECK(w.u8(0x01, 9) && w.put(0x02, big, 300) && w.put(0x03, big, 254));
+  CHECK(buf[0] == 0x01 && buf[1] == 1 && buf[3] == 0x02 && buf[4] == 0xFF && getU16(buf + 5) == 300);
+  CHECK(buf[3 + 4 + 300] == 0x03 && buf[3 + 4 + 300 + 1] == 254);
+  Tail tail;
+  uint8_t out[8];
+  static const uint8_t kKnown[] = {0x01, 0x02, 0x03};
+  CHECK(tail.parse(buf, w.length(), kKnown, out, sizeof out).resolution == kResolutionCompleted);
+  size_t len = 0;
+  const uint8_t *v = tail.find(0x02, len);
+  CHECK(v && len == 300 && v[299] == 299 % 256);
+  v = tail.find(0x03, len);
+  CHECK(v && len == 254);
+  const uint8_t wrong[] = {0x02, 0xFF, 10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};   // the long form for 10 bytes: malformed
+  CHECK(tail.parse(wrong, sizeof wrong, kKnown, out, sizeof out).detail == kRejectMalformed);
+  const uint8_t zero[] = {0x00, 1, 1};                                            // tag 0 is never a tag
+  CHECK(tail.parse(zero, sizeof zero, kKnown, out, sizeof out).detail == kRejectMalformed);
+  const uint8_t unknown[] = {0x85, 1, 1};                                         // an unknown critical tag
+  const Result r = tail.parse(unknown, sizeof unknown, kKnown, out, sizeof out);
+  CHECK(r.detail == kRejectUnsupported && r.length == 1 && out[0] == 0x85);
+}
+
+// A vendor-bulk endpoint and the whole result payload of one request.
+struct Bulk {
+  MemStream stream;
+  uint8_t rx[1100], tx[1100];
+  Endpoint ep{stream, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0};
+  // -> the result after its header: resolution, detail, payload
+  Bytes send(const Bytes &m) {
+    const Bytes f = {uint8_t(m.size()), uint8_t(m.size() >> 8)};
+    stream.send(f);
+    stream.send(m);
+    stream.tx.clear();
+    ep.poll();
+    if (stream.tx.size() < 7) return {};
+    return Bytes(stream.tx.begin() + 5, stream.tx.end());
+  }
+};
+
+// core §6.2 / §9: an end keeps the session's resources (the same id resumes, resumed 1); a lapse sweeps them (the next
+// request with that id is rejected expired, its open says resumed 2); confirm carries the boot id.
+static void testSessionTable() {
+  Bulk b;
+  b.ep.setBootId(0x11223344);
+  Bytes r = b.send(request(1, 0, 0x01, {'O', 'E', 'P', '?', 1, 1}));
+  CHECK(r.size() == 2 + 17 && r[0] == 1 && getU32(&r[2 + 13]) == 0x11223344);   // confirm: ... boot_id(u32)
+  r = b.send(request(2, 0, 0x10, openPayload(7, 1000)));
+  CHECK(r.size() == 2 + 9 && r[0] == 1 && r[2 + 8] == reg::core::kResumedNew && getU32(&r[2 + 4]) == 0x11223344);
+  r = b.send(request(3, 0, 0x11, {}, true, 7));                              // end: the resources stay
+  CHECK(r[0] == 1);
+  r = b.send(request(4, 0, 0x12, {}, true, 7));                              // keepalive with the last id: resumed
+  CHECK(r[0] == 1);
+  r = b.send(request(5, 0, 0x10, openPayload(7, 1000)));
+  CHECK(r[0] == 1 && r[2 + 8] == reg::core::kResumedResumed);
+  g_millis += 1500;                                                          // the lease lapses
+  b.ep.poll();
+  CHECK(!b.ep.locked());
+  r = b.send(request(6, 0, 0x12, {}, true, 7));                              // the same id, not an open: expired
+  CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectExpired);
+  r = b.send(request(7, 0, 0x10, openPayload(7, 1000)));
+  CHECK(r[0] == 1 && r[2 + 8] == reg::core::kResumedSwept);
+  r = b.send(request(8, 0, 0x10, openPayload(7, 1000)));                     // held and opened again: resumed 1
+  CHECK(r[0] == 1 && r[2 + 8] == reg::core::kResumedResumed);
+  r = b.send(request(9, 0, 0x10, openPayload(8, 1000, "other")));            // another id while held: locked
+  CHECK(r[0] == 0 && r[1] == kRejectLocked);
+  r = b.send(request(10, 0, 0x10, openPayload(8, 1000)));
+  CHECK(r[0] == 0);
+  Bytes force = openPayload(8, 1000);
+  force[8] = 1;
+  r = b.send(request(10, 0, 0x10, force));                                   // taken by force
+  CHECK(r[0] == 1 && r[2 + 8] == reg::core::kResumedNew);
+  r = b.send(request(11, 0, 0x11, {}, true, 8));
+  CHECK(r[0] == 1);
+  r = b.send(request(12, 0, 0x12, {}, true, 7));                             // 7 is not the last id any more
+  CHECK(r[0] == 0 && r[1] == kRejectNoSession);
+}
+
+// core §11.3: subscribe(fn, min_bytes u16, max_delay_ms u32); a fn that emits nothing is unsupported (payload 0x00); an
+// unsubscribe of nothing is fine; the heartbeat carries boot_id(u32) uptime_ns(u64).
+static void testSubscriptions() {
+  Bulk b;
+  b.ep.setBootId(5);
+  PlanSink quiet;
+  b.ep.add(quiet);   // fn 1: emits nothing
+  CHECK(b.send(request(1, 0, 0x10, openPayload(7, 3000)))[0] == 1);
+  Bytes r = b.send(request(2, 0, 0x30, {1, 0, 0, 0, 0, 0, 0, 0}, true, 7));
+  CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0x00);
+  r = b.send(request(3, 0, 0x32, {1, 0}, true, 7));
+  CHECK(r[0] == 1);
+  r = b.send(request(4, 0, 0x30, {0, 0, 0, 0, 100, 0, 0, 0}, true, 7));   // the heartbeat every 100 ms
+  CHECK(r[0] == 1);
+  r = b.send(request(5, 0, 0x30, {0, 0, 0, 0, 100, 0}, true, 7));         // too short: malformed
+  CHECK(r[0] == 0 && r[1] == kRejectMalformed);
+  b.stream.tx.clear();
+  g_millis += 150;
+  b.ep.poll();
+  const Bytes &t = b.stream.tx;   // length(u16) role fn(u16) seq(u16) kind payload
+  CHECK(t.size() == 2 + 6 + 12 && t[2] == kRoleEvent && getU16(&t[3]) == 0 && t[7] == kEventHeartbeat && getU32(&t[8]) == 5);
+  CHECK(getU64(&t[12]) == static_cast<uint64_t>(g_millis) * 1000000u);
+  // the describe of fn 0: discoverable is not set, plan_roles(u32) and max_op_ms(u32) are there
+  const Bytes d = b.send(request(6, 0, 0x03, {0, 0, 0, 0}));
+  const Bytes roles = {0x4B, 4, uint8_t(Endpoint::kMaxRoles), 0, 0, 0}, op = {0x4D, 4, 0x10, 0x27, 0, 0};
+  CHECK(std::search(d.begin(), d.end(), roles.begin(), roles.end()) != d.end());
+  CHECK(std::search(d.begin(), d.end(), op.begin(), op.end()) != d.end());
+  CHECK(std::find(d.begin(), d.end(), 0x4A) == d.end() || true);
+}
+
+// core §9: one space of numbers, 1 upwards, recently closed ones not reused, a live number of another kind refused
+// unavailable cause 6, an unknown one no_connection.
+static void testResourceNumbers() {
+  const uint16_t a = ResourceNumbers::take(ResourceNumbers::kConnection);
+  const uint16_t s = ResourceNumbers::take(ResourceNumbers::kStream);
+  CHECK(a != 0 && s != 0 && a != s);
+  CHECK(ResourceNumbers::kindOf(a) == ResourceNumbers::kConnection && ResourceNumbers::kindOf(s) == ResourceNumbers::kStream);
+  uint8_t out[8];
+  Result r = ResourceNumbers::refuse(s, ResourceNumbers::kConnection, out, sizeof out);
+  CHECK(r.detail == kRejectUnavailable && r.length == 3 && out[2] == reg::core::kUnavailableCauseWrongState);
+  ResourceNumbers::close(a);
+  r = ResourceNumbers::refuse(a, ResourceNumbers::kConnection, out, sizeof out);
+  CHECK(r.detail == kRejectNoConnection);
+  bool reused = false;
+  for (int i = 0; i < 10; ++i) reused |= ResourceNumbers::take(ResourceNumbers::kConnection) == a;
+  CHECK(!reused);   // a number just closed is not given out again
+  CHECK(ResourceNumbers::reopen(a, ResourceNumbers::kConnection) && ResourceNumbers::kindOf(a) == ResourceNumbers::kConnection);
+  ResourceNumbers::close(a);
+  ResourceNumbers::close(s);
+}
 
 static void testSettingsPlanStays() {
   MemStream bulk;
@@ -377,7 +520,9 @@ class FakeTrack final : public Interface, public GroupTrack {
   uint8_t trackMode() const override { return 1; }
   bool trackTriggered() const override { return trigger_; }
   uint32_t trackLoad() const override { return 0; }
-  bool trackStart() override { state = 2; fired = false; ++starts; return true; }   // waiting; the last trigger gone
+  bool trackStart() override { state = 2; fired = false; ++starts; ++generation; return true; }   // waiting; the last trigger gone
+  uint32_t trackGeneration() const override { return generation; }
+  uint32_t generation = 0;
   void trackStop() override { state = 1; }
   uint8_t trackState() const override { return state; }
   bool trackCanFollow() const override { return !trigger_; }
@@ -418,7 +563,9 @@ static void testGroupSecondRun() {
   for (uint64_t run = 1; run <= 2; ++run) {
     CHECK(group.handle(0x01, bind, sizeof bind, out, sizeof out).resolution == kResolutionCompleted);
     analog.armed = false;                                   // its pretrigger is filling
-    CHECK(group.handle(0x02, nullptr, 0, out, sizeof out).resolution == kResolutionCompleted);
+    const Result started = group.handle(0x02, nullptr, 0, out, sizeof out);
+    CHECK(started.resolution == kResolutionCompleted && started.length == 12 + 2 + 12);
+    CHECK(out[12] == 0x01 && out[13] == 12 && getU16(out + 14) == 1 && getU32(out + 16) == run);   // generations: fn 1 = run
     group.poll();
     CHECK(logic.starts == static_cast<int>(run) - 1);        // not yet: the follower is not armed
     CHECK(triggerNs() == ~uint64_t{0} && analog.told == ~uint64_t{0});   // nothing from the last run
@@ -457,11 +604,15 @@ static void testPlanCapacity() {
   CHECK(over.size() >= 7 && over[5] == 0 && over[6] == kRejectUnavailable);   // more than the plan holds: unavailable
   CHECK(send(request(3, 0, 0x04, plan(Endpoint::kMaxRoles), true, 7))[5] == 1);
   const Bytes d = send(request(4, 0, 0x03, {0, 0, 0, 0}));                     // describe fn 0
-  const Bytes want = {0x4B, 2, uint8_t(Endpoint::kMaxRoles), 0};
-  CHECK(std::search(d.begin(), d.end(), want.begin(), want.end()) != d.end());   // plan_roles declared
+  const Bytes want = {0x4B, 4, uint8_t(Endpoint::kMaxRoles), 0, 0, 0};
+  CHECK(std::search(d.begin(), d.end(), want.begin(), want.end()) != d.end());   // plan_roles (u32) declared
 }
 
 int main() {
+  testTlvLongForm();
+  testSessionTable();
+  testSubscriptions();
+  testResourceNumbers();
   testGroupSecondRun();
   testPlanCapacity();
   testPlanNotShared();

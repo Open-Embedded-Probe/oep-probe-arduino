@@ -31,24 +31,24 @@ bool nameMatches(const char *name, const uint8_t *prefix, size_t n, bool exact) 
   return len >= n && memcmp(name, prefix, n) == 0 && (len == n || name[n] == '.');
 }
 
-// Page a TLV stream by whole TLVs: skip `first`, then copy while they fit. Returns bytes, sets more.
+// Page a TLV stream by whole TLVs (short or long form): skip `first`, then copy while they fit. Returns bytes, sets more.
 size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, size_t capacity, bool &more) {
-  size_t at = 0, n = 0, used = 0;
+  size_t at = 0, used = 0;
   uint16_t index = 0;
   more = false;
-  while (at + 2 <= length) {
-    const size_t size = 2 + tlv[at + 1];
-    if (at + size > length) break;
+  uint8_t tag = 0;
+  const uint8_t *value = nullptr;
+  size_t vlen = 0, next = 0;
+  while (tlvAt(tlv, length, at, tag, value, vlen, next)) {
+    const size_t size = next - at;
     if (index >= first) {
       if (used + size > capacity) { more = true; break; }
       memcpy(out + used, tlv + at, size);
       used += size;
-      ++n;
     }
-    at += size;
+    at = next;
     ++index;
   }
-  (void)n;
   return used;
 }
 
@@ -156,7 +156,7 @@ void Endpoint::eventsLost(Interface &from, uint16_t count) {
     if (interfaces_[i] == &from && subscribed_[i]) __atomic_fetch_add(&push_seq_[i], count, __ATOMIC_RELAXED);
 }
 
-bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint16_t &max_delay_ms) const {
+bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint32_t &max_delay_ms) const {
   for (size_t i = 0; i < count_; ++i) {
     if (interfaces_[i] != &from) continue;
     if (!subscribed_[i] || !locked_) return false;
@@ -191,9 +191,9 @@ void Endpoint::push() {
   if (!locked_) return;
   if (heartbeat_ && static_cast<uint32_t>(millis() - heartbeat_last_) >= heartbeat_ms_) {
     heartbeat_last_ = millis();
-    uint8_t hb[8];
+    uint8_t hb[12];   // boot_id(u32) uptime_ns(u64) (core §11.2)
     putU32(hb, boot_id_);
-    putU32(hb + 4, heartbeat_last_);
+    putU64(hb + 4, nowNs());
     queueEvent(0, kEventHeartbeat, hb, sizeof hb);
   }
   if (!sendEvents()) return;
@@ -239,18 +239,19 @@ void Endpoint::push() {
   }
 }
 
-// subscribe(fn u16, min_bytes u16, max_delay_ms u16) [TLV]; unsubscribe(fn u16) [TLV]. fn 0 = heartbeat events,
-// max_delay_ms = the period (0: 1000 ms). seq starts again at 0 with every subscribe. No field is optional (core
-// §2.3: an optional fixed field could not be told apart from a tail).
+// subscribe(fn u16, min_bytes u16, max_delay_ms u32) [TLV]; unsubscribe(fn u16) [TLV]. fn 0 = heartbeat events,
+// max_delay_ms = the period (0: 1000 ms). seq starts again at 0 with every subscribe. A fn that emits nothing is
+// rejected unsupported; an unsubscribe of a fn not subscribed does nothing (core §11.3).
 Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   const bool batching = op == kOpSubscribe;
-  const size_t fixed = batching ? 6 : 2;
+  const size_t fixed = batching ? 8 : 2;
   if (length < fixed) return rejected(kRejectMalformed);
   Tail tail;
   const Result parsed = tail.parse(payload + fixed, length - fixed, out, capacity);
   if (parsed.resolution != kResolutionCompleted) return parsed;
   const uint16_t fn = getU16(payload);
-  const uint16_t min_bytes = batching ? getU16(payload + 2) : 0, max_delay = batching ? getU16(payload + 4) : 0;
+  const uint16_t min_bytes = batching ? getU16(payload + 2) : 0;
+  const uint32_t max_delay = batching ? getU32(payload + 4) : 0;
   if (op == kOpSubscribe) push_ = current_;   // pushes and events go where the subscription came from
   if (fn == 0) {
     heartbeat_ = op == kOpSubscribe;
@@ -268,7 +269,7 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length,
     subscribed_[i] = false;
     return tail.finish(completed(), out, capacity);
   }
-  if (!interfaces_[i]->subscribe(true)) return rejected(kRejectUnavailable);
+  if (!interfaces_[i]->subscribe(true)) return unsupportedValue(out, capacity);   // it emits nothing (core §11.3)
   subscribed_[i] = true;
   push_seq_[i] = 0;
   min_bytes_[i] = min_bytes;
@@ -320,7 +321,8 @@ void Endpoint::poll() {
 
 void Endpoint::lapse() {
   if (locked_ && static_cast<int32_t>(millis() - expires_ms_) >= 0) {
-    locked_ = false;   // the last id stays
+    locked_ = false;   // the last id stays, but its resources go: its next request is rejected expired
+    swept_ = true;
     loseSession();
     sessionEnded();
   }
@@ -355,11 +357,14 @@ uint32_t Endpoint::remaining() const {
   return left > 0 ? static_cast<uint32_t>(left) : 0;
 }
 
+// core §6.2: the lock free and the last session's id - ended by end: resume (the lease as its open set it); ended by
+// a lapse: rejected expired (its resources went; the host opens again).
 Result Endpoint::checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity) {
   if (!has_session) return rejected(kRejectSessionRequired);
   if (!locked_) {
-    if (have_last_ && session == last_) {   // resume: nobody else came in between
-      locked_ = true;
+    if (have_last_ && session == last_) {
+      if (swept_) return rejected(kRejectExpired);
+      locked_ = true;   // resume: nobody else came in between
       holder_ = session;
       return completed();
     }
@@ -468,19 +473,21 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
   Tail tail;
   switch (op) {
     case kOpConfirm: {
-      // "OEP?" min_rev(u8) max_rev(u8) [TLV]  ->  "OEP!" revision(u8) flags(u8) max_frame(u16) window(u32) max_inflight(u8)
+      // "OEP?" min_rev(u8) max_rev(u8) [TLV]
+      //   ->  "OEP!" revision(u8) flags(u8) max_frame(u16) window(u32) max_inflight(u8) boot_id(u32) [TLV]  (core §7.1)
       if (length < 6 || memcmp(payload, reg::kConfirmRequestMagic, 4) != 0) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 6, length - 6, out, capacity);
       if (refused(parsed)) return parsed;
-      if (reg::kProtocolRevision < payload[4] || reg::kProtocolRevision > payload[5]) return rejected(kRejectUnsupported);
-      if (capacity < 13) return failed();
+      if (reg::kProtocolRevision < payload[4] || reg::kProtocolRevision > payload[5]) return unsupportedValue(out, capacity);
+      if (capacity < 17) return failed();
       memcpy(out, reg::kConfirmResultMagic, 4);
       out[4] = reg::kProtocolRevision;
       out[5] = 0;                                     // flags: reserved
       putU16(out + 6, limits_.max_frame);
       putU32(out + 8, limits_.window_bytes);
       out[12] = limits_.max_inflight;
-      return tail.finish(completed(13), out, capacity);
+      putU32(out + 13, boot_id_);                     // a host without the lock learns of a restart here (core §6.5)
+      return tail.finish(completed(17), out, capacity);
     }
     case kOpList: return list(payload, length, out, capacity);
     case kOpLinkSource: {   // length(u32) [TLV] -> that many bytes (as many as fit one frame), byte k = k & 0xff
@@ -491,7 +498,7 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       static uint8_t pattern[256];
       if (pattern[255] != 255) for (size_t k = 0; k < 256; ++k) pattern[k] = static_cast<uint8_t>(k);
       for (size_t at = 0; at < n; at += 256) memcpy(out + at, pattern, n - at < 256 ? n - at : 256);
-      return completed(n);   // closed tail: nothing can follow the bytes
+      return completed(n);   // the one shape with no tail: nothing can follow the bytes (core §2.3)
     }
     case kOpLinkSink:       // any bytes (no tail) -> how many arrived (u32)
       if (capacity < 4) return failed();
@@ -540,15 +547,16 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       }
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (op == kOpEnd) { locked_ = false; endSubscriptions(); sessionEnded(); }   // the last id stays: it may resume
+      if (op == kOpEnd) { locked_ = false; swept_ = false; endSubscriptions(); sessionEnded(); }   // the last id stays: it may resume
       return tail.finish(completed(), out, capacity);
     }
     default: return rejected(kRejectUnknownOperation);
   }
 }
 
-// session_id(u32) lease_ms(u32) force(u8) [TLV 0x01 owner]  ->  lease_ms(u32) boot_id(u32) resumed(u8)
-// lease_ms 0 = the default; 1000..60000 are taken as asked (core §6.4), longer ones cut to kLeaseMaxMs.
+// session_id(u32) lease_ms(u32) force(u8) [TLV 0x01 owner]  ->  lease_ms(u32) boot_id(u32) resumed(u8: 0 new, 1 the same
+// id with its resources, 2 the same id after a lapse or a takeover swept them). lease_ms 0 = the default; 1000..60000 are
+// taken as asked (core §6.4), the rest rounded into that range.
 Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   static const uint8_t kKnown[] = {reg::core::kTlvOpenOwner};
   if (length < 9) return rejected(kRejectMalformed);
@@ -559,7 +567,7 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   const uint32_t session = getU32(payload), lease = getU32(payload + 4);
   const bool force = payload[8];
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
-  uint8_t owner_len = 0;
+  size_t owner_len = 0;
   bool owner_critical = false;
   const uint8_t *owner = tail.find(reg::core::kTlvOpenOwner, owner_len, &owner_critical);
   if (owner && (owner_len == 0 || owner_len > sizeof owner_)) {   // 1..32 bytes: a value this probe cannot keep
@@ -567,11 +575,19 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
     if (refused(r)) return r;
     owner = nullptr;
   }
-  // Taken over by force: the previous holder loses what its session made, as at a lapse (core §6.4).
+  // Taken over by force: the previous holder loses what its session made, as at a lapse (core §6.4). Its id is forgotten
+  // with this open (the probe keeps the last id only): its next request meets locked, later no_session (core §9).
   if (locked_ && holder_ != session) { loseSession(); sessionEnded(); }
   if (!(have_last_ && last_ == session)) owner_length_ = 0;   // another session: the old owner goes
-  if (owner) { memcpy(owner_, owner, owner_len); owner_length_ = owner_len; }
-  const bool resumed = (locked_ && holder_ == session) || (have_last_ && last_ == session);
+  if (owner) { memcpy(owner_, owner, owner_len); owner_length_ = static_cast<uint8_t>(owner_len); }
+  uint8_t resumed = reg::core::kResumedNew;
+  if (locked_ && holder_ == session) {
+    resumed = reg::core::kResumedResumed;   // held: the lease starts again, the subscriptions stay and follow this transport
+    push_ = current_;
+  } else if (have_last_ && last_ == session) {
+    resumed = swept_ ? reg::core::kResumedSwept : reg::core::kResumedResumed;
+  }
+  swept_ = false;
   // Every open (a resume too) drops the kept results: a one-shot CLI resumes the session with corr from 1 again, and
   // must not get a previous process's result (core §5.2).
   for (Dedup &d : dedup_) d.used = false;
@@ -579,7 +595,7 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   locked_ = true;
   holder_ = last_ = session;
   have_last_ = true;
-  lease_ms_ = lease == 0 ? kLeaseDefaultMs : (lease > kLeaseMaxMs ? kLeaseMaxMs : lease);
+  lease_ms_ = lease == 0 ? kLeaseDefaultMs : (lease > kLeaseMaxMs ? kLeaseMaxMs : lease < kLeaseMinMs ? kLeaseMinMs : lease);
   expires_ms_ = millis() + lease_ms_;
   putU32(out, lease_ms_);
   putU32(out + 4, boot_id_);
@@ -598,7 +614,8 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   if (refused(parsed)) return parsed;
   RoleAssignment roles[kMaxRoles];
   size_t count = 0, at = 0;
-  uint8_t raw = 0, len = 0;
+  uint8_t raw = 0;
+  size_t len = 0;
   const uint8_t *v = nullptr;
   while (tail.next(at, raw, v, len)) {
     if ((raw & ~kTagCritical) != (kTagRoleAssignment & ~kTagCritical)) continue;
@@ -811,29 +828,19 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   const uint16_t first = getU16(payload + 2);
   const uint8_t *tlv = nullptr;
   size_t tlv_length = 0;
-  if (fn == 0) {   // the sketch's part, then the transports, oep_pid and plan_roles (core §7.5)
-    if (probe_tlv_length_ <= sizeof scratch_) { memcpy(scratch_, probe_tlv_, probe_tlv_length_); }
-    size_t at = probe_tlv_length_ <= sizeof scratch_ ? probe_tlv_length_ : 0;
-    for (size_t i = 0; i < transport_count_ && at + 5 <= sizeof scratch_; ++i) {
-      const uint8_t v[5] = {reg::core::kTlvDescribeTransport, 3, static_cast<uint8_t>(i), transports_[i].kind,
-                            transports_[i].usb_interface};
-      memcpy(scratch_ + at, v, 5);
-      at += 5;
+  if (fn == 0) {   // the sketch's part, then the transports, discoverable, plan_roles and max_op_ms (core §7.5)
+    const size_t sketch = probe_tlv_length_ <= sizeof scratch_ ? probe_tlv_length_ : 0;
+    if (sketch) memcpy(scratch_, probe_tlv_, sketch);
+    TlvWriter w(scratch_ + sketch, sizeof scratch_ - sketch);
+    for (size_t i = 0; i < transport_count_; ++i) {
+      const uint8_t v[3] = {static_cast<uint8_t>(i), transports_[i].kind, transports_[i].usb_interface};
+      w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
     }
-    if (oep_pid_ && at + 3 <= sizeof scratch_) {
-      const uint8_t v[3] = {reg::core::kTlvDescribeOepPid, 1, 1};
-      memcpy(scratch_ + at, v, 3);
-      at += 3;
-    }
-    if (at + 4 <= sizeof scratch_) {
-      const uint8_t v[4] = {reg::core::kTlvDescribePlanRoles, 2, kMaxRoles & 0xff, kMaxRoles >> 8};
-      memcpy(scratch_ + at, v, 4);
-      at += 4;
-    }
-    if (probe_extra_) at += probe_extra_(probe_extra_context_, scratch_ + at, sizeof scratch_ - at);
-
+    if (discoverable_) w.u8(reg::core::kTlvDescribeDiscoverable, 1);
+    w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);
+    w.u32(reg::core::kTlvDescribeMaxOpMs, kMaxOpMs);
     tlv = scratch_;
-    tlv_length = at;
+    tlv_length = sketch + w.length();
   } else if (fn <= count_) {
     tlv_length = interfaces_[fn - 1]->describe(scratch_, sizeof scratch_);
     tlv = scratch_;
