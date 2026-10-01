@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The retry table keeps answers up to a whole 1 KiB frame (8 entries; was 72 bytes × 16): a read_block answer corrupted on the link is answered from the table when the host sends the request again, instead of rejected result_lost (the V003 jig's CP2102 link dropped bytes in long frames, 2026-10-01).
+- (JA) 送り直しの表は 1 KiB のフレーム丸ごとまで覚える（8 個。72 byte × 16 だった）。線の上で壊れた read_block の答えは、host が同じ要求を送り直したときに表から答え、rejected result_lost にしない（V003 ジグの CP2102 の経路が長いフレームで byte を落とした、2026-10-01）。
 - (EN) CH32 riscv-dm: a block op's fixed cost is smaller (ABSTRACTAUTO is written only when it may be set; the four GPR restores share one completion check; cmderr is cleared only when one was raised): about 42 DMI round trips around a read_block instead of about 70 (X035 measured 5.1 ms of fixed cost per read_block at 777 kHz, 2026-10-01).
 - (JA) CH32 riscv-dm: block op の固定のコストを減らした（ABSTRACTAUTO は立っている可能性があるときだけ書く、GPR 4 本の復元は完了の確認を 1 回にまとめる、cmderr は出たときだけ消す）。read_block 1 回あたりの DMI の往復が約 70 回から約 42 回に（X035 で 777 kHz のとき固定分 5.1 ms を測った、2026-10-01）。
 

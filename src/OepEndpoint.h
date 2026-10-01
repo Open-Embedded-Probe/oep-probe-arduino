@@ -201,13 +201,15 @@ class Endpoint {
   void endSubscriptions();
   void send(size_t length);
   // Dedup of the last session's requests sent again (core §5.2): the last kDedupEntries results, keyed on corr
-  // and checked against fn, op and a CRC of the payload; dropped at every open. Results over kDedupBytes are not kept.
-  static constexpr size_t kDedupEntries = 16, kDedupBytes = 72;
+  // and checked against fn, op and a CRC of the payload; dropped at every open. Results over kDedupBytes are not kept
+  // (rejected result_lost): kDedupBytes covers a whole frame of the largest profile, so a 1 KiB read_block whose answer
+  // was corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).
+  static constexpr size_t kDedupEntries = 8, kDedupBytes = 1024 + 5;
   struct Dedup {
     bool used = false, kept = false;
     uint16_t corr = 0, fn = 0;
     uint8_t op = 0;
-    uint8_t length = 0;
+    uint16_t length = 0;
     uint32_t crc = 0;
     uint8_t result[kDedupBytes];
   };
