@@ -3,11 +3,13 @@
 
 // OEP v1 ARM SWD interfaces (oep-spec docs/oep-if-debug.ja.md §1, §5-§6, revision 1):
 //
-//   oep.wire.swd         scan / attach / detach on the probe's fixed SWD pair; attach wakes the port (JTAG-to-SWD,
-//                        then the dormant wake), sends TARGETSEL when the host gives one, and returns DPIDR; attaching
-//                        an attached port hands its connection back (flags bit1)
-//   oep.target.arm-adi   ADI (v5 / v6) access on that connection: a list of raw DP / AP transfers, and MEM-AP block
-//                        reads / writes through TAR / DRW
+//   oep.wire.swd         scan / attach / detach / connections on the probe's SWD pair (fixed or host-chosen); attach
+//                        (method 0 only) wakes the port (JTAG-to-SWD, then the dormant wake: flags bit2), sends
+//                        TARGETSEL when the host gives one, and returns DPIDR; attaching an attached port hands its
+//                        connection back (flags bit1). The reset TLV is not offered (rejected unsupported). The
+//                        connections entry's tid is scheme 2 = TARGETSEL (0 when none).
+//   oep.target.arm-adi   ADI (v5 / v6) access on that connection: a list of raw DP / AP transfers (done, status, the last
+//                        ACK, nvals, values), and MEM-AP block reads / writes through TAR / DRW
 //
 // Like the RISC-V side, the probe knows nothing about the target: power-up requests, SELECT, CSW, the AP layout, the
 // Cortex-M debug registers are all the host's. RP2040 / RP2350 SIO bit-bang only for now.
@@ -26,9 +28,7 @@ struct SwdPort {
   uint16_t swdio, swclk;       // probe channels (GPIO numbers)
   uint32_t half_ns = 500;      // SWCLK half period (the fastest this probe uses)
   bool connected = false;
-  uint16_t number = 0;         // the live connection's number: the next for every new one, never reused (as DebugPort)
-  void numberNew() { ++number; }
-  bool exhausted() const { return !connected && number == 0xffff; }
+  uint16_t number = 0;         // the live connection's number, from the probe's one space (core §9, ResourceNumbers)
   rp2::BitBang io;
   uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
   bool active_targetsel = false;   // the live connection's TARGETSEL (part of its identity, oep-if-debug §5)
@@ -39,6 +39,9 @@ struct SwdPort {
   PinTable *pins = nullptr;
   uint8_t pin_owner = 0xf1;
 };
+
+// The live connection goes: pins released (Hi-Z), its number closed, let go of in the pin table.
+void closePort(SwdPort &port);
 
 class WireSwd final : public Interface {
  public:

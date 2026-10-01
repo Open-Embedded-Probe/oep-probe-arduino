@@ -3,15 +3,19 @@
 
 // OEP v1 target interfaces over Ch32Dm (oep-spec docs/oep-if-debug.ja.md §1-§4, revision 1):
 //
-//   oep.wire.rvswd       scan / attach / detach / attach_under_reset on the probe's fixed RVSWD pair; the one
-//                        connection is number 1, and attaching an attached wire hands it back (flags bit1)
+//   oep.wire.rvswd       scan / attach / detach / connections on the probe's RVSWD pair (fixed, or host-chosen); the
+//                        connection takes a number from the probe's one space, and attaching an attached wire hands it
+//                        back (flags bit1). attach's reset TLV holds the target's reset line first (method 1: stopped
+//                        before its first instruction; method 0: left running)
 //   oep.wire.swio        the same on a single SWIO wire (CH32V003); one class, told which it is
 //   oep.target.riscv-dm  RISC-V Debug Module over DMI on that connection: a DMI step list plus the parts that
 //                        make host-driven flashing fast (block read/write through autoexec, run until halt,
-//                        halt / resume with the CH32 re-issue and bus bring-up, reset, step)
+//                        halt / resume with the CH32 re-issue and bus bring-up, reset, step). Every op puts back what it
+//                        changed in the target before it answers (oep-if-debug §4).
 //
 // Failures that happened while executing are completed failed / partial with the success-shaped payload and a
-// status byte (ok / wait / line / fault / timeout / state); rejected is kept for requests not accepted.
+// status byte (ok / wait / line / fault / timeout / state); rejected is kept for requests not accepted. A request that
+// finds the line gone answers status line and then closes the connection (§2).
 // The probe knows nothing about the target: no chip names, no flash controller. The host composes
 // everything else from these (experiments/flash-primitives F4).
 #pragma once
@@ -29,10 +33,17 @@ struct DebugPort {
   Ch32Dm &dm;
   uint16_t swdio, swclk;   // probe channels, for scan results and the describe pin set (swclk 0xffff: one wire)
   bool connected = false;
-  uint32_t resets = 0;     // resets issued through riscv-dm (the console marks them)
-  // The target's reset line for attach-under-reset: the host names the channel every time - there is no default
-  // (oep-if-debug §3); it can find it by pulsing candidates and watching where the hart stops. Only channels in
-  // reset_allowed may be pulled (describe role_channels, role reset), and not one another interface holds in `pins`.
+  // Host resets of the target that the console marks and last-reset follows: riscv-dm's reset and attach's reset TLV.
+  // reset_detail: how the last one was done (mark_detail_reset: 1 ndmreset, 3 attach's reset TLV).
+  uint32_t resets = 0;
+  uint8_t reset_detail = 0;
+  // Times the connection closed, and whether the last close was the line lost (the console marks link-lost, then
+  // closed 4) or a detach / release (closed 4).
+  uint32_t closes = 0;
+  bool lost = false;
+  // The target's reset line (attach's reset TLV): the host names the channel every time - there is no default
+  // (oep-if-debug §3). Only channels in reset_allowed may be pulled (describe role_channels, role reset), and not one
+  // another interface holds in `pins`.
   uint64_t reset_allowed = 0;
   PinTable *pins = nullptr;
   // Host-chosen pins (oep-if-debug §1): the channels this wire may take as SWDIO / SWCLK, declared as role_channels;
@@ -50,12 +61,9 @@ struct DebugPort {
   uint32_t tid = 0;
   // The slot registered on this place (oep.probe.config), 0xff: none - the connections entry's slot.
   uint8_t slot = 0xff;
-  // The connection's number (u16): a new connection takes the next, never reused within a boot, so a host holding the
-  // number of an earlier one gets no_connection instead of reaching this one (core §9). One connection at a time on
-  // this wire. exhausted(): every number used - a new connection is refused (unavailable).
+  // The connection's number: from the probe's one space (core §9, ResourceNumbers), taken when a connection comes up,
+  // closed when it goes. A host holding an old number gets no_connection.
   uint16_t number = 0;
-  void numberNew() { ++number; }
-  bool exhausted() const { return !connected && number == 0xffff; }
 };
 
 // Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the
@@ -65,8 +73,12 @@ struct DebugPort {
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
-// Drop `user`'s use; the link is closed when nobody is left (or `force`).
-void releaseConnection(DebugPort &port, uint8_t user, bool force);
+// Drop `user`'s use; the link is closed when nobody is left (or `force`). lost: the line was found gone (the console
+// marks link-lost before closed).
+void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost = false);
+// An at-boot slot's liveness check (oep-if-probe-config §3.1): DMSTATUS read once; false = the line did not answer and
+// the connection was closed as lost.
+bool checkConnection(DebugPort &port);
 // Host-chosen pins (oep-if-debug §1). pairAllowed: a pair this wire may use at all; pairFree: none of its channels held
 // by anything but this wire's live connection on that pair; usePair: move the link there (no live connection; the pair
 // allowed and free) - the same pair is always fine; holdPins: the live connection takes its pins (after it came up).
@@ -74,14 +86,15 @@ bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk);
 void holdPins(DebugPort &port);
-// The connections answer (oep-if-debug §2.1) for a wire with this one place.
-Result connectionsOf(DebugPort &port, uint32_t speed_hz, uint8_t *out, size_t capacity);
+// The connections answer (oep-if-debug §2.1: first(u8) -> more(u8) count(u8) count x (len, entry)) for a wire with
+// this one place.
+Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity);
 
 class WireRvswd final : public Interface {
  public:
   enum : uint8_t {
     kOpScan = reg::wire_rvswd::kOpScan, kOpAttach = reg::wire_rvswd::kOpAttach, kOpDetach = reg::wire_rvswd::kOpDetach,
-    kOpAttachUnderReset = reg::wire_rvswd::kOpAttachUnderReset, kOpConnections = reg::wire_rvswd::kOpConnections,
+    kOpConnections = reg::wire_rvswd::kOpConnections,
   };
   WireRvswd(DebugPort &port, uint16_t instance, const char *name = reg::wire_rvswd::kName)
       : port_(port), instance_(instance), name_(name) {}
@@ -98,7 +111,10 @@ class WireRvswd final : public Interface {
   DebugPort &port_;
   uint16_t instance_;
   const char *name_;
-  uint8_t choosePair(const uint8_t *pins, uint8_t len);
+  bool isRvswd() const { return strcmp(name_, reg::wire_rvswd::kName) == 0; }
+  uint8_t choosePair(const uint8_t *pins, size_t len);
+  Result scan(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  Result attach(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
 };
 
 class TargetRiscvDm final : public Interface {
@@ -129,8 +145,10 @@ class TargetRiscvDm final : public Interface {
  private:
   static constexpr size_t kMaxRegs = 16;
   size_t max_frame_ = 0;
+  Result dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   Result dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity);
-  uint8_t failure(uint8_t otherwise);   // line when the link does not answer, else `otherwise`
+  uint8_t failure(uint8_t otherwise);   // line when the link does not answer (the connection then closes), else `otherwise`
+  bool line_lost_ = false;              // set by failure(): the answer goes out, then the connection is closed
   DebugPort &port_;
   uint16_t instance_;
   uint32_t words_[256];

@@ -5,6 +5,12 @@
 // sequences, abstract register access, the autoexec block reader / writer (E156), running host code until its ebreak,
 // single step, attach under reset. Nothing chip-specific beyond the debug module: flashing is the host's job
 // (oep-client-python ch32_flash) through these parts.
+//
+// The op boundary invariant (oep-if-debug §4): nothing the probe changed in the target is carried past an operation.
+// A block op keeps s0, s1, a0, a1, DATA0 / DATA1 and abstractauto as it found them and puts them back before it
+// returns; step puts dcsr.step and DATA back; run puts abstractauto and haltreq back (pc, the host's registers and dcsr
+// stay as the host asked). halt may keep haltreq asserted while the hart is halted (the L103 drops its DMI link on a
+// change of hart state); resume, step, reset, detach lower it. A raw DMI write is just that: the host owns DATA then.
 #pragma once
 
 #include <Arduino.h>
@@ -18,56 +24,48 @@ class Ch32Dm {
   explicit Ch32Dm(DmiPhy &phy) : phy_(phy) {}
   bool attached() const { return phy_.attached(); }
   DmiPhy &phy() { return phy_; }
+  // This helper's view of the hart; checkHalted() reads DMSTATUS and brings it in line (the host may have halted or
+  // resumed the hart through raw DMI writes). false from checkHalted: the link did not answer.
   bool halted() const { return halted_; }
+  bool checkHalted();
   uint8_t lastCmderr() const { return cmderr_; }   // cmderr of the last abstract command that failed (0 = none)
   bool attach();
+  // A scan's look (oep-if-debug §1): bring the link up and read DMSTATUS, writing nothing but dmactive. false: no answer.
+  bool probe(uint32_t &dmstatus);
   bool halt();            // attach + haltreq, waits for allhalted; true at once when already halted
-  bool resume();          // resumereq until the hart left debug mode once (allresumeack, running, or dpc moved)
+  bool resume();          // one resumereq; ok = the hart left debug mode (allresumeack, or running and not halted)
   // Restart the target from its reset vector and let it run (reset-halt, then resume; the link stays attached).
   // flags: bit0 released and running, bit1 execution confirmed by a nonzero pc sample (confirm = true: a brief
   // halt, dpc read, resume), bit2 the sequence was redone, bit3 a confirmation halt / resume failed.
   struct ResetReport { uint8_t flags; uint8_t attempts; uint32_t pc; };
   ResetReport reset(bool confirm = true);
-  void detach();          // dmactive = 0, lines Hi-Z (target keeps running or stays halted)
-  // Memory (hart must be halted). readWords uses the autoexec reader with no
-  // per-word poll; cmderr is checked once at the end.
+  void detach();          // haltreq and the rest lowered, dmactive kept, lines Hi-Z (target keeps running or stays halted)
+  // Memory (hart must be halted). readWords uses the autoexec reader with no per-word poll; cmderr is checked once at
+  // the end. Both put s0, s1, a0, a1, DATA1, DATA0 and abstractauto back before returning (§4.5).
   bool readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr = nullptr);
-  bool readWordScalar(uint32_t address, uint32_t &value);
+  bool writeWordsFast(uint32_t address, const uint32_t *words, size_t count);
+  // Abstract register access (hart halted). They use DATA0: an op that calls them restores DATA (keepMailbox /
+  // giveMailbox) around the whole of itself.
   bool readRegister(uint16_t regno, uint32_t &value);
   bool writeRegister(uint16_t regno, uint32_t value);
   bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }
-  // Raw DMI write for host-built step lists (v1 oep.target.riscv-dm). It bypasses this helper's view of the
-  // hart: after raw dmcontrol writes, use halt()/resume() to bring halted() back in line.
+  // Raw DMI write for host-built step lists (v1 oep.target.riscv-dm): nothing of the probe's is restored first - the
+  // probe carries nothing across operations (§4). After raw dmcontrol writes checkHalted() brings halted() in line.
   bool writeDmi(uint8_t address, uint32_t value) {
     if (!attach()) return false;
-    // What this helper changed during the stop goes back first: the target's s0, s1, a0, a1 (a block op used them)
-    // and then its DATA0 / DATA1, so the host's raw list starts from the target as it stopped - the host does not know
-    // what the probe did. Dropping them instead left the block op's address in s0 for the target to run on
-    // (halt -> read_block -> a raw write -> resume: mcause 5 at a load through s0, 2026-10-01, ch32rv RTT on the X035).
-    if (gprs_kept_) giveGprs();
-    giveMailbox();
-    host_raw_ = true;             // the host may be running abstract commands: DATA0 / DATA1 are its operands now,
-                                  // and it gives them back itself, if at all (oep-if-debug §4.2)
     phy_.write(address, value);   // a DMI write reports nothing; read back through the list to check
     return true;
   }
-  // True from the host's first raw DMI write until the probe itself resumes, resets or detaches: the console must
-  // not touch DATA0 / DATA1 then, whatever halted() says (the host may have halted the hart through the list).
-  bool hostRaw() const { return host_raw_; }  // abstract access register (CSR 0x000-0xfff, GPR 0x1000+)
-  // After raw DMI writes: true when DMSTATUS says the hart runs (all running, none halted) - the host let it go by
-  // itself (a debugger writing resumereq), so hostRaw() ends and the console may read again (oep-if-console §2: it
-  // stops only for a riscv-dm request and while the hart is halted). False while halted, or when the read failed.
-  bool hostLetGo();
-  bool writeWord(uint32_t address, uint32_t value);
-  // Generic parts for host-driven flashing (experiment F3/F4, 2026-09-24). writeWordsFast
-  // stores consecutive words through an autoexec program buffer (the write-side twin of
-  // readWords); runUntilHalt sets registers and dpc, resumes, and waits for the hart to stop
-  // on its own ebreak (ebreakm/s/u are set first), forcing a halt at the timeout.
-  bool writeWordsFast(uint32_t address, const uint32_t *words, size_t count);
-  struct RunReport { bool stopped; uint32_t dpc; uint32_t a0; uint32_t elapsed_us; };
-  bool runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
-                    uint32_t timeout_ms, RunReport &report);   // timeout_ms 0xFFFFFFFF = no limit
-  // Parts from the ch32rv review of the v1 draft (2026-09-24):
+  // DATA0 / DATA1 as the target left them (a dmseq frame or the answer to one): kept at the start of an op that uses
+  // them and written back (DATA1, then DATA0) before the op returns. Public for the ops composed above this class (run).
+  void keepMailbox();
+  void giveMailbox();
+  // runUntilHalt: sets registers and dpc (dcsr: ebreakm, prv = M), resumes once, waits for the hart to stop on its
+  // ebreak; at the timeout it halts the hart itself. Then dpc and the registers `outs` are read. It never re-issues the
+  // resume (oep-if-debug §4.4). report.halted: the hart is halted at the end (false: it could not be stopped - stopped 2).
+  struct RunReport { bool stopped; bool halted; uint32_t dpc; uint32_t elapsed_us; };
+  bool runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count, uint32_t timeout_ms,
+                    const uint16_t *outs, uint32_t *out_values, size_t out_count, RunReport &report);
   // resetHalt: system reset with haltreq held through it, so the hart stops before its first instruction
   // (semihosting, gdb "monitor reset halt", flashing over a running watchdog). dpc = where it stopped.
   bool resetHalt(uint32_t &dpc);
@@ -75,34 +73,37 @@ class Ch32Dm {
   // privilege level left as it is; moved = dpc changed (the CH32L103 raises no allresumeack to go by).
   bool step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved);
   // Acknowledge a pending havereset: until then a V00x DM keeps DMSTATUS's halt / run bits frozen at their
-  // reset values. true = one was pending.
+  // reset values. true = one was pending (restarts() counts them: the console marks a restart).
   bool ackHaveReset();
+  uint32_t restarts() const { return restarts_; }
   // Attach while the target is held in reset, then release it and stop the hart at once: the way back from
   // firmware that turns the debug pins into GPIOs or sleeps straight away. `release` lets go of the reset line;
   // the halt requests start before it and run through it.
   bool attachUnderReset(void (*hold)(void *), void (*release)(void *), void *ctx, uint32_t hold_ms, uint32_t &dpc);
+  // Hold the reset line hold_ms and let go, the target left running (attach's reset TLV with method 0). The link is
+  // brought up again afterwards by the caller's attach.
+  void pulseReset(void (*hold)(void *), void (*release)(void *), void *ctx, uint32_t hold_ms);
+  // Lower haltreq (dmactive kept): what resume, step, reset, detach and a closing connection do (§4).
+  void lowerHaltreq() { if (attached()) phy_.write(0x10, 0x00000001); }
+
  private:
   DmiPhy &phy_;
   bool halted_ = false;
-  bool host_raw_ = false;
-  // DATA0 / DATA1 as the hart left them when it stopped (oep-if-debug §4.2): the target's (a dmseq frame or the
-  // answer to one). Abstract commands overwrite them while it is halted; they go back before it runs again.
   bool kept_ = false;
   uint32_t kept0_ = 0, kept1_ = 0;
-  void keepMailbox();                     // at a halt: remember them (once per stop)
-  void giveMailbox();                     // before resumereq: write them back (DATA1, then DATA0)
-  // s0, s1, a0, a1 as the target had them, kept the first time a block / word op uses them during a stop and written
-  // back before it runs again (oep-if-debug §4.5): halt -> read_block -> resume leaves the target as it was.
+  // s0, s1, a0, a1 as the target had them: kept by a block op before it uses them and written back before it returns.
   bool gprs_kept_ = false;
   uint32_t gprs_[4] = {};
   bool keepGprs();
   void giveGprs();
   uint8_t cmderr_ = 0;
+  uint32_t restarts_ = 0;
   bool waitAbstract();
   void relink();                          // PHY re-sync + abstract-command block back to a known state
   void retune();                          // PHY speed search + the same
   void settleHalted(bool ack_reset);      // after the hart stopped: ack a pending reset, relink, halted_
   bool loadRegisters(uint32_t &data0_address);
+  void restoreBlock();                    // a block op's exit: GPRs, abstractauto, then the mailbox
 };
 
 }  // namespace oep

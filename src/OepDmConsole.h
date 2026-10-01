@@ -20,18 +20,28 @@ class DmConsole {
   DmConsole(Ch32Dm &dm, DmiPhy &phy) : dm_(dm), phy_(phy) {}
   // Where the bytes from the target go (the v1 stream's buffer). Set before start().
   void setSink(Sink sink, void *ctx) { sink_ = sink; sink_ctx_ = ctx; }
-  // Call from loop(). Collects at most one frame, and only while the target is attached
-  // and running: those two registers are where abstract commands put their operands.
+  // Call from loop(). Collects at most one frame, and only while the target is attached and running: those two
+  // registers are where abstract commands put their operands (oep-if-console §2: the reading stops while the hart is
+  // halted, which DMSTATUS says - a host that halted it through raw DMI counts too; every kStatusMs it is asked).
   void poll();
-  // Start a fresh session in `framing` (whatever an earlier one left in the mailbox is thrown away), stop, queue
+  // Start a fresh session in `mechanism` (whatever an earlier one left in the mailbox is thrown away), stop, queue
   // bytes for the target.
-  bool start(uint8_t framing);
+  bool start(uint8_t mechanism);
   void stop() { enabled_ = false; }
   bool enabled() const { return enabled_; }
   size_t queue(const uint8_t *data, size_t length);
   size_t room() const { return kTxCapacity - 1 - pending(); }   // what queue() takes now
+  // The mechanism's one send slot (oep-if-common §1.4): what a write may hand over right now - the queue's room, and
+  // nothing on a one-way mechanism (SDI).
+  size_t slot() const { return mechanism_ == 0 ? 0 : room(); }
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
   uint32_t resyncs() const { return seq_resyncs_; }
+  // The target restarted (havereset seen while reading): dmseq goes back to unsynced (oep-if-console §2).
+  void unsync() { seq_synced_ = false; seq_chunk_len_ = 0; }
+  // The line was found gone while reading (no answer for kLostMs at the slowest speed, oep-if-debug §2): the stream
+  // marks link-lost and the connection closes. Cleared by start().
+  bool lineLost() const { return lost_; }
+  static constexpr uint32_t kLostMs = 1000, kStatusMs = 20;
   // dmseq diagnostics: polls that read a word with bit 7 set, of those the invalid ones, answers written
   struct SeqStats { uint32_t polls, frames, invalid, answers; };
   SeqStats seqStats() const { return stats_; }
@@ -41,8 +51,11 @@ class DmConsole {
   DmiPhy &phy_;
   static constexpr size_t kTxCapacity = 256;
   bool enabled_ = false;
-  uint32_t last_raw_check_ms_ = 0;      // hostRaw(): when DMSTATUS was last asked whether the hart runs again
-  uint8_t framing_ = 0;                 // 0 = SerialSDI (one way), 1 = SerialDMDATA, 2 = dmseq (two way)
+  uint32_t last_status_ms_ = 0;         // when DMSTATUS was last read (halted? havereset?)
+  bool hart_halted_ = false;            // what it said
+  uint32_t last_answer_ms_ = 0;         // the last DMI read that answered
+  bool lost_ = false;
+  uint8_t mechanism_ = 0;               // 0 = SerialSDI (one way), 1 = SerialDMDATA, 2 = dmseq (two way)
   bool saw_empty_ = false;              // the target's empty frame was already there last poll
   bool discarding_ = false;             // start(): what arrives now is an earlier session's
   Sink sink_ = nullptr;
@@ -52,10 +65,11 @@ class DmConsole {
   uint8_t tx_[kTxCapacity];
   uint16_t pending() const { return static_cast<uint16_t>((tx_head_ - tx_tail_ + kTxCapacity) % kTxCapacity); }
   void push(uint8_t byte);
+  bool readData(uint8_t address, uint32_t &value);   // a DMI read that keeps the line-lost clock
   void pollSdi();
   void pollDmdata();
   void sendOrClear();
-  // framing 2, dmseq (oep-spec docs/target-console-dmseq.ja.md)
+  // mechanism 2, dmseq (oep-spec docs/target-console-dmseq.ja.md)
   void pollSeq();
   void seqAnswer(uint8_t k, bool with_data);
   bool seq_synced_ = false;             // a target frame has been accepted this session
