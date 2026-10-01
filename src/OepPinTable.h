@@ -20,6 +20,8 @@ class PinTable {
   }
   explicit constexpr PinTable(uint64_t allowed) : allowed_(allowed) {}
   bool allowed(uint16_t channel) const { return channel < kChannels && (allowed_ >> channel) & 1; }
+  // Channels taken away at start-up (pins the chip in this package uses itself: platformUnusablePins).
+  void forbid(uint64_t mask) { allowed_ &= ~mask; }
   bool free(uint16_t channel) const { return allowed(channel) && owner_[channel] == 0; }
   bool claim(uint16_t channel, uint8_t owner) {
     if (!free(channel)) return false;

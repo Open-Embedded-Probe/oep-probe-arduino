@@ -43,7 +43,7 @@ plans it; a pin one interface holds is refused to another. The others are the bo
 | RP2040 / RP2350 | GP0-GP22, GP26-GP28 | GP23-GP25, GP29 (a Pico's SMPS, VBUS sense, LED, VSYS). On other boards, parts on offered pins (an LED, a PSRAM chip select) are for the host to leave alone |
 | SparkFun Pro Micro RP2350 (`promicrorp2350`) | GP0-GP18, GP20-GP29 | GP19 (the PSRAM's chip select) |
 | ESP32-P4 | GPIO0-GPIO54 but 24, 25 | GPIO24 / 25 (USB-Serial/JTAG) |
-| classic ESP32 | GPIO4, 5, 13, 14, 16-19, 21-23, 25-27, 32, 33, 34-36, 39 (34-39 input only); SWIO on the outputs below 32 | 1, 3 (UART0: the transport), 6-11 (flash), 0, 2, 12, 15 (boot straps) |
+| classic ESP32 | GPIO4, 5, 13, 14, 16-19 (16 / 17 dropped at start-up on a PICO-D4 / PICO-V3 / D2WD / D0WDR2 or with PSRAM), 21-23, 25-27, 32, 33, 34-36, 39 (34-39 input only); SWIO on the outputs below 32 | 1, 3 (UART0: the transport), 6-11 (flash), 0, 2, 12, 15 (boot straps) |
 
 The UART fixture on an RP2 uses UART0, whose RX / TX may be GP1/0, GP13/12, GP17/16 or GP29/28. On the ESP32s any pin
 works (the GPIO matrix).
