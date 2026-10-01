@@ -43,7 +43,11 @@ class's own ceiling (8-byte reports, one per millisecond), not a measurement.
 
 **Why a probe needs its own USB identity**: a host finds OEP probes among all the USB devices without opening each one, and
 the same probe is seen on every link it has (vendor bulk, HID, CDC) as one device with one serial number (= the probe's
-`unit_id`). The links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
+`unit_id`). A serial port that the host cannot tell apart (a USB-UART bridge's, a USB-Serial/JTAG port, a CDC port with
+another device's VID:PID) is different: the only way to know whether an OEP probe is behind it is to open it and see whether
+OEP frames come back, and opening an arbitrary serial port can disturb whatever is on it (a board that resets on DTR, a modem,
+another tool's device). A host cannot do that on its own for every port, so the user has to pick such a port explicitly. The
+links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
 browsers - and those need a VID:PID of their own to be recognised. Until pid.codes grants one, the reference firmware
 uses `303a:0002` and hosts recognise the probe by an iProduct starting with `OEP` (oep-spec docs/usb-identity.ja.md).
 
