@@ -89,6 +89,10 @@ class FixtureUart final : public Interface, public BindSource {
   // can run within 5 % (else unsupported).
   static bool formatDefined(uint8_t format);
   static bool baudWithinReach(uint32_t baud) { return baud >= kMinBaud && baud <= kMaxBaud; }
+  // The channels the peripheral can take as RX and as TX (platform wiring: an RP2 UART reaches a few pins each way).
+  // describe declares role_channels from these, planCheck refuses others as unsupported - before the core's pin
+  // setters are reached (arduino-pico's SerialUART::setRX / setTX panic on a pin the UART cannot use).
+  void setRoleChannels(uint64_t rx_mask, uint64_t tx_mask) { rx_mask_ = rx_mask; tx_mask_ = tx_mask; }
   // BindSource (oep.probe.config §1.2): the receive stream while the UART is planned; a port's raw bytes go out on TX,
   // as much as the UART takes without waiting.
   const PositionStream *bindStream() const override { return rx_ >= 0 || tx_ >= 0 ? &stream_ : nullptr; }
@@ -96,6 +100,7 @@ class FixtureUart final : public Interface, public BindSource {
   size_t bindInput(const uint8_t *data, size_t length) override;
 
  private:
+  uint64_t rx_mask_ = ~uint64_t{0}, tx_mask_ = ~uint64_t{0};   // setRoleChannels
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   // a port forwarded over USB may not be drained for 90 ms and more (usbip): 8 KiB overflowed at 921600 (P7)
   static constexpr size_t kCapacity = 32768, kMarks = 16;

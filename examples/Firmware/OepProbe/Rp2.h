@@ -116,6 +116,7 @@ void setup() {
   endpoint.add(adi);
   endpoint.add(gpio);
   endpoint.add(uart);
+  uart.setRoleChannels(oep::platformUartRxMask(0), oep::platformUartTxMask(0));   // Serial1 = UART0: the pins it reaches
   endpoint.setRawPorts(&binds);
   endpoint.add(config);   // last: the fns before it keep their numbers
   config.addPlace(wireRvswd, console);
