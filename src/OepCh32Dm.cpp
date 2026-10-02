@@ -41,8 +41,7 @@ bool Ch32Dm::attach() {
 bool Ch32Dm::probe(uint32_t &dmstatus) {
   if (!phy_.attached() && !phy_.attach()) return false;
   if (!phy_.read(kDmStatus, dmstatus)) return false;
-  const uint32_t version = dmstatus & 0xf;
-  return dmstatus != 0 && dmstatus != 0xffffffffu && (version == 2 || version == 3);
+  return dmstatus != 0 && dmstatus != 0xffffffffu && dmVersionKnown(dmstatus);
 }
 
 // Bring the link up again (the CH32 drops it on a change of state) and put the abstract-command block back in a
@@ -71,15 +70,15 @@ void Ch32Dm::settleHalted(bool ack_reset) {
   halted_ = true;
 }
 
-// What DMSTATUS says now: allhalted (bit 9) of a version-2 module, with no reset pending (a V00x freezes the halt / run
-// bits until it is acknowledged, so a pending one is acknowledged first).
+// What DMSTATUS says now: allhalted (bit 9) of a version-2 or -3 module, with no reset pending (a V00x freezes the
+// halt / run bits until it is acknowledged, so a pending one is acknowledged first).
 bool Ch32Dm::checkHalted() {
   if (!attach()) return false;
   uint32_t status = 0;
-  if (!phy_.read(kDmStatus, status) || (status & 0xf) != 2) return false;
+  if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) return false;
   if (status & (3u << 18)) {   // havereset: acknowledge, then read again
     ackHaveReset();
-    if (!phy_.read(kDmStatus, status) || (status & 0xf) != 2) return false;
+    if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) return false;
   }
   const bool now = (status & (1u << 9)) != 0;
   if (now && !halted_) settleHalted(false);
@@ -142,7 +141,7 @@ bool Ch32Dm::halt() {
   // a V00x keeps DMSTATUS's halt / run bits frozen until it is acknowledged.
   {
     uint32_t status = 0;
-    if (phy_.read(kDmStatus, status) && (status & 0xf) == 2 && (status & (1u << 9)) && !(status & (3u << 18))) {
+    if (phy_.read(kDmStatus, status) && dmVersionKnown(status) && (status & (1u << 9)) && !(status & (3u << 18))) {
       if (!halted_) settleHalted(false);
       return true;
     }
@@ -188,7 +187,7 @@ bool Ch32Dm::resume() {
     uint32_t status = 0;
     if (!phy_.read(kDmStatus, status)) continue;
     if (status & (1u << 17)) ok = true;                          // allresumeack
-    else if ((status & 0xf) == 2 && (status & (1u << 11)) && !(status & (1u << 9)))
+    else if (dmVersionKnown(status) && (status & (1u << 11)) && !(status & (1u << 9)))
       ok = true;                                                 // allrunning, not halted
     else if ((status & (1u << 9)) && ++halted_reads >= 3) break;
   }
@@ -437,7 +436,7 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   // part leaves reset on its default clock, slower than a sketch that raised it, and at the speed attach() tuned to
   // the sketch the release was garbled and the hart ran into its image (2026-09-24, CH32X035 from a running
   // sketch: 0 of 28 at the vector; at the slowest period 28 of 28, as through a WCH-LinkE). So run the reset at
-  // the slowest period and tune the link again once the hart has stopped. A DMSTATUS without version 2 is noise.
+  // the slowest period and tune the link again once the hart has stopped. A DMSTATUS without version 2 or 3 is noise.
   phy_.useSafeSpeed();
   kept_ = gprs_kept_ = false;              // the target starts over: nothing of before is wanted back
   phy_.write(kDmControl, 0x80000003);      // haltreq | ndmreset | dmactive
@@ -448,7 +447,7 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   bool halted = false;
   for (int poll = 0; poll < 400 && !halted; ++poll) {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status) || (status & 0xf) != 2) { relink(); continue; }
+    if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) { relink(); continue; }
     if (status & (1u << 13)) { delayMicroseconds(250); continue; }   // anyunavail
     if (status & (1u << 9)) { halted = true; break; }
     phy_.write(kDmControl, 0x80000001);

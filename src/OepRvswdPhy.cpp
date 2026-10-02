@@ -251,16 +251,16 @@ void RvswdPhy::reviveIfIdle() {
   if (!ready_ || !attached_) return;
   if (micros() - last_activity_us_ < kIdleUs) return;
   uint32_t status = 0;
-  if (readRaw(kDmStatus, status) && (status & 0xf) == 2 && (status & 0x80)) return;   // still there
+  if (readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80)) return;   // still there
   configureBus(false);                                                                // re-sync, no reset
-  if (readRaw(kDmStatus, status) && (status & 0xf) == 2 && (status & 0x80)) return;
+  if (readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80)) return;
   // Parking the clock low keeps the link, so this is the path for a target that was left
   // parked high by something else, or that lost the bus for its own reasons. It takes
   // about a dozen bring-ups to come back, and the debug module resets on the way, so the
   // hart will be running again: the caller finds out through cmderr, not through a lie.
   for (int i = 0; i < 12; ++i) {
     configureBus(true);
-    if (readRaw(kDmStatus, status) && (status & 0xf) == 2 && (status & 0x80)) break;
+    if (readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80)) break;
   }
   last_activity_us_ = micros();
 }

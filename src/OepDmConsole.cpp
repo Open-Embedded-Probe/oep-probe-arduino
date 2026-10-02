@@ -45,7 +45,7 @@ void DmConsole::poll() {
     last_status_ms_ = millis();
     uint32_t status = 0;
     if (!readData(0x11, status)) return;
-    if ((status & 0xf) != 2) return;
+    if (!dmVersionKnown(status)) return;
     if (status & (3u << 18)) {   // havereset: the target restarted on its own
       dm_.ackHaveReset();
       unsync();
