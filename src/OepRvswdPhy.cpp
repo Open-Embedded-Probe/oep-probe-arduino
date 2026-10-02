@@ -446,6 +446,7 @@ bool RvswdPhy::wakeModule(uint32_t &dmstatus) {
   setHalf(slowestNs());
   for (int wake = 0; wake < 8; ++wake) {
     if (wake && pastDeadline()) return false;
+    if (wake) ++search_retries_;   // the wake before this one got no answer (oep-if-debug §1, search_retries)
     configureBus(true);
     activate();
     if (readRaw(kDmStatus, dmstatus) && dmVersionKnown(dmstatus)) return true;

@@ -66,6 +66,7 @@ struct Target {
   uint32_t min_read_half = 0, min_write_half = 0;
   std::set<int> bad_reads;
   int flip_every = 0;
+  int ignore_wakes = 0;   // wakes the module sleeps through before one wakes it
 
   void reset() { *this = Target(); }
   void tick() {
@@ -97,6 +98,7 @@ struct Target {
   void rise() {
     if (!driven) return;
     if (!in_frame) {
+      if (!dio && wake_cells >= 100 && ignore_wakes > 0) { --ignore_wakes; wake_cells = 0; return; }   // a cold module
       wake_cells = dio ? wake_cells + 1 : (wake_cells >= 100 ? (awake = true, 0) : 0);
       return;
     }
@@ -332,6 +334,17 @@ int main() {
     t.dmcontrol = 0x80000001u;
     CHECK(phy.bringUp(status));
     for (const Write &w : t.writes) CHECK(w.address != 0x10);
+  }
+
+  // ---- search_retries counts each wake that got no answer before the one that did (oep-if-debug §1; 0.0.28: 0) ----
+  {
+    t.reset(); t.begun = true;
+    t.ignore_wakes = 2;
+    phy.setMaxHz(1000000);
+    phy.clearSearchRetries();
+    CHECK(phy.attach());
+    CHECK(phy.searchRetries() == 2);
+    phy.free();
   }
 
   // ---- the lines while the wire does not answer (oep-if-debug §2, §3.1; oep-spec 975d88c): from a read with no answer
