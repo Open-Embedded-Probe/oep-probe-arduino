@@ -30,6 +30,51 @@ bool lostAfter(SwdPort &port, uint8_t status) {
 uint32_t hzOf(uint32_t half_ns) { return half_ns ? static_cast<uint32_t>(500000000u / half_ns) : 0; }
 constexpr uint32_t kSlowHalfNs = 50000;   // the slowest SWCLK this probe uses (10 kHz): a scan without max_speed, min_clock_hz
 
+// The link back after a transfer that got nothing back (oep-if-debug §5: in the retries of §2 the line reset and the
+// wake from dormant are redone): the JTAG-to-SWD switch with its line resets, then the dormant wake when that brings no
+// answer, each followed by TARGETSEL on a multidrop connection and the DPIDR read a DP needs after a line reset before
+// it takes another request. true: DPIDR answered. The DP's other registers (SELECT, CTRL/STAT) survive a line reset.
+bool relink(SwdPort &port) {
+  for (int how = 0; how < 2; ++how) {
+    if (how == 0) swd::jtagToSwd(port.io); else swd::dormantToSwd(port.io);
+    if (port.active_targetsel) swd::targetSelect(port.io, port.targetsel);
+    uint32_t id = 0;
+    if (swd::transfer(port.io, false, true, 0x0, id) == swd::kOk && id != 0 && id != 0xffffffffu) return true;
+  }
+  return false;
+}
+
+// About how long one round of relink() and the transfer again takes, before one has been measured: the two wakes
+// (136 + 208 cells), TARGETSEL and DPIDR twice and the transfer (46 cells each), two half periods a cell.
+uint32_t roundUs(const SwdPort &port) {
+  const uint32_t half = port.active_half_ns ? port.active_half_ns : port.half_ns;
+  return static_cast<uint32_t>((uint64_t{344 + 5 * 46} * 2u * half + 999) / 1000);
+}
+
+// A transfer with the WAIT retries (kWaitRetries) and the request's wire retries (oep-if-debug §2, §5): a transfer that
+// got nothing back - no ACK, or a read's data parity - is tried again after relink() while one more round still ends
+// inside the request's wire_retry_ms. An AP read with a bad parity is not repeated: the target took it (TAR moved, the
+// posted value changed), and a second read would return another word. Returns the last ACK.
+uint8_t transferRetried(SwdPort &port, bool ap, bool read, uint8_t a23, uint32_t &data, WireRetry &retry) {
+  int waits = 0;
+  bool retrying = false;
+  uint32_t t0 = 0, cost = roundUs(port);
+  for (;;) {
+    bool bad_parity = false;
+    const uint8_t ack = swd::transfer(port.io, ap, read, a23, data, &bad_parity);
+    if (retrying) {   // the round: relink() and this transfer
+      cost = micros() - t0;
+      retry.spent_us += cost;
+      retrying = false;
+    }
+    if (ack == swd::kWait && waits++ < kWaitRetries) continue;
+    if (ack != swd::kNoReply || (bad_parity && ap && read) || !retry.fits(cost)) return ack;
+    t0 = micros();
+    retrying = true;
+    relink(port);   // whatever it got, the transfer again says how it went
+  }
+}
+
 size_t describePins(const SwdPort &port, uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   if (port.pin_choice) {                // any free pair of these (oep-if-debug §1)
@@ -112,7 +157,8 @@ void WireSwd::close() { closePort(port_); }
 
 bool WireSwd::xferDpidr(uint32_t &dpidr) {
   uint32_t id = 0;
-  if (swd::transfer(port_.io, false, true, 0x0, id) != swd::kOk || id == 0 || id == 0xffffffffu) return false;
+  WireRetry retry;   // this request's wire retries (oep-if-debug §2)
+  if (transferRetried(port_, false, true, 0x0, id, retry) != swd::kOk || id == 0 || id == 0xffffffffu) return false;
   dpidr = id;
   return true;
 }
@@ -294,8 +340,9 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       // The slowest half period that keeps SWCLK at or under the ceiling (nominal: the loop overhead only slows it).
       uint32_t half = port_.half_ns;
       if (hzOf(half) > max_hz) half = static_cast<uint32_t>((500000000ull + max_hz - 1) / max_hz);
-      uint32_t dpidr = 0;
+      uint32_t dpidr = 0, search_retries = 0;
       uint8_t flags = 0;
+      bool searched = false;
       bool ok;   // a failed attach answers its status alone: line (no answer from the port)
       if (port_.connected &&
           (have_targetsel != port_.active_targetsel || (have_targetsel && targetsel != port_.targetsel)))
@@ -312,8 +359,22 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         // nothing back: status line; the connection closes after the answer only once the wire is lost (§2)
         if (lostAfter(port_, ok ? kStatusOk : kStatusLine)) close();
       } else {
+        // The wake, tried again while the wire retries of oep-if-debug §2 last (each try the line reset, the dormant
+        // wake, TARGETSEL: §5), a try started only when it still ends inside wire_retry_ms - well inside the attach
+        // budget. Each failed try is one of the answer's search_retries.
         bool dormant = false;
+        WireRetry retry;
+        uint32_t t0 = micros();
         ok = wake(have_targetsel ? &targetsel : nullptr, half, dpidr, dormant);
+        uint32_t cost = micros() - t0;
+        while (!ok && retry.fits(cost)) {
+          ++search_retries;
+          t0 = micros();
+          ok = wake(have_targetsel ? &targetsel : nullptr, half, dpidr, dormant);
+          cost = micros() - t0;
+          retry.spent_us += cost;
+        }
+        searched = true;
         if (!ok) freePort(port_);   // a failed attach holds nothing: the pair goes free
         if (ok) {
           const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
@@ -336,7 +397,14 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       putU32(out + 2, dpidr);
       out[6] = flags;
       putU32(out + 7, hzOf(port_.active_half_ns));
-      return tail.finish(completed(11), out, capacity);
+      size_t n = 11;
+      if (searched && capacity >= n + 4) {   // search_retries (oep-if-debug §1): the wakes that failed, 0xFFFF = more
+        out[n] = sw::kTlvAttachAnswerSearchRetries;
+        out[n + 1] = 2;
+        putU16(out + n + 2, static_cast<uint16_t>(search_retries < 0xffff ? search_retries : 0xffff));
+        n += 4;
+      }
+      return tail.finish(completed(n), out, capacity);
     }
     case kOpConnections: {   // first(u8) [TLV] -> more(u8) count(u8), the live connection (users: the host only; tid scheme 2 = TARGETSEL)
       const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
@@ -384,18 +452,14 @@ size_t TargetArmAdi::describe(uint8_t *out, size_t capacity) {
 }
 
 uint8_t TargetArmAdi::xfer(bool ap, bool read, uint8_t a23, uint32_t &data) {
-  uint8_t ack = swd::kNoReply;
-  for (int i = 0; i <= kWaitRetries; ++i) {
-    ack = swd::transfer(port_.io, ap, read, a23, data);
-    if (ack != swd::kWait) break;
-  }
-  return ack;
+  return transferRetried(port_, ap, read, a23, data, retry_);
 }
 
 Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 2) return rejected(kRejectMalformed);
   if (!port_.connected || getU16(payload) != port_.number)
     return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
+  retry_ = WireRetry();   // the request's allowance for wire retries (oep-if-debug §2)
   const uint8_t *p = payload + 2;
   const size_t n = length - 2;
   Tail tail;

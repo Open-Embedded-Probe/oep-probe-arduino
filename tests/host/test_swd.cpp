@@ -7,6 +7,9 @@
 //   is accepted.
 // - Wire loss (oep-if-debug §2): a request that gets nothing back answers status line and keeps the connection; it closes
 //   only after wire_lost_ms of failures with no answer between.
+// - Wire retries (oep-if-debug §2, §5): a transfer that got nothing back is tried again after the line reset (and the
+//   dormant wake, TARGETSEL, the DPIDR read) within wire_retry_ms; an AP read with a bad parity is not repeated. attach
+//   tries the wake again within it, and search_retries counts the failed wakes.
 #include <stdio.h>
 
 #include <vector>
@@ -136,6 +139,64 @@ int main() {
     g_millis += 600;
     r = call(adi, TargetArmAdi::kOpTransfer, t, out);
     CHECK(out[2] == kStatusLine && !fixed.connected);                     // 1000 ms of failures: closed
+    g_swd.absent = false;
+  }
+
+  // ---- wire retries (oep-if-debug §2, §5): a transfer that got nothing back, retried after the line reset ----
+  {
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && fixed.connected);
+    Bytes t = u16(fixed.number);
+    t.insert(t.end(), {1, 0, 0x06});   // DP read CTRL/STAT
+    g_swd.ctrl = 0xf0000000u;
+    g_swd.drop_requests = 3;           // three requests get no reply (the DPIDR reads of the retries count too)
+    const uint32_t resets = g_swd.line_resets;
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(ok(r) && out.size() >= 10 && out[2] == kStatusOk && fixed.connected);   // 0.0.28: status line, closed
+    CHECK((out[6] | out[7] << 8 | out[8] << 16 | uint32_t(out[9]) << 24) == 0xf0000000u);
+    CHECK(g_swd.line_resets > resets);
+    // a DP read with a bad data parity: read again after the relink
+    g_swd.parity_reads = 1;
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(ok(r) && out[2] == kStatusOk);
+    // an AP read with a bad data parity is not repeated (the target took it): status line, one AP read, still connected
+    Bytes ap = u16(fixed.number);
+    ap.insert(ap.end(), {1, 0, 0x03});   // AP read, A = 0
+    g_swd.parity_reads = 1;
+    const uint32_t ap_reads = g_swd.ap_reads;
+    r = call(adi, TargetArmAdi::kOpTransfer, ap, out);
+    CHECK(out.size() >= 3 && out[2] == kStatusLine && g_swd.ap_reads == ap_reads + 1 && fixed.connected);
+    // nothing answers: the retries stop inside wire_retry_ms (plus the first try and one round's estimate)
+    g_swd.absent = true;
+    const uint32_t before = micros();
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    const uint32_t took = micros() - before;
+    printf("  a transfer with nothing there: %u ms\n", took / 1000);
+    CHECK(out[2] == kStatusLine && took >= 150000u && took <= reg::kLimitWireRetryMs * 1000u + 2000u);
+    g_swd.absent = false;
+    r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+  }
+
+  // ---- attach: the wake tried again within wire_retry_ms; search_retries counts the failed wakes ----
+  {
+    g_swd.drop_requests = 2;   // the first wake's two DPIDR reads (after JTAG-to-SWD, after the dormant wake)
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && fixed.connected);
+    size_t len = 0;
+    const uint8_t *v = tlv(out, 11, sw::kTlvAttachAnswerSearchRetries, len);
+    CHECK(v && len == 2 && v[0] == 1 && v[1] == 0);
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);   // joining: no search, no search_retries
+    CHECK(ok(r) && !tlv(out, 11, sw::kTlvAttachAnswerSearchRetries, len));
+    r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
+    CHECK(ok(r));
+    g_swd.absent = true;
+    const uint32_t before = micros();
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    const uint32_t took = micros() - before;
+    printf("  an attach with nothing there: %u ms\n", took / 1000);
+    CHECK(r.resolution == kResolutionCompleted && out.size() >= 1 && out[0] == kStatusLine && !fixed.connected);
+    CHECK(took >= 150000u && took <= reg::kLimitWireRetryMs * 1000u + 2000u);
     g_swd.absent = false;
   }
 

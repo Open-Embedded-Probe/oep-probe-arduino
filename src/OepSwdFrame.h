@@ -69,9 +69,11 @@ inline uint8_t request(bool ap, bool read_op, uint8_t a2_3) {
   return uint8_t(1 | (ap << 1) | (read_op << 2) | (a2 << 3) | (a3 << 4) | (par << 5) | (0 << 6) | (1 << 7));
 }
 
-// Returns the ACK. On kOk the data is valid (reads) or was sent (writes).
+// Returns the ACK. On kOk the data is valid (reads) or was sent (writes). A read whose data parity is wrong returns
+// kNoReply with *bad_parity set (the target took that read: an AP read's side effects happened).
 template <typename Io>
-inline uint8_t transfer(Io &io, bool ap, bool read_op, uint8_t a2_3, uint32_t &data) {
+inline uint8_t transfer(Io &io, bool ap, bool read_op, uint8_t a2_3, uint32_t &data, bool *bad_parity = nullptr) {
+  if (bad_parity) *bad_parity = false;
   io.hostDrives(true);
   writeBits(io, request(ap, read_op, a2_3), 8);
   io.hostDrives(false);
@@ -91,7 +93,10 @@ inline uint8_t transfer(Io &io, bool ap, bool read_op, uint8_t a2_3, uint32_t &d
     const bool par = sampleBit(io);
     sampleBit(io);                 // turnaround
     io.hostDrives(true);
-    if (par != parity32(value)) return kNoReply;
+    if (par != parity32(value)) {
+      if (bad_parity) *bad_parity = true;
+      return kNoReply;
+    }
     data = value;
   } else {
     sampleBit(io);                 // turnaround

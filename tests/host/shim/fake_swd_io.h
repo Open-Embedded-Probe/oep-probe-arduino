@@ -71,8 +71,8 @@ struct FakeSwdTarget {
       return;
     }
     if (absent || !selected) return;   // nothing driven: the host reads the pull-up (all ones)
-    if (drop_requests > 0) { --drop_requests; return; }
     if (locked && !(read && !ap_ && a == 0)) return;   // after a line reset: DPIDR first
+    if (drop_requests > 0) { --drop_requests; return; }   // a request it would have answered gets nothing
     out.push_back(-1);                                    // turnaround
     pushBits(1, 3);                                       // OK
     if (read) {

@@ -6,7 +6,9 @@
 //   oep.wire.swd         scan / attach / detach / connections on the probe's SWD pair (fixed or host-chosen); attach
 //                        (method 0 only) wakes the port (JTAG-to-SWD, then the dormant wake: flags bit2), sends
 //                        TARGETSEL when the host gives one, and returns DPIDR; attaching an attached port hands its
-//                        connection back (flags bit1). The reset TLV is not offered (rejected unsupported). The
+//                        connection back (flags bit1). The wake is tried again within wire_retry_ms (search_retries
+//                        counts the failed tries), and a transfer that got nothing back is tried again after the line
+//                        reset / dormant wake (oep-if-debug §2, §5). The reset TLV is not offered (rejected unsupported). The
 //                        connections entry's tid is scheme 2 = TARGETSEL (0 when none).
 //   oep.target.arm-adi   ADI (v5 / v6) access on that connection: a list of raw DP / AP transfers (done, status, the last
 //                        ACK, nvals, values), and MEM-AP block reads / writes through TAR / DRW
@@ -44,6 +46,13 @@ struct SwdPort {
   PinTable *pins = nullptr;
   uint8_t pin_owner = 0xf1;
   WireLossClock loss{};        // oep-if-debug §2: the live connection closes only once the wire is lost
+};
+
+// One request's wire retries (oep-if-debug §2): at most wire_retry_ms of it goes to retrying the wire. fits: one more
+// round that takes about cost_us still ends inside it.
+struct WireRetry {
+  uint32_t spent_us = 0;
+  bool fits(uint32_t cost_us) const { return spent_us + cost_us <= reg::kLimitWireRetryMs * 1000u; }
 };
 
 // The live connection goes: pins released (Hi-Z), its number closed, let go of in the pin table.
@@ -92,7 +101,9 @@ class TargetArmAdi final : public Interface {
   void setFrameLimit(size_t max_frame) override { max_frame_ = max_frame; }
 
  private:
-  uint8_t xfer(bool ap, bool read, uint8_t a23, uint32_t &data);   // with WAIT retries; returns the last ACK
+  // with WAIT retries and the request's wire retries (retry_); returns the last ACK
+  uint8_t xfer(bool ap, bool read, uint8_t a23, uint32_t &data);
+  WireRetry retry_;
   // describe's max_length (oep-if-debug §6): bytes of one block op that fit the frame (the words go straight
   // between the frame and the line, no buffer of this interface's own)
   uint16_t maxLength() const { return blockMaxLength(max_frame_, 0); }
