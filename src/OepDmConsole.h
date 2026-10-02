@@ -38,10 +38,10 @@ class DmConsole {
   uint32_t resyncs() const { return seq_resyncs_; }
   // The target restarted (havereset seen while reading): dmseq goes back to unsynced (oep-if-console §2).
   void unsync() { seq_synced_ = false; seq_chunk_len_ = 0; seq_bad_run_ = 0; }   // a new dmseq session
-  // The line was found gone while reading (no answer for kLostMs at the slowest speed, oep-if-debug §2): the stream
-  // marks link-lost and the connection closes. Cleared by start().
+  // The wire was found lost while reading (reads got nothing back for wire_lost_ms of real time with no answer between,
+  // oep-if-debug §2: the PHY's wire-loss clock): the stream marks link-lost and the connection closes. Cleared by start().
   bool lineLost() const { return lost_; }
-  static constexpr uint32_t kLostMs = 1000, kStatusMs = 20;
+  static constexpr uint32_t kStatusMs = 20;
   // dmseq diagnostics: polls that read a word with bit 7 set, of those the invalid ones, answers written
   struct SeqStats { uint32_t polls, frames, invalid, answers; };
   SeqStats seqStats() const { return stats_; }
@@ -53,7 +53,6 @@ class DmConsole {
   bool enabled_ = false;
   uint32_t last_status_ms_ = 0;         // when DMSTATUS was last read (halted? havereset?)
   bool hart_halted_ = false;            // what it said
-  uint32_t last_answer_ms_ = 0;         // the last DMI read that answered
   bool lost_ = false;
   uint8_t mechanism_ = 0;               // 0 = SerialSDI (one way), 1 = SerialDMDATA, 2 = dmseq (two way)
   bool saw_empty_ = false;              // the target's empty frame was already there last poll

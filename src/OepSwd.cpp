@@ -18,6 +18,15 @@ uint8_t statusOf(uint8_t ack) {
   return ack == swd::kOk ? kStatusOk : ack == swd::kFault ? kStatusFault : ack == swd::kWait ? kStatusWait : kStatusLine;
 }
 
+// A request's outcome on the wire-loss clock (oep-if-debug §2): any answer (OK, WAIT, FAULT) stops it, status line
+// starts it. true: the wire is now lost - no good exchange for wire_lost_ms of real time - and the connection closes
+// once the answer is out. One request that got nothing back within its retries keeps the connection.
+bool lostAfter(SwdPort &port, uint8_t status) {
+  if (status != kStatusLine) { port.loss.answered(); return false; }
+  port.loss.silent();
+  return port.loss.lost();
+}
+
 uint32_t hzOf(uint32_t half_ns) { return half_ns ? static_cast<uint32_t>(500000000u / half_ns) : 0; }
 constexpr uint32_t kSlowHalfNs = 50000;   // the slowest SWCLK this probe uses (10 kHz): a scan without max_speed, min_clock_hz
 
@@ -277,7 +286,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         }
         flags |= sw::kAttachFlagsExisting;
         ok = xferDpidr(dpidr);
-        if (!ok) close();   // the line is gone: the answer says so, then the connection is closed (oep-if-debug §2)
+        // nothing back: status line; the connection closes after the answer only once the wire is lost (§2)
+        if (lostAfter(port_, ok ? kStatusOk : kStatusLine)) close();
       } else {
         bool dormant = false;
         ok = wake(have_targetsel ? &targetsel : nullptr, half, dpidr, dormant);
@@ -287,6 +297,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           if (!number) { freePort(port_); return unavailable(out, capacity, reg::core::kUnavailableCauseLimit); }
           port_.connected = true;
           port_.number = number;
+          port_.loss.clear();   // a new connection: its own wire-loss clock (oep-if-debug §2)
           if (port_.pin_choice && port_.pins) {   // the live connection holds its pins (core §8.1)
             port_.pins->claim(port_.swdio, port_.pin_owner);
             port_.pins->claim(port_.swclk, port_.pin_owner);
@@ -402,7 +413,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       out[2] = status;
       out[3] = ack;
       putU16(out + 4, nvals);
-      if (status == kStatusLine) closePort(port_);   // no answer: the connection goes once the answer is out (oep-if-debug §2)
+      if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
       return tail.finish(outcome(status, done, o), out, capacity);
     }
     case kOpReadBlock: {
@@ -439,7 +450,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       const uint8_t status = statusOf(ack);
       putU16(out, done);
       out[2] = status;
-      if (status == kStatusLine) closePort(port_);
+      if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
       return tail.finish(outcome(status, done, o), out, capacity);
     }
     case kOpWriteBlock: {
@@ -478,7 +489,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       const uint8_t status = statusOf(ack);
       putU16(out, done);
       out[2] = status;
-      if (status == kStatusLine) closePort(port_);
+      if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
       return tail.finish(outcome(status, done, 3), out, capacity);
     }
     default:

@@ -129,7 +129,7 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   return true;
 }
 
-bool SwioPhy::read(uint8_t address, uint32_t &value) {
+bool SwioPhy::readWire(uint8_t address, uint32_t &value) {
   if (!ready_) return false;
   ++transactions_;
   return readRetried(address, value);
@@ -365,7 +365,7 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   return true;
 }
 
-bool SwioPhy::read(uint8_t address, uint32_t &value) {
+bool SwioPhy::readWire(uint8_t address, uint32_t &value) {
   if (!ready_ || !gOutBundle) return false;
   ++transactions_;
   return readRetried(address, value);
@@ -503,7 +503,7 @@ namespace oep {
 bool SwioPhy::begin(int) { return false; }
 bool SwioPhy::usePins(int, int) { return false; }
 bool SwioPhy::readRaw(uint8_t, uint32_t &) { return false; }
-bool SwioPhy::read(uint8_t, uint32_t &) { return false; }
+bool SwioPhy::readWire(uint8_t, uint32_t &) { return false; }
 void SwioPhy::write(uint8_t, uint32_t) {}
 bool SwioPhy::attach() { return false; }
 void SwioPhy::release() { attached_ = false; }

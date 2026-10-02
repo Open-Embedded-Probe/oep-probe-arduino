@@ -11,10 +11,14 @@
 //   halt answers the DMSTATUS after the halt; search_retries (TLV 0x12) counts the attaches tried again; the attach
 //   budget stops them; no pair of a scan starts after the scan budget; a request's wire retries stop after
 //   wire_retry_ms, and the next request has its own (oep-if-debug §1, §2).
+// - Wire loss (oep-if-debug §2): a request that gets nothing back answers status line and keeps the connection; it
+//   closes only after wire_lost_ms of failures with no good exchange between (requests and the liveness check alike),
+//   a reset's hold and the wire_lost_ms after it not counted.
 #include <stdio.h>
 
 #include <vector>
 
+#include "OepDmConsole.h"
 #include "OepPinTable.h"
 #include "OepTarget.h"
 
@@ -73,7 +77,7 @@ class FakePhy final : public DmiPhy {
   }
   void free() override { state = kFree; attached_flag = false; }
   bool attached() const override { return attached_flag; }
-  bool read(uint8_t address, uint32_t &value) override {
+  bool readWire(uint8_t address, uint32_t &value) override {
     if (!present || !attached_flag) return false;
     if (flaky) {   // the RVSWD PHY's way: retries while the request's allowance lasts, then a failed read
       while (retryLeft()) { g_millis += 1; spentRetrying(1000); ++retry_reads; }
@@ -315,8 +319,82 @@ int main() {
     CHECK(r.resolution == kResolutionCompleted && out.size() >= 3 && out[2] == kStatusLine);
     CHECK(phy.retry_reads == reg::kLimitWireRetryMs && millis() - before >= reg::kLimitWireRetryMs &&
           millis() - before < reg::kLimitWireRetryMs + 20);
+    // one request that got nothing back is not wire loss: status line, the connection kept (0.0.28: closed)
+    CHECK(fixed.connected);
+    // ... nor are failures for less than wire_lost_ms: still kept 900 ms after the first failure
+    g_millis += 600;
+    r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);
+    CHECK(out.size() >= 3 && out[2] == kStatusLine && fixed.connected);
+    // a good exchange in between stops the clock
+    phy.flaky = false;
+    r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);
+    CHECK(ok(r) && fixed.connected);
+    phy.flaky = true;
+    r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);   // the clock starts again here
+    CHECK(out[2] == kStatusLine && fixed.connected);
+    g_millis += reg::kLimitWireLostMs - 200;               // with this request's 200: 1000 ms since this run's first failure
+    r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);
+    CHECK(out.size() >= 3 && out[2] == kStatusLine);
+    CHECK(!fixed.connected && fixed.lost);                 // wire_lost_ms of failures: the answer, then closed
     phy.flaky = false;
     phy.present = true;
+  }
+
+  // ---- the liveness check (probe.config §3.1) runs the same clock: one failed check keeps the connection ----
+  {
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    CHECK(checkConnection(fixed));
+    phy.present = false;
+    CHECK(checkConnection(fixed) && fixed.connected);      // 0.0.28: three failed reads closed it
+    g_millis += 500;
+    CHECK(checkConnection(fixed) && fixed.connected);
+    g_millis += 500;
+    CHECK(!checkConnection(fixed) && !fixed.connected && fixed.lost);
+    phy.present = true;
+  }
+
+  // ---- the console's reads run the same clock: lost only after wire_lost_ms of reads that got nothing ----
+  {
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    static DmConsole console(dm, phy);
+    CHECK(console.start(0));
+    console.poll();
+    CHECK(!console.lineLost());
+    phy.present = false;
+    for (int i = 0; i < 9; ++i) { g_millis += 100; console.poll(); }
+    CHECK(!console.lineLost());
+    phy.present = true;
+    g_millis += 100;
+    console.poll();                                        // an answer: the clock stops
+    phy.present = false;
+    for (int i = 0; i < 9; ++i) { g_millis += 100; console.poll(); }
+    CHECK(!console.lineLost());
+    // wire_lost_ms after the first read that got nothing: link-lost
+    g_millis += 200;
+    console.poll();
+    CHECK(console.lineLost());
+    console.stop();
+    phy.present = true;
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r));
+  }
+
+  // ---- the wire-loss clock: a reset's hold and the wire_lost_ms after it are not counted ----
+  {
+    WireLossClock clock;
+    clock.silent();
+    g_millis += 300;
+    clock.excuseReset();                                   // a reset line let go of now
+    g_millis += 900;
+    CHECK(!clock.lost());                                  // 1200 ms of failures, all but 300 inside the excuse
+    g_millis += 100;
+    CHECK(!clock.lost());
+    g_millis += reg::kLimitWireLostMs;
+    CHECK(clock.lost());
+    clock.answered();
+    CHECK(!clock.lost());
   }
 
   printf("wire: %d checks, %d failures\n", checks, failures);

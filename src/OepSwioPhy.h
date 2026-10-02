@@ -28,7 +28,6 @@ class SwioPhy final : public DmiPhy {
   void release() override;
   void free() override;   // released, without the pull-up the line has while a link waits
   bool attached() const override { return attached_; }
-  bool read(uint8_t address, uint32_t &value) override;   // bounded retry on a lost read
   void write(uint8_t address, uint32_t value) override;
   uint32_t dmiNs() const override { return dmi_ns_; }
   // 1 start + 7 address + 1 direction + 32 data bits per transaction
@@ -40,6 +39,9 @@ class SwioPhy final : public DmiPhy {
   bool keepsMaxHz(uint32_t hz) const override { return hz == 0 || hz >= kNominalHz; }
   uint32_t minClockHz() const override { return kNominalHz; }
   uint32_t transactions() const override { return transactions_; }
+
+ protected:
+  bool readWire(uint8_t address, uint32_t &value) override;   // with bounded retry (DmiPhy::read)
 
  private:
   bool ready_ = false, attached_ = false;

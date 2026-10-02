@@ -15,7 +15,9 @@
 //
 // Failures that happened while executing are completed failed / partial with the success-shaped payload and a
 // status byte (ok / wait / line / fault / timeout / state); rejected is kept for requests not accepted. A request that
-// finds the line gone answers status line and then closes the connection (§2).
+// gets nothing back from the wire within its wire_retry_ms answers status line and keeps the connection; the
+// connection closes (after that answer) only when the wire has failed for wire_lost_ms of real time with no good
+// exchange between (§2: the PHY's wire-loss clock, which the console's reads and a slot's liveness check share).
 // The probe knows nothing about the target: no chip names, no flash controller. The host composes
 // everything else from these (experiments/flash-primitives F4).
 #pragma once
@@ -88,8 +90,8 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost = false);
 // No connection holds the wire's pins (closed, a scan's try, a failed attach): to their free state (oep-core §8).
 void freeWire(DebugPort &port);
-// An at-boot slot's liveness check (oep-if-probe-config §3.1): DMSTATUS read once; false = the line did not answer and
-// the connection was closed as lost.
+// An at-boot slot's liveness check (oep-if-probe-config §3.1): DMSTATUS read once; false = the wire is lost (no good
+// exchange for wire_lost_ms, oep-if-debug §2) and the connection was closed. A single failed check keeps it.
 bool checkConnection(DebugPort &port);
 // Host-chosen pins (oep-if-debug §1). pairAllowed: a pair this wire may use at all; pairFree: none of its channels held
 // by anything but this wire's live connection on that pair; usePair: move the link there (no live connection; the pair
@@ -165,8 +167,8 @@ class TargetRiscvDm final : public Interface {
   uint16_t maxLength() const { return blockMaxLength(max_frame_, sizeof words_); }
   Result dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   Result dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity);
-  uint8_t failure(uint8_t otherwise);   // line when the link does not answer (the connection then closes), else `otherwise`
-  bool line_lost_ = false;              // set by failure(): the answer goes out, then the connection is closed
+  uint8_t failure(uint8_t otherwise);   // line when the link does not answer, else `otherwise`
+  bool line_lost_ = false;              // set by failure() once the wire is lost (§2): the answer goes out, then the close
   DebugPort *ports_[2] = {};
   DebugPort *port_ = nullptr;           // the port of the request being handled (chosen in handle)
   uint16_t instance_;

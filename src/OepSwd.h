@@ -21,6 +21,7 @@
 #include "Oep.h"
 #include "OepDebug.h"
 #include "OepPinTable.h"
+#include "OepWireLoss.h"
 
 namespace oep {
 
@@ -38,6 +39,7 @@ struct SwdPort {
   uint64_t pin_choice = 0;
   PinTable *pins = nullptr;
   uint8_t pin_owner = 0xf1;
+  WireLossClock loss{};        // oep-if-debug §2: the live connection closes only once the wire is lost
 };
 
 // The live connection goes: pins released (Hi-Z), its number closed, let go of in the pin table.

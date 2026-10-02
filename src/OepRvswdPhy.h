@@ -30,7 +30,6 @@ class RvswdPhy final : public DmiPhy {
   void free() override;
   void park() override;
   bool attached() const override { return attached_; }
-  bool read(uint8_t address, uint32_t &value) override;   // with bounded retry
   // One cheap look for a debug module at this half period: drive the bus, set dmactive (unless DMCONTROL reads it set)
   // and read DMSTATUS once. For sweeping candidate pin pairs, where attach()'s margin check
   // (six half periods x 1000 reads) is far too slow to be a search step.
@@ -70,6 +69,9 @@ class RvswdPhy final : public DmiPhy {
   uint32_t clockHz() const override { return dmi_ns_ ? uint32_t(53000000000ull / dmi_ns_) : 0; }
   uint32_t retries() const override { return retries_; }
   uint32_t transactions() const override { return transactions_; }
+
+ protected:
+  bool readWire(uint8_t address, uint32_t &value) override;   // with bounded retry (DmiPhy::read)
 
  private:
   int swdio_ = -1, swclk_ = -1;

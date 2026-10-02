@@ -333,7 +333,7 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
 
 // A failed read is retried while the request's allowance lasts (oep-if-debug §2: at most wire_retry_ms of one request
 // goes to retries), and no more than 200 times in a row.
-bool RvswdPhy::read(uint8_t address, uint32_t &value) {
+bool RvswdPhy::readWire(uint8_t address, uint32_t &value) {
   reviveIfIdle();
   if (readRaw(address, value)) return true;
   for (int attempt = 1; attempt < 200 && retryLeft(); ++attempt) {
@@ -619,7 +619,7 @@ bool RvswdPhy::attach() { return false; }
 void RvswdPhy::release() { attached_ = false; }
 void RvswdPhy::free() { attached_ = false; }
 void RvswdPhy::park() { attached_ = false; }
-bool RvswdPhy::read(uint8_t, uint32_t &) { return false; }
+bool RvswdPhy::readWire(uint8_t, uint32_t &) { return false; }
 void RvswdPhy::write(uint8_t, uint32_t) {}
 void RvswdPhy::setHalf(uint32_t) {}
 void RvswdPhy::configureBus(bool) {}

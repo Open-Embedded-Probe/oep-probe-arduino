@@ -61,6 +61,7 @@ struct ResetLine {
   int channel;
   PinTable *pins;
   uint64_t *held_at_ns;   // nullptr, or where the time the pull started goes
+  WireLossClock *loss;    // the connection's wire-loss clock: the hold and the wire_lost_ms after it do not count (§2)
 };
 void holdReset(void *ctx) {
   const ResetLine &line = *static_cast<ResetLine *>(ctx);
@@ -71,6 +72,7 @@ void releaseReset(void *ctx) {
   const ResetLine &line = *static_cast<ResetLine *>(ctx);
   platformGpio(line.channel, kGpioOpenDrainRelease);
   if (line.pins) line.pins->rest(static_cast<uint16_t>(line.channel));
+  if (line.loss) line.loss->excuseReset();
 }
 
 // The halted hart's dpc for the attach answer's TLV 0x11 (DATA0 is used and put back).
@@ -110,7 +112,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
     if (max_hz && port.dm.attached() && phy.clockHz() > max_hz) port.dm.detach();
     AttachDeadline budget(phy, reset ? reset->hold_ms : 0);   // oep-if-debug §1, as a host's attach
     if (reset) {   // as attach's reset TLV with method 0: the line pulled and released, then the attach
-      ResetLine line{reset->channel, port.pins, &reset->held_at_ns};
+      ResetLine line{reset->channel, port.pins, &reset->held_at_ns, &phy.loss()};
       port.dm.pulseReset(holdReset, releaseReset, &line, reset->hold_ms);
     }
     // a failed try holds nothing: the pins go free until the slot tries again
@@ -128,6 +130,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
     port.connected = true;
     port.number = number;
     port.lost = false;
+    phy.loss().clear();   // a new connection: its own wire-loss clock (oep-if-debug §2)
     holdPins(port);
     uint8_t tlv[8];
     targetId(port, tlv, sizeof tlv);   // what a slot's lock is checked against
@@ -160,13 +163,17 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost) {
   freeWire(port);
 }
 
+// One DMSTATUS read, with the wire retries of one request (oep-if-debug §2). A check that gets nothing back is not wire
+// loss by itself: the connection closes only once the wire has failed for wire_lost_ms with no good exchange between
+// (this check, the host's requests, the console's reads all run the same clock).
 bool checkConnection(DebugPort &port) {
   if (!port.connected) return true;
+  DmiPhy &phy = port.dm.phy();
+  phy.beginRequest();
   uint32_t status = 0;
-  for (int attempt = 0; attempt < 3; ++attempt) {
-    if (port.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return true;
-    delay(1);
-  }
+  if (port.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return true;
+  phy.loss().silent();   // all zeros / ones: no module behind the answer
+  if (!phy.loss().lost()) return true;
   releaseConnection(port, 0xff, true, true);
   return false;
 }
@@ -457,7 +464,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     phy.setIdleClockLow(false);
   }
   if (capacity < 11) return failed();
-  ResetLine reset_line{reset_channel, port_.pins, nullptr};
+  ResetLine reset_line{reset_channel, port_.pins, nullptr, &phy.loss()};
   uint32_t status = 0, dpc = 0;
   uint8_t flags = 0;
   uint8_t failure = kStatusOk;
@@ -498,7 +505,8 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       else if ((halt || (status & (1u << 9))) && !(port_.dm.halt() && port_.dm.readDmi(kDmStatus, status)))
         failure = kStatusTimeout;
     }
-    if (failure == kStatusLine) releaseConnection(port_, 0xff, true, true);   // the line is gone: the answer, then closed
+    // nothing back: status line; the connection closes after the answer only once the wire is lost (oep-if-debug §2)
+    if (failure == kStatusLine && phy.loss().lost()) releaseConnection(port_, 0xff, true, true);
   } else {
     if (!phy.setMaxHz(max_hz)) {   // a ceiling this link cannot keep (a fixed speed above it)
       const Result r = tail.refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
@@ -539,6 +547,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       port_.connected = true;
       port_.number = number;
       port_.lost = false;
+      phy.loss().clear();   // a new connection: its own wire-loss clock (oep-if-debug §2)
       holdPins(port_);
       if (with_reset) { ++port_.resets; port_.reset_detail = reg::common::kMarkDetailResetAttachReset; }
     } else {
@@ -616,15 +625,16 @@ size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
   return w.ok() ? w.length() : 0;
 }
 
-// The status of an op that did not go through: `otherwise` when the module still answers, line when it does not -
-// then the connection is closed once the answer is out (oep-if-debug §2: the line-loss judgement inside a request).
+// The status of an op that did not go through: `otherwise` when the module still answers, line when it does not
+// (oep-if-debug §2). A request that gets nothing back within its wire_retry_ms answers status line and keeps the
+// connection; the connection is closed once the answer is out only when the wire has now failed for wire_lost_ms of
+// real time with no good exchange between (the wire-loss clock, shared with the console's reads).
 uint8_t TargetRiscvDm::failure(uint8_t otherwise) {
   uint32_t status = 0;
-  for (int attempt = 0; attempt < 3; ++attempt) {
-    if (port_->dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return otherwise;
-    delay(1);
-  }
-  line_lost_ = true;
+  WireLossClock &loss = port_->dm.phy().loss();
+  if (port_->dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return otherwise;
+  loss.silent();   // all zeros / ones: no module behind the answer
+  if (loss.lost()) line_lost_ = true;
   return kStatusLine;
 }
 
@@ -692,6 +702,7 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
         ok = p[0] == kResetRunConfirm ? (r.flags & reg::target_riscv_dm::kResetFlagsVerified) != 0
                                       : (r.flags & reg::target_riscv_dm::kResetFlagsReached) != 0;
       }
+      dm.phy().loss().excuseReset();   // the reset asserted: not counted towards wire loss (oep-if-debug §2)
       ++port_->resets;   // the console marks it (detail 1 ndmreset); last-reset binds follow it
       port_->reset_detail = reg::common::kMarkDetailResetNdmreset;
       out[0] = ok ? kStatusOk : failure(kStatusTimeout);

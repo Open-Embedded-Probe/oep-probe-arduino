@@ -13,13 +13,13 @@ void DmConsole::push(uint8_t byte) {
   if (!discarding_ && sink_) sink_(sink_ctx_, byte);
 }
 
-// A DMI read of the mailbox that keeps the line-lost clock: an answer within kLostMs of the last keeps the line alive.
+// A DMI read of the mailbox. Its outcome runs the PHY's wire-loss clock (oep-if-debug §2, shared with the host's
+// requests on the connection): the wire is lost once reads have got nothing back for wire_lost_ms with no answer between.
 bool DmConsole::readData(uint8_t address, uint32_t &value) {
   if (!phy_.read(address, value)) {
-    if (millis() - last_answer_ms_ >= kLostMs) lost_ = true;
+    if (phy_.loss().lost()) lost_ = true;
     return false;
   }
-  last_answer_ms_ = millis();
   return true;
 }
 
@@ -38,7 +38,8 @@ void DmConsole::poll() {
     last_attach_ms_ = millis();
     AttachDeadline budget(phy_);   // as any attach (oep-if-debug §1)
     if (!dm_.attach()) {
-      if (millis() - last_answer_ms_ >= kLostMs) lost_ = true;
+      phy_.loss().silent();   // the wire did not come back: on the same clock as a read that got nothing
+      if (phy_.loss().lost()) lost_ = true;
       return;
     }
   }
@@ -270,7 +271,7 @@ bool DmConsole::start(uint8_t mechanism) {
   enabled_ = true;
   lost_ = false;
   hart_halted_ = false;
-  last_answer_ms_ = last_status_ms_ = millis();
+  last_status_ms_ = millis();
   mechanism_ = mechanism;
   // dmseq writes DATA0 only while bit 7 is set (a target frame is there): zeroing it at the start broke the frame the
   // target had out, which then waited out its timeout (up to 1 s per try) before posting again - the console took

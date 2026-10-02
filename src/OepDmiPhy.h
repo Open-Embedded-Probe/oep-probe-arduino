@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include "OepRegistry.h"
+#include "OepWireLoss.h"
 
 namespace oep {
 
@@ -37,7 +38,14 @@ class DmiPhy {
   // up again. Backends whose release() already leaves no pull leave this alone.
   virtual void free() { release(); }
   virtual bool attached() const = 0;
-  virtual bool read(uint8_t address, uint32_t &value) = 0;   // with the PHY's own bounded retry
+  // One DMI read with the PHY's own bounded retry (readWire). Its outcome runs the connection's wire-loss clock
+  // (oep-if-debug §2): an answer stops it, a read that got nothing back starts it.
+  bool read(uint8_t address, uint32_t &value) {
+    const bool ok = readWire(address, value);
+    if (ok) loss_.answered(); else loss_.silent();
+    return ok;
+  }
+  WireLossClock &loss() { return loss_; }
   virtual void write(uint8_t address, uint32_t value) = 0;
   // Re-run the bus bring-up without touching any debug-module register. A CH32 drops the
   // DMI link when its state changes, so a caller whose write did not take can try again
@@ -91,6 +99,7 @@ class DmiPhy {
   void beginRequest() { retry_us_ = 0; }
 
  protected:
+  virtual bool readWire(uint8_t address, uint32_t &value) = 0;
   bool retryLeft() const { return retry_us_ < v1::reg::kLimitWireRetryMs * 1000u; }
   void spentRetrying(uint32_t us) { retry_us_ += us; }
   uint32_t search_retries_ = 0;
@@ -99,6 +108,7 @@ class DmiPhy {
   uint32_t deadline_ms_ = 0;
   bool has_deadline_ = false;
   uint32_t retry_us_ = 0;
+  WireLossClock loss_;
 };
 
 // The attach budget (oep-if-debug §1, limits.attach_budget_ms) over one attach: the PHY's deadline from construction to
