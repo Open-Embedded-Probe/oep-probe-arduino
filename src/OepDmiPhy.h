@@ -11,6 +11,13 @@
 
 namespace oep {
 
+// DMSTATUS.version (bits 3:0) of a debug module the probe works with: 2 (debug spec 0.13) or 3 (1.0), as oep-if-debug
+// §1 counts a module "found". Anything else (0 none, 1 0.11, 15 non-conforming, a floating bus) is not one.
+inline bool dmVersionKnown(uint32_t dmstatus) {
+  const uint32_t version = dmstatus & 0xf;
+  return version == 2 || version == 3;
+}
+
 class DmiPhy {
  public:
   virtual ~DmiPhy() = default;
