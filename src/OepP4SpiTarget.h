@@ -11,8 +11,8 @@
 // for read_rx. Polled from service() in loop(); nothing runs in an ISR.
 // While nothing is armed a discard transaction (MISO 0, MOSI to a scratch buffer) waits in the driver, so a transfer
 // the host did not arm is seen and counted in transactions and errors (fixture §4); arm replaces it (the driver cannot
-// take a queued transaction back: arm restarts the target). A CS frame with no SCK edge (0 bits) is noise: it counts
-// nothing and leaves the arm waiting (the spec does not say; floating CS / SCK make them).
+// take a queued transaction back: arm restarts the target). A CS frame with no SCK edge (0 bits) is no transfer: it
+// counts nothing and leaves the arm waiting (fixture §4).
 #pragma once
 
 #include <Arduino.h>
