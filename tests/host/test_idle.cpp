@@ -265,11 +265,20 @@ static void testDriveSet() {
   // a level the probe does not have: that TLV ignored (listed), the set done at the default
   CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 0, 4, 0}}), out)) && ignoredDrive(out, 0));
   CHECK(drives(20, HIGH) && g_pin_drive[20] == 2);
-  // malformed, nothing done: index out of range, the same index twice, an undefined kind, an element not 3 / 4, length
+  // an undefined kind (2+): a value this probe cannot handle - that TLV ignored, or unsupported when critical (C-02)
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 2, 0, 0}}), out)) && ignoredDrive(out, 0));
+  CHECK(drives(20, HIGH) && g_pin_drive[20] == 2);
+  Bytes kind2 = setWithDrive({{20, hi}}, {{0, 2, 0, 0}});
+  kind2[4] |= kTagCritical;
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, kind2, out).detail == kRejectUnsupported && out.size() == 1 &&
+        out[0] == (reg::fixture_gpio::kTlvSetDrive | kTagCritical));
+  // malformed, nothing done: index out of range, the same index twice, an element not 3 / 4, length
   const int before = g_pin_changes;
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{1, 0, 0, 0}}), out).detail == kRejectMalformed);
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0, 0, 0}, {0, 0, 1, 0}}), out).detail == kRejectMalformed);
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 2, 0, 0}}), out).detail == kRejectMalformed);
+  // an undefined mode (8+) is unsupported like an undeclared one, with the channel and its index (C-02)
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, 8}}, {}), out).detail == kRejectUnsupported && out.size() >= 1 &&
+        out[0] == kTagValue);
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}, {21, 0}}, {{1, 0, 0, 0}}), out).detail == kRejectMalformed);
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0, 0}}), out).detail == kRejectMalformed);
   // malformed wins wherever it is: after an ignored one, and after a critical one that would be unsupported

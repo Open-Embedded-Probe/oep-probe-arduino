@@ -216,8 +216,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (length < 1) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] > 1) return rejected(kRejectMalformed);
-      if (payload[0] == 1) return unsupportedValue(out, capacity);   // halt: arm-adi has no halt (oep-if-debug §5)
+      if (payload[0] != 0) return unsupportedValue(out, capacity);   // 0 only: arm-adi has no halt (oep-if-debug §5)
       size_t len = 0;
       bool critical = false;
       uint32_t max_hz = 0, targetsel = 0;

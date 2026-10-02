@@ -85,15 +85,14 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       // drive (fixture §1.1) is known only where this chip declares drive_levels; elsewhere it is an unknown tag
       const Result parsed = tail.parse(payload + fixed, length - fixed, kKnown, levels.count ? 1 : 0, out, capacity);
       if (refused(parsed)) return parsed;
-      for (uint8_t i = 0; i < n; ++i)
-        if (payload[3 + 3 * i] > gp::kModeInputPullupPulldown) return rejected(kRejectMalformed);
       auto isOutput = [&](uint8_t i) {
         const uint8_t m = payload[3 + 3 * i];
         return m == gp::kModeOutputLow || m == gp::kModeOutputHigh;
       };
-      // drive TLVs, one per element: index n or more, an index twice, an undefined kind, or an element not mode 3 / 4
-      // is malformed (the whole request); a level this probe does not have ignores that TLV (listed in ignored). Every
-      // form is checked first (pass 0), so a malformed one anywhere wins over a critical one's unsupported (core §4.3).
+      // drive TLVs, one per element: index n or more, an index twice, or an element not mode 3 / 4 is malformed (the
+      // whole request); an undefined kind (2+) or a level this probe does not have ignores that TLV (listed in ignored;
+      // unsupported when critical, fixture §1.1). Every form is checked first (pass 0), so a malformed one anywhere wins
+      // over a critical one's unsupported (core §4.3).
       uint8_t drive[255];
       memset(drive, PinTable::kDriveDefault, n);
       for (int pass = 0; pass < 2; ++pass) {
@@ -109,8 +108,8 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
           if (pass == 0) {
             if (len != 4) return rejected(kRejectMalformed);
             const uint8_t index = v[0], kind = v[1];
-            if (index >= n || ((seen[index / 8] >> (index % 8)) & 1) || kind > gp::kDriveKindMaxMa || !isOutput(index))
-              return rejected(kRejectMalformed);
+            if (index >= n || ((seen[index / 8] >> (index % 8)) & 1) || !isOutput(index)) return rejected(kRejectMalformed);
+            (void)kind;
             seen[index / 8] |= static_cast<uint8_t>(1u << (index % 8));
             continue;
           }
@@ -120,8 +119,10 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
           else tail.ignore(gp::kTlvSetDrive);   // listed once per TLV ignored
         }
       }
+      // a mode this probe does not declare, or an undefined one (8+: a later revision may define it, core §2.5): unsupported
       for (uint8_t i = 0; i < n; ++i)
-        if (!((kModes >> payload[3 + 3 * i]) & 1)) return unsupportedAt(out, capacity, getU16(payload + 1 + 3 * i), i);
+        if (payload[3 + 3 * i] > gp::kModeInputPullupPulldown || !((kModes >> payload[3 + 3 * i]) & 1))
+          return unsupportedAt(out, capacity, getU16(payload + 1 + 3 * i), i);
       for (uint8_t i = 0; i < n; ++i)
         if (!planned(getU16(payload + 1 + 3 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 3 * i), out, capacity);
       // the strength of a mode 3 / 4 element: its drive, else its channel's idle drive, else the default level; kept
@@ -328,11 +329,15 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       if (refused(parsed)) return parsed;
       const uint32_t baud = getU32(payload);
       // format: bits 0-1 data bits (0 = 8, 1 = 7), bits 2-3 parity (0 none, 1 even, 2 odd), bit 4 stop bits (0 = 1,
-      // 1 = 2). 8N1 when absent. An undefined value is malformed; every defined one is declared here (fixture §2).
+      // 1 = 2). 8N1 when absent. An undefined value or reserved bit is unsupported with the tag as received (a later
+      // revision may define it, core §2.5); every defined one is declared here (fixture §2).
       uint8_t format = 0;
       size_t len = 0;
-      if (const uint8_t *f = tail.find(ua::kTlvConfigureFormat, len)) {
-        if (len != 1 || !formatDefined(f[0])) return rejected(kRejectMalformed);
+      bool format_critical = false;
+      if (const uint8_t *f = tail.find(ua::kTlvConfigureFormat, len, &format_critical)) {
+        if (len != 1) return rejected(kRejectMalformed);
+        if (!formatDefined(f[0]))
+          return unsupportedTag(out, capacity, ua::kTlvConfigureFormat | (format_critical ? kTagCritical : 0));
         format = f[0];
       }
       if (!baudWithinReach(baud)) return unsupportedValue(out, capacity);   // a rate this UART cannot run (core §4.3)
@@ -359,7 +364,7 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
     case kOpRead: {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) len(u16) data [TLV]
       const Result parsed = plainTail(tail, payload, length, PositionStream::kReadRequest, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] > reg::common::kReadFromLastMark) return rejected(kRejectMalformed);
+      if (payload[0] > reg::common::kReadFromLastMark) return unsupportedValue(out, capacity);   // from 4+ (common §1, core §2.5)
       poll();
       const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
       return tail.finish(stream_.read(payload, out, capacity, max_read_, reserve), out, capacity);

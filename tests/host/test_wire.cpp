@@ -265,6 +265,12 @@ int main() {
     CHECK(ok(r));
   }
 
+  // ---- an undefined attach method (2+): unsupported, payload 0x00 (C-02) ----
+  {
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(2), out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() == 1 && out[0] == 0);
+  }
+
   // ---- the attach budget: attach() tried again only while it lasts ----
   {
     phy.fail_attaches = 100;

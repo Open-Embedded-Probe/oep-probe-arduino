@@ -291,7 +291,9 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
     case kOpConfigure: {   // address(u8) mode(u8) [TLV]
       const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] > 0x7f || payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return rejected(kRejectMalformed);
+      if (payload[0] > 0x7f) return rejected(kRejectMalformed);
+      // an undefined mode (0, 4+: a later revision may define it, core §2.5): unsupported, payload 0x00 (fixture §3)
+      if (payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return unsupportedValue(out, capacity);
       if (sda_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §3: unavailable cause 6)
       stop();
       clearTarget();   // frames, the wait, slots, rx_frames and errors go; stretch stays

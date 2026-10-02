@@ -131,8 +131,9 @@ int main() {
   CHECK(unavailableCause(call(t, P4I2cTarget::kOpReadRx, {}, out), out, 6));
   CHECK(unavailableCause(call(t, P4I2cTarget::kOpReset, {}, out), out, 6));
   CHECK(rejectedAs(configure(t, 0x80, 1), kRejectMalformed));
-  CHECK(rejectedAs(configure(t, 0x42, 0), kRejectMalformed));
-  CHECK(rejectedAs(configure(t, 0x42, 4), kRejectMalformed));
+  // an undefined mode (0, 4+): unsupported, payload 0x00 (fixture §3, C-02)
+  CHECK(rejectedAs(configure(t, 0x42, 0), kRejectUnsupported));
+  CHECK(rejectedAs(configure(t, 0x42, 4), kRejectUnsupported));
 
   // ---- mode 1
   CHECK(ok(configure(t, 0x42, P4I2cTarget::kModeFixedRx)));

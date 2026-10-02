@@ -389,7 +389,8 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   Tail tail;
   const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, isRvswd() ? 4 : 3, out, capacity);
   if (refused(parsed)) return parsed;
-  if (payload[0] > wire::kAttachMethodHalt) return rejected(kRejectMalformed);   // not a method of the table
+  // not a method of the table: unsupported, payload 0x00 (oep-if-debug §3; a later revision may define it, core §2.5)
+  if (payload[0] > wire::kAttachMethodHalt) return unsupportedValue(out, capacity);
   const bool halt = payload[0] == wire::kAttachMethodHalt;
   DmiPhy &phy = port_.dm.phy();
   uint32_t max_hz = 0;
@@ -662,7 +663,7 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       if (n < 1) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(p + 1, n - 1, kKnown, out, capacity);
       if (refused(parsed)) return parsed;
-      if (p[0] > kResetHalt) return rejected(kRejectMalformed);
+      if (p[0] > kResetHalt) return unsupportedValue(out, capacity);   // mode 3 or more (oep-if-debug §4.3, core §2.5)
       size_t len = 0;
       bool critical = false;
       if (const uint8_t *method = tail.find(reg::target_riscv_dm::kTlvResetMethod, len, &critical)) {

@@ -254,11 +254,13 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       return completed();
     case cfg::kTlvItemIdle: {
       if (len < 3) return rejected(kRejectMalformed);
-      if (v[2] > PinTable::kIdleOutputHigh) return rejected(kRejectMalformed);
       // the strength (probe.config §1, fixture §1.1): drive_kind(u8) drive_value(u16) after mode, mode 3 / 4 only
       const bool output = v[2] == PinTable::kIdleOutputLow || v[2] == PinTable::kIdleOutputHigh;
       if (len == 4 || len == 5) return rejected(kRejectMalformed);
-      if (len >= 6 && (!output || v[3] > reg::fixture_gpio::kDriveKindMaxMa)) return rejected(kRejectMalformed);
+      if (len >= 6 && !output) return rejected(kRejectMalformed);
+      // an idle mode of 5 or more, an undefined drive_kind (2+): unsupported with the item's tag (probe.config §2's table)
+      if (v[2] > PinTable::kIdleOutputHigh) return unsupportedTag(out, capacity, raw);
+      if (len >= 6 && v[3] > reg::fixture_gpio::kDriveKindMaxMa) return unsupportedTag(out, capacity, raw);
       if (!pins_) return unsupportedTag(out, capacity, raw);
       if (getU16(v) >= PinTable::kChannels || !pins_->allowed(getU16(v))) return unsupportedTag(out, capacity, raw);
       // output low / high (probe.config §1): only on a channel this probe can drive
@@ -327,12 +329,13 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
     }
     case cfg::kTlvItemUart: {
       if (len < 7) return rejected(kRejectMalformed);
-      if (!FixtureUart::formatDefined(v[6])) return rejected(kRejectMalformed);
       const uint16_t fn = getU16(v);
       if (!endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
       bool is_uart = false;
       for (size_t i = 0; i < uart_count_; ++i) is_uart |= uarts_[i].fn == fn;
-      if (!is_uart || !FixtureUart::baudWithinReach(getU32(v + 2))) return unsupportedTag(out, capacity, raw);
+      // an unused value or reserved bit of format is unsupported, as an unrealisable baud (probe.config §2's table)
+      if (!is_uart || !FixtureUart::baudWithinReach(getU32(v + 2)) || !FixtureUart::formatDefined(v[6]))
+        return unsupportedTag(out, capacity, raw);
       return completed();
     }
     case cfg::kTlvItemDisable:
