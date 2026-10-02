@@ -25,6 +25,7 @@
 
 #include "Oep.h"
 #include "OepCaptureGroup.h"
+#include "OepPinTable.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <driver/parlio_rx.h>
@@ -61,8 +62,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr size_t kSegmentMin = 4096, kSegmentMaxRepeat = 1024 * 1024;
   static constexpr size_t kInfos = 256;                               // segment infos kept (>= segments in store)
 
-  LogicCapture(Endpoint &endpoint, uint64_t reserved_pins, uint16_t instance = 0)
-      : endpoint_(endpoint), reserved_(reserved_pins), instance_(instance) {}
+  // pins: the probe's channels (any allowed one may be a line: the capture only listens, and claims none)
+  LogicCapture(Endpoint &endpoint, const PinTable &pins, uint16_t instance = 0)
+      : endpoint_(endpoint), table_(pins), instance_(instance) {}
   const char *name() const override { return reg::fixture_logic::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_logic::kRevision; }
@@ -104,7 +106,7 @@ class LogicCapture final : public Interface, public GroupTrack {
     return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
   }
   Endpoint &endpoint_;
-  uint64_t reserved_;
+  const PinTable &table_;
   uint16_t instance_;
   int pins_[kMaxChannels];
   uint8_t channels_ = 0;

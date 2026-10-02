@@ -16,6 +16,7 @@
 
 #include "Oep.h"
 #include "OepCaptureGroup.h"
+#include "OepPinTable.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
 #include <freertos/FreeRTOS.h>
@@ -34,8 +35,9 @@ class SamplerCapture final : public Interface, public GroupTrack {
   static constexpr uint32_t kMaxHz = 2000000, kMinHz = 400000;
   static constexpr uint32_t kMaxHzHighBank = 1000000;   // with any channel on GPIO32..39
 
-  SamplerCapture(Endpoint &endpoint, uint64_t reserved_pins, uint16_t instance = 0)
-      : endpoint_(endpoint), reserved_(reserved_pins), instance_(instance) {}
+  // pins: the probe's channels (any allowed one may be a line: the capture only listens, and claims none)
+  SamplerCapture(Endpoint &endpoint, const PinTable &pins, uint16_t instance = 0)
+      : endpoint_(endpoint), table_(pins), instance_(instance) {}
   const char *name() const override { return reg::fixture_logic::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_logic::kRevision; }
@@ -76,7 +78,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
     return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
   }
   Endpoint &endpoint_;
-  uint64_t reserved_;
+  const PinTable &table_;
   uint16_t instance_;
   int pins_[kMaxChannels];
   uint8_t channels_ = 0;

@@ -33,7 +33,8 @@ static oep::Endpoint endpoint(bulk, rxBuffer, sizeof rxBuffer, txBuffer, sizeof 
 // board pull-ups (7, 8), the old 8-wire link (24, 25), straps (35), UART0 (37, 38), the LED (51)
 static constexpr uint64_t kReserved = (1ull << 7) | (1ull << 8) | (1ull << 24) | (1ull << 25) | (1ull << 35) |
                                       (1ull << 37) | (1ull << 38) | (1ull << 51);
-static oep::LogicCapture capture(endpoint, kReserved, 0);
+static oep::PinTable pins(((1ull << 55) - 1) & ~kReserved);   // the channels a plan may give the capture
+static oep::LogicCapture capture(endpoint, pins, 0);
 static TestSignal signal_;
 static uint8_t probeTlv[160];
 static char serial_[20];

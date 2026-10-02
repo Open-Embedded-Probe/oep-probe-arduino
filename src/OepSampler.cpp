@@ -148,6 +148,10 @@ void SamplerCapture::waitIdle() {
 
 size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
+  // role k = channel k (oep-if-capture: roles 0..), each on any of the probe's channels
+  uint8_t roles[kMaxChannels];
+  for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
+  w.roleChannels(roles, kMaxChannels, table_.allowedMask());
   w.u32(kTagFeatures, 0b111);                      // bit0 query, bit1 force, bit2 notifications
   uint8_t mode[10] = {cap::kModeOneShot, 1};       // one-shot, in the background (core 0 samples, OEP on core 1)
   putU32(mode + 2, kBufferBytes);                  // one byte per sample
@@ -178,8 +182,8 @@ uint8_t SamplerCapture::planCheck(const RoleAssignment *roles, size_t count) {
   if (count > kMaxChannels) return kRejectUnavailable;
   uint32_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
-    if (roles[i].role >= kMaxChannels || roles[i].channel >= 40) return kRejectUnavailable;
-    if ((reserved_ >> roles[i].channel) & 1) return kRejectUnavailable;
+    if (roles[i].role >= kMaxChannels) return kRejectUnavailable;
+    if (!table_.allowed(roles[i].channel)) return kRejectUnsupported;   // not in role_channels (core §8)
     if (seen & (1u << roles[i].role)) return kRejectUnavailable;
     seen |= 1u << roles[i].role;
   }

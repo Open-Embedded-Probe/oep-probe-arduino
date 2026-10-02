@@ -84,7 +84,7 @@ static oep::PinTable pins(kChannels);
 // PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0, the analog 7)
 static oep::FixtureGpio gpio(pins, 0, 1);
 static oep::FixtureUart uart(pins, Serial2, 0, 2);
-static oep::SamplerCapture capture(endpoint, kReserved);
+static oep::SamplerCapture capture(endpoint, pins);
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
 static oep::Binds binds;

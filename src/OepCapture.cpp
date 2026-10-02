@@ -406,6 +406,10 @@ bool LogicCapture::receiveDone(parlio_rx_unit_handle_t, const parlio_rx_event_da
 
 size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
+  // role k = channel k (oep-if-capture: roles 0..), each on any of the probe's channels
+  uint8_t roles[kMaxChannels];
+  for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
+  w.roleChannels(roles, kMaxChannels, table_.allowedMask());
   w.u32(kTagFeatures, cap::kFeaturesQuery | cap::kFeaturesForce | cap::kFeaturesNotify);
   uint8_t mode[10] = {1, 1};                       // one-shot, runs in the background (DMA)
   putU32(mode + 2, kSegmentBytes * 8);             // max samples at w = 1
@@ -451,8 +455,8 @@ uint8_t LogicCapture::planCheck(const RoleAssignment *roles, size_t count) {
   if (count > kMaxChannels) return kRejectUnavailable;
   uint32_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
-    if (roles[i].role >= kMaxChannels || roles[i].channel >= 64) return kRejectUnavailable;
-    if ((reserved_ >> roles[i].channel) & 1) return kRejectUnavailable;
+    if (roles[i].role >= kMaxChannels) return kRejectUnavailable;
+    if (!table_.allowed(roles[i].channel)) return kRejectUnsupported;   // not in role_channels (core §8)
     if (seen & (1u << roles[i].role)) return kRejectUnavailable;
     seen |= 1u << roles[i].role;
   }
