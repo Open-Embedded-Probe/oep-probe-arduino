@@ -7,7 +7,7 @@
 
 ## ID
 
-OEP の USB の VID:PID（pid.codes の VID）は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
+OEP の USB の VID:PID は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
 USB の device** を指す。ライブラリが対応するどの基板でもよい（ESP32-P4、RP2350、RP2040、後から足すもの）。その device は
 Open Embedded Probe のプロトコル（[oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)）を話す。
 
@@ -18,7 +18,7 @@ probe 自身（confirm、list、describe）から読む。そのためには、�
 
 次をすべて満たすなら、この VID:PID で firmware を出してよい（自分の基板、自分の治具、example を変えたもの）:
 
-1. **このライブラリから作っている**（fork でもよい）。出すもののソースを、pid.codes が求めるとおり OSS のライセンスで公開している。
+1. **このライブラリから作っている**（fork でもよい）。出すもののソースを OSS のライセンスで公開している。
 2. **仕様どおりに OEP を話す**: confirm、list、describe に oep-spec の core のとおりに答え、`oep.` の名前で出すインターフェースは、
    どれもそのインターフェースの仕様に従う。自分のインターフェースには自分の逆 DNS の名前（`io.github.<you>.<name>`）を付け、
    `oep.` を使わない。
@@ -33,9 +33,7 @@ probe 自身（confirm、list、describe）から読む。そのためには、�
 - OEP を話さない firmware（基板が同じなだけのもの）: 自分の ID を使う。
 - このライブラリから作っていない、独立した OEP の実装: 自分の VID:PID を取る。host は iProduct と describe で同じように見つける。
   プロトコルはこの ID に依存しない。
-- 手元の試しのビルドは、pid.codes の試験用の PID `1209:0001` を使ってよい。出荷はしない。
 
 ## 変更
 
-この文書は、このリポジトリへのレビューを経た pull request でだけ変える。ID の登録は pid.codes にあり、
-持ち主は `Open-Embedded-Probe`。
+この文書は、このリポジトリへのレビューを経た pull request でだけ変える。
