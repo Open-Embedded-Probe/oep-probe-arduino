@@ -5,7 +5,9 @@
 // nobody armed counts in transactions and errors, an armed one is queued, a CS frame with no clock counts nothing and
 // leaves the arm waiting, one arm at a time, over length counts an error (and over length with the queue full two),
 // read_rx in state 0 is unavailable cause 6, configure clears the counts, releasing the plan goes back to describe's
-// state.
+// state. The next transaction is loaded at the CS rising edge that ended the last one, never inside a frame: the bench
+// sequence of 0.0.28 (a 0-bit frame before a 64-byte one, loop() running during it), and an unarmed frame right after
+// an armed one. arm does not restart the driver.
 #include <stdio.h>
 
 #include <vector>
@@ -154,6 +156,59 @@ int main() {
   t.service();
   s = status(t);
   CHECK(s.transactions == 1 && s.errors == 1);
+
+  // The bench sequence that failed on 0.0.28 (ArduinoCore-CH32RV tests/bench/trace/periph_probe test_spi_peer, classic
+  // ESP32): 4-byte frames over the modes, then configure(0) / arm(64) / a 64-byte frame three times. Each 64-byte frame
+  // follows a CS pulse with no clock (a 0-bit frame), and loop() runs 18 bits into it. 0.0.28 loaded the armed
+  // transaction again from that loop(): the slave restarted there, the DUT's MISO went wrong from byte 2 and read_rx
+  // held only bits from 18 on. Now it is loaded at the pulse's CS rising edge: whole both ways, nothing loaded in a frame.
+  {
+    const uint8_t p4[] = {0xa5, 0x5a, 0x0f, 0x01};
+    const Bytes a4 = {0x3c, 0x96, 0xc3, 0x0f};
+    for (uint8_t mode : {0, 1, 2, 3, 0}) {
+      CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {mode, 0}, out)));
+      CHECK(ok(arm(t, 4, a4)));
+      CHECK(fakeSpiTransfer(32, p4));
+      CHECK(g_fake_spi.miso == a4);
+      t.service();
+      CHECK(ok(call(t, P4SpiTarget::kOpReadRx, {}, out)));
+      CHECK(out.size() == 11 && getU32(out.data() + 1) == 32 && Bytes(out.begin() + 7, out.end()) == Bytes(p4, p4 + 4));
+    }
+    Bytes payload(64), answer(64);
+    uint32_t x = 7;
+    for (size_t i = 0; i < 64; ++i) { x = x * 1103515245u + 12345u; payload[i] = static_cast<uint8_t>(x >> 16); }
+    for (size_t i = 0; i < 64; ++i) { x = x * 1103515245u + 12345u; answer[i] = static_cast<uint8_t>(x >> 16); }
+    for (int n = 0; n < 3; ++n) {
+      CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
+      const int inits = g_fake_spi.inits, in_frame = g_fake_spi.loads_in_frame;
+      CHECK(ok(arm(t, 64, answer)));
+      CHECK(g_fake_spi.inits == inits);   // arm swaps the discard for the armed one; the driver is not restarted
+      CHECK(fakeSpiTransfer(0));          // CS without a clock: the arm keeps waiting
+      CHECK(fakeCsLow());
+      fakeClock(18, payload.data());
+      t.service();                        // loop() during the frame
+      fakeClock(64 * 8 - 18, payload.data());
+      fakeCsHigh();
+      t.service();
+      CHECK(g_fake_spi.miso == answer);
+      CHECK(g_fake_spi.loads_in_frame == in_frame);
+      CHECK(ok(call(t, P4SpiTarget::kOpReadRx, {}, out)));
+      CHECK(out.size() == 7 + 64 && out[0] == 0 && getU32(out.data() + 1) == 512 && getU16(out.data() + 5) == 64);
+      CHECK(Bytes(out.begin() + 7, out.end()) == payload);
+      s = status(t);
+      CHECK(!s.armed && s.queued == 0 && s.transactions == 1 && s.errors == 0);
+    }
+    // An unarmed frame right after the armed one, before loop() runs: the discard is already loaded, so the frame is
+    // counted and its MISO is 0 (not the armed frame's MOSI left in the slave's buffer).
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
+    CHECK(ok(arm(t, 4, a4)));
+    CHECK(fakeSpiTransfer(32, p4));
+    CHECK(fakeSpiTransfer(32, p4));
+    CHECK(g_fake_spi.miso == Bytes({0, 0, 0, 0}));
+    t.service();
+    s = status(t);
+    CHECK(!s.armed && s.queued == 1 && s.transactions == 2 && s.errors == 1);
+  }
 
   // releasing the plan, then a new one: the state right after describe (state 0, mode and bit_order 0, no counts)
   t.planRelease();

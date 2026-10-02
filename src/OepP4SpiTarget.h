@@ -10,9 +10,12 @@
 // after the master raises CS the result (MOSI bytes, length in bits) is queued
 // for read_rx. Polled from service() in loop(); nothing runs in an ISR.
 // While nothing is armed a discard transaction (MISO 0, MOSI to a scratch buffer) waits in the driver, so a transfer
-// the host did not arm is seen and counted in transactions and errors (fixture §4); arm replaces it (the driver cannot
-// take a queued transaction back: arm restarts the target). A CS frame with no SCK edge (0 bits) is no transfer: it
-// counts nothing and leaves the arm waiting (fixture §4).
+// the host did not arm is seen and counted in transactions and errors (fixture §4); arm takes it back (the driver's
+// queue reset) and loads the armed one. A CS frame with no SCK edge (0 bits) is no transfer: it counts nothing and
+// leaves the arm waiting (fixture §4).
+// The next transaction is loaded by the driver's interrupt, in post_trans_cb, at the CS rising edge that ended the last
+// one - never later from loop(): on the classic ESP32 without DMA a load is a sync reset of the slave and a rewrite of
+// its buffer, so a load while CS is low restarts the frame from that bit (MISO from byte 0 again, MOSI kept from there).
 #pragma once
 
 #include <Arduino.h>
@@ -24,6 +27,8 @@
 #if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_SPI_SLAVE)
 #define OEP_SPI_SLAVE_DRIVER 1
 #include <driver/spi_slave.h>
+#include <esp_private/spi_slave_internal.h>   // spi_slave_queue_trans_isr, spi_slave_queue_reset
+#include <freertos/FreeRTOS.h>
 #endif
 
 namespace oep {
@@ -64,7 +69,6 @@ class P4SpiTarget final : public Interface {
   // the discard transaction while nothing is armed: MISO 0, MOSI dropped
   alignas(4) uint8_t idle_tx_[kMaxFrame] = {};
   alignas(4) uint8_t idle_rx_[kMaxFrame];
-  bool idle_queued_ = false;
   // finished transactions, oldest first
   uint8_t queue_[kQueueDepth][kMaxFrame];
   uint8_t queue_length_[kQueueDepth] = {};
@@ -73,8 +77,15 @@ class P4SpiTarget final : public Interface {
 #if defined(OEP_SPI_SLAVE_DRIVER)
   spi_slave_transaction_t trans_ = {};
   spi_slave_transaction_t idle_trans_ = {};
+  // What the interrupt saw since service() last looked (under lock_): the armed one ended (its bits), unarmed
+  // transfers, and a load that failed (service() retries it).
+  portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
+  volatile bool isr_armed_done_ = false;
+  volatile uint32_t isr_armed_bits_ = 0;
+  volatile uint32_t isr_unarmed_ = 0;
+  volatile bool isr_load_failed_ = false;
+  static void onDone(spi_slave_transaction_t *done);   // post_trans_cb, in the driver's interrupt
   bool begin();        // the driver alone
-  bool queueIdle();
 #endif
   bool start();
   void stop();

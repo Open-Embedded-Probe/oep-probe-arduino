@@ -72,81 +72,98 @@ bool P4SpiTarget::begin() {
   bus.max_transfer_sz = kMaxFrame;
   spi_slave_interface_config_t cfg = {};
   cfg.spics_io_num = cs_;
-  cfg.flags = bit_order_ ? SPI_SLAVE_BIT_LSBFIRST : 0;
-  cfg.queue_size = 1;
+  // No result queue: post_trans_cb sees every end and loads the next transaction there.
+  cfg.flags = (bit_order_ ? SPI_SLAVE_BIT_LSBFIRST : 0) | SPI_SLAVE_NO_RETURN_RESULT;
+  cfg.queue_size = 1;   // never more than one waits: the one post_trans_cb or arm puts in, loaded at once
   cfg.mode = mode_;
+  cfg.post_trans_cb = onDone;
+  isr_armed_done_ = false; isr_armed_bits_ = 0; isr_unarmed_ = 0; isr_load_failed_ = false;
+  // The discard: MISO 0, whatever the master sends.
+  idle_trans_ = {};
+  idle_trans_.length = kMaxFrame * 8; idle_trans_.tx_buffer = idle_tx_; idle_trans_.rx_buffer = idle_rx_;
+  idle_trans_.user = this;
   return spi_slave_initialize(SPI2_HOST, &bus, &cfg, SPI_DMA_DISABLED) == ESP_OK;
 }
 
-// While nothing is armed: a transaction that takes whatever the master sends (MISO 0), so it can be counted.
-bool P4SpiTarget::queueIdle() {
-  idle_trans_ = {};
-  idle_trans_.length = kMaxFrame * 8; idle_trans_.tx_buffer = idle_tx_; idle_trans_.rx_buffer = idle_rx_;
-  idle_queued_ = spi_slave_queue_trans(SPI2_HOST, &idle_trans_, 0) == ESP_OK;
-  return idle_queued_;
+// In the driver's interrupt, at the CS rising edge that ended `done` (its result already stored): note what it was and
+// queue the next one, which the same interrupt loads right after this returns - while CS is high, before the master
+// can start another frame. Loading from loop() instead came at a moment of its own: inside the next frame, the slave
+// was reset there and the transaction held only the bits from that point (0.0.28, the classic ESP32).
+void IRAM_ATTR P4SpiTarget::onDone(spi_slave_transaction_t *done) {
+  P4SpiTarget *self = static_cast<P4SpiTarget *>(done->user);
+  const spi_slave_transaction_t *next = &self->idle_trans_;
+  portENTER_CRITICAL_ISR(&self->lock_);
+  if (done == &self->trans_) {
+    if (done->trans_len == 0) {
+      next = &self->trans_;   // CS without a clock: noise, the arm keeps waiting
+    } else {
+      self->isr_armed_done_ = true;
+      self->isr_armed_bits_ = done->trans_len;
+    }
+  } else if (done->trans_len) {
+    ++self->isr_unarmed_;   // a transfer nobody armed: MOSI dropped, counted (fixture §4)
+  }
+  portEXIT_CRITICAL_ISR(&self->lock_);
+  if (spi_slave_queue_trans_isr(SPI2_HOST, next) != ESP_OK) self->isr_load_failed_ = true;
 }
 
 bool P4SpiTarget::start() {
   if (started_) return true;
   if (!begin()) return false;
   started_ = true;
-  queueIdle();
+  if (spi_slave_queue_trans(SPI2_HOST, &idle_trans_, 0) != ESP_OK) isr_load_failed_ = true;
   return true;
 }
 
 void P4SpiTarget::stop() {
   if (started_) spi_slave_free(SPI2_HOST);
-  started_ = false; armed_ = false; idle_queued_ = false; queue_count_ = 0;
+  started_ = false; armed_ = false; queue_count_ = 0;
 }
 
 bool P4SpiTarget::arm(const uint8_t *tx, size_t tx_length, size_t length) {
   if (!started_ || armed_ || !length || length > kMaxFrame || tx_length > length) return false;
-  // The discard transaction sits in the driver and cannot be taken back: count what it got, then restart the target
-  // with nothing queued (a transfer under way right now is cut; it was not armed).
-  service();
-  if (idle_queued_) {
-    spi_slave_free(SPI2_HOST);
-    idle_queued_ = false;
-    if (!begin()) { started_ = false; return false; }
-  }
+  service();   // count what the discard got so far
   memset(tx_buffer_, 0, sizeof tx_buffer_); memcpy(tx_buffer_, tx, tx_length);
   memset(rx_buffer_, 0, sizeof rx_buffer_);
   trans_ = {};
-  trans_.length = length * 8; trans_.tx_buffer = tx_buffer_; trans_.rx_buffer = rx_buffer_;
-  if (spi_slave_queue_trans(SPI2_HOST, &trans_, 0) != ESP_OK) { queueIdle(); return false; }
+  trans_.length = length * 8; trans_.tx_buffer = tx_buffer_; trans_.rx_buffer = rx_buffer_; trans_.user = this;
+  // The loaded discard is taken back (the driver forgets it; the next load replaces it) and the armed one goes in its
+  // place, loaded at once. A transfer under way right now is cut: it was not armed.
+  spi_slave_queue_reset(SPI2_HOST);
+  isr_load_failed_ = false;
+  if (spi_slave_queue_trans(SPI2_HOST, &trans_, 0) != ESP_OK) {
+    if (spi_slave_queue_trans(SPI2_HOST, &idle_trans_, 0) != ESP_OK) isr_load_failed_ = true;
+    return false;
+  }
   armed_ = true; armed_length_ = length;
   return true;
 }
 
 void P4SpiTarget::service() {
   if (!started_) return;
-  spi_slave_transaction_t *done = nullptr;
-  while (spi_slave_get_trans_result(SPI2_HOST, &done, 0) == ESP_OK && done) {
-    if (done == &idle_trans_) {   // a transfer nobody armed: MOSI dropped, counted (fixture §4)
-      idle_queued_ = false;
-      if (done->trans_len) { ++transactions_; ++errors_; }
-      queueIdle();
-      continue;
-    }
-    if (!armed_ || done != &trans_) continue;
-    if (done->trans_len == 0) {   // CS without a clock: noise, the arm keeps waiting
-      if (spi_slave_queue_trans(SPI2_HOST, &trans_, 0) != ESP_OK) { armed_ = false; queueIdle(); }
-      continue;
-    }
+  portENTER_CRITICAL(&lock_);
+  const bool armed_done = isr_armed_done_;
+  const uint32_t armed_bits = isr_armed_bits_, unarmed = isr_unarmed_;
+  const bool load_failed = isr_load_failed_;
+  isr_armed_done_ = false; isr_unarmed_ = 0; isr_load_failed_ = false;
+  portEXIT_CRITICAL(&lock_);
+  transactions_ += unarmed; errors_ += unarmed;
+  if (armed_done && armed_) {
     armed_ = false;
     ++transactions_;
-    if (done->trans_len > armed_length_ * 8) ++errors_;   // over length: the rest was dropped
+    if (armed_bits > armed_length_ * 8) ++errors_;   // over length: the rest was dropped
     if (queue_count_ == kQueueDepth) {
       ++errors_;
     } else {
-      const size_t bytes = (done->trans_len + 7) / 8 > armed_length_ ? armed_length_ : (done->trans_len + 7) / 8;
+      const size_t bytes = (armed_bits + 7) / 8 > armed_length_ ? armed_length_ : (armed_bits + 7) / 8;
       memcpy(queue_[queue_count_], rx_buffer_, bytes);
       queue_length_[queue_count_] = static_cast<uint8_t>(bytes);
-      queue_bits_[queue_count_] = done->trans_len;
+      queue_bits_[queue_count_] = armed_bits;
       ++queue_count_;
     }
-    queueIdle();
   }
+  // The interrupt could not queue the next one (not expected: nothing else waits): nothing is loaded, put it in now.
+  if (load_failed) spi_slave_queue_trans(SPI2_HOST, armed_ ? &trans_ : &idle_trans_, 0);
 }
 
 #else
