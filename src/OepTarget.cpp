@@ -501,6 +501,11 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       idle = pairIdle(port_, getU16(pins), getU16(pins + 2), true);
     else if (!pins && !port_.pin_choice && !port_.connected)
       idle = pairIdle(port_, port_.swdio, port_.swclk, false);
+    // the reset line with an output idle (debug §1, §3): the same refusal, nothing executed
+    if (idle == 0xffff && with_reset && port_.pins) {
+      const uint8_t mode = port_.pins->idle(static_cast<uint16_t>(reset_channel));
+      if (mode == PinTable::kIdleOutputLow || mode == PinTable::kIdleOutputHigh) idle = static_cast<uint16_t>(reset_channel);
+    }
     if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
                                             reg::core::kHolderKindSettingsIdle);
     PinRefusal why;

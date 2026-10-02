@@ -131,6 +131,7 @@ class FakePhy final : public DmiPhy {
   uint32_t transactions() const override { return 0; }
 };
 
+static bool drives(int pin, int level) { return g_pin_mode[pin] == OUTPUT && g_pin_level[pin] == level; }
 static Result call(Interface &i, uint8_t op, const Bytes &payload, Bytes &out) {
   out.assign(256, 0);
   const Result r = i.handle(op, payload.data(), payload.size(), out.data(), out.size());
@@ -309,6 +310,30 @@ int main() {
     CHECK(isSettingsIdle(r, out, 3));
     // a slot's own attach on that pair (usePair) does not drive it either
     CHECK(!usePair(fixed4, 2, 3));
+  }
+
+  // ---- attach's reset TLV naming a channel whose idle is an output: unavailable cause 5, holder_kind 7, nothing done
+  // (oep-if-debug §1, oep-spec 975d88c; 0.0.28 pulled the line) ----
+  {
+    static FakePhy phy7;
+    static Ch32Dm dm7(phy7);
+    static PinTable pins7((1ull << 2) | (1ull << 3) | (1ull << 8));
+    static DebugPort fixed7{dm7, 2, 3};
+    fixed7.pins = &pins7;
+    fixed7.reset_allowed = 1ull << 8;
+    static WireRvswd wire7(fixed7, 6);
+    CHECK(pins7.setIdle(8, PinTable::kIdleOutputHigh));
+    Bytes with_reset = attachRequest(1);
+    with_reset.insert(with_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 4, 8, 0, 10, 0});
+    const uint32_t before = millis();
+    Result r = call(wire7, WireRvswd::kOpAttach, with_reset, out);
+    CHECK(isSettingsIdle(r, out, 8) && !fixed7.connected);
+    CHECK(phy7.attaches == 0 && millis() == before && drives(8, HIGH));   // not pulled, not held for hold_ms
+    CHECK(pins7.setIdle(8, PinTable::kIdlePullUp));                       // an input idle: the reset goes ahead
+    r = call(wire7, WireRvswd::kOpAttach, with_reset, out);
+    CHECK(ok(r) && fixed7.connected);
+    r = call(wire7, WireRvswd::kOpDetach, detachRequest(fixed7.number), out);
+    CHECK(ok(r));
   }
 
   // ---- the pair the link was last on, taken by a plan since: attach, a slot's usePair and scan all refuse it ----

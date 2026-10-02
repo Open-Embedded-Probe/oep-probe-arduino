@@ -806,6 +806,8 @@ bool ProbeConfig::retryWithReset(uint8_t i, uint32_t &dmstatus) {
   const uint16_t nrst = lineOf(i, "nrst");
   if (nrst > 63 || !((port.reset_allowed >> nrst) & 1)) return false;   // none, or not a reset channel of this wire
   if (pins_ && (pins_->disabled(nrst) || pins_->owner(nrst))) return false;   // disabled, held by a plan / connection
+  // an output idle on it: attach's reset TLV refuses such a line (oep-if-debug §1), and so does the probe's own attach
+  if (pins_ && (pins_->idle(nrst) == PinTable::kIdleOutputLow || pins_->idle(nrst) == PinTable::kIdleOutputHigh)) return false;
   b.done = true;
   AttachReset reset{nrst, static_cast<uint16_t>(reg::kSlotRetryResetHoldMs), kNeverNs};
   SlotRun &r = runs_[i];
