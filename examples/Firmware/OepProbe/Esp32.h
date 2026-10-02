@@ -113,6 +113,7 @@ void setup() {
   // before any idle / park; applySaved below gives them back if the settings are not applied).
   const uint64_t unusable = oep::platformUnusablePins();
   pins.forbid(unusable);
+  pins.setInputOnly(0xf0ull << 32);   // GPIO34-39: no output idle (probe.config §1, rejected unsupported)
   config.load();
   pins.setDisabled(config.savedDisabled());
   oep::platformParkMask(kChannels & ~unusable & ~pins.disabledMask());
@@ -145,6 +146,8 @@ void setup() {
   group.addTrack(analog, analog);
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
+  // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
+  // slots' attach last (on its poll), so a target powered through an output idle is up before it.
   config.applySaved();   // read by config.load() at the top
 }
 

@@ -17,6 +17,8 @@
 #if defined(ARDUINO_ARCH_RP2040)
 #include <hardware/gpio.h>
 #include <pico/unique_id.h>
+#elif defined(ARDUINO_ARCH_ESP32)
+#include <driver/gpio.h>
 #endif
 
 namespace oep {
@@ -42,6 +44,14 @@ using OepUart = HardwareSerial;
 // reset line to one of these pads. Called by the probe sketches before any service runs.
 inline void platformParkPins(const uint8_t *pins, size_t count);
 
+inline void platformPresetLevel(int pin, int level) {
+#if defined(ARDUINO_ARCH_ESP32)
+  gpio_set_level(static_cast<gpio_num_t>(pin), level);
+#else
+  (void)pin; (void)level;
+#endif
+}
+
 inline void platformGpio(int pin, uint8_t mode) {
 #if defined(ARDUINO_ARCH_RP2040)
   switch (mode) {
@@ -64,8 +74,10 @@ inline void platformGpio(int pin, uint8_t mode) {
     case kGpioInputPullUp: pinMode(pin, INPUT_PULLUP); break;
     case kGpioInputPullDown: pinMode(pin, INPUT_PULLDOWN); break;
     case kGpioInputPullUpDown: pinMode(pin, INPUT_PULLUP | INPUT_PULLDOWN); break;
-    case kGpioOutputLow: pinMode(pin, OUTPUT); digitalWrite(pin, LOW); break;
-    case kGpioOutputHigh: pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); break;
+    // The level into the output register first (gpio_set_level: digitalWrite refuses a pin not yet set up as a GPIO),
+    // then the output on: an output idle (probe.config §1) on a power switch comes up at its level, no pulse.
+    case kGpioOutputLow: platformPresetLevel(pin, LOW); pinMode(pin, OUTPUT); digitalWrite(pin, LOW); break;
+    case kGpioOutputHigh: platformPresetLevel(pin, HIGH); pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); break;
     case kGpioOpenDrainLow: pinMode(pin, OUTPUT_OPEN_DRAIN); digitalWrite(pin, LOW); break;
     case kGpioOpenDrainRelease: pinMode(pin, OUTPUT_OPEN_DRAIN); digitalWrite(pin, HIGH); break;
     default: break;

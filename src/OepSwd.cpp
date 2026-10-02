@@ -72,13 +72,14 @@ bool WireSwd::move(uint16_t swdio, uint16_t swclk) {
   return true;              // wake() sets the new pair up
 }
 
-// The live connection goes: pins released (Hi-Z), its number closed, let go of in the pin table.
+// The live connection goes: pins released (Hi-Z, or the idle the settings give them), its number closed, let go of in
+// the pin table.
 void closePort(SwdPort &port) {
   if (!port.connected) return;
   port.io.releaseBoth();
   port.connected = false;
   ResourceNumbers::close(port.number);
-  if (port.pin_choice && port.pins) port.pins->releaseQuiet(port.pin_owner);
+  if (port.pin_choice && port.pins) port.pins->releaseToIdle(port.pin_owner);
 }
 
 void WireSwd::close() { closePort(port_); }

@@ -235,9 +235,12 @@ Result ProbeConfig::checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t
       return completed();
     case cfg::kTlvItemIdle: {
       if (len < 3) return rejected(kRejectMalformed);
-      if (v[2] > PinTable::kIdlePullDown) return rejected(kRejectMalformed);
+      if (v[2] > PinTable::kIdleOutputHigh) return rejected(kRejectMalformed);
       if (!pins_) return unsupportedValue(out, capacity);
       if (getU16(v) >= PinTable::kChannels || !pins_->allowed(getU16(v))) return unsupportedValue(out, capacity);
+      // output low / high (probe.config §1): only on a channel this probe can drive
+      if ((v[2] == PinTable::kIdleOutputLow || v[2] == PinTable::kIdleOutputHigh) && !pins_->canOutput(getU16(v)))
+        return unsupportedValue(out, capacity);
       return completed();
     }
     case cfg::kTlvItemSlot: {
@@ -481,6 +484,21 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
                                            reg::core::kHolderKindDisabled);
     }
   }
+  // idle before the plans (probe.config §2: idle, plan, uart, the at-boot attach): a free channel takes its new idle
+  // state now - an output idle drives before a gpio plan takes the channel, which keeps that level until its first set
+  // (fixture §1) - and a channel the replaced plans release goes to the new idle. A channel disabled by this change only
+  // keeps the mode (never touched); one enabled again gets it from setDisabled below. A refused plan puts the old back.
+  static uint8_t was_idle[PinTable::kChannels];
+  memcpy(was_idle, idle_, sizeof was_idle);
+  auto applyIdles = [&](const uint8_t *modes) {
+    if (!pins_) return;
+    for (uint16_t c = 0; c < PinTable::kChannels; ++c)
+      if (modes[c] != idle_[c]) {
+        idle_[c] = modes[c];
+        pins_->setIdle(c, idle_[c], !((d.disabled >> c) & 1));
+      }
+  };
+  applyIdles(d.idle);
   if (plan_fn_count) {   // the plans of the fns touched, as the candidate has them
     RoleAssignment roles[Endpoint::kMaxRoles];
     size_t n = 0;
@@ -488,17 +506,14 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
       for (size_t k = 0; k < plan_fn_count; ++k)
         if (d.roles[r].function == plan_fns[k]) roles[n++] = d.roles[r];
     const uint8_t reason = endpoint_.replacePlan(roles, n, plan_fns, plan_fn_count);
+    if (reason) applyIdles(was_idle);
     if (reason == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
     if (reason) return rejected(reason);
   }
   // accepted: make it current
   memcpy(items_, candidate, length);
   items_length_ = length;
-  setDisabled(d.disabled);   // first: a channel disabled now is not set to an idle state below
-  if (pins_) {
-    for (uint16_t c = 0; c < PinTable::kChannels; ++c)
-      if (d.idle[c] != idle_[c]) { idle_[c] = d.idle[c]; pins_->setIdle(c, idle_[c]); }
-  }
+  setDisabled(d.disabled);   // a channel enabled again goes to its (new) idle state here
   for (uint8_t i = 0; i < kMaxSlots; ++i) {
     const Slot &was = slots_[i], &now = d.slots[i];
     const bool changed = was.set != now.set || (now.set && memcmp(&was, &now, sizeof(Slot)) != 0);
