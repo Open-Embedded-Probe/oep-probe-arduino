@@ -420,6 +420,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     if (have_newest_ && static_cast<int16_t>(corr - newest_corr_) <= 0) { sendReject(corr, kRejectResultLost); return; }
   }
   Result result;
+  g_request_ignored.reset();   // this request's ignored tags (core §2.3), from its tail's parse
   if (fn == 0) {
     result = core(op, has_session, session, payload, payload_length, out, capacity);
   } else if (fn > count_) {
@@ -430,6 +431,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     if (result.resolution == kResolutionCompleted) result = it.handle(op, payload, payload_length, out, capacity);
   }
   if (result.length > capacity) result = failed(0);
+  // core §2.3: every completed answer carries ignored, a failed status too - for a handler that returned without finish
+  result = g_request_ignored.append(result, out, capacity);
   // core §3.4: a serial port the lock holder's requests come in on (its open too) stops its raw transfer
   if (serialKind(transports_[current_].kind) && locked_ &&
       ((fn == 0 && op == kOpOpen && result.resolution == kResolutionCompleted) || (has_session && session == holder_)))
@@ -944,11 +947,9 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
 }
 
 Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // fn(u16) first(u16) [TLV]  ->  more(u8) TLVs (first = the index of the first TLV)
-  if (length < 4 || capacity < 1) return rejected(kRejectMalformed);
-  Tail tail;
-  const Result parsed = tail.parse(payload + 4, length - 4, out, capacity);
-  if (refused(parsed)) return parsed;
+  // fn(u16) first(u16)  ->  more(u8) TLVs (first = the index of the first TLV). No TLV in the request (core §7.3: the
+  // answer is a TLV list itself, so ignored never appears in it): anything after the fixed part is malformed.
+  if (length != 4 || capacity < 1) return rejected(kRejectMalformed);
   const uint16_t fn = getU16(payload);
   const uint16_t first = getU16(payload + 2);
   const uint8_t *tlv = nullptr;
@@ -973,11 +974,10 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   } else {
     return rejected(kRejectUnknownFunction);
   }
-  const size_t room = tail.anyIgnored() && capacity > 3 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
   bool more = false;
-  const size_t used = tlv ? pageTlv(tlv, tlv_length, first, out + 1, room - 1, more) : 0;
+  const size_t used = tlv ? pageTlv(tlv, tlv_length, first, out + 1, capacity - 1, more) : 0;
   out[0] = more;
-  return tail.finish(completed(1 + used), out, capacity);
+  return completed(1 + used);
 }
 
 }  // namespace oep

@@ -357,6 +357,41 @@ struct Bulk {
   }
 };
 
+// core §2.3: ignored (0x7F) goes on every completed answer, a failed status too - the endpoint appends what the
+// request's tail ignored when the handler returned without finish; one entry per TLV ignored. core §7.3: no TLV in a
+// describe request (malformed), so ignored never appears in its answer.
+class FailsEarly final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.fails"; }
+  uint16_t instance() const override { return 0; }
+  bool lockFree(uint8_t) const override { return true; }
+  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override {
+    Tail tail;
+    const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+    if (refused(parsed)) return parsed;
+    out[0] = 0x05;   // a status
+    if (op == 1) return failed(1);                            // returns before finish
+    return tail.finish(failed(1), out, capacity);             // finish itself: not listed twice
+  }
+};
+
+static void testIgnoredOnEveryCompletedAnswer() {
+  Bulk b;
+  FailsEarly fails;
+  b.ep.add(fails);   // fn 1
+  for (uint8_t op = 1; op <= 2; ++op) {
+    Bytes r = b.send(request(1, 1, op, {0x30, 1, 9, 0x31, 0, 0x30, 0}));
+    CHECK(r.size() == 2 + 1 + 5 && r[0] == kResolutionCompleted && r[1] == kOutcomeFailed && r[2] == 0x05 &&
+          r[3] == kTagIgnored && r[4] == 3 && r[5] == 0x30 && r[6] == 0x31 && r[7] == 0x30);
+  }
+  Bytes r = b.send(request(2, 1, 1, {}));                     // the next request starts without the last one's list
+  CHECK(r.size() == 3 && r[1] == kOutcomeFailed);
+  r = b.send(request(3, 0, reg::core::kOpDescribe, {1, 0, 0, 0}));   // describe fn 1: fine
+  CHECK(!r.empty() && r[0] == kResolutionCompleted);
+  r = b.send(request(4, 0, reg::core::kOpDescribe, {1, 0, 0, 0, 0x30, 0}));   // with a TLV: malformed, not ignored
+  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectMalformed);
+}
+
 // core §6.2 / §9: an end keeps the session's resources (the same id resumes, resumed 1); a lapse sweeps them (the next
 // request with that id is rejected expired, its open says resumed 2); confirm carries the boot id.
 static void testSessionTable() {
@@ -910,6 +945,7 @@ int main() {
   testDisabledChannel();
   testTlvLongForm();
   testSessionTable();
+  testIgnoredOnEveryCompletedAnswer();
   testSubscriptions();
   testResourceNumbers();
   testGroupSecondRun();
