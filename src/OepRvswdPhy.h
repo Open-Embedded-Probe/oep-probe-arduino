@@ -49,6 +49,11 @@ class RvswdPhy final : public DmiPhy {
   // The host's max_speed (v1 attach TLV 0x01): no half period shorter than one SWCLK period of 1 / hz allows. Taken
   // from the nominal period (the measured rate, with the loop overhead, is lower). 0 = no ceiling.
   bool keepsMaxHz(uint32_t) const override { return true; }
+  // The slowest max_speed this link takes (describe min_clock_hz, oep-if-debug §1): under it one attach's minimum
+  // checks - and the halt and reads after them - no longer fit the attach budget (a host test: a clean target at 2 kHz
+  // took 2.2 s, at 1 kHz 4.4 s), and a frame outlasts the 1 ms idle a CH32 keeps its link for.
+  static constexpr uint32_t kMinClockHz = 50000;
+  uint32_t minClockHz() const override { return kMinClockHz; }
   bool setMaxHz(uint32_t hz) override {
     cap_half_ns_ = hz ? static_cast<uint32_t>((1000000000ull + 2ull * hz - 1) / (2ull * hz)) : 0;
     return true;

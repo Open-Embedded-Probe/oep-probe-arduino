@@ -6,7 +6,8 @@
 # the I2C one with a fake controller), of the pin table's idle
 # states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
 # unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the RVSWD PHY's attach on a
-# simulated target (what is written before the speed is verified, the checks, the budget), and of the SWD wire on a
+# simulated target (what is written before the speed is verified, the checks, the budget), of the whole rvswd stack's
+# attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries): g++ and a shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
@@ -44,6 +45,9 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RVSWD -I"$here/shim" -I"$src" -o "$out-rvswd" \
   "$here/test_rvswd_phy.cpp" "$src/OepRvswdPhy.cpp"
 "$out-rvswd"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RVSWD -I"$here/shim" -I"$src" -o "$out-attach-cycle" \
+  "$here/test_attach_cycle.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepRvswdPhy.cpp" "$src/OepFrame.cpp"
+"$out-attach-cycle"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWD -I"$here/shim" -I"$src" -o "$out-swd" \
   "$here/test_swd.cpp" "$src/OepSwd.cpp" "$src/OepFrame.cpp"
 "$out-swd"

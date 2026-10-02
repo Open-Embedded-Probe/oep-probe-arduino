@@ -110,9 +110,12 @@ class DmiPhy {
   void countSearchRetry() { ++search_retries_; }   // a try above the PHY (a whole attach() again) failed
   // The attach budget (oep-if-debug §1, limits.attach_budget_ms): attach() starts no further step of its search once
   // millis() reaches `at_ms` and answers false. The caller sets it before and clears it after.
-  void setDeadline(uint32_t at_ms) { deadline_ms_ = at_ms; has_deadline_ = true; }
+  // end_ms: the budget's own end - what follows the search (a halt's rounds, an abstract command's wait) stops there.
+  void setDeadline(uint32_t at_ms, uint32_t end_ms) { deadline_ms_ = at_ms; end_ms_ = end_ms; has_deadline_ = true; }
+  void setDeadline(uint32_t at_ms) { setDeadline(at_ms, at_ms); }
   void clearDeadline() { has_deadline_ = false; }
   bool pastDeadline() const { return has_deadline_ && static_cast<int32_t>(millis() - deadline_ms_) >= 0; }
+  bool pastBudget() const { return has_deadline_ && static_cast<int32_t>(millis() - end_ms_) >= 0; }
   // Retries inside one request (oep-if-debug §2, limits.wire_retry_ms): a request starts with the whole allowance, and
   // read() retries no more once it is spent (the request then ends with status line).
   void beginRequest() { retry_us_ = 0; }
@@ -127,7 +130,7 @@ class DmiPhy {
   uint32_t search_retries_ = 0;
 
  private:
-  uint32_t deadline_ms_ = 0;
+  uint32_t deadline_ms_ = 0, end_ms_ = 0;
   bool has_deadline_ = false;
   uint32_t retry_us_ = 0;
   WireLossClock loss_;
@@ -135,13 +138,15 @@ class DmiPhy {
 
 // The attach budget (oep-if-debug §1, limits.attach_budget_ms) over one attach: the PHY's deadline from construction to
 // destruction. One attach answer takes at most the budget of the probe's time, a reset's hold_ms (extra_ms) aside; the
-// PHY's search gets it less kTailMs - what follows the search (havereset, a halt, the target_id and dpc reads) and the
-// one search step that may still be running when the deadline passes (a read check and a write check: 140 ms at most).
+// PHY's search gets it less kTailMs - what follows the search (havereset, a halt, the target_id and dpc reads) and
+// the request's wire retries (wire_retry_ms); a search step running when the deadline passes ends there, and the steps
+// after the search end at the budget's end (pastBudget).
 class AttachDeadline {
  public:
-  static constexpr uint32_t kTailMs = 250;
+  static constexpr uint32_t kTailMs = v1::reg::kLimitWireRetryMs + 100;
   AttachDeadline(DmiPhy &phy, uint32_t extra_ms = 0) : phy_(phy) {
-    phy_.setDeadline(millis() + v1::reg::kLimitAttachBudgetMs - kTailMs + extra_ms);
+    const uint32_t end = millis() + v1::reg::kLimitAttachBudgetMs + extra_ms;
+    phy_.setDeadline(end - kTailMs, end);
   }
   ~AttachDeadline() { phy_.clearDeadline(); }
   AttachDeadline(const AttachDeadline &) = delete;

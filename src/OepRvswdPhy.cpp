@@ -502,7 +502,8 @@ bool RvswdPhy::readsStable(uint32_t &first, uint8_t retries) {
   const uint32_t t0 = micros();
   uint32_t reads = 0;
   for (int good = 0; good < kReadChecks;) {
-    if (good >= kMinReadChecks && micros() - t0 >= kReadCheckUs) break;
+    if (good >= kMinReadChecks && (micros() - t0 >= kReadCheckUs || pastDeadline())) break;
+    if (pastDeadline()) return false;   // the attach budget is over before the check could count as passed
     uint32_t value = 0;
     ++reads;
     if (readRaw(kDmStatus, value) && ((value ^ first) & ~kHartStateBits) == 0) { ++good; continue; }
@@ -548,7 +549,8 @@ bool RvswdPhy::writesLand(uint8_t retries) {
   uint8_t missed = 0;
   const uint32_t t0 = micros();
   for (int round = 0; round < kWriteRounds && ok; ++round) {
-    if (round >= kMinWriteRounds && micros() - t0 >= kWriteCheckUs) break;
+    if (round >= kMinWriteRounds && (micros() - t0 >= kWriteCheckUs || pastDeadline())) break;
+    if (pastDeadline()) { ok = false; break; }   // the attach budget is over: this period is not proved
     for (uint32_t pattern : kPatterns) {
       for (;;) {
         writeRaw(kDmProgBuf0, pattern);
@@ -601,7 +603,7 @@ bool RvswdPhy::retune() {
   resyncAt(slowest);
   if (!keepScratch(kSlowestRetries)) { useSafeSpeed(); return false; }
   for (size_t i = kCount; i-- > 0;) {
-    if ((kHalfNs[i] < floor && i != kCount - 1) || (good != kCount && pastDeadline())) break;
+    if ((kHalfNs[i] < floor && i != kCount - 1) || pastDeadline()) break;
     const uint32_t half = kHalfNs[i] > floor ? kHalfNs[i] : floor;
     const uint8_t retries = half == slowest ? kSlowestRetries : 0;
     resyncAt(half);

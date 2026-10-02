@@ -262,6 +262,18 @@ int main() {
     printf("  an attach with nothing there: %u ms\n", took / 1000);
     CHECK(r.resolution == kResolutionCompleted && out.size() >= 1 && out[0] == kStatusLine && !fixed.connected);
     CHECK(took >= 150000u && took <= reg::kLimitWireRetryMs * 1000u + 2000u);
+    // at the slowest clock this wire takes (min_clock_hz 10 kHz): still well inside the attach budget
+    Bytes slow = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0x10, 0x27, 0, 0};   // 10000 Hz
+    const uint32_t before_slow = micros();
+    r = call(wire, WireSwd::kOpAttach, slow, out);
+    const uint32_t took_slow = micros() - before_slow;
+    printf("  an attach with nothing there at 10 kHz: %u ms\n", took_slow / 1000);
+    CHECK(r.resolution == kResolutionCompleted && out.size() >= 1 && out[0] == kStatusLine);
+    CHECK(took_slow <= reg::kLimitAttachBudgetMs * 1000u);
+    slow[3] = 0x0f;   // 9999 Hz: under min_clock_hz, unsupported
+    slow[4] = 0x27;
+    r = call(wire, WireSwd::kOpAttach, slow, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
     g_swd.absent = false;
   }
 

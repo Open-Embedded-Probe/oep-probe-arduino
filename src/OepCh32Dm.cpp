@@ -14,7 +14,7 @@ constexpr uint32_t kBlockWriter[] = {0x41044180, 0x0411c004, 0x9002c180};
 }  // namespace
 
 bool Ch32Dm::waitAbstract() {
-  for (int i = 0; i < 1000; ++i) {
+  for (int i = 0; i < 1000 && !(i && phy_.pastBudget()); ++i) {
     uint32_t cs = 0;
     if (!phy_.read(kAbstractCs, cs)) return false;
     if (cs & (1u << 12)) continue;
@@ -151,7 +151,7 @@ bool Ch32Dm::halt() {
   // running, and abstract commands fail cmderr=4; repeating it makes the halt land every
   // time. minichlink writes it three or four times in a row for the same reason, so
   // re-issue between polls instead of only polling.
-  for (int round = 0; round < 8; ++round) {
+  for (int round = 0; round < 8 && !(round && phy_.pastBudget()); ++round) {
     // A request that does not take leaves the bus out of step, and every attempt that
     // worked on the bench had a fresh bring-up in front of it, so start each round from
     // one (2026-09-23, CH32L103: without this, halt landed on every other attempt).
@@ -517,7 +517,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   release(ctx);
   bool halted = false;
   const uint32_t started = micros();
-  while (!halted && micros() - started < 200000u) {
+  while (!halted && micros() - started < 200000u && !phy_.pastDeadline()) {
     phy_.write(kDmControl, 0x80000001);
     uint32_t status = 0;
     if (phy_.read(kDmStatus, status)) halted = dmHalted(status);
