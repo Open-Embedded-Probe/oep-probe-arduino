@@ -26,6 +26,7 @@ dedic_gpio_bundle_handle_t gOut = nullptr;
 dedic_gpio_bundle_handle_t gIn = nullptr;
 int gDio = -1;
 uint32_t gHalfCycles = 0;
+uint32_t gDioSig = 0, gClkSig = 0;   // the pins' output signals once in the bundle (ioReclaim)
 
 struct Io {
   inline void spin() const {
@@ -72,6 +73,10 @@ bool ioBegin(int dio, int clk) {
     gpio_set_drive_capability(gpio_num_t(dio), GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability(gpio_num_t(clk), GPIO_DRIVE_CAP_0);
     gIo.bothHigh();
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+    gDioSig = GPIO.func_out_sel_cfg[dio].out_sel;
+    gClkSig = GPIO.func_out_sel_cfg[clk].out_sel;
+#endif
   }
   return true;
 }
@@ -87,6 +92,19 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {
     gpio_ll_pullup_dis(&GPIO, old_dio);
   }
   return ioBegin(dio, clk);
+}
+
+// The pins back in the bundles if something else routed them away since (ESP32-P4: oep.wire.swio takes any channel,
+// the RVSWD pair's too, into its own bundle and leaves it a plain GPIO; a pair unchanged since would otherwise stay
+// cut off from its bundle). Nothing done while they are still routed here.
+void ioReclaim(int dio, int clk) {
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+  if (!gOut || dio < 0) return;
+  if (GPIO.func_out_sel_cfg[dio].out_sel == gDioSig && GPIO.func_out_sel_cfg[clk].out_sel == gClkSig) return;
+  ioMove(dio, clk, dio, clk);
+#else
+  (void)dio; (void)clk;
+#endif
 }
 
 void ioDrive(int dio, int clk) { gpio_ll_output_enable(&GPIO, clk); gpio_ll_output_enable(&GPIO, dio); }
@@ -123,6 +141,7 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {   // the old pins back
   }
   return gIo.setup(dio, clk);
 }
+void ioReclaim(int, int) {}
 void ioDrive(int, int) { gIo.driveBoth(); }
 void ioRelease(int, int) { gIo.releaseBoth(); }
 uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
@@ -384,6 +403,7 @@ bool RvswdPhy::retune() {
 bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
+  ioReclaim(swdio_, swclk_);
   const uint32_t floor = floorNs();
   const uint32_t slowest = kHalfNs[kCount - 1] > floor ? kHalfNs[kCount - 1] : floor;
   // Two passes. A cold debug module can need more waking than one pass's eight attempts (2026-09-23: the first pass

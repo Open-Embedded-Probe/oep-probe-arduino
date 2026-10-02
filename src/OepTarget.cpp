@@ -540,7 +540,7 @@ size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
 uint8_t TargetRiscvDm::failure(uint8_t otherwise) {
   uint32_t status = 0;
   for (int attempt = 0; attempt < 3; ++attempt) {
-    if (port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return otherwise;
+    if (port_->dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return otherwise;
     delay(1);
   }
   line_lost_ = true;
@@ -549,16 +549,19 @@ uint8_t TargetRiscvDm::failure(uint8_t otherwise) {
 
 Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 2) return rejected(kRejectMalformed);
-  if (!port_.connected || getU16(payload) != port_.number)   // the live connection only
-    return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
+  // The wire whose live connection the request names (one riscv-dm serves every wire's connections).
+  port_ = nullptr;
+  for (DebugPort *port : ports_)
+    if (port && port->connected && getU16(payload) == port->number) port_ = port;
+  if (!port_) return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
   line_lost_ = false;
   const Result r = dispatch(op, payload + 2, length - 2, out, capacity);
-  if (line_lost_) releaseConnection(port_, 0xff, true, true);   // the answer says line; the connection goes with it
+  if (line_lost_) releaseConnection(*port_, 0xff, true, true);   // the answer says line; the connection goes with it
   return r;
 }
 
 Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
-  Ch32Dm &dm = port_.dm;
+  Ch32Dm &dm = port_->dm;
   Tail tail;
   switch (op) {
     case kOpDmi: return dmi(p, n, out, capacity);
@@ -607,8 +610,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
         ok = p[0] == kResetRunConfirm ? (r.flags & reg::target_riscv_dm::kResetFlagsVerified) != 0
                                       : (r.flags & reg::target_riscv_dm::kResetFlagsReached) != 0;
       }
-      ++port_.resets;   // the console marks it (detail 1 ndmreset); last-reset binds follow it
-      port_.reset_detail = reg::common::kMarkDetailResetNdmreset;
+      ++port_->resets;   // the console marks it (detail 1 ndmreset); last-reset binds follow it
+      port_->reset_detail = reg::common::kMarkDetailResetNdmreset;
       out[0] = ok ? kStatusOk : failure(kStatusTimeout);
       return tail.finish(outcome(out[0], 0, 7), out, capacity);
     }
@@ -777,7 +780,7 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
   if (refused(parsed)) return parsed;
   if (5 + 4 * values > capacity) return rejected(kRejectMalformed);   // the answer would not fit a frame
   if (wait_us > static_cast<uint64_t>(kMaxOpMs) * 1000u) return unsupportedValue(out, capacity);
-  Ch32Dm &dm = port_.dm;
+  Ch32Dm &dm = port_->dm;
   size_t written = 5;
   uint16_t done = 0, nvals = 0;
   uint8_t status = kStatusOk;
