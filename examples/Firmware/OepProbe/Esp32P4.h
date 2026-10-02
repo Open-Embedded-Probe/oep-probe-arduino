@@ -17,7 +17,7 @@
 // with the merged image.
 //
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
-// a slot's console, a fixture UART). The HS device is VID:PID 303a:0002 until the OEP PID is granted (PID-USE.md),
+// a slot's console, a fixture UART). The HS device is VID:PID 303a:0002 (the board's default, a temporary USB ID; PID-USE.md),
 // iProduct "OEP probe (ESP32-P4)", serial = the unit id (the MAC, lowercase hex; one usbipd bind lasts across reflashes).
 // How a host tells the ports apart (core §3.3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
@@ -53,7 +53,7 @@
 #include <OepTarget.h>
 #include "UsbStreams.h"
 
-static constexpr uint16_t kUsbVid = 0x303a, kUsbPid = 0x0002;   // until the OEP PID (pid.codes) is granted
+static constexpr uint16_t kUsbVid = 0x303a, kUsbPid = 0x0002;   // the board's default: a temporary USB ID, not for distribution
 static constexpr uint16_t kUnset = 0xfffe;                        // no pair chosen yet
 
 // The vendor bulk function with OEP's subclass / protocol in its interface descriptor (core §3.3).

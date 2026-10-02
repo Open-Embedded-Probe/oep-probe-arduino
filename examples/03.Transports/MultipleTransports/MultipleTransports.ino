@@ -67,7 +67,7 @@ void setup() {
 
   oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig usb;
-  usb.vid = 0x303a;   // until the OEP PID is granted (PID-USE.md)
+  usb.vid = 0x303a;   // the board's default: a temporary USB ID, not for distribution (PID-USE.md)
   usb.pid = 0x0002;
   usb.manufacturer = "Open Embedded Probe";
   usb.product = "OEP multiple transports";   // iProduct starting "OEP": discovery

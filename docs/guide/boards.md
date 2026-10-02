@@ -56,7 +56,8 @@ works (the GPIO matrix).
 | ESP32-P4 (HS port) | `303a:0002` | `OEP probe (ESP32-P4)` | the MAC + `-hs` |
 | classic ESP32 | the bridge's | - (a UART: a host opens it and asks) | the bridge's |
 
-When pid.codes grants the OEP PID `1209:4F45` the firmware moves to it ([PID-USE.md](../../PID-USE.md)).
+The firmware currently runs with a temporary USB ID (the board's default VID:PID), which may not be used for distribution. When the project obtains a PID of its own, the firmware will switch to it. Hosts find probes by iProduct `OEP` and
+describe ([PID-USE.md](../../PID-USE.md)).
 
 ## Building for another board
 

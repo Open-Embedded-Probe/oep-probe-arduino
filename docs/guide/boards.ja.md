@@ -55,7 +55,8 @@ RP2 の UART の fixture は UART0 で、RX / TX は GP1/0、GP13/12、GP17/16�
 | ESP32-P4（HS の口） | `303a:0002` | `OEP probe (ESP32-P4)` | MAC + `-hs` |
 | classic ESP32 | bridge のもの | -（UART なので、host が開いて聞く） | bridge のもの |
 
-pid.codes が OEP の PID `1209:4F45` を割り当てたら、firmware はそれに移ります（[PID-USE.ja.md](../../PID-USE.ja.md)）。
+今は仮の USB の ID（ボードの既定の VID:PID）で動かしていて、配布には使えません。専用の PID を取得できたら、それに切り替える予定です。
+host は iProduct の `OEP` と describe で probe を見つけます（[PID-USE.ja.md](../../PID-USE.ja.md)）。
 
 ## ほかのボード向けのビルド
 

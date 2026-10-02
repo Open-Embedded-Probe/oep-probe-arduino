@@ -130,7 +130,8 @@ class Blink final : public oep::Interface {
 ## 9. USB の名乗り
 
 USB の probe は、`OEP` で始まる iProduct（host の発見の手がかり）、個体ごとに違う serial number、VID:PID を名乗ります。
-pid.codes が OEP の PID（`1209:4F45`、[PID-USE.ja.md](../../PID-USE.ja.md)）を割り当てるまでは `303a:0002` / ボードの既定です。
+VID:PID はボードの既定（ESP32-P4 では `303a:0002`）です。これは仮の USB の ID で、配布には使えません。専用の PID を取得できたら、
+それに切り替える予定です（[PID-USE.ja.md](../../PID-USE.ja.md)）。
 vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /
 usage 0x45 を持ちます（core §3.3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
 `endpoint.setDiscoverable(true)` で describe にもそう書きます。
