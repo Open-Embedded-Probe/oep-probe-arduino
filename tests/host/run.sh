@@ -3,7 +3,8 @@
 # Copyright (c) 2026 Open Embedded Probe
 # Host tests of the portable core (serial-port framing, the endpoint's serial-port rules, the binds) and of the
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, the I2C one with a fake controller), of the pin table's idle
-# states and the gpio fixture's take (with its output drive strength): g++ and a shim.
+# states and the gpio fixture's take (with its output drive strength), of the label convention's line names: g++ and a
+# shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 src=$here/../../src
@@ -25,3 +26,6 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_DRIVE -I"$h
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-idle-nodrive" "$here/test_idle.cpp" \
   "$src/OepFixture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out-idle-nodrive"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-lines" "$here/test_lines.cpp" \
+  "$src/OepConfig.cpp"
+"$out-lines"

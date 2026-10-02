@@ -18,7 +18,11 @@
 //                                                        3 output low, 4 output high while free; 3 / 4 at the strength
 //                                                        given (fixture §1.1) where gpio declares drive_levels
 //   0x04 slot  slot(u8) wire_fn(u16) swdio(u16) swclk(u16) attach(u8) retry_ms(u32) max_speed_hz(u32) idle_clock(u8)
-//              mechanism(u8: 0xFF none) name_len(u8) name lock_len(u8) [lock_scheme(u8) mask(n) value(n)]   key slot
+//              mechanism(u8: 0xFF none) name_len(u8) name lock_len(u8) [lock_scheme(u8) mask(n) value(n)]
+//              [boot_reset(u8)]                                                                       key slot
+//              boot_reset 1 (at-boot slots): an automatic attach the wire did not answer (status line) is done once
+//              more with the slot's nrst line (§1.3) pulled for slot_retry_reset_hold_ms first - once a boot, and only
+//              while no session has taken the lock since boot (§3.1)
 //   0x05 bind  port(u8) mode(u8) selected(u8) n(u8) n x (len(u8) kind(u8) id(u16))                       key port
 //   0x06 uart  fn(u16) baud(u32) format(u8)              key fn: a fixture UART's settings, in force when its plan has pins
 //   0x07 disable channel(u16)                            key channel: never used, driven or configured (not on this
@@ -60,11 +64,11 @@ class ProbeConfig final : public Interface {
 
   ProbeConfig(Endpoint &endpoint, Binds &binds) : endpoint_(endpoint), binds_(binds) {
     memset(idle_, PinTable::kIdleUnset, sizeof idle_);
+    memset(idle_drive_, PinTable::kDriveDefault, sizeof idle_drive_);
     binds_.setNamer(&ProbeConfig::nameOf, this);
   }
   // A place a slot may name: this wire and its console. Add after the endpoint has them.
   bool addPlace(WireRvswd &wire, TargetConsoleStream &console);
-    memset(idle_drive_, PinTable::kDriveDefault, sizeof idle_drive_);
   // A fixture UART a bind may carry and the uart item sets (after the endpoint has it).
   bool addUart(FixtureUart &uart);
   // The pins whose idle state the idle item sets and the disable item takes away (without it, both are refused).
@@ -81,6 +85,9 @@ class ProbeConfig final : public Interface {
   uint64_t savedDisabled() const { return disabledIn(saved_, saved_length_); }
   void applySaved();
   void poll();   // from loop(): the slots' automatic attach, retries, liveness, the bound consoles
+  // A line named by the settings' labels (§1.3: nrst, power_hi, power_lo) for the slot `slot` (a slot number; 0xff:
+  // the probe's target, settings without slots): its channel, 0xFFFF when there is none.
+  uint16_t lineOf(uint8_t slot, const char *line) const;
 
   const char *name() const override { return reg::probe_config::kName; }
   uint16_t instance() const override { return 0; }
@@ -99,6 +106,7 @@ class ProbeConfig final : public Interface {
     uint16_t swdio = 0, swclk = 0;   // the slot's pair on its place's wire (fixed, or one the host chose)
     uint32_t max_hz = 0;           // the line's settings for the probe's own attach (oep-if-debug §3): the target's
     bool idle_low = false;
+    bool boot_reset = false;       // the retry with reset (§3.1)
     char name[kMaxName + 1] = {};
     uint8_t mask[kMaxLock] = {}, value[kMaxLock] = {};
   };
@@ -110,6 +118,13 @@ class ProbeConfig final : public Interface {
     bool mismatch = false, mismatch_has_tid = false;   // the last automatic attach found the lock not matching
     uint32_t mismatch_tid = 0;
   };
+  // The retry with reset of a boot_reset slot (§3.1): at most once a boot per slot, whatever the settings do since.
+  struct BootReset {
+    bool done = false;
+    uint64_t at_ns = kNeverNs;     // slot_state's reset_at_ns: when the reset line was pulled
+  };
+  BootReset boot_resets_[kMaxSlots];
+  bool retryWithReset(uint8_t slot, uint32_t &dmstatus);
   struct Label { bool set = false; uint16_t channel = 0; };
   struct UartItem { bool set = false; uint32_t baud = 0; uint8_t format = 0; };
   // Everything the items say, derived from their canonical bytes and checked as a whole (derive).
@@ -117,6 +132,7 @@ class ProbeConfig final : public Interface {
     RoleAssignment roles[Endpoint::kMaxRoles];
     size_t role_count = 0;
     uint8_t idle[PinTable::kChannels];
+    uint8_t idle_drive[PinTable::kChannels];   // the idle's strength as a level (kDriveDefault: none, or not applied)
     Slot slots[kMaxSlots];
     Binds::Spec binds[Binds::kMaxPorts];
     UartItem uarts[kMaxUarts];
@@ -132,12 +148,12 @@ class ProbeConfig final : public Interface {
   size_t uart_count_ = 0;
   Slot slots_[kMaxSlots];          // several per place (each its own pair), at most one at boot per wire
   SlotRun runs_[kMaxSlots];
-    uint8_t idle_drive[PinTable::kChannels];   // the idle's strength as a level (kDriveDefault: none, or not applied)
   bool onPair(const Slot &s) const {   // the place's link is on this slot's pair now
     const DebugPort &p = *places_[s.place].port;
     return p.swdio == s.swdio && p.swclk == s.swclk;
   }
   uint8_t idle_[PinTable::kChannels];             // the idle items (kIdleUnset: none)
+  uint8_t idle_drive_[PinTable::kChannels];       // their strengths (kDriveDefault: none)
   // the items as the host sent them, canonical order (tag, then key): what get pages, the hash covers and save keeps
   uint8_t items_[kMaxItems];
   size_t items_length_ = 0;
@@ -153,11 +169,11 @@ class ProbeConfig final : public Interface {
   // The item store: one item's key (the bytes after the tag that identify it) and the canonical order.
   static size_t keyLength(uint8_t tag);
   static uint64_t keyValue(uint8_t tag, const uint8_t *value, size_t length);
-  uint8_t idle_drive_[PinTable::kChannels];       // their strengths (kDriveDefault: none)
   static bool itemBefore(uint8_t tag_a, const uint8_t *a, size_t alen, uint8_t tag_b, const uint8_t *b, size_t blen);
   static bool insertItem(uint8_t *store, size_t &length, size_t capacity, uint8_t tag, const uint8_t *value, size_t vlen);
   static void removeItems(uint8_t *store, size_t &length, uint8_t tag, const uint8_t *key, size_t key_length);
   uint32_t hash() const { return crc32Of(items_, items_length_); }
+  DriveLevels driveLevels() const;
   static uint64_t disabledIn(const uint8_t *items, size_t length);
   void setDisabled(uint64_t mask);   // the PinTable's and the endpoint's
   void applySavedItems();
@@ -173,7 +189,6 @@ class ProbeConfig final : public Interface {
   Result unset(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result state(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   size_t slotState(uint8_t i, uint8_t *out) const;
-  DriveLevels driveLevels() const;
   bool sourceFor(const Slot *slots, uint8_t kind, uint16_t id, Binds::Source &out) const;
   bool bound(uint8_t slot) const;
   // 1 the lock matches (or none), 0 it does not, -1 there is a lock and no target_id to check
@@ -188,3 +203,13 @@ uint32_t crc32Ieee(const uint8_t *data, size_t length);
 }  // namespace oep
 
 #endif
+
+namespace oep {
+
+// The label convention (oep-if-probe-config §1.3) over a store of items (TLVs as probe.config keeps them): the channel
+// of line `line` (nrst, power_hi, power_lo) for the slot named `slot` - the label whose text is "slot.line", else, only
+// when the items hold at most one slot item, the one whose text is "line"; slot nullptr (settings without slots): the
+// label "line". Texts compared ignoring ASCII case; two or more channels at the step that matches: none. 0xFFFF: none.
+uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line);
+
+}  // namespace oep
