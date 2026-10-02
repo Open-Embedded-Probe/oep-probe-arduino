@@ -15,7 +15,10 @@
 
 #include <deque>
 
-inline void gpio_disable_pulls(int) {}
+// the pads' pulls, per pin: 1 up, 0 none
+inline int g_swd_pull[64] = {};
+inline void gpio_disable_pulls(int pin) { if (pin >= 0 && pin < 64) g_swd_pull[pin] = 0; }
+inline void gpio_pull_up(int pin) { if (pin >= 0 && pin < 64) g_swd_pull[pin] = 1; }
 
 struct FakeSwdTarget {
   bool absent = false;
@@ -26,6 +29,7 @@ struct FakeSwdTarget {
   uint32_t ctrl = 0, select = 0, rdbuff = 0;
   uint32_t ap[4] = {0x11, 0x22, 0x33, 0x44};
   uint32_t ap_reads = 0, ap_writes = 0, requests = 0, line_resets = 0;
+  uint32_t idle_run = 0;           // host-driven 0 cells since the last 1 (the idle cycles after a packet)
   // state
   bool locked = true, selected = true;
   int ones = 0;
@@ -42,6 +46,7 @@ struct FakeSwdTarget {
   void pushBits(uint32_t v, int n) { for (int i = 0; i < n; ++i) out.push_back((v >> i) & 1); }
 
   void hostBit(bool v) {
+    idle_run = v ? 0 : idle_run + 1;
     if (v) { if (++ones >= 50) { if (ones == 50) { ++line_resets; locked = true; if (multidrop) selected = false; } phase = kIdle; out.clear(); } }
     else ones = 0;
     switch (phase) {
@@ -125,8 +130,9 @@ struct BitBang {
   }
   void hostDrives(bool yes) const { host_drives = yes; }
   bool setup(int, int) { return true; }
-  void driveBoth() const {}
-  void releaseBoth() const {}
+  mutable bool driven = false;     // both lines' output enables (driveBoth / releaseBoth)
+  void driveBoth() const { driven = true; }
+  void releaseBoth() const { driven = false; }
   uint32_t setHalfNs(uint32_t ns) { half_ns = ns; loops = ns; return ns; }
 
  private:

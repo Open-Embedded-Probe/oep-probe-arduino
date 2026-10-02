@@ -45,6 +45,9 @@ class SwioPhy final : public DmiPhy {
 
  private:
   bool ready_ = false, attached_ = false;
+  // oep-if-debug §2 / §3.2: from a read with no answer until one answers, the line rests released to its pull-up
+  // between frames and is never driven high there (each frame still drives it high and low)
+  bool rest_free_ = false;
   uint32_t retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   bool readRaw(uint8_t address, uint32_t &value);   // IRAM_ATTR on the definition: the attribute is ESP32-only
   bool readRetried(uint8_t address, uint32_t &value);   // up to 4 tries, within the request's wire_retry_ms

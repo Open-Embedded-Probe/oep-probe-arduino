@@ -116,8 +116,16 @@ void ioReclaim(int dio, int clk) {
 
 void ioDrive(int dio, int clk) { gpio_ll_output_enable(&GPIO, clk); gpio_ll_output_enable(&GPIO, dio); }
 void ioRelease(int dio, int clk) { gpio_ll_output_disable(&GPIO, dio); gpio_ll_output_disable(&GPIO, clk); }
+// SWCLK's pull: none (a link that answers drives it), or toward its rest level while the wire does not answer
+// (ioRestFree). SWDIO keeps the pull-up of ioBegin / ioReclaim either way (its rest level is high).
+void ioClkPull(int clk, int dir) {
+  if (clk < 0) return;
+  if (dir > 0) { gpio_ll_pulldown_dis(&GPIO, clk); gpio_ll_pullup_en(&GPIO, clk); }
+  else if (dir < 0) { gpio_ll_pullup_dis(&GPIO, clk); gpio_ll_pulldown_en(&GPIO, clk); }
+  else { gpio_ll_pullup_dis(&GPIO, clk); gpio_ll_pulldown_dis(&GPIO, clk); }
+}
 // The free state (oep-core §8): released, and SWDIO without the pull-up ioBegin gave it (ioReclaim puts it back).
-void ioFree(int dio, int clk) { ioRelease(dio, clk); gpio_ll_pullup_dis(&GPIO, dio); }
+void ioFree(int dio, int clk) { ioRelease(dio, clk); gpio_ll_pullup_dis(&GPIO, dio); ioClkPull(clk, 0); }
 uint32_t ioSetHalf(uint32_t half_ns) {
   gHalfCycles = (uint32_t)((uint64_t)half_ns * getCpuFrequencyMhz() / 1000);
   return gHalfCycles;
@@ -160,8 +168,10 @@ void ioReclaim(int dio, int clk) {
 }
 void ioDrive(int, int) { gIo.driveBoth(); }
 void ioRelease(int, int) { gIo.releaseBoth(); }
+// SWCLK's pull: none, or toward its rest level while the wire does not answer (ioRestFree); SWDIO keeps its pull-up.
+void ioClkPull(int clk, int dir) { if (clk >= 0) gpio_set_pulls(clk, dir > 0, dir < 0); }
 // The free state (oep-core §8): released, and SWDIO without the pull-up setup gave it (ioReclaim puts it back).
-void ioFree(int dio, int) { gIo.releaseBoth(); gpio_disable_pulls(dio); }
+void ioFree(int dio, int clk) { gIo.releaseBoth(); gpio_disable_pulls(dio); ioClkPull(clk, 0); }
 uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
 
 }  // namespace
@@ -184,7 +194,8 @@ bool ioMove(int, int, int dio, int clk) { return gIo.begin(dio, clk); }
 void ioReclaim(int dio, int) { if (dio >= 0) gIo.pullUp(true); }
 void ioDrive(int, int) { gIo.driveBoth(true); }
 void ioRelease(int, int) { gIo.driveBoth(false); }
-void ioFree(int, int) { gIo.driveBoth(false); gIo.pullUp(false); }
+void ioClkPull(int, int dir) { gIo.clkPull(dir); }
+void ioFree(int, int) { gIo.driveBoth(false); gIo.pullUp(false); gIo.clkPull(0); }
 uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
 
 }  // namespace
@@ -239,23 +250,49 @@ void RvswdPhy::setHalf(uint32_t half_ns) {
 }
 
 void RvswdPhy::release() {
+  rest_free_ = false;
   if (swdio_ < 0) return;
   ioRelease(swdio_, swclk_);
+  ioClkPull(swclk_, 0);
   attached_ = false;
 }
 
 void RvswdPhy::free() {
+  rest_free_ = false;
   if (swdio_ < 0) { attached_ = false; return; }
   ioFree(swdio_, swclk_);
   attached_ = false;
 }
 
 void RvswdPhy::park() {
+  rest_free_ = false;
   if (swdio_ < 0) { attached_ = false; return; }
   if (!park_low_) { release(); return; }
+  ioClkPull(swclk_, 0);
   ioDrive(swdio_, swclk_);
   gIo.clkLowDio(true);
   attached_ = false;
+}
+
+// The lines while the wire does not answer (oep-if-debug §2, §3.1): on a connection (not inside attach's or retune's
+// speed search), from an exchange that got no answer until one answers, the lines rest free between exchanges -
+// released, SWDIO on its pull-up, SWCLK pulled toward its rest level (up with idle_clock high, down with idle_clock
+// low, never up then) - and are driven only during an exchange (a frame, the wake pattern with the levels before it).
+// An answer brings the connection's rest state back at once: driven, SWCLK's pull off.
+void RvswdPhy::exchangeBegins() {
+  if (rest_free_ && restRule()) ioDrive(swdio_, swclk_);
+}
+void RvswdPhy::exchangeEnds(DmiPhy::Outcome outcome) {
+  if (!restRule()) return;
+  if (outcome == DmiPhy::kAnswered) {
+    if (rest_free_) { rest_free_ = false; ioClkPull(swclk_, 0); }
+    return;
+  }
+  if (outcome == DmiPhy::kNoAnswer || rest_free_) {
+    rest_free_ = true;
+    ioRelease(swdio_, swclk_);
+    ioClkPull(swclk_, park_low_ ? -1 : 1);
+  }
 }
 
 
@@ -272,6 +309,7 @@ void RvswdPhy::configureBus(bool with_wake) {
   if (with_wake) {
     rvswd::wake(gIo);
     delayMicroseconds(20);
+    exchangeEnds(DmiPhy::kNeither);   // the wake pattern is one exchange (§2): the lines free after it while failing
   }
   // DMSHDWCFGR then DMCFGR with the WCH key and "allow output from slave". minichlink writes
   // this pair on every bring-up with the note that a part coming out of cold boot will not
@@ -336,6 +374,7 @@ void RvswdPhy::reviveIfIdle() {
 
 bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
   bool ok;
+  exchangeBegins();
   {
     Critical lock;
     ok = rvswd::readWord(gIo, address, value);
@@ -343,6 +382,7 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
   }
   ++transactions_;
   last_activity_us_ = micros();
+  exchangeEnds(DmiPhy::outcomeOf(address, ok, value));
   return ok;
 }
 
@@ -365,6 +405,7 @@ bool RvswdPhy::readWire(uint8_t address, uint32_t &value) {
 }
 
 void RvswdPhy::writeRaw(uint8_t address, uint32_t data) {
+  exchangeBegins();
   {
     Critical lock;
     rvswd::writeWord(gIo, address, data);
@@ -372,6 +413,7 @@ void RvswdPhy::writeRaw(uint8_t address, uint32_t data) {
   }
   ++transactions_;
   last_activity_us_ = micros();
+  exchangeEnds(DmiPhy::kNeither);   // a write has no answer
 }
 
 void RvswdPhy::write(uint8_t address, uint32_t data) {
@@ -544,6 +586,16 @@ void RvswdPhy::useSafeSpeed() {
 // failure it steps back to the last good one and proves that again rather than trusting it.
 bool RvswdPhy::retune() {
   if (!attached_) return false;
+  // a speed search, as attach's: the rest rule of §2 is not applied inside it; afterwards the lines are as the
+  // connection's state says (driven after the search found a period, free while the wire does not answer)
+  struct Search {
+    RvswdPhy &phy;
+    explicit Search(RvswdPhy &p) : phy(p) { phy.searching_ = true; }
+    ~Search() {
+      phy.searching_ = false;
+      if (phy.rest_free_) { ioRelease(phy.swdio_, phy.swclk_); ioClkPull(phy.swclk_, phy.park_low_ ? -1 : 1); }
+    }
+  } search(*this);
   const uint32_t floor = floorNs(), slowest = slowestNs();
   size_t good = kCount;   // index of the fastest period that passed
   resyncAt(slowest);
@@ -565,7 +617,11 @@ bool RvswdPhy::retune() {
     const uint8_t retries = half == slowest ? kSlowestRetries : 0;
     resyncAt(half);
     uint32_t first = 0;
-    if (readsStable(first, retries) && writesLand(retries)) return true;
+    if (readsStable(first, retries) && writesLand(retries)) {   // an answer: the connection's rest state (§2)
+      rest_free_ = false;
+      ioClkPull(swclk_, 0);
+      return true;
+    }
     if (good + 1 < kCount) ++good;   // slower
   }
   useSafeSpeed();
@@ -582,7 +638,9 @@ bool RvswdPhy::retune() {
 bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
+  rest_free_ = false;
   ioReclaim(swdio_, swclk_);
+  ioClkPull(swclk_, 0);
   const uint32_t floor = floorNs();
   const uint32_t slowest = slowestNs();
   // Two passes. A cold debug module can need more waking than one pass's eight attempts (2026-09-23: the first pass

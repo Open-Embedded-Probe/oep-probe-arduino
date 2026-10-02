@@ -10,6 +10,9 @@
 // - Wire retries (oep-if-debug §2, §5): a transfer that got nothing back is tried again after the line reset (and the
 //   dormant wake, TARGETSEL, the DPIDR read) within wire_retry_ms; an AP read with a bad parity is not repeated. attach
 //   tries the wake again within it, and search_retries counts the failed wakes.
+// - Idle cycles and the lines while the wire does not answer (oep-if-debug §2, §5): 8 idle cycles after a read whose
+//   parity failed and before a detach lets the lines go; from a transfer with no answer until one answers, the lines
+//   are free between exchanges (released, no pulls) and the rest state comes back with the answer.
 #include <stdio.h>
 
 #include <vector>
@@ -199,6 +202,45 @@ int main() {
     g_swd.absent = false;
     r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
+  }
+
+  // ---- the idle cycles (oep-if-debug §5): after a read whose data parity failed (0.0.28: none), and before a detach
+  //      lets the lines go ----
+  {
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && fixed.connected);
+    Bytes ap = u16(fixed.number);
+    ap.insert(ap.end(), {1, 0, 0x03});   // an AP read: a bad parity is not retried
+    g_swd.parity_reads = 1;
+    r = call(adi, TargetArmAdi::kOpTransfer, ap, out);
+    CHECK(out.size() >= 3 && out[2] == kStatusLine && g_swd.idle_run >= 8);
+    Bytes t = u16(fixed.number);
+    t.insert(t.end(), {1, 0, 0x06});
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);   // answers: the rest state again
+    CHECK(ok(r) && fixed.io.driven && !fixed.rest_free);
+    const uint32_t before = g_swd.idle_run;
+    r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
+    CHECK(ok(r) && g_swd.idle_run >= before + 8 && !fixed.io.driven);   // 0.0.28: released at once
+  }
+
+  // ---- the lines while the wire does not answer (oep-if-debug §2, §5; oep-spec 975d88c, 8d91db0): from a transfer
+  //      with no answer until one answers, released between exchanges, SWDIO without its pull-up; an answer restores
+  //      the rest state (0.0.28: driven throughout) ----
+  {
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && fixed.connected && fixed.io.driven);
+    Bytes t = u16(fixed.number);
+    t.insert(t.end(), {1, 0, 0x06});
+    g_swd.absent = true;
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(out.size() >= 3 && out[2] == kStatusLine && fixed.connected);
+    CHECK(!fixed.io.driven && fixed.rest_free && g_swd_pull[fixed.swdio] == 0 && g_swd_pull[fixed.swclk] == 0);
+    CHECK(g_swd.idle_run >= 8);   // the last exchange's idle cycles before the release
+    g_swd.absent = false;
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(ok(r) && fixed.io.driven && !fixed.rest_free);
+    r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
+    CHECK(ok(r));
   }
 
   // ---- attach: the wake tried again within wire_retry_ms; search_retries counts the failed wakes ----

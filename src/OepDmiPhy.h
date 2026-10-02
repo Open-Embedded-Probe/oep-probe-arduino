@@ -50,12 +50,20 @@ class DmiPhy {
   // register it may be the register's value, so it leaves the clock as it is. A read that got nothing back starts it.
   bool read(uint8_t address, uint32_t &value) {
     const bool ok = readWire(address, value);
-    if (!ok) loss_.silent();
-    else if (value != 0 && value != 0xffffffffu) loss_.answered();
-    else if (address == kDmStatusAddress) loss_.silent();
+    const Outcome o = outcomeOf(address, ok, value);
+    if (o == kNoAnswer) loss_.silent();
+    else if (o == kAnswered) loss_.answered();
     return ok;
   }
   static constexpr uint8_t kDmStatusAddress = 0x11;
+  // One read as an exchange of oep-if-debug §2: answered (a good exchange), no answer (nothing came back, or a DMSTATUS
+  // of all zeros / all ones), or neither (another register's all zeros / all ones: it may be the register's value).
+  enum Outcome : uint8_t { kNoAnswer, kAnswered, kNeither };
+  static Outcome outcomeOf(uint8_t address, bool ok, uint32_t value) {
+    if (!ok) return kNoAnswer;
+    if (value != 0 && value != 0xffffffffu) return kAnswered;
+    return address == kDmStatusAddress ? kNoAnswer : kNeither;
+  }
   WireLossClock &loss() { return loss_; }
   virtual void write(uint8_t address, uint32_t value) = 0;
   // Re-run the bus bring-up without touching any debug-module register. A CH32 drops the

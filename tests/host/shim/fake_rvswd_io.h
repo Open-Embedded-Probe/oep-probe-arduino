@@ -18,6 +18,7 @@ struct FakeRvswdIo {
   // the backend's pad setup
   bool begin(int dio, int clk) const;
   void pullUp(bool on) const;
+  void clkPull(int dir) const;   // SWCLK's pull: 1 up, -1 down, 0 none
   void driveBoth(bool on) const;
   uint32_t setHalfNs(uint32_t half_ns) const;
 };

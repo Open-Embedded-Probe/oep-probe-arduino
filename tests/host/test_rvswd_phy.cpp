@@ -13,6 +13,8 @@
 // - begin() leaves the pins free: not driven, no pull (oep-core §8).
 // - A request's wire retries - the revive's re-sync and wakes, the read's retries - take at most wire_retry_ms
 //   (oep-if-debug §2), also at a slow max_speed where one wake takes tens of ms.
+// - The lines while the wire does not answer (oep-if-debug §2): free between frames from a read with no answer until
+//   one answers (SWDIO's pull-up, SWCLK pulled toward its idle_clock level), driven only for a frame.
 #include <stdio.h>
 
 #include <set>
@@ -39,6 +41,7 @@ struct Write { uint8_t address; uint32_t value; uint32_t half_ns; };
 struct Target {
   // pads
   bool begun = false, driven = false, pulled = false;
+  int clk_pull = 0;   // SWCLK's pull: 1 up, -1 down
   uint32_t half_ns = 0;
   uint32_t cell_overhead_ps = 220000;   // per half period, on top of it (RP2350: about 24 us a frame at 500 ns)
   uint64_t ps = 0;                      // time not yet handed to advanceMicros
@@ -145,6 +148,7 @@ bool FakeRvswdIo::dioRead() const { return t.host_drives ? t.dio : t.targetBit()
 void FakeRvswdIo::hostDrives(bool yes) const { t.host_drives = yes; }
 bool FakeRvswdIo::begin(int, int) const { t.begun = true; t.pulled = true; t.driven = false; return true; }   // the pull-up a setup gives
 void FakeRvswdIo::pullUp(bool on) const { t.pulled = on; }
+void FakeRvswdIo::clkPull(int dir) const { t.clk_pull = dir; }
 void FakeRvswdIo::driveBoth(bool on) const { t.driven = on; }
 uint32_t FakeRvswdIo::setHalfNs(uint32_t half_ns) const { t.half_ns = half_ns; return half_ns; }
 
@@ -329,6 +333,33 @@ int main() {
     CHECK(phy.bringUp(status));
     for (const Write &w : t.writes) CHECK(w.address != 0x10);
   }
+
+  // ---- the lines while the wire does not answer (oep-if-debug §2, §3.1; oep-spec 975d88c): from a read with no answer
+  //      until one answers, released between frames - SWDIO on its pull-up, SWCLK pulled toward its rest level (down
+  //      with idle_clock low, never up) - and driven only for a frame; an answer restores the rest state (0.0.28: the
+  //      lines stayed driven) ----
+  for (bool low : {false, true}) {
+    t.reset(); t.begun = true;
+    phy.setMaxHz(1000000);
+    phy.setIdleClockLow(low);
+    CHECK(phy.attach());
+    CHECK(t.driven && t.clk_pull == 0 && !phy.restingFree());
+    t.min_read_half = 100000;   // nothing answers
+    phy.beginRequest();
+    uint32_t v = 0;
+    CHECK(!phy.read(0x11, v));
+    CHECK(!t.driven && t.pulled && t.clk_pull == (low ? -1 : 1) && phy.restingFree());
+    const size_t writes = t.writes.size();
+    phy.write(0x04, 0x1234);    // a frame while failing: driven for it (it lands), free again after
+    CHECK(t.writes.size() == writes + 1 && !t.driven && t.clk_pull == (low ? -1 : 1));
+    t.min_read_half = 0;        // the target answers again: the rest state is back after that read
+    phy.beginRequest();
+    CHECK(phy.read(0x11, v));
+    CHECK(t.driven && t.clk_pull == 0 && !phy.restingFree());
+    phy.free();
+    CHECK(!t.driven && t.clk_pull == 0);
+  }
+  phy.setIdleClockLow(false);
 
   printf("rvswd-phy: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

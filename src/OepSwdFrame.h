@@ -95,6 +95,7 @@ inline uint8_t transfer(Io &io, bool ap, bool read_op, uint8_t a2_3, uint32_t &d
     io.hostDrives(true);
     if (par != parity32(value)) {
       if (bad_parity) *bad_parity = true;
+      idle(io, 8);                 // the idle cycles end every packet, this one too (oep-if-debug §5)
       return kNoReply;
     }
     data = value;

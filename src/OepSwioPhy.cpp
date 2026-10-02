@@ -53,11 +53,11 @@ inline int IRAM_ATTR readBit(uint32_t m) {
       return sampled;
     }
   }
-  outputOn(m);
-  return 2;
+  return 2;   // the line never came back: left released to its pull-up, not driven high against it (§3.2)
 }
 
-void IRAM_ATTR writeRaw(uint8_t address, uint32_t value) {
+// free_after: the wire does not answer (oep-if-debug §2, §3.2) - the line released to its pull-up once the frame is out.
+void IRAM_ATTR writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
   const uint32_t m = gMask;
   high(m);
   outputOn(m);
@@ -66,6 +66,7 @@ void IRAM_ATTR writeRaw(uint8_t address, uint32_t value) {
   for (uint8_t mask = 0x40; mask; mask >>= 1) (address & mask) ? sendOne(m) : sendZero(m);
   sendOne(m);
   for (uint32_t mask = 0x80000000u; mask; mask >>= 1) (value & mask) ? sendOne(m) : sendZero(m);
+  if (free_after) outputOff(m);
   portEXIT_CRITICAL(&gMux);
   delayMicroseconds(8);   // E135: LinkE frame gap median 6.7 us
 }
@@ -120,9 +121,19 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   for (int bit = 0; bit < 32; ++bit) {
     result <<= 1;
     const int decoded = readBit(m);
-    if (decoded == 2) { portEXIT_CRITICAL(&gMux); delayMicroseconds(8); return false; }
+    if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
+      outputOff(m);
+      portEXIT_CRITICAL(&gMux);
+      rest_free_ = true;
+      delayMicroseconds(8);
+      return false;
+    }
     result |= decoded;
   }
+  const DmiPhy::Outcome outcome = DmiPhy::outcomeOf(address, true, result);
+  if (outcome == DmiPhy::kAnswered) rest_free_ = false;
+  else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;   // a DMSTATUS of all ones: the line, no module
+  if (rest_free_) outputOff(m);
   portEXIT_CRITICAL(&gMux);
   delayMicroseconds(8);
   value = result;
@@ -138,7 +149,7 @@ bool SwioPhy::readWire(uint8_t address, uint32_t &value) {
 void SwioPhy::write(uint8_t address, uint32_t value) {
   if (!ready_) return;
   ++transactions_;
-  writeRaw(address, value);
+  writeRaw(address, value, rest_free_);
 }
 
 // The line up and driven: left to its pull-up for 2 ms first, no target if it then reads low (held low: no pull-up, or
@@ -152,13 +163,13 @@ bool SwioPhy::lineUp() {
 }
 
 void SwioPhy::release() {
-  attached_ = false;
+  attached_ = rest_free_ = false;
   if (gPin >= 0) pinMode(gPin, INPUT_PULLUP);
 }
 
 // The free state (oep-core §8): Hi-Z, no pull. attach() puts the pull-up back before it looks at the line.
 void SwioPhy::free() {
-  attached_ = false;
+  attached_ = rest_free_ = false;
   if (gPin >= 0) pinMode(gPin, INPUT);
 }
 
@@ -253,11 +264,11 @@ inline int IRAM_ATTR readBit(uint32_t m, uint32_t in, const Times &tm) {
       return sampled;
     }
   } while (now() - t < tm.riseTimeout);
-  outputOn(m);
-  return 2;
+  return 2;   // the line never came back: left released to its pull-up, not driven high against it (§3.2)
 }
 
-void IRAM_ATTR writeRaw(uint8_t address, uint32_t value) {
+// free_after: the wire does not answer (oep-if-debug §2, §3.2) - the line released to its pull-up once the frame is out.
+void IRAM_ATTR writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
   const uint32_t m = gOut;
   const Times tm = gT;
   high(m);
@@ -266,6 +277,7 @@ void IRAM_ATTR writeRaw(uint8_t address, uint32_t value) {
   const uint64_t bits = (uint64_t{1} << 40) | (uint64_t{address & 0x7fu} << 33) | (uint64_t{1} << 32) | value;
   portENTER_CRITICAL(&gMux);
   until(sendBits(m, tm, bits, 41, now()));
+  if (free_after) outputOff(m);
   portEXIT_CRITICAL(&gMux);
   delayMicroseconds(8);   // E135: LinkE frame gap median 6.7 us
 }
@@ -356,9 +368,19 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   for (int bit = 0; bit < 32; ++bit) {
     result <<= 1;
     const int decoded = readBit(m, in, tm);
-    if (decoded == 2) { portEXIT_CRITICAL(&gMux); delayMicroseconds(8); return false; }
+    if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
+      outputOff(m);
+      portEXIT_CRITICAL(&gMux);
+      rest_free_ = true;
+      delayMicroseconds(8);
+      return false;
+    }
     result |= decoded;
   }
+  const DmiPhy::Outcome outcome = DmiPhy::outcomeOf(address, true, result);
+  if (outcome == DmiPhy::kAnswered) rest_free_ = false;
+  else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;   // a DMSTATUS of all ones: the line, no module
+  if (rest_free_) outputOff(m);
   portEXIT_CRITICAL(&gMux);
   delayMicroseconds(8);
   value = result;
@@ -374,7 +396,7 @@ bool SwioPhy::readWire(uint8_t address, uint32_t &value) {
 void SwioPhy::write(uint8_t address, uint32_t value) {
   if (!ready_ || !gOutBundle) return;
   ++transactions_;
-  writeRaw(address, value);
+  writeRaw(address, value, rest_free_);
 }
 
 // The line up and in the bundle: left to its pull-up for 2 ms first (out of any bundle), no target if it then reads
@@ -388,7 +410,7 @@ bool SwioPhy::lineUp() {
 }
 
 void SwioPhy::release() {
-  attached_ = false;
+  attached_ = rest_free_ = false;
   unconfigureIo();
 }
 
@@ -433,11 +455,11 @@ bool SwioPhy::readRetried(uint8_t address, uint32_t &value) {
 // E123: shadow first, before the DM answers - then dmactive only when DMCONTROL does not already read it set (that write
 // clears haltreq: a target halted earlier would run again). The configuration read back says a module is there.
 bool SwioPhy::configureModule() {
-  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
-  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
+  writeRaw(kDmShadowCfgr, kCfgr, rest_free_); writeRaw(kDmCfgr, kCfgr, rest_free_);
+  writeRaw(kDmShadowCfgr, kCfgr, rest_free_); writeRaw(kDmCfgr, kCfgr, rest_free_);
   uint32_t control = 0;
   if (!(readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1))) {
-    writeRaw(kDmControl, 1); writeRaw(kDmControl, 1);   // the two writes the E123 bring-up made
+    writeRaw(kDmControl, 1, rest_free_); writeRaw(kDmControl, 1, rest_free_);   // the two writes the E123 bring-up made
   }
   uint32_t configuration = 0;
   const uint32_t started = micros();
@@ -457,12 +479,12 @@ bool SwioPhy::writesLand() {
     if (missed++ >= kCheckRetries) return false;
     ++search_retries_;
   }
-  writeRaw(kSwAbstractAuto, 0);
+  writeRaw(kSwAbstractAuto, 0, rest_free_);
   bool ok = true;
   for (int round = 0; round < kCheckRounds && ok; ++round) {
     for (uint32_t pattern : kPatterns) {
       for (;;) {
-        writeRaw(kSwProgBuf0, pattern);
+        writeRaw(kSwProgBuf0, pattern, rest_free_);
         uint32_t read_back = 0;
         if (readRaw(kSwProgBuf0, read_back) && read_back == pattern) break;
         if (missed++ >= kCheckRetries) { ok = false; break; }
@@ -472,7 +494,7 @@ bool SwioPhy::writesLand() {
     }
   }
   for (int attempt = 0; attempt <= kCheckRetries; ++attempt) {   // the value back, read to confirm
-    writeRaw(kSwProgBuf0, saved);
+    writeRaw(kSwProgBuf0, saved, rest_free_);
     uint32_t read_back = 0;
     if (readRaw(kSwProgBuf0, read_back) && read_back == saved) break;
   }
@@ -482,6 +504,7 @@ bool SwioPhy::writesLand() {
 bool SwioPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
+  rest_free_ = false;
   if (!lineUp()) return false;
   if (!configureModule() || !writesLand()) { release(); return false; }
   attached_ = true;
@@ -492,6 +515,7 @@ bool SwioPhy::attach() {
 bool SwioPhy::bringUp(uint32_t &dmstatus) {
   if (!ready_) return false;
   if (attached_) return read(kSwDmStatus, dmstatus);
+  rest_free_ = false;
   if (!lineUp()) return false;
   const bool ok = configureModule() && readRaw(kSwDmStatus, dmstatus);
   release();

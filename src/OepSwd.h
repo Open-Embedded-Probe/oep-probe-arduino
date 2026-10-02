@@ -46,6 +46,8 @@ struct SwdPort {
   PinTable *pins = nullptr;
   uint8_t pin_owner = 0xf1;
   WireLossClock loss{};        // oep-if-debug §2: the live connection closes only once the wire is lost
+  bool io_driven = false;      // the lines are driven (from a wake on, until they are let go)
+  bool rest_free = false;      // oep-if-debug §2: no answer since the last exchange - the lines free between exchanges
 };
 
 // One request's wire retries (oep-if-debug §2): at most wire_retry_ms of it goes to retrying the wire. fits: one more

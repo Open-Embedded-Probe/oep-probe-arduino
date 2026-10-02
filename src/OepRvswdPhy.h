@@ -23,6 +23,8 @@ class RvswdPhy final : public DmiPhy {
   // consistent and whose writes to the scratch land (oep-if-debug §1, §3). false = no target, or the attach budget
   // (setDeadline) ran out.
   bool attach() override;
+  // From an exchange with no answer until one answers, the lines rest free between exchanges (oep-if-debug §2).
+  bool restingFree() const { return rest_free_; }
   // A scan's look (oep-if-debug §1): the wake, the configuration pair and dmactive at the slowest period, DMSTATUS read
   // until a module answers (eight wakes at most). No write check; the link is left released.
   bool bringUp(uint32_t &dmstatus) override;
@@ -84,6 +86,12 @@ class RvswdPhy final : public DmiPhy {
   static constexpr uint32_t kIdleUs = 300;
   uint32_t last_activity_us_ = 0;
   bool park_low_ = false;     // idle with SWCLK low instead of both lines high (setIdleClockLow)
+  // oep-if-debug §2, the lines while the wire does not answer: rest_free_ from an exchange with no answer until one
+  // answers (the lines free between exchanges); searching_ inside retune's speed search, where it is not applied
+  bool rest_free_ = false, searching_ = false;
+  bool restRule() const { return attached_ && !searching_; }
+  void exchangeBegins();
+  void exchangeEnds(DmiPhy::Outcome outcome);
   uint32_t scratch_ = 0;       // PROGBUF0 as the attach found it: written back after each write check
   void setHalf(uint32_t half_ns);
   uint32_t slowestNs() const;  // the slowest period: the table's last, or the max_speed floor below it

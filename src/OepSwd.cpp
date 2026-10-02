@@ -30,16 +30,46 @@ bool lostAfter(SwdPort &port, uint8_t status) {
 uint32_t hzOf(uint32_t half_ns) { return half_ns ? static_cast<uint32_t>(500000000u / half_ns) : 0; }
 constexpr uint32_t kSlowHalfNs = 50000;   // the slowest SWCLK this probe uses (10 kHz): a scan without max_speed, min_clock_hz
 
+// The lines while the wire does not answer (oep-if-debug §2, §5): on a live connection, from an exchange that got no
+// answer until one answers, the lines rest free between exchanges - released, SWDIO without the pull-up the setup gave
+// it (its rest level is low), SWCLK with no pull - and are driven only during an exchange (a packet, the line reset,
+// the JTAG-to-SWD switch, the dormant wake, each with its 8 idle cycles, which every one of them clocks before the
+// lines are let go). An answer brings the rest state back at once: SWDIO driven low, SWCLK high (the levels the idle
+// cycles leave latched).
+void exchangeBegins(SwdPort &port) {
+  if (!port.connected || !port.rest_free) return;
+  gpio_pull_up(port.swdio);   // during the exchange: a released SWDIO reads high (no ACK) rather than floating
+  port.io.driveBoth();
+}
+void exchangeEnds(SwdPort &port, bool answered, bool sent_only = false) {
+  if (!port.connected) return;
+  if (answered) { port.rest_free = false; return; }
+  if (sent_only && !port.rest_free) return;   // a sequence with no answer of its own, on a healthy link
+  port.rest_free = true;
+  port.io.releaseBoth();
+  gpio_disable_pulls(port.swdio);
+  gpio_disable_pulls(port.swclk);
+}
+
 // The link back after a transfer that got nothing back (oep-if-debug §5: in the retries of §2 the line reset and the
 // wake from dormant are redone): the JTAG-to-SWD switch with its line resets, then the dormant wake when that brings no
 // answer, each followed by TARGETSEL on a multidrop connection and the DPIDR read a DP needs after a line reset before
 // it takes another request. true: DPIDR answered. The DP's other registers (SELECT, CTRL/STAT) survive a line reset.
 bool relink(SwdPort &port) {
   for (int how = 0; how < 2; ++how) {
+    exchangeBegins(port);
     if (how == 0) swd::jtagToSwd(port.io); else swd::dormantToSwd(port.io);
-    if (port.active_targetsel) swd::targetSelect(port.io, port.targetsel);
+    exchangeEnds(port, false, true);
+    if (port.active_targetsel) {
+      exchangeBegins(port);
+      swd::targetSelect(port.io, port.targetsel);
+      exchangeEnds(port, false, true);
+    }
     uint32_t id = 0;
-    if (swd::transfer(port.io, false, true, 0x0, id) == swd::kOk && id != 0 && id != 0xffffffffu) return true;
+    exchangeBegins(port);
+    const bool up = swd::transfer(port.io, false, true, 0x0, id) == swd::kOk && id != 0 && id != 0xffffffffu;
+    exchangeEnds(port, up);
+    if (up) return true;
   }
   return false;
 }
@@ -61,7 +91,9 @@ uint8_t transferRetried(SwdPort &port, bool ap, bool read, uint8_t a23, uint32_t
   uint32_t t0 = 0, cost = roundUs(port);
   for (;;) {
     bool bad_parity = false;
+    exchangeBegins(port);
     const uint8_t ack = swd::transfer(port.io, ap, read, a23, data, &bad_parity);
+    exchangeEnds(port, ack != swd::kNoReply);   // OK, WAIT, FAULT: an answer
     if (retrying) {   // the round: relink() and this transfer
       cost = micros() - t0;
       retry.spent_us += cost;
@@ -146,6 +178,14 @@ bool WireSwd::move(uint16_t swdio, uint16_t swclk) {
 // Nothing holds the pair (the connection closed, a scan's try, a failed attach): Hi-Z without the pull-up setup gave
 // SWDIO, then a channel with an idle set goes to it (oep-core §8). wake() sets the pins up again.
 static void freePort(SwdPort &port) {
+  // the 8 idle cycles before the lines are let go (oep-if-debug §5): the target completes the last packet. Every
+  // packet and sequence here ends with them already; clocked again only while the lines are driven.
+  if (port.io_driven && !port.rest_free) {
+    port.io.hostDrives(true);
+    swd::idle(port.io, 8);
+  }
+  port.io_driven = false;
+  port.rest_free = false;
   port.io.releaseBoth();
   gpio_disable_pulls(port.swdio);
   gpio_disable_pulls(port.swclk);
@@ -179,6 +219,8 @@ bool WireSwd::wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr,
   port_.io.setup(port_.swdio, port_.swclk);
   port_.io.setHalfNs(half_ns);
   port_.io.driveBoth();
+  port_.io_driven = true;
+  port_.rest_free = false;
   for (int how = 0; how < 2; ++how) {
     if (how == 0) swd::jtagToSwd(port_.io); else swd::dormantToSwd(port_.io);
     if (targetsel) swd::targetSelect(port_.io, *targetsel);
@@ -189,7 +231,8 @@ bool WireSwd::wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr,
       return true;
     }
   }
-  port_.io.releaseBoth();
+  port_.io.releaseBoth();   // after the last packet's idle cycles
+  port_.io_driven = false;
   return false;
 }
 
