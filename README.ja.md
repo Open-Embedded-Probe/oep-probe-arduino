@@ -69,6 +69,27 @@ classic ESP32 の firmware は任意の `port_speed`（oep-core §3.5）を持�
 - USB の VID:PID: 今は仮の USB の ID（ボードの既定の VID:PID。ESP32-P4 では `303a:0002`）と `OEP` で始まる iProduct で動かしていて、
   配布には使えない。専用の PID を取得できたら、それに切り替える予定（[PID-USE.ja.md](PID-USE.ja.md)）。
 
+## 配線: 回路図も、決まったピンの割り当ても無い
+
+OpenEmbeddedProbe はファームウェアだけでできています。独自の基板や回路はありません。probe は、対応するマイコン（ESP32-P4、
+classic ESP32、RP2040 / RP2350）の市販の開発ボードにこのファームウェアを書いたものなので、従うべき回路図がありません。決まった
+ピンの割り当てもありません。
+
+- **空いている GPIO なら、どれを target のどの線につないでもよい。** debug の線（RVSWD、SWIO、SWD）はどれもビットバンギングで
+  動かし、UART、SPI、I2C の治具は GPIO マトリクスを通る（例外は RP2 の UART0 だけ: [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン)）。
+  使うピンは、要求ごとに host が選ぶ。
+- **target がどこにつながっているかは、host が探す。** oep-client-python の `oep pins` は、probe の pull をかけて probe が出す
+  すべてのピンを読み、候補の上で debug の線を scan し、target を ID で見分け、リセットの線を見つける。最後に、保存する
+  スロットを示す（oep-spec の host 開発ガイド §9。target ごとの記録は oep-spec の docs/target-scan-notes.ja.md）。
+- **残りの線は、target を通して探せる。** debug の線がつながれば、host はその線を通して target 自身の GPIO を動かし、probe の
+  どのピンが追いかけるかを見られる。そのため、target のほかの線（UART、電源のスイッチ、アプリケーションのピン）も、配線の表
+  なしに同じやり方で見つかる。
+
+なので、GND と target の debug のピン、ほかに使いたい線を、probe のボードの空いている GPIO に、順番を気にせずつなぎます。避ける
+のは probe のボード自身のピンです。flash / PSRAM のピン、USB のピン、起動のモードを決めるピン、probe 自身の経路のピンは、
+ファームウェアが出しません。チップごとの一覧は [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン) にあります。信号の
+電圧にも注意してください（[電気的な注意](#電気的な注意)）。
+
 ## 利用例: ESP32-P4 で CH32L103 を試験する
 
 <img src="docs/images/p4-ch32l103-bench.jpg" alt="ESP32-P4 の基板と CH32L103 の基板をジャンパ線でつないだ所: RVSWD、UART、GPIO、ADC の入力" width="420">
