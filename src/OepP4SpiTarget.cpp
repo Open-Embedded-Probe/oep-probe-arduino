@@ -65,10 +65,7 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   w.u8(reg::fixture_spi_target::kTlvDescribeQueueDepth, kQueueDepth);
 #if defined(OEP_SPI_MISO_GATE)
   // cs_setup_ns (u32): how long after CS falls MISO may still be undriven - the gate's worst case (kCsSetupNs).
-  // TODO(registry): oep-spec adds describe cs_setup_ns = 0x43 to oep.fixture.spi-target; use
-  // reg::fixture_spi_target::kTlvDescribeCsSetupNs once src/OepRegistry.h is synced with it.
-  constexpr uint8_t kTlvDescribeCsSetupNs = 0x43;
-  w.u32(kTlvDescribeCsSetupNs, kCsSetupNs);
+  w.u32(reg::fixture_spi_target::kTlvDescribeCsSetupNs, kCsSetupNs);
 #endif
   return w.ok() ? w.length() : 0;
 }

@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Registry synced from oep-spec 975d88c (registry hash 41388af90cf14a68): the SPI target's describe cs_setup_ns uses reg::fixture_spi_target::kTlvDescribeCsSetupNs (0x43, oep-spec 73a0c37) in place of the local constant.
+- (JA) registry を oep-spec 975d88c に合わせた（registry hash 41388af90cf14a68）。SPI target の describe の cs_setup_ns は、ローカルの定数ではなく reg::fixture_spi_target::kTlvDescribeCsSetupNs（0x43、oep-spec 73a0c37）を使う。
 - (EN) OepProbe, classic ESP32: ESP-IDF's log is off (`esp_log_level_set("*", ESP_LOG_NONE)`, probe guide §2.5), as on the ESP32-P4 - UART0 is the OEP transport, and a driver's error log went out on it between frames.
 - (JA) OepProbe、classic ESP32: ESP-IDF のログを止めた（`esp_log_level_set("*", ESP_LOG_NONE)`、probe ガイド §2.5）。ESP32-P4 と同じ。UART0 は OEP の transport で、ドライバのエラーログが frame の間にそこへ出ていた。
 - (EN) probe.config set (C-02, oep-if-probe-config §1): values a later revision may define are refused unsupported with the item's tag as received, not malformed - a slot's attach policy 2+ and idle_clock 2+, a lock_scheme not in the table (a defined scheme these wires do not read, targetsel, was already unsupported), a bind stream kind other than 1 / 2. The form is checked first and stays malformed: retry_ms on a host slot, a lock whose n is not its scheme's length (scheme 2's length now from the registry), a cut bind element, boot_reset 2+ (malformed as §1.1 states it now). The other item fields were already so (idle mode / drive_kind, bind mode, mechanism, uart format). Host test (tests/host/test_config.cpp; ProbeConfig builds on the host with OEP_HOST_FAKE_CONFIG, the blob in RAM).
