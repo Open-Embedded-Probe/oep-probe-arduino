@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Open Embedded Probe
 # Host tests of the portable core (serial-port framing, the endpoint's serial-port rules, the binds) and of the
-# I2C / SPI targets (the SPI one on a fake spi_slave driver, the I2C one with a fake controller): g++ and a shim.
+# I2C / SPI targets (the SPI one on a fake spi_slave driver, the I2C one with a fake controller), of the pin table's idle
+# states and the gpio fixture's take: g++ and a shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 src=$here/../../src
@@ -18,3 +19,6 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_SLAVE -
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_I2C_SLAVE -I"$here/shim" -I"$src" -o "$out-i2c" \
   "$here/test_i2c_target.cpp" "$src/OepP4I2cTarget.cpp"
 "$out-i2c"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-idle" "$here/test_idle.cpp" \
+  "$src/OepFixture.cpp"
+"$out-idle"

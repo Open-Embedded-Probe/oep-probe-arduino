@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // The little of the Arduino API the portable core of the library uses, for host tests (g++): Stream, millis(), and
-// enough of the pin / UART API for OepPlatform.h (pin modes do nothing).
+// enough of the pin / UART API for OepPlatform.h and the fixtures (pin modes recorded, the UART does nothing).
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -42,11 +42,34 @@ class Stream : public Print {
 #define OUTPUT_OPEN_DRAIN 0x13
 #define LOW 0
 #define HIGH 1
-inline void pinMode(int, int) {}
-inline void digitalWrite(int, int) {}
+// Pin modes and output levels are recorded (pin 0-63) so a test can see what a pad was left at: g_pin_mode (-1 never
+// set), g_pin_level (the output latch), and g_pin_changes (every pinMode / digitalWrite that changed something).
+inline int g_pin_mode[64] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+                             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+inline int g_pin_level[64] = {};
+inline int g_pin_changes = 0;
+inline void pinMode(int pin, int mode) {
+  if (pin < 0 || pin >= 64) return;
+  if (g_pin_mode[pin] != mode) ++g_pin_changes;
+  g_pin_mode[pin] = mode;
+}
+inline void digitalWrite(int pin, int level) {
+  if (pin < 0 || pin >= 64) return;
+  if (g_pin_level[pin] != level) ++g_pin_changes;
+  g_pin_level[pin] = level;
+}
+inline int digitalRead(int pin) { return pin >= 0 && pin < 64 && g_pin_level[pin]; }
 enum : uint32_t {
   SERIAL_7N1 = 0x8000018, SERIAL_7N2 = 0x8000038, SERIAL_7E1 = 0x800001a, SERIAL_7E2 = 0x800003a, SERIAL_7O1 = 0x800001b,
   SERIAL_7O2 = 0x800003b, SERIAL_8N1 = 0x800001c, SERIAL_8N2 = 0x800003c, SERIAL_8E1 = 0x800001e, SERIAL_8E2 = 0x800003e,
   SERIAL_8O1 = 0x800001f, SERIAL_8O2 = 0x800003f,
 };
-class HardwareSerial {};
+class HardwareSerial {
+ public:
+  void end() {}
+  int available() { return 0; }
+  size_t readBytes(uint8_t *, size_t) { return 0; }
+  int availableForWrite() { return 0; }
+  size_t write(const uint8_t *, size_t n) { return n; }
+};

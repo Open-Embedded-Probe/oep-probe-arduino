@@ -52,9 +52,18 @@ bool idleClock(const Tail &tail, uint8_t tag, bool &low, bool &critical) {
   return true;
 }
 
-// The reset line, open drain: pulled low, then released to Hi-Z - never driven high (oep-if-debug §3).
-void holdReset(void *ctx) { platformGpio(*static_cast<int *>(ctx), kGpioOpenDrainLow); }
-void releaseReset(void *ctx) { platformGpio(*static_cast<int *>(ctx), kGpioOpenDrainRelease); }
+// The reset line, open drain: pulled low, then released - never driven high (oep-if-debug §3) - and back to its idle
+// state when the settings give it one (oep-core §8; without one it stays released, Hi-Z).
+struct ResetLine {
+  int channel;
+  PinTable *pins;
+};
+void holdReset(void *ctx) { platformGpio(static_cast<ResetLine *>(ctx)->channel, kGpioOpenDrainLow); }
+void releaseReset(void *ctx) {
+  const ResetLine &line = *static_cast<ResetLine *>(ctx);
+  platformGpio(line.channel, kGpioOpenDrainRelease);
+  if (line.pins) line.pins->rest(static_cast<uint16_t>(line.channel));
+}
 
 // The halted hart's dpc for the attach answer's TLV 0x11 (DATA0 is used and put back).
 bool readDpc(Ch32Dm &dm, uint32_t &dpc) {
@@ -115,7 +124,8 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost) {
   port.lost = lost;
   ++port.closes;
   ResourceNumbers::close(port.number);
-  if (port.pin_choice && port.pins) port.pins->releaseQuiet(port.pin_owner);   // the PHY left them Hi-Z
+  // the PHY left them Hi-Z; a channel with an idle set goes to it (oep-core §8: a released pin, whichever way)
+  if (port.pin_choice && port.pins) port.pins->releaseToIdle(port.pin_owner);
 }
 
 bool checkConnection(DebugPort &port) {
@@ -399,6 +409,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     phy.setIdleClockLow(false);
   }
   if (capacity < 11) return failed();
+  ResetLine reset_line{reset_channel, port_.pins};
   uint32_t status = 0, dpc = 0;
   uint8_t flags = 0;
   uint8_t failure = kStatusOk;
@@ -415,10 +426,10 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     if (with_reset) {
       // the reset op's NRST on this connection (mark reset 3), then stopped at the vector or left running
       if (halt) {
-        if (!port_.dm.attachUnderReset(holdReset, releaseReset, &reset_channel, hold_ms, dpc)) failure = kStatusTimeout;
+        if (!port_.dm.attachUnderReset(holdReset, releaseReset, &reset_line, hold_ms, dpc)) failure = kStatusTimeout;
         else have_dpc = true;
       } else {
-        port_.dm.pulseReset(holdReset, releaseReset, &reset_channel, hold_ms);
+        port_.dm.pulseReset(holdReset, releaseReset, &reset_line, hold_ms);
         if (!attachAndRead(port_.dm, status)) failure = kStatusLine;
         else if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
       }
@@ -441,7 +452,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     // A scan may have left the link up at a speed over the new ceiling: search again under it.
     if (port_.dm.attached() && phy.clockHz() > max_hz) port_.dm.detach();
     if (with_reset && halt) {
-      if (!port_.dm.attachUnderReset(holdReset, releaseReset, &reset_channel, hold_ms, dpc)) {
+      if (!port_.dm.attachUnderReset(holdReset, releaseReset, &reset_line, hold_ms, dpc)) {
         // the module answers but the hart never stopped: timeout; no answer: line
         const bool answers = port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
         failure = answers ? kStatusTimeout : kStatusLine;
@@ -450,7 +461,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
         if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
       }
     } else {
-      if (with_reset) port_.dm.pulseReset(holdReset, releaseReset, &reset_channel, hold_ms);
+      if (with_reset) port_.dm.pulseReset(holdReset, releaseReset, &reset_line, hold_ms);
       if (!attachAndRead(port_.dm, status)) {
         failure = kStatusLine;
       } else {
