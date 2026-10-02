@@ -76,8 +76,8 @@ class Endpoint {
   // A session holds the lock / holds serial port `port` (its raw transfer is stopped, core §3.4).
   bool locked() const { return locked_; }
   bool held(size_t port) const { return locked_ && ((held_ >> port) & 1); }
-  // The probe also enumerates as a USB device discovery lists (iProduct starting "OEP", the vendor bulk's subclass /
-  // protocol; describe discoverable, core §3.3).
+  // The probe also enumerates with the project's own USB VID:PID (describe discoverable, core §3.3 / §7.5). Until that
+  // VID:PID is listed in the registry, no probe sets this.
   void setDiscoverable(bool on) { discoverable_ = on; }
   // The longest one request takes (describe max_op_ms, core §7.5): what every interface's long op is bounded by.
   static constexpr uint32_t kMaxOpMs = oep::kMaxOpMs;

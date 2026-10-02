@@ -46,7 +46,9 @@ docs/logic-capture.ja.md §2.7、docs/probe-cdc-and-persistence.ja.md §5.3 / §
 任意のシリアルの口を開くと、その先にあるもの（DTR でリセットするボード、モデム、ほかのツールのデバイス）を乱しうるので、host が
 すべての口について自動で試すことはできず、利用者がその口を明示的に選ぶ必要があります。
 さらに上のリンクには、シリアルの口でない USB のデバイスが要ります（速さのための vendor bulk、ソフトウェア USB とブラウザのための
-HID）。host はそれを VID:PID ではなく、iProduct が `OEP` で始まることと describe で見分けます（oep-spec docs/usb-identity.ja.md）。
+HID）。host が自動で OEP の probe と見分けるのはプロジェクトの USB の VID:PID だけで（まだ取得していない）、unit_id（USB の serial number）で
+名指した probe は開いて describe で確かめます。それまでは iProduct が `OEP` で始まる device を暫定の手がかりとして、最初に confirm だけを
+送って試すことがあります（oep-spec core §3.3、docs/usb-identity.ja.md）。
 今は仮の USB の ID（ボードの既定の VID:PID。ESP32-P4 では `303a:0002`）で動かしていて、配布には使えません。専用の PID を
 取得できたら、それに切り替える予定です。
 

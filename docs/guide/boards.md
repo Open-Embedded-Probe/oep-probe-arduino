@@ -82,8 +82,8 @@ minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
    `RvswdDebugProbe` already has this profile: `arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe`
    builds.
 3. **Pick the transport** by what `Serial` is: USB-Serial/JTAG (`USBMode=hwcdc`: `kUsbSerialJtag`), TinyUSB CDC
-   (`USBMode=default`: `kUsbCdc`; set the product name to start with `OEP` - `USB.productName("OEP probe (ESP32-S3)")` -
-   so hosts discover it), or a USB-UART bridge (`kUartBridge`, a classic ESP32 or an ESP32-C3 on its UART0).
+   (`USBMode=default`: `kUsbCdc`; a product name starting with `OEP` - `USB.productName("OEP probe (ESP32-S3)")` -
+   is the hosts' temporary clue until the project's VID:PID, oep-spec host guide §1.7), or a USB-UART bridge (`kUartBridge`, a classic ESP32 or an ESP32-C3 on its UART0).
 4. **Choose the pins.** Leave out the flash / PSRAM pins, the USB pins, the boot straps and anything the board wires to a
    part; reserve them in `describeCore`, offer the rest (the pin table's mask, `pin_choice` for host-chosen pins).
 5. **Build and flash**: `arduino-cli compile --profile esp32s3 <dir>`, then `arduino-cli upload -p <port> --profile esp32s3

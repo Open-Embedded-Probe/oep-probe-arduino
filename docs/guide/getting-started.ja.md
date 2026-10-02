@@ -48,7 +48,9 @@ oep dump --port usb                 # または USB の最初の OEP の probe�
 probe を使っていても邪魔しません。ESP32-P4 は 4 つの経路（HS vendor bulk、USB-Serial/JTAG、HID、CDC の口）を、ほかは 1 つを
 出します。
 
-USB の probe は iProduct `OEP probe (...)` を名乗ります。host はこれで、すべての口を開かずに probe を見つけます。
+USB の probe は iProduct `OEP probe (...)` を名乗り、USB の serial number が unit_id です。host は unit_id で名指した probe
+（`usb:<unit_id>`）をこれで見つけます。プロジェクトの VID:PID ができるまでは、iProduct が `OEP` で始まる device も、最初に confirm
+だけを送って試すことがあります（暫定の手がかり。oep-spec host 開発ガイド §1.7）。
 
 ## 4. 使う
 

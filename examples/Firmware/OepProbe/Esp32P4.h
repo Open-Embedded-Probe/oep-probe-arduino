@@ -19,7 +19,7 @@
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
 // a slot's console, a fixture UART). The HS device is VID:PID 303a:0002 (the board's default, a temporary USB ID; PID-USE.md),
 // iProduct "OEP probe (ESP32-P4)", serial = the unit id (the MAC, lowercase hex; one usbipd bind lasts across reflashes).
-// How a host tells the ports apart (core §3.3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
+// How a host tells the ports apart inside a device known to be OEP (core §3.3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
 //
@@ -162,7 +162,7 @@ void setup() {
   usb.vid = kUsbVid;
   usb.pid = kUsbPid;
   usb.manufacturer = "Open Embedded Probe";
-  usb.product = "OEP probe (ESP32-P4)";   // iProduct "OEP...": how discovery knows the probe (core §3.3)
+  usb.product = "OEP probe (ESP32-P4)";   // free text; starting "OEP" is a host's temporary clue (host guide §1.7)
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
   usbDevice.begin(usb);
@@ -172,7 +172,7 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
-  endpoint.setDiscoverable(true);   // describe discoverable: the iProduct starts "OEP", the vendor bulk carries 0x4F / 0x45
+  // describe discoverable stays 0: it is 1 only on the project's own USB VID:PID, none listed yet (core §3.3 / §7.5)
 
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;

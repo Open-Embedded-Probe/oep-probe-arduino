@@ -49,7 +49,9 @@ oep dump --port usb                 # or: the first OEP probe on USB (its vendor
 never disturbs another program using the probe. An ESP32-P4 shows four transports (HS vendor bulk, USB-Serial/JTAG, HID,
 a CDC port); the others show one.
 
-USB probes say iProduct `OEP probe (...)`: that is how a host finds them without opening every port.
+USB probes say iProduct `OEP probe (...)` and their unit_id as the USB serial number. A host finds a probe you name by
+its unit_id (`usb:<unit_id>`); until the project has a VID:PID of its own, hosts may also try devices whose iProduct
+starts with `OEP`, sending only a confirm first (a temporary clue, oep-spec host guide §1.7).
 
 ## 4. Use it
 
