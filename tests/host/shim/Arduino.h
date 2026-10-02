@@ -9,12 +9,14 @@
 #include <string.h>
 
 extern uint32_t g_millis;
+inline uint32_t g_micros_part = 0;   // the microseconds past g_millis (a test that keeps finer time: advanceMicros)
 inline uint32_t millis() { return g_millis; }
-inline uint32_t micros() { return g_millis * 1000u; }
+inline uint32_t micros() { return g_millis * 1000u + g_micros_part; }
+inline void advanceMicros(uint32_t us) { g_micros_part += us; g_millis += g_micros_part / 1000; g_micros_part %= 1000; }
 inline void delay(uint32_t ms) { g_millis += ms; }
 // A busy wait in the code under test: time goes on, and a test may complete USB transfers meanwhile.
 extern void (*g_on_wait)();
-inline void delayMicroseconds(uint32_t us) { static uint32_t acc = 0; acc += us; if (acc >= 1000) { g_millis += acc / 1000; acc %= 1000; } if (g_on_wait) g_on_wait(); }
+inline void delayMicroseconds(uint32_t us) { advanceMicros(us); if (g_on_wait) g_on_wait(); }
 template <class A, class B> inline auto min(A a, B b) -> decltype(a < b ? a : b) { return a < b ? a : b; }
 
 class Print {

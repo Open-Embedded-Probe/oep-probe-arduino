@@ -167,23 +167,57 @@ uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
 }  // namespace
 }  // namespace oep
 
+#elif defined(OEP_HOST_FAKE_RVSWD)
+// Host tests (tests/host): the frames against a simulated target, which keeps the pins' state and the time.
+#define OEP_RVSWD_BACKEND 1
+#include <fake_rvswd_io.h>
+
+namespace oep {
+namespace {
+
+using Io = FakeRvswdIo;
+Io gIo;
+struct Critical { ~Critical() {} };   // nothing to mask on the host
+
+bool ioBegin(int dio, int clk) { return gIo.begin(dio, clk); }
+bool ioMove(int, int, int dio, int clk) { return gIo.begin(dio, clk); }
+void ioReclaim(int dio, int) { if (dio >= 0) gIo.pullUp(true); }
+void ioDrive(int, int) { gIo.driveBoth(true); }
+void ioRelease(int, int) { gIo.driveBoth(false); }
+void ioFree(int, int) { gIo.driveBoth(false); gIo.pullUp(false); }
+uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
+
+}  // namespace
+}  // namespace oep
+
 #endif  // backend selection
 
 #if OEP_RVSWD_BACKEND
 
 namespace oep {
 namespace {
-constexpr uint8_t kDmControl = 0x10, kDmStatus = 0x11, kAbstractCs = 0x16, kDmAbstractAuto = 0x18,
-                  kDmProgBuf0 = 0x20;
+constexpr uint8_t kDmControl = 0x10, kDmStatus = 0x11, kDmAbstractAuto = 0x18, kDmProgBuf0 = 0x20;
 constexpr uint8_t kDmShadowCfgr = 0x7e, kDmCfgr = 0x7d;
 constexpr uint32_t kCfgr = 0x5aa50400;   // WCH key | (1 << 10) "allow output from slave"
+// DMSTATUS bits 8-19 are the harts' state (any / all halted, running, unavailable, nonexistent, resumeack, havereset):
+// they change on their own while the speed is checked - a hart coming to a stop, a target resetting itself - and say
+// nothing about the link. The check compares the rest (version, authenticated, impebreak and the like).
+constexpr uint32_t kHartStateBits = 0x000fff00u;
+// At the slowest period there is nothing slower to fall back to: an isolated parity or turnaround error there would
+// fail the whole attach. So the checks there take a few retries; the faster periods take none (a period with any
+// error is not used).
+constexpr uint8_t kSlowestRetries = 3;
+// How long one check may take. 1000 reads and 256 round trips take 79 + 40 ms at the 500 ns half period (RP2350, CH32L103);
+// a host's max_speed far below it would stretch them past the attach budget, so a slower period checks fewer.
+constexpr uint32_t kReadCheckUs = 100000, kWriteCheckUs = 60000;
+constexpr int kReadChecks = 1000, kMinReadChecks = 64, kWriteRounds = 32, kMinWriteRounds = 2;
 }  // namespace
 
 bool RvswdPhy::begin(int swdio, int swclk) {
   swdio_ = swdio;
   swclk_ = swclk;
   if (!ioBegin(swdio, swclk)) return false;
-  release();
+  free();   // until a connection takes them: the free state (oep-core §8), the same as after a release
   ready_ = true;
   return true;
 }
@@ -194,7 +228,7 @@ bool RvswdPhy::usePins(int swdio, int swclk) {
   if (!ioMove(swdio_, swclk_, swdio, swclk)) { swdio_ = swclk_ = -1; ready_ = false; return false; }
   swdio_ = swdio;
   swclk_ = swclk;
-  release();
+  free();
   ready_ = true;
   return true;
 }
@@ -252,6 +286,14 @@ void RvswdPhy::configureBus(bool with_wake) {
   // clears it when it attaches and whenever it brings the link up again (Ch32Dm::relink).
 }
 
+// Back in step at `half` before its speed is verified (oep-if-debug §1): the configuration pair goes out at the slowest
+// period - the only one writes may use before the check - and the link then moves to `half` for the reads.
+void RvswdPhy::resyncAt(uint32_t half) {
+  setHalf(slowestNs());
+  configureBus(false);
+  setHalf(half);
+}
+
 // The CH32's two-wire debug interface drops the link when the bus goes quiet. Measured on
 // the CH32L103 (2026-09-23): idle for 500 us and everything still answers; 1 ms and every
 // read comes back all ones; 5 ms and one bring-up is no longer enough to get it back. A
@@ -289,11 +331,17 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
   return ok;
 }
 
+// A failed read is retried while the request's allowance lasts (oep-if-debug §2: at most wire_retry_ms of one request
+// goes to retries), and no more than 200 times in a row.
 bool RvswdPhy::read(uint8_t address, uint32_t &value) {
   reviveIfIdle();
-  for (int attempt = 0; attempt < 200; ++attempt) {
-    if (readRaw(address, value)) return true;
+  if (readRaw(address, value)) return true;
+  for (int attempt = 1; attempt < 200 && retryLeft(); ++attempt) {
     ++retries_;
+    const uint32_t t0 = micros();
+    const bool ok = readRaw(address, value);
+    spentRetrying(micros() - t0);
+    if (ok) return true;
   }
   return false;
 }
@@ -313,16 +361,59 @@ void RvswdPhy::write(uint8_t address, uint32_t data) {
   writeRaw(address, data);
 }
 
+// dmactive (oep-if-debug §1 item 2), written only when DMCONTROL does not already read it set: that write clears
+// haltreq, so attaching to a target somebody halted earlier would set it running again. "Plainly" set matters - a
+// module that is not active leaves the bus floating, and all ones has bit 0 set too (2026-09-23, CH32X035).
+void RvswdPhy::activate() {
+  uint32_t control = 0;
+  if (readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1)) return;
+  writeRaw(kDmControl, 1);
+  // The CFGR pair above went to a module that was not active (a detach writes DMCONTROL = 0): the configuration
+  // sequence again now that it is, the order a WCH-LinkE uses (dmactive, then CFGR; wch-protocols link-to-target §5). It
+  // did not cure the dmseq console coming back 1-10 s late after a refused automatic attach (probe-cdc-and-persistence
+  // §7.5.1); oep_smoke x035 14/14 with it.
+  for (int i = 0; i < 2; ++i) {
+    writeRaw(kDmShadowCfgr, kCfgr);
+    writeRaw(kDmCfgr, kCfgr);
+  }
+}
+
+// The writes allowed before the speed is verified, at the slowest period (oep-if-debug §1, §3): the wake and the
+// configuration pair, then dmactive - until DMSTATUS shows a debug module. A cold one does not answer the first wake.
+// Measured on a CH32L103 over the RP2350 probe (2026-09-23): the first clean read came on attempt 5 at a 500 ns half
+// period, and on attempt 0 once the module had answered.
+bool RvswdPhy::wakeModule(uint32_t &dmstatus) {
+  setHalf(slowestNs());
+  for (int wake = 0; wake < 8; ++wake) {
+    if (wake && pastDeadline()) return false;
+    configureBus(true);
+    activate();
+    if (readRaw(kDmStatus, dmstatus) && dmVersionKnown(dmstatus)) return true;
+  }
+  return false;
+}
+
+bool RvswdPhy::bringUp(uint32_t &dmstatus) {
+  if (!ready_) return false;
+  if (attached_) return read(kDmStatus, dmstatus);
+  ioReclaim(swdio_, swclk_);
+  const bool ok = wakeModule(dmstatus);
+  ioRelease(swdio_, swclk_);
+  attached_ = false;
+  return ok;
+}
+
 bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
+  ioReclaim(swdio_, swclk_);
   setHalf(half_ns);
   configureBus(true);
-  write(0x10, 1);  // DMCONTROL.dmactive
+  activate();
   dmstatus = 0;
-  const bool ok = readRaw(0x11, dmstatus);
+  const bool ok = readRaw(kDmStatus, dmstatus);
   if (!keep_driven) { ioRelease(swdio_, swclk_); attached_ = false; }
-  // A debug module reports a nonzero DMSTATUS.version; an idle bus reads all ones or zeros.
-  return ok && ((dmstatus >> 8) & 0xf) != 0 && dmstatus != 0xffffffffu;
+  // A debug module reports a known DMSTATUS.version; an idle bus reads all ones or zeros.
+  return ok && dmVersionKnown(dmstatus);
 }
 
 namespace {
@@ -330,17 +421,46 @@ const uint32_t kHalfNs[] = {0, 25, 50, 100, 200, 500};
 const size_t kCount = sizeof kHalfNs / sizeof kHalfNs[0];
 }  // namespace
 
-bool RvswdPhy::readsStable(uint32_t &first) {
+uint32_t RvswdPhy::slowestNs() const {
+  return kHalfNs[kCount - 1] > floorNs() ? kHalfNs[kCount - 1] : floorNs();
+}
+
+// Up to 1000 DMSTATUS reads at the current period that all pass their parity and agree with the first, the harts'
+// state bits left out (kHartStateBits); fewer at a period too slow for 1000 in kReadCheckUs. `retries` failed reads are
+// taken again (at the slowest period, kSlowestRetries; elsewhere none). `first`: the reference value.
+bool RvswdPhy::readsStable(uint32_t &first, uint8_t retries) {
   // Let anything the bring-up disturbed settle before the reference read, or a hart that
   // is still coming to a stop makes a good half period look unstable.
-  for (int i = 0; i < 8; ++i) readRaw(kDmStatus, first);
-  if (((first >> 8) & 0xf) == 0 || first == 0xffffffffu) return false;
-  const uint32_t t0 = micros();
-  for (int i = 0; i < 1000; ++i) {
-    uint32_t value = 0;
-    if (!readRaw(kDmStatus, value) || value != first) return false;
+  bool ok = false;
+  for (int i = 0; i < 8; ++i) ok = readRaw(kDmStatus, first);
+  uint8_t missed = 0;
+  while (!ok || !dmVersionKnown(first)) {
+    if (missed++ >= retries) return false;
+    ++search_retries_;
+    ok = readRaw(kDmStatus, first);
   }
-  dmi_ns_ = micros() - t0;   // 1000 reads -> ns per read
+  const uint32_t t0 = micros();
+  uint32_t reads = 0;
+  for (int good = 0; good < kReadChecks;) {
+    if (good >= kMinReadChecks && micros() - t0 >= kReadCheckUs) break;
+    uint32_t value = 0;
+    ++reads;
+    if (readRaw(kDmStatus, value) && ((value ^ first) & ~kHartStateBits) == 0) { ++good; continue; }
+    if (missed++ >= retries) return false;
+    ++search_retries_;
+  }
+  dmi_ns_ = static_cast<uint32_t>((uint64_t)(micros() - t0) * 1000u / reads);   // ns per read
+  return true;
+}
+
+// The scratch register's value before the write check (oep-if-debug §1), read at the slowest period once the reads
+// there have checked out. false: it could not be read.
+bool RvswdPhy::keepScratch(uint8_t retries) {
+  uint8_t missed = 0;
+  while (!readRaw(kDmProgBuf0, scratch_)) {
+    if (missed++ >= retries) return false;
+    ++search_retries_;
+  }
   return true;
 }
 
@@ -348,33 +468,47 @@ bool RvswdPhy::readsStable(uint32_t &first) {
 // the RP2350 probe (2026-09-23): DMSTATUS read the same 1000 times at 100 ns, yet
 // the halt requests written at that speed were silently mangled - the hart kept running
 // and abstract commands failed cmderr=4. So prove the write path at the same speed.
-// DATA0 is the debug module's own scratch register while no abstract command runs.
 // A handful of patterns is not enough: at 200 ns on that jig every pattern came back
 // intact, and the multi-transaction sequences behind a memory read still broke. Match
 // the read check's weight - a few hundred round trips - so a half period only survives
 // if its writes land as reliably as its reads.
 //
-// The scratch is the first program buffer word, not DATA0. DATA0 belongs to whatever is
-// running: a target printing through the debug module's console writes it continuously,
-// and attaching to one failed every time while this check used it (2026-09-23). Nothing
-// reads the program buffer until an abstract command runs one.
-bool RvswdPhy::writesLand() {
+// Only what oep-if-debug §3 names is written: the scratch, the first program buffer word (not DATA0: that belongs to
+// whatever is running - a target printing through the debug module's console writes it continuously, and attaching to
+// one failed every time while this check used it, 2026-09-23), and ABSTRACTAUTO = 0, which makes it free (an
+// autoexec a previous session left armed would re-run its command on every access here and the readback would never
+// match: 2026-09-23, an aborted flash sequence did exactly that, and every later attach failed until the probe was
+// power-cycled). ABSTRACTAUTO is not restored; the scratch gets the value keepScratch read back - at this period when
+// the check passed, at the slowest one when it did not (a period whose writes do not land would garble it).
+bool RvswdPhy::writesLand(uint8_t retries) {
   static const uint32_t kPatterns[] = {0xa5a5a5a5u, 0x5a5a5a5au, 0xffffffffu, 0x00000001u,
                                        0x0f0f0f0fu, 0xf0f0f0f0u, 0x80000000u, 0x7fffffffu};
-  // DATA0 is only scratch while nothing is armed on it: a previous session that left
-  // ABSTRACTAUTO set would re-run its command on every access here and the readback
-  // would never match (2026-09-23: an aborted flash sequence did exactly that, and
-  // every later attach failed until the probe was power-cycled).
-  write(kDmAbstractAuto, 0);
+  writeRaw(kDmAbstractAuto, 0);
   bool ok = true;
-  for (int round = 0; round < 32 && ok; ++round) {
+  uint8_t missed = 0;
+  const uint32_t t0 = micros();
+  for (int round = 0; round < kWriteRounds && ok; ++round) {
+    if (round >= kMinWriteRounds && micros() - t0 >= kWriteCheckUs) break;
     for (uint32_t pattern : kPatterns) {
-      write(kDmProgBuf0, pattern);
-      uint32_t read_back = 0;
-      if (!readRaw(kDmProgBuf0, read_back) || read_back != pattern) { ok = false; break; }
+      for (;;) {
+        writeRaw(kDmProgBuf0, pattern);
+        uint32_t read_back = 0;
+        if (readRaw(kDmProgBuf0, read_back) && read_back == pattern) break;
+        if (missed++ >= retries) { ok = false; break; }
+        ++search_retries_;
+      }
+      if (!ok) break;
     }
   }
-  write(kDmProgBuf0, 0);
+  const uint32_t half = half_ns_;
+  if (!ok) resyncAt(slowestNs());
+  for (int attempt = 0; attempt <= kSlowestRetries; ++attempt) {   // the value back, read to confirm
+    writeRaw(kDmProgBuf0, scratch_);
+    uint32_t read_back = 0;
+    if (readRaw(kDmProgBuf0, read_back) && read_back == scratch_) break;
+    if (ok && missed++ >= retries) { ok = false; resyncAt(slowestNs()); }   // not at this period after all
+  }
+  if (half_ns_ != half) setHalf(half);
   return ok;
 }
 
@@ -382,7 +516,7 @@ void RvswdPhy::useSafeSpeed() {
   // Also when attach() did not take: a CH32 held in reset may not answer, and the writes that follow the release
   // must still go out at a speed its default clock can follow.
   if (!ready_) return;
-  setHalf(kHalfNs[kCount - 1] > floorNs() ? kHalfNs[kCount - 1] : floorNs());
+  setHalf(slowestNs());
   configureBus(false);
 }
 
@@ -392,95 +526,80 @@ void RvswdPhy::useSafeSpeed() {
 // failure it steps back to the last good one and proves that again rather than trusting it.
 bool RvswdPhy::retune() {
   if (!attached_) return false;
-  const uint32_t floor = floorNs();
+  const uint32_t floor = floorNs(), slowest = slowestNs();
   size_t good = kCount;   // index of the fastest period that passed
-  bool failed = false;
+  resyncAt(slowest);
+  if (!keepScratch(kSlowestRetries)) { useSafeSpeed(); return false; }
   for (size_t i = kCount; i-- > 0;) {
-    if (kHalfNs[i] < floor && i != kCount - 1) break;
-    setHalf(kHalfNs[i] > floor ? kHalfNs[i] : floor);
-    configureBus(false);
+    if ((kHalfNs[i] < floor && i != kCount - 1) || (good != kCount && pastDeadline())) break;
+    const uint32_t half = kHalfNs[i] > floor ? kHalfNs[i] : floor;
+    const uint8_t retries = half == slowest ? kSlowestRetries : 0;
+    resyncAt(half);
     uint32_t first = 0;
-    if (!readsStable(first) || !writesLand()) { failed = true; break; }
+    if (!readsStable(first, retries) || !writesLand(retries)) break;
     good = i;
   }
   if (good == kCount) { useSafeSpeed(); return false; }
   // Prove the chosen period once more even when nothing failed on the way down: the fastest candidates are
   // marginal (half 0 ns sometimes fails for a whole run), and skipping this broke the X035's reset-halt (2026-09-25).
-  (void)failed;
-  for (int tries = 0; tries < 3; ++tries) {
-    setHalf(kHalfNs[good] > floor ? kHalfNs[good] : floor);
-    configureBus(false);
+  for (int tries = 0; tries < 3 && !(tries && pastDeadline()); ++tries) {   // an attach's budget (attach under reset)
+    const uint32_t half = kHalfNs[good] > floor ? kHalfNs[good] : floor;
+    const uint8_t retries = half == slowest ? kSlowestRetries : 0;
+    resyncAt(half);
     uint32_t first = 0;
-    if (readsStable(first) && writesLand()) return true;
+    if (readsStable(first, retries) && writesLand(retries)) return true;
     if (good + 1 < kCount) ++good;   // slower
   }
   useSafeSpeed();
   return false;
 }
 
-// oep-if-debug §1: nothing is written to the target until the link speed is settled, and the speed is chosen by reads
-// alone - a write garbled by a period the target cannot follow can land anywhere in the debug module. So the
-// bring-up writes (the wake, DMSHDWCFGR / DMCFGR, dmactive) go out at the slowest period, the one every target
-// follows and the one the resets use; faster periods are then tried with DMSTATUS reads only (margin check E156 /
-// E157: 1000 identical reads); writes start again at the fastest period that passed, which the write check
-// (writesLand) must also pass before it is kept - otherwise the next slower one is proved the same way.
+// oep-if-debug §1: until the link speed is verified the probe writes only the wake / configuration sequence and
+// dmactive, at the slowest period (the one every target follows and the one the resets use), and the speed is chosen
+// by reads alone - a write garbled by a period the target cannot follow can land anywhere in the debug module. The
+// slowest period's reads are checked first (margin check E156 / E157: 1000 identical reads), then faster periods are
+// tried with DMSTATUS reads only; the fastest that passed must then pass the write check (writesLand) before it is
+// kept - otherwise the next slower one is proved the same way. When only the slowest period is left, its reads were
+// just checked: only the writes are. Each step starts only while the attach budget lasts (setDeadline).
 bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
   ioReclaim(swdio_, swclk_);
   const uint32_t floor = floorNs();
-  const uint32_t slowest = kHalfNs[kCount - 1] > floor ? kHalfNs[kCount - 1] : floor;
+  const uint32_t slowest = slowestNs();
   // Two passes. A cold debug module can need more waking than one pass's eight attempts (2026-09-23: the first pass
   // failed where the same period attached immediately on the second).
   for (int pass = 0; pass < 2; ++pass) {
-    setHalf(slowest);
-    // A cold debug module does not answer the first wake. Measured on a CH32L103 over the RP2350 probe (2026-09-23):
-    // the first clean read came on attempt 5 at a 500 ns half period, and on attempt 0 once the module had answered.
+    if (pass) ++search_retries_;
+    if (pastDeadline()) break;
     uint32_t first = 0;
-    bool awake = false;
-    for (int wake = 0; wake < 8 && !awake; ++wake) {
-      configureBus(true);
-      // Only skip the dmactive write when the module is plainly up: that write clears haltreq, so attaching to a
-      // target somebody halted earlier would set it running again. "Plainly" matters - a module that is not active
-      // leaves the bus floating, and all ones has bit 0 set too (2026-09-23, CH32X035), so all ones is no answer.
-      uint32_t control = 0;
-      const bool up = readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1);
-      if (!up) {
-        writeRaw(kDmControl, 1);
-        // The CFGR pair above went to a module that was not active (a detach writes DMCONTROL = 0): write it again now
-        // that it is, the order a WCH-LinkE uses (dmactive, then CFGR; wch-protocols link-to-target §5). It did not
-        // cure the dmseq console coming back 1-10 s late after a refused automatic attach (probe-cdc-and-persistence
-        // §7.5.1); oep_smoke x035 14/14 with it.
-        for (int i = 0; i < 2; ++i) {
-          writeRaw(kDmShadowCfgr, kCfgr);
-          writeRaw(kDmCfgr, kCfgr);
-        }
-      }
-      // DMSTATUS.version is nonzero on a real module; an idle bus reads all ones or zeros.
-      awake = readRaw(kDmStatus, first) && ((first >> 8) & 0xf) != 0 && first != 0xffffffffu;
-    }
-    if (!awake || !readsStable(first)) continue;
+    if (!wakeModule(first) || pastDeadline() || !readsStable(first, kSlowestRetries) ||
+        !keepScratch(kSlowestRetries))
+      continue;
+    const uint32_t slowest_dmi_ns = dmi_ns_;
     // Faster, reading only. The first period that fails ends the search.
     size_t chosen = kCount;   // kCount = the slowest period (which may be a floor between the table's entries)
     for (size_t i = kCount - 1; i-- > 0;) {
-      if (kHalfNs[i] < floor) break;
+      if (kHalfNs[i] < floor || pastDeadline()) break;
       setHalf(kHalfNs[i]);
       uint32_t value = 0;
-      if (!readsStable(value)) break;
+      if (!readsStable(value, 0)) break;
       chosen = i;
     }
-    // Settle there: bring the bus back in step at that period (a failed faster read may have left it out), then prove
-    // the writes. A period whose writes do not land gives way to the next slower one.
-    for (;;) {
-      const uint32_t half = chosen == kCount ? slowest : kHalfNs[chosen];
-      setHalf(half);
-      configureBus(false);
+    // Settle there: bring the bus back in step (a failed faster read may have left it out), then prove the writes. A
+    // period whose writes do not land gives way to the next slower one.
+    while (!pastDeadline()) {
+      const bool at_slowest = chosen == kCount;
+      resyncAt(at_slowest ? slowest : kHalfNs[chosen]);
       uint32_t value = 0;
-      if (readsStable(value) && writesLand()) {
+      const bool reads = at_slowest || readsStable(value, 0);
+      if (at_slowest) dmi_ns_ = slowest_dmi_ns;
+      if (reads && writesLand(at_slowest ? kSlowestRetries : 0)) {
         attached_ = true;
         return true;
       }
-      if (chosen == kCount) break;
+      if (at_slowest) break;
+      ++search_retries_;
       ++chosen;
       if (chosen < kCount && kHalfNs[chosen] >= slowest) chosen = kCount;
     }
@@ -504,10 +623,13 @@ bool RvswdPhy::read(uint8_t, uint32_t &) { return false; }
 void RvswdPhy::write(uint8_t, uint32_t) {}
 void RvswdPhy::setHalf(uint32_t) {}
 void RvswdPhy::configureBus(bool) {}
+void RvswdPhy::useSafeSpeed() {}
+bool RvswdPhy::retune() { return false; }
 void RvswdPhy::writeRaw(uint8_t, uint32_t) {}
 void RvswdPhy::reviveIfIdle() {}
 bool RvswdPhy::readRaw(uint8_t, uint32_t &) { return false; }
 bool RvswdPhy::probeOnce(uint32_t, uint32_t &, bool) { return false; }
+bool RvswdPhy::bringUp(uint32_t &) { return false; }
 }  // namespace oep
 
 #endif

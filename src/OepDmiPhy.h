@@ -7,15 +7,19 @@
 // this line do not know which one they run on.
 #pragma once
 
+#include <Arduino.h>
 #include <stdint.h>
+
+#include "OepRegistry.h"
 
 namespace oep {
 
-// DMSTATUS.version (bits 3:0) of a debug module the probe works with: 2 (debug spec 0.13) or 3 (1.0), as oep-if-debug
-// §1 counts a module "found". Anything else (0 none, 1 0.11, 15 non-conforming, a floating bus) is not one.
+// DMSTATUS.version (bits 3:0) of a debug module the probe works with, as oep-if-debug §1 counts a module "found": 2 or
+// more and not 15 (2 = debug spec 0.13, 3 = 1.0, later versions alike; the riscv-dm ops treat them all the same, §4).
+// Anything else (0 none, 1 0.11, 15 non-conforming, a floating bus reading all ones) is not one.
 inline bool dmVersionKnown(uint32_t dmstatus) {
   const uint32_t version = dmstatus & 0xf;
-  return version == 2 || version == 3;
+  return version >= 2 && version != 15;
 }
 
 class DmiPhy {
@@ -65,6 +69,54 @@ class DmiPhy {
   virtual uint32_t clockHz() const = 0;
   virtual uint32_t retries() const = 0;
   virtual uint32_t transactions() const = 0;
+
+  // A scan's look at a combination (oep-if-debug §1, what scan writes): the wire's wake / configuration sequence and
+  // dmactive (only when DMCONTROL does not read it set), then DMSTATUS read - no write check, no scratch register, the
+  // link left not attached. false: nothing answered. The default (a backend with no separate bring-up) attaches.
+  virtual bool bringUp(uint32_t &dmstatus) { return attach() && read(0x11, dmstatus); }
+
+  // search_retries (oep-if-debug §1, attach answer TLV 0x12): the tries of the speed search that failed in the attaches
+  // since clearSearchRetries() - a speed whose reads or writes did not check out, a pass that started again, and each
+  // read or round trip retried inside a check at the slowest speed.
+  uint32_t searchRetries() const { return search_retries_; }
+  void clearSearchRetries() { search_retries_ = 0; }
+  void countSearchRetry() { ++search_retries_; }   // a try above the PHY (a whole attach() again) failed
+  // The attach budget (oep-if-debug §1, limits.attach_budget_ms): attach() starts no further step of its search once
+  // millis() reaches `at_ms` and answers false. The caller sets it before and clears it after.
+  void setDeadline(uint32_t at_ms) { deadline_ms_ = at_ms; has_deadline_ = true; }
+  void clearDeadline() { has_deadline_ = false; }
+  bool pastDeadline() const { return has_deadline_ && static_cast<int32_t>(millis() - deadline_ms_) >= 0; }
+  // Retries inside one request (oep-if-debug §2, limits.wire_retry_ms): a request starts with the whole allowance, and
+  // read() retries no more once it is spent (the request then ends with status line).
+  void beginRequest() { retry_us_ = 0; }
+
+ protected:
+  bool retryLeft() const { return retry_us_ < v1::reg::kLimitWireRetryMs * 1000u; }
+  void spentRetrying(uint32_t us) { retry_us_ += us; }
+  uint32_t search_retries_ = 0;
+
+ private:
+  uint32_t deadline_ms_ = 0;
+  bool has_deadline_ = false;
+  uint32_t retry_us_ = 0;
+};
+
+// The attach budget (oep-if-debug §1, limits.attach_budget_ms) over one attach: the PHY's deadline from construction to
+// destruction. One attach answer takes at most the budget of the probe's time, a reset's hold_ms (extra_ms) aside; the
+// PHY's search gets it less kTailMs - what follows the search (havereset, a halt, the target_id and dpc reads) and the
+// one search step that may still be running when the deadline passes (a read check and a write check: 140 ms at most).
+class AttachDeadline {
+ public:
+  static constexpr uint32_t kTailMs = 250;
+  AttachDeadline(DmiPhy &phy, uint32_t extra_ms = 0) : phy_(phy) {
+    phy_.setDeadline(millis() + v1::reg::kLimitAttachBudgetMs - kTailMs + extra_ms);
+  }
+  ~AttachDeadline() { phy_.clearDeadline(); }
+  AttachDeadline(const AttachDeadline &) = delete;
+  AttachDeadline &operator=(const AttachDeadline &) = delete;
+
+ private:
+  DmiPhy &phy_;
 };
 
 }  // namespace oep

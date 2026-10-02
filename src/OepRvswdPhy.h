@@ -19,16 +19,20 @@ class RvswdPhy final : public DmiPhy {
   // from the bundle, and neither begin() again nor anything short of a chip reset brings it back (wch-protocols E170).
   bool begin(int swdio, int swclk);
   bool usePins(int swdio, int swclk) override;   // begin() on another pair; the old one released
-  // Drive the bus, write dmactive, and pick the smallest half period whose
-  // DMSTATUS reads are all parity-clean and consistent. false = no target.
+  // Drive the bus, write dmactive, and pick the smallest half period whose DMSTATUS reads are all parity-clean and
+  // consistent and whose writes to the scratch land (oep-if-debug §1, §3). false = no target, or the attach budget
+  // (setDeadline) ran out.
   bool attach() override;
+  // A scan's look (oep-if-debug §1): the wake, the configuration pair and dmactive at the slowest period, DMSTATUS read
+  // until a module answers (eight wakes at most). No write check; the link is left released.
+  bool bringUp(uint32_t &dmstatus) override;
   void release() override;
   void free() override;
   void park() override;
   bool attached() const override { return attached_; }
   bool read(uint8_t address, uint32_t &value) override;   // with bounded retry
-  // One cheap look for a debug module at this half period: drive the bus, set dmactive and
-  // read DMSTATUS once. For sweeping candidate pin pairs, where attach()'s margin check
+  // One cheap look for a debug module at this half period: drive the bus, set dmactive (unless DMCONTROL reads it set)
+  // and read DMSTATUS once. For sweeping candidate pin pairs, where attach()'s margin check
   // (six half periods x 1000 reads) is far too slow to be a search step.
   // keep_driven leaves the bus driven so readOnce() can continue where this left off.
   bool probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven = false);
@@ -78,9 +82,17 @@ class RvswdPhy final : public DmiPhy {
   static constexpr uint32_t kIdleUs = 300;
   uint32_t last_activity_us_ = 0;
   bool park_low_ = false;     // idle with SWCLK low instead of both lines high (setIdleClockLow)
+  uint32_t scratch_ = 0;       // PROGBUF0 as the attach found it: written back after each write check
   void setHalf(uint32_t half_ns);
-  bool readsStable(uint32_t &first);   // 1000 identical DMSTATUS reads at the current period
-  bool writesLand();                   // a few hundred program-buffer write/read round trips
+  uint32_t slowestNs() const;  // the slowest period: the table's last, or the max_speed floor below it
+  // Up to 1000 DMSTATUS reads at the current period that agree, the harts' state bits aside; `retries` failed reads are
+  // taken again (the slowest period: a few; elsewhere none)
+  bool readsStable(uint32_t &first, uint8_t retries);
+  bool keepScratch(uint8_t retries);   // PROGBUF0 read into scratch_
+  bool writesLand(uint8_t retries);    // a few hundred program-buffer write/read round trips, then scratch_ back
+  void activate();                     // dmactive, unless DMCONTROL already reads it set
+  bool wakeModule(uint32_t &dmstatus); // wake + configuration + dmactive at the slowest period until DMSTATUS answers
+  void resyncAt(uint32_t half_ns);     // the configuration pair at the slowest period, then this period
   void configureBus(bool with_wake);
   void writeRaw(uint8_t address, uint32_t data);
   void reviveIfIdle();
