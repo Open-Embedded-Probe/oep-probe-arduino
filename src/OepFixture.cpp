@@ -33,6 +33,16 @@ size_t FixtureGpio::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.roleChannels(kGpioRoles, sizeof kGpioRoles, pins_.allowedMask());
   w.u32(gp::kTlvDescribeModes, kModes);   // modes 0-7 (u32 bit set)
+  // drive_levels (fixture §1.1): default(u8) n(u8) n x ma(u16), the chip's levels (OepPlatform.h); none: not switched
+  const DriveLevels d = platformDriveLevels();
+  if (d.count) {
+    uint8_t v[2 + 2 * 8];
+    const uint8_t n = d.count < 8 ? d.count : 8;
+    v[0] = d.default_level;
+    v[1] = n;
+    for (uint8_t i = 0; i < n; ++i) putU16(v + 2 + 2 * i, d.ma[i]);
+    w.put(gp::kTlvDescribeDriveLevels, v, 2u + 2u * n);
+  }
   return w.ok() ? w.length() : 0;
 }
 
@@ -65,29 +75,92 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
   if (length < 1) return rejected(kRejectMalformed);
   const uint8_t n = payload[0];
   switch (op) {
-    case kOpSet: {   // n(u8) n x (channel u16, mode u8) [TLV]: in order; nothing done if any entry cannot be
-      // (fixture §1, core §4.3's order: a mode outside the table malformed, one not handled unsupported with the channel
-      // and its position, a channel not planned unavailable with the same)
-      const Result parsed = plainTail(tail, payload, length, 1u + 3u * n, out, capacity);
+    case kOpSet: {   // n(u8) n x (channel u16, mode u8) [TLV 0x01 drive, repeated]: in order; nothing done if any
+      // entry cannot be (fixture §1, core §4.3's order: a mode outside the table malformed, one not handled unsupported
+      // with the channel and its position, a channel not planned unavailable with the same)
+      const DriveLevels levels = platformDriveLevels();
+      static const uint8_t kKnown[] = {gp::kTlvSetDrive};
+      const size_t fixed = 1u + 3u * n;
+      if (length < fixed) return rejected(kRejectMalformed);
+      // drive (fixture §1.1) is known only where this chip declares drive_levels; elsewhere it is an unknown tag
+      const Result parsed = tail.parse(payload + fixed, length - fixed, kKnown, levels.count ? 1 : 0, out, capacity);
       if (refused(parsed)) return parsed;
       for (uint8_t i = 0; i < n; ++i)
         if (payload[3 + 3 * i] > gp::kModeInputPullupPulldown) return rejected(kRejectMalformed);
+      auto isOutput = [&](uint8_t i) {
+        const uint8_t m = payload[3 + 3 * i];
+        return m == gp::kModeOutputLow || m == gp::kModeOutputHigh;
+      };
+      // drive TLVs, one per element: index n or more, an index twice, an undefined kind, or an element not mode 3 / 4
+      // is malformed (the whole request); a level this probe does not have ignores that TLV (listed in ignored). Every
+      // form is checked first (pass 0), so a malformed one anywhere wins over a critical one's unsupported (core §4.3).
+      uint8_t drive[255];
+      memset(drive, PinTable::kDriveDefault, n);
+      size_t ignored_drives = 0;   // each ignored drive TLV is listed in ignored (tag 0x01 once per TLV)
+      for (int pass = 0; pass < 2; ++pass) {
+        uint8_t seen[32] = {};
+        size_t at = 0, len = 0;
+        uint8_t raw = 0;
+        const uint8_t *v = nullptr;
+        while (tail.next(at, raw, v, len)) {
+          if ((raw & ~kTagCritical) != gp::kTlvSetDrive) continue;
+          // without drive_levels an unknown tag: ignored as it is, no form checked (a critical one was refused above)
+          if (!levels.count) { ignored_drives += pass; continue; }
+          if (pass == 0) {
+            if (len != 4) return rejected(kRejectMalformed);
+            const uint8_t index = v[0], kind = v[1];
+            if (index >= n || ((seen[index / 8] >> (index % 8)) & 1) || kind > gp::kDriveKindMaxMa || !isOutput(index))
+              return rejected(kRejectMalformed);
+            seen[index / 8] |= static_cast<uint8_t>(1u << (index % 8));
+            continue;
+          }
+          uint8_t level = 0;
+          if (PinTable::driveLevelOf(levels, v[1], getU16(v + 2), level)) drive[v[0]] = level;
+          else if (raw & kTagCritical) return unsupportedTag(out, capacity, raw);   // critical: not ignored (core §2.3)
+          else ++ignored_drives;
+        }
+      }
       for (uint8_t i = 0; i < n; ++i)
         if (!((kModes >> payload[3 + 3 * i]) & 1)) return unsupportedAt(out, capacity, getU16(payload + 1 + 3 * i), i);
       for (uint8_t i = 0; i < n; ++i)
         if (!planned(getU16(payload + 1 + 3 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 3 * i), out, capacity);
-      for (uint8_t i = 0; i < n; ++i) platformGpio(getU16(payload + 1 + 3 * i), platformMode(payload[3 + 3 * i]));
-      return tail.finish(completed(), out, capacity);
+      // the strength of a mode 3 / 4 element: its drive, else its channel's idle drive, else the default level; kept
+      // until the channel is set again
+      for (uint8_t i = 0; i < n; ++i) {
+        const uint16_t c = getU16(payload + 1 + 3 * i);
+        pins_.setPad(static_cast<uint8_t>(c), platformMode(payload[3 + 3 * i]),
+                     drive[i] != PinTable::kDriveDefault ? drive[i] : pins_.idleDrive(c));
+      }
+      if (!ignored_drives) return tail.finish(completed(), out, capacity);
+      // ignored (core §2.3): the other unknown tags once each, then 0x01 for every drive TLV ignored
+      const uint8_t *tags = nullptr;
+      const size_t listed = tail.ignoredTags(tags);
+      if (capacity < 2) return completed();
+      size_t count = 0;
+      for (size_t k = 0; k < listed && 2 + count < capacity && count < 254; ++k)
+        if (tags[k] != gp::kTlvSetDrive) out[2 + count++] = tags[k];
+      for (size_t k = 0; k < ignored_drives && 2 + count < capacity && count < 254; ++k) out[2 + count++] = gp::kTlvSetDrive;
+      out[0] = kTagIgnored;
+      out[1] = static_cast<uint8_t>(count);
+      return completed(2 + count);
     }
-    case kOpRead: {   // n(u8) n x channel(u16) [TLV]  ->  n(u8) n x level(u8) [TLV]
+    case kOpRead: {   // n(u8) n x channel(u16) [TLV]  ->  n(u8) n x level(u8) [TLV 0x01 drive]
       const Result parsed = plainTail(tail, payload, length, 1u + 2u * n, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 1u + n) return failed();
+      const bool levels = platformDriveLevels().count != 0;
+      const size_t answer = 1u + n + (levels ? tlvSize(n) : 0);
+      if (capacity < answer) return failed();
       for (uint8_t i = 0; i < n; ++i)
         if (!planned(getU16(payload + 1 + 2 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 2 * i), out, capacity);
       out[0] = n;
       for (uint8_t i = 0; i < n; ++i) out[1 + i] = digitalRead(getU16(payload + 1 + 2 * i)) ? 1 : 0;
-      return tail.finish(completed(1u + n), out, capacity);
+      if (levels) {   // drive (fixture §1.1): the level each channel is driven at in mode 3 / 4, 0xFF when not
+        TlvWriter w(out + 1 + n, capacity - 1 - n);
+        uint8_t v[255];
+        for (uint8_t i = 0; i < n; ++i) v[i] = pins_.drivenLevel(getU16(payload + 1 + 2 * i));
+        w.put(gp::kTlvReadAnswerDrive, v, n);
+      }
+      return tail.finish(completed(answer), out, capacity);
     }
     default:
       return rejected(kRejectUnknownOperation);
@@ -147,6 +220,8 @@ bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
   if (tx >= 0 && !pins_.claim(tx, owner_)) { pins_.release(owner_); return false; }
   rx_ = rx;
   tx_ = tx;
+  if (rx_ >= 0) pins_.ownStrength(rx_);
+  if (tx_ >= 0) pins_.ownStrength(tx_);
   session_configured_ = false;
   if (rx_ >= 0) pinMode(rx_, INPUT);
   idleHigh();   // before the UART starts, too: the DUT's RX stays connected

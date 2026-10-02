@@ -97,7 +97,13 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {
 // The pins back in the bundles if something else routed them away since (ESP32-P4: oep.wire.swio takes any channel,
 // the RVSWD pair's too, into its own bundle and leaves it a plain GPIO; a pair unchanged since would otherwise stay
 // cut off from its bundle). Nothing done while they are still routed here.
+// The weakest strength is put back too: a fixture gpio output or an output idle on these pins since (a host-chosen
+// pair is free between connections) leaves the pad at its own strength (oep-if-fixture §1.1), never the wire's.
 void ioReclaim(int dio, int clk) {
+  if (dio >= 0) {
+    gpio_set_drive_capability(gpio_num_t(dio), GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(gpio_num_t(clk), GPIO_DRIVE_CAP_0);
+  }
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (!gOut || dio < 0) return;
   if (GPIO.func_out_sel_cfg[dio].out_sel == gDioSig && GPIO.func_out_sel_cfg[clk].out_sel == gClkSig) return;
@@ -141,7 +147,13 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {   // the old pins back
   }
   return gIo.setup(dio, clk);
 }
-void ioReclaim(int, int) {}
+// The weakest strength put back (a fixture gpio output, an output idle or arduino-pico's pinMode(OUTPUT) - 4 mA - on a
+// host-chosen pair since its last connection, oep-if-fixture §1.1): the wire always runs at 2 mA (setup).
+void ioReclaim(int dio, int clk) {
+  if (dio < 0) return;
+  gpio_set_drive_strength(dio, GPIO_DRIVE_STRENGTH_2MA);
+  gpio_set_drive_strength(clk, GPIO_DRIVE_STRENGTH_2MA);
+}
 void ioDrive(int, int) { gIo.driveBoth(); }
 void ioRelease(int, int) { gIo.releaseBoth(); }
 uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }

@@ -234,6 +234,8 @@ class Tail {
     return completed();
   }
   bool anyIgnored() const { return ignored_count_ != 0; }
+  // The tags on the ignored list so far (each once), for an op that writes its own ignored TLV.
+  size_t ignoredTags(const uint8_t *&tags) const { tags = ignored_; return ignored_count_; }
   // Append the ignored TLV after a completed result's payload.
   Result finish(Result result, uint8_t *out, size_t capacity) const {
     if (result.resolution != kResolutionCompleted || !ignored_count_) return result;

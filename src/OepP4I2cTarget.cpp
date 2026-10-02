@@ -33,6 +33,8 @@ bool P4I2cTarget::planApply(const RoleAssignment *roles, size_t count) {
   if (!pins_.claim(sda, kOwnerId)) return false;
   if (!pins_.claim(scl, kOwnerId)) { pins_.release(kOwnerId); return false; }
   sda_ = sda; scl_ = scl;
+  pins_.ownStrength(sda);
+  pins_.ownStrength(scl);
   return true;
 }
 

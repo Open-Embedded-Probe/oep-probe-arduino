@@ -32,6 +32,7 @@ bool P4SpiTarget::planApply(const RoleAssignment *roles, size_t count) {
     if (!pins_.claim(pin[r], kOwnerId)) { pins_.release(kOwnerId); return false; }
   }
   sck_ = pin[kRoleSck]; mosi_ = pin[kRoleMosi]; miso_ = pin[kRoleMiso]; cs_ = pin[kRoleCs];
+  for (int r = kRoleSck; r <= kRoleCs; ++r) pins_.ownStrength(static_cast<uint16_t>(pin[r]));
   return true;
 }
 

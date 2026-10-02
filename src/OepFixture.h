@@ -7,7 +7,12 @@
 //     0x01 set(n u8, n x (channel u16, mode u8)) [TLV]      modes 0 input, 1 pull-up, 2 pull-down, 3 output low,
 //                                                          4 output high, 5 open-drain low, 6 open-drain release,
 //                                                          7 input with pull-up and pull-down
-//     0x02 read(n u8, n x channel u16) [TLV] -> n(u8) n x level [TLV]   no lock
+//          TLV 0x01 drive(index u8, kind u8, value u16), one per mode 3 / 4 element: its output strength (§1.1)
+//     0x02 read(n u8, n x channel u16) [TLV] -> n(u8) n x level [TLV 0x01 drive: n x level, 0xFF not mode 3 / 4]
+//                                                          no lock
+//     The output strength (oep-if-fixture §1.1) where the chip switches it (platformDriveLevels: describe drive_levels,
+//     the classic ESP32 / ESP32-P4 and the RP2040 / RP2350): a set's drive, else the channel's idle drive, else the
+//     default level, kept until the channel is set again; a channel taken or released is at its idle state's (PinTable).
 //   oep.fixture.uart   plan roles 1 = RX, 2 = TX. A position stream like oep.target.console (without the stream
 //                      byte): the plan makes the stream and the UART runs from then on (the probe.config uart item's
 //                      settings, else 115200 8N1) until plan_release; reading does not consume. Positions and mark

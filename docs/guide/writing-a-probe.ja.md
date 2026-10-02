@@ -112,6 +112,15 @@ class Blink final : public oep::Interface {
   ずらしたりしました（36 frame 中 23 だけ正しい。最弱では 72 中 72 で、線の速さは変わらない。2026-10-02）。このライブラリの
   PHY はどれもそうしています（RVSWD: ESP32-P4 は `GPIO_DRIVE_CAP_0`、RP2 は 2 mA。SWIO: classic と P4 は `GPIO_DRIVE_CAP_0`、
   `OEP_SWIO_DRIVE_CAP`）。新しい PHY や別のチップへの移植でも必ず設定します（P4 の SWIO の移植は、最初は既定のままでした）。
+  線がピンを取るたびに設定し直します（RVSWD の PHY は attach のたびにそうします）。host が選ぶ組は接続と接続の間は空いていて、
+  fixture gpio の出力や出力の idle が別の強さを残すことがあるためです。
+- **fixture gpio の出力の強さ**（oep-if-fixture §1.1）は `OepPlatform.h` の `platformDriveLevels()` から来ます。段階と、
+  そのおよその mA と、既定（パッドのリセット時の強さ）です。classic ESP32 / ESP32-P4 は `GPIO_DRIVE_CAP_0..3` で約
+  5 / 10 / 20 / 40 mA、既定は 2。RP2040 / RP2350 は 2 / 4 / 8 / 12 mA で、既定は 4 mA。ほかのチップは持ちません（drive_levels
+  を出さず、set の drive TLV は知らない tag です）。別のチップへの移植では、そこに段階を足すか、持たないままにします。
+  強さが効くのは mode 3 / 4（set と出力の idle）だけです。`PinTable::setPad` は、パッドがそれ以外の mode に移るとき既定の強さに
+  戻します。ピンを自分の周辺回路に使う fixture（UART、I2C / SPI target）は claim のあとで `PinTable::ownStrength` を呼ぶので、
+  出力の idle から直接取ってもパッド本来の強さから始まります。線は自分の強さ（最弱）を自分で設定します。
 
 ## 7. シリアルの口、bind、設定
 
