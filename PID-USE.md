@@ -27,8 +27,9 @@ You may ship firmware with this VID:PID - your own board, your own jig, a change
 2. **It speaks OEP as specified**: it answers confirm, list and describe as oep-spec's core says, and every interface it lists
    under an `oep.` name follows that interface's specification. Your own interfaces use your own reverse-DNS names
    (`io.github.<you>.<name>`), never `oep.`.
-3. **It identifies itself honestly**: iProduct starts with `OEP`, the serial number is unique per unit (the reference firmware
-   uses the chip's MAC), and oep.core's describe carries `unit_id`, the transport list and `oep_pid = 1`.
+3. **It identifies itself honestly**: iProduct starts with `OEP`, the USB serial number is the probe's `unit_id` - unique per
+   unit and unchanged across firmware versions (oep-spec core §3.3 / §7.5; the reference firmware derives it from the chip's
+   unique ID) - and oep.core's describe carries `unit_id`, the transport list and `discoverable = 1`.
 4. **It does not change the protocol incompatibly.** A firmware that changes the wire format, or answers OEP requests in a way
    the specification does not allow, is not an OEP probe and must use a VID:PID of its own.
 
