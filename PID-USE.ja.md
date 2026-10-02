@@ -25,8 +25,9 @@ probe 自身（confirm、list、describe）から読む。そのためには、�
 2. **仕様どおりに OEP を話す**: confirm、list、describe に oep-spec の core のとおりに答え、`oep.` の名前で出すインターフェースは、
    どれもそのインターフェースの仕様に従う。自分のインターフェースには自分の逆 DNS の名前（`io.github.<you>.<name>`）を付け、
    `oep.` を使わない。
-3. **正直に名乗る**: iProduct を `OEP` で始め、serial number を個体ごとに変え（参照の firmware はチップの MAC を使う）、oep.core
-   の describe に `unit_id`、経路の一覧、`oep_pid = 1` を出す。
+3. **正直に名乗る**: iProduct を `OEP` で始め、USB の serial number を probe の `unit_id` にする（個体ごとに違い、firmware の版で
+   変えない。oep-spec core §3.3 / §7.5。参照の firmware はチップの固有の番号から作る）。oep.core の describe に `unit_id`、経路の
+   一覧、`discoverable = 1` を出す。
 4. **プロトコルを非互換に変えない。** wire の形を変えた firmware、仕様が許さない形で OEP の要求に答える firmware は OEP の probe
    ではなく、自分の VID:PID を使う。
 
