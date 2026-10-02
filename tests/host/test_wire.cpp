@@ -13,7 +13,11 @@
 //   wire_retry_ms, and the next request has its own (oep-if-debug §1, §2).
 // - Wire loss (oep-if-debug §2): a request that gets nothing back answers status line and keeps the connection; it
 //   closes only after wire_lost_ms of failures with no good exchange between (requests and the liveness check alike),
-//   a reset's hold and the wire_lost_ms after it not counted.
+//   a reset's hold and the wire_lost_ms after it not counted. A read of all zeros / all ones is no good exchange: on
+//   DMSTATUS it counts as no answer, on another register it leaves the clock as it is (a line with no module behind
+//   it closes after wire_lost_ms, through the liveness check, riscv-dm's ops and the console alike).
+// - Held pins (core §4.3, §8.1): a refusal says cause 1, the channel and its holder_kind; the pair the link was last
+//   on is refused while a plan holds it.
 #include <stdio.h>
 
 #include <vector>
@@ -52,6 +56,9 @@ class FakePhy final : public DmiPhy {
   // flaky: every read fails once per retry try (1 ms each) until the request's allowance is spent
   bool flaky = false;
   uint32_t retry_reads = 0;
+  // stuck: every read comes back with this value (a line held low: 0; one rising through its pull-up, no module: ~0)
+  bool stuck = false;
+  uint32_t stuck_value = 0;
 
   bool attach() override {
     if (attached_flag) return true;
@@ -79,6 +86,7 @@ class FakePhy final : public DmiPhy {
   bool attached() const override { return attached_flag; }
   bool readWire(uint8_t address, uint32_t &value) override {
     if (!present || !attached_flag) return false;
+    if (stuck) { value = stuck_value; return true; }
     if (flaky) {   // the RVSWD PHY's way: retries while the request's allowance lasts, then a failed read
       while (retryLeft()) { g_millis += 1; spentRetrying(1000); ++retry_reads; }
       return false;
@@ -468,6 +476,38 @@ int main() {
     phy.present = true;
   }
 
+  // ---- a line that reads all zeros / all ones (no module behind it) is no good exchange: it closes after wire_lost_ms
+  // (0.0.28: each DMSTATUS read of it counted as an answer, and the clock restarted at every check - never closed) ----
+  for (uint32_t stuck : {0u, 0xffffffffu}) {
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    phy.stuck = true;
+    phy.stuck_value = stuck;
+    CHECK(checkConnection(fixed) && fixed.connected);
+    g_millis += 500;
+    CHECK(checkConnection(fixed) && fixed.connected);
+    // a host's dmi read of DATA0 in between (the same value: it may be the register's own) does not stop the clock
+    const Bytes data0 = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x02, 0x04};
+    r = call(riscv, TargetRiscvDm::kOpDmi, data0, out);
+    CHECK(ok(r));
+    g_millis += 500;
+    CHECK(!checkConnection(fixed) && !fixed.connected && fixed.lost);
+    // riscv-dm's ops see it the same way: halt answers line, and the connection closes after wire_lost_ms
+    phy.stuck = false;
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    phy.stuck = true;
+    const Bytes halt = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    phy.halted = false;
+    r = call(riscv, TargetRiscvDm::kOpHalt, halt, out);
+    CHECK(out.size() == 1 && out[0] == kStatusLine && fixed.connected);
+    g_millis += reg::kLimitWireLostMs;
+    r = call(riscv, TargetRiscvDm::kOpHalt, halt, out);
+    CHECK(out.size() == 1 && out[0] == kStatusLine && !fixed.connected);
+    phy.stuck = false;
+    phy.halted = false;
+  }
+
   // ---- the console's reads run the same clock: lost only after wire_lost_ms of reads that got nothing ----
   {
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
@@ -491,6 +531,26 @@ int main() {
     CHECK(console.lineLost());
     console.stop();
     phy.present = true;
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r));
+  }
+
+  // ---- the console on a line that reads all ones (no module): link-lost after wire_lost_ms (0.0.28: never) ----
+  {
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    static DmConsole console2(dm, phy);
+    CHECK(console2.start(0));
+    console2.poll();
+    phy.stuck = true;
+    phy.stuck_value = 0xffffffffu;
+    for (int i = 0; i < 9; ++i) { g_millis += 100; console2.poll(); }
+    CHECK(!console2.lineLost());
+    g_millis += 200;
+    console2.poll();
+    CHECK(console2.lineLost());
+    console2.stop();
+    phy.stuck = false;
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r));
   }

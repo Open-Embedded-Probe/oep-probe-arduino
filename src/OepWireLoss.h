@@ -18,7 +18,7 @@ namespace oep {
 class WireLossClock {
  public:
   static constexpr uint32_t kLostMs = v1::reg::kLimitWireLostMs;
-  void answered() { failing_ = false; }   // a good exchange
+  void answered() { failing_ = false; }   // a good exchange (DmiPhy::read says which reads are)
   void silent() {                         // an exchange that got nothing back
     if (failing_) return;
     if (excused_ && static_cast<int32_t>(millis() - excused_until_ms_) >= 0) excused_ = false;   // long over

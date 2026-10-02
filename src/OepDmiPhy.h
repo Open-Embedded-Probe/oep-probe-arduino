@@ -23,6 +23,9 @@ inline bool dmVersionKnown(uint32_t dmstatus) {
   return version >= 2 && version != 15;
 }
 
+// DMSTATUS.allhalted (bit 9) of a module: a line reading all ones has it set too, with no module behind it.
+inline bool dmHalted(uint32_t dmstatus) { return dmVersionKnown(dmstatus) && (dmstatus & (1u << 9)); }
+
 class DmiPhy {
  public:
   virtual ~DmiPhy() = default;
@@ -39,12 +42,20 @@ class DmiPhy {
   virtual void free() { release(); }
   virtual bool attached() const = 0;
   // One DMI read with the PHY's own bounded retry (readWire). Its outcome runs the connection's wire-loss clock
-  // (oep-if-debug §2): an answer stops it, a read that got nothing back starts it.
+  // (oep-if-debug §2: lost after wire_lost_ms of exchanges with no answer from the wire, with no successful one between).
+  // A good exchange is a read that came back with a value other than all zeros or all ones: a line held low, or one
+  // that rises through its pull-up with no module behind it, reads one of those (a read cell, a parity bit included,
+  // comes back as the line rests). Such a value is no answer on DMSTATUS - the probe answers status line for it
+  // (TargetRiscvDm::failure, checkConnection) - so the clock runs on as for a read that got nothing; on any other
+  // register it may be the register's value, so it leaves the clock as it is. A read that got nothing back starts it.
   bool read(uint8_t address, uint32_t &value) {
     const bool ok = readWire(address, value);
-    if (ok) loss_.answered(); else loss_.silent();
+    if (!ok) loss_.silent();
+    else if (value != 0 && value != 0xffffffffu) loss_.answered();
+    else if (address == kDmStatusAddress) loss_.silent();
     return ok;
   }
+  static constexpr uint8_t kDmStatusAddress = 0x11;
   WireLossClock &loss() { return loss_; }
   virtual void write(uint8_t address, uint32_t value) = 0;
   // Re-run the bus bring-up without touching any debug-module register. A CH32 drops the

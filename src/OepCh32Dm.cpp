@@ -159,7 +159,7 @@ bool Ch32Dm::halt() {
     for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x80000001);
     for (int i = 0; i < 25; ++i) {
       uint32_t status = 0;
-      if (phy_.read(kDmStatus, status) && (status & (1u << 9))) {
+      if (phy_.read(kDmStatus, status) && dmHalted(status)) {
         // Keep haltreq asserted while halted (E156/E157 ran this way; oep-if-debug §4 allows it). The hart changing
         // state drops the DMI link on this part, and the first word of the first memory read after a halt came back as
         // the previous operation's leftover (2026-09-23): settleHalted starts the caller from a freshly brought-up bus.
@@ -189,7 +189,7 @@ bool Ch32Dm::resume() {
     if (status & (1u << 17)) ok = true;                          // allresumeack
     else if (dmVersionKnown(status) && (status & (1u << 11)) && !(status & (1u << 9)))
       ok = true;                                                 // allrunning, not halted
-    else if ((status & (1u << 9)) && ++halted_reads >= 3) break;
+    else if (dmHalted(status) && ++halted_reads >= 3) break;
   }
   phy_.write(kDmControl, 0x00000001);
   halted_ = !ok;
@@ -388,7 +388,7 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   while (!expired()) {
     uint32_t status = 0;
     if (!phy_.read(kDmStatus, status)) { relink(); continue; }
-    if (status & (1u << 9)) { halted = true; break; }
+    if (dmHalted(status)) { halted = true; break; }
   }
   phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
   phy_.write(kAbstractCs, 0x700);
@@ -418,7 +418,7 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
 bool Ch32Dm::ackHaveReset() {
   uint32_t status = 0;
   if (!attach() || !phy_.read(kDmStatus, status)) return false;
-  if (!(status & (3u << 18))) return false;               // anyhavereset / allhavereset
+  if (!dmVersionKnown(status) || !(status & (3u << 18))) return false;   // anyhavereset / allhavereset of a module
   phy_.write(kDmControl, halted_ ? 0x90000001 : 0x10000001);   // ackhavereset, haltreq kept if we hold a halt
   ++restarts_;
   // The CH32L103 drops its DMI link after this write and the next read fails (2026-09-24: every attach failed
@@ -481,7 +481,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved) {
   while (micros() - started < 50000u) {
     uint32_t status = 0;
     if (!phy_.read(kDmStatus, status)) { relink(); continue; }
-    if (status & (1u << 9)) { halted = true; break; }
+    if (dmHalted(status)) { halted = true; break; }
   }
   phy_.write(kDmControl, 0x80000001);
   phy_.write(kAbstractCs, 0x700);
@@ -520,7 +520,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   while (!halted && micros() - started < 200000u) {
     phy_.write(kDmControl, 0x80000001);
     uint32_t status = 0;
-    if (phy_.read(kDmStatus, status)) halted = (status & (1u << 9)) != 0;
+    if (phy_.read(kDmStatus, status)) halted = dmHalted(status);
     else relink();
   }
   if (!halted) return false;

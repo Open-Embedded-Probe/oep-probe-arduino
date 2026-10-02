@@ -16,11 +16,9 @@ void DmConsole::push(uint8_t byte) {
 // A DMI read of the mailbox. Its outcome runs the PHY's wire-loss clock (oep-if-debug §2, shared with the host's
 // requests on the connection): the wire is lost once reads have got nothing back for wire_lost_ms with no answer between.
 bool DmConsole::readData(uint8_t address, uint32_t &value) {
-  if (!phy_.read(address, value)) {
-    if (phy_.loss().lost()) lost_ = true;
-    return false;
-  }
-  return true;
+  const bool ok = phy_.read(address, value);
+  if (phy_.loss().lost()) lost_ = true;   // also a DMSTATUS of all zeros / ones (no answer, DmiPhy::read)
+  return ok;
 }
 
 void DmConsole::poll() {
