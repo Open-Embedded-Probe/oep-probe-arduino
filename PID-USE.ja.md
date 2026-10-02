@@ -6,9 +6,12 @@
 TinyUSB の既定の `303a:0002`）で、iProduct は `OEP` で始まる。この仮の ID は**配布には使えない**。これに頼る製品や
 firmware を出さないこと。
 
-専用の PID を取得できたら、参照の firmware はそれに切り替える予定である。host は USB の ID に依存しない。iProduct が `OEP` で
-始まることで OEP の probe を見つけ、何ができるかは probe 自身から読む（confirm、list、describe。oep-spec の core のとおり）。
-それまでに配布のために USB の ID が要る firmware は、自分の ID を使うこと。
+専用の PID を取得できたら、参照の firmware はそれに切り替える予定である。それまでは**暫定の決まり**として、host は iProduct が
+`OEP` で始まること（ほかの手がかりは oep-spec の host 開発ガイド §1.7）で OEP の probe の候補を探す。手がかりは候補にすぎず、
+OEP の probe かどうかは、host が開いて confirm に応答があるまで分からない。そのため、たまたま手がかりに当たった関係の無い USB の
+device を開くことがある（host は confirm だけを送り、正しい応答が無ければ閉じる。oep-spec core §3.3）。構成によっては、対象を
+明示する必要がある（probe を unit_id で名指す `oep://<unit_id>`、または利用者が口を選ぶ）。何ができるかは probe 自身から読む
+（confirm、list、describe）。それまでに配布のために USB の ID が要る firmware は、自分の ID を使うこと。
 
 ## 専用の PID を取得した後に使ってよい範囲
 
@@ -32,8 +35,8 @@ firmware を出さないこと。
 使わないでほしい場合:
 
 - OEP を話さない firmware（基板が同じなだけのもの）: 自分の ID を使う。
-- このライブラリから作っていない、独立した OEP の実装: 自分の ID を使う。host は iProduct と describe で同じように見つける。
-  プロトコルはこの ID に依存しない。
+- このライブラリから作っていない、独立した OEP の実装: 自分の ID を使う。host は、利用者が名指すか口を選んだとき、またはその ID
+  への自前の対応で開く。プロトコルはこの ID に依存しない。
 
 ## 変更
 
