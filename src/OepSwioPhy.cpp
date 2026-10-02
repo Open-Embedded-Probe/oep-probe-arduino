@@ -95,7 +95,7 @@ bool SwioPhy::begin(int swio) {
   if (swio < 0 || swio > 31) return false;   // GPIO0-31 (one register; 34-39 are inputs only anyway)
   gPin = swio;
   gMask = 1u << swio;
-  pinMode(gPin, INPUT_PULLUP);
+  pinMode(gPin, INPUT);   // free until a connection takes it (oep-core §8), the same as after a release; attach pulls it up
   ready_ = true;
   return true;
 }
@@ -132,11 +132,7 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
 bool SwioPhy::read(uint8_t address, uint32_t &value) {
   if (!ready_) return false;
   ++transactions_;
-  for (int attempt = 0; attempt < 4; ++attempt) {
-    if (readRaw(address, value)) return true;
-    ++retries_;
-  }
-  return false;
+  return readRetried(address, value);
 }
 
 void SwioPhy::write(uint8_t address, uint32_t value) {
@@ -145,23 +141,13 @@ void SwioPhy::write(uint8_t address, uint32_t value) {
   writeRaw(address, value);
 }
 
-bool SwioPhy::attach() {
-  if (!ready_) return false;
-  if (attached_) return true;
+// The line up and driven: left to its pull-up for 2 ms first, no target if it then reads low (held low: no pull-up, or
+// the target is wedged).
+bool SwioPhy::lineUp() {
   pinMode(gPin, INPUT_PULLUP);
   delay(2);
-  if (!digitalRead(gPin)) return false;   // line held low: no pull-up, or the target is wedged
+  if (!digitalRead(gPin)) return false;
   configureIo();
-  // E123: the configuration register must be written twice, shadow first, before the DM answers.
-  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
-  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
-  writeRaw(kDmControl, 1); writeRaw(kDmControl, 1);
-  uint32_t configuration = 0;
-  const uint32_t started = micros();
-  const bool ok = readRaw(kDmCfgr, configuration);
-  dmi_ns_ = (micros() - started) * 1000u;
-  if (!ok || (configuration & 0xffff0000u) != 0x5aa50000u) { release(); return false; }
-  attached_ = true;
   return true;
 }
 
@@ -346,7 +332,7 @@ bool SwioPhy::begin(int swio) {
   const uint32_t mhz = getCpuFrequencyMhz();
   gT = {cyclesFor(kShortLowNs, mhz), cyclesFor(kLongLowNs, mhz), cyclesFor(kHighNs, mhz), cyclesFor(kHalfNs, mhz),
         cyclesFor(kRechargeNs, mhz), cyclesFor(kZeroNs, mhz), cyclesFor(kRiseTimeoutNs, mhz)};
-  pinMode(gPin, INPUT_PULLUP);
+  pinMode(gPin, INPUT);   // free until a connection takes it (oep-core §8), the same as after a release; attach pulls it up
   ready_ = true;
   return true;
 }
@@ -382,11 +368,7 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
 bool SwioPhy::read(uint8_t address, uint32_t &value) {
   if (!ready_ || !gOutBundle) return false;
   ++transactions_;
-  for (int attempt = 0; attempt < 4; ++attempt) {
-    if (readRaw(address, value)) return true;
-    ++retries_;
-  }
-  return false;
+  return readRetried(address, value);
 }
 
 void SwioPhy::write(uint8_t address, uint32_t value) {
@@ -395,23 +377,13 @@ void SwioPhy::write(uint8_t address, uint32_t value) {
   writeRaw(address, value);
 }
 
-bool SwioPhy::attach() {
-  if (!ready_) return false;
-  if (attached_) return true;
+// The line up and in the bundle: left to its pull-up for 2 ms first (out of any bundle), no target if it then reads
+// low (held low: no pull-up, or the target is wedged).
+bool SwioPhy::lineUp() {
   unconfigureIo();   // pinMode(INPUT_PULLUP), out of any bundle
   delay(2);
-  if (!digitalRead(gPin)) return false;   // line held low: no pull-up, or the target is wedged
+  if (!digitalRead(gPin)) return false;
   if (!configureIo()) { unconfigureIo(); return false; }
-  // E123: the configuration register must be written twice, shadow first, before the DM answers.
-  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
-  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
-  writeRaw(kDmControl, 1); writeRaw(kDmControl, 1);
-  uint32_t configuration = 0;
-  const uint32_t started = micros();
-  const bool ok = readRaw(kDmCfgr, configuration);
-  dmi_ns_ = (micros() - started) * 1000u;
-  if (!ok || (configuration & 0xffff0000u) != 0x5aa50000u) { release(); return false; }
-  attached_ = true;
   return true;
 }
 
@@ -428,6 +400,103 @@ void SwioPhy::free() {
 
 }  // namespace oep
 
+#endif
+
+#if defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4))
+// ---- shared by the classic ESP32 and the ESP32-P4 -------------------------------------------------------------
+namespace oep {
+namespace {
+constexpr uint8_t kSwDmStatus = 0x11, kSwAbstractAuto = 0x18, kSwProgBuf0 = 0x20;
+// The wire has one speed, so nothing slower to fall back to (as the RVSWD's slowest period): the checks take a few
+// retries. SWIO has no parity (oep-if-debug §3.2): only a read that never comes back high is seen as failed; a wrong
+// bit shows up only in a comparison.
+constexpr uint8_t kCheckRetries = 3;
+constexpr int kCheckRounds = 2;   // x 8 patterns: about 2 ms of frames
+}  // namespace
+
+bool SwioPhy::readRetried(uint8_t address, uint32_t &value) {
+  if (readRaw(address, value)) return true;
+  for (int attempt = 1; attempt < 4 && retryLeft(); ++attempt) {   // within the request's wire_retry_ms (oep-if-debug §2)
+    ++retries_;
+    const uint32_t t0 = micros();
+    const bool ok = readRaw(address, value);
+    spentRetrying(micros() - t0);
+    if (ok) return true;
+  }
+  return false;
+}
+
+// The wake / configuration sequence and dmactive (oep-if-debug §1 items 1 and 2, §3): the configuration pair twice -
+// E123: shadow first, before the DM answers - then dmactive only when DMCONTROL does not already read it set (that write
+// clears haltreq: a target halted earlier would run again). The configuration read back says a module is there.
+bool SwioPhy::configureModule() {
+  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
+  writeRaw(kDmShadowCfgr, kCfgr); writeRaw(kDmCfgr, kCfgr);
+  uint32_t control = 0;
+  if (!(readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1))) {
+    writeRaw(kDmControl, 1); writeRaw(kDmControl, 1);   // the two writes the E123 bring-up made
+  }
+  uint32_t configuration = 0;
+  const uint32_t started = micros();
+  const bool ok = readRaw(kDmCfgr, configuration);
+  dmi_ns_ = (micros() - started) * 1000u;
+  return ok && (configuration & 0xffff0000u) == 0x5aa50000u;
+}
+
+// The write path at the wire's one speed (oep-if-debug §1, §3): only the scratch, PROGBUF0, and ABSTRACTAUTO = 0 that
+// makes it free (not restored). PROGBUF0 is read first and written back after.
+bool SwioPhy::writesLand() {
+  static const uint32_t kPatterns[] = {0xa5a5a5a5u, 0x5a5a5a5au, 0xffffffffu, 0x00000001u,
+                                       0x0f0f0f0fu, 0xf0f0f0f0u, 0x80000000u, 0x7fffffffu};
+  uint8_t missed = 0;
+  uint32_t saved = 0;
+  while (!readRaw(kSwProgBuf0, saved)) {
+    if (missed++ >= kCheckRetries) return false;
+    ++search_retries_;
+  }
+  writeRaw(kSwAbstractAuto, 0);
+  bool ok = true;
+  for (int round = 0; round < kCheckRounds && ok; ++round) {
+    for (uint32_t pattern : kPatterns) {
+      for (;;) {
+        writeRaw(kSwProgBuf0, pattern);
+        uint32_t read_back = 0;
+        if (readRaw(kSwProgBuf0, read_back) && read_back == pattern) break;
+        if (missed++ >= kCheckRetries) { ok = false; break; }
+        ++search_retries_;
+      }
+      if (!ok) break;
+    }
+  }
+  for (int attempt = 0; attempt <= kCheckRetries; ++attempt) {   // the value back, read to confirm
+    writeRaw(kSwProgBuf0, saved);
+    uint32_t read_back = 0;
+    if (readRaw(kSwProgBuf0, read_back) && read_back == saved) break;
+  }
+  return ok;
+}
+
+bool SwioPhy::attach() {
+  if (!ready_) return false;
+  if (attached_) return true;
+  if (!lineUp()) return false;
+  if (!configureModule() || !writesLand()) { release(); return false; }
+  attached_ = true;
+  return true;
+}
+
+// A scan's look (oep-if-debug §1): the wake / configuration and dmactive, DMSTATUS read; no write check, released after.
+bool SwioPhy::bringUp(uint32_t &dmstatus) {
+  if (!ready_) return false;
+  if (attached_) return read(kSwDmStatus, dmstatus);
+  if (!lineUp()) return false;
+  const bool ok = configureModule() && readRaw(kSwDmStatus, dmstatus);
+  release();
+  return ok;
+}
+
+}  // namespace oep
+
 #else
 
 namespace oep {
@@ -439,6 +508,7 @@ void SwioPhy::write(uint8_t, uint32_t) {}
 bool SwioPhy::attach() { return false; }
 void SwioPhy::release() { attached_ = false; }
 void SwioPhy::free() { attached_ = false; }
+bool SwioPhy::bringUp(uint32_t &) { return false; }
 }  // namespace oep
 
 #endif

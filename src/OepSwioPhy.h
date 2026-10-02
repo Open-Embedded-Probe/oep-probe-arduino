@@ -21,7 +21,10 @@ class SwioPhy final : public DmiPhy {
  public:
   bool begin(int swio);   // GPIO0-31 (ESP32-P4: 0-54)
   bool usePins(int swdio, int swclk) override;   // swclk -1: one wire
+  // The wake / configuration and dmactive (only when DMCONTROL does not read it set), the configuration read back, then
+  // the write check on PROGBUF0 (put back after) - oep-if-debug §1, §3. false: no target.
   bool attach() override;
+  bool bringUp(uint32_t &dmstatus) override;   // a scan's look: no write check, released after
   void release() override;
   void free() override;   // released, without the pull-up the line has while a link waits
   bool attached() const override { return attached_; }
@@ -42,6 +45,10 @@ class SwioPhy final : public DmiPhy {
   bool ready_ = false, attached_ = false;
   uint32_t retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   bool readRaw(uint8_t address, uint32_t &value);   // IRAM_ATTR on the definition: the attribute is ESP32-only
+  bool readRetried(uint8_t address, uint32_t &value);   // up to 4 tries, within the request's wire_retry_ms
+  bool lineUp();            // the pull-up look (2 ms), then the line driven high
+  bool configureModule();   // the configuration pair twice, dmactive when not set, the configuration read back
+  bool writesLand();        // PROGBUF0 round trips, its value put back
 };
 
 }  // namespace oep
