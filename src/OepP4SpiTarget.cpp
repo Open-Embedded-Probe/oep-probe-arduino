@@ -10,9 +10,6 @@
 
 namespace oep {
 
-namespace {
-}  // namespace
-
 uint8_t P4SpiTarget::planCheck(const RoleAssignment *roles, size_t count) {
   if (count != 4) return kRejectMalformed;
   int pin[5] = {-1, -1, -1, -1, -1};
@@ -64,10 +61,9 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   return w.ok() ? w.length() : 0;
 }
 
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_SPI_SLAVE_DRIVER)
 
-bool P4SpiTarget::start() {
-  if (started_) return true;
+bool P4SpiTarget::begin() {
   spi_bus_config_t bus = {};
   bus.mosi_io_num = mosi_; bus.miso_io_num = miso_; bus.sclk_io_num = sck_;
   bus.quadwp_io_num = -1; bus.quadhd_io_num = -1;
@@ -77,39 +73,78 @@ bool P4SpiTarget::start() {
   cfg.flags = bit_order_ ? SPI_SLAVE_BIT_LSBFIRST : 0;
   cfg.queue_size = 1;
   cfg.mode = mode_;
-  if (spi_slave_initialize(SPI2_HOST, &bus, &cfg, SPI_DMA_DISABLED) != ESP_OK) return false;
+  return spi_slave_initialize(SPI2_HOST, &bus, &cfg, SPI_DMA_DISABLED) == ESP_OK;
+}
+
+// While nothing is armed: a transaction that takes whatever the master sends (MISO 0), so it can be counted.
+bool P4SpiTarget::queueIdle() {
+  idle_trans_ = {};
+  idle_trans_.length = kMaxFrame * 8; idle_trans_.tx_buffer = idle_tx_; idle_trans_.rx_buffer = idle_rx_;
+  idle_queued_ = spi_slave_queue_trans(SPI2_HOST, &idle_trans_, 0) == ESP_OK;
+  return idle_queued_;
+}
+
+bool P4SpiTarget::start() {
+  if (started_) return true;
+  if (!begin()) return false;
   started_ = true;
+  queueIdle();
   return true;
 }
 
 void P4SpiTarget::stop() {
   if (started_) spi_slave_free(SPI2_HOST);
-  started_ = false; armed_ = false; queue_count_ = 0;
+  started_ = false; armed_ = false; idle_queued_ = false; queue_count_ = 0;
 }
 
 bool P4SpiTarget::arm(const uint8_t *tx, size_t tx_length, size_t length) {
   if (!started_ || armed_ || !length || length > kMaxFrame || tx_length > length) return false;
+  // The discard transaction sits in the driver and cannot be taken back: count what it got, then restart the target
+  // with nothing queued (a transfer under way right now is cut; it was not armed).
+  service();
+  if (idle_queued_) {
+    spi_slave_free(SPI2_HOST);
+    idle_queued_ = false;
+    if (!begin()) { started_ = false; return false; }
+  }
   memset(tx_buffer_, 0, sizeof tx_buffer_); memcpy(tx_buffer_, tx, tx_length);
   memset(rx_buffer_, 0, sizeof rx_buffer_);
   trans_ = {};
   trans_.length = length * 8; trans_.tx_buffer = tx_buffer_; trans_.rx_buffer = rx_buffer_;
-  if (spi_slave_queue_trans(SPI2_HOST, &trans_, 0) != ESP_OK) return false;
+  if (spi_slave_queue_trans(SPI2_HOST, &trans_, 0) != ESP_OK) { queueIdle(); return false; }
   armed_ = true; armed_length_ = length;
   return true;
 }
 
 void P4SpiTarget::service() {
-  if (!armed_) return;
+  if (!started_) return;
   spi_slave_transaction_t *done = nullptr;
-  if (spi_slave_get_trans_result(SPI2_HOST, &done, 0) != ESP_OK) return;
-  armed_ = false;
-  ++transactions_;
-  if (queue_count_ == kQueueDepth) { ++errors_; return; }
-  const size_t bytes = (done->trans_len + 7) / 8 > armed_length_ ? armed_length_ : (done->trans_len + 7) / 8;
-  memcpy(queue_[queue_count_], rx_buffer_, bytes);
-  queue_length_[queue_count_] = static_cast<uint8_t>(bytes);
-  queue_bits_[queue_count_] = done->trans_len;
-  ++queue_count_;
+  while (spi_slave_get_trans_result(SPI2_HOST, &done, 0) == ESP_OK && done) {
+    if (done == &idle_trans_) {   // a transfer nobody armed: MOSI dropped, counted (fixture §4)
+      idle_queued_ = false;
+      if (done->trans_len) { ++transactions_; ++errors_; }
+      queueIdle();
+      continue;
+    }
+    if (!armed_ || done != &trans_) continue;
+    if (done->trans_len == 0) {   // CS without a clock: noise, the arm keeps waiting
+      if (spi_slave_queue_trans(SPI2_HOST, &trans_, 0) != ESP_OK) { armed_ = false; queueIdle(); }
+      continue;
+    }
+    armed_ = false;
+    ++transactions_;
+    if (done->trans_len > armed_length_ * 8) ++errors_;   // over length: the rest was dropped
+    if (queue_count_ == kQueueDepth) {
+      ++errors_;
+    } else {
+      const size_t bytes = (done->trans_len + 7) / 8 > armed_length_ ? armed_length_ : (done->trans_len + 7) / 8;
+      memcpy(queue_[queue_count_], rx_buffer_, bytes);
+      queue_length_[queue_count_] = static_cast<uint8_t>(bytes);
+      queue_bits_[queue_count_] = done->trans_len;
+      ++queue_count_;
+    }
+    queueIdle();
+  }
 }
 
 #else

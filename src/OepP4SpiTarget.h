@@ -9,6 +9,10 @@
 // One CS-framed transaction is armed at a time with the MISO bytes to send;
 // after the master raises CS the result (MOSI bytes, length in bits) is queued
 // for read_rx. Polled from service() in loop(); nothing runs in an ISR.
+// While nothing is armed a discard transaction (MISO 0, MOSI to a scratch buffer) waits in the driver, so a transfer
+// the host did not arm is seen and counted in transactions and errors (fixture §4); arm replaces it (the driver cannot
+// take a queued transaction back: arm restarts the target). A CS frame with no SCK edge (0 bits) is noise: it counts
+// nothing and leaves the arm waiting (the spec does not say; floating CS / SCK make them).
 #pragma once
 
 #include <Arduino.h>
@@ -16,7 +20,9 @@
 #include "OepPinTable.h"
 #include "Oep.h"
 
-#if defined(ARDUINO_ARCH_ESP32)
+// The ESP-IDF spi_slave driver; OEP_HOST_FAKE_SPI_SLAVE: a host test's fake of it (tests/host/shim)
+#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_SPI_SLAVE)
+#define OEP_SPI_SLAVE_DRIVER 1
 #include <driver/spi_slave.h>
 #endif
 
@@ -55,13 +61,20 @@ class P4SpiTarget final : public Interface {
   alignas(4) uint8_t tx_buffer_[kMaxFrame];
   alignas(4) uint8_t rx_buffer_[kMaxFrame];
   size_t armed_length_ = 0;
+  // the discard transaction while nothing is armed: MISO 0, MOSI dropped
+  alignas(4) uint8_t idle_tx_[kMaxFrame] = {};
+  alignas(4) uint8_t idle_rx_[kMaxFrame];
+  bool idle_queued_ = false;
   // finished transactions, oldest first
   uint8_t queue_[kQueueDepth][kMaxFrame];
   uint8_t queue_length_[kQueueDepth] = {};
   uint32_t queue_bits_[kQueueDepth] = {};
   uint8_t queue_count_ = 0;
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_SPI_SLAVE_DRIVER)
   spi_slave_transaction_t trans_ = {};
+  spi_slave_transaction_t idle_trans_ = {};
+  bool begin();        // the driver alone
+  bool queueIdle();
 #endif
   bool start();
   void stop();
