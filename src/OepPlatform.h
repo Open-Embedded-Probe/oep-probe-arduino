@@ -60,11 +60,13 @@ inline void platformGpio(int pin, uint8_t mode) {
     case kGpioInputPullDown: pinMode(pin, INPUT_PULLDOWN); break;
     case kGpioInputPullUpDown: pinMode(pin, INPUT); gpio_set_pulls(pin, true, true); break;
     // The level goes into the output latch before the output is enabled: the other order drives whatever the
-    // latch held last, which on a reset line can be a brief high.
-    case kGpioOutputLow: digitalWrite(pin, LOW); pinMode(pin, OUTPUT); break;
-    case kGpioOutputHigh: digitalWrite(pin, HIGH); pinMode(pin, OUTPUT); break;
+    // latch held last, which on a reset line can be a brief high. gpio_put, not digitalWrite: after pinMode
+    // INPUT_PULLUP / INPUT_PULLDOWN arduino-pico's digitalWrite only turns the output on or off and leaves the latch
+    // at the 0 / 1 those modes put there, so a pull-up pin set to output high would come up driven low.
+    case kGpioOutputLow: gpio_put(pin, 0); pinMode(pin, OUTPUT); break;
+    case kGpioOutputHigh: gpio_put(pin, 1); pinMode(pin, OUTPUT); break;
     // No open-drain output on the RP2 pad: release as an input, drive the low.
-    case kGpioOpenDrainLow: digitalWrite(pin, LOW); pinMode(pin, OUTPUT); break;
+    case kGpioOpenDrainLow: gpio_put(pin, 0); pinMode(pin, OUTPUT); break;
     case kGpioOpenDrainRelease: pinMode(pin, INPUT); break;
     default: break;
   }
