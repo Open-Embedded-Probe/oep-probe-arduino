@@ -12,8 +12,8 @@
 //   - 16 KiB frames (confirm's max_frame): one bulk transfer per push.
 //
 // With nothing wired, io.github.open-embedded-probe.test-signal (this example's own interface, TestSignal.h) puts an
-// LEDC square on a pin so the capture has something to see. The USB device is VID:PID 303a:0002 until the OEP PID is
-// granted, iProduct "OEP capture (ESP32-P4)", serial = the unit id (the board MAC, lowercase hex; one usbipd bind lasts across reflashes).
+// LEDC square on a pin so the capture has something to see. The USB device is VID:PID 303a:0002 (the board's default, a temporary
+// USB ID), iProduct "OEP capture (ESP32-P4)", serial = the unit id (the board MAC, lowercase hex; one usbipd bind lasts across reflashes).
 // USB-Serial/JTAG stays for uploads and a status line. Host: host/stream_test.py (streams at a rate, checks every edge).
 #include <esp_mac.h>
 #include <EspUsbDevice.h>

@@ -48,8 +48,9 @@ another device's VID:PID) is different: the only way to know whether an OEP prob
 OEP frames come back, and opening an arbitrary serial port can disturb whatever is on it (a board that resets on DTR, a modem,
 another tool's device). A host cannot do that on its own for every port, so the user has to pick such a port explicitly. The
 links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
-browsers - and those need a VID:PID of their own to be recognised. Until the project has a PID of its own, the reference firmware
-uses `303a:0002` and hosts recognise the probe by an iProduct starting with `OEP` (oep-spec docs/usb-identity.ja.md).
+browsers. Hosts recognise those by an iProduct starting with `OEP` and the describe, not by VID:PID (oep-spec
+docs/usb-identity.ja.md). The firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the
+ESP32-P4), which may not be used for distribution. When the project obtains a PID of its own, the firmware will switch to it.
 
 A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume
 (some bridges and boards do not run 921600 reliably), so a host stays at 115200 unless the probe and the host agree on more.
@@ -67,8 +68,9 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
   (Japanese first; English follows once it settles).
 - Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
   `oep` command, a fake probe for tests).
-- USB VID:PID: until the project has a PID of its own the reference firmware uses `303a:0002` with an iProduct starting `OEP`; who may use
-  the OEP PID is in [PID-USE.md](PID-USE.md).
+- USB VID:PID: the firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the ESP32-P4)
+  with an iProduct starting `OEP`, which may not be used for distribution. When the project obtains a PID of its own, the firmware
+  will switch to it ([PID-USE.md](PID-USE.md)).
 
 ## An example: an ESP32-P4 testing a CH32L103
 

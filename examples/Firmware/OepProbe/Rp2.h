@@ -4,8 +4,8 @@
 // RP2040 / RP2350 (built for the Raspberry Pi Pico / Pico 2; profiles rp2040 / rp2350).
 //
 // Transport: USB CDC (Serial), a serial port: COBS frames (oep-core §3.1). The USB device says iProduct "OEP probe
-// (RP2040)" / "(RP2350)" (how discovery knows it, oep-core §3.3), the board's own VID:PID and serial number until the
-// OEP PID is granted (PID-USE.md).
+// (RP2040)" / "(RP2350)" (how discovery knows it, oep-core §3.3), the board's own VID:PID and serial number (the VID:PID
+// is a temporary USB ID, not for distribution; PID-USE.md).
 //
 // Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all).

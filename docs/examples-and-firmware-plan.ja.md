@@ -36,7 +36,7 @@
 | `OepProbe-esp32` | ESP32 DevKitC ほか | UART bridge | swio | gpio、uart | console、probe.config |
 | `OepProbe-esp32p4` | ESP32-P4 | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | rvswd | gpio、uart、capture | console、probe.config、I2C / SPI target |
 
-どれも iProduct は `OEP` で始め、PID が割り当てられたら `1209:4F45`（PID-USE.md）。describe の probe の名前はボード
+どれも iProduct は `OEP` で始め、VID:PID はボードの既定（仮の USB の ID で、配布には使えない。専用の PID を取得できたら、それに切り替える予定。PID-USE.md）。describe の probe の名前はボード
 （`raspberrypi-pico` など）で、治具の profile（`io.github.ch32-riscv-ug.rp2350-l103` など）は付けない。
 
 Firmware の workflow は、`examples/Firmware/` の各 sketch の sketch.yaml の profile ごとに作って付ける

@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The project's USB VID:PID is not settled: `src/OepRegistry.h` synced from oep-spec 2bbd7d1 drops `kUsbReferenceVid` / `kUsbReferencePid` (registry `usb.reference_vid` / `reference_pid` are gone). The firmware keeps the board's default VID:PID (303a:0002 on the ESP32-P4), a temporary USB ID that may not be used for distribution; the READMEs, the guides and the sketch comments no longer name a planned number. Hosts find probes by iProduct `OEP` and describe.
+- (JA) プロジェクトの USB の VID:PID は決まっていない: oep-spec 2bbd7d1 から写した `src/OepRegistry.h` から `kUsbReferenceVid` / `kUsbReferencePid` が消えた（registry の `usb.reference_vid` / `reference_pid` は削除）。firmware はボードの既定の VID:PID（ESP32-P4 では 303a:0002）のまま。これは仮の USB の ID で、配布には使えない。README、ガイド、sketch のコメントは予定の番号を書かない。host は iProduct の `OEP` と describe で probe を見つける。
 
 ## 0.0.28
 - (EN) Fix: replacing a plan (plan_apply with a new channel set for the same fn, or a settings change of that plan) no longer puts every old channel to Hi-Z before claiming the new set. In 0.0.27 a power line kept in both gpio plans glitched off (ESP32-P4: the target lost power and stopped answering until power-cycled). `Endpoint::replaceFns` now defers the idle states (`PinTable::deferIdle` / `settleIdle`; `ProbeConfig::setPins` hands the table to the endpoint): a channel in both plans keeps its state and drive, a channel leaving goes to its idle state at the end, a new channel stays in its idle state until the first set (oep-core §8, fixture §1). The same for every fixture that releases through the pin table (uart, i2c / spi targets, analog) and for a refused replacement's undo. Host test in `test_idle.cpp`.
