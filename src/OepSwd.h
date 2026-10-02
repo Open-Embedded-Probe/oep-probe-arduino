@@ -80,6 +80,8 @@ class WireSwd final : public Interface {
   void close();                      // the live connection goes: pins released (Hi-Z), let go of in the pin table
   bool allowed(uint16_t swdio, uint16_t swclk) const;
   bool free(uint16_t swdio, uint16_t swclk) const;   // nothing but this link's live connection on that pair holds them
+  // unavailable for a pair free() refuses: cause 1, the held channel and its holder_kind (core §4.3)
+  Result heldRefusal(uint16_t swdio, uint16_t swclk, uint8_t *out, size_t capacity) const;
   uint16_t disabledOf(uint16_t swdio, uint16_t swclk) const;   // a channel the settings disable, or 0xFFFF
   // a channel with an idle item in the settings (outputs: an output idle only), or 0xFFFF (oep-if-debug §1)
   uint16_t idleOf(uint16_t swdio, uint16_t swclk, bool outputs) const;

@@ -434,6 +434,9 @@ class Interface {
     (void)roles;
     return count ? kRejectUnavailable : 0;
   }
+  // The cause (core §4.3 unavailable payload) of the last planCheck that answered unavailable when none of its channels
+  // is held by something else (the endpoint reports a held channel itself: cause 1, the channel, its holder_kind).
+  virtual uint8_t planRefusalCause() const { return reg::core::kUnavailableCauseWrongState; }
   virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
   virtual void planRelease() {}
   // false: this interface's planned channels are shared with no other fn's plan (core §8.1) - an analog input that

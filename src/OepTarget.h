@@ -99,6 +99,10 @@ bool checkConnection(DebugPort &port);
 bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk);
+// The first channel of the pair held by anything but this wire's own connection (0xFFFF: none), and the
+// unavailable refusal for it (core §4.3: cause 1, the channel, its holder_kind).
+uint16_t pairHeld(const DebugPort &port, uint16_t swdio, uint16_t swclk);
+Result pairHeldRefusal(const DebugPort &port, uint16_t swdio, uint16_t swclk, uint8_t *out, size_t capacity);
 void holdPins(DebugPort &port);
 // The connections answer (oep-if-debug §2.1: first(u8) -> more(u8) count(u8) count x (len, entry)) for a wire with
 // this one place.
@@ -126,7 +130,8 @@ class WireRvswd final : public Interface {
   uint16_t instance_;
   const char *name_;
   bool isRvswd() const { return strcmp(name_, reg::wire_rvswd::kName) == 0; }
-  uint8_t choosePair(const uint8_t *pins, size_t len);
+  struct PinRefusal { uint8_t cause; uint16_t channel; uint8_t holder_kind; };   // an unavailable's payload (core §4.3)
+  uint8_t choosePair(const uint8_t *pins, size_t len, PinRefusal &why);
   Result scan(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result attach(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
 };

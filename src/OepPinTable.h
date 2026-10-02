@@ -39,9 +39,12 @@ class PinTable {
   bool disabled(uint16_t channel) const { return channel < kChannels && (disabled_ >> channel) & 1; }
   uint64_t disabledMask() const { return disabled_; }
   bool free(uint16_t channel) const { return allowed(channel) && !disabled(channel) && owner_[channel] == 0; }
-  bool claim(uint16_t channel, uint8_t owner) {
+  // kind: who holds it, for an unavailable refusal's holder_kind (core §4.3): a plan (an interface's planApply), or a
+  // wire's live connection (reg::core::kHolderKindConnection).
+  bool claim(uint16_t channel, uint8_t owner, uint8_t kind = reg::core::kHolderKindPlan) {
     if (!free(channel)) return false;
     owner_[channel] = owner;
+    kind_[channel] = kind;
     pending_ &= ~(uint64_t{1} << channel);   // taken again within a replacement: its pad untouched
     return true;
   }
@@ -84,6 +87,8 @@ class PinTable {
   }
   uint64_t allowedMask() const { return allowed_; }
   uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
+  // The holder_kind of a held channel (what claim was given), 0 when nobody holds it.
+  uint8_t holderKind(uint16_t channel) const { return channel < kChannels && owner_[channel] ? kind_[channel] : 0; }
   // Idle states (oep.probe.config idle: 0 Hi-Z, 1 pull-up, 2 pull-down, 3 output low, 4 output high; kIdleUnset =
   // Hi-Z). Applied now to a free channel (apply false: only kept, for a channel about to be disabled), and at every
   // release; an output idle drives its level for as long as the channel is free, at its strength `drive` (a level of
@@ -169,6 +174,7 @@ class PinTable {
   uint64_t strong_ = 0;       // pads setPad left at another strength than the default
   uint8_t deferring_ = 0;
   uint8_t owner_[kChannels] = {};
+  uint8_t kind_[kChannels] = {};
   uint8_t idle_[kChannels] = {kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,

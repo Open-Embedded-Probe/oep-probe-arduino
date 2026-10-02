@@ -158,6 +158,17 @@ static bool isSettingsIdle(const Result &r, const Bytes &out, uint16_t channel) 
          kind && kind[0] == reg::core::kHolderKindSettingsIdle;
 }
 
+// rejected unavailable, cause 1 pin in use, the channel, its holder_kind (core §4.3)
+static bool isHeld(const Result &r, const Bytes &out, uint16_t channel, uint8_t holder_kind) {
+  if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
+  size_t len = 0;
+  const uint8_t *cause = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadCause, len);
+  const uint8_t *ch = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadChannel, len);
+  const uint8_t *kind = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadHolderKind, len);
+  return cause && cause[0] == reg::core::kUnavailableCausePinInUse && ch && (ch[0] | ch[1] << 8) == channel && kind &&
+         kind[0] == holder_kind;
+}
+
 int main() {
   // A fixed pair (the wire's own channels 0 / 1, not in the pin table) and a host-chosen one among 4-7.
   static FakePhy phy;
@@ -308,15 +319,34 @@ int main() {
     CHECK(pins5.claim(5, 0x01));                                                    // a gpio plan takes 5
     phy5.attaches = phy5.bring_ups = 0;
     r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 4, 5), out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && !chosen5.connected);   // 0.0.28: attached
+    // unavailable cause 1, channel 5, holder_kind 1 plan (core §4.3; 0.0.28: attached)
+    CHECK(isHeld(r, out, 5, reg::core::kHolderKindPlan) && !chosen5.connected);
     CHECK(phy5.attaches == 0 && pins5.owner(5) == 0x01);
     CHECK(!usePair(chosen5, 4, 5));                                                 // a slot's attach: the same
     const Bytes scan45 = {1, 4, 0, 5, 0};
     r = call(wire5, WireRvswd::kOpScan, scan45, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && phy5.bring_ups == 0);
+    CHECK(isHeld(r, out, 5, reg::core::kHolderKindPlan) && phy5.bring_ups == 0);   // 0.0.28: no holder_kind
     pins5.release(0x01);
     r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 4, 5), out);
     CHECK(ok(r) && chosen5.connected);
+    // another wire on the same pins meets this connection: holder_kind 2
+    static FakePhy phy6;
+    static Ch32Dm dm6(phy6);
+    static DebugPort other{dm6, 0xfffe, 0xfffe};
+    other.pins = &pins5;
+    other.pin_choice = chosen5.pin_choice;
+    other.pin_owner = 0xf2;
+    static WireRvswd wire6(other, 5);
+    r = call(wire6, WireRvswd::kOpAttach, attachRequest(0, 6, 4), out);
+    CHECK(isHeld(r, out, 4, reg::core::kHolderKindConnection) && !other.connected);
+    const Bytes scan64 = {1, 6, 0, 4, 0};
+    r = call(wire6, WireRvswd::kOpScan, scan64, out);
+    CHECK(isHeld(r, out, 4, reg::core::kHolderKindConnection));
+    // the one seat taken by the host on 4 / 5: another pair of this wire is a count limit (cause 2)
+    r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 6, 5), out);
+    size_t clen = 0;
+    const uint8_t *cause = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadCause, clen);
+    CHECK(r.detail == kRejectUnavailable && cause && cause[0] == reg::core::kUnavailableCauseLimit);
     r = call(wire5, WireRvswd::kOpDetach, detachRequest(chosen5.number), out);
     CHECK(ok(r));
   }

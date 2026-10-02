@@ -97,6 +97,12 @@ class Endpoint {
   static constexpr size_t kMaxRoles = 64;   // the plan's role assignments, every fn together (describe plan_roles)
   size_t plan(RoleAssignment *out, size_t max, bool persistent_only = false) const;
   uint8_t replacePlan(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns);
+  // The unavailable answer for the last replacement refused unavailable (core §4.3: the cause, the channel that met
+  // something, who holds it).
+  Result planUnavailable(uint8_t *out, size_t capacity) const {
+    return unavailable(out, capacity, plan_refusal_.cause, plan_refusal_.channel, plan_refusal_.holder_fn,
+                       plan_refusal_.holder_kind);
+  }
   // The channels oep.probe.config's disable items take away (channel < 64): a plan_apply naming one is refused
   // unavailable cause 5 (held by settings) with the channel (probe.config §1).
   void setDisabled(uint64_t mask) { disabled_ = mask; }
@@ -179,7 +185,10 @@ class Endpoint {
   size_t probe_tlv_length_ = 0;
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
   PinTable *pins_ = nullptr;                     // setPins
-  uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
+  // What the last plan replacement refused unavailable met (core §4.3's payload: cause, channel, holder_fn,
+  // holder_kind; 0xFFFF / 0 = left out). replaceFns fills it.
+  struct PlanRefusal { uint8_t cause; uint16_t channel, holder_fn; uint8_t holder_kind; };
+  PlanRefusal plan_refusal_ = {0, 0xffff, 0xffff, 0};
   uint32_t boot_id_ = 0;
   // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed; one
   // broken candidate after the first good frame at the new speed reverts) or committed (idle_ms, at most

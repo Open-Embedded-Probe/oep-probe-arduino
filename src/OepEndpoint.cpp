@@ -758,12 +758,10 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     if (disabled(roles[r].channel))
       return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, roles[r].channel, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
-  clash_fn_ = 0;
   const uint16_t reason = replaceFns(roles, count, fns, nfns, false);
   if (reason > 0xff) return failed();
-  if (reason == kRejectUnavailable && clash_fn_)   // a channel another plan has, where one of them shares none
-    return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, clash_channel_, clash_fn_,
-                       reg::core::kHolderKindPlan);
+  // another plan's channel, a wire connection's, the interface's own state: what it met (core §4.3)
+  if (reason == kRejectUnavailable) return planUnavailable(out, capacity);
   // a role, channel or combination the interface does not declare: unsupported, tag 0x90 (core §8's table)
   if (reason == kRejectUnsupported) return unsupportedTag(out, capacity, kTagRoleAssignment | kTagCritical);
   if (reason) return rejected(static_cast<uint8_t>(reason));
@@ -801,6 +799,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
     old_persistent[i] = persistent_[i];
     if (planned_[i]) { interfaces_[i]->planRelease(); planned_[i] = false; }
   }
+  plan_refusal_ = {reg::core::kUnavailableCausePinInUse, 0xffff, 0xffff, 0};
   auto applyAll = [this, &listed](const RoleAssignment *set, size_t n, bool check) -> uint16_t {
     for (size_t i = 0; i < count_; ++i) {
       if (!listed[i]) continue;
@@ -809,7 +808,26 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
       for (size_t r = 0; r < n; ++r) if (set[r].function == i + 1) mine[m++] = set[r];
       if (!m) continue;
       if (check) {
-        if (const uint8_t reason = interfaces_[i]->planCheck(mine, m)) return reason;
+        if (const uint8_t reason = interfaces_[i]->planCheck(mine, m)) {
+          if (reason == kRejectUnavailable) {   // a channel held now (a wire's connection, a resource), else its state
+            plan_refusal_ = {interfaces_[i]->planRefusalCause(), 0xffff, 0xffff, 0};
+            for (size_t r = 0; r < m && pins_; ++r) {
+              const uint16_t ch = mine[r].channel;
+              if (!pins_->owner(ch) || pins_->owner(ch) == 0xff) continue;
+              plan_refusal_ = {reg::core::kUnavailableCausePinInUse, ch, 0xffff, pins_->holderKind(ch)};
+              for (size_t k = 0; k < plan_count_; ++k)   // another fn's plan: which, and whether the settings put it in
+                if (plan_roles_[k].channel == ch) {
+                  const uint16_t g = plan_roles_[k].function;
+                  plan_refusal_.holder_fn = g;
+                  plan_refusal_.holder_kind =
+                      persistent_[g - 1] ? reg::core::kHolderKindSettingsPlan : reg::core::kHolderKindPlan;
+                  break;
+                }
+              break;
+            }
+          }
+          return reason;
+        }
       } else {
         if (!interfaces_[i]->planApply(mine, m)) return kRejectUnavailable + 0x100;
         planned_[i] = true;
@@ -824,7 +842,11 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
     for (size_t r = 0; r < old_count && plan_count_ < kMaxRoles; ++r) plan_roles_[plan_count_++] = old[r];
     for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = old_persistent[i];
   };
-  if (plan_count_ + count > kMaxRoles) { undo(); return kRejectUnavailable; }   // over plan_roles (core §8)
+  if (plan_count_ + count > kMaxRoles) {   // over plan_roles (core §8)
+    plan_refusal_ = {reg::core::kUnavailableCauseLimit, 0xffff, 0xffff, 0};
+    undo();
+    return kRejectUnavailable;
+  }
   // a channel of an interface that shares none may be in no other fn's plan, old (kept) or new (core §8.1)
   for (size_t r = 0; r < count; ++r) {
     const uint16_t f = roles[r].function;
@@ -835,16 +857,17 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
              (!shares || (o.function >= 1 && o.function <= count_ && !interfaces_[o.function - 1]->planShares()));
     };
     for (size_t k = 0; k < plan_count_; ++k)
-      if (clash(plan_roles_[k])) {
-        clash_channel_ = roles[r].channel;
-        clash_fn_ = plan_roles_[k].function;
+      if (clash(plan_roles_[k])) {   // another fn's plan: a session's (1), or one the settings put in (5)
+        const uint16_t g = plan_roles_[k].function;
+        plan_refusal_ = {reg::core::kUnavailableCausePinInUse, roles[r].channel, g,
+                         persistent_[g - 1] ? reg::core::kHolderKindSettingsPlan : reg::core::kHolderKindPlan};
         undo();
         return kRejectUnavailable;
       }
     for (size_t k = 0; k < count; ++k)
-      if (clash(roles[k])) {
-        clash_channel_ = roles[r].channel;
-        clash_fn_ = roles[k].function;
+      if (clash(roles[k])) {   // two fns of this very replacement
+        plan_refusal_ = {reg::core::kUnavailableCausePinInUse, roles[r].channel, roles[k].function,
+                         reg::core::kHolderKindPlan};
         undo();
         return kRejectUnavailable;
       }

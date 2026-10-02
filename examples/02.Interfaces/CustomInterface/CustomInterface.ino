@@ -84,7 +84,7 @@ class Blink final : public oep::Interface {
       case kOpSet: {   // level(u8) [TLV]
         const oep::Result parsed = oep::plainTail(tail, payload, length, 1, out, capacity);
         if (oep::refused(parsed)) return parsed;
-        if (pin_ < 0) return oep::rejected(oep::kRejectUnavailable);   // not planned
+        if (pin_ < 0) return oep::wrongState(out, capacity);   // not planned: unavailable cause 6 (core §4.3)
         if (payload[0] > 1) return oep::rejected(oep::kRejectMalformed);
         left_ = 0;
         level_ = payload[0];
@@ -94,7 +94,7 @@ class Blink final : public oep::Interface {
       case kOpBlink: {   // count(u8) half_ms(u16) [TLV]
         const oep::Result parsed = oep::plainTail(tail, payload, length, 3, out, capacity);
         if (oep::refused(parsed)) return parsed;
-        if (pin_ < 0) return oep::rejected(oep::kRejectUnavailable);
+        if (pin_ < 0) return oep::wrongState(out, capacity);
         const uint16_t half = oep::getU16(payload + 1);
         if (half == 0) return oep::rejected(oep::kRejectMalformed);
         left_ = static_cast<uint16_t>(payload[0]) * 2;   // edges to go

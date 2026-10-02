@@ -52,6 +52,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_analog::kLockFreeOps, op); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
+  uint8_t planRefusalCause() const override { return refusal_cause_; }   // capturing: 6; the roles' count: 2
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
@@ -90,6 +91,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   size_t max_read_ = 1000;
   bool subscribed_ = false, reported_ = true;
   uint8_t state_ = reg::fixture_analog::kStateUnconfigured;
+  uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;   // planRefusalCause
   uint32_t total_hz_ = 0, rate_num_ = 0, rate_den_ = 1;   // the conversions a second; the rate a channel = num / den
   uint32_t samples_ = 0, frames_ = 0;                     // asked; complete frames captured
   uint16_t *buffer_ = nullptr;                            // samples_ x channels_ values, frame after frame

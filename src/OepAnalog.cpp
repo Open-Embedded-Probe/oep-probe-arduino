@@ -120,7 +120,10 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
 // ---- the plan: roles 0 .. C-1 on ADC inputs, each once ------------------------------------------------------------
 
 uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
-  if (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting || count > kMaxChannels) return kRejectUnavailable;
+  refusal_cause_ = reg::core::kUnavailableCauseWrongState;
+  if (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting) return kRejectUnavailable;
+  refusal_cause_ = reg::core::kUnavailableCauseLimit;   // the roles: more than its channels, one twice, one skipped
+  if (count > kMaxChannels) return kRejectUnavailable;
   uint8_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
     const uint8_t role = roles[i].role;

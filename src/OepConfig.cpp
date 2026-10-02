@@ -579,7 +579,7 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
         if (d.roles[r].function == plan_fns[k]) roles[n++] = d.roles[r];
     const uint8_t reason = endpoint_.replacePlan(roles, n, plan_fns, plan_fn_count);
     if (reason) applyIdles(was_idle, was_drive);
-    if (reason == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
+    if (reason == kRejectUnavailable) return endpoint_.planUnavailable(out, capacity);   // what it met (core §4.3)
     if (reason == kRejectUnsupported) return unsupportedTag(out, capacity, plan_raw);   // the plan item, as received
     if (reason) return rejected(reason);
   }

@@ -58,6 +58,16 @@ static bool isSettingsIdle(const Result &r, const Bytes &out, uint16_t channel) 
          kind && kind[0] == reg::core::kHolderKindSettingsIdle;
 }
 
+static bool isHeld(const Result &r, const Bytes &out, uint16_t channel, uint8_t holder_kind) {
+  if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
+  size_t len = 0;
+  const uint8_t *cause = tlv(out, 0, reg::core::kTlvUnavailablePayloadCause, len);
+  const uint8_t *ch = tlv(out, 0, reg::core::kTlvUnavailablePayloadChannel, len);
+  const uint8_t *kind = tlv(out, 0, reg::core::kTlvUnavailablePayloadHolderKind, len);
+  return cause && cause[0] == reg::core::kUnavailableCausePinInUse && ch && (ch[0] | ch[1] << 8) == channel && kind &&
+         kind[0] == holder_kind;
+}
+
 int main() {
   Bytes out;
 
@@ -120,8 +130,21 @@ int main() {
     CHECK(isSettingsIdle(r, out, 5) && !chosen.connected);
     r = call(wire2, WireSwd::kOpAttach, attachRequest(4, 6), out);   // the pull-down idle on 4, named: accepted
     CHECK(ok(r) && chosen.connected);
+    // the one seat taken: another pair is a count limit (cause 2; 0.0.28: cause 1)
+    r = call(wire2, WireSwd::kOpAttach, attachRequest(6, 7), out);
+    size_t clen = 0;
+    const uint8_t *cause = tlv(out, 0, reg::core::kTlvUnavailablePayloadCause, clen);
+    CHECK(r.detail == kRejectUnavailable && cause && cause[0] == reg::core::kUnavailableCauseLimit);
     r = call(wire2, WireSwd::kOpDetach, u16(chosen.number), out);
     CHECK(ok(r));
+    // a channel a plan holds: unavailable cause 1, the channel, holder_kind 1 (core §4.3; 0.0.28: the cause alone)
+    CHECK(pins.claim(7, 0x01));
+    r = call(wire2, WireSwd::kOpAttach, attachRequest(6, 7), out);
+    CHECK(isHeld(r, out, 7, reg::core::kHolderKindPlan) && !chosen.connected);
+    const Bytes scan67 = {1, 6, 0, 7, 0};
+    r = call(wire2, WireSwd::kOpScan, scan67, out);
+    CHECK(isHeld(r, out, 7, reg::core::kHolderKindPlan));
+    pins.release(0x01);
   }
 
   // ---- wire loss: status line keeps the connection until wire_lost_ms of failures ----

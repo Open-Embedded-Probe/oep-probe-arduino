@@ -218,6 +218,22 @@ bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   return freeFor(swdio) && freeFor(swclk);
 }
 
+uint16_t pairHeld(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
+  if (!port.pin_choice || !port.pins) return 0xffff;
+  auto held = [&](uint16_t c) {   // this wire's own connection is not "something else" (its seat is another matter)
+    if (c == 0xffff) return false;
+    const uint8_t owner = port.pins->owner(c);
+    return owner != 0 && owner != port.pin_owner;
+  };
+  return held(swdio) ? swdio : held(swclk) ? swclk : 0xffff;
+}
+
+Result pairHeldRefusal(const DebugPort &port, uint16_t swdio, uint16_t swclk, uint8_t *out, size_t capacity) {
+  const uint16_t held = pairHeld(port, swdio, swclk);
+  if (held == 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
+  return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, held, 0xFFFF, port.pins->holderKind(held));
+}
+
 bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk) {
   if (!port.connected && pairIdle(port, swdio, swclk, true) != 0xffff) return false;   // an output idle: never driven
   // the pair the link is on: a live connection's own, or - nothing live - only while nothing else holds its pins (a
@@ -234,8 +250,8 @@ bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk) {
 void holdPins(DebugPort &port) {
   if (!port.pin_choice || !port.pins || !port.connected) return;
   port.pins->releaseQuiet(port.pin_owner);
-  port.pins->claim(port.swdio, port.pin_owner);
-  if (port.swclk != 0xffff) port.pins->claim(port.swclk, port.pin_owner);
+  port.pins->claim(port.swdio, port.pin_owner, reg::core::kHolderKindConnection);
+  if (port.swclk != 0xffff) port.pins->claim(port.swclk, port.pin_owner, reg::core::kHolderKindConnection);
 }
 
 // connections (oep-if-debug §2.1): first(u8) -> more(u8) count(u8), per entry len(u8) then connection(u16) swdio(u16)
@@ -279,26 +295,27 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
 // The attach pins TLV (oep-if-debug §1): the pair to attach on, the link moved there. Absent: the live connection's pair
 // (join it), else the fixed pair, else - pins the host chooses, nothing live - refused (the host names one). Another pair
 // than the live connection's takes its seat only when a slot alone uses it (the seat rule); else refused. 0, or a
-// reject reason.
-uint8_t WireRvswd::choosePair(const uint8_t *pins, size_t len) {
-  if (!pins) return port_.pin_choice && !port_.connected ? kRejectUnavailable : 0;
+// reject reason; for unavailable, `why` says what core §4.3's payload carries.
+uint8_t WireRvswd::choosePair(const uint8_t *pins, size_t len, PinRefusal &why) {
+  why = {reg::core::kUnavailableCauseWrongState, 0xffff, 0};
+  if (!pins) return port_.pin_choice && !port_.connected ? kRejectUnavailable : 0;   // the host names a pair
   if (len != 4) return kRejectMalformed;
   const uint16_t d = getU16(pins), c = getU16(pins + 2);
   if (!pairAllowed(port_, d, c)) return kRejectUnsupported;   // not a pair this wire declares (core §4.3 order 6)
-  if (port_.pin_choice && port_.pins) {                        // held by anything but this wire's own connection - the
-    const uint16_t chs[2] = {d, c};                            // pair the link is on included (a plan may hold it now)
-    for (uint16_t ch : chs) {
-      if (ch == 0xffff) continue;
-      const uint8_t owner = port_.pins->owner(ch);
-      if (owner != 0 && owner != port_.pin_owner) return kRejectUnavailable;
-    }
+  const uint16_t held = pairHeld(port_, d, c);                 // the pair the link is on included (a plan may hold it now)
+  if (held != 0xffff) {
+    why = {reg::core::kUnavailableCausePinInUse, held, port_.pins->holderKind(held)};
+    return kRejectUnavailable;
   }
   if (d == port_.swdio && c == port_.swclk) return 0;          // the pair the link is on (live or not)
   if (!port_.pins) return kRejectUnavailable;
   if (port_.connected) {
-    if (port_.users != DebugPort::kUserSlot) return kRejectUnavailable;   // no seat: the host's connection is on it
+    // no seat: the host's connection is on another pair (max_connections 1)
+    why = {reg::core::kUnavailableCauseLimit, 0xffff, 0};
+    if (port_.users != DebugPort::kUserSlot) return kRejectUnavailable;
     releaseConnection(port_, DebugPort::kUserSlot, true);     // the seat rule: a slot-only connection makes room
   }
+  why = {reg::core::kUnavailableCausePinInUse, 0xffff, 0};
   return usePair(port_, d, c) ? 0 : kRejectUnavailable;
 }
 
@@ -340,8 +357,9 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     const uint16_t idle = pairIdle(port_, d, c, true);   // an output idle: cause 5, holder_kind 7 (debug §1)
     if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
                                             reg::core::kHolderKindSettingsIdle);
-    if (!pairFree(port_, d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
-      return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, port_.pins && port_.pins->owner(d) ? d : c);
+    if (port_.connected && (d != port_.swdio || c != port_.swclk))   // the one seat taken (debug §1): a count limit
+      return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+    if (!pairFree(port_, d, c)) return pairHeldRefusal(port_, d, c, out, capacity);   // cause 1, the channel, its holder
   }
   if (capacity < 2) return failed();
   if (!port_.connected) {   // the scan's line settings (a connection keeps its own)
@@ -485,14 +503,16 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       idle = pairIdle(port_, port_.swdio, port_.swclk, false);
     if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
                                             reg::core::kHolderKindSettingsIdle);
-    if (const uint8_t bad = choosePair(pins, plen)) {
+    PinRefusal why;
+    if (const uint8_t bad = choosePair(pins, plen, why)) {
       if (bad == kRejectUnsupported) return unsupportedTag(out, capacity, wire::kTlvAttachPins | kTagCritical);   // critical, above
-      if (bad == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
+      if (bad == kRejectUnavailable) return unavailable(out, capacity, why.cause, why.channel, 0xFFFF, why.holder_kind);
       return rejected(bad);
     }
   }
   if (with_reset && port_.pins && port_.pins->owner(static_cast<uint16_t>(reset_channel)))
-    return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, static_cast<uint16_t>(reset_channel));
+    return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, static_cast<uint16_t>(reset_channel), 0xFFFF,
+                       port_.pins->holderKind(static_cast<uint16_t>(reset_channel)));
   if (!phy.setIdleClockLow(idle_low)) {   // an existing connection takes the new rest level too
     const Result r = tail.refuse(wire::kTlvAttachIdleClock, idle_critical, out, capacity);
     if (refused(r)) return r;

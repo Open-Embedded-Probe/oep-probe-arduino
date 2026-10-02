@@ -190,6 +190,52 @@ static void testReplaceKeepsSharedChannels() {
   CHECK(floating(40) && floating(42) && drives(43, LOW));
 }
 
+// A plan refused unavailable says what it met (core §4.3): cause 1, the channel, holder_kind - a wire's live connection
+// (2), another session's plan (1), a plan the settings put in (5). 0.0.28 sent an empty payload for a channel a
+// connection held.
+static bool unavailableWith(const Result &r, const Bytes &out, uint8_t cause, uint16_t channel, uint8_t kind) {
+  if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
+  uint8_t got_cause = 0, got_kind = 0;
+  uint16_t got_channel = 0xffff;
+  for (size_t at = 0; at + 2 <= out.size(); at += 2u + out[at + 1]) {
+    if (out[at] == reg::core::kTlvUnavailablePayloadCause) got_cause = out[at + 2];
+    if (out[at] == reg::core::kTlvUnavailablePayloadChannel) got_channel = getU16(out.data() + at + 2);
+    if (out[at] == reg::core::kTlvUnavailablePayloadHolderKind) got_kind = out[at + 2];
+  }
+  return got_cause == cause && got_channel == channel && got_kind == kind;
+}
+
+static void testPlanRefusalPayload() {
+  static NullStream stream;
+  static uint8_t rx[512], tx[512];
+  static Endpoint ep(stream, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kVendorBulk, 0);
+  static PinTable pins((1ull << 44) | (1ull << 45) | (1ull << 46));
+  static FixtureGpio gpio(pins, 0, 1), gpio2(pins, 1, 2);
+  ep.add(gpio);    // fn 1
+  ep.add(gpio2);   // fn 2
+  ep.setPins(&pins);
+  const uint16_t fn = 1, fn2 = 2;
+  CHECK(pins.claim(44, 0xf0, reg::core::kHolderKindConnection));   // a debug wire's live connection on 44
+  const RoleAssignment on44[] = {{fn, reg::fixture_gpio::kRoleLine, 44}};
+  CHECK(ep.replacePlan(on44, 1, &fn, 1) == kRejectUnavailable);
+  Bytes out(64);
+  Result r = ep.planUnavailable(out.data(), out.size());
+  out.resize(r.length);
+  CHECK(unavailableWith(r, out, reg::core::kUnavailableCausePinInUse, 44, reg::core::kHolderKindConnection));
+  CHECK(pins.owner(44) == 0xf0);
+  pins.releaseQuiet(0xf0);
+  // fn 2's plan, put in through the settings (replacePlan), holds 45: fn 1 naming 45 meets a settings plan
+  const RoleAssignment on45[] = {{fn2, reg::fixture_gpio::kRoleLine, 45}};
+  CHECK(ep.replacePlan(on45, 1, &fn2, 1) == 0);
+  const RoleAssignment want45[] = {{fn, reg::fixture_gpio::kRoleLine, 45}};
+  CHECK(ep.replacePlan(want45, 1, &fn, 1) == kRejectUnavailable);
+  out.assign(64, 0);
+  r = ep.planUnavailable(out.data(), out.size());
+  out.resize(r.length);
+  CHECK(unavailableWith(r, out, reg::core::kUnavailableCausePinInUse, 45, reg::core::kHolderKindSettingsPlan));
+  CHECK(ep.replacePlan(nullptr, 0, &fn2, 1) == 0);
+}
+
 // ---- output drive strength (oep-if-fixture §1.1; OEP_HOST_FAKE_DRIVE: levels 5 / 10 / 20 / 40 mA, default 2) ----
 
 static Bytes setWithDrive(std::vector<std::pair<uint16_t, uint8_t>> elements, std::vector<std::vector<uint8_t>> drives) {
@@ -325,6 +371,7 @@ int main() {
   testGpioTakeKeepsIdle();
   testWireReleaseAndReset();
   testReplaceKeepsSharedChannels();
+  testPlanRefusalPayload();
 #if defined(OEP_HOST_FAKE_DRIVE)
   testDriveDescribe();
   testDriveSet();

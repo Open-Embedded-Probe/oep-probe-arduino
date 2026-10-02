@@ -122,6 +122,16 @@ bool WireSwd::free(uint16_t swdio, uint16_t swclk) const {
   return ok(swdio) && ok(swclk);
 }
 
+Result WireSwd::heldRefusal(uint16_t swdio, uint16_t swclk, uint8_t *out, size_t capacity) const {
+  uint16_t held = 0xffff;
+  if (port_.pins) {
+    auto taken = [&](uint16_t c) { const uint8_t o = port_.pins->owner(c); return o != 0 && o != port_.pin_owner; };
+    held = taken(swdio) ? swdio : taken(swclk) ? swclk : 0xffff;
+  }
+  if (held == 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
+  return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, held, 0xFFFF, port_.pins->holderKind(held));
+}
+
 bool WireSwd::move(uint16_t swdio, uint16_t swclk) {
   if (swdio == port_.swdio && swclk == port_.swclk) return true;
   if (port_.connected || !port_.pin_choice || !allowed(swdio, swclk) || !free(swdio, swclk)) return false;
@@ -225,8 +235,9 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5, holder_kind 7 (oep-if-debug §1)
         if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
                                                 reg::core::kHolderKindSettingsIdle);
-        if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
-          return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
+        if (port_.connected && (d != port_.swdio || c != port_.swclk))   // the one seat taken (debug §1): a count limit
+          return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+        if (!free(d, c)) return heldRefusal(d, c, out, capacity);   // cause 1, the channel, its holder (core §4.3)
       }
       if (capacity < 2) return failed();
       // the scan's clock: the slowest this probe goes when no ceiling is given (oep-if-debug §3), else under max_speed
@@ -331,8 +342,9 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5, holder_kind 7
           if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
                                                   reg::core::kHolderKindSettingsIdle);
-          if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))   // held, or no seat
-            return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
+          if (port_.connected && (d != port_.swdio || c != port_.swclk))   // no seat (max_connections 1): a count limit
+            return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+          if (!free(d, c)) return heldRefusal(d, c, out, capacity);   // cause 1, the channel, its holder (core §4.3)
           if (!move(d, c)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
         }
       }
@@ -383,8 +395,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           port_.number = number;
           port_.loss.clear();   // a new connection: its own wire-loss clock (oep-if-debug §2)
           if (port_.pin_choice && port_.pins) {   // the live connection holds its pins (core §8.1)
-            port_.pins->claim(port_.swdio, port_.pin_owner);
-            port_.pins->claim(port_.swclk, port_.pin_owner);
+            port_.pins->claim(port_.swdio, port_.pin_owner, reg::core::kHolderKindConnection);
+            port_.pins->claim(port_.swclk, port_.pin_owner, reg::core::kHolderKindConnection);
           }
           port_.active_half_ns = half;
           port_.active_targetsel = have_targetsel;
