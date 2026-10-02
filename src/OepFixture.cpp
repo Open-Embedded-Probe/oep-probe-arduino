@@ -132,12 +132,12 @@ uint8_t FixtureUart::planCheck(const RoleAssignment *roles, size_t count) {
 }
 
 // Park TX at the UART idle level: high through the pull-up first (pinMode(OUTPUT) alone starts low), then driven.
-// A dip reaches the DUT as a framing-error byte that sits in its line buffer (2026-09-22, X035 testcmd).
+// A dip reaches the DUT as a framing-error byte that sits in its line buffer (2026-09-22, X035 testcmd). The level goes
+// through platformGpio: on the RP2 a digitalWrite after INPUT_PULLUP leaves the latch low, and OUTPUT then drove a dip.
 void FixtureUart::idleHigh() {
   if (tx_ < 0) return;
   pinMode(tx_, INPUT_PULLUP);
-  digitalWrite(tx_, HIGH);
-  pinMode(tx_, OUTPUT);
+  platformGpio(tx_, kGpioOutputHigh);
 }
 
 bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
