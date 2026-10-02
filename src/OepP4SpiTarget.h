@@ -47,6 +47,8 @@
 #define OEP_SPI_MISO_GATE 1
 #include <driver/gpio.h>
 #include <esp_ipc.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 #include <hal/gpio_ll.h>
 #endif
 
@@ -119,6 +121,8 @@ class P4SpiTarget final : public Interface {
  private:
   bool gated_ = false;
   static void onCs(void *self);   // a CS edge, in the GPIO interrupt: MISO's output enable = CS low
+  static constexpr uint32_t kServiceStack = 4096;   // the install task's stack (bytes): esp_intr_alloc and a log
+  static bool gateService();             // the GPIO ISR service on kGateCore, once per boot (an ordinary task)
   static void gateInstall(void *self);   // on kGateCore (esp_ipc): the handler, and MISO set from CS at once
   static void gateRemove(void *self);    // on kGateCore: the handler out, MISO undriven
   bool gate_ok_ = false;

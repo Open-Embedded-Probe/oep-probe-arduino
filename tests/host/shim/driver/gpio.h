@@ -8,6 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <esp_ipc.h>
+#include <fake_core.h>
+
 typedef int esp_err_t;
 #ifndef ESP_OK
 #define ESP_OK 0
@@ -25,7 +28,6 @@ typedef void (*gpio_isr_t)(void *arg);
 struct gpio_dev_t {};
 inline gpio_dev_t GPIO;
 
-inline int g_fake_core = 1;   // the core the code runs on (loop(): core 1; esp_ipc.h moves it)
 struct FakeGpio {
   bool service = false;
   int service_core = -1;      // where the ISR service was installed: its handlers run there
@@ -38,10 +40,19 @@ struct FakeGpio {
 };
 inline FakeGpio g_fake_gpio;
 
+// As ESP-IDF's: a second install is refused (with an error log there, counted here); the first takes the core it is
+// called on and allocates the interrupt there through esp_ipc_call_blocking (gpio_isr_register), so an install made
+// from inside an IPC call to that core never returns on the chip.
+inline int g_fake_gpio_error_logs = 0;
+inline void fakeGpioRegister(void *) { g_fake_gpio.service = true; }
 inline esp_err_t gpio_install_isr_service(int) {
-  if (g_fake_gpio.service) return ESP_ERR_INVALID_STATE;
-  g_fake_gpio.service = true;
+  if (g_fake_gpio.service) { ++g_fake_gpio_error_logs; return ESP_ERR_INVALID_STATE; }
   g_fake_gpio.service_core = g_fake_core;
+  if (esp_ipc_call_blocking(static_cast<uint32_t>(g_fake_core), fakeGpioRegister, nullptr) != ESP_OK) {
+    ++g_fake_gpio_error_logs;
+    g_fake_gpio.service_core = -1;
+    return 0x105;   // ESP_ERR_NOT_FOUND
+  }
   return ESP_OK;
 }
 inline esp_err_t gpio_set_intr_type(gpio_num_t pin, gpio_int_type_t type) { g_fake_gpio.intr[pin] = type; return ESP_OK; }

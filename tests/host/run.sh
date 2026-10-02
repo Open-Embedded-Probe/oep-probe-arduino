@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Open Embedded Probe
 # Host tests of the portable core (serial-port framing, the endpoint's serial-port rules, the binds) and of the
-# I2C / SPI targets (the SPI one on a fake spi_slave driver, the I2C one with a fake controller), of the pin table's idle
+# I2C / SPI targets (the SPI one on a fake spi_slave driver, also behind a relaying broker's sequence on a UART bridge,
+# the I2C one with a fake controller), of the pin table's idle
 # states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
 # unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the RVSWD PHY's attach on a
 # simulated target (what is written before the speed is verified, the checks, the budget), and of the SWD wire on a
@@ -19,6 +20,10 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_SLAVE -I"$here/shim" -I"$src" -o "$out-spi" \
   "$here/test_spi_target.cpp" "$src/OepP4SpiTarget.cpp"
 "$out-spi"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_SLAVE -I"$here/shim" -I"$src" -o "$out-broker-spi" \
+  "$here/test_broker_spi.cpp" "$src/OepP4SpiTarget.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
+  "$src/OepCaptureGroup.cpp"
+"$out-broker-spi"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_I2C_SLAVE -I"$here/shim" -I"$src" -o "$out-i2c" \
   "$here/test_i2c_target.cpp" "$src/OepP4I2cTarget.cpp"
 "$out-i2c"

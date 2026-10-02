@@ -35,7 +35,7 @@ struct Status {
 static Result call(P4SpiTarget &t, uint8_t op, const Bytes &payload, Bytes &out) {
   out.assign(256, 0);
   const Result r = t.handle(op, payload.data(), payload.size(), out.data(), out.size());
-  out.resize(r.length);
+  out.resize(r.length <= out.size() ? r.length : 0);
   return r;
 }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
@@ -261,6 +261,12 @@ int main() {
   // (tag 0x43, u32): how long MISO may stay undriven after CS falls
   {
     CHECK(g_fake_gpio.service && g_fake_gpio.service_core == 0);   // 0.0.28: installed from loop(), core 1
+    // the ISR service installed once, from a task pinned to core 0 - not from the IPC task, where the install's own
+    // IPC call waited for ever (0.0.28+ec38b1d: the first configure never answered) - and never again (a second
+    // install logs an error, on the classic's UART0)
+    CHECK(g_fake_ipc_deadlocks == 0);
+    CHECK(g_fake_gpio_error_logs == 0);
+    CHECK(g_fake_tasks == 1);
     uint8_t d[64];
     const size_t n = t.describe(d, sizeof d);
     bool found = false;

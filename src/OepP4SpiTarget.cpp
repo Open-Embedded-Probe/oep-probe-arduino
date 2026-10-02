@@ -127,14 +127,44 @@ void IRAM_ATTR P4SpiTarget::onCs(void *arg) {
   else gpio_ll_output_enable(&GPIO, self->miso_);
 }
 
-// On kGateCore, in the IPC task: the ISR service installed there (so the GPIO interrupts it enables go to that core and
-// its handlers run there), the CS handler added and MISO set from CS once - inside a critical section, so no CS edge's
-// handler on this core falls between the look at CS and the output enable it sets.
+// The GPIO ISR service, once per boot, from an ordinary task pinned to kGateCore: the service takes the core of its
+// first install (its interrupts go there and its handlers run there). Not from the IPC task: the install allocates the
+// interrupt through esp_ipc_call_blocking itself, and a call from inside an IPC call waits for the IPC lock its caller
+// holds - forever (0.0.28+ec38b1d: configure never answered, the probe stopped). Once only: a second install is refused
+// with an error log, and on the classic the log goes out on UART0, the OEP port.
+namespace {
+struct ServiceJob {
+  SemaphoreHandle_t done;
+  esp_err_t result;
+};
+void serviceTask(void *arg) {
+  ServiceJob *job = static_cast<ServiceJob *>(arg);
+  job->result = gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
+  xSemaphoreGive(job->done);
+  vTaskDelete(nullptr);
+}
+}  // namespace
+
+bool P4SpiTarget::gateService() {
+  static bool installed = false;
+  if (installed) return true;
+  static StaticSemaphore_t buffer;
+  static SemaphoreHandle_t done = xSemaphoreCreateBinaryStatic(&buffer);
+  ServiceJob job = {done, ESP_FAIL};
+  if (xTaskCreatePinnedToCore(serviceTask, "oep_gpio_isr", kServiceStack, &job, uxTaskPriorityGet(nullptr), nullptr,
+                              kGateCore) != pdPASS)
+    return false;
+  xSemaphoreTake(done, portMAX_DELAY);
+  installed = job.result == ESP_OK || job.result == ESP_ERR_INVALID_STATE;   // INVALID_STATE: the sketch installed it
+  return installed;
+}
+
+// On kGateCore, in the IPC task (nothing here makes an IPC call of its own): the CS handler added and MISO set from CS
+// once - inside a critical section, so no CS edge's handler on this core falls between the look at CS and the output
+// enable it sets.
 void P4SpiTarget::gateInstall(void *arg) {
   P4SpiTarget *self = static_cast<P4SpiTarget *>(arg);
   self->gate_ok_ = false;
-  const esp_err_t service = gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
-  if (service != ESP_OK && service != ESP_ERR_INVALID_STATE) return;   // INVALID_STATE: already installed
   portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
   portENTER_CRITICAL(&mux);
   if (gpio_isr_handler_add(static_cast<gpio_num_t>(self->cs_), onCs, self) == ESP_OK) {
@@ -159,7 +189,7 @@ void P4SpiTarget::gateRemove(void *arg) {
 bool P4SpiTarget::gateBegin() {
   gpio_ll_output_disable(&GPIO, miso_);   // undriven until the handler looks at CS
   gpio_ll_set_output_enable_ctrl(&GPIO, static_cast<uint8_t>(miso_), false, false);
-  if (esp_ipc_call_blocking(kGateCore, gateInstall, this) != ESP_OK || !gate_ok_) {
+  if (!gateService() || esp_ipc_call_blocking(kGateCore, gateInstall, this) != ESP_OK || !gate_ok_) {
     gpio_ll_output_disable(&GPIO, miso_);
     return false;
   }
