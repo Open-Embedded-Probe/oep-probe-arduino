@@ -7,7 +7,7 @@
 
 ## ID
 
-`1209:4F45`（pid.codes）は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
+OEP の USB の VID:PID（pid.codes の VID）は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
 USB の device** を指す。ライブラリが対応するどの基板でもよい（ESP32-P4、RP2350、RP2040、後から足すもの）。その device は
 Open Embedded Probe のプロトコル（[oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)）を話す。
 
@@ -37,5 +37,5 @@ probe 自身（confirm、list、describe）から読む。そのためには、�
 
 ## 変更
 
-この文書は、このリポジトリへのレビューを経た pull request でだけ変える。ID の登録は pid.codes の `1209/4F45/index.md` で、
+この文書は、このリポジトリへのレビューを経た pull request でだけ変える。ID の登録は pid.codes にあり、
 持ち主は `Open-Embedded-Probe`。
