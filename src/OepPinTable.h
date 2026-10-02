@@ -42,13 +42,29 @@ class PinTable {
   bool claim(uint16_t channel, uint8_t owner) {
     if (!free(channel)) return false;
     owner_[channel] = owner;
+    pending_ &= ~(uint64_t{1} << channel);   // taken again within a replacement: its pad untouched
     return true;
+  }
+  // A plan replacement (oep-core §8, oep-if-fixture §1): between deferIdle and settleIdle a released channel is only
+  // marked; settleIdle puts the ones nobody took again in their idle state. A channel in both the old and the new plan
+  // keeps its current state and drive; one leaving goes to its idle state; a new one stays as it was (its idle state).
+  void deferIdle() { ++deferring_; }
+  void settleIdle() {
+    if (deferring_ && --deferring_) return;
+    const uint64_t pending = pending_;
+    pending_ = 0;
+    for (uint8_t c = 0; c < kChannels; ++c)
+      if (((pending >> c) & 1) && owner_[c] == 0 && !disabled(c)) applyIdle(c);
   }
   // A released channel goes to its idle state (oep-core §8): Hi-Z unless the probe's settings (or its fixed wiring)
   // say pull-up / pull-down / output low / output high. Nothing but the settings' idle drives a pin nobody owns.
   void release(uint8_t owner) {
     for (uint8_t c = 0; c < kChannels; ++c)
-      if (owner_[c] == owner) { owner_[c] = 0; if (!disabled(c)) applyIdle(c); }
+      if (owner_[c] == owner) {
+        owner_[c] = 0;
+        if (deferring_) pending_ |= uint64_t{1} << c;
+        else if (!disabled(c)) applyIdle(c);
+      }
   }
   // The same for an owner whose own driver already left its pins Hi-Z (a debug wire's PHY): only a channel with an idle
   // set is touched, so a channel without one keeps the PHY's state (on the ESP32-P4 a pinMode takes a pin out of the
@@ -90,6 +106,8 @@ class PinTable {
   uint64_t allowed_ = 0;
   uint64_t disabled_ = 0;   // the settings' disable items
   uint64_t input_only_ = 0;   // setInputOnly
+  uint64_t pending_ = 0;      // released during a replacement, not yet settled (deferIdle)
+  uint8_t deferring_ = 0;
   uint8_t owner_[kChannels] = {};
   uint8_t idle_[kChannels] = {kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,

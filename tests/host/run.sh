@@ -20,5 +20,5 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_I2C_SLAVE -
   "$here/test_i2c_target.cpp" "$src/OepP4I2cTarget.cpp"
 "$out-i2c"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-idle" "$here/test_idle.cpp" \
-  "$src/OepFixture.cpp"
+  "$src/OepFixture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out-idle"

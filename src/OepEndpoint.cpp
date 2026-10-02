@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 #include "OepEndpoint.h"
+#include "OepPinTable.h"
 
 #include <string.h>
 
@@ -770,6 +771,14 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
 // kRejectUnavailable + 0x100 when an interface accepted the check and then failed to apply (completed failed).
 uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns,
                               bool persistent) {
+  // The old plans are released and the new ones applied as one change: a channel in both keeps its state and drive
+  // (a power line through a gpio plan does not blink off), one leaving goes to its idle state at the end, a new one
+  // stays in its idle state until its first set (oep-core §8, oep-if-fixture §1). The undo path settles the same way.
+  struct Settle {
+    PinTable *pins;
+    explicit Settle(PinTable *p) : pins(p) { if (pins) pins->deferIdle(); }
+    ~Settle() { if (pins) pins->settleIdle(); }
+  } settle(pins_);
   bool listed[kMaxInterfaces] = {};
   for (size_t k = 0; k < nfns; ++k) if (fns[k] >= 1 && fns[k] <= count_) listed[fns[k] - 1] = true;
   RoleAssignment old[kMaxRoles];
