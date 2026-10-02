@@ -48,8 +48,9 @@ another device's VID:PID) is different: the only way to know whether an OEP prob
 OEP frames come back, and opening an arbitrary serial port can disturb whatever is on it (a board that resets on DTR, a modem,
 another tool's device). A host cannot do that on its own for every port, so the user has to pick such a port explicitly. The
 links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
-browsers. Hosts recognise those by an iProduct starting with `OEP` and the describe, not by VID:PID (oep-spec
-docs/usb-identity.ja.md). The firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the
+browsers. Hosts identify OEP probes automatically only by the project's own USB VID:PID (none obtained yet), open a probe
+named by its unit_id (the USB serial number) and check it with describe, and until then may try devices with an iProduct
+starting `OEP` as a temporary clue, sending only a confirm first (oep-spec core §3.3, docs/usb-identity.ja.md). The firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the
 ESP32-P4), which may not be used for distribution. When the project obtains a PID of its own, the firmware will switch to it.
 
 A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume

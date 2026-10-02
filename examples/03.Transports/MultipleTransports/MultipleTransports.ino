@@ -15,8 +15,8 @@
 //
 // The HS vendor bulk interface is written directly (build_opt.h: CFG_TUD_VENDOR_TXRX_BUFFERED=0 and friends; compile
 // with --clean after changing it): oep::DirectBulkStream hands whole frames to the USB stack. The HS device says
-// iProduct "OEP ..." - how a host finds OEP probes without opening every port (core §3.3) - and a serial number of the
-// chip's MAC.
+// iProduct "OEP ..." (free text; starting "OEP" is a host's temporary clue until the project's VID:PID, host guide §1.7)
+// and a serial number of the chip's MAC (the unit_id, how a host finds a probe named by it, core §3.3).
 //
 // One interface, oep.fixture.gpio, so there is something to use; add yours the same way.
 #include <esp_mac.h>
@@ -70,7 +70,7 @@ void setup() {
   usb.vid = 0x303a;   // the board's default: a temporary USB ID, not for distribution (PID-USE.md)
   usb.pid = 0x0002;
   usb.manufacturer = "Open Embedded Probe";
-  usb.product = "OEP multiple transports";   // iProduct starting "OEP": discovery
+  usb.product = "OEP multiple transports";   // free text; starting "OEP" is a host's temporary clue
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
   usbDevice.begin(usb);
@@ -82,7 +82,7 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setFlushAfterBurst(true);
-  endpoint.setDiscoverable(true);   // describe discoverable: this probe is on the OEP discovery list (the iProduct starts "OEP")
+  // describe discoverable stays 0: it is 1 only on the project's own USB VID:PID, none listed yet (core §3.3 / §7.5)
 
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(oep::platformRandom32());

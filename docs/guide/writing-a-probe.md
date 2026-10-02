@@ -132,12 +132,14 @@ fixture UART and the capture do this.
 
 ## 9. USB identity
 
-A USB probe says iProduct starting `OEP` (how hosts discover it), a serial number unique per unit, and the VID:PID:
+A USB probe says an iProduct starting `OEP` (free text; a host's temporary clue until the project's VID:PID, oep-spec host
+guide §1.7), a serial number unique per unit (the unit_id: how a host finds a probe named by it), and the VID:PID:
 the board's default (`303a:0002` on the ESP32-P4). That is a temporary USB ID, which may not be used for distribution; when the
 project obtains a PID of its own, the firmware will switch to it ([PID-USE.md](../../PID-USE.md)).
 The vendor bulk interface carries bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45 and a vendor HID says usage page
 0xFF4F, usage 0x45 (core §3.3; `Firmware/OepProbe/Esp32P4.h` patches EspUsbDevice's descriptors for that).
-`endpoint.setDiscoverable(true)` says so in describe.
+Only a probe on the project's own VID:PID calls `endpoint.setDiscoverable(true)` (describe discoverable, core §7.5);
+until that VID:PID is listed in the registry, no probe does.
 
 ## 10. Testing
 
