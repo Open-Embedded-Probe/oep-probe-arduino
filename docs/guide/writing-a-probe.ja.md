@@ -107,6 +107,11 @@ class Blink final : public oep::Interface {
   で host が名指した空いている組ならどれでも受けて、PHY をそこへ動かし（`usePins`）、生きている接続はそのピンを表で持ちます。
   `reset_allowed` は attach の reset TLV が引いてよい channel で、いつも host が名指します。
 - 線の設定（休ませ方、速さの上限）は target のもので、host が attach で渡します。probe はチップごとの既定を持ちません。
+- **debug の線は、線のタイミングが許すいちばん弱い出力の強さで駆動します。** 線の鋭いエッジは、同じ治具の隣の fixture の線に
+  乗ります。classic ESP32 の既定の 20 mA では、コンソールを読んでいる間、SWIO の線が 1 MHz の SPI target の bit を落としたり
+  ずらしたりしました（36 frame 中 23 だけ正しい。最弱では 72 中 72 で、線の速さは変わらない。2026-10-02）。このライブラリの
+  PHY はどれもそうしています（RVSWD: ESP32-P4 は `GPIO_DRIVE_CAP_0`、RP2 は 2 mA。SWIO: classic と P4 は `GPIO_DRIVE_CAP_0`、
+  `OEP_SWIO_DRIVE_CAP`）。新しい PHY や別のチップへの移植でも必ず設定します（P4 の SWIO の移植は、最初は既定のままでした）。
 
 ## 7. シリアルの口、bind、設定
 
@@ -153,3 +158,8 @@ usage 0x45 を持ちます（core §3.3。`Firmware/OepProbe/Esp32P4.h` が EspU
   ません（chip の reset が要る）。PHY とピンの表はこれを避けています（`releaseQuiet`）。自分のコードでも避けてください。
 - `build_opt.h` のあるスケッチ（P4 の HS vendor の direct build）は、それを変えたら `--clean` でビルドします。
 - `handle()` や `loop()` で止まらないこと。poll しなくなった probe は答えなくなり、host は時間切れになります。
+- debug の線が忙しいとき（コンソールの読み取り、flash の書き込み）だけ壊れる fixture は、CPU より線のエッジを先に疑います。
+  線が休んでいるとき（コンソールを外す）と忙しいときで試し、まず出力の強さを見ます。直ったかは前後を同じ手順で測り、arm した
+  frame の直後に読みます（DUT の周期より長く待つと、arm していない次の frame が入って失敗に見えます）。
+- 問題を直したら、同じ仕組みの箇所（ほかの PHY、ほかの SoC、線を駆動する fixture）を探して一つずつ確かめ、どれが大丈夫でどれが
+  未確認かを書き残します。
