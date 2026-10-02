@@ -179,14 +179,14 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
 }
 
 uint8_t SamplerCapture::planCheck(const RoleAssignment *roles, size_t count) {
-  if (count > kMaxChannels) return kRejectUnavailable;
   uint32_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
-    if (roles[i].role >= kMaxChannels) return kRejectUnavailable;
+    if (roles[i].role >= kMaxChannels) return kRejectUnsupported;   // a role this capture does not have (core §8)
     if (!table_.allowed(roles[i].channel)) return kRejectUnsupported;   // not in role_channels (core §8)
     if (seen & (1u << roles[i].role)) return kRejectUnavailable;
     seen |= 1u << roles[i].role;
   }
+  if (count > kMaxChannels) return kRejectUnavailable;   // more channels than it has (a role twice)
   return (count == 0 || seen == (1u << count) - 1) ? 0 : kRejectUnavailable;   // roles 0..count-1, no holes
 }
 

@@ -764,6 +764,8 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   if (reason == kRejectUnavailable && clash_fn_)   // a channel another plan has, where one of them shares none
     return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, clash_channel_, clash_fn_,
                        reg::core::kHolderKindPlan);
+  // a role, channel or combination the interface does not declare: unsupported, tag 0x90 (core §8's table)
+  if (reason == kRejectUnsupported) return unsupportedTag(out, capacity, kTagRoleAssignment);
   if (reason) return rejected(static_cast<uint8_t>(reason));
   return tail.finish(completed(), out, capacity);
 }

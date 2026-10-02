@@ -125,7 +125,9 @@ uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
   for (size_t i = 0; i < count; ++i) {
     const uint8_t role = roles[i].role;
     const uint16_t ch = roles[i].channel;
-    if (role >= count || ((seen >> role) & 1) || ch > 63 || !((adc_pins_ >> ch) & 1)) return kRejectUnavailable;
+    // a role it does not have, a pin without an ADC channel (outside role_channels): unsupported (core §8, capture §3.1)
+    if (role >= kMaxChannels || ch > 63 || !((adc_pins_ >> ch) & 1)) return kRejectUnsupported;
+    if (role >= count || ((seen >> role) & 1)) return kRejectUnavailable;
     if (table_ && table_->owner(ch) != 0 && table_->owner(ch) != owner_) return kRejectUnavailable;   // a wire, a slot
     seen |= 1u << role;
   }

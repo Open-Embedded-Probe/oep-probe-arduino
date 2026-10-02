@@ -99,6 +99,13 @@ int main() {
     CHECK(t.planCheck(same, 2) == kRejectMalformed);
     CHECK(t.planCheck(other, 2) == kRejectMalformed);
     CHECK(t.planCheck(twice, 1) == kRejectMalformed);
+    // a channel outside role_channels: unsupported; a declared one something else holds: unavailable (core §8)
+    const RoleAssignment undeclared[] = {{0, P4I2cTarget::kRoleSda, 4}, {0, P4I2cTarget::kRoleScl, 6}};
+    CHECK(t.planCheck(undeclared, 2) == kRejectUnsupported);
+    CHECK(pins.claim(5, 99));
+    const RoleAssignment held[] = {{0, P4I2cTarget::kRoleSda, 4}, {0, P4I2cTarget::kRoleScl, 5}};
+    CHECK(t.planCheck(held, 2) == kRejectUnavailable);
+    pins.release(99);
   }
   // no plan: configure is unavailable cause 6; stretch is taken in any state
   CHECK(unavailableCause(call(t, P4I2cTarget::kOpConfigure, {0x42, 1}, out), out, 6));

@@ -19,8 +19,10 @@ uint8_t P4SpiTarget::planCheck(const RoleAssignment *roles, size_t count) {
   }
   for (int r = kRoleSck; r <= kRoleCs; ++r) {
     for (int q = r + 1; q <= kRoleCs; ++q) if (pin[r] == pin[q]) return kRejectMalformed;
-    if (!pins_.free(pin[r])) return kRejectUnavailable;
   }
+  // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
+  for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.allowed(pin[r])) return kRejectUnsupported;
+  for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.free(pin[r])) return kRejectUnavailable;
   if (sck_ >= 0) return kRejectUnavailable;
   return 0;
 }

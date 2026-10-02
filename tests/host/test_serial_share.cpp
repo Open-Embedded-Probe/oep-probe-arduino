@@ -510,6 +510,37 @@ static void testSettingsPlanStays() {
   CHECK(n == 1 && now[0].function == 1 && now[0].channel == 12);    // the settings' plan stays, the session's went
 }
 
+// An interface that declares no channel the host asks for: plan_apply is rejected unsupported with tag 0x90 (core §8's
+// table, §4.3: tag(u8) first in the payload).
+class PlanUndeclared final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.undeclared"; }
+  uint16_t instance() const override { return 0; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  uint8_t planCheck(const RoleAssignment *, size_t) override { return kRejectUnsupported; }
+};
+
+static void testPlanUnsupportedTag() {
+  MemStream bulk;
+  static uint8_t rx[1100], tx[1100];
+  Endpoint ep(bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0);
+  PlanUndeclared u;
+  ep.add(u);   // fn 1
+  auto send = [&](const Bytes &m) {
+    const Bytes f = {uint8_t(m.size()), uint8_t(m.size() >> 8)};
+    bulk.send(f);
+    bulk.send(m);
+    bulk.tx.clear();
+    ep.poll();
+  };
+  send(request(1, 0, 0x10, openPayload(7, 3000)));
+  send(request(2, 0, 0x04, {0x90, 5, 1, 0, 1, 20, 0}, true, 7));
+  // length(2) role corr(2) resolution detail payload
+  CHECK(bulk.tx.size() == 8 && bulk.tx[5] == kResolutionRejected && bulk.tx[6] == kRejectUnsupported && bulk.tx[7] == 0x90);
+  RoleAssignment now[2];
+  CHECK(ep.plan(now, 2) == 0);
+}
+
 // An interface whose channels are shared with no other plan (an analog input, oep-if-capture §1.2).
 class PlanAlone final : public Interface {
  public:
@@ -951,6 +982,7 @@ int main() {
   testGroupSecondRun();
   testPlanCapacity();
   testPlanNotShared();
+  testPlanUnsupportedTag();
   testSettingsPlanStays();
   testLastMarkMissing();
   testReader();

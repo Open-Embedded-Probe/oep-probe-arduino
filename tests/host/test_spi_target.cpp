@@ -65,6 +65,14 @@ int main() {
   static P4SpiTarget t(pins);
   const RoleAssignment roles[] = {{0, P4SpiTarget::kRoleSck, 4}, {0, P4SpiTarget::kRoleMosi, 5},
                                   {0, P4SpiTarget::kRoleMiso, 6}, {0, P4SpiTarget::kRoleCs, 7}};
+  {   // a channel outside role_channels: unsupported; a declared one something else holds: unavailable (core §8)
+    const RoleAssignment undeclared[] = {{0, P4SpiTarget::kRoleSck, 4}, {0, P4SpiTarget::kRoleMosi, 5},
+                                         {0, P4SpiTarget::kRoleMiso, 6}, {0, P4SpiTarget::kRoleCs, 8}};
+    CHECK(t.planCheck(undeclared, 4) == kRejectUnsupported);
+    CHECK(pins.claim(7, 99));
+    CHECK(t.planCheck(roles, 4) == kRejectUnavailable);
+    pins.release(99);
+  }
   CHECK(t.planCheck(roles, 4) == 0);
   CHECK(t.planApply(roles, 4));
   Bytes out;

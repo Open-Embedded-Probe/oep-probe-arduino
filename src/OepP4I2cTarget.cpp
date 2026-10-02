@@ -23,6 +23,8 @@ uint8_t P4I2cTarget::planCheck(const RoleAssignment *roles, size_t count) {
     pin = roles[i].channel;
   }
   if (sda < 0 || scl < 0 || sda == scl) return kRejectMalformed;
+  // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
+  if (!pins_.allowed(sda) || !pins_.allowed(scl)) return kRejectUnsupported;
   if (!pins_.free(sda) || !pins_.free(scl) || sda_ >= 0) return kRejectUnavailable;
   return 0;
 }
