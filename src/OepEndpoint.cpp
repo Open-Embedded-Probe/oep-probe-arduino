@@ -522,7 +522,9 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       putU32(out, static_cast<uint32_t>(length));
       return completed(4);
     case kOpDescribe: return describe(payload, length, out, capacity);
-    case kOpOpen: return open(payload, length, out, capacity);
+    case kOpOpen:   // sent with role 0x01: an open with role 0x81 is malformed (core §6.3)
+      if (has_session) return rejected(kRejectMalformed);
+      return open(payload, length, out, capacity);
     case kOpLockState: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
@@ -681,6 +683,7 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   if (refused(parsed)) return parsed;
   if (capacity < 9) return failed();
   const uint32_t session = getU32(payload), lease = getU32(payload + 4);
+  if (session == 0) return rejected(kRejectMalformed);   // a host never uses 0 (core §6.4)
   const bool force = payload[8];
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
   size_t owner_len = 0;

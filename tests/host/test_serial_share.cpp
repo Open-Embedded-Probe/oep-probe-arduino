@@ -401,6 +401,15 @@ static void testSessionTable() {
   CHECK(r.size() == 2 + 17 && r[0] == 1 && getU32(&r[2 + 13]) == 0x11223344);   // confirm: ... boot_id(u32)
   r = b.send(request(2, 0, 0x10, openPayload(7, 1000)));
   CHECK(r.size() == 2 + 9 && r[0] == 1 && r[2 + 8] == reg::core::kResumedNew && getU32(&r[2 + 4]) == 0x11223344);
+  // an open sent with role 0x81, or with session_id 0, is malformed (core §6.3 / §6.4; 0.0.28 took both)
+  r = b.send(request(20, 0, 0x10, openPayload(7, 1000), true, 7));
+  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectMalformed);
+  r = b.send(request(21, 0, 0x10, openPayload(0, 1000)));
+  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectMalformed);
+  Bytes force0 = openPayload(0, 1000);
+  force0[8] = 1;
+  r = b.send(request(22, 0, 0x10, force0));                                  // malformed before locked / force
+  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectMalformed && b.ep.locked());
   r = b.send(request(3, 0, 0x11, {}, true, 7));                              // end: the resources stay
   CHECK(r[0] == 1);
   r = b.send(request(4, 0, 0x12, {}, true, 7));                              // keepalive with the last id: resumed
