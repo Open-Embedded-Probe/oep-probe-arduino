@@ -3,8 +3,8 @@
 # Copyright (c) 2026 Open Embedded Probe
 # Host tests of the portable core (serial-port framing, the endpoint's serial-port rules, the binds) and of the
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, the I2C one with a fake controller), of the pin table's idle
-# states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the unit id: g++ and a
-# shim.
+# states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
+# unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module): g++ and a shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 src=$here/../../src
@@ -31,6 +31,9 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 "$out-lines"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-unit-id" "$here/test_unit_id.cpp"
 "$out-unit-id"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-wire" "$here/test_wire.cpp" \
+  "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepFrame.cpp"
+"$out-wire"
 # A platform without a chip number does not build without OEP_UNIT_ID, nor with one outside a-z 0-9 - (core §7.5).
 for bad in -DOEP_HOST_NO_UNIT_ID "-DOEP_UNIT_ID=\"Host\"" "-DOEP_UNIT_ID=\"\""; do
   if g++ -std=gnu++17 -fsyntax-only "$bad" -I"$here/shim" -I"$src" "$here/test_unit_id.cpp" 2>/dev/null; then

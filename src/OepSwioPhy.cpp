@@ -170,6 +170,12 @@ void SwioPhy::release() {
   if (gPin >= 0) pinMode(gPin, INPUT_PULLUP);
 }
 
+// The free state (oep-core §8): Hi-Z, no pull. attach() puts the pull-up back before it looks at the line.
+void SwioPhy::free() {
+  attached_ = false;
+  if (gPin >= 0) pinMode(gPin, INPUT);
+}
+
 }  // namespace oep
 
 #elif defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
@@ -414,6 +420,12 @@ void SwioPhy::release() {
   unconfigureIo();
 }
 
+// The free state (oep-core §8): out of the bundle, Hi-Z, no pull. attach() puts the pull-up back before it looks.
+void SwioPhy::free() {
+  release();
+  if (gPin >= 0) pinMode(gPin, INPUT);
+}
+
 }  // namespace oep
 
 #else
@@ -426,6 +438,7 @@ bool SwioPhy::read(uint8_t, uint32_t &) { return false; }
 void SwioPhy::write(uint8_t, uint32_t) {}
 bool SwioPhy::attach() { return false; }
 void SwioPhy::release() { attached_ = false; }
+void SwioPhy::free() { attached_ = false; }
 }  // namespace oep
 
 #endif

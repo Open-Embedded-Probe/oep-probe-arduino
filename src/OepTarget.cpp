@@ -109,11 +109,18 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
       ResetLine line{reset->channel, port.pins, &reset->held_at_ns};
       port.dm.pulseReset(holdReset, releaseReset, &line, reset->hold_ms);
     }
-    if (!attachAndRead(port.dm, dmstatus)) { if (no_answer) *no_answer = true; return false; }
+    // a failed try holds nothing: the pins go free until the slot tries again
+    auto fail = [&](bool silent) {
+      if (no_answer) *no_answer = silent;
+      port.dm.detach();
+      freeWire(port);
+      return false;
+    };
+    if (!attachAndRead(port.dm, dmstatus)) return fail(true);
     port.dm.ackHaveReset();
-    if (!port.dm.readDmi(kDmStatus, dmstatus)) { if (no_answer) *no_answer = true; return false; }
+    if (!port.dm.readDmi(kDmStatus, dmstatus)) return fail(true);
     const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
-    if (!number) { port.dm.detach(); return false; }
+    if (!number) return fail(false);
     port.connected = true;
     port.number = number;
     port.lost = false;
@@ -123,6 +130,17 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
   }
   port.users |= user;
   return true;
+}
+
+// Nothing holds the wire's pins any more (a connection closed, a scan's try, a failed attach): the PHY lets them go
+// to Hi-Z with no pull, then a channel with an idle set goes to it (oep-core §8: a released pin, whichever way; the
+// PHY's resting - SWCLK low, SWDIO's pull-up - is only how a live link waits). The pin table's owner is cleared first.
+void freeWire(DebugPort &port) {
+  port.dm.phy().free();
+  if (!port.pins) return;
+  if (port.pin_choice && !port.connected) port.pins->releaseQuiet(port.pin_owner);
+  port.pins->rest(port.swdio);
+  if (port.swclk != 0xffff) port.pins->rest(port.swclk);
 }
 
 void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost) {
@@ -135,8 +153,7 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost) {
   port.lost = lost;
   ++port.closes;
   ResourceNumbers::close(port.number);
-  // the PHY left them Hi-Z; a channel with an idle set goes to it (oep-core §8: a released pin, whichever way)
-  if (port.pin_choice && port.pins) port.pins->releaseToIdle(port.pin_owner);
+  freeWire(port);
 }
 
 bool checkConnection(DebugPort &port) {
@@ -316,8 +333,8 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
       ok = port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
     } else if (usePair(port_, d, c)) {
       ok = port_.dm.probe(status);
-      port_.dm.detach();                                 // nothing held: dmactive stays, the lines rest
-      if (port_.pin_choice) phy.release();               // a pair of the host's choice goes back to Hi-Z
+      port_.dm.detach();                                 // nothing held: dmactive stays
+      freeWire(port_);                                   // found or not, the pair to its free state (debug §1)
     }
     if (ok) {
       out[at] = 9;   // the element's length (core §2.3)
@@ -495,14 +512,19 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     }
     if (failure == kStatusOk) {
       const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
-      if (!number) { port_.dm.detach(); return unavailable(out, capacity, reg::core::kUnavailableCauseLimit); }
+      if (!number) {
+        port_.dm.detach();
+        freeWire(port_);
+        return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+      }
       port_.connected = true;
       port_.number = number;
       port_.lost = false;
       holdPins(port_);
       if (with_reset) { ++port_.resets; port_.reset_detail = reg::common::kMarkDetailResetAttachReset; }
     } else {
-      port_.dm.detach();   // a failed attach consumes no number and holds no pins
+      port_.dm.detach();   // a failed attach consumes no number and holds no pins: they go free
+      freeWire(port_);
     }
   }
   if (failure != kStatusOk) return tail.finish(failedStatus(failure, out, capacity), out, capacity);

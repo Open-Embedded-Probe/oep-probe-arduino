@@ -23,6 +23,7 @@ class RvswdPhy final : public DmiPhy {
   // DMSTATUS reads are all parity-clean and consistent. false = no target.
   bool attach() override;
   void release() override;
+  void free() override;
   void park() override;
   bool attached() const override { return attached_; }
   bool read(uint8_t address, uint32_t &value) override;   // with bounded retry

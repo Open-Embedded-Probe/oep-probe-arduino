@@ -86,6 +86,8 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`). lost: the line was found gone (the console
 // marks link-lost before closed).
 void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost = false);
+// No connection holds the wire's pins (closed, a scan's try, a failed attach): to their free state (oep-core §8).
+void freeWire(DebugPort &port);
 // An at-boot slot's liveness check (oep-if-probe-config §3.1): DMSTATUS read once; false = the line did not answer and
 // the connection was closed as lost.
 bool checkConnection(DebugPort &port);

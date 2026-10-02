@@ -23,6 +23,7 @@ class SwioPhy final : public DmiPhy {
   bool usePins(int swdio, int swclk) override;   // swclk -1: one wire
   bool attach() override;
   void release() override;
+  void free() override;   // released, without the pull-up the line has while a link waits
   bool attached() const override { return attached_; }
   bool read(uint8_t address, uint32_t &value) override;   // bounded retry on a lost read
   void write(uint8_t address, uint32_t value) override;

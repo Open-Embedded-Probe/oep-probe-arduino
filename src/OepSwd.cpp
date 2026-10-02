@@ -72,14 +72,24 @@ bool WireSwd::move(uint16_t swdio, uint16_t swclk) {
   return true;              // wake() sets the new pair up
 }
 
-// The live connection goes: pins released (Hi-Z, or the idle the settings give them), its number closed, let go of in
-// the pin table.
+// Nothing holds the pair (the connection closed, a scan's try, a failed attach): Hi-Z without the pull-up setup gave
+// SWDIO, then a channel with an idle set goes to it (oep-core §8). wake() sets the pins up again.
+static void freePort(SwdPort &port) {
+  port.io.releaseBoth();
+  gpio_disable_pulls(port.swdio);
+  gpio_disable_pulls(port.swclk);
+  if (!port.pins) return;
+  if (port.pin_choice && !port.connected) port.pins->releaseQuiet(port.pin_owner);
+  port.pins->rest(port.swdio);
+  port.pins->rest(port.swclk);
+}
+
+// The live connection goes: pins to their free state, its number closed, let go of in the pin table.
 void closePort(SwdPort &port) {
   if (!port.connected) return;
-  port.io.releaseBoth();
   port.connected = false;
   ResourceNumbers::close(port.number);
-  if (port.pin_choice && port.pins) port.pins->releaseToIdle(port.pin_owner);
+  freePort(port);
 }
 
 void WireSwd::close() { closePort(port_); }
@@ -172,7 +182,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         } else if (move(d, c)) {
           bool dormant = false;
           ok = wake(scan_select ? &scan_targetsel : nullptr, half, dpidr, dormant);
-          port_.io.releaseBoth();
+          freePort(port_);   // found or not, the pair to its free state (oep-if-debug §1)
         }
         if (ok) {
           out[at] = 9;   // the element's length (core §2.3)
@@ -273,9 +283,10 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       } else {
         bool dormant = false;
         ok = wake(have_targetsel ? &targetsel : nullptr, half, dpidr, dormant);
+        if (!ok) freePort(port_);   // a failed attach holds nothing: the pair goes free
         if (ok) {
           const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
-          if (!number) { port_.io.releaseBoth(); return unavailable(out, capacity, reg::core::kUnavailableCauseLimit); }
+          if (!number) { freePort(port_); return unavailable(out, capacity, reg::core::kUnavailableCauseLimit); }
           port_.connected = true;
           port_.number = number;
           if (port_.pin_choice && port_.pins) {   // the live connection holds its pins (core §8.1)

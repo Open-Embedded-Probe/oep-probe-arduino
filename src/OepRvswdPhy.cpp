@@ -103,6 +103,7 @@ void ioReclaim(int dio, int clk) {
   if (dio >= 0) {
     gpio_set_drive_capability(gpio_num_t(dio), GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability(gpio_num_t(clk), GPIO_DRIVE_CAP_0);
+    gpio_ll_pullup_en(&GPIO, dio);   // the data line idles high while the target drives it (ioFree took it off)
   }
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (!gOut || dio < 0) return;
@@ -115,6 +116,8 @@ void ioReclaim(int dio, int clk) {
 
 void ioDrive(int dio, int clk) { gpio_ll_output_enable(&GPIO, clk); gpio_ll_output_enable(&GPIO, dio); }
 void ioRelease(int dio, int clk) { gpio_ll_output_disable(&GPIO, dio); gpio_ll_output_disable(&GPIO, clk); }
+// The free state (oep-core §8): released, and SWDIO without the pull-up ioBegin gave it (ioReclaim puts it back).
+void ioFree(int dio, int clk) { ioRelease(dio, clk); gpio_ll_pullup_dis(&GPIO, dio); }
 uint32_t ioSetHalf(uint32_t half_ns) {
   gHalfCycles = (uint32_t)((uint64_t)half_ns * getCpuFrequencyMhz() / 1000);
   return gHalfCycles;
@@ -153,9 +156,12 @@ void ioReclaim(int dio, int clk) {
   if (dio < 0) return;
   gpio_set_drive_strength(dio, GPIO_DRIVE_STRENGTH_2MA);
   gpio_set_drive_strength(clk, GPIO_DRIVE_STRENGTH_2MA);
+  gpio_pull_up(dio);   // the data line idles high while the target drives it (ioFree took it off)
 }
 void ioDrive(int, int) { gIo.driveBoth(); }
 void ioRelease(int, int) { gIo.releaseBoth(); }
+// The free state (oep-core §8): released, and SWDIO without the pull-up setup gave it (ioReclaim puts it back).
+void ioFree(int dio, int) { gIo.releaseBoth(); gpio_disable_pulls(dio); }
 uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
 
 }  // namespace
@@ -201,6 +207,12 @@ void RvswdPhy::setHalf(uint32_t half_ns) {
 void RvswdPhy::release() {
   if (swdio_ < 0) return;
   ioRelease(swdio_, swclk_);
+  attached_ = false;
+}
+
+void RvswdPhy::free() {
+  if (swdio_ < 0) { attached_ = false; return; }
+  ioFree(swdio_, swclk_);
   attached_ = false;
 }
 
@@ -486,6 +498,7 @@ bool RvswdPhy::begin(int, int) { return false; }
 bool RvswdPhy::usePins(int, int) { return false; }
 bool RvswdPhy::attach() { return false; }
 void RvswdPhy::release() { attached_ = false; }
+void RvswdPhy::free() { attached_ = false; }
 void RvswdPhy::park() { attached_ = false; }
 bool RvswdPhy::read(uint8_t, uint32_t &) { return false; }
 void RvswdPhy::write(uint8_t, uint32_t) {}

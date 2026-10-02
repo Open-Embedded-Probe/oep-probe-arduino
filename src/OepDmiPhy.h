@@ -28,6 +28,10 @@ class DmiPhy {
   // a CH32's two wires lets them float high together, which is the bus's reset condition;
   // parking keeps the clock low instead. Backends without that distinction just release.
   virtual void park() { release(); }
+  // Nothing holds the pins any more (the connection closed, a scan's try, a failed attach): both to Hi-Z with no pull,
+  // the free state of oep-core §8 - not the resting a live link uses (SWCLK low, SWDIO's pull-up). attach() sets them
+  // up again. Backends whose release() already leaves no pull leave this alone.
+  virtual void free() { release(); }
   virtual bool attached() const = 0;
   virtual bool read(uint8_t address, uint32_t &value) = 0;   // with the PHY's own bounded retry
   virtual void write(uint8_t address, uint32_t value) = 0;
