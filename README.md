@@ -79,9 +79,13 @@ OpenEmbeddedProbe is firmware only. There is no board or circuit of our own: the
 supported microcontroller (ESP32-P4, classic ESP32, RP2040 / RP2350) running the firmware, so there is no schematic to
 follow. Nor is there a fixed pin map:
 
-- **Any free GPIO can be wired to any target line.** Every debug wire (RVSWD, SWIO, SWD) is bit-banged, and the UART, SPI
-  and I2C fixtures go through the GPIO matrix (the RP2's UART0 is the one limit: [Boards](docs/guide/boards.md#pins-of-the-released-firmware)).
-  The host chooses the pins per request.
+- **Any free GPIO can be wired to a debug or GPIO line.** Every debug wire (RVSWD, SWIO, SWD) is bit-banged and every GPIO
+  fixture pin is the host's choice, per request. On the ESP32s the UART, SPI and I2C fixtures also go through the GPIO
+  matrix, so any pin works for them as well.
+- **Fixed pins only where a hardware peripheral is used.** On an RP2040 / RP2350 the UART fixture is the chip's UART0, so
+  its RX / TX go on GP1 / GP0, GP13 / GP12, GP17 / GP16 or GP29 / GP28. Analog capture uses the ADC pins on every chip
+  (RP2 GP26-28, ESP32-P4 GPIO16-23, classic ESP32 GPIO32-36 / 39), and the classic ESP32's SWIO needs an output below
+  GPIO32. Wire those lines to such a pin; [Boards](docs/guide/boards.md#pins-of-the-released-firmware) lists them per chip.
 - **The host finds where the target is.** `oep pins` (oep-client-python) reads every offered pin under the probe's pulls,
   scans the debug wire over the candidates, identifies the target by its ID, and finds its reset line. It then suggests a
   slot to save (oep-spec host-development-guide §9; per-target notes in oep-spec docs/target-scan-notes.ja.md).
