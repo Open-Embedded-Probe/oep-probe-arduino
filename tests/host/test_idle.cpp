@@ -5,11 +5,13 @@
 // fixture's take (oep-if-fixture §1) - modes 3 / 4 drive their level while a channel is free, an output idle on a
 // channel that cannot drive is refused, every release goes to the idle state, a channel taken by a gpio plan keeps its
 // idle drive until the first set (no glitch on a power line), a debug wire's release touches only channels with an
-// idle, the reset line goes back to its idle.
+// idle, the reset line goes back to its idle, and a plan replaced through the endpoint releases only the channels that
+// leave it (a power line kept in both plans never blinks off).
 #include <stdio.h>
 
 #include <vector>
 
+#include "OepEndpoint.h"
 #include "OepFixture.h"
 
 uint32_t g_millis = 1000;
@@ -133,11 +135,62 @@ static void testWireReleaseAndReset() {
   CHECK(floating(14));
 }
 
+class NullStream final : public Stream {
+ public:
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  size_t write(uint8_t) override { return 1; }
+};
+
+// plan_apply replacing a gpio plan (the same fn, a new channel set): 0.0.27 put every old channel to Hi-Z before
+// claiming the new set, so a power line in both plans glitched off (ESP32-P4, the target lost power).
+static void testReplaceKeepsSharedChannels() {
+  static NullStream stream;
+  static uint8_t rx[512], tx[512];
+  static Endpoint ep(stream, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kVendorBulk, 0);
+  static PinTable pins((1ull << 40) | (1ull << 41) | (1ull << 42) | (1ull << 43));
+  static FixtureGpio gpio(pins, 0, 1);
+  ep.add(gpio);
+  ep.setPins(&pins);
+  const uint16_t fn = 1;
+  CHECK(pins.setIdle(43, PinTable::kIdleOutputLow));
+  const RoleAssignment first[] = {{fn, reg::fixture_gpio::kRoleLine, 40}, {fn, reg::fixture_gpio::kRoleLine, 41}};
+  CHECK(ep.replacePlan(first, 2, &fn, 1) == 0);
+  Bytes out;
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setOne(40, reg::fixture_gpio::kModeOutputHigh), out)));   // the power
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setOne(41, reg::fixture_gpio::kModeOutputHigh), out)));
+  CHECK(drives(40, HIGH) && drives(41, HIGH));
+  // replaced: 40 kept, 41 leaves, 42 and 43 new
+  const RoleAssignment second[] = {{fn, reg::fixture_gpio::kRoleLine, 40}, {fn, reg::fixture_gpio::kRoleLine, 42},
+                                   {fn, reg::fixture_gpio::kRoleLine, 43}};
+  int changes40 = 0;
+  const int mode40 = g_pin_mode[40], level40 = g_pin_level[40];
+  g_pin_mode[42] = INPUT;   // its idle state (Hi-Z)
+  CHECK(ep.replacePlan(second, 3, &fn, 1) == 0);
+  changes40 += g_pin_mode[40] != mode40 || g_pin_level[40] != level40;
+  CHECK(changes40 == 0 && drives(40, HIGH));   // in both plans: its drive untouched
+  CHECK(floating(41) && pins.free(41));         // left the plan: to its idle state (Hi-Z)
+  CHECK(floating(42) && drives(43, LOW));       // new: their idle states until the first set
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(40), out)) && out[1] == 1);
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setOne(43, reg::fixture_gpio::kModeOutputHigh), out)));
+  CHECK(drives(43, HIGH));
+  // a refused replacement (a channel this gpio does not have) changes nothing either
+  const RoleAssignment bad[] = {{fn, reg::fixture_gpio::kRoleLine, 40}, {fn, reg::fixture_gpio::kRoleLine, 50}};
+  CHECK(ep.replacePlan(bad, 2, &fn, 1) != 0);
+  CHECK(drives(40, HIGH) && drives(43, HIGH) && !pins.free(40) && !pins.free(43));
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(43), out)) && out[1] == 1);
+  // released for good (no new plan): each channel to its idle state
+  CHECK(ep.replacePlan(nullptr, 0, &fn, 1) == 0);   // the plan removed
+  CHECK(floating(40) && floating(42) && drives(43, LOW));
+}
+
 int main() {
   testIdleModes();
   testReleaseGoesToIdle();
   testGpioTakeKeepsIdle();
   testWireReleaseAndReset();
+  testReplaceKeepsSharedChannels();
   printf("idle: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

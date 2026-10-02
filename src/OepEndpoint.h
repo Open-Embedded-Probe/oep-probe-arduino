@@ -19,6 +19,8 @@ namespace oep {
 
 // The raw side of the serial ports (core §3.4): what a serial port carries outside the frames. The binds implement it
 // (oep.probe.config §1.2); the endpoint calls it from poll(), the one writer of every port.
+class PinTable;
+
 class RawPorts {
  public:
   // Bytes that came in on serial port `port` outside any frame (not called while a session holds the port).
@@ -96,6 +98,9 @@ class Endpoint {
   // The channels oep.probe.config's disable items take away (channel < 64): a plan_apply naming one is refused
   // unavailable cause 5 (held by settings) with the channel (probe.config §1).
   void setDisabled(uint64_t mask) { disabled_ = mask; }
+  // The pin table the interfaces' plans claim from: a plan replacement releases only the channels leaving the plan
+  // (PinTable::deferIdle; oep-core §8). ProbeConfig::setPins sets it too.
+  void setPins(PinTable *pins) { pins_ = pins; }
   bool disabled(uint16_t channel) const { return channel < 64 && (disabled_ >> channel) & 1; }
   // The identity of the interface list (oep-if-probe-config §2): CRC-32 of every entry (fn u16, instance u16,
   // revision u8, name) in fn order, oep.core first.
@@ -171,6 +176,7 @@ class Endpoint {
   const uint8_t *probe_tlv_ = nullptr;
   size_t probe_tlv_length_ = 0;
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
+  PinTable *pins_ = nullptr;                     // setPins
   uint16_t clash_channel_ = 0, clash_fn_ = 0;   // the last plan refused for a channel shared with none (core §4.3)
   uint32_t boot_id_ = 0;
   // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed; one

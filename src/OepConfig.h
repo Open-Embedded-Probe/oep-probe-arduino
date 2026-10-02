@@ -65,7 +65,7 @@ class ProbeConfig final : public Interface {
   // A fixture UART a bind may carry and the uart item sets (after the endpoint has it).
   bool addUart(FixtureUart &uart);
   // The pins whose idle state the idle item sets and the disable item takes away (without it, both are refused).
-  void setPins(PinTable *pins) { pins_ = pins; }
+  void setPins(PinTable *pins) { pins_ = pins; endpoint_.setPins(pins); }   // the endpoint's plan replacements too
 
   // Read what was saved, then apply it: both after the sketch's last endpoint.add(). The saved items keep the
   // (name, instance, revision) of every interface they name and are renumbered to where those are now; one gone (or of
