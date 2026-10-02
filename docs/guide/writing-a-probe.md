@@ -109,6 +109,12 @@ Each source file starts with the spec sections it follows.
   holds its pins in the table. `reset_allowed` is the channels attach's reset TLV may pull - always named by the host.
 - The line's settings (how it rests, how fast it may go) are the target's: the host passes them at attach; the probe
   keeps no per-chip defaults.
+- **Drive the debug wire at the weakest strength the wire's timing allows.** Its sharp edges couple into the fixture
+  lines next to it on the same jig: at the classic ESP32's default 20 mA the SWIO line made a 1 MHz SPI target lose or
+  shift bits while the console was read (23 of 36 frames good; 72 of 72 at the weakest, wire speed unchanged,
+  2026-10-02). Every PHY in this library does so (RVSWD: ESP32-P4 `GPIO_DRIVE_CAP_0`, RP2 2 mA; SWIO: classic and P4
+  `GPIO_DRIVE_CAP_0`, `OEP_SWIO_DRIVE_CAP`). A new PHY or a port to another chip must set it too - the P4 SWIO port
+  first left it at the default.
 
 ## 7. Serial ports, binds and settings
 
@@ -156,3 +162,9 @@ until that VID:PID is listed in the registry, no probe does.
   bundle for good (a chip reset is needed). The PHY and the pin table avoid it (`releaseQuiet`); your code must too.
 - `build_opt.h` sketches (the P4's direct HS vendor build) are built with `--clean` after it changes.
 - Never block in `handle()` or `loop()`: a probe that stops polling stops answering, and the host times out.
+- A fixture that fails only while the debug wire is busy (the console read, a flash write) is more likely the wire's
+  edges than the CPU: test it with the wire idle (detach the console) and with the wire busy, and look at the drive
+  strength first. Measure "is it fixed" with the same procedure before and after, and read the result right after the
+  frame you armed - a wait longer than the DUT's period lets the next, unarmed frame in and looks like a failure.
+- When you fix a problem, look for the same mechanism elsewhere (the other PHYs, the other SoCs, the fixtures that
+  drive lines) and check each one; write down which are fine and which are untested.
