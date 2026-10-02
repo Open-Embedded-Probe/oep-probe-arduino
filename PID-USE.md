@@ -2,16 +2,12 @@
 
 [日本語](PID-USE.ja.md)
 
-Status: **draft** (2026-09-30), prepared with the application for a pid.codes PID. Until the PID is granted, the reference
-firmware enumerates as `303a:0002` (arduino-esp32's TinyUSB default) with an iProduct starting `OEP`; nothing here applies to
-that interim ID.
-
 The MIT license of this library covers its source code. It does **not** by itself grant the use of the USB VID:PID below; this
 file does, under the conditions it states.
 
 ## The ID
 
-`1209:4F45` (pid.codes, applied for; not granted yet) identifies **a USB device running firmware built from the
+`1209:4F45` (pid.codes) identifies **a USB device running firmware built from the
 OpenEmbeddedProbe library** - on any board the library supports (ESP32-P4, RP2350, RP2040, and later ones) - that speaks the
 Open Embedded Probe protocol ([oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)).
 

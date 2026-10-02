@@ -2,15 +2,12 @@
 
 [English](PID-USE.md)
 
-状態: **案**（2026-09-30）。pid.codes の PID の申請と一緒に用意した。PID が割り当てられるまでは、参照の firmware は `303a:0002`
-（arduino-esp32 の TinyUSB の既定）と、`OEP` で始まる iProduct で列挙する。その仮の ID には、この文書は掛からない。
-
 このライブラリの MIT License が及ぶのはソースコードである。下の USB の VID:PID を使ってよいかは、それだけでは決まらない。
 この文書が、ここに書く条件のもとで認める。
 
 ## ID
 
-`1209:4F45`（pid.codes に申請中。まだ割り当てられていない）は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
+`1209:4F45`（pid.codes）は、**OpenEmbeddedProbe ライブラリから作った firmware を動かしている
 USB の device** を指す。ライブラリが対応するどの基板でもよい（ESP32-P4、RP2350、RP2040、後から足すもの）。その device は
 Open Embedded Probe のプロトコル（[oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)）を話す。
 

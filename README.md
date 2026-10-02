@@ -68,7 +68,7 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
 - Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
   `oep` command, a fake probe for tests).
 - USB VID:PID: until the project has a PID of its own the reference firmware uses `303a:0002` with an iProduct starting `OEP`; who may use
-  the OEP PID once granted is in [PID-USE.md](PID-USE.md).
+  the OEP PID is in [PID-USE.md](PID-USE.md).
 
 ## An example: an ESP32-P4 testing a CH32L103
 
