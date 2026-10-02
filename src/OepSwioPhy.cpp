@@ -174,6 +174,9 @@ void SwioPhy::release() {
 
 #elif defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <driver/dedic_gpio.h>
+#ifndef OEP_SWIO_DRIVE_CAP
+#define OEP_SWIO_DRIVE_CAP GPIO_DRIVE_CAP_0   // see the classic block: sharp edges couple into fixture lines
+#endif
 #include <driver/gpio.h>
 #include <esp_cpu.h>
 #include <esp_rom_gpio.h>
@@ -294,6 +297,7 @@ bool configureIo() {
   config.pull_down_en = GPIO_PULLDOWN_DISABLE;
   config.intr_type = GPIO_INTR_DISABLE;
   gpio_config(&config);
+  gpio_set_drive_capability(gpio_num_t(gPin), OEP_SWIO_DRIVE_CAP);   // the weakest, as the classic and the RVSWD PHY
   const int pins[] = {gPin};
   dedic_gpio_bundle_config_t out = {};
   out.gpio_array = pins;
