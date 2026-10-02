@@ -6,9 +6,13 @@ The reference firmware currently runs with a **temporary USB ID**: the board's d
 `303a:0002`, arduino-esp32's TinyUSB default), with an iProduct starting `OEP`. This temporary ID is **not for
 distribution**: do not ship products or firmware that rely on it.
 
-When the project obtains a PID of its own, the reference firmware will switch to it. Hosts do not depend on the USB ID: they
-find OEP probes by an iProduct starting `OEP` and then read what each probe offers from the probe itself (confirm, list,
-describe), as oep-spec's core says. Firmware that needs a USB ID for distribution before then should use one of its own.
+When the project obtains a PID of its own, the reference firmware will switch to it. Until then, as a **temporary rule**,
+hosts look for OEP probes by an iProduct starting `OEP` (and similar clues, oep-spec host-development-guide §1.7). Such a clue
+is only a candidate: whether a device is an OEP probe is known only after the host opens it and a confirm is answered, so a
+host may open an unrelated USB device that happens to match (it sends a confirm only and closes the device when no valid
+answer comes, oep-spec core §3.3). Some setups need the target named explicitly - the probe by its unit_id
+(`oep://<unit_id>`), or the port chosen by the user. What a probe offers is then read from the probe itself (confirm, list,
+describe). Firmware that needs a USB ID for distribution before then should use one of its own.
 
 ## Who may use the project's own PID, once obtained
 
@@ -33,8 +37,8 @@ You may ship firmware with that PID - your own board, your own jig, a changed ex
 It should not be used by:
 
 - Firmware that does not speak OEP (a board that only shares the hardware) - use your own ID.
-- Another, independent implementation of OEP (not built from this library) - use your own ID; hosts find it by its iProduct
-  and describe the same way. The protocol does not depend on the ID.
+- Another, independent implementation of OEP (not built from this library) - use your own ID; hosts open it when the user
+  names it or chooses its port, or by their own support for that ID. The protocol does not depend on the ID.
 
 ## Changes
 
