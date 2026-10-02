@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.wire.rvswd / oep.wire.swio, host-chosen pins (oep-if-debug §1, core §8.1): an attach whose pins name the pair the link was last on is refused unavailable when a plan has taken one of its channels since (the pin table's owner is checked before the "same pair" shortcut; it was accepted and drove the plan's pin, while a scan of the same pair was refused). A slot's automatic attach (usePair) takes the same check. oep.wire.swd checked: its attach and scan test the owners before moving the link (no change).
+- (JA) oep.wire.rvswd / oep.wire.swio、host の選ぶ pin（oep-if-debug §1、core §8.1）: link が最後にいた組を pins に名指す attach は、その後 plan がその channel を取っていれば unavailable で拒む（「同じ組」の近道より前に pin 表の持ち主を見る。これまでは受けて plan の pin を駆動していた。同じ組の scan は拒んでいた）。slot の自動 attach（usePair）も同じ確認をする。oep.wire.swd は確認済み: attach と scan は link を動かす前に持ち主を見る（変更なし）。
 - (EN) Registry synced from oep-spec 975d88c (registry hash 41388af90cf14a68): the SPI target's describe cs_setup_ns uses reg::fixture_spi_target::kTlvDescribeCsSetupNs (0x43, oep-spec 73a0c37) in place of the local constant.
 - (JA) registry を oep-spec 975d88c に合わせた（registry hash 41388af90cf14a68）。SPI target の describe の cs_setup_ns は、ローカルの定数ではなく reg::fixture_spi_target::kTlvDescribeCsSetupNs（0x43、oep-spec 73a0c37）を使う。
 - (EN) OepProbe, classic ESP32: ESP-IDF's log is off (`esp_log_level_set("*", ESP_LOG_NONE)`, probe guide §2.5), as on the ESP32-P4 - UART0 is the OEP transport, and a driver's error log went out on it between frames.

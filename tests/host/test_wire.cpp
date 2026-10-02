@@ -292,6 +292,35 @@ int main() {
     CHECK(!usePair(fixed4, 2, 3));
   }
 
+  // ---- the pair the link was last on, taken by a plan since: attach, a slot's usePair and scan all refuse it ----
+  {
+    static FakePhy phy5;
+    static Ch32Dm dm5(phy5);
+    static PinTable pins5((1ull << 4) | (1ull << 5) | (1ull << 6));
+    static DebugPort chosen5{dm5, 0xfffe, 0xfffe};
+    chosen5.pins = &pins5;
+    chosen5.pin_choice = (1ull << 4) | (1ull << 5) | (1ull << 6);
+    static WireRvswd wire5(chosen5, 4);
+    Result r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 4, 5), out);
+    CHECK(ok(r) && chosen5.connected);
+    r = call(wire5, WireRvswd::kOpDetach, detachRequest(chosen5.number), out);
+    CHECK(ok(r) && !chosen5.connected && chosen5.swdio == 4 && chosen5.swclk == 5);   // the link stays on 4 / 5
+    CHECK(pins5.claim(5, 0x01));                                                    // a gpio plan takes 5
+    phy5.attaches = phy5.bring_ups = 0;
+    r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 4, 5), out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && !chosen5.connected);   // 0.0.28: attached
+    CHECK(phy5.attaches == 0 && pins5.owner(5) == 0x01);
+    CHECK(!usePair(chosen5, 4, 5));                                                 // a slot's attach: the same
+    const Bytes scan45 = {1, 4, 0, 5, 0};
+    r = call(wire5, WireRvswd::kOpScan, scan45, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && phy5.bring_ups == 0);
+    pins5.release(0x01);
+    r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 4, 5), out);
+    CHECK(ok(r) && chosen5.connected);
+    r = call(wire5, WireRvswd::kOpDetach, detachRequest(chosen5.number), out);
+    CHECK(ok(r));
+  }
+
   // ---- scan: the bring-up, no write check, nothing written through the link; attach(halt): DMSTATUS after the halt ----
   {
     phy.version = 2;

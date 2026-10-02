@@ -220,7 +220,9 @@ bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
 
 bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk) {
   if (!port.connected && pairIdle(port, swdio, swclk, true) != 0xffff) return false;   // an output idle: never driven
-  if (swdio == port.swdio && swclk == port.swclk) return true;
+  // the pair the link is on: a live connection's own, or - nothing live - only while nothing else holds its pins (a
+  // plan may have taken them since the link was last there)
+  if (swdio == port.swdio && swclk == port.swclk) return port.connected || pairFree(port, swdio, swclk);
   if (!port.pin_choice || port.connected || !pairAllowed(port, swdio, swclk) || !pairFree(port, swdio, swclk)) return false;
   if (port.dm.attached()) port.dm.detach();
   if (!port.dm.phy().usePins(swdio, swclk == 0xffff ? -1 : swclk)) return false;
@@ -283,14 +285,16 @@ uint8_t WireRvswd::choosePair(const uint8_t *pins, size_t len) {
   if (len != 4) return kRejectMalformed;
   const uint16_t d = getU16(pins), c = getU16(pins + 2);
   if (!pairAllowed(port_, d, c)) return kRejectUnsupported;   // not a pair this wire declares (core §4.3 order 6)
+  if (port_.pin_choice && port_.pins) {                        // held by anything but this wire's own connection - the
+    const uint16_t chs[2] = {d, c};                            // pair the link is on included (a plan may hold it now)
+    for (uint16_t ch : chs) {
+      if (ch == 0xffff) continue;
+      const uint8_t owner = port_.pins->owner(ch);
+      if (owner != 0 && owner != port_.pin_owner) return kRejectUnavailable;
+    }
+  }
   if (d == port_.swdio && c == port_.swclk) return 0;          // the pair the link is on (live or not)
   if (!port_.pins) return kRejectUnavailable;
-  const uint16_t chs[2] = {d, c};
-  for (uint16_t ch : chs) {                                    // held by anything but this wire's own connection
-    if (ch == 0xffff) continue;
-    const uint8_t owner = port_.pins->owner(ch);
-    if (owner != 0 && owner != port_.pin_owner) return kRejectUnavailable;
-  }
   if (port_.connected) {
     if (port_.users != DebugPort::kUserSlot) return kRejectUnavailable;   // no seat: the host's connection is on it
     releaseConnection(port_, DebugPort::kUserSlot, true);     // the seat rule: a slot-only connection makes room
