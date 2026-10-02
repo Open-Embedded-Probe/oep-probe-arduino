@@ -5,14 +5,14 @@ profiles:
       - platform: rp2040:rp2040 (6.1.1)
         platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.27)
   esp32p4:
     fqbn: esp32:esp32:esp32p4:USBMode=hwcdc,CDCOnBoot=cdc
     platforms:
       - platform: esp32:esp32 (3.3.12)
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.27)
   # esp32s3: built, not checked on a bench (there is no S3 bench)
   esp32s3:
     fqbn: esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc
@@ -20,5 +20,5 @@ profiles:
       - platform: esp32:esp32 (3.3.12)
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
     libraries:
-      - dir: ../../..
+      - OpenEmbeddedProbe (0.0.27)
 default_profile: rp2040
