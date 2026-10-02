@@ -614,7 +614,10 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (actual_segments < 2) return failed();
     samples = seg * 8 / width;
   } else if (mode == 2) {   // repeat: segments of whole 4 KiB, as many as fit the PSRAM budget (or as asked)
-    uint32_t seg = samples ? (samples * width + 7) / 8 : 65536;
+    // in 64 bits: a samples above the limit is rounded down to it (capture §3.3), never wrapped (samples x width
+    // overflowed u32 from 2^28 samples at w = 16: a segment of 0 bytes, and configure failed)
+    const uint64_t asked = samples ? (static_cast<uint64_t>(samples) * width + 7) / 8 : 65536;
+    uint32_t seg = asked > kSegmentMaxRepeat ? kSegmentMaxRepeat : static_cast<uint32_t>(asked);
     seg = (seg + kSegmentMin - 1) / kSegmentMin * kSegmentMin;
     if (seg > kSegmentMaxRepeat) seg = kSegmentMaxRepeat;
     while (seg > kSegmentMin && budget / seg < 2) seg /= 2;
