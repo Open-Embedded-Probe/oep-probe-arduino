@@ -120,7 +120,7 @@ static oep::TargetConsoleStream console(rvswd, consoleDriver, 0);
 static oep::FixtureGpio gpio(pins, 0, 1);
 // PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the analog 7)
 static oep::FixtureUart uart1(pins, Serial1, 0, 2), uart2(pins, Serial2, 1, 5);
-static oep::LogicCapture capture(endpoint, kReserved, 0);   // PARLIO RX; its lines are never driven
+static oep::LogicCapture capture(endpoint, pins, 0);   // PARLIO RX; its lines are never driven
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
 static oep::Binds binds;
