@@ -11,8 +11,11 @@
 //   first), counting bits since CS fell or since the last load; a load rewrites the buffer from tx and restarts the
 //   count, so a load while CS is low restarts the frame at that bit (counted in loads_in_frame);
 // - with nothing loaded a frame still shifts the buffer (MISO what is left in it) and nobody sees it.
+// - the classic's slave enables its MISO output from spi_slave_initialize to spi_slave_free, CS high or low (bench,
+//   2026-10-02): fakeMisoDriven() is that, unless the pin's output enable was given to the GPIO enable bit
+//   (driver/gpio.h's fake), which then decides.
 // The master: fakeCsLow / fakeClock / fakeCsHigh, or fakeSpiTransfer for a whole frame; g_fake_spi.miso is what the
-// master read in the last frame.
+// master read in the last frame. CS edges are also edges of the CS pin for driver/gpio.h's fake.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -20,6 +23,8 @@
 
 #include <deque>
 #include <vector>
+
+#include <driver/gpio.h>
 
 typedef int esp_err_t;
 typedef uint32_t TickType_t;
@@ -56,6 +61,7 @@ struct FakeSpiSlave {
   bool up = false;
   int queue_size = 0;
   int inits = 0;
+  int cs_pin = -1, miso_pin = -1;
   uint32_t flags = 0;
   slave_transaction_cb_t post_trans_cb = nullptr;
   std::deque<spi_slave_transaction_t *> queued, done;
@@ -99,10 +105,13 @@ inline void fakeSpiIsr() {
   }
 }
 
-inline esp_err_t spi_slave_initialize(spi_host_device_t, const spi_bus_config_t *, const spi_slave_interface_config_t *c,
+inline esp_err_t spi_slave_initialize(spi_host_device_t, const spi_bus_config_t *b, const spi_slave_interface_config_t *c,
                                       spi_dma_chan_t) {
   FakeSpiSlave &f = g_fake_spi;
   if (f.up) return ESP_FAIL;
+  f.cs_pin = c->spics_io_num; f.miso_pin = b->miso_io_num;
+  if (f.cs_pin >= 0) g_fake_gpio.level[f.cs_pin] = f.cs_low ? 0 : 1;
+  if (f.miso_pin >= 0) g_fake_gpio.oe_by_gpio[f.miso_pin] = false;   // routed to the slave: its output enable
   f.up = true; f.queue_size = c->queue_size; f.flags = c->flags; f.post_trans_cb = c->post_trans_cb; ++f.inits;
   f.queued.clear(); f.done.clear(); f.cur = nullptr;
   f.trans_done = true; f.intr_on = false;   // forced: the first queue_trans loads at once
@@ -148,10 +157,18 @@ inline esp_err_t spi_slave_get_trans_result(spi_host_device_t, spi_slave_transac
   return ESP_OK;
 }
 
+// Whether the MISO pad is driven now.
+inline bool fakeMisoDriven() {
+  const FakeSpiSlave &f = g_fake_spi;
+  if (!f.up || f.miso_pin < 0) return false;
+  return g_fake_gpio.oe_by_gpio[f.miso_pin] ? g_fake_gpio.enable[f.miso_pin] : true;
+}
+
 // The master. CS falling: true if a transaction is loaded to take the frame.
 inline bool fakeCsLow() {
   FakeSpiSlave &f = g_fake_spi;
   f.cs_low = true; f.bit = 0; f.frame_bits = 0; f.miso.clear();
+  if (f.cs_pin >= 0) fakeGpioLevel(f.cs_pin, 0);
   return f.up && f.cur;
 }
 // `bits` clocks; MOSI from `mosi` at the frame's own bit position (0 with none).
@@ -168,6 +185,7 @@ inline void fakeClock(size_t bits, const uint8_t *mosi = nullptr) {
       mi = (b & m) ? 1 : 0;
       b = static_cast<uint8_t>(mo ? (b | m) : (b & ~m));
     }
+    if (!fakeMisoDriven()) mi = 1;   // nobody drives it: the master reads the line's pull-up
     if (fb % 8 == 0) f.miso.push_back(0);
     if (mi) f.miso.back() = static_cast<uint8_t>(f.miso.back() | (0x80u >> (fb % 8)));
   }
@@ -178,6 +196,7 @@ inline void fakeCsHigh() {
   f.cs_low = false;
   f.trans_done = true;
   fakeSpiIsr();
+  if (f.cs_pin >= 0) fakeGpioLevel(f.cs_pin, 1);
 }
 // One whole CS-framed transfer of `bits` clocks. false: nothing took it.
 inline bool fakeSpiTransfer(size_t bits, const uint8_t *mosi = nullptr) {

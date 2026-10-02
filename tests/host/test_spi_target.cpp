@@ -7,7 +7,7 @@
 // read_rx in state 0 is unavailable cause 6, configure clears the counts, releasing the plan goes back to describe's
 // state. The next transaction is loaded at the CS rising edge that ended the last one, never inside a frame: the bench
 // sequence of 0.0.28 (a 0-bit frame before a 64-byte one, loop() running during it), and an unarmed frame right after
-// an armed one. arm does not restart the driver.
+// an armed one. arm does not restart the driver. MISO is driven only while CS is low.
 #include <stdio.h>
 
 #include <vector>
@@ -208,6 +208,45 @@ int main() {
     t.service();
     s = status(t);
     CHECK(!s.armed && s.queued == 1 && s.transactions == 2 && s.errors == 1);
+  }
+
+  // MISO is driven only while CS is low (the classic's slave drives it from initialize to free; the target gates its
+  // output enable from CS): configured, armed, after a CS cycle, armed again, during a frame, and after release.
+  {
+    t.planRelease();
+    CHECK(t.planApply(roles, 4));
+    CHECK(!fakeMisoDriven());                               // planned, not configured
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
+    CHECK(!fakeMisoDriven());                               // configured, CS high
+    CHECK(ok(arm(t, 2, {0x81, 0x42})));
+    CHECK(!fakeMisoDriven());                               // armed
+    CHECK(fakeCsLow());
+    CHECK(fakeMisoDriven());                                // selected
+    fakeClock(16);
+    CHECK(g_fake_spi.miso == Bytes({0x81, 0x42}));          // driven from the first bit on
+    fakeCsHigh();
+    CHECK(!fakeMisoDriven());                               // after the CS cycle
+    t.service();
+    CHECK(ok(arm(t, 2, {0x01})));
+    CHECK(!fakeMisoDriven());                               // armed again
+    CHECK(fakeSpiTransfer(16));
+    CHECK(g_fake_spi.miso == Bytes({0x01, 0x00}));
+    CHECK(!fakeMisoDriven());
+    CHECK(ok(call(t, P4SpiTarget::kOpReset, {}, out)));
+    CHECK(!fakeMisoDriven());                               // reset
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {1, 0}, out)));
+    CHECK(!fakeMisoDriven());                               // configured anew
+    // configured while selected: driven at once
+    CHECK(fakeCsLow() || true);
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
+    CHECK(fakeMisoDriven());
+    fakeCsHigh();
+    CHECK(!fakeMisoDriven());
+    t.planRelease();
+    CHECK(!fakeMisoDriven());                               // released
+    CHECK(g_fake_gpio.isr[7] == nullptr && g_fake_gpio.intr[7] == GPIO_INTR_DISABLE);   // the CS handler went
+    CHECK(!g_fake_gpio.oe_by_gpio[6]);                      // the pad's output enable handed back
+    CHECK(t.planApply(roles, 4));
   }
 
   // releasing the plan, then a new one: the state right after describe (state 0, mode and bit_order 0, no counts)

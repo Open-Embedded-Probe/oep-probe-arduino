@@ -108,16 +108,60 @@ void IRAM_ATTR P4SpiTarget::onDone(spi_slave_transaction_t *done) {
   if (spi_slave_queue_trans_isr(SPI2_HOST, next) != ESP_OK) self->isr_load_failed_ = true;
 }
 
+#if defined(OEP_SPI_MISO_GATE)
+// MISO driven only while selected: the pad's output enable moves from the slave to the GPIO enable bit, set from the
+// CS level now and at every CS edge after. The slave keeps the pad's output value (the bits it shifts). The level is
+// read in the handler rather than taken from the edge's kind, so a late or merged interrupt still leaves it right.
+void IRAM_ATTR P4SpiTarget::onCs(void *arg) {
+  const P4SpiTarget *self = static_cast<const P4SpiTarget *>(arg);
+  if (gpio_ll_get_level(&GPIO, self->cs_)) gpio_ll_output_disable(&GPIO, self->miso_);
+  else gpio_ll_output_enable(&GPIO, self->miso_);
+}
+
+bool P4SpiTarget::gateBegin() {
+  const esp_err_t service = gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
+  if (service != ESP_OK && service != ESP_ERR_INVALID_STATE) return false;   // INVALID_STATE: already installed
+  gpio_ll_set_output_enable_ctrl(&GPIO, static_cast<uint8_t>(miso_), false, false);
+  onCs(this);
+  if (gpio_isr_handler_add(static_cast<gpio_num_t>(cs_), onCs, this) != ESP_OK) {
+    gpio_ll_output_disable(&GPIO, miso_);
+    return false;
+  }
+  gpio_set_intr_type(static_cast<gpio_num_t>(cs_), GPIO_INTR_ANYEDGE);
+  onCs(this);   // an edge between the first look and the handler going in
+  gated_ = true;
+  return true;
+}
+
+// Before the driver goes: MISO stays off from here; spi_slave_free and the pin table's release put the pad to idle.
+void P4SpiTarget::gateEnd() {
+  if (!gated_) return;
+  gpio_set_intr_type(static_cast<gpio_num_t>(cs_), GPIO_INTR_DISABLE);
+  gpio_isr_handler_remove(static_cast<gpio_num_t>(cs_));
+  gpio_ll_output_disable(&GPIO, miso_);
+  gated_ = false;
+}
+#endif
+
 bool P4SpiTarget::start() {
   if (started_) return true;
   if (!begin()) return false;
+#if defined(OEP_SPI_MISO_GATE)
+  if (!gateBegin()) { spi_slave_free(SPI2_HOST); return false; }
+#endif
   started_ = true;
   if (spi_slave_queue_trans(SPI2_HOST, &idle_trans_, 0) != ESP_OK) isr_load_failed_ = true;
   return true;
 }
 
 void P4SpiTarget::stop() {
+#if defined(OEP_SPI_MISO_GATE)
+  gateEnd();
+#endif
   if (started_) spi_slave_free(SPI2_HOST);
+#if defined(OEP_SPI_MISO_GATE)
+  if (started_) gpio_ll_set_output_enable_ctrl(&GPIO, static_cast<uint8_t>(miso_), true, false);   // as before begin()
+#endif
   started_ = false; armed_ = false; queue_count_ = 0;
 }
 

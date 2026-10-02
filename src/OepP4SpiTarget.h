@@ -8,7 +8,7 @@
 //   0x04 status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) (no lock)   0x05 reset.   Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
 // One CS-framed transaction is armed at a time with the MISO bytes to send;
 // after the master raises CS the result (MOSI bytes, length in bits) is queued
-// for read_rx. Polled from service() in loop(); nothing runs in an ISR.
+// for read_rx. The driver's interrupt loads transactions (below); service() in loop() does the accounting.
 // While nothing is armed a discard transaction (MISO 0, MOSI to a scratch buffer) waits in the driver, so a transfer
 // the host did not arm is seen and counted in transactions and errors (fixture §4); arm takes it back (the driver's
 // queue reset) and loads the armed one. A CS frame with no SCK edge (0 bits) is no transfer: it counts nothing and
@@ -29,6 +29,16 @@
 #include <driver/spi_slave.h>
 #include <esp_private/spi_slave_internal.h>   // spi_slave_queue_trans_isr, spi_slave_queue_reset
 #include <freertos/FreeRTOS.h>
+#endif
+// The classic ESP32's slave drives MISO from spi_slave_initialize to spi_slave_free, CS high as well (bench,
+// 2026-10-02: low while CS is high, configured, armed and between frames; the ESP32-P4's leaves it undriven). A target
+// that drives the line while it is not selected fights any other device on it, so there the pad's output enable is taken
+// from the slave and follows CS (a CS edge interrupt): on while CS is low, off while it is high. The fake spi_slave
+// models the classic, so the host tests run with the gate.
+#if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)) || defined(OEP_HOST_FAKE_SPI_SLAVE)
+#define OEP_SPI_MISO_GATE 1
+#include <driver/gpio.h>
+#include <hal/gpio_ll.h>
 #endif
 
 namespace oep {
@@ -86,6 +96,12 @@ class P4SpiTarget final : public Interface {
   volatile bool isr_load_failed_ = false;
   static void onDone(spi_slave_transaction_t *done);   // post_trans_cb, in the driver's interrupt
   bool begin();        // the driver alone
+#endif
+#if defined(OEP_SPI_MISO_GATE)
+  bool gated_ = false;
+  static void onCs(void *self);   // a CS edge, in the GPIO interrupt: MISO's output enable = CS low
+  bool gateBegin();
+  void gateEnd();
 #endif
   bool start();
   void stop();
