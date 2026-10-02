@@ -36,12 +36,12 @@ bool Ch32Dm::attach() {
   return true;
 }
 
-// A scan's look at a pair (oep-if-debug §1): the bus up (dmactive) and DMSTATUS read, nothing else written. A debug
-// module answers with version 2 or 3 in DMSTATUS[3:0]; anything else is noise.
+// A scan's look at a pair (oep-if-debug §1, what scan writes): the PHY's bring-up - the wake / configuration sequence
+// and dmactive - and DMSTATUS read; no write check, no scratch, nothing else written, the link left down. A debug module
+// answers with a "found" version in DMSTATUS[3:0]; anything else is noise. An attached link is only read.
 bool Ch32Dm::probe(uint32_t &dmstatus) {
-  if (!phy_.attached() && !phy_.attach()) return false;
-  if (!phy_.read(kDmStatus, dmstatus)) return false;
-  return dmstatus != 0 && dmstatus != 0xffffffffu && dmVersionKnown(dmstatus);
+  if (phy_.attached() ? !phy_.read(kDmStatus, dmstatus) : !phy_.bringUp(dmstatus)) return false;
+  return dmVersionKnown(dmstatus);
 }
 
 // Bring the link up again (the CH32 drops it on a change of state) and put the abstract-command block back in a

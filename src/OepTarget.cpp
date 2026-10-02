@@ -13,14 +13,17 @@ namespace {
 
 namespace wire = reg::wire_rvswd;
 
-constexpr uint32_t kScanBudgetMs = 500;   // the longest one scan answer takes (the host asks again for the rest)
-
 constexpr uint8_t kDmStatus = 0x11;
 
 // A cold CH32 ignores the first wake now and then (the CH32L103 answered on the fifth, 2026-09-23), and one that
-// sat idle past its link timeout has dropped the link: bring the bus up afresh and try again before saying no.
+// sat idle past its link timeout has dropped the link: bring the bus up afresh and try again before saying no - while
+// the attach budget lasts (the PHY's deadline). Each try again counts in search_retries.
 bool attachAndRead(Ch32Dm &dm, uint32_t &status) {
   for (int attempt = 0; attempt < 3; ++attempt) {
+    if (attempt) {
+      if (dm.phy().pastDeadline()) break;
+      dm.phy().countSearchRetry();
+    }
     if (dm.attach() && dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return true;
     dm.detach();
   }
@@ -105,6 +108,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
     if (!phy.setMaxHz(max_hz)) phy.setMaxHz(0);   // the slot's settings were checked when it was set
     phy.setIdleClockLow(idle_low);
     if (max_hz && port.dm.attached() && phy.clockHz() > max_hz) port.dm.detach();
+    AttachDeadline budget(phy, reset ? reset->hold_ms : 0);   // oep-if-debug §1, as a host's attach
     if (reset) {   // as attach's reset TLV with method 0: the line pulled and released, then the attach
       ResetLine line{reset->channel, port.pins, &reset->held_at_ns};
       port.dm.pulseReset(holdReset, releaseReset, &line, reset->hold_ms);
@@ -319,12 +323,13 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   }
   size_t at = 2;
   uint8_t tried = 0, found = 0;
-  // One answer takes at most kScanBudgetMs: the host goes on with the rest (count 0 with skip, or the pairs after
-  // tried). 26 free pins bit-banged pair by pair kept an RP2350 from answering for seconds (0.0.18). At least one pair
-  // is tried while any is left (tried 0 means the list is used up).
+  // No pair starts later than scan_budget_ms after the request (oep-if-debug §1): the host goes on with the rest (count 0
+  // with skip, or the pairs after tried). 26 free pins bit-banged pair by pair kept an RP2350 from answering for seconds
+  // (0.0.18). At least one pair is tried while any is left (tried 0 means the list is used up); one try is bounded by
+  // the attach budget.
   const uint32_t began = millis();
   auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full, or its time is up
-    if (at + 10 > capacity || (tried && millis() - began >= kScanBudgetMs)) return false;
+    if (at + 10 > capacity || (tried && millis() - began >= reg::kLimitScanBudgetMs)) return false;
     uint32_t status = 0;
     bool ok = false;
     if (port_.connected) {
@@ -332,7 +337,10 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
       // from under the host that holds it
       ok = port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
     } else if (usePair(port_, d, c)) {
-      ok = port_.dm.probe(status);
+      {
+        AttachDeadline budget(phy);
+        ok = port_.dm.probe(status);                     // wake / configuration and dmactive only (debug §1)
+      }
       port_.dm.detach();                                 // nothing held: dmactive stays
       freeWire(port_);                                   // found or not, the pair to its free state (debug §1)
     }
@@ -369,8 +377,9 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
 }
 
 // method(u8: 0 leave it running, 1 halt) [TLV 0x01 max_speed (required), 0x03 pins, 0x04 idle_clock, 0x05 reset]
-//   ->  connection(u16) DMSTATUS(u32) flags(u8: bit0 acknowledged a pending havereset, bit1 existing, bit3 halted)
-//       speed_hz(u32) [TLV 0x10 target_id, 0x11 dpc while halted]
+//   ->  connection(u16) DMSTATUS(u32, after the attach: halted when it halted) flags(u8: bit0 acknowledged a pending
+//       havereset, bit1 existing, bit3 halted) speed_hz(u32) [TLV 0x10 target_id, 0x11 dpc while halted, 0x12
+//       search_retries when a speed search ran]
 // A failed attach answers status(u8) alone: line (no answer), timeout (the hart did not stop / start).
 Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // idle_clock is rvswd's (oep-if-debug §3): on swio it is an unknown tag (critical: rejected unsupported)
@@ -452,13 +461,21 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   uint8_t flags = 0;
   uint8_t failure = kStatusOk;
   bool have_dpc = false;
+  // The speed search and its retries take at most the attach budget, a reset's hold_ms aside (oep-if-debug §1). What
+  // failed on the way is the answer's search_retries.
+  AttachDeadline budget(phy, with_reset ? hold_ms : 0);
+  phy.clearSearchRetries();
+  bool searched = !port_.connected || with_reset;   // a search ran (search_retries goes in the answer)
   if (port_.connected) {
     // Already attached: the same connection, nothing redone (a one-command-per-process host gets its link back).
     // A running link over the new ceiling is slowed to it (going slower is safe); only a link that cannot keep
     // the ceiling refuses it.
-    if (phy.clockHz() > max_hz && !(phy.setMaxHz(max_hz) && phy.retune() && phy.clockHz() <= max_hz)) {
-      const Result r = tail.refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
-      if (refused(r)) return r;
+    if (phy.clockHz() > max_hz) {
+      searched = true;
+      if (!(phy.setMaxHz(max_hz) && phy.retune() && phy.clockHz() <= max_hz)) {
+        const Result r = tail.refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
+        if (refused(r)) return r;
+      }
     }
     flags |= wire::kAttachFlagsExisting;
     if (with_reset) {
@@ -508,6 +525,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
         if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
         if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
         else if (halt && !port_.dm.halt()) failure = kStatusTimeout;
+        else if (halt && !port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;   // the answer: DMSTATUS after the halt
       }
     }
     if (failure == kStatusOk) {
@@ -544,11 +562,19 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     putU32(out + n + 2, dpc);
     n += 6;
   }
+  if (searched && n + 4 <= capacity) {   // search_retries (oep-if-debug §1): u16, 0xFFFF = that many or more
+    const uint32_t retries = phy.searchRetries();
+    out[n] = wire::kTlvAttachAnswerSearchRetries;
+    out[n + 1] = 2;
+    putU16(out + n + 2, static_cast<uint16_t>(retries < 0xffff ? retries : 0xffff));
+    n += 4;
+  }
   return tail.finish(completed(n), out, capacity);
 }
 
 Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
+  port_.dm.phy().beginRequest();   // the request's allowance for wire retries (oep-if-debug §2)
   switch (op) {
     case kOpScan: return scan(payload, length, out, capacity);
     case kOpAttach: return attach(payload, length, out, capacity);
@@ -609,6 +635,7 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
     if (port && port->connected && getU16(payload) == port->number) port_ = port;
   if (!port_) return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
   line_lost_ = false;
+  port_->dm.phy().beginRequest();   // the request's allowance for wire retries (oep-if-debug §2)
   const Result r = dispatch(op, payload + 2, length - 2, out, capacity);
   if (line_lost_) releaseConnection(*port_, 0xff, true, true);   // the answer says line; the connection goes with it
   return r;

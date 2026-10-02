@@ -7,6 +7,10 @@
 // - The pins go to their free state - Hi-Z with no pull, or the idle the settings give them - whenever nothing holds
 //   them: a connection closed (also with idle_clock low, which rests SWCLK driven low), a scan's try, a failed attach
 //   (oep-core §8, oep-if-debug §1).
+// - scan brings a pair up without the write check (the PHY's bringUp: nothing written through write()); an attach with
+//   halt answers the DMSTATUS after the halt; search_retries (TLV 0x12) counts the attaches tried again; the attach
+//   budget stops them; no pair of a scan starts after the scan budget; a request's wire retries stop after
+//   wire_retry_ms, and the next request has its own (oep-if-debug §1, §2).
 #include <stdio.h>
 
 #include <vector>
@@ -38,12 +42,28 @@ class FakePhy final : public DmiPhy {
   int dio = -1, clk = -1;
   bool halted = false, resumeack = false;
   uint32_t data0 = 0, data1 = 0;
+  // what the layer above did: attach() / bringUp() calls, write() calls, and how long each attach / bring-up takes
+  int attaches = 0, bring_ups = 0, writes = 0, fail_attaches = 0;
+  uint32_t attach_ms = 0, bring_up_ms = 0;
+  // flaky: every read fails once per retry try (1 ms each) until the request's allowance is spent
+  bool flaky = false;
+  uint32_t retry_reads = 0;
 
   bool attach() override {
     if (attached_flag) return true;
+    ++attaches;
+    g_millis += attach_ms;
     state = kDriven;
-    if (!present) { state = kReleased; return false; }
+    if (!present || fail_attaches > 0) { --fail_attaches; state = kReleased; return false; }
     attached_flag = true;
+    return true;
+  }
+  bool bringUp(uint32_t &status) override {   // the wake / configuration and dmactive (not seen here), DMSTATUS read
+    ++bring_ups;
+    g_millis += bring_up_ms;
+    state = kReleased;
+    if (!present) return false;
+    status = version | (1u << 7) | (halted ? (3u << 8) : (3u << 10));
     return true;
   }
   void release() override { state = kReleased; attached_flag = false; }
@@ -55,6 +75,10 @@ class FakePhy final : public DmiPhy {
   bool attached() const override { return attached_flag; }
   bool read(uint8_t address, uint32_t &value) override {
     if (!present || !attached_flag) return false;
+    if (flaky) {   // the RVSWD PHY's way: retries while the request's allowance lasts, then a failed read
+      while (retryLeft()) { g_millis += 1; spentRetrying(1000); ++retry_reads; }
+      return false;
+    }
     switch (address) {
       case 0x04: value = data0; break;
       case 0x05: value = data1; break;
@@ -69,6 +93,7 @@ class FakePhy final : public DmiPhy {
     return true;
   }
   void write(uint8_t address, uint32_t value) override {
+    ++writes;
     if (!present || !attached_flag) return;
     if (address == 0x04) data0 = value;
     if (address == 0x05) data1 = value;
@@ -111,6 +136,12 @@ static Bytes attachRequest(uint8_t method, int swdio = -1, int swclk = -1, bool 
   return p;
 }
 static Bytes detachRequest(uint16_t number) { return {uint8_t(number), uint8_t(number >> 8)}; }
+// The value of answer TLV `tag` after `from` (core §2.3), or nullptr.
+static const uint8_t *answerTlv(const Bytes &out, size_t from, uint8_t tag, size_t &len) {
+  for (size_t at = from; at + 2 <= out.size(); at += 2u + out[at + 1])
+    if (out[at] == tag && at + 2u + out[at + 1] <= out.size()) { len = out[at + 1]; return out.data() + at + 2; }
+  return nullptr;
+}
 
 int main() {
   // A fixed pair (the wire's own channels 0 / 1, not in the pin table) and a host-chosen one among 4-7.
@@ -200,6 +231,86 @@ int main() {
     bad[7] = wire::kTlvAttachPins;   // not critical: ignored; no live connection and the host must name a pair
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable);
+  }
+
+  // ---- scan: the bring-up, no write check, nothing written through the link; attach(halt): DMSTATUS after the halt ----
+  {
+    phy.version = 2;
+    phy.halted = false;
+    phy.writes = phy.attaches = phy.bring_ups = 0;
+    const Bytes scan_fixed = {0};
+    Result r = call(wire_fixed, WireRvswd::kOpScan, scan_fixed, out);
+    CHECK(ok(r) && out.size() >= 12 && out[0] == 1 && out[1] == 1);
+    CHECK(phy.bring_ups == 1 && phy.attaches == 0 && phy.writes == 0);   // 0.0.28: a full attach, its write check, DMCONTROL
+    CHECK(phy.state == FakePhy::kFree && !fixed.connected);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && out.size() >= 11 && (out[6] & wire::kAttachFlagsHalted));
+    const uint32_t dmstatus = out[2] | out[3] << 8 | out[4] << 16 | uint32_t(out[5]) << 24;
+    CHECK((dmstatus & (1u << 9)) && !(dmstatus & (1u << 11)));   // allhalted, not running (0.0.28: the value before the halt)
+    size_t len = 0;
+    const uint8_t *v = answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len);
+    CHECK(v && len == 2 && v[0] == 0 && v[1] == 0);
+    // joining it again: no search, no search_retries
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting) && !answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len));
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    // the first attach() fails, the second takes: search_retries 1
+    phy.fail_attaches = 1;
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r));
+    v = answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len);
+    CHECK(v && len == 2 && v[0] == 1 && v[1] == 0);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r));
+  }
+
+  // ---- the attach budget: attach() tried again only while it lasts ----
+  {
+    phy.fail_attaches = 100;
+    phy.attach_ms = 400;
+    phy.attaches = 0;
+    const uint32_t before = millis();
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(r.resolution == kResolutionCompleted && r.detail != kOutcomeSuccess && out.size() >= 1 && out[0] == kStatusLine);
+    CHECK(phy.attaches == 2 && millis() - before <= reg::kLimitAttachBudgetMs);   // a third would start at 800 ms
+    phy.fail_attaches = 0;
+    phy.attach_ms = 0;
+  }
+
+  // ---- the scan budget: no pair starts 500 ms after the request ----
+  {
+    static FakePhy phy3;
+    static Ch32Dm dm3(phy3);
+    static PinTable pins3((1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 7));
+    static DebugPort chosen{dm3, 0xfffe, 0xfffe};
+    chosen.pins = &pins3;
+    chosen.pin_choice = (1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 7);
+    static WireRvswd wire3(chosen, 2);
+    phy3.present = false;
+    phy3.bring_up_ms = 200;
+    const Bytes scan_all = {0};
+    Result r = call(wire3, WireRvswd::kOpScan, scan_all, out);
+    CHECK(ok(r) && out.size() >= 2 && out[0] == 3 && out[1] == 0);   // at 0, 200 and 400 ms; not at 600
+    CHECK(phy3.bring_ups == 3);
+  }
+
+  // ---- wire retries inside a request: at most wire_retry_ms, the next request starts afresh (oep-if-debug §2) ----
+  {
+    phy.flaky = false;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    phy.flaky = true;
+    phy.retry_reads = 0;
+    // dmi: three reads of DMSTATUS
+    const Bytes reads = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3, 0, 0x02, 0x11, 0x02, 0x11, 0x02, 0x11};
+    const uint32_t before = millis();
+    r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);
+    CHECK(r.resolution == kResolutionCompleted && out.size() >= 3 && out[2] == kStatusLine);
+    CHECK(phy.retry_reads == reg::kLimitWireRetryMs && millis() - before >= reg::kLimitWireRetryMs &&
+          millis() - before < reg::kLimitWireRetryMs + 20);
+    phy.flaky = false;
+    phy.present = true;
   }
 
   printf("wire: %d checks, %d failures\n", checks, failures);

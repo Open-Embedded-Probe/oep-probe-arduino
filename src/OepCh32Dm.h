@@ -30,7 +30,8 @@ class Ch32Dm {
   bool checkHalted();
   uint8_t lastCmderr() const { return cmderr_; }   // cmderr of the last abstract command that failed (0 = none)
   bool attach();
-  // A scan's look (oep-if-debug §1): bring the link up and read DMSTATUS, writing nothing but dmactive. false: no answer.
+  // A scan's look (oep-if-debug §1): the PHY's bring-up (wake / configuration, dmactive) and DMSTATUS, no write check;
+  // the link is not left attached. false: no module answered.
   bool probe(uint32_t &dmstatus);
   bool halt();            // attach + haltreq, waits for allhalted; true at once when already halted
   bool resume();          // one resumereq; ok = the hart left debug mode (allresumeack, or running and not halted)

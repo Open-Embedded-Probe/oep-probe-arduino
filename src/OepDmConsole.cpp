@@ -29,12 +29,14 @@ void DmConsole::poll() {
   // halted or resumed it through raw DMI, which halted() does not see); a reset it did by itself (havereset) is
   // acknowledged there too (oep-if-debug §4.6: the stream marks a restart, dmseq starts over).
   if (!enabled_ || lost_) return;
+  phy_.beginRequest();   // one console read: its own allowance for wire retries (oep-if-debug §2)
   if (!phy_.attached()) {
     // A reset detaches, and the console has to outlive that: the point of it is to watch
     // a target through its own restarts. Retry at a slow rate so a target that is simply
     // gone does not turn every loop into a full attach.
     if (millis() - last_attach_ms_ < 250) return;
     last_attach_ms_ = millis();
+    AttachDeadline budget(phy_);   // as any attach (oep-if-debug §1)
     if (!dm_.attach()) {
       if (millis() - last_answer_ms_ >= kLostMs) lost_ = true;
       return;
