@@ -160,6 +160,11 @@ DriveLevels ProbeConfig::driveLevels() const {
 
 // ---- the item store ------------------------------------------------------------------------------------------------
 
+// The items describe declares: idle and disable only on a probe with a pin table.
+bool ProbeConfig::declares(uint8_t tag) const {
+  return keyLength(tag) && (pins_ || (tag != cfg::kTlvItemIdle && tag != cfg::kTlvItemDisable));
+}
+
 size_t ProbeConfig::keyLength(uint8_t tag) {
   switch (tag) {
     case cfg::kTlvItemPlan: return 5;    // fn role channel (an unset's key is the fn alone: 2)
@@ -592,8 +597,7 @@ Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, siz
     tag &= ~kTagCritical;
     if (tag == kTagValue || tag == kTagIgnored || tag == kTagInvalid) return rejected(kRejectMalformed);
     // an item this probe does not declare (describe items): unsupported with its tag as received (§1, core §4.3)
-    const bool declared = keyLength(tag) && (pins_ || (tag != cfg::kTlvItemIdle && tag != cfg::kTlvItemDisable));
-    if (!declared) return unsupportedTag(out, capacity, raw);
+    if (!keyLength(tag) || !declares(tag)) return unsupportedTag(out, capacity, raw);
     const Result r = checkItem(tag, v, vlen, out, capacity);
     if (refused(r)) return r;
     const size_t klen = keyLength(tag);
@@ -638,9 +642,11 @@ Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, s
   size_t at = 1;
   for (uint8_t i = 0; i < n; ++i) {   // the shape first
     if (at >= length || at + 1u + payload[at] > length || payload[at] < 1) return rejected(kRejectMalformed);
-    const uint8_t tag = payload[at + 1] & ~kTagCritical;
+    // the tag is the item's tag itself (no critical bit here): one this probe does not declare (describe items) is
+    // unsupported with the tag as received (§2, core §4.3)
+    const uint8_t tag = payload[at + 1];
     const size_t klen = tag == cfg::kTlvItemPlan ? 2 : keyLength(tag);
-    if (!klen) return unsupportedValue(out, capacity);   // not an item this probe takes
+    if (!klen || !declares(tag)) return unsupportedTag(out, capacity, tag);
     if (payload[at] < 1u + klen) return rejected(kRejectMalformed);
     at += 1u + payload[at];
   }
@@ -654,7 +660,7 @@ Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, s
   size_t plan_fn_count = 0;
   at = 1;
   for (uint8_t i = 0; i < n; ++i) {
-    const uint8_t tag = payload[at + 1] & ~kTagCritical;
+    const uint8_t tag = payload[at + 1];
     const uint8_t *key = payload + at + 2;
     if (tag == cfg::kTlvItemPlan) {
       bool listed = false;
