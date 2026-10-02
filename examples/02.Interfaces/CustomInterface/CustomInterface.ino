@@ -155,6 +155,8 @@ static size_t describeProbe() {
 void setup() {
 #if defined(ARDUINO_ARCH_RP2040)
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
+#elif defined(ARDUINO_ARCH_ESP32)
+  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §2.5): UART0 is the transport
 #endif
   Serial.begin(115200);
   endpoint.setProbeDescription(probeTlv, describeProbe());
