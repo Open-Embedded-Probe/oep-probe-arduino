@@ -385,16 +385,26 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       const uint8_t raw = wire::kTlvAttachReset | (reset_critical ? kTagCritical : 0);
       reset_channel = getU16(v);
       hold_ms = getU16(v + 2);
-      if (reset_channel > 63 || !((port_.reset_allowed >> reset_channel) & 1) || hold_ms > kMaxOpMs)
-        return unsupportedTag(out, capacity, raw);
-      with_reset = true;
+      // a value it cannot take: unsupported with the tag as received when critical, else ignored (core §2.3)
+      if (reset_channel > 63 || !((port_.reset_allowed >> reset_channel) & 1) || hold_ms > kMaxOpMs) {
+        if (reset_critical) return unsupportedTag(out, capacity, raw);
+        tail.ignore(wire::kTlvAttachReset);
+      } else {
+        with_reset = true;
+      }
     }
   }
   if (phy.minClockHz() && max_hz < phy.minClockHz())
     return unsupportedTag(out, capacity, wire::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
   {
     size_t plen = 0;
-    const uint8_t *pins = tail.find(wire::kTlvAttachPins, plen);
+    bool pins_critical = false;
+    const uint8_t *pins = tail.find(wire::kTlvAttachPins, plen, &pins_critical);
+    // a pair this wire does not declare: unsupported with the tag as received when critical, else ignored (core §2.3)
+    if (pins && plen == 4 && !pairAllowed(port_, getU16(pins), getU16(pins + 2)) && !pins_critical) {
+      tail.ignore(wire::kTlvAttachPins);
+      pins = nullptr;
+    }
     // a channel the settings disable - the pins asked for, the fixed pair, the reset line: cause 5 with the channel
     // (probe.config §1), before choosePair moves anything
     uint16_t off = 0xffff;
@@ -407,7 +417,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
     if (const uint8_t bad = choosePair(pins, plen)) {
-      if (bad == kRejectUnsupported) return unsupportedTag(out, capacity, wire::kTlvAttachPins | kTagCritical);
+      if (bad == kRejectUnsupported) return unsupportedTag(out, capacity, wire::kTlvAttachPins | kTagCritical);   // critical, above
       if (bad == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
       return rejected(bad);
     }

@@ -226,7 +226,13 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (max_hz < hzOf(kSlowHalfNs)) return unsupportedTag(out, capacity, sw::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
       {
         size_t plen = 0;
-        const uint8_t *pins = tail.find(sw::kTlvAttachPins, plen);
+        bool pins_critical = false;
+        const uint8_t *pins = tail.find(sw::kTlvAttachPins, plen, &pins_critical);
+        // a pair this wire does not declare: unsupported with the tag as received when critical, else ignored (core §2.3)
+        if (pins && plen == 4 && !allowed(getU16(pins), getU16(pins + 2)) && !pins_critical) {
+          tail.ignore(sw::kTlvAttachPins);
+          pins = nullptr;
+        }
         if (!pins) {   // the live connection's pair (join it), the fixed pair, else the host names one
           if (port_.pin_choice && !port_.connected) return unavailable(out, capacity, reg::core::kUnavailableCauseWrongState);
           const uint16_t off = port_.connected ? 0xffff : disabledOf(port_.swdio, port_.swclk);
@@ -235,7 +241,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         } else {
           if (plen != 4) return rejected(kRejectMalformed);
           const uint16_t d = getU16(pins), c = getU16(pins + 2);
-          if (!allowed(d, c)) return unsupportedTag(out, capacity, sw::kTlvAttachPins | kTagCritical);
+          if (!allowed(d, c)) return unsupportedTag(out, capacity, sw::kTlvAttachPins | kTagCritical);   // critical, above
           const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
           if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
