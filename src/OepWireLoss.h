@@ -39,7 +39,8 @@ class WireLossClock {
     if (excused_ && static_cast<int32_t>(excused_until_ms_ - from) > 0) from = excused_until_ms_;
     return static_cast<int32_t>(millis() - from) >= static_cast<int32_t>(kLostMs);
   }
-  void clear() { failing_ = false; excused_ = false; }   // a new connection
+  // A new connection: no failure carried over (a reset's excuse is kept - an attach with its reset TLV ends inside it).
+  void clear() { failing_ = false; }
 
  private:
   bool failing_ = false, excused_ = false;
