@@ -66,11 +66,21 @@ struct DebugPort {
   uint16_t number = 0;
 };
 
+// The reset line of a probe's own attach (oep-if-probe-config §3.1, the retry with reset): pulled low for hold_ms and
+// released before the attach, as attach's reset TLV with method 0 (oep-if-debug §3). Not a host reset: `resets` is not
+// counted, so a last-reset bind keeps its selection (probe.config §3.1 / §1.2). held_at_ns: when the pull started.
+struct AttachReset {
+  uint16_t channel;
+  uint16_t hold_ms;
+  uint64_t held_at_ns;
+};
 // Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the
-// host's attach, havereset acknowledged. Joins an existing connection. Adds `user`. false: the target did not answer.
+// host's attach, havereset acknowledged. Joins an existing connection. Adds `user`. false: the target did not answer
+// (no_answer set: the wire got nothing back - status line), or no connection number was left.
 // A new connection takes the line settings given (oep-if-debug §3: a slot's max_speed / idle_clock); an existing one keeps
-// its own.
-bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
+// its own. `reset`: a new connection pulls that reset line first (an existing one is joined without it).
+bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false,
+                   AttachReset *reset = nullptr, bool *no_answer = nullptr);
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`). lost: the line was found gone (the console

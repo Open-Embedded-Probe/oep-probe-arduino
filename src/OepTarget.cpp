@@ -57,8 +57,13 @@ bool idleClock(const Tail &tail, uint8_t tag, bool &low, bool &critical) {
 struct ResetLine {
   int channel;
   PinTable *pins;
+  uint64_t *held_at_ns;   // nullptr, or where the time the pull started goes
 };
-void holdReset(void *ctx) { platformGpio(static_cast<ResetLine *>(ctx)->channel, kGpioOpenDrainLow); }
+void holdReset(void *ctx) {
+  const ResetLine &line = *static_cast<ResetLine *>(ctx);
+  if (line.held_at_ns) *line.held_at_ns = nowNs();
+  platformGpio(line.channel, kGpioOpenDrainLow);
+}
 void releaseReset(void *ctx) {
   const ResetLine &line = *static_cast<ResetLine *>(ctx);
   platformGpio(line.channel, kGpioOpenDrainRelease);
@@ -90,17 +95,23 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   return 7;
 }
 
-bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz, bool idle_low) {
+bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz, bool idle_low, AttachReset *reset,
+                   bool *no_answer) {
+  if (no_answer) *no_answer = false;
   if (port.connected) {
-    if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
+    if (!port.dm.readDmi(kDmStatus, dmstatus)) { if (no_answer) *no_answer = true; return false; }
   } else {
     DmiPhy &phy = port.dm.phy();
     if (!phy.setMaxHz(max_hz)) phy.setMaxHz(0);   // the slot's settings were checked when it was set
     phy.setIdleClockLow(idle_low);
     if (max_hz && port.dm.attached() && phy.clockHz() > max_hz) port.dm.detach();
-    if (!attachAndRead(port.dm, dmstatus)) return false;
+    if (reset) {   // as attach's reset TLV with method 0: the line pulled and released, then the attach
+      ResetLine line{reset->channel, port.pins, &reset->held_at_ns};
+      port.dm.pulseReset(holdReset, releaseReset, &line, reset->hold_ms);
+    }
+    if (!attachAndRead(port.dm, dmstatus)) { if (no_answer) *no_answer = true; return false; }
     port.dm.ackHaveReset();
-    if (!port.dm.readDmi(kDmStatus, dmstatus)) return false;
+    if (!port.dm.readDmi(kDmStatus, dmstatus)) { if (no_answer) *no_answer = true; return false; }
     const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
     if (!number) { port.dm.detach(); return false; }
     port.connected = true;
@@ -409,7 +420,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     phy.setIdleClockLow(false);
   }
   if (capacity < 11) return failed();
-  ResetLine reset_line{reset_channel, port_.pins};
+  ResetLine reset_line{reset_channel, port_.pins, nullptr};
   uint32_t status = 0, dpc = 0;
   uint8_t flags = 0;
   uint8_t failure = kStatusOk;

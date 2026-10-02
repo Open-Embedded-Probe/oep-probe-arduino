@@ -75,6 +75,8 @@ class Endpoint {
   void setRawPorts(RawPorts *raw) { raw_ = raw; }
   // A session holds the lock / holds serial port `port` (its raw transfer is stopped, core §3.4).
   bool locked() const { return locked_; }
+  // A session has taken the lock at least once since boot (oep-if-probe-config §3.1: no retry with reset after that).
+  bool lockEverTaken() const { return have_last_; }
   bool held(size_t port) const { return locked_ && ((held_ >> port) & 1); }
   // The probe also enumerates with the project's own USB VID:PID (describe discoverable, core §3.3 / §7.5). Until that
   // VID:PID is listed in the registry, no probe sets this.

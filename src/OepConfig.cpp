@@ -280,6 +280,11 @@ Result ProbeConfig::checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t
       if (lock_len && lock[0] != reg::wire_rvswd::kTargetIdSchemeWchDmi7f && lock[0] != reg::wire_swd::kTargetIdSchemeTargetsel)
         return rejected(kRejectMalformed);   // not a scheme of the table
       if (lock_len && (lock_len - 1) / 2 != reg::wire_rvswd::kTargetIdLenWchDmi7f) return rejected(kRejectMalformed);   // n = the scheme's length (4)
+      // boot_reset after the lock (optional, 0 when absent): 0 / 1, and 1 only on an at-boot slot (§1.1)
+      const size_t after_lock = kSlotFixed + name_length + 1u + lock_len;
+      if (len > after_lock && (v[after_lock] > cfg::kSlotBootResetRetryWithReset ||
+                               (v[after_lock] == cfg::kSlotBootResetRetryWithReset && attach != cfg::kSlotAttachAtBoot)))
+        return rejected(kRejectMalformed);
       if (lock_len && lock[0] != reg::wire_rvswd::kTargetIdSchemeWchDmi7f) return unsupportedValue(out, capacity);   // a scheme these wires do not read
       if (!endpoint_.interfaceAt(wire_fn)) return rejected(kRejectUnknownFunction);
       int place = -1;
@@ -338,12 +343,12 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
   d.role_count = 0;
   d.disabled = 0;
   memset(d.idle, PinTable::kIdleUnset, sizeof d.idle);
+  memset(d.idle_drive, PinTable::kDriveDefault, sizeof d.idle_drive);
   for (Slot &s : d.slots) s = Slot{};
   for (Binds::Spec &b : d.binds) b = Binds::Spec{};
   for (UartItem &u : d.uarts) u = UartItem{};
   for (Label &l : d.labels) l = Label{};
   size_t at = 0, vlen = 0;
-  memset(d.idle_drive, PinTable::kDriveDefault, sizeof d.idle_drive);
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
   size_t labels = 0;
@@ -358,18 +363,18 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
         break;
       case cfg::kTlvItemIdle: {
         d.idle[getU16(v)] = v[2];
-        break;
-      case cfg::kTlvItemSlot: {
-        Slot &s = d.slots[v[0]];
-        const uint16_t wire_fn = getU16(v + 1);
-        for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) s.place = static_cast<uint8_t>(k);
         uint8_t level = PinTable::kDriveDefault;   // applied only where gpio declares drive_levels (the default otherwise)
         const DriveLevels levels = driveLevels();
         if (vlen >= 6 && levels.count && !PinTable::driveLevelOf(levels, v[3], getU16(v + 4), level))
           level = PinTable::kDriveDefault;
         d.idle_drive[getU16(v)] = level;
-        s.set = true;
+        break;
       }
+      case cfg::kTlvItemSlot: {
+        Slot &s = d.slots[v[0]];
+        const uint16_t wire_fn = getU16(v + 1);
+        for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) s.place = static_cast<uint8_t>(k);
+        s.set = true;
         s.swdio = getU16(v + 3);
         s.swclk = getU16(v + 5);
         s.attach = v[7];
@@ -386,6 +391,8 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
         s.lock_length = static_cast<uint8_t>(lock_len ? (lock_len - 1) / 2 : 0);
         memcpy(s.mask, lock + 1, s.lock_length);
         memcpy(s.value, lock + 1 + s.lock_length, s.lock_length);
+        const size_t after_lock = kSlotFixed + s.name_length + 1u + lock_len;
+        s.boot_reset = vlen > after_lock && v[after_lock] == cfg::kSlotBootResetRetryWithReset;
         break;
       }
       case cfg::kTlvItemBind: {
@@ -712,8 +719,13 @@ void ProbeConfig::runSlot(uint8_t i) {
       r.last_try_ms = millis();
       r.last_try_ns = nowNs();
       uint32_t status = 0;
-      // the link to the slot's pair first (host-chosen pins; a fixed pair is always there), unless its pins are held
-      if (usePair(port, s.swdio, s.swclk) && attachRunning(port, DebugPort::kUserSlot, status, s.max_hz, s.idle_low)) {
+      bool no_answer = false;
+      // the link to the slot's pair first (host-chosen pins; a fixed pair is always there), unless its pins are held;
+      // the wire not answering (status line) may be tried once more with the reset line (§3.1)
+      bool up = usePair(port, s.swdio, s.swclk) &&
+                attachRunning(port, DebugPort::kUserSlot, status, s.max_hz, s.idle_low, nullptr, &no_answer);
+      if (!up && no_answer) up = retryWithReset(i, status);
+      if (up) {
         r.mismatch = lockMatches(s, port.has_tid, port.tid) != 1;
         r.mismatch_has_tid = port.has_tid;
         r.mismatch_tid = port.tid;
@@ -736,6 +748,34 @@ void ProbeConfig::runSlot(uint8_t i) {
     p.console->bindClose();
     releaseConnection(port, DebugPort::kUserSlot, false);
   }
+}
+
+// The retry with reset (§3.1) after an automatic attach of slot i the wire did not answer: a boot_reset slot, no
+// session has taken the lock since boot, not done for this slot in this boot, and its nrst line (§1.3) one the wire's
+// attach could pull with its reset TLV (role 3 of role_channels, not disabled, nothing holding it). The same attach
+// (method 0), the line held slot_retry_reset_hold_ms first. true: attached.
+bool ProbeConfig::retryWithReset(uint8_t i, uint32_t &dmstatus) {
+  const Slot &s = slots_[i];
+  BootReset &b = boot_resets_[i];
+  if (!s.boot_reset || b.done || endpoint_.lockEverTaken()) return false;
+  DebugPort &port = *places_[s.place].port;
+  const uint16_t nrst = lineOf(i, "nrst");
+  if (nrst > 63 || !((port.reset_allowed >> nrst) & 1)) return false;   // none, or not a reset channel of this wire
+  if (pins_ && (pins_->disabled(nrst) || pins_->owner(nrst))) return false;   // disabled, held by a plan / connection
+  b.done = true;
+  AttachReset reset{nrst, static_cast<uint16_t>(reg::kSlotRetryResetHoldMs), kNeverNs};
+  SlotRun &r = runs_[i];
+  r.last_try_ms = millis();
+  r.last_try_ns = nowNs();
+  const bool up = attachRunning(port, DebugPort::kUserSlot, dmstatus, s.max_hz, s.idle_low, &reset);
+  b.at_ns = reset.held_at_ns;
+  return up;
+}
+
+uint16_t ProbeConfig::lineOf(uint8_t slot, const char *line) const {
+  const char *name = slot < kMaxSlots && slots_[slot].set ? slots_[slot].name : nullptr;
+  if (slot != 0xff && !name) return 0xffff;
+  return findLine(items_, items_length_, name, line);
 }
 
 void ProbeConfig::poll() {
@@ -925,6 +965,7 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {   // declarations 
 }
 
 // slot_state (probe.config §3.3): slot(u8) state(u8) connection(u16) last_try_at_ns(u64) tid_scheme(u8) tid_len(u8) tid
+// reset_at_ns(u64: the retry with reset's pull, all ones when not done)
 size_t ProbeConfig::slotState(uint8_t i, uint8_t *out) const {
   const Slot &s = slots_[i];
   const SlotRun &r = runs_[i];
@@ -948,7 +989,9 @@ size_t ProbeConfig::slotState(uint8_t i, uint8_t *out) const {
   out[12] = has_tid ? reg::wire_rvswd::kTargetIdSchemeWchDmi7f : 0;
   out[13] = has_tid ? reg::wire_rvswd::kTargetIdLenWchDmi7f : 0;
   if (has_tid) putU32(out + 14, tid);
-  return has_tid ? 18 : 14;
+  const size_t at = has_tid ? 18 : 14;
+  putU64(out + at, boot_resets_[i].at_ns);
+  return at + 8;
 }
 
 // state(first_slot u8, first_bind u8) -> more(u8) storage_state(u8) storage_hash(u32) unreadable_reason(u8)
@@ -968,7 +1011,7 @@ Result ProbeConfig::state(const uint8_t *payload, size_t length, uint8_t *out, s
   for (uint8_t i = 0; i < kMaxSlots; ++i) {
     if (!slots_[i].set) continue;
     if (index++ < payload[0]) continue;
-    if (used + 1 + 18 + 1 > room) { more = true; break; }
+    if (used + 1 + 26 + 1 > room) { more = true; break; }   // the longest slot_state: 26
     out[used] = static_cast<uint8_t>(slotState(i, out + used + 1));
     used += 1u + out[used];
     ++n;
@@ -1074,3 +1117,58 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
 }  // namespace oep
 
 #endif
+
+namespace oep {
+namespace {
+
+// A label's text equal to `slot` "." `line` (slot nullptr: `line` alone), ASCII case ignored (probe.config §1.3).
+bool labelNames(const uint8_t *text, size_t n, const char *slot, const char *line) {
+  auto lower = [](uint8_t c) { return c >= 'A' && c <= 'Z' ? static_cast<uint8_t>(c - 'A' + 'a') : c; };
+  size_t at = 0;
+  auto part = [&](const char *p) {
+    for (; *p; ++p, ++at)
+      if (at >= n || lower(text[at]) != lower(static_cast<uint8_t>(*p))) return false;
+    return true;
+  };
+  if (slot && !(part(slot) && part("."))) return false;
+  return part(line) && at == n;
+}
+
+// How many label items name the line, the channel of the last one in `channel`.
+size_t labelsNaming(const uint8_t *items, size_t length, const char *slot, const char *line, uint16_t &channel) {
+  size_t at = 0, found = 0;
+  while (at < length) {
+    uint8_t tag = 0;
+    const uint8_t *v = nullptr;
+    size_t vlen = 0, next = 0;
+    if (!tlvAt(items, length, at, tag, v, vlen, next)) break;
+    at = next;
+    if (tag != reg::probe_config::kTlvItemLabel || vlen < 2 || !labelNames(v + 2, vlen - 2, slot, line)) continue;
+    channel = getU16(v);
+    ++found;
+  }
+  return found;
+}
+
+}  // namespace
+
+uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line) {
+  uint16_t channel = 0xffff;
+  if (slot) {
+    const size_t n = labelsNaming(items, length, slot, line, channel);
+    if (n) return n == 1 ? channel : 0xffff;   // "S.N": one channel, or none when two or more
+    size_t slots = 0, at = 0;
+    while (at < length) {
+      uint8_t tag = 0;
+      const uint8_t *v = nullptr;
+      size_t vlen = 0, next = 0;
+      if (!tlvAt(items, length, at, tag, v, vlen, next)) break;
+      at = next;
+      slots += tag == reg::probe_config::kTlvItemSlot;
+    }
+    if (slots > 1) return 0xffff;              // "N" alone names a line only with at most one slot
+  }
+  return labelsNaming(items, length, nullptr, line, channel) == 1 ? channel : 0xffff;
+}
+
+}  // namespace oep
