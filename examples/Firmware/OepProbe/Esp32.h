@@ -104,6 +104,7 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §2.5): UART0 is the transport
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(kBootBaud);
