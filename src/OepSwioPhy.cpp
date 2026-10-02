@@ -415,12 +415,15 @@ constexpr int kCheckRounds = 2;   // x 8 patterns: about 2 ms of frames
 }  // namespace
 
 bool SwioPhy::readRetried(uint8_t address, uint32_t &value) {
+  uint32_t t0 = micros();
   if (readRaw(address, value)) return true;
-  for (int attempt = 1; attempt < 4 && retryLeft(); ++attempt) {   // within the request's wire_retry_ms (oep-if-debug §2)
+  uint32_t cost = micros() - t0;   // a retry starts only when it still ends within wire_retry_ms (oep-if-debug §2)
+  for (int attempt = 1; attempt < 4 && retryFits(cost); ++attempt) {
     ++retries_;
-    const uint32_t t0 = micros();
+    t0 = micros();
     const bool ok = readRaw(address, value);
-    spentRetrying(micros() - t0);
+    cost = micros() - t0;
+    spentRetrying(cost);
     if (ok) return true;
   }
   return false;

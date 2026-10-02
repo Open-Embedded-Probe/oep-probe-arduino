@@ -101,6 +101,9 @@ class DmiPhy {
  protected:
   virtual bool readWire(uint8_t address, uint32_t &value) = 0;
   bool retryLeft() const { return retry_us_ < v1::reg::kLimitWireRetryMs * 1000u; }
+  // One more retry that takes about cost_us still ends inside the allowance (so a request never spends more than
+  // wire_retry_ms retrying, even when one retry is long - a wake at a slow max_speed takes tens of ms).
+  bool retryFits(uint32_t cost_us) const { return retry_us_ + cost_us <= v1::reg::kLimitWireRetryMs * 1000u; }
   void spentRetrying(uint32_t us) { retry_us_ += us; }
   uint32_t search_retries_ = 0;
 

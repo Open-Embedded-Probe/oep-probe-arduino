@@ -301,20 +301,35 @@ void RvswdPhy::resyncAt(uint32_t half) {
 // separate requests tens of ms apart - and the damage is silent, because the debug module
 // keeps answering DATA0 with whatever was left there and the abstract command never runs.
 // So bring the bus back before the first transaction after any pause.
+//
+// Everything after the first read that did not answer is a retry of the request's (oep-if-debug §2): the re-sync and
+// each wake are charged to its wire_retry_ms, and none starts that would end past it (one wake at a slow max_speed
+// takes tens of ms; at 10 kHz twelve of them and the read's own retries made one request 691 ms).
 void RvswdPhy::reviveIfIdle() {
   if (!ready_ || !attached_) return;
   if (micros() - last_activity_us_ < kIdleUs) return;
   uint32_t status = 0;
-  if (readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80)) return;   // still there
-  configureBus(false);                                                                // re-sync, no reset
-  if (readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80)) return;
+  auto answers = [&]() { return readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80); };
+  if (answers()) return;   // still there
+  uint32_t t0 = micros();
+  configureBus(false);     // re-sync, no reset
+  const bool back = answers();
+  uint32_t cost = micros() - t0;
+  spentRetrying(cost);
+  if (back) return;
   // Parking the clock low keeps the link, so this is the path for a target that was left
   // parked high by something else, or that lost the bus for its own reasons. It takes
   // about a dozen bring-ups to come back, and the debug module resets on the way, so the
   // hart will be running again: the caller finds out through cmderr, not through a lie.
-  for (int i = 0; i < 12; ++i) {
+  // A wake costs more than the re-sync: the first one is let start only with twice the re-sync's time left.
+  cost *= 2;
+  for (int i = 0; i < 12 && retryFits(cost); ++i) {
+    t0 = micros();
     configureBus(true);
-    if (readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80)) break;
+    const bool up = answers();
+    cost = micros() - t0;
+    spentRetrying(cost);
+    if (up) break;
   }
   last_activity_us_ = micros();
 }
@@ -332,15 +347,18 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
 }
 
 // A failed read is retried while the request's allowance lasts (oep-if-debug §2: at most wire_retry_ms of one request
-// goes to retries), and no more than 200 times in a row.
+// goes to retries, the revive's re-sync and wakes included), and no more than 200 times in a row.
 bool RvswdPhy::readWire(uint8_t address, uint32_t &value) {
   reviveIfIdle();
+  uint32_t t0 = micros();
   if (readRaw(address, value)) return true;
-  for (int attempt = 1; attempt < 200 && retryLeft(); ++attempt) {
+  uint32_t cost = micros() - t0;   // one read: the next retry starts only if it still ends inside the allowance
+  for (int attempt = 1; attempt < 200 && retryFits(cost); ++attempt) {
     ++retries_;
-    const uint32_t t0 = micros();
+    t0 = micros();
     const bool ok = readRaw(address, value);
-    spentRetrying(micros() - t0);
+    cost = micros() - t0;
+    spentRetrying(cost);
     if (ok) return true;
   }
   return false;

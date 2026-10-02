@@ -11,6 +11,8 @@
 //   most); a faster period with one is not used. The slowest period's reads are checked once.
 // - The attach budget stops the search (setDeadline); search_retries counts what failed.
 // - begin() leaves the pins free: not driven, no pull (oep-core §8).
+// - A request's wire retries - the revive's re-sync and wakes, the read's retries - take at most wire_retry_ms
+//   (oep-if-debug §2), also at a slow max_speed where one wake takes tens of ms.
 #include <stdio.h>
 
 #include <set>
@@ -284,6 +286,30 @@ int main() {
     phy.clearDeadline();
     CHECK(millis() - before < 50);
     phy.free();
+  }
+
+  // ---- a request whose link went quiet: the revive's re-sync and wakes and the read's retries together stay inside
+  //      wire_retry_ms (oep-if-debug §2) - at 10 kHz the request took 691 ms (0.0.28: twelve wakes, then 200 ms) ----
+  {
+    t.reset(); t.begun = true;
+    phy.setMaxHz(10000);   // 50 us half period: a frame about 5 ms, a wake about 37 ms
+    CHECK(phy.attach());
+    t.min_read_half = 100000;    // the target lost the link: every read fails its parity from now on
+    advanceMicros(1000);         // past the 300 us rest: the next transaction revives the link first
+    phy.beginRequest();
+    const uint32_t before = micros();
+    uint32_t value = 0;
+    CHECK(!phy.read(0x11, value));
+    const uint32_t took = micros() - before;
+    printf("  a failed read at 10 kHz: %u ms\n", took / 1000);
+    // the allowance, plus the two reads that are not retries (the revive's first look, the read's first try)
+    CHECK(took <= v1::reg::kLimitWireRetryMs * 1000u + 2 * 6000u);
+    // the next request has its own allowance; a request already spent retries nothing more
+    const uint32_t before2 = micros();
+    CHECK(!phy.read(0x11, value));
+    CHECK(micros() - before2 < 7000);   // one read, no retries
+    phy.free();
+    phy.setMaxHz(1000000);
   }
 
   // ---- scan's bring-up: the wake / configuration pair and dmactive only, released after ----
