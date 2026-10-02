@@ -78,6 +78,14 @@ void configureIo() {
   config.pull_down_en = GPIO_PULLDOWN_DISABLE;
   config.intr_type = GPIO_INTR_DISABLE;
   gpio_config(&config);
+  // The weakest drive (about 5 mA): the line's sharp edges at the default 20 mA coupled into the fixture lines next to
+  // it - on the V003 jig a 1 MHz SPI target lost or shifted bits while the console was read over this wire (23 of 36
+  // frames good; 72 of 72 at the weakest drive, the wire's own timing unchanged, 2026-10-02). OEP_SWIO_DRIVE_CAP
+  // chooses another gpio_drive_cap_t.
+#ifndef OEP_SWIO_DRIVE_CAP
+#define OEP_SWIO_DRIVE_CAP GPIO_DRIVE_CAP_0
+#endif
+  gpio_set_drive_capability(static_cast<gpio_num_t>(gPin), OEP_SWIO_DRIVE_CAP);
   high(gMask);
   outputOn(gMask);
 }
