@@ -48,7 +48,7 @@
 #include "OepFixture.h"
 #include "OepTarget.h"
 
-#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_CONFIG)
 
 namespace oep {
 

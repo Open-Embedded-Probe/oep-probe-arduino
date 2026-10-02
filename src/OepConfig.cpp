@@ -3,11 +3,11 @@
 
 #include "OepConfig.h"
 
-#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_CONFIG)
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <Preferences.h>
-#else
+#elif defined(ARDUINO_ARCH_RP2040)
 #include <EEPROM.h>
 #endif
 #include <stdio.h>
@@ -54,6 +54,21 @@ bool storeWrite(const uint8_t *blob, size_t length) {   // length 0: nothing sav
   const size_t written = length ? p.putBytes(kNvsItems, blob, length) : (p.remove(kNvsItems), 0);
   p.end();
   return written == length;
+}
+#elif defined(OEP_HOST_FAKE_CONFIG)
+// Host tests (tests/host): the blob in RAM.
+uint8_t gFakeBlob[kMaxBlob];
+size_t gFakeLength = 0;
+bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
+  length = gFakeLength;
+  if (!length || length > capacity) return false;
+  memcpy(blob, gFakeBlob, length);
+  return true;
+}
+bool storeWrite(const uint8_t *blob, size_t length) {
+  memcpy(gFakeBlob, blob, length);
+  gFakeLength = length;
+  return true;
 }
 #else
 constexpr uint32_t kEepromMagic = 0x4f455034;   // "OEP4"
@@ -278,23 +293,32 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       const uint32_t retry_ms = getU32(v + 8), max_hz = getU32(v + 12);
       if (len < kSlotFixed + name_length + 1u) return rejected(kRejectMalformed);   // up to lock_len
       if (n >= kMaxSlots || !place_count_) return rejected(kRejectMalformed);   // slots_max
-      if (attach > cfg::kSlotAttachAtBoot || (retry_ms && attach != cfg::kSlotAttachAtBoot)) return rejected(kRejectMalformed);
-      if (idle > reg::wire_rvswd::kIdleClockLow) return rejected(kRejectMalformed);
+      // an attach policy or idle_clock a later revision may define (2+): unsupported with the item's tag (C-02), once
+      // the form is known to be right; the rules that read them apply only to the defined values
+      const bool undefined = attach > cfg::kSlotAttachAtBoot || idle > reg::wire_rvswd::kIdleClockLow;
+      if (attach <= cfg::kSlotAttachAtBoot && retry_ms && attach != cfg::kSlotAttachAtBoot) return rejected(kRejectMalformed);
       if (name_length < 1 || name_length > kMaxName) return rejected(kRejectMalformed);
       for (uint8_t k = 0; k < name_length; ++k) if (!nameChar(static_cast<char>(v[kSlotFixed + k]))) return rejected(kRejectMalformed);
       const uint8_t lock_len = v[kSlotFixed + name_length];
       const uint8_t *lock = v + kSlotFixed + name_length + 1;
       if (len < kSlotFixed + name_length + 1u + lock_len) return rejected(kRejectMalformed);
       if (lock_len && (lock_len < 3 || lock_len % 2 == 0 || lock[0] == 0)) return rejected(kRejectMalformed);
-      if (lock_len && lock[0] != reg::common::kTargetIdSchemeWchDmi7f && lock[0] != reg::common::kTargetIdSchemeTargetsel)
-        return rejected(kRejectMalformed);   // not a scheme of the table
-      if (lock_len && (lock_len - 1) / 2 != reg::common::kTargetIdLenWchDmi7f) return rejected(kRejectMalformed);   // n = the scheme's length (4)
+      // n = the scheme's length (the registry's target_id_len); a scheme not in the table has no length to check
+      // against and is refused unsupported below (probe.config §1.1: "whether defined or not", C-02)
+      const bool scheme_known =
+          lock_len && (lock[0] == reg::common::kTargetIdSchemeWchDmi7f || lock[0] == reg::common::kTargetIdSchemeTargetsel);
+      const uint8_t scheme_len = lock_len && lock[0] == reg::common::kTargetIdSchemeTargetsel ? reg::common::kTargetIdLenTargetsel
+                                                                                              : reg::common::kTargetIdLenWchDmi7f;
+      if (scheme_known && (lock_len - 1) / 2 != scheme_len) return rejected(kRejectMalformed);
       // boot_reset after the lock (optional, 0 when absent): 0 / 1, and 1 only on an at-boot slot (§1.1)
       const size_t after_lock = kSlotFixed + name_length + 1u + lock_len;
+      // (boot_reset 2+ is malformed as probe.config §1.1 states it now)
       if (len > after_lock && (v[after_lock] > cfg::kSlotBootResetRetryWithReset ||
-                               (v[after_lock] == cfg::kSlotBootResetRetryWithReset && attach != cfg::kSlotAttachAtBoot)))
+                               (v[after_lock] == cfg::kSlotBootResetRetryWithReset && attach == cfg::kSlotAttachHost)))
         return rejected(kRejectMalformed);
-      if (lock_len && lock[0] != reg::common::kTargetIdSchemeWchDmi7f) return unsupportedTag(out, capacity, raw);   // a scheme these wires do not read
+      if (undefined) return unsupportedTag(out, capacity, raw);
+      // a scheme these wires do not read, defined (targetsel) or not
+      if (lock_len && lock[0] != reg::common::kTargetIdSchemeWchDmi7f) return unsupportedTag(out, capacity, raw);
       if (!endpoint_.interfaceAt(wire_fn)) return rejected(kRejectUnknownFunction);
       int place = -1;
       for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) place = static_cast<int>(k);
@@ -310,10 +334,12 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
     case cfg::kTlvItemBind: {
       if (len < 4 || v[3] < 1) return rejected(kRejectMalformed);
       if (v[3] > Binds::kMaxStreams) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+      for (uint8_t k = 0; k < v[3]; ++k)   // the form first: every element there (malformed before unsupported)
+        if (!bindStreamAt(v, len, k)) return rejected(kRejectMalformed);
       for (uint8_t k = 0; k < v[3]; ++k) {
         const size_t at = bindStreamAt(v, len, k);
-        if (!at) return rejected(kRejectMalformed);
-        if (v[at] != Binds::kSlotConsole && v[at] != Binds::kFixtureUart) return rejected(kRejectMalformed);
+        // a stream kind a later revision may define: unsupported with the item's tag (C-02)
+        if (v[at] != Binds::kSlotConsole && v[at] != Binds::kFixtureUart) return unsupportedTag(out, capacity, raw);
         if (v[at] == Binds::kFixtureUart) {
           const uint16_t fn = getU16(v + at + 1);
           if (!endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
