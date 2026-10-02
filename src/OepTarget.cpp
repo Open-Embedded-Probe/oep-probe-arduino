@@ -90,7 +90,7 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   if (room < 7 || !port.has_tid) return 0;
   out[0] = wire::kTlvAttachAnswerTargetId;
   out[1] = 5;
-  out[2] = wire::kTargetIdSchemeWchDmi7f;
+  out[2] = reg::common::kTargetIdSchemeWchDmi7f;
   putU32(out + 3, id);
   return 7;
 }
@@ -226,8 +226,8 @@ Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t 
   putU32(e + 6, speed_hz);
   e[10] = port.users;
   e[11] = port.slot;
-  e[12] = port.has_tid ? wire::kTargetIdSchemeWchDmi7f : 0;
-  e[13] = port.has_tid ? wire::kTargetIdLenWchDmi7f : 0;
+  e[12] = port.has_tid ? reg::common::kTargetIdSchemeWchDmi7f : 0;
+  e[13] = port.has_tid ? reg::common::kTargetIdLenWchDmi7f : 0;
   if (port.has_tid) putU32(e + 14, port.tid);
   out[2] = port.has_tid ? 18 : 14;
   return completed(3u + out[2]);

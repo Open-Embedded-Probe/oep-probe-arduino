@@ -284,15 +284,15 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       const uint8_t *lock = v + kSlotFixed + name_length + 1;
       if (len < kSlotFixed + name_length + 1u + lock_len) return rejected(kRejectMalformed);
       if (lock_len && (lock_len < 3 || lock_len % 2 == 0 || lock[0] == 0)) return rejected(kRejectMalformed);
-      if (lock_len && lock[0] != reg::wire_rvswd::kTargetIdSchemeWchDmi7f && lock[0] != reg::wire_swd::kTargetIdSchemeTargetsel)
+      if (lock_len && lock[0] != reg::common::kTargetIdSchemeWchDmi7f && lock[0] != reg::common::kTargetIdSchemeTargetsel)
         return rejected(kRejectMalformed);   // not a scheme of the table
-      if (lock_len && (lock_len - 1) / 2 != reg::wire_rvswd::kTargetIdLenWchDmi7f) return rejected(kRejectMalformed);   // n = the scheme's length (4)
+      if (lock_len && (lock_len - 1) / 2 != reg::common::kTargetIdLenWchDmi7f) return rejected(kRejectMalformed);   // n = the scheme's length (4)
       // boot_reset after the lock (optional, 0 when absent): 0 / 1, and 1 only on an at-boot slot (§1.1)
       const size_t after_lock = kSlotFixed + name_length + 1u + lock_len;
       if (len > after_lock && (v[after_lock] > cfg::kSlotBootResetRetryWithReset ||
                                (v[after_lock] == cfg::kSlotBootResetRetryWithReset && attach != cfg::kSlotAttachAtBoot)))
         return rejected(kRejectMalformed);
-      if (lock_len && lock[0] != reg::wire_rvswd::kTargetIdSchemeWchDmi7f) return unsupportedTag(out, capacity, raw);   // a scheme these wires do not read
+      if (lock_len && lock[0] != reg::common::kTargetIdSchemeWchDmi7f) return unsupportedTag(out, capacity, raw);   // a scheme these wires do not read
       if (!endpoint_.interfaceAt(wire_fn)) return rejected(kRejectUnknownFunction);
       int place = -1;
       for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) place = static_cast<int>(k);
@@ -698,7 +698,7 @@ bool ProbeConfig::bound(uint8_t slot) const {
 int ProbeConfig::lockMatches(const Slot &s, bool has_tid, uint32_t tid) const {
   if (!s.lock_scheme) return 1;
   if (!has_tid) return -1;
-  if (s.lock_scheme != reg::wire_rvswd::kTargetIdSchemeWchDmi7f || s.lock_length != 4) return 0;
+  if (s.lock_scheme != reg::common::kTargetIdSchemeWchDmi7f || s.lock_length != 4) return 0;
   uint8_t id[4];
   putU32(id, tid);
   for (uint8_t i = 0; i < 4; ++i) if ((id[i] & s.mask[i]) != s.value[i]) return 0;
@@ -1001,8 +1001,8 @@ size_t ProbeConfig::slotState(uint8_t i, uint8_t *out) const {
     putU16(out + 2, 0);
   }
   putU64(out + 4, r.tried ? r.last_try_ns : kNeverNs);
-  out[12] = has_tid ? reg::wire_rvswd::kTargetIdSchemeWchDmi7f : 0;
-  out[13] = has_tid ? reg::wire_rvswd::kTargetIdLenWchDmi7f : 0;
+  out[12] = has_tid ? reg::common::kTargetIdSchemeWchDmi7f : 0;
+  out[13] = has_tid ? reg::common::kTargetIdLenWchDmi7f : 0;
   if (has_tid) putU32(out + 14, tid);
   const size_t at = has_tid ? 18 : 14;
   putU64(out + at, boot_resets_[i].at_ns);

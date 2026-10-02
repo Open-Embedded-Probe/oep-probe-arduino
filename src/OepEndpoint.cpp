@@ -719,7 +719,7 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   return tail.finish(completed(9), out, capacity);
 }
 
-// Role assignments as TLVs 0x90 = fn(u16) role(u8) channel(u16) (critical). The plan is per fn (oep-core §8): the fns
+// Role assignments as TLVs 0x10 (sent critical, 0x90) = fn(u16) role(u8) channel(u16) (critical). The plan is per fn (oep-core §8): the fns
 // the request names are replaced, every other fn keeps its plan. An unknown critical TLV refuses the plan (unsupported),
 // an unknown non-critical one is ignored and listed. A session's plan: an explicit end keeps it, a lapse or a takeover
 // releases it; a plan set through oep.probe.config (replacePlan, persistent) stays.
@@ -765,7 +765,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, clash_channel_, clash_fn_,
                        reg::core::kHolderKindPlan);
   // a role, channel or combination the interface does not declare: unsupported, tag 0x90 (core §8's table)
-  if (reason == kRejectUnsupported) return unsupportedTag(out, capacity, kTagRoleAssignment);
+  if (reason == kRejectUnsupported) return unsupportedTag(out, capacity, kTagRoleAssignment | kTagCritical);
   if (reason) return rejected(static_cast<uint8_t>(reason));
   return tail.finish(completed(), out, capacity);
 }

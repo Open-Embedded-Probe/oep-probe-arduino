@@ -320,8 +320,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       putU32(out + 9, port_.active_half_ns ? 500000000u / port_.active_half_ns : 0);
       out[13] = sw::kConnectionUsersHostSession;
       out[14] = 0xff;   // no slot
-      out[15] = sw::kTargetIdSchemeTargetsel;
-      out[16] = sw::kTargetIdLenTargetsel;
+      out[15] = reg::common::kTargetIdSchemeTargetsel;
+      out[16] = reg::common::kTargetIdLenTargetsel;
       putU32(out + 17, port_.active_targetsel ? port_.targetsel : 0);
       return tail.finish(completed(21), out, capacity);
     }

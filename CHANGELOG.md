@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `src/OepRegistry.h` synced from oep-spec 0bb10e8: role_assignment is 0x10 (sent critical as 0x90; the plan refusal still carries 0x90), the target_id schemes and lengths are common (`reg::common::kTargetIdScheme*`), max_op_ms's reference value is `kReferenceMaxOpMs` ([reference]), and the new limits (attach / scan budgets, wire_retry_ms, wire_lost_ms), search_retries 0x12, attach_writes_unbounded and holder_kind 7 are there.
+- (JA) `src/OepRegistry.h` を oep-spec 0bb10e8 から写した: role_assignment は 0x10（critical を付けて 0x90 で送る。plan の拒否は今も 0x90 を付ける）、target_id の scheme と長さは common（`reg::common::kTargetIdScheme*`）、max_op_ms の参照値は `kReferenceMaxOpMs`（[reference]）。新しい limits（attach / scan の予算、wire_retry_ms、wire_lost_ms）、search_retries 0x12、attach_writes_unbounded、holder_kind 7 が入った。
 - (EN) unit_id is always in describe (core §7.5): on a platform the library has no chip number for, the build stops unless the sketch defines OEP_UNIT_ID (1 to 16 of a-z 0-9 -, the build constant core §7.5 allows); describeCore fails rather than leave it out (it was silently omitted). ESP32 (MAC) and RP2 (flash id) are unchanged.
 - (JA) unit_id は describe に必ず入る（core §7.5）: ライブラリがチップの番号を知らない platform では、スケッチが OEP_UNIT_ID（a-z 0-9 - で 1〜16 文字、core §7.5 が許すビルド定数）を定義しないとビルドが止まる。describeCore は省くかわりに失敗する（これまでは黙って省いていた）。ESP32（MAC）と RP2（flash の id）は変わらない。
 - (EN) riscv-dm: a version-3 (debug spec 1.0) debug module is worked with like version 2 (oep-if-debug §1: found = DMSTATUS.version 2 or 3). The ops, the console and the RVSWD link revive required version 2: a 1.0 module was found by scan but never treated as halted.

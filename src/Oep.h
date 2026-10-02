@@ -51,7 +51,7 @@ constexpr uint8_t kRejectUnsupported = reg::kRejectUnsupported;          // defi
 constexpr uint8_t kRejectExpired = reg::kRejectExpired;                  // the last session lapsed or was taken: open again
 
 // The longest one request may take (core §7.5 max_op_ms, declared in oep.core's describe): the reference firmware's value.
-constexpr uint32_t kMaxOpMs = reg::kLimitMaxOpMsReference;
+constexpr uint32_t kMaxOpMs = reg::kReferenceMaxOpMs;
 
 // core (fn 0)
 constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpList, kOpDescribe = reg::core::kOpDescribe;
@@ -60,7 +60,7 @@ constexpr uint8_t kOpOpen = reg::core::kOpOpen, kOpEnd = reg::core::kOpEnd, kOpK
 constexpr uint8_t kOpLinkSource = reg::core::kOpLinkSource, kOpLinkSink = reg::core::kOpLinkSink;
 constexpr uint8_t kOpSubscribe = reg::core::kOpSubscribe, kOpUnsubscribe = reg::core::kOpUnsubscribe;
 constexpr uint8_t kOpPlanApply = reg::core::kOpPlanApply, kOpPlanRelease = reg::core::kOpPlanRelease;
-constexpr uint8_t kTagRoleAssignment = reg::core::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), critical
+constexpr uint8_t kTagRoleAssignment = reg::core::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), sent critical (0x90)
 
 // common describe tags (core §7.4)
 constexpr uint8_t kTagRoleChannels = reg::kDescribeRoleChannels, kTagMaxClockHz = reg::kDescribeMaxClockHz,
