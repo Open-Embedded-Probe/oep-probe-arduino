@@ -463,12 +463,12 @@ uint8_t LogicCapture::planCheck(const RoleAssignment *roles, size_t count) {
   return (count == 0 || seen == (1u << count) - 1) ? 0 : kRejectUnavailable;   // roles 0..count-1, no holes
 }
 
+// Taking the plan changes no pin (a logic capture only listens, capture §1.2, core §8): an output idle or another fn's
+// output on the channel keeps driving. The parallel IO unit only enables each data pin's input and routes it in
+// (parlio_new_rx_unit when a capture is set up), so there is nothing to restore at release either.
 bool LogicCapture::planApply(const RoleAssignment *roles, size_t count) {
   close();
-  for (size_t i = 0; i < count; ++i) {
-    pins_[roles[i].role] = roles[i].channel;
-    pinMode(roles[i].channel, INPUT);            // never driven
-  }
+  for (size_t i = 0; i < count; ++i) pins_[roles[i].role] = roles[i].channel;
   channels_ = static_cast<uint8_t>(count);
   state_ = kStateUnconfigured;
   return true;

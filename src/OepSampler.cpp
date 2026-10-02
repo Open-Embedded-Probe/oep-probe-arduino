@@ -8,6 +8,7 @@
 #include <esp_cpu.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
+#include <hal/gpio_ll.h>
 #include <soc/gpio_struct.h>
 #include <string.h>
 
@@ -190,13 +191,18 @@ uint8_t SamplerCapture::planCheck(const RoleAssignment *roles, size_t count) {
   return (count == 0 || seen == (1u << count) - 1) ? 0 : kRejectUnavailable;   // roles 0..count-1, no holes
 }
 
+// Taking the plan changes no pin (a logic capture only listens, capture §1.2, core §8): an output idle or another fn's
+// output on the channel keeps driving. Only the pad's input buffer is switched on (an ESP32 output pad has it off,
+// and GPIO.in then reads 0), again at each start in case something set the pad up since. Nothing to restore at release.
+static void listen(const int *pins, uint8_t count) {
+  for (uint8_t l = 0; l < count; ++l) if (pins[l] >= 0) gpio_ll_input_enable(&GPIO, static_cast<uint32_t>(pins[l]));
+}
+
 bool SamplerCapture::planApply(const RoleAssignment *roles, size_t count) {
   waitIdle();
-  for (size_t i = 0; i < count; ++i) {
-    pins_[roles[i].role] = roles[i].channel;
-    pinMode(roles[i].channel, INPUT);            // never driven
-  }
+  for (size_t i = 0; i < count; ++i) pins_[roles[i].role] = roles[i].channel;
   channels_ = static_cast<uint8_t>(count);
+  listen(pins_, channels_);
   state_ = cap::kStateUnconfigured;
   return true;
 }
@@ -351,6 +357,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (state_ != cap::kStateConfigured && state_ != cap::kStateDone && state_ != cap::kStateError) return wrongState(out, capacity);
       if (capacity < 8) return failed();
       waitIdle();
+      listen(pins_, channels_);
       done_ = trig_seen_ = aborted_ = false;
       control_ = 0;
       memset(buffer_, 0, samples_);
