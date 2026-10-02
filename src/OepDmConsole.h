@@ -37,7 +37,7 @@ class DmConsole {
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
   uint32_t resyncs() const { return seq_resyncs_; }
   // The target restarted (havereset seen while reading): dmseq goes back to unsynced (oep-if-console §2).
-  void unsync() { seq_synced_ = false; seq_chunk_len_ = 0; }
+  void unsync() { seq_synced_ = false; seq_chunk_len_ = 0; seq_bad_run_ = 0; }   // a new dmseq session
   // The line was found gone while reading (no answer for kLostMs at the slowest speed, oep-if-debug §2): the stream
   // marks link-lost and the connection closes. Cleared by start().
   bool lineLost() const { return lost_; }

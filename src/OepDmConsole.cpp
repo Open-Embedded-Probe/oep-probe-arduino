@@ -200,7 +200,10 @@ void DmConsole::pollSeq() {
     // Answering K = the last S we accepted is safe whatever is there: if the target's
     // outstanding frame is that one, it was ours already; if it is a new one, K does not
     // match and the target posts it again.
-    if (++seq_bad_run_ >= 3 && seq_synced_) { seq_bad_run_ = 0; seqAnswer(seq_last_s_, false); }
+    // The count (dmseq host rule 1, DS-5) stops at 3 while not synced, which never answers; it restarts at a valid
+    // frame, after this answer, and when a session starts (start, unsync).
+    if (seq_bad_run_ < 3) ++seq_bad_run_;
+    if (seq_bad_run_ >= 3 && seq_synced_) { seq_bad_run_ = 0; seqAnswer(seq_last_s_, false); }
     return;
   }
   seq_bad_run_ = 0;
@@ -260,6 +263,7 @@ bool DmConsole::start(uint8_t mechanism) {
   saw_empty_ = false;
   seq_synced_ = false;
   seq_last_syn_ = false;
+  seq_bad_run_ = 0;
   seq_syn_drops_ = 0;
   seq_chunk_len_ = 0;
   seq_resyncs_ = 0;
