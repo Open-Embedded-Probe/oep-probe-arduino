@@ -58,15 +58,18 @@ class Blink final : public oep::Interface {
     return w.ok() ? w.length() : 0;
   }
 
-  // The plan (core §8): check without changing anything, then take the pin; release gives it back.
+  // The plan (core §8): check without changing anything, then take the pin; release gives it back. A role or channel
+  // this interface does not declare is unsupported; a declared channel something else holds is unavailable. Taking the
+  // pin changes nothing on it (an output idle keeps driving): the first set makes it this interface's output.
   uint8_t planCheck(const oep::RoleAssignment *roles, size_t count) override {
-    if (count != 1 || roles[0].role != kRoleLine) return oep::kRejectUnavailable;
+    if (count != 1) return oep::kRejectMalformed;
+    if (roles[0].role != kRoleLine || !pins_.allowed(roles[0].channel)) return oep::kRejectUnsupported;
     return pins_.free(roles[0].channel) ? 0 : oep::kRejectUnavailable;
   }
   bool planApply(const oep::RoleAssignment *roles, size_t count) override {
     if (count != 1 || !pins_.claim(roles[0].channel, kOwner)) return false;
     pin_ = roles[0].channel;
-    pinMode(pin_, OUTPUT);
+    driving_ = false;
     return true;
   }
   void planRelease() override {
@@ -85,7 +88,7 @@ class Blink final : public oep::Interface {
         if (payload[0] > 1) return oep::rejected(oep::kRejectMalformed);
         left_ = 0;
         level_ = payload[0];
-        digitalWrite(pin_, level_);
+        drive();
         return tail.finish(oep::completed(), out, capacity);
       }
       case kOpBlink: {   // count(u8) half_ms(u16) [TLV]
@@ -116,7 +119,7 @@ class Blink final : public oep::Interface {
     if (!left_ || pin_ < 0 || millis() - last_ms_ < half_ms_) return;
     last_ms_ = millis();
     level_ ^= 1;
-    digitalWrite(pin_, level_);
+    drive();
     --left_;
   }
 
@@ -125,6 +128,11 @@ class Blink final : public oep::Interface {
   oep::PinTable &pins_;
   int pin_ = -1;
   uint8_t level_ = 0;
+  bool driving_ = false;   // the pin is this interface's output (from its first set or blink)
+  void drive() {
+    digitalWrite(pin_, level_);   // the level first, so the output starts at it
+    if (!driving_) { pinMode(pin_, OUTPUT); digitalWrite(pin_, level_); driving_ = true; }
+  }
   uint16_t left_ = 0, half_ms_ = 0;
   uint32_t last_ms_ = 0;
 };

@@ -84,7 +84,11 @@ class Blink final : public oep::Interface {
   interfaces never drive one pin (core §8.1). A released channel goes to its idle state (Hi-Z, or what the settings say).
 - The **plan** is how a host assigns pins at run time (core §8): `plan_apply` names (fn, role, channel); the endpoint asks
   each interface `planCheck()` (no side effects: 0 or a reject reason), then `planApply()`, and `planRelease()` gives them
-  back. Declare the roles and their candidate pins in describe (`roleChannels`).
+  back. Declare the roles and their candidate pins in describe (`roleChannels`). planCheck refuses a role or a channel
+  it does not declare with `kRejectUnsupported` (the endpoint adds the tag 0x90) and a declared channel something else
+  holds with `kRejectUnavailable`. planApply changes nothing on the pin (an output idle keeps driving); the interface's
+  first operation does. A debug wire's pins go to their free state whenever no connection holds them
+  (`DmiPhy::free`).
 - Owner ids must differ between interfaces sharing a table (the Firmware sketches list theirs).
 
 ## 5. The standard interfaces in this library

@@ -83,7 +83,11 @@ class Blink final : public oep::Interface {
   とおり）になります。
 - **plan** は、host が実行中にピンを割り当てる方法です（core §8）。`plan_apply` が (fn, role, channel) を挙げると、endpoint は
   各インターフェースに `planCheck()`（副作用なし: 0 か断る理由）、次に `planApply()` を聞き、`planRelease()` で返させます。
-  役とその候補のピンは describe で宣言します（`roleChannels`）。
+  役とその候補のピンは describe で宣言します（`roleChannels`）。宣言していない役や channel は planCheck が
+  `kRejectUnsupported` で断り（endpoint が tag 0x90 を付けます）、宣言した channel を他が持っているときは
+  `kRejectUnavailable` で断ります。planApply はピンを何も変えません（出力の idle は駆動を続けます）。変えるのは
+  そのインターフェースの最初の操作です。debug wire のピンは、接続が持っていない間は空きの状態に戻ります
+  （`DmiPhy::free`）。
 - 1 つの表を共有するインターフェースの持ち主の番号は、重ならないようにします（Firmware のスケッチに一覧があります）。
 
 ## 5. このライブラリの標準インターフェース
