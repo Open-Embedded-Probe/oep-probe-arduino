@@ -3,7 +3,7 @@
 # Copyright (c) 2026 Open Embedded Probe
 # Host tests of the portable core (serial-port framing, the endpoint's serial-port rules, the binds) and of the
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, the I2C one with a fake controller), of the pin table's idle
-# states and the gpio fixture's take (with its output drive strength), of the label convention's line names: g++ and a
+# states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the unit id: g++ and a
 # shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
@@ -29,3 +29,12 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-lines" "$here/test_lines.cpp" \
   "$src/OepConfig.cpp"
 "$out-lines"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-unit-id" "$here/test_unit_id.cpp"
+"$out-unit-id"
+# A platform without a chip number does not build without OEP_UNIT_ID, nor with one outside a-z 0-9 - (core §7.5).
+for bad in -DOEP_HOST_NO_UNIT_ID "-DOEP_UNIT_ID=\"Host\"" "-DOEP_UNIT_ID=\"\""; do
+  if g++ -std=gnu++17 -fsyntax-only "$bad" -I"$here/shim" -I"$src" "$here/test_unit_id.cpp" 2>/dev/null; then
+    echo "unit-id: a build with $bad was accepted"; exit 1
+  fi
+done
+echo "unit-id: builds without a usable OEP_UNIT_ID refused"

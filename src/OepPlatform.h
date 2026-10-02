@@ -165,11 +165,20 @@ inline void platformParkMask(uint64_t mask) {
   for (int pin = 0; pin < 64; ++pin) if ((mask >> pin) & 1) platformGpio(pin, kGpioInputFloating);
 }
 
-// This probe's own unit id, the same on any transport: the eFuse MAC on the ESP32 family, the flash's unique id on
-// the RP2040 / RP2350. -> bytes written (at most `capacity`).
 // The unit id (oep-core §7.5): the chip's own number as lowercase hex text - the RP2's flash unique id (16), the
 // ESP32's base MAC (12) - the same on every transport, and the USB serial number (core §3.3). Needs 17 bytes of out
 // with the 0 after it. -> the text's length.
+//
+// unit_id is mandatory and per unit. A platform this library has no unique number for does not build unless the
+// sketch gives one: -DOEP_UNIT_ID='"..."' (1 to 16 of a-z 0-9 -), the build constant core §7.5 allows a probe that has
+// neither a unique number nor storage - units built with the same value cannot be told apart, so give each its own.
+namespace detail {
+constexpr bool unitIdTextOk(const char *s, size_t n = 0) {
+  return *s == 0 ? n >= 1 && n <= 16
+                 : ((*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9') || *s == '-') && unitIdTextOk(s + 1, n + 1);
+}
+}  // namespace detail
+
 inline size_t platformUnitId(uint8_t *out, size_t capacity) {
   uint8_t raw[8];
   size_t n = 0;
@@ -182,6 +191,15 @@ inline size_t platformUnitId(uint8_t *out, size_t capacity) {
   const uint64_t mac = ESP.getEfuseMac();
   n = 6;
   for (size_t i = 0; i < n; ++i) raw[i] = static_cast<uint8_t>(mac >> (8 * i));
+#elif defined(OEP_UNIT_ID)
+  static_assert(detail::unitIdTextOk(OEP_UNIT_ID), "OEP_UNIT_ID: 1 to 16 characters of a-z 0-9 - (oep-core §7.5)");
+  (void)raw;
+  const size_t length = strlen(OEP_UNIT_ID);
+  if (length + 1 > capacity) return 0;
+  memcpy(out, OEP_UNIT_ID, length + 1);
+  return length;
+#else
+#error "OpenEmbeddedProbe: no unique number on this platform for unit_id (oep-core §7.5); define OEP_UNIT_ID"
 #endif
   static const char kHex[] = "0123456789abcdef";
   size_t at = 0;

@@ -35,6 +35,11 @@ class Stream : public Print {
   size_t readBytes(uint8_t *b, size_t n) { return readBytes(reinterpret_cast<char *>(b), n); }
 };
 
+// The host has no chip number: the build constant OepPlatform.h asks for on such a platform (core §7.5).
+#if !defined(OEP_UNIT_ID) && !defined(OEP_HOST_NO_UNIT_ID)
+#define OEP_UNIT_ID "host-test"
+#endif
+
 #define INPUT 0x01
 #define OUTPUT 0x03
 #define INPUT_PULLUP 0x05

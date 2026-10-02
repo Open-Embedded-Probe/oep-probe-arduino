@@ -304,6 +304,7 @@ class TlvWriter {
   bool u16(uint8_t tag, uint16_t v) { uint8_t b[2]; putU16(b, v); return put(tag, b, 2); }
   bool u32(uint8_t tag, uint32_t v) { uint8_t b[4]; putU32(b, v); return put(tag, b, 4); }
   bool text(uint8_t tag, const char *s) { return put(tag, s, strlen(s)); }
+  void fail() { ok_ = false; }   // a value the caller found it cannot write: the whole answer is unusable
   // A list of u8 with its count first (core §2.3: n(u8), n x u8).
   bool u8List(uint8_t tag, const uint8_t *values, size_t count) {
     uint8_t b[1 + 255];
@@ -470,12 +471,17 @@ class DirectTransport {
 
 // The part of oep.core's describe every probe writes the same way: firmware, model, unit id, channel count and
 // the reserved-channel bitmap. The sketch adds its profile and fixed labels after it; the endpoint adds the transports,
-// discoverable, plan_roles and max_op_ms.
+// discoverable, plan_roles and max_op_ms. unit_id is mandatory (core §7.5, 1 to 32 bytes): without one the writer
+// fails rather than send a describe that leaves it out.
 inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id, size_t unit_id_length,
                          uint16_t channels, uint64_t reserved) {
   w.text(kCoreFirmware, kFirmwareVersion);
   w.text(kCoreModel, model);
-  if (unit_id_length) w.put(kCoreUnitId, unit_id, unit_id_length);
+  if (unit_id_length == 0 || unit_id_length > reg::kLimitUnitIdMaxBytes) {
+    w.fail();
+    return false;
+  }
+  w.put(kCoreUnitId, unit_id, unit_id_length);
   w.u16(kCoreChannels, channels);
   uint8_t bitmap[2 + 8] = {0, 0};                       // first channel (u16) = 0, then one bit per channel
   const size_t bytes = (channels + 7) / 8 < 8 ? (channels + 7) / 8 : 8;

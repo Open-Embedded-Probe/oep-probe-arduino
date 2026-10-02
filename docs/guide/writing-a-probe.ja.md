@@ -38,6 +38,8 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   unit id（`platformUnitId`）、channel の数、予約の channel を書きます。`setProbeDescription` で渡します。経路の一覧と
   transport、`discoverable`、`plan_roles`、`max_op_ms` は endpoint が足します。describe は宣言だけです（core §7.3）:
   動いている間に変わるものは入れません。
+  unit_id は必須です（core §7.5）。ライブラリが固有の番号を知らないチップでは、`-DOEP_UNIT_ID='"..."'`
+  （`a-z 0-9 -` で 1〜16 文字、個体ごとに違う値）を与えるまでビルドが止まります。
 - `setBootId(platformRandom32())` を 1 度。host は probe が起動し直したことを知ります。
 - `loop()` から `poll()`。長く止まりません。インターフェースも止まってはいけません。
 

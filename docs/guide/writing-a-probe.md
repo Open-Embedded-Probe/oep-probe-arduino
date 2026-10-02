@@ -38,6 +38,8 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   a unit id that is the same on every transport (`platformUnitId`), the channel count and the reserved channels. Hand it
   over with `setProbeDescription`. The transports, `discoverable`, `plan_roles` and `max_op_ms` are added by the endpoint.
   describe is declarations only (core §7.3): nothing that changes while the probe runs goes in it.
+  unit_id is mandatory (core §7.5): on a chip the library has no unique number for, the build stops until you give
+  `-DOEP_UNIT_ID='"..."'` (1 to 16 of `a-z 0-9 -`, a different value per unit).
 - `setBootId(platformRandom32())` once: a host sees that the probe restarted.
 - `poll()` from `loop()`: it never blocks long. Neither may your interfaces.
 
