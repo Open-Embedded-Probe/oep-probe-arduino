@@ -24,7 +24,8 @@
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
 //
 // Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.wire.swio (WCH
-// CH32V00x, one wire: its connections go through the same oep.target.riscv-dm; the console is the RVSWD wire's only); oep.fixture.gpio /
+// CH32V00x, one wire: its connections go through the same oep.target.riscv-dm, its console is oep.target.console instance 1,
+// and a slot may name it: the second place); oep.fixture.gpio /
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
 // (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic). Every GPIO but the
@@ -123,6 +124,8 @@ static oep::SwioPhy swioPhy;
 static oep::Ch32Dm swioDm(swioPhy);
 static oep::DebugPort swio{swioDm, kUnset, 0xffff};   // one wire: swclk stays 0xffff
 static oep::WireRvswd swioWire(swio, 0, "oep.wire.swio");
+static oep::DmConsole swioConsoleDriver(swioDm, swioPhy);
+static oep::TargetConsoleStream swioConsole(swio, swioConsoleDriver, 1);   // the one-wire link's own console
 
 static oep::FixtureGpio gpio(pins, 0, 1);
 // PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the SWIO wire
@@ -205,6 +208,8 @@ void setup() {
   group.addTrack(capture, capture);
   group.addTrack(analog, analog, 1400000);   // its first value comes a conversion frame after the start
   endpoint.add(swioWire);   // after the group: the fns before it keep their numbers
+  endpoint.add(swioConsole);
+  config.addPlace(swioWire, swioConsole);   // a slot on the one wire (CH32V00x): the second place
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   config.load();
@@ -221,6 +226,7 @@ void loop() {
   }
   endpoint.poll();
   console.poll();
+  swioConsole.poll();
   config.poll();
   uart1.poll();
   uart2.poll();
