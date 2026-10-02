@@ -23,11 +23,12 @@
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
 //
-// Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.fixture.gpio /
+// Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.wire.swio (WCH
+// CH32V00x, one wire: its connections go through the same oep.target.riscv-dm; the console is the RVSWD wire's only); oep.fixture.gpio /
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
 // (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic). Every GPIO but the
-// USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the reset line, or any fixture's pin - the host chooses.
+// USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the SWIO pin, the reset line, or any fixture's pin - the host chooses.
 #pragma once
 #include <esp_mac.h>
 #include <soc/usb_serial_jtag_reg.h>
@@ -48,6 +49,7 @@
 #include <OepP4SpiTarget.h>
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
+#include <OepSwioPhy.h>
 #include <OepTarget.h>
 #include "UsbStreams.h"
 
@@ -116,9 +118,15 @@ static oep::WireRvswd wire(rvswd, 0);
 static oep::TargetRiscvDm riscvDm(rvswd, 0);
 static oep::DmConsole consoleDriver(dm, phy);   // the DM console framings (SDI / DMDATA / dmseq)
 static oep::TargetConsoleStream console(rvswd, consoleDriver, 0);
+// The one-wire link (CH32V00x): its own wire fn, its connections served by riscvDm above (addPort in setup).
+static oep::SwioPhy swioPhy;
+static oep::Ch32Dm swioDm(swioPhy);
+static oep::DebugPort swio{swioDm, kUnset, 0xffff};   // one wire: swclk stays 0xffff
+static oep::WireRvswd swioWire(swio, 0, "oep.wire.swio");
 
 static oep::FixtureGpio gpio(pins, 0, 1);
-// PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the analog 7)
+// PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the SWIO wire
+// 0xf2, the analog 7)
 static oep::FixtureUart uart1(pins, Serial1, 0, 2), uart2(pins, Serial2, 1, 5);
 static oep::LogicCapture capture(endpoint, pins, 0);   // PARLIO RX; its lines are never driven
 static oep::P4I2cTarget i2c(pins);
@@ -169,6 +177,11 @@ void setup() {
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;
   rvswd.reset_allowed = kChannels;   // attach's reset TLV: the channel the host names (no default), nobody holding it
+  swio.pin_choice = kChannels;
+  swio.pins = &pins;
+  swio.pin_owner = 0xf2;
+  swio.reset_allowed = kChannels;
+  riscvDm.addPort(swio);
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setBootId(esp_random());
   endpoint.add(wire);
@@ -191,6 +204,7 @@ void setup() {
   endpoint.add(group);
   group.addTrack(capture, capture);
   group.addTrack(analog, analog, 1400000);   // its first value comes a conversion frame after the start
+  endpoint.add(swioWire);   // after the group: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   config.load();

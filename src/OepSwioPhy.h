@@ -6,7 +6,9 @@
 // cycle coefficient (8 = 262.5/862.5 ns, the closest to the WCH-LinkE's
 // 240/860 ns), read recharge pulses, DMCFGR/SHDWCFGR unlock at attach. Any
 // GPIO0-31 (begin, or usePins for host-chosen pins); the hot path keeps the
-// pin's mask in a register. Other architectures get a stub.
+// pin's mask in a register. The ESP32-P4 has the same frames on the CPU's
+// dedicated GPIO, timed in nanoseconds against the cycle counter (any
+// GPIO0-54). Other architectures get a stub.
 #pragma once
 
 #include <Arduino.h>
@@ -17,7 +19,7 @@ namespace oep {
 
 class SwioPhy final : public DmiPhy {
  public:
-  bool begin(int swio);   // GPIO0-31
+  bool begin(int swio);   // GPIO0-31 (ESP32-P4: 0-54)
   bool usePins(int swdio, int swclk) override;   // swclk -1: one wire
   bool attach() override;
   void release() override;

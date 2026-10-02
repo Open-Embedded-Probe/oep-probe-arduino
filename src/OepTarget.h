@@ -134,7 +134,11 @@ class TargetRiscvDm final : public Interface {
     kResetRun = reg::target_riscv_dm::kResetModeRun, kResetRunConfirm = reg::target_riscv_dm::kResetModeRunVerified,
     kResetHalt = reg::target_riscv_dm::kResetModeHaltAtReset,
   };
-  TargetRiscvDm(DebugPort &port, uint16_t instance) : port_(port), instance_(instance) {}
+  TargetRiscvDm(DebugPort &port, uint16_t instance) : instance_(instance) { ports_[0] = &port; }
+  // Another wire's port (a probe with two wires, e.g. oep.wire.rvswd and oep.wire.swio): this one interface serves the
+  // connections of both - a request goes to the wire whose live connection it names (oep-if-debug: oep.wire.* creates
+  // connections, oep.target.* works over one).
+  void addPort(DebugPort &port) { ports_[1] = &port; }
   const char *name() const override { return reg::target_riscv_dm::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::target_riscv_dm::kRevision; }
@@ -151,7 +155,8 @@ class TargetRiscvDm final : public Interface {
   Result dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity);
   uint8_t failure(uint8_t otherwise);   // line when the link does not answer (the connection then closes), else `otherwise`
   bool line_lost_ = false;              // set by failure(): the answer goes out, then the connection is closed
-  DebugPort &port_;
+  DebugPort *ports_[2] = {};
+  DebugPort *port_ = nullptr;           // the port of the request being handled (chosen in handle)
   uint16_t instance_;
   uint32_t words_[256];
 };
