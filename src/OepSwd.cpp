@@ -10,8 +10,6 @@
 namespace oep {
 namespace {
 
-constexpr uint32_t kScanBudgetMs = 500;   // the longest one scan answer takes (the host asks again for the rest)
-
 namespace sw = reg::wire_swd;
 constexpr int kWaitRetries = 100;
 
@@ -170,11 +168,12 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (half < port_.half_ns) half = port_.half_ns;
       size_t at = 2;
       uint8_t tried = 0, found = 0;
-      // One answer takes at most kScanBudgetMs: the host goes on with the rest (count 0 with skip, or the pairs after
-      // tried). 26 free pins bit-banged pair by pair kept an RP2350 from answering for seconds (0.0.18).
+      // No pair starts later than scan_budget_ms after the request (oep-if-debug §1): the host goes on with the rest
+      // (count 0 with skip, or the pairs after tried). 26 free pins bit-banged pair by pair kept an RP2350 from answering
+      // for seconds (0.0.18). One try is a line reset and a dormant wake at most: well inside the attach budget.
       const uint32_t began = millis();
       auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full, or its time is up
-        if (at + 10 > capacity || (tried && millis() - began >= kScanBudgetMs)) return false;
+        if (at + 10 > capacity || (tried && millis() - began >= reg::kLimitScanBudgetMs)) return false;
         uint32_t dpidr = 0;
         bool ok = false;
         if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state

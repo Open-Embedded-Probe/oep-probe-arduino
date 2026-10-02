@@ -41,6 +41,9 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  // The pair free until a host attaches (oep-core §8: Hi-Z, no pull - the RP2's pads come out of reset pulled down), the
+  // same as after a detach.
+  oep::platformParkMask((1ull << kSwdio) | (1ull << kSwclk));
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
   endpoint.setProbeDescription(probeTlv, describeProbe());
