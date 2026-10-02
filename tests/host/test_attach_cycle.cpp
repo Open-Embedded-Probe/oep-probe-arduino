@@ -188,7 +188,7 @@ int main() {
         r = call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
         CHECK(ok(r) && !port.connected);
       }
-      printf("A %s gap %4u ms: attach %u.%03u-%u.%03u ms (sim), search_retries present\n", halt ? "halt" : "run ",
+      printf("  A %s gap %4u ms: attach %u.%03u-%u.%03u ms (sim), search_retries present\n", halt ? "halt" : "run ",
              gap_ms, took_min / 1000, took_min % 1000, took_max / 1000, took_max % 1000);
     }
   }
@@ -208,7 +208,7 @@ int main() {
     const uint32_t took = micros() - t0;
     CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting));
     CHECK(answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) == nullptr);
-    printf("B slot-shared: second attach flags 0x%02x (existing), no TLV 0x12, %u.%03u ms (sim)\n", out[6],
+    printf("  B slot-shared: second attach flags 0x%02x (existing), no TLV 0x12, %u.%03u ms (sim)\n", out[6],
            took / 1000, took % 1000);
     r = call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);   // force
     CHECK(ok(r) && !port.connected);
@@ -219,7 +219,7 @@ int main() {
     for (size_t cap : {11u, 18u, 24u, 25u, 28u}) {
       Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out, cap);
       size_t len = 0;
-      printf("C capacity %2zu: %s, %zu bytes, TLV 0x12 %s\n", cap, ok(r) ? "ok" : "not ok", out.size(),
+      printf("  C capacity %2zu: %s, %zu bytes, TLV 0x12 %s\n", cap, ok(r) ? "ok" : "not ok", out.size(),
              answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) ? "present" : "absent");
       if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);
     }
@@ -254,7 +254,7 @@ int main() {
       const uint32_t took = micros() - t0;
       size_t len = 0;
       const uint8_t *v = ok(r) && out.size() > 11 ? answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) : nullptr;
-      printf("D %-28s %s  %4u.%03u ms (sim)%s%u\n", c.name, ok(r) && out.size() >= 11 && out[0] != 0xff ? "answer" : "status",
+      printf("  D %-28s %s  %4u.%03u ms (sim)%s%u\n", c.name, ok(r) && out.size() >= 11 && out[0] != 0xff ? "answer" : "status",
              took / 1000, took % 1000, v ? "  search_retries " : "", v ? unsigned(v[0] | v[1] << 8) : 0u);
       if (c.hz < RvswdPhy::kMinClockHz)   // under min_clock_hz: unsupported, the tag as received, nothing run
         CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() == 1 &&
@@ -275,7 +275,7 @@ int main() {
       const uint32_t t0 = micros();
       Result r = call(w, WireRvswd::kOpAttach, req, out);
       const uint32_t took = micros() - t0;
-      printf("E reset 20 ms, %s, %8u Hz: %s %u.%03u ms (sim)\n", method ? "halt" : "run ", hz,
+      printf("  E reset 20 ms, %s, %8u Hz: %s %u.%03u ms (sim)\n", method ? "halt" : "run ", hz,
              ok(r) && out.size() >= 11 ? "answer" : "status/reject", took / 1000, took % 1000);
       if (hz < RvswdPhy::kMinClockHz) CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
       else CHECK(ok(r) && took <= (reg::kLimitAttachBudgetMs + 20) * 1000u);   // the budget, the hold aside
