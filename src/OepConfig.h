@@ -181,11 +181,12 @@ class ProbeConfig final : public Interface {
   static uint32_t crc32Of(const uint8_t *data, size_t length);
 
   // One item's own checks (probe.config §1 / §2's table) - its shape and what this probe has; nothing of the whole.
-  Result checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t *out, size_t capacity) const;
+  Result checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t *out, size_t capacity) const;
   // The whole: every item decoded into `d`, the rules between items checked. completed() or the rejection.
   Result derive(const uint8_t *items, size_t length, Derived &d, uint8_t *out, size_t capacity) const;
   // A candidate store (the current items with a set's / unset's changes) checked, its plans reserved, then made current.
-  Result commit(uint8_t *candidate, size_t length, const uint16_t *plan_fns, size_t plan_fn_count, uint8_t *out, size_t capacity);
+  Result commit(uint8_t *candidate, size_t length, const uint16_t *plan_fns, size_t plan_fn_count, uint8_t *out, size_t capacity,
+                uint8_t plan_raw = reg::probe_config::kTlvItemPlan);
   Result set(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result unset(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result state(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
