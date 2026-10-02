@@ -173,15 +173,38 @@ constexpr size_t tlvSize(size_t length) { return length + (length < 255 ? 2 : 4)
 //   return tail.finish(result, out, capacity);                                  // appends ignored (0x7F) if any
 //
 // Unknown critical tags reject the request (unsupported, payload = the tag byte as received); unknown
-// non-critical ones are ignored and listed in the result's ignored TLV. Tag 0xFF or 0x7F anywhere is malformed.
+// non-critical ones are ignored and listed in the result's ignored TLV, once per TLV ignored. Tag 0xFF or 0x7F anywhere
+// is malformed. ignored goes on every completed answer, a failed status too (core §2.3): the list lives for the request
+// (RequestIgnored), and the endpoint appends it to a completed answer whose handler did not (finish) - a handler's
+// early `return failed()` keeps it.
+struct RequestIgnored {
+  static constexpr size_t kMax = 16;
+  uint8_t tags[kMax];
+  uint8_t count;
+  bool written;   // finish put it in the answer already
+  void reset() { count = 0; written = false; }
+  // Append the ignored TLV after a completed result's payload (nothing when it does not fit).
+  Result append(Result result, uint8_t *out, size_t capacity) {
+    if (result.resolution != kResolutionCompleted || !count || written) return result;
+    if (result.length + 2 + count > capacity) return result;
+    out[result.length] = kTagIgnored;
+    out[result.length + 1] = count;
+    memcpy(out + result.length + 2, tags, count);
+    result.length += 2 + count;
+    written = true;
+    return result;
+  }
+};
+inline RequestIgnored g_request_ignored = {};
+
 class Tail {
  public:
-  static constexpr size_t kMaxIgnored = 16;
+  static constexpr size_t kMaxIgnored = RequestIgnored::kMax;
 
   Result parse(const uint8_t *p, size_t n, const uint8_t *known, size_t known_count, uint8_t *out, size_t capacity) {
     p_ = p;
     n_ = n;
-    ignored_count_ = 0;
+    g_request_ignored.reset();
     size_t at = 0;
     uint8_t raw = 0;
     size_t len = 0;
@@ -233,34 +256,22 @@ class Tail {
     ignore(tag);
     return completed();
   }
-  bool anyIgnored() const { return ignored_count_ != 0; }
-  // The tags on the ignored list so far (each once), for an op that writes its own ignored TLV.
-  size_t ignoredTags(const uint8_t *&tags) const { tags = ignored_; return ignored_count_; }
-  // Append the ignored TLV after a completed result's payload.
-  Result finish(Result result, uint8_t *out, size_t capacity) const {
-    if (result.resolution != kResolutionCompleted || !ignored_count_) return result;
-    if (result.length + 2 + ignored_count_ > capacity) return result;
-    out[result.length] = kTagIgnored;
-    out[result.length + 1] = ignored_count_;
-    memcpy(out + result.length + 2, ignored_, ignored_count_);
-    result.length += 2 + ignored_count_;
-    return result;
+  bool anyIgnored() const { return g_request_ignored.count != 0; }
+  // One more TLV of `tag` ignored (a known tag whose value this probe skips without a refusal, like gpio set's drive).
+  void ignore(uint8_t tag) {
+    if (g_request_ignored.count < kMaxIgnored) g_request_ignored.tags[g_request_ignored.count++] = tag & ~kTagCritical;
   }
+  // Append the ignored TLV after a completed result's payload (any status).
+  Result finish(Result result, uint8_t *out, size_t capacity) const { return g_request_ignored.append(result, out, capacity); }
 
  private:
   const uint8_t *p_ = nullptr;
   size_t n_ = 0;
-  uint8_t ignored_[kMaxIgnored];
-  uint8_t ignored_count_ = 0;
   bool step(size_t &at, uint8_t &raw, const uint8_t *&value, size_t &length) const {
     size_t next = 0;
     if (!tlvAt(p_, n_, at, raw, value, length, next)) return false;
     at = next;
     return true;
-  }
-  void ignore(uint8_t tag) {
-    for (uint8_t i = 0; i < ignored_count_; ++i) if (ignored_[i] == tag) return;
-    if (ignored_count_ < kMaxIgnored) ignored_[ignored_count_++] = tag;
   }
 };
 

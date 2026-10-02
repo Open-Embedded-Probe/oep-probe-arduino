@@ -96,7 +96,6 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       // form is checked first (pass 0), so a malformed one anywhere wins over a critical one's unsupported (core §4.3).
       uint8_t drive[255];
       memset(drive, PinTable::kDriveDefault, n);
-      size_t ignored_drives = 0;   // each ignored drive TLV is listed in ignored (tag 0x01 once per TLV)
       for (int pass = 0; pass < 2; ++pass) {
         uint8_t seen[32] = {};
         size_t at = 0, len = 0;
@@ -104,8 +103,9 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
         const uint8_t *v = nullptr;
         while (tail.next(at, raw, v, len)) {
           if ((raw & ~kTagCritical) != gp::kTlvSetDrive) continue;
-          // without drive_levels an unknown tag: ignored as it is, no form checked (a critical one was refused above)
-          if (!levels.count) { ignored_drives += pass; continue; }
+          // without drive_levels an unknown tag: listed by the parse once per TLV, no form checked (a critical one was
+          // refused there)
+          if (!levels.count) continue;
           if (pass == 0) {
             if (len != 4) return rejected(kRejectMalformed);
             const uint8_t index = v[0], kind = v[1];
@@ -117,7 +117,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
           uint8_t level = 0;
           if (PinTable::driveLevelOf(levels, v[1], getU16(v + 2), level)) drive[v[0]] = level;
           else if (raw & kTagCritical) return unsupportedTag(out, capacity, raw);   // critical: not ignored (core §2.3)
-          else ++ignored_drives;
+          else tail.ignore(gp::kTlvSetDrive);   // listed once per TLV ignored
         }
       }
       for (uint8_t i = 0; i < n; ++i)
@@ -131,18 +131,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
         pins_.setPad(static_cast<uint8_t>(c), platformMode(payload[3 + 3 * i]),
                      drive[i] != PinTable::kDriveDefault ? drive[i] : pins_.idleDrive(c));
       }
-      if (!ignored_drives) return tail.finish(completed(), out, capacity);
-      // ignored (core §2.3): the other unknown tags once each, then 0x01 for every drive TLV ignored
-      const uint8_t *tags = nullptr;
-      const size_t listed = tail.ignoredTags(tags);
-      if (capacity < 2) return completed();
-      size_t count = 0;
-      for (size_t k = 0; k < listed && 2 + count < capacity && count < 254; ++k)
-        if (tags[k] != gp::kTlvSetDrive) out[2 + count++] = tags[k];
-      for (size_t k = 0; k < ignored_drives && 2 + count < capacity && count < 254; ++k) out[2 + count++] = gp::kTlvSetDrive;
-      out[0] = kTagIgnored;
-      out[1] = static_cast<uint8_t>(count);
-      return completed(2 + count);
+      return tail.finish(completed(), out, capacity);
     }
     case kOpRead: {   // n(u8) n x channel(u16) [TLV]  ->  n(u8) n x level(u8) [TLV 0x01 drive]
       const Result parsed = plainTail(tail, payload, length, 1u + 2u * n, out, capacity);

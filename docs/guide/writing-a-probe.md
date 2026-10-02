@@ -67,7 +67,9 @@ class Blink final : public oep::Interface {
 - **TLV tails**: any request may end with TLVs. `plainTail(tail, payload, length, fixed, out, capacity)` parses what
   follows the fixed part: an unknown critical TLV refuses the request (`refused()` tells), an unknown other one is
   recorded, and `tail.finish(result, out, capacity)` lists it as ignored. With known tags: `tail.parse(...)`,
-  `tail.find(tag, len, &critical)`, and `tail.refuse(tag, critical, ...)` for a value you cannot honour.
+  `tail.find(tag, len, &critical)`, and `tail.refuse(tag, critical, ...)` for a value you cannot honour. Every
+  completed answer carries ignored, a failed status too (core §2.3); the list lives for the request, so the endpoint
+  appends it when a handler returns `failed(n)` early without `finish` - leave room for it after the payload.
 - **The lock** is the endpoint's: an op not `lockFree` only runs for the session holding the lock. `sessionLapsed()` is
   called when that session's lease ran out - drop what it left (a wire's connection).
 - **describe** uses `TlvWriter`: common tags (`roleChannels`, `u32(kTagMaxClockHz, ...)`, `u32(kTagFeatures, ...)`) and

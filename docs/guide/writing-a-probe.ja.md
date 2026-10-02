@@ -65,7 +65,9 @@ class Blink final : public oep::Interface {
 - **TLV の後ろの部分**: どの要求も最後に TLV を付けられます。`plainTail(tail, payload, length, fixed, out, capacity)` が固定部分の
   後ろを読みます。知らない critical の TLV は要求を断り（`refused()` で分かる）、それ以外の知らない TLV は覚えておき、
   `tail.finish(result, out, capacity)` が ignored として返します。知っている tag があるときは `tail.parse(...)`、
-  `tail.find(tag, len, &critical)`、守れない値には `tail.refuse(tag, critical, ...)`。
+  `tail.find(tag, len, &critical)`、守れない値には `tail.refuse(tag, critical, ...)`。ignored は、status が failed のものも含めて
+  completed の応答すべてに付きます（core §2.3）。一覧は要求ごとに持つので、handler が `finish` を通さずに早めに `failed(n)` を返しても
+  endpoint が付けます。payload の後ろに場所を残しておきます。
 - **ロック**は endpoint が見ます。`lockFree` でない op は、ロックを持つセッションにだけ実行されます。そのセッションのリースが
   切れると `sessionLapsed()` が呼ばれるので、残したもの（線の接続など）を片付けます。
 - **describe** は `TlvWriter` で書きます。共通の tag（`roleChannels`、`u32(kTagMaxClockHz, ...)`、`u32(kTagFeatures, ...)`）と、

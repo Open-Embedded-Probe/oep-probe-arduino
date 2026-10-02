@@ -588,8 +588,12 @@ Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, siz
   while (at < length) {
     size_t next = 0;
     if (!tlvAt(payload, length, at, tag, v, vlen, next)) return rejected(kRejectMalformed);
+    const uint8_t raw = tag;
     tag &= ~kTagCritical;
     if (tag == kTagValue || tag == kTagIgnored || tag == kTagInvalid) return rejected(kRejectMalformed);
+    // an item this probe does not declare (describe items): unsupported with its tag as received (§1, core §4.3)
+    const bool declared = keyLength(tag) && (pins_ || (tag != cfg::kTlvItemIdle && tag != cfg::kTlvItemDisable));
+    if (!declared) return unsupportedTag(out, capacity, raw);
     const Result r = checkItem(tag, v, vlen, out, capacity);
     if (refused(r)) return r;
     const size_t klen = keyLength(tag);
@@ -1040,12 +1044,11 @@ Result ProbeConfig::state(const uint8_t *payload, size_t length, uint8_t *out, s
 
 Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   switch (op) {
-    case cfg::kOpGet: {   // first(u16) [TLV] -> more(u8) hash(u32) items from the first-th on (the canonical order)
-      Tail tail;
-      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
-      if (refused(parsed)) return parsed;
+    case cfg::kOpGet: {   // first(u16) -> more(u8) hash(u32) items from the first-th on (the canonical order)
+      // no TLV in the request (core §7.3: the answer is a TLV list itself, ignored never in it): malformed
+      if (length != 2) return rejected(kRejectMalformed);
       if (capacity < 5) return failed();
-      const size_t room = tail.anyIgnored() && capacity > 5 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
+      const size_t room = capacity;
       size_t at = 0, index = 0, put = 5;
       const uint16_t first = getU16(payload);
       bool more = false;
@@ -1064,7 +1067,7 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       }
       out[0] = more ? 1 : 0;
       putU32(out + 1, hash());
-      return tail.finish(completed(put), out, capacity);
+      return completed(put);
     }
     case cfg::kOpSet: {
       const Result r = set(payload, length, out, capacity);
