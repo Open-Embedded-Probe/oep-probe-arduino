@@ -168,6 +168,7 @@ class ProbeConfig final : public Interface {
 
   // The item store: one item's key (the bytes after the tag that identify it) and the canonical order.
   static size_t keyLength(uint8_t tag);
+  bool declares(uint8_t tag) const;
   static uint64_t keyValue(uint8_t tag, const uint8_t *value, size_t length);
   static bool itemBefore(uint8_t tag_a, const uint8_t *a, size_t alen, uint8_t tag_b, const uint8_t *b, size_t blen);
   static bool insertItem(uint8_t *store, size_t &length, size_t capacity, uint8_t tag, const uint8_t *value, size_t vlen);
