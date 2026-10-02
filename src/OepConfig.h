@@ -14,7 +14,9 @@
 //   0x01 plan  fn(u16) role(u8) channel(u16)            key (fn, role, channel); a set replaces the whole plan of the fn
 //   0x02 label channel(u16) text                         key channel (read back with get; oep.core's describe has only
 //                                                        the firmware's fixed labels)
-//   0x03 idle  channel(u16) mode(u8)                     key channel: 0 Hi-Z, 1 pull-up, 2 pull-down while free
+//   0x03 idle  channel(u16) mode(u8) [drive_kind(u8) drive_value(u16)]   key channel: 0 Hi-Z, 1 pull-up, 2 pull-down,
+//                                                        3 output low, 4 output high while free; 3 / 4 at the strength
+//                                                        given (fixture §1.1) where gpio declares drive_levels
 //   0x04 slot  slot(u8) wire_fn(u16) swdio(u16) swclk(u16) attach(u8) retry_ms(u32) max_speed_hz(u32) idle_clock(u8)
 //              mechanism(u8: 0xFF none) name_len(u8) name lock_len(u8) [lock_scheme(u8) mask(n) value(n)]   key slot
 //   0x05 bind  port(u8) mode(u8) selected(u8) n(u8) n x (len(u8) kind(u8) id(u16))                       key port
@@ -62,6 +64,7 @@ class ProbeConfig final : public Interface {
   }
   // A place a slot may name: this wire and its console. Add after the endpoint has them.
   bool addPlace(WireRvswd &wire, TargetConsoleStream &console);
+    memset(idle_drive_, PinTable::kDriveDefault, sizeof idle_drive_);
   // A fixture UART a bind may carry and the uart item sets (after the endpoint has it).
   bool addUart(FixtureUart &uart);
   // The pins whose idle state the idle item sets and the disable item takes away (without it, both are refused).
@@ -129,6 +132,7 @@ class ProbeConfig final : public Interface {
   size_t uart_count_ = 0;
   Slot slots_[kMaxSlots];          // several per place (each its own pair), at most one at boot per wire
   SlotRun runs_[kMaxSlots];
+    uint8_t idle_drive[PinTable::kChannels];   // the idle's strength as a level (kDriveDefault: none, or not applied)
   bool onPair(const Slot &s) const {   // the place's link is on this slot's pair now
     const DebugPort &p = *places_[s.place].port;
     return p.swdio == s.swdio && p.swclk == s.swclk;
@@ -149,6 +153,7 @@ class ProbeConfig final : public Interface {
   // The item store: one item's key (the bytes after the tag that identify it) and the canonical order.
   static size_t keyLength(uint8_t tag);
   static uint64_t keyValue(uint8_t tag, const uint8_t *value, size_t length);
+  uint8_t idle_drive_[PinTable::kChannels];       // their strengths (kDriveDefault: none)
   static bool itemBefore(uint8_t tag_a, const uint8_t *a, size_t alen, uint8_t tag_b, const uint8_t *b, size_t blen);
   static bool insertItem(uint8_t *store, size_t &length, size_t capacity, uint8_t tag, const uint8_t *value, size_t vlen);
   static void removeItems(uint8_t *store, size_t &length, uint8_t tag, const uint8_t *key, size_t key_length);
@@ -168,6 +173,7 @@ class ProbeConfig final : public Interface {
   Result unset(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result state(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   size_t slotState(uint8_t i, uint8_t *out) const;
+  DriveLevels driveLevels() const;
   bool sourceFor(const Slot *slots, uint8_t kind, uint16_t id, Binds::Source &out) const;
   bool bound(uint8_t slot) const;
   // 1 the lock matches (or none), 0 it does not, -1 there is a lock and no target_id to check

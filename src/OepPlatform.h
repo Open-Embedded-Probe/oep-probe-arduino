@@ -87,6 +87,60 @@ inline void platformGpio(int pin, uint8_t mode) {
 #endif
 }
 
+// Output drive strengths (oep-if-fixture §1.1): the levels a fixture gpio output (mode 3 / 4, an output idle) can be
+// driven at, ascending, with their approximate mA, and the default level - the pad's own reset strength, so a pin
+// nobody set is already at it. count 0: this chip's strength is not switched (no drive_levels in describe).
+//   classic ESP32, ESP32-P4: gpio_drive_cap_t GPIO_DRIVE_CAP_0..3, about 5 / 10 / 20 / 40 mA (the datasheets' typical
+//                            source currents); GPIO_DRIVE_CAP_DEFAULT is 2.
+//   RP2040 / RP2350: the pad's 2 / 4 / 8 / 12 mA (enum gpio_drive_strength 0..3); 4 mA after reset.
+// Other chips declare none. Debug wires and the other fixtures never go through these: their PHYs and drivers set the
+// strength they need (the wires the weakest).
+struct DriveLevels {
+  const uint16_t *ma;
+  uint8_t count;
+  uint8_t default_level;
+};
+inline DriveLevels platformDriveLevels() {
+#if defined(OEP_HOST_FAKE_DRIVE) || \
+    (defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4)))
+  static const uint16_t kMa[] = {5, 10, 20, 40};
+  return {kMa, 4, 2};
+#elif defined(ARDUINO_ARCH_RP2040)
+  static const uint16_t kMa[] = {2, 4, 8, 12};
+  return {kMa, 4, 1};
+#else
+  return {nullptr, 0, 0};
+#endif
+}
+
+// The pad's strength alone (a level of platformDriveLevels).
+inline void platformDrive(int pin, uint8_t level) {
+#if defined(OEP_HOST_FAKE_DRIVE)
+  if (pin >= 0 && pin < 64) g_pin_drive[pin] = level;
+#elif defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4))
+  gpio_set_drive_capability(static_cast<gpio_num_t>(pin), static_cast<gpio_drive_cap_t>(level));
+#elif defined(ARDUINO_ARCH_RP2040)
+  gpio_set_drive_strength(pin, static_cast<gpio_drive_strength>(level));
+#else
+  (void)pin; (void)level;
+#endif
+}
+
+// Output low / high (kGpioOutputLow / kGpioOutputHigh) at a level: the strength is in place before the output is
+// enabled, so no edge goes out at another one. arduino-pico's pinMode(OUTPUT) sets 4 mA itself, so the RP2 takes its
+// OUTPUT_xMA mode; on the ESP32 the strength is set again after pinMode (a peripheral the pin left may reset it).
+inline void platformGpioDriven(int pin, uint8_t mode, uint8_t level) {
+#if defined(ARDUINO_ARCH_RP2040) && !defined(OEP_HOST_FAKE_DRIVE)
+  static const PinMode kOutput[] = {OUTPUT_2MA, OUTPUT_4MA, OUTPUT_8MA, OUTPUT_12MA};
+  gpio_put(pin, mode == kGpioOutputHigh);   // the latch first, as platformGpio
+  pinMode(pin, kOutput[level & 3]);
+#else
+  platformDrive(pin, level);
+  platformGpio(pin, mode);
+  platformDrive(pin, level);
+#endif
+}
+
 inline void platformParkPins(const uint8_t *pins, size_t count) {
   for (size_t i = 0; i < count; ++i) platformGpio(pins[i], kGpioInputFloating);
 }

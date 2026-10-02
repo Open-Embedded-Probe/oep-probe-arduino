@@ -86,18 +86,76 @@ class PinTable {
   uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
   // Idle states (oep.probe.config idle: 0 Hi-Z, 1 pull-up, 2 pull-down, 3 output low, 4 output high; kIdleUnset =
   // Hi-Z). Applied now to a free channel (apply false: only kept, for a channel about to be disabled), and at every
-  // release; an output idle drives its level for as long as the channel is free. false: not a channel of this table, a
-  // mode it does not know, or an output idle on a channel that cannot drive (setInputOnly).
+  // release; an output idle drives its level for as long as the channel is free, at its strength `drive` (a level of
+  // platformDriveLevels; kDriveDefault: the default level) - level and strength together. false: not a channel of this
+  // table, a mode it does not know, or an output idle on a channel that cannot drive (setInputOnly).
   static constexpr uint8_t kIdleHiZ = 0, kIdlePullUp = 1, kIdlePullDown = 2, kIdleOutputLow = 3, kIdleOutputHigh = 4,
                            kIdleUnset = 0xff;
-  bool setIdle(uint16_t channel, uint8_t mode, bool apply = true) {
+  static constexpr uint8_t kDriveDefault = 0xff;   // no strength given: the default level
+  static constexpr uint8_t kNotDriven = reg::fixture_gpio::kDriveReadNotDriven;
+  bool setIdle(uint16_t channel, uint8_t mode, bool apply = true, uint8_t drive = kDriveDefault) {
     if (!allowed(channel) || (mode > kIdleOutputHigh && mode != kIdleUnset)) return false;
     if ((mode == kIdleOutputLow || mode == kIdleOutputHigh) && !canOutput(channel)) return false;
     idle_[channel] = mode;
+    idle_drive_[channel] = drive == kDriveDefault ? 0 : static_cast<uint8_t>(drive + 1);
     if (apply && owner_[channel] == 0 && !disabled(channel)) applyIdle(static_cast<uint8_t>(channel));
     return true;
   }
   uint8_t idle(uint16_t channel) const { return channel < kChannels ? idle_[channel] : kIdleUnset; }
+  uint8_t idleDrive(uint16_t channel) const {
+    return channel < kChannels && idle_drive_[channel] ? static_cast<uint8_t>(idle_drive_[channel] - 1) : kDriveDefault;
+  }
+
+  // Output drive strength (oep-if-fixture §1.1). A pad set to `mode` (the platform's, OepPlatform.h); output low / high
+  // at `level` (kDriveDefault or out of range: the default level), everything else without one - a pad an earlier
+  // output left at another strength goes back to the default, so whoever takes the pin next starts from the pad's own.
+  // Used by the idle states and the gpio fixture's set; never by the wires or the other fixtures.
+  void setPad(uint8_t c, uint8_t mode, uint8_t level) {
+    const DriveLevels d = platformDriveLevels();
+    const uint64_t bit = uint64_t{1} << c;
+    if (d.count && (mode == kGpioOutputLow || mode == kGpioOutputHigh)) {
+      const uint8_t l = level < d.count ? level : d.default_level;
+      platformGpioDriven(c, mode, l);
+      level_[c] = static_cast<uint8_t>(l + 1);
+      if (l != d.default_level) strong_ |= bit;
+      else strong_ &= ~bit;
+      return;
+    }
+    platformGpio(c, mode);
+    level_[c] = 0;
+    if (strong_ & bit) {
+      platformDrive(c, d.default_level);
+      strong_ &= ~bit;
+    }
+  }
+  // For a fixture that takes a channel for its own peripheral (UART, I2C / SPI target): a pad an output idle left at
+  // another strength goes back to the default, as setPad does when a pad leaves mode 3 / 4. Not for a debug wire (its
+  // PHY sets the weakest itself, and claims its pins only once they run) nor the gpio fixture (it keeps the idle state).
+  void ownStrength(uint16_t channel) {
+    if (channel >= kChannels) return;
+    const uint64_t bit = uint64_t{1} << channel;
+    level_[channel] = 0;
+    if (!(strong_ & bit)) return;
+    platformDrive(channel, platformDriveLevels().default_level);
+    strong_ &= ~bit;
+  }
+  // The level a channel is driven at in mode 3 / 4 now (a set's output or an output idle), kNotDriven when it is not
+  // (fixture §1.1 read's drive TLV).
+  uint8_t drivenLevel(uint16_t channel) const {
+    return channel < kChannels && level_[channel] ? static_cast<uint8_t>(level_[channel] - 1) : kNotDriven;
+  }
+  // A drive specification (fixture §1.1: kind 0 a level number, kind 1 the strongest level of at most `value` mA, level 0
+  // when none is) as a level of `d`. false: kind 0 with a level the probe does not have (the caller checks kind first).
+  static bool driveLevelOf(const DriveLevels &d, uint8_t kind, uint16_t value, uint8_t &level) {
+    if (kind == reg::fixture_gpio::kDriveKindLevel) {
+      if (value >= d.count) return false;
+      level = static_cast<uint8_t>(value);
+      return true;
+    }
+    level = 0;
+    for (uint8_t i = 0; i < d.count; ++i) if (d.ma[i] <= value) level = i;
+    return true;
+  }
   // Channels the probe can only read (the classic ESP32's GPIO34-39): no output idle on them (probe.config §1).
   void setInputOnly(uint64_t mask) { input_only_ = mask; }
   bool canOutput(uint16_t channel) const { return allowed(channel) && !((input_only_ >> channel) & 1); }
@@ -107,6 +165,7 @@ class PinTable {
   uint64_t disabled_ = 0;   // the settings' disable items
   uint64_t input_only_ = 0;   // setInputOnly
   uint64_t pending_ = 0;      // released during a replacement, not yet settled (deferIdle)
+  uint64_t strong_ = 0;       // pads setPad left at another strength than the default
   uint8_t deferring_ = 0;
   uint8_t owner_[kChannels] = {};
   uint8_t idle_[kChannels] = {kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
@@ -117,13 +176,17 @@ class PinTable {
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset};
-  void applyIdle(uint8_t c) const {
+  // per channel, one more than the level (0: none) - zero-initialised: the idle without a strength, not driven
+  uint8_t idle_drive_[kChannels] = {};   // the idle's strength (setIdle)
+  uint8_t level_[kChannels] = {};        // the level a mode 3 / 4 output is driven at now (setPad)
+  void applyIdle(uint8_t c) {
     const uint8_t m = idle_[c];
-    platformGpio(c, m == kIdlePullUp       ? kGpioInputPullUp
-                    : m == kIdlePullDown   ? kGpioInputPullDown
-                    : m == kIdleOutputLow  ? kGpioOutputLow
-                    : m == kIdleOutputHigh ? kGpioOutputHigh
-                                           : kGpioInputFloating);
+    setPad(c, m == kIdlePullUp       ? kGpioInputPullUp
+              : m == kIdlePullDown   ? kGpioInputPullDown
+              : m == kIdleOutputLow  ? kGpioOutputLow
+              : m == kIdleOutputHigh ? kGpioOutputHigh
+                                     : kGpioInputFloating,
+           idleDrive(c));
   }
 };
 

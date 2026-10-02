@@ -146,6 +146,18 @@ size_t ProbeConfig::nameOf(void *self, uint8_t kind, uint16_t id, char *out, siz
   return n < 0 ? 0 : static_cast<size_t>(n);
 }
 
+// The output strengths of the probe's oep.fixture.gpio (fixture §1.1, describe drive_levels): the chip's levels when
+// a gpio fixture is there to declare them, else none (an idle's drive is then kept but not applied, probe.config §1).
+DriveLevels ProbeConfig::driveLevels() const {
+  const DriveLevels levels = platformDriveLevels();
+  for (uint16_t f = 1; levels.count && f <= 255; ++f) {
+    const Interface *it = endpoint_.interfaceAt(f);
+    if (!it) break;
+    if (strcmp(it->name(), reg::fixture_gpio::kName) == 0) return levels;
+  }
+  return {nullptr, 0, 0};
+}
+
 // ---- the item store ------------------------------------------------------------------------------------------------
 
 size_t ProbeConfig::keyLength(uint8_t tag) {
@@ -236,10 +248,17 @@ Result ProbeConfig::checkItem(uint8_t tag, const uint8_t *v, size_t len, uint8_t
     case cfg::kTlvItemIdle: {
       if (len < 3) return rejected(kRejectMalformed);
       if (v[2] > PinTable::kIdleOutputHigh) return rejected(kRejectMalformed);
+      // the strength (probe.config §1, fixture §1.1): drive_kind(u8) drive_value(u16) after mode, mode 3 / 4 only
+      const bool output = v[2] == PinTable::kIdleOutputLow || v[2] == PinTable::kIdleOutputHigh;
+      if (len == 4 || len == 5) return rejected(kRejectMalformed);
+      if (len >= 6 && (!output || v[3] > reg::fixture_gpio::kDriveKindMaxMa)) return rejected(kRejectMalformed);
       if (!pins_) return unsupportedValue(out, capacity);
       if (getU16(v) >= PinTable::kChannels || !pins_->allowed(getU16(v))) return unsupportedValue(out, capacity);
       // output low / high (probe.config §1): only on a channel this probe can drive
-      if ((v[2] == PinTable::kIdleOutputLow || v[2] == PinTable::kIdleOutputHigh) && !pins_->canOutput(getU16(v)))
+      if (output && !pins_->canOutput(getU16(v))) return unsupportedValue(out, capacity);
+      uint8_t level = 0;   // a level number this probe does not have (drive_levels declared); without them it is kept
+      const DriveLevels levels = driveLevels();
+      if (len >= 6 && levels.count && !PinTable::driveLevelOf(levels, v[3], getU16(v + 4), level))
         return unsupportedValue(out, capacity);
       return completed();
     }
@@ -324,6 +343,7 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
   for (UartItem &u : d.uarts) u = UartItem{};
   for (Label &l : d.labels) l = Label{};
   size_t at = 0, vlen = 0;
+  memset(d.idle_drive, PinTable::kDriveDefault, sizeof d.idle_drive);
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
   size_t labels = 0;
@@ -336,14 +356,20 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
       case cfg::kTlvItemLabel:
         if (labels < kMaxLabels) d.labels[labels++] = {true, getU16(v)};
         break;
-      case cfg::kTlvItemIdle:
+      case cfg::kTlvItemIdle: {
         d.idle[getU16(v)] = v[2];
         break;
       case cfg::kTlvItemSlot: {
         Slot &s = d.slots[v[0]];
         const uint16_t wire_fn = getU16(v + 1);
         for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) s.place = static_cast<uint8_t>(k);
+        uint8_t level = PinTable::kDriveDefault;   // applied only where gpio declares drive_levels (the default otherwise)
+        const DriveLevels levels = driveLevels();
+        if (vlen >= 6 && levels.count && !PinTable::driveLevelOf(levels, v[3], getU16(v + 4), level))
+          level = PinTable::kDriveDefault;
+        d.idle_drive[getU16(v)] = level;
         s.set = true;
+      }
         s.swdio = getU16(v + 3);
         s.swclk = getU16(v + 5);
         s.attach = v[7];
@@ -488,17 +514,20 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
   // state now - an output idle drives before a gpio plan takes the channel, which keeps that level until its first set
   // (fixture §1) - and a channel the replaced plans release goes to the new idle. A channel disabled by this change only
   // keeps the mode (never touched); one enabled again gets it from setDisabled below. A refused plan puts the old back.
-  static uint8_t was_idle[PinTable::kChannels];
+  // An idle's strength goes with its level (probe.config §1): a change of either applies both.
+  static uint8_t was_idle[PinTable::kChannels], was_drive[PinTable::kChannels];
   memcpy(was_idle, idle_, sizeof was_idle);
-  auto applyIdles = [&](const uint8_t *modes) {
+  memcpy(was_drive, idle_drive_, sizeof was_drive);
+  auto applyIdles = [&](const uint8_t *modes, const uint8_t *drives) {
     if (!pins_) return;
     for (uint16_t c = 0; c < PinTable::kChannels; ++c)
-      if (modes[c] != idle_[c]) {
+      if (modes[c] != idle_[c] || drives[c] != idle_drive_[c]) {
         idle_[c] = modes[c];
-        pins_->setIdle(c, idle_[c], !((d.disabled >> c) & 1));
+        idle_drive_[c] = drives[c];
+        pins_->setIdle(c, idle_[c], !((d.disabled >> c) & 1), idle_drive_[c]);
       }
   };
-  applyIdles(d.idle);
+  applyIdles(d.idle, d.idle_drive);
   if (plan_fn_count) {   // the plans of the fns touched, as the candidate has them
     RoleAssignment roles[Endpoint::kMaxRoles];
     size_t n = 0;
@@ -506,7 +535,7 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
       for (size_t k = 0; k < plan_fn_count; ++k)
         if (d.roles[r].function == plan_fns[k]) roles[n++] = d.roles[r];
     const uint8_t reason = endpoint_.replacePlan(roles, n, plan_fns, plan_fn_count);
-    if (reason) applyIdles(was_idle);
+    if (reason) applyIdles(was_idle, was_drive);
     if (reason == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
     if (reason) return rejected(reason);
   }

@@ -114,7 +114,17 @@ Each source file starts with the spec sections it follows.
   shift bits while the console was read (23 of 36 frames good; 72 of 72 at the weakest, wire speed unchanged,
   2026-10-02). Every PHY in this library does so (RVSWD: ESP32-P4 `GPIO_DRIVE_CAP_0`, RP2 2 mA; SWIO: classic and P4
   `GPIO_DRIVE_CAP_0`, `OEP_SWIO_DRIVE_CAP`). A new PHY or a port to another chip must set it too - the P4 SWIO port
-  first left it at the default.
+  first left it at the default. Set it again when the wire takes its pins (the RVSWD PHY does at every attach): a
+  host-chosen pair is free between connections, and a fixture gpio output or an output idle may leave another strength
+  on it.
+- **Fixture gpio's output strength** (oep-if-fixture §1.1) comes from `platformDriveLevels()` in `OepPlatform.h`: the
+  levels, their approximate mA and the default (the pad's reset strength) - classic ESP32 / ESP32-P4 `GPIO_DRIVE_CAP_0..3`
+  about 5 / 10 / 20 / 40 mA, default 2; RP2040 / RP2350 2 / 4 / 8 / 12 mA, default 4 mA; other chips none (no
+  drive_levels, and set's drive TLV is an unknown tag). A port to another chip adds its levels there, or leaves none.
+  The strength applies to modes 3 / 4 only (a set, an output idle); `PinTable::setPad` puts a pad back to the default
+  when it leaves them, and a fixture that takes a pin for its own peripheral (UART, I2C / SPI target) calls
+  `PinTable::ownStrength` after its claim, so it starts from the pad's own strength even straight from an output idle.
+  A wire sets its own (the weakest) instead.
 
 ## 7. Serial ports, binds and settings
 
