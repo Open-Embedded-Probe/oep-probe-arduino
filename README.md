@@ -73,6 +73,27 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
   with an iProduct starting `OEP`, which may not be used for distribution. When the project obtains a PID of its own, the firmware
   will switch to it ([PID-USE.md](PID-USE.md)).
 
+## Wiring: no schematic, no fixed pin map
+
+OpenEmbeddedProbe is firmware only. There is no board or circuit of our own: the probe is a stock development board of a
+supported microcontroller (ESP32-P4, classic ESP32, RP2040 / RP2350) running the firmware, so there is no schematic to
+follow. Nor is there a fixed pin map:
+
+- **Any free GPIO can be wired to any target line.** Every debug wire (RVSWD, SWIO, SWD) is bit-banged, and the UART, SPI
+  and I2C fixtures go through the GPIO matrix (the RP2's UART0 is the one limit: [Boards](docs/guide/boards.md#pins-of-the-released-firmware)).
+  The host chooses the pins per request.
+- **The host finds where the target is.** `oep pins` (oep-client-python) reads every offered pin under the probe's pulls,
+  scans the debug wire over the candidates, identifies the target by its ID, and finds its reset line. It then suggests a
+  slot to save (oep-spec host-development-guide §9; per-target notes in oep-spec docs/target-scan-notes.ja.md).
+- **The rest can be found through the target.** Once the debug link is up, the host can drive the target's own GPIOs
+  through it and see which probe pin follows, so its other lines (UART, power switch, application pins) are found the same
+  way, without a wiring list.
+
+So: connect GND and the target's debug pin(s), and any other lines you want, to free GPIOs of the probe board, in any order.
+What to avoid is the probe board's own pins: the flash / PSRAM pins, the USB pins, the boot straps and the pins of the
+probe's own transport, which the firmware never offers. [Boards](docs/guide/boards.md#pins-of-the-released-firmware) lists
+them per chip. Mind the voltage levels too ([Electrical notes](#electrical-notes)).
+
 ## An example: an ESP32-P4 testing a CH32L103
 
 <img src="docs/images/p4-ch32l103-bench.jpg" alt="An ESP32-P4 board wired to a CH32L103 board: RVSWD, UART, GPIO and the ADC inputs on jumper wires" width="420">
