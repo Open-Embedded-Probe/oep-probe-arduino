@@ -3,7 +3,9 @@
 
 // Host tests: oep.fixture.spi-target (oep-spec oep-if-fixture §4) on a fake of the ESP-IDF spi_slave driver - a transfer
 // nobody armed counts in transactions and errors, an armed one is queued, a CS frame with no clock counts nothing and
-// leaves the arm waiting, one arm at a time, over length counts an error.
+// leaves the arm waiting, one arm at a time, over length counts an error (and over length with the queue full two),
+// read_rx in state 0 is unavailable cause 6, configure clears the counts, releasing the plan goes back to describe's
+// state.
 #include <stdio.h>
 
 #include <vector>
@@ -35,6 +37,10 @@ static Result call(P4SpiTarget &t, uint8_t op, const Bytes &payload, Bytes &out)
   return r;
 }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
+static bool unavailableCause(const Result &r, const Bytes &out, uint8_t cause) {
+  return r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && out.size() >= 3 && out[0] == 0x01 &&
+         out[1] == 1 && out[2] == cause;
+}
 static Status status(P4SpiTarget &t) {
   Bytes out;
   const Result r = call(t, P4SpiTarget::kOpStatus, {}, out);
@@ -60,6 +66,9 @@ int main() {
   CHECK(t.planCheck(roles, 4) == 0);
   CHECK(t.planApply(roles, 4));
   Bytes out;
+  // state 0: read_rx is unavailable cause 6, as reset is
+  CHECK(unavailableCause(call(t, P4SpiTarget::kOpReadRx, {}, out), out, 6));
+  CHECK(unavailableCause(call(t, P4SpiTarget::kOpReset, {}, out), out, 6));
   CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
   Status s = status(t);
   CHECK(s.state == 1 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
@@ -121,6 +130,38 @@ int main() {
   t.service();
   s = status(t);
   CHECK(s.transactions == 1 && s.errors == 1);
+
+  // over length with the queue full: counted in transactions, not queued, errors + 2
+  for (int i = 0; i < 4; ++i) {
+    CHECK(ok(arm(t, 4, {})));
+    CHECK(fakeSpiTransfer(32, mosi));
+    t.service();
+  }
+  s = status(t);
+  CHECK(s.queued == 4 && s.transactions == 5 && s.errors == 1);
+  CHECK(ok(arm(t, 2, {})));
+  CHECK(fakeSpiTransfer(32, mosi));
+  t.service();
+  s = status(t);
+  CHECK(s.queued == 4 && s.transactions == 6 && s.errors == 3);
+
+  // configure makes the target anew: queue, wait and counts go
+  CHECK(ok(arm(t, 4, {})));
+  CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {3, 1}, out)));
+  s = status(t);
+  CHECK(s.state == 1 && s.mode == 3 && s.bit_order == 1 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
+  CHECK(fakeSpiTransfer(8, mosi));
+  t.service();
+  s = status(t);
+  CHECK(s.transactions == 1 && s.errors == 1);
+
+  // releasing the plan, then a new one: the state right after describe (state 0, mode and bit_order 0, no counts)
+  t.planRelease();
+  CHECK(t.planCheck(roles, 4) == 0);
+  CHECK(t.planApply(roles, 4));
+  s = status(t);
+  CHECK(s.state == 0 && s.mode == 0 && s.bit_order == 0 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
+  CHECK(unavailableCause(call(t, P4SpiTarget::kOpReadRx, {}, out), out, 6));
 
   t.planRelease();
   printf("spi-target: %d checks, %d failures\n", checks, failures);

@@ -35,10 +35,12 @@ bool P4SpiTarget::planApply(const RoleAssignment *roles, size_t count) {
   return true;
 }
 
+// Releasing or replacing the plan: back to the state right after describe (fixture §4).
 void P4SpiTarget::planRelease() {
   stop();
   pins_.release(kOwnerId);   // each pin to its idle state
   sck_ = mosi_ = miso_ = cs_ = -1;
+  mode_ = 0; bit_order_ = 0; transactions_ = 0; errors_ = 0;
 }
 
 size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
@@ -162,8 +164,8 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       if (refused(parsed)) return parsed;
       if (payload[0] > 3 || payload[1] > 1) return rejected(kRejectMalformed);   // not a mode / order of the table
       if (sck_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §4: unavailable cause 6)
-      stop();
-      mode_ = payload[0]; bit_order_ = payload[1];
+      stop();   // the queue and the wait go
+      mode_ = payload[0]; bit_order_ = payload[1]; transactions_ = 0; errors_ = 0;
       if (!start()) return failed();
       return tail.finish(completed(), out, capacity);
     }
@@ -181,6 +183,7 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
     case kOpReadRx: {   // [TLV] -> pending(u8) bits(u32) count(u16) data: the oldest finished transaction
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (!started_) return wrongState(out, capacity);   // state 0 (fixture §4)
       const size_t data = queue_count_ ? queue_length_[0] : 0;
       if (capacity < 7 + data) return failed();
       out[0] = queue_count_ ? static_cast<uint8_t>(queue_count_ - 1) : 0;

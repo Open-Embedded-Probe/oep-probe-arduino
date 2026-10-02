@@ -1,18 +1,23 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// oep.fixture.i2c-target revision 1 (oep-spec oep-if-fixture §3), on an ESP32's hardware I2C target (the ESP-IDF
-// slave v1 driver), for testing a DUT's I2C controller.
+// oep.fixture.i2c-target revision 1 (oep-spec oep-if-fixture §3), on an ESP32's hardware I2C target, for testing a DUT's
+// I2C controller.
 //   0x01 configure(address u8, mode u8: 1 fixed rx, 2 framed rx, 3 preloaded tx)   0x02 arm_rx(length u16)
 //   0x03 read_rx -> pending(u8) count(u16) data          0x04 preload_tx(count u16, data) -> slots(u8)
 //   0x05 status -> state(u8) mode(u8) armed(u8) queued(u8) rx_frames(u32) tx_slots(u8) errors(u32)   (no lock)
-//   0x06 reset   0x07 stretch(stretch_us u32)
+//   0x06 reset   0x07 stretch(stretch_us u32; ESP32-P4 only)
 // Every request takes a TLV tail (oep-core §2.3). Roles: 1 SDA, 2 SCL.
-// Contract measured in E147-E150 (wch-protocols): Contract measured in E147-E150: a receive job is
-// armed with the exact transaction length; framed mode takes a 1-byte length
-// header transaction then a payload transaction; preloaded TX slots need one
-// filler byte after the payload. The ISR only flags completion; re-arming,
-// queueing and TX preloads happen in service() from loop().
+//
+// The ESP-IDF slave driver (v1, the one the arduino-esp32 libraries are built with) only sets the peripheral up: its
+// receive job reports no byte count (i2c_slave_rx_done_event_data_t has only the buffer; the v2 driver that has a
+// length is not compiled into the libraries) and reads the job's length from the FIFO whatever the controller sent,
+// and its transmit ring is a byte stream with no slot boundaries. So the FIFOs are this class's own: a handler shared
+// on the peripheral's interrupt (registered after the driver's, so it runs first and clears what it handled) reads
+// every received byte of a transaction and keeps the TX FIFO topped up from the current preload slot (then 0xFF). At
+// STOP the transaction is judged by its write's byte count (fixture §3's frame and write rules), and a transaction
+// that took bytes from the TX FIFO used up the slot. The logic past the FIFOs (onTransaction, txByte) is portable and
+// host-tested through OEP_HOST_FAKE_I2C_SLAVE (tests/host).
 #pragma once
 
 #include <Arduino.h>
@@ -22,6 +27,7 @@
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <driver/i2c_slave.h>
+#include <esp_intr_alloc.h>
 #endif
 
 namespace oep {
@@ -32,7 +38,17 @@ class P4I2cTarget final : public Interface {
   enum Mode : uint8_t { kModeNone = 0, kModeFixedRx = 1, kModeFramedRx = 2, kModePreloadedTx = 3 };
   enum Role : uint8_t { kRoleSda = 1, kRoleScl = 2 };
   static constexpr size_t kMaxFrame = 128;
-  static constexpr size_t kQueueDepth = 4;
+  static constexpr size_t kQueueDepth = 4;   // received frames kept, and unread preload slots (fixture §3)
+#if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(OEP_HOST_FAKE_I2C_SLAVE)
+  // stretch: the P4's slave holds SCL itself (slave_scl_stretch_en, with slave_byte_ack_ctl_en a hold at every
+  // received byte's ACK) and service() lets go after stretch_us, so the limit is the bench's: 0.1-20 ms measured with
+  // a CH32 Wire controller (2026-09-22), 30 ms used to make it time out.
+  static constexpr bool kStretch = true;
+  static constexpr uint32_t kMaxStretchUs = 100000;
+#else
+  static constexpr bool kStretch = false;   // the classic ESP32's I2C slave cannot hold SCL
+  static constexpr uint32_t kMaxStretchUs = 0;
+#endif
 
   enum : uint8_t { kOpConfigure = 0x01, kOpArmRx = 0x02, kOpReadRx = 0x03, kOpPreloadTx = 0x04, kOpStatus = 0x05,
                    kOpReset = 0x06, kOpStretch = 0x07 };
@@ -47,7 +63,14 @@ class P4I2cTarget final : public Interface {
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
-  void service();  // call from loop(): drains the ISR flag, queues frames, re-arms
+  void service();  // call from loop(): ends a stretch hold, reloads the TX FIFO when a preload waited for an idle bus
+
+#if defined(OEP_HOST_FAKE_I2C_SLAVE)
+  // The host test's controller: one transaction to this address - a write of `count` bytes (0: the address alone),
+  // then, with `read` > 0, a repeated START and a read of `read` bytes into `got`. false: the target is not running.
+  bool hostTransaction(const uint8_t *data, size_t count, size_t read = 0, uint8_t *got = nullptr);
+  uint32_t hostStretchUs() const { return stretch_us_; }
+#endif
 
  private:
   PinTable &pins_;
@@ -55,28 +78,44 @@ class P4I2cTarget final : public Interface {
   int sda_ = -1, scl_ = -1;
   uint8_t address_ = 0, mode_ = kModeNone;
   bool started_ = false;
+  uint32_t stretch_us_ = 0;   // kept by configure and reset, 0 again when the plan goes (fixture §3)
+  // the state the interrupt handler shares (under lock_)
   uint32_t rx_frames_ = 0;
   uint32_t errors_ = 0;
-  uint8_t tx_slots_ = 0;
-  // receive job
-  uint8_t rx_buffer_[kMaxFrame];
-  size_t armed_ = 0;
-  bool framed_header_ = true;
-  volatile bool rx_done_ = false;
-  // completed frames, oldest first
+  size_t armed_ = 0;   // mode 1: the length waited for (0 = not armed)
   uint8_t queue_[kQueueDepth][kMaxFrame];
   uint8_t queue_length_[kQueueDepth] = {};
   uint8_t queue_count_ = 0;
+  uint8_t slot_[kQueueDepth][kMaxFrame];   // preload slots, a ring: slot_head_ is what the next read sends
+  uint8_t slot_length_[kQueueDepth] = {};
+  uint8_t slot_head_ = 0, slot_count_ = 0;
+  uint8_t slot_serial_ = 0;   // preload_tx's answer: slots placed since configure / reset (u8, wraps)
+  // the transaction under way: its write bytes (kept up to the largest frame a mode takes) and how many came
+  uint8_t rx_[kMaxFrame + 1];
+  size_t rx_count_ = 0;
+  // the TX FIFO: bytes put in since its last reset, and how far into the head slot (then 0xFF) they reached
+  uint32_t tx_loaded_ = 0;
+  size_t tx_pos_ = 0;
+  bool tx_stale_ = false;   // a preload went into an empty set while the bus was busy: reload when it is idle
+  bool stretch_held_ = false;
+  uint32_t stretch_since_ = 0;
 #if defined(ARDUINO_ARCH_ESP32)
+  portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
   i2c_slave_dev_handle_t slave_ = nullptr;
-  static bool receiveDone(i2c_slave_dev_handle_t, const i2c_slave_rx_done_event_data_t *, void *context);
+  intr_handle_t intr_ = nullptr;
+  static void isr(void *context);
+  void fillTx();
+  void reloadTx();
+  void drainRx();
+  void applyStretch();
 #endif
-  // set_stretch: hold every hardware stretch (address match on read / TX empty / RX full) this long from service(), 0 = off
-  uint32_t stretch_us_ = 0;
-  volatile uint32_t stretch_events_ = 0;
+  void lock();
+  void unlock();
   bool start();
   void stop();
-  bool arm(size_t length);
+  void clearTarget();   // queues, wait, slots, counts: configure's and reset's fresh state
+  uint8_t txByte(size_t pos) const;   // what a read sends at pos: the head slot, then (and with no slot) 0xFF
+  void onTransaction(bool read);   // STOP: judge the write (rx_, rx_count_), and a read uses up the head slot
   void pushFrame(const uint8_t *data, size_t length);
 };
 
