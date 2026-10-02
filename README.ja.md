@@ -75,9 +75,13 @@ OpenEmbeddedProbe はファームウェアだけでできています。独自�
 classic ESP32、RP2040 / RP2350）の市販の開発ボードにこのファームウェアを書いたものなので、従うべき回路図がありません。決まった
 ピンの割り当てもありません。
 
-- **空いている GPIO なら、どれを target のどの線につないでもよい。** debug の線（RVSWD、SWIO、SWD）はどれもビットバンギングで
-  動かし、UART、SPI、I2C の治具は GPIO マトリクスを通る（例外は RP2 の UART0 だけ: [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン)）。
-  使うピンは、要求ごとに host が選ぶ。
+- **debug の線と GPIO の線は、空いている GPIO のどれにつないでもよい。** debug の線（RVSWD、SWIO、SWD）はどれもビットバンギング
+  で動かし、GPIO の治具のピンも、要求ごとに host が選ぶ。ESP32 では UART、SPI、I2C の治具も GPIO マトリクスを通るので、これらも
+  どのピンでもよい。
+- **ピンが決まるのは、ハードウェアの周辺回路を使うときだけ。** RP2040 / RP2350 の UART の治具はチップの UART0 なので、RX / TX は
+  GP1 / GP0、GP13 / GP12、GP17 / GP16、GP29 / GP28 のどれかにつなぐ。アナログのキャプチャはどのチップでも ADC のピン（RP2 は
+  GP26〜28、ESP32-P4 は GPIO16〜23、classic ESP32 は GPIO32〜36 / 39）を使い、classic ESP32 の SWIO は GPIO32 より下の出力が
+  要る。これらの線は、そのピンにつなぐ。チップごとの一覧は [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン) にある。
 - **target がどこにつながっているかは、host が探す。** oep-client-python の `oep pins` は、probe の pull をかけて probe が出す
   すべてのピンを読み、候補の上で debug の線を scan し、target を ID で見分け、リセットの線を見つける。最後に、保存する
   スロットを示す（oep-spec の host 開発ガイド §9。target ごとの記録は oep-spec の docs/target-scan-notes.ja.md）。
