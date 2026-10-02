@@ -194,6 +194,19 @@ uint16_t pairDisabled(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   return 0xffff;
 }
 
+// A channel of the pair that has an idle item in the settings (probe.config §1), or 0xFFFF. outputs: only an output
+// idle (mode 3 / 4). oep-if-debug §1: count = 0 and an attach without pins leave out every channel with an idle item;
+// a request naming one is refused (cause 5, holder_kind 7) only when the idle is an output.
+uint16_t pairIdle(const DebugPort &port, uint16_t swdio, uint16_t swclk, bool outputs) {
+  if (!port.pins) return 0xffff;
+  auto has = [&](uint16_t c) {
+    if (c == 0xffff) return false;
+    const uint8_t mode = port.pins->idle(c);
+    return outputs ? mode == PinTable::kIdleOutputLow || mode == PinTable::kIdleOutputHigh : mode != PinTable::kIdleUnset;
+  };
+  return has(swdio) ? swdio : has(swclk) ? swclk : 0xffff;
+}
+
 bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   if (pairDisabled(port, swdio, swclk) != 0xffff) return false;   // never used, the fixed pair included
   if (!port.pin_choice || !port.pins) return true;   // a fixed pair is the wire's own (kept out of the pin table)
@@ -206,6 +219,7 @@ bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
 }
 
 bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk) {
+  if (!port.connected && pairIdle(port, swdio, swclk, true) != 0xffff) return false;   // an output idle: never driven
   if (swdio == port.swdio && swclk == port.swclk) return true;
   if (!port.pin_choice || port.connected || !pairAllowed(port, swdio, swclk) || !pairFree(port, swdio, swclk)) return false;
   if (port.dm.attached()) port.dm.detach();
@@ -319,6 +333,9 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     const uint16_t off = pairDisabled(port_, d, c);   // the settings disable it: cause 5 (probe.config §1)
     if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
+    const uint16_t idle = pairIdle(port_, d, c, true);   // an output idle: cause 5, holder_kind 7 (debug §1)
+    if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
+                                            reg::core::kHolderKindSettingsIdle);
     if (!pairFree(port_, d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
       return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, port_.pins && port_.pins->owner(d) ? d : c);
   }
@@ -366,12 +383,17 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   if (count) {
     for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
   } else if (port_.connected || !port_.pin_choice) {   // the count-0 list: the live pair, or the fixed one
-    if (skip == 0 && pairDisabled(port_, port_.swdio, port_.swclk) == 0xffff) tryPair(port_.swdio, port_.swclk);
-  } else {                                            // swdio ascending, then swclk; held pairs left out
+    // a fixed pair with an idle item on a channel is not in the list (debug §1); the live pair is
+    if (skip == 0 && pairDisabled(port_, port_.swdio, port_.swclk) == 0xffff &&
+        (port_.connected || pairIdle(port_, port_.swdio, port_.swclk, false) == 0xffff))
+      tryPair(port_.swdio, port_.swclk);
+  } else {                                            // swdio ascending, then swclk; held pairs and idle items left out
     uint32_t index = 0;
     bool more = true;
     auto consider = [&](uint16_t d, uint16_t c) {
-      if (more && tried < 255 && pairAllowed(port_, d, c) && pairFree(port_, d, c) && index++ >= skip) more = tryPair(d, c);
+      if (more && tried < 255 && pairAllowed(port_, d, c) && pairFree(port_, d, c) &&
+          pairIdle(port_, d, c, false) == 0xffff && index++ >= skip)
+        more = tryPair(d, c);
     };
     for (uint16_t d = 0; d < 64; ++d) {
       if (one_wire) consider(d, 0xffff);
@@ -450,6 +472,15 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       off = static_cast<uint16_t>(reset_channel);
     if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
+    // an idle item (debug §1): pins naming a channel whose idle is an output, or - no pins, no live connection - the
+    // fixed pair with any idle item (the candidates leave it out, so none is left): cause 5, holder_kind 7
+    uint16_t idle = 0xffff;
+    if (pins && plen == 4 && pairAllowed(port_, getU16(pins), getU16(pins + 2)))
+      idle = pairIdle(port_, getU16(pins), getU16(pins + 2), true);
+    else if (!pins && !port_.pin_choice && !port_.connected)
+      idle = pairIdle(port_, port_.swdio, port_.swclk, false);
+    if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
+                                            reg::core::kHolderKindSettingsIdle);
     if (const uint8_t bad = choosePair(pins, plen)) {
       if (bad == kRejectUnsupported) return unsupportedTag(out, capacity, wire::kTlvAttachPins | kTagCritical);   // critical, above
       if (bad == kRejectUnavailable) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);

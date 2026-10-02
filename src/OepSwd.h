@@ -15,9 +15,13 @@
 // Cortex-M debug registers are all the host's. RP2040 / RP2350 SIO bit-bang only for now.
 #pragma once
 
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD)
 
+#if defined(OEP_HOST_FAKE_SWD)
+#include <fake_swd_io.h>   // host tests (tests/host): rp2::BitBang over a simulated SWD target
+#else
 #include "OepRp2BitBang.h"
+#endif
 #include "Oep.h"
 #include "OepDebug.h"
 #include "OepPinTable.h"
@@ -30,7 +34,7 @@ struct SwdPort {
   uint32_t half_ns = 500;      // SWCLK half period (the fastest this probe uses)
   bool connected = false;
   uint16_t number = 0;         // the live connection's number, from the probe's one space (core §9, ResourceNumbers)
-  rp2::BitBang io;
+  rp2::BitBang io{};
   uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
   bool active_targetsel = false;   // the live connection's TARGETSEL (part of its identity, oep-if-debug §5)
   uint32_t targetsel = 0;
@@ -68,6 +72,8 @@ class WireSwd final : public Interface {
   bool allowed(uint16_t swdio, uint16_t swclk) const;
   bool free(uint16_t swdio, uint16_t swclk) const;   // nothing but this link's live connection on that pair holds them
   uint16_t disabledOf(uint16_t swdio, uint16_t swclk) const;   // a channel the settings disable, or 0xFFFF
+  // a channel with an idle item in the settings (outputs: an output idle only), or 0xFFFF (oep-if-debug §1)
+  uint16_t idleOf(uint16_t swdio, uint16_t swclk, bool outputs) const;
   bool move(uint16_t swdio, uint16_t swclk);          // the link to that pair (no live connection)
   SwdPort &port_;
   uint16_t instance_;

@@ -147,6 +147,17 @@ static const uint8_t *answerTlv(const Bytes &out, size_t from, uint8_t tag, size
   return nullptr;
 }
 
+// rejected unavailable, cause 5, the channel, holder_kind 7 settings_idle (debug §1)
+static bool isSettingsIdle(const Result &r, const Bytes &out, uint16_t channel) {
+  if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
+  size_t len = 0;
+  const uint8_t *cause = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadCause, len);
+  const uint8_t *ch = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadChannel, len);
+  const uint8_t *kind = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadHolderKind, len);
+  return cause && cause[0] == reg::core::kUnavailableCauseHeldBySettings && ch && (ch[0] | ch[1] << 8) == channel &&
+         kind && kind[0] == reg::core::kHolderKindSettingsIdle;
+}
+
 int main() {
   // A fixed pair (the wire's own channels 0 / 1, not in the pin table) and a host-chosen one among 4-7.
   static FakePhy phy;
@@ -194,22 +205,29 @@ int main() {
     static WireRvswd wire_chosen(chosen, 1);
     CHECK(pins.setIdle(4, PinTable::kIdlePullUp));
     CHECK(pins.setIdle(5, PinTable::kIdleOutputLow));
-    // attach on 4 / 5, then detach: 4 pulled up, 5 driven low by its idle, the PHY's own drive gone
+    // a channel whose idle is an output, named: unavailable cause 5, the channel, holder_kind 7 settings_idle (debug §1)
     Result r = call(wire_chosen, WireRvswd::kOpAttach, attachRequest(0, 4, 5, true), out);
+    CHECK(isSettingsIdle(r, out, 5) && !chosen.connected);
+    const Bytes scan_out_idle = {1, 4, 0, 5, 0};
+    r = call(wire_chosen, WireRvswd::kOpScan, scan_out_idle, out);
+    CHECK(isSettingsIdle(r, out, 5));
+    CHECK(pins.setIdle(5, PinTable::kIdlePullDown));   // an input idle, named: accepted
+    // attach on 4 / 5, then detach: 4 pulled up, 5 pulled down by its idle, the PHY's own drive gone
+    r = call(wire_chosen, WireRvswd::kOpAttach, attachRequest(0, 4, 5, true), out);
     CHECK(ok(r) && chosen.connected && pins.owner(4) == chosen.pin_owner);
     g_pin_mode[4] = g_pin_mode[5] = -1;
     r = call(wire_chosen, WireRvswd::kOpDetach, detachRequest(chosen.number), out);
     CHECK(ok(r) && !chosen.connected && pins.free(4) && pins.free(5));
     CHECK(phy2.state == FakePhy::kFree);
     CHECK(g_pin_mode[4] == INPUT_PULLUP);
-    CHECK(g_pin_mode[5] == OUTPUT && g_pin_level[5] == LOW);
+    CHECK(g_pin_mode[5] == INPUT_PULLDOWN);
     // a scan of 4 / 5 (found) and 6 / 7 (nothing there): each tried pair back to its free state
     g_pin_mode[4] = g_pin_mode[5] = -1;
     const Bytes scan_found = {1, 4, 0, 5, 0};
     r = call(wire_chosen, WireRvswd::kOpScan, scan_found, out);
     CHECK(ok(r) && out.size() >= 2 && out[0] == 1 && out[1] == 1);
     CHECK(phy2.state == FakePhy::kFree && !chosen.connected);
-    CHECK(g_pin_mode[4] == INPUT_PULLUP && g_pin_mode[5] == OUTPUT && g_pin_level[5] == LOW);
+    CHECK(g_pin_mode[4] == INPUT_PULLUP && g_pin_mode[5] == INPUT_PULLDOWN);
     phy2.present = false;
     CHECK(pins.setIdle(6, PinTable::kIdlePullDown));
     g_pin_mode[6] = -1;
@@ -235,6 +253,43 @@ int main() {
     bad[7] = wire::kTlvAttachPins;   // not critical: ignored; no live connection and the host must name a pair
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable);
+    // count = 0 leaves out every channel with an idle item, input ones too (4, 5, 6 here): only 7 is left, no pair
+    const Bytes scan_all = {0};
+    r = call(wire_chosen, WireRvswd::kOpScan, scan_all, out);
+    CHECK(ok(r) && out.size() >= 2 && out[0] == 0);
+    CHECK(pins.setIdle(6, PinTable::kIdleUnset) && pins.setIdle(5, PinTable::kIdleUnset));
+    phy2.bring_ups = 0;
+    r = call(wire_chosen, WireRvswd::kOpScan, scan_all, out);   // 5, 6, 7: six ordered pairs, none with 4
+    CHECK(ok(r) && out.size() >= 2 && out[0] == 6 && phy2.bring_ups == 6);
+    for (size_t at = 2; at + 10 <= out.size(); at += 10) CHECK(out[at + 2] != 4 && out[at + 4] != 4);
+    CHECK(pins.setIdle(4, PinTable::kIdleUnset));
+  }
+
+  // ---- a fixed pair with an idle item: not in count = 0, not a candidate of an attach without pins ----
+  {
+    static FakePhy phy4;
+    static Ch32Dm dm4(phy4);
+    static PinTable pins4((1ull << 2) | (1ull << 3));
+    static DebugPort fixed4{dm4, 2, 3};
+    fixed4.pins = &pins4;
+    static WireRvswd wire4(fixed4, 3);
+    CHECK(pins4.setIdle(3, PinTable::kIdlePullUp));
+    const Bytes scan_all = {0};
+    Result r = call(wire4, WireRvswd::kOpScan, scan_all, out);
+    CHECK(ok(r) && out.size() >= 2 && out[0] == 0 && phy4.bring_ups == 0);
+    r = call(wire4, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(isSettingsIdle(r, out, 3) && !fixed4.connected);
+    r = call(wire4, WireRvswd::kOpAttach, attachRequest(0, 2, 3), out);   // named, an input idle: accepted
+    CHECK(ok(r) && fixed4.connected);
+    r = call(wire4, WireRvswd::kOpScan, scan_all, out);                   // the live pair is listed
+    CHECK(ok(r) && out[0] == 1 && out[1] == 1);
+    r = call(wire4, WireRvswd::kOpDetach, detachRequest(fixed4.number), out);
+    CHECK(ok(r));
+    CHECK(pins4.setIdle(3, PinTable::kIdleOutputHigh));
+    r = call(wire4, WireRvswd::kOpAttach, attachRequest(0, 2, 3), out);   // named, an output idle: refused
+    CHECK(isSettingsIdle(r, out, 3));
+    // a slot's own attach on that pair (usePair) does not drive it either
+    CHECK(!usePair(fixed4, 2, 3));
   }
 
   // ---- scan: the bring-up, no write check, nothing written through the link; attach(halt): DMSTATUS after the halt ----

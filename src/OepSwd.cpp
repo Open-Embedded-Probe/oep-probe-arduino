@@ -3,7 +3,7 @@
 
 #include "OepSwd.h"
 
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD)
 
 #include "OepSwdFrame.h"
 
@@ -58,6 +58,15 @@ bool WireSwd::allowed(uint16_t swdio, uint16_t swclk) const {
 uint16_t WireSwd::disabledOf(uint16_t swdio, uint16_t swclk) const {
   if (!port_.pins) return 0xffff;
   return port_.pins->disabled(swdio) ? swdio : port_.pins->disabled(swclk) ? swclk : 0xffff;
+}
+
+uint16_t WireSwd::idleOf(uint16_t swdio, uint16_t swclk, bool outputs) const {
+  if (!port_.pins) return 0xffff;
+  auto has = [&](uint16_t c) {
+    const uint8_t mode = port_.pins->idle(c);
+    return outputs ? mode == PinTable::kIdleOutputLow || mode == PinTable::kIdleOutputHigh : mode != PinTable::kIdleUnset;
+  };
+  return has(swdio) ? swdio : has(swclk) ? swclk : 0xffff;
 }
 
 bool WireSwd::free(uint16_t swdio, uint16_t swclk) const {
@@ -167,6 +176,9 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
         if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
+        const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5, holder_kind 7 (oep-if-debug §1)
+        if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
+                                                reg::core::kHolderKindSettingsIdle);
         if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))
           return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
       }
@@ -207,13 +219,17 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (count) {
         for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
       } else if (port_.connected || !port_.pin_choice) {   // the count-0 list: the live pair, or the fixed one
-        if (skip == 0 && disabledOf(port_.swdio, port_.swclk) == 0xffff) tryPair(port_.swdio, port_.swclk);
-      } else {                                            // swdio ascending, then swclk; held and disabled pairs left out
+        // a fixed pair with an idle item on a channel is not in the list (oep-if-debug §1); the live pair is
+        if (skip == 0 && disabledOf(port_.swdio, port_.swclk) == 0xffff &&
+            (port_.connected || idleOf(port_.swdio, port_.swclk, false) == 0xffff))
+          tryPair(port_.swdio, port_.swclk);
+      } else {                                            // swdio ascending, then swclk; held, disabled, idle items left out
         uint32_t index = 0;
         bool more = true;
         for (uint16_t d = 0; d < 64; ++d)
           for (uint16_t c = 0; c < 64; ++c)
-            if (more && tried < 255 && allowed(d, c) && free(d, c) && index++ >= skip) more = tryPair(d, c);
+            if (more && tried < 255 && allowed(d, c) && free(d, c) && idleOf(d, c, false) == 0xffff && index++ >= skip)
+              more = tryPair(d, c);
       }
       out[0] = tried;
       out[1] = found;
@@ -255,6 +271,10 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           const uint16_t off = port_.connected ? 0xffff : disabledOf(port_.swdio, port_.swclk);
           if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
+          // the fixed pair with an idle item is not a candidate (oep-if-debug §1): none left
+          const uint16_t idle = port_.connected ? 0xffff : idleOf(port_.swdio, port_.swclk, false);
+          if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
+                                                  reg::core::kHolderKindSettingsIdle);
         } else {
           if (plen != 4) return rejected(kRejectMalformed);
           const uint16_t d = getU16(pins), c = getU16(pins + 2);
@@ -262,6 +282,9 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
           if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);
+          const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5, holder_kind 7
+          if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
+                                                  reg::core::kHolderKindSettingsIdle);
           if (!free(d, c) || (port_.connected && (d != port_.swdio || c != port_.swclk)))   // held, or no seat
             return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
           if (!move(d, c)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);

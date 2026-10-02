@@ -5,7 +5,8 @@
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, the I2C one with a fake controller), of the pin table's idle
 # states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
 # unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the RVSWD PHY's attach on a
-# simulated target (what is written before the speed is verified, the checks, the budget): g++ and a shim.
+# simulated target (what is written before the speed is verified, the checks, the budget), and of the SWD wire on a
+# simulated SWD target (idle items, wire loss, retries): g++ and a shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 src=$here/../../src
@@ -38,6 +39,9 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RVSWD -I"$here/shim" -I"$src" -o "$out-rvswd" \
   "$here/test_rvswd_phy.cpp" "$src/OepRvswdPhy.cpp"
 "$out-rvswd"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWD -I"$here/shim" -I"$src" -o "$out-swd" \
+  "$here/test_swd.cpp" "$src/OepSwd.cpp" "$src/OepFrame.cpp"
+"$out-swd"
 # A platform without a chip number does not build without OEP_UNIT_ID, nor with one outside a-z 0-9 - (core §7.5).
 for bad in -DOEP_HOST_NO_UNIT_ID "-DOEP_UNIT_ID=\"Host\"" "-DOEP_UNIT_ID=\"\""; do
   if g++ -std=gnu++17 -fsyntax-only "$bad" -I"$here/shim" -I"$src" "$here/test_unit_id.cpp" 2>/dev/null; then
