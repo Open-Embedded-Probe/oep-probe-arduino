@@ -25,8 +25,10 @@ typedef void (*gpio_isr_t)(void *arg);
 struct gpio_dev_t {};
 inline gpio_dev_t GPIO;
 
+inline int g_fake_core = 1;   // the core the code runs on (loop(): core 1; esp_ipc.h moves it)
 struct FakeGpio {
   bool service = false;
+  int service_core = -1;      // where the ISR service was installed: its handlers run there
   int level[64] = {};
   bool oe_by_gpio[64] = {};   // false: the peripheral routed to the pin enables its output
   bool enable[64] = {};       // the GPIO enable bit
@@ -39,6 +41,7 @@ inline FakeGpio g_fake_gpio;
 inline esp_err_t gpio_install_isr_service(int) {
   if (g_fake_gpio.service) return ESP_ERR_INVALID_STATE;
   g_fake_gpio.service = true;
+  g_fake_gpio.service_core = g_fake_core;
   return ESP_OK;
 }
 inline esp_err_t gpio_set_intr_type(gpio_num_t pin, gpio_int_type_t type) { g_fake_gpio.intr[pin] = type; return ESP_OK; }

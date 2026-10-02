@@ -63,6 +63,13 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagFeatures, 1);   // bit0 LSB first
   w.u8(kTagImplementation, 2);   // a dedicated peripheral
   w.u8(reg::fixture_spi_target::kTlvDescribeQueueDepth, kQueueDepth);
+#if defined(OEP_SPI_MISO_GATE)
+  // cs_setup_ns (u32): how long after CS falls MISO may still be undriven - the gate's worst case (kCsSetupNs).
+  // TODO(registry): oep-spec adds describe cs_setup_ns = 0x43 to oep.fixture.spi-target; use
+  // reg::fixture_spi_target::kTlvDescribeCsSetupNs once src/OepRegistry.h is synced with it.
+  constexpr uint8_t kTlvDescribeCsSetupNs = 0x43;
+  w.u32(kTlvDescribeCsSetupNs, kCsSetupNs);
+#endif
   return w.ok() ? w.length() : 0;
 }
 
@@ -120,17 +127,42 @@ void IRAM_ATTR P4SpiTarget::onCs(void *arg) {
   else gpio_ll_output_enable(&GPIO, self->miso_);
 }
 
-bool P4SpiTarget::gateBegin() {
+// On kGateCore, in the IPC task: the ISR service installed there (so the GPIO interrupts it enables go to that core and
+// its handlers run there), the CS handler added and MISO set from CS once - inside a critical section, so no CS edge's
+// handler on this core falls between the look at CS and the output enable it sets.
+void P4SpiTarget::gateInstall(void *arg) {
+  P4SpiTarget *self = static_cast<P4SpiTarget *>(arg);
+  self->gate_ok_ = false;
   const esp_err_t service = gpio_install_isr_service(ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3);
-  if (service != ESP_OK && service != ESP_ERR_INVALID_STATE) return false;   // INVALID_STATE: already installed
+  if (service != ESP_OK && service != ESP_ERR_INVALID_STATE) return;   // INVALID_STATE: already installed
+  portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+  portENTER_CRITICAL(&mux);
+  if (gpio_isr_handler_add(static_cast<gpio_num_t>(self->cs_), onCs, self) == ESP_OK) {
+    gpio_set_intr_type(static_cast<gpio_num_t>(self->cs_), GPIO_INTR_ANYEDGE);
+    onCs(self);
+    self->gate_ok_ = true;
+  }
+  portEXIT_CRITICAL(&mux);
+}
+
+// On kGateCore: the handler goes and MISO is left undriven, with no handler on this core in between to drive it again.
+void P4SpiTarget::gateRemove(void *arg) {
+  P4SpiTarget *self = static_cast<P4SpiTarget *>(arg);
+  portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+  portENTER_CRITICAL(&mux);
+  gpio_set_intr_type(static_cast<gpio_num_t>(self->cs_), GPIO_INTR_DISABLE);
+  gpio_isr_handler_remove(static_cast<gpio_num_t>(self->cs_));
+  gpio_ll_output_disable(&GPIO, self->miso_);
+  portEXIT_CRITICAL(&mux);
+}
+
+bool P4SpiTarget::gateBegin() {
+  gpio_ll_output_disable(&GPIO, miso_);   // undriven until the handler looks at CS
   gpio_ll_set_output_enable_ctrl(&GPIO, static_cast<uint8_t>(miso_), false, false);
-  onCs(this);
-  if (gpio_isr_handler_add(static_cast<gpio_num_t>(cs_), onCs, this) != ESP_OK) {
+  if (esp_ipc_call_blocking(kGateCore, gateInstall, this) != ESP_OK || !gate_ok_) {
     gpio_ll_output_disable(&GPIO, miso_);
     return false;
   }
-  gpio_set_intr_type(static_cast<gpio_num_t>(cs_), GPIO_INTR_ANYEDGE);
-  onCs(this);   // an edge between the first look and the handler going in
   gated_ = true;
   return true;
 }
@@ -138,8 +170,7 @@ bool P4SpiTarget::gateBegin() {
 // Before the driver goes: MISO stays off from here; spi_slave_free and the pin table's release put the pad to idle.
 void P4SpiTarget::gateEnd() {
   if (!gated_) return;
-  gpio_set_intr_type(static_cast<gpio_num_t>(cs_), GPIO_INTR_DISABLE);
-  gpio_isr_handler_remove(static_cast<gpio_num_t>(cs_));
+  esp_ipc_call_blocking(kGateCore, gateRemove, this);
   gpio_ll_output_disable(&GPIO, miso_);
   gated_ = false;
 }

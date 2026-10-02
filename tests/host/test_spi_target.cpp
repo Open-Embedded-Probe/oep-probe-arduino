@@ -257,6 +257,19 @@ int main() {
     CHECK(t.planApply(roles, 4));
   }
 
+  // the CS handler runs on core 0, not on loop()'s core 1 that the SWIO frames mask; describe declares cs_setup_ns
+  // (tag 0x43, u32): how long MISO may stay undriven after CS falls
+  {
+    CHECK(g_fake_gpio.service && g_fake_gpio.service_core == 0);   // 0.0.28: installed from loop(), core 1
+    uint8_t d[64];
+    const size_t n = t.describe(d, sizeof d);
+    bool found = false;
+    for (size_t at = 0; at + 2 <= n; at += 2u + d[at + 1])
+      if (d[at] == 0x43 && d[at + 1] == 4)
+        found = (d[at + 2] | d[at + 3] << 8 | d[at + 4] << 16 | uint32_t(d[at + 5]) << 24) == P4SpiTarget::kCsSetupNs;
+    CHECK(found && P4SpiTarget::kCsSetupNs == 10000);
+  }
+
   // releasing the plan, then a new one: the state right after describe (state 0, mode and bit_order 0, no counts)
   t.planRelease();
   CHECK(t.planCheck(roles, 4) == 0);

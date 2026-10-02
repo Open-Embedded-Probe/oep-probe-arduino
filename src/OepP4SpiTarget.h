@@ -35,9 +35,18 @@
 // that drives the line while it is not selected fights any other device on it, so there the pad's output enable is taken
 // from the slave and follows CS (a CS edge interrupt): on while CS is low, off while it is high. The fake spi_slave
 // models the classic, so the host tests run with the gate.
+// The gate only switches the pad's output enable; the pad's value stays the slave's MISO signal throughout, so once
+// enabled after CS fell it carries what the slave shifts - nothing the gate holds of its own. Its handler runs on core 0
+// (kGateCore): the SWIO wire's frames run in loop() on core 1 with that core's interrupts masked for up to about 45 us
+// each, and a handler there waited them out. The delay from CS falling to MISO driven - the time of one level-3 GPIO
+// interrupt on a core that is not masked - is declared as describe cs_setup_ns (kCsSetupNs): during it MISO is
+// undriven. Not reachable in software below about 1 us on this chip: the level-5 vector is ESP-IDF's own (xt_highint5,
+// the interrupt watchdog and the cache-lock fix) and the level-4 one the Bluetooth controller's dispatcher, whose C
+// entry alone costs more than the 0.3 us asked for.
 #if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)) || defined(OEP_HOST_FAKE_SPI_SLAVE)
 #define OEP_SPI_MISO_GATE 1
 #include <driver/gpio.h>
+#include <esp_ipc.h>
 #include <hal/gpio_ll.h>
 #endif
 
@@ -98,8 +107,21 @@ class P4SpiTarget final : public Interface {
   bool begin();        // the driver alone
 #endif
 #if defined(OEP_SPI_MISO_GATE)
+ public:
+  // The core the CS handler runs on (not loop()'s, which the SWIO frames mask), and the declared worst-case delay from
+  // CS falling to MISO driven (describe cs_setup_ns): one level-3 GPIO interrupt there, about 1.5 us (1-2 us measured on
+  // the bench with nothing masking the core), plus the longest the core masks level 3 itself - FreeRTOS's and ESP-IDF's
+  // critical sections on core 0, a few us. An estimate from the code, to be measured on the bench. Not covered: a logic
+  // capture of the core-0 sampler running at the same time (it masks core 0 for its whole window, up to 164 ms).
+  static constexpr uint32_t kGateCore = 0;
+  static constexpr uint32_t kCsSetupNs = 10000;
+
+ private:
   bool gated_ = false;
   static void onCs(void *self);   // a CS edge, in the GPIO interrupt: MISO's output enable = CS low
+  static void gateInstall(void *self);   // on kGateCore (esp_ipc): the handler, and MISO set from CS at once
+  static void gateRemove(void *self);    // on kGateCore: the handler out, MISO undriven
+  bool gate_ok_ = false;
   bool gateBegin();
   void gateEnd();
 #endif
