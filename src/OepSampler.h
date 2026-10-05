@@ -44,6 +44,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   // its unavailable plans are a role twice, more roles than channels, a role skipped: the roles' count limit
   uint8_t planRefusalCause() const override { return reg::core::kUnavailableCauseLimit; }

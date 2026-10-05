@@ -101,6 +101,10 @@ class Endpoint {
   // An interface, numbered fn 1, 2, ... in the order added. The list stays the same for a boot (core §7.2): every add
   // comes before the first poll(), and one after it is refused (false).
   bool add(Interface &interface);
+  bool anyPlanRoles() const {
+    for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->planRoles()) return true;
+    return false;
+  }
   // The plan (oep-core §8, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
   // a replacement of the fns listed that is all or nothing and outlives sessions (0: applied; else the reject reason,
   // with the plans before it applied again). A listed fn with no role is released.

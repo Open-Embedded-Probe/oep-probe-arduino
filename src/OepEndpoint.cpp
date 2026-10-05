@@ -547,6 +547,9 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
     case kOpKeepalive:
     case kOpPlanApply:
     case kOpPlanRelease: {
+      // plan_apply / plan_release are ops of a probe one of whose interfaces has plan roles (core §1.2, §12):
+      // unknown_operation otherwise, before the session is looked at (order 1)
+      if ((op == kOpPlanApply || op == kOpPlanRelease) && !anyPlanRoles()) return rejected(kRejectUnknownOperation);
       const Result check = checkSession(has_session, session, out, capacity);
       if (refused(check)) return check;
       if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
@@ -730,24 +733,33 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
 // an unknown non-critical one is ignored and listed. A session's plan: an explicit end keeps it, a lapse or a takeover
 // releases it; a plan set through oep.probe.config (replacePlan, persistent) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  // core §4.3's order over the whole request: its form (order 5: every role_assignment 5 bytes, fn 0 malformed as §8's
+  // table says, at least one), then at the end of order 5 the fns named inside it (unknown_function), then an unknown
+  // critical tag (unsupported, order 6), then the count against plan_roles (unavailable cause 2).
   static const uint8_t kKnown[] = {kTagRoleAssignment};
   Tail tail;
-  const Result parsed = tail.parse(payload, length, kKnown, out, capacity);
+  Result unknown_critical;
+  const Result parsed = tail.parse(payload, length, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
-  RoleAssignment roles[kMaxRoles];
-  size_t count = 0, at = 0;
+  size_t total = 0, at = 0;
   uint8_t raw = 0;
   size_t len = 0;
   const uint8_t *v = nullptr;
   while (tail.next(at, raw, v, len)) {
     if ((raw & ~kTagCritical) != (kTagRoleAssignment & ~kTagCritical)) continue;
-    if (len != 5) return rejected(kRejectMalformed);
-    if (count >= kMaxRoles) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // over plan_roles (core §8)
-    roles[count] = {getU16(v), v[2], getU16(v + 3)};
-    if (roles[count].function == 0 || roles[count].function > count_) return rejected(kRejectUnknownFunction);
-    ++count;
+    if (len != 5 || getU16(v) == 0) return rejected(kRejectMalformed);
+    ++total;
   }
-  if (!count) return rejected(kRejectMalformed);
+  if (!total) return rejected(kRejectMalformed);
+  for (at = 0; tail.next(at, raw, v, len);)
+    if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical) && getU16(v) > count_)
+      return rejected(kRejectUnknownFunction);
+  if (refused(unknown_critical)) return unknown_critical;
+  if (total > kMaxRoles) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // over plan_roles (core §8)
+  RoleAssignment roles[kMaxRoles];
+  size_t count = 0;
+  for (at = 0; tail.next(at, raw, v, len);)
+    if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical)) roles[count++] = {getU16(v), v[2], getU16(v + 3)};
   uint16_t fns[kMaxInterfaces];
   size_t nfns = 0;
   for (size_t r = 0; r < count; ++r) {
@@ -994,7 +1006,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
       w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
     }
     if (discoverable_) w.u8(reg::core::kTlvDescribeDiscoverable, 1);
-    w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);
+    if (anyPlanRoles()) w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);   // no plan ops, no plan to count
     w.u32(reg::core::kTlvDescribeMaxOpMs, kMaxOpMs);
     if (port_speed_) w.u8(reg::core::kTlvDescribePortSpeed, 1);   // the optional port_speed is on (core §3.5)
     tlv = scratch_;

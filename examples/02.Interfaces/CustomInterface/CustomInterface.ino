@@ -61,6 +61,7 @@ class Blink final : public oep::Interface {
   // The plan (core §8): check without changing anything, then take the pin; release gives it back. A role or channel
   // this interface does not declare is unsupported; a declared channel something else holds is unavailable. Taking the
   // pin changes nothing on it (an output idle keeps driving): the first set makes it this interface's output.
+  bool planRoles() const override { return true; }   // its line is a plan role (core §1.2, §8)
   uint8_t planCheck(const oep::RoleAssignment *roles, size_t count) override {
     if (count != 1) return oep::kRejectMalformed;
     if (roles[0].role != kRoleLine || !pins_.allowed(roles[0].channel)) return oep::kRejectUnsupported;

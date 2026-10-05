@@ -316,10 +316,11 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       if (len > after_lock && (v[after_lock] > cfg::kSlotBootResetRetryWithReset ||
                                (v[after_lock] == cfg::kSlotBootResetRetryWithReset && attach == cfg::kSlotAttachHost)))
         return rejected(kRejectMalformed);
+      // the form is right: the fn it names (core §4.3, the end of order 5), then what this probe cannot take (order 6)
+      if (!endpoint_.interfaceAt(wire_fn)) return rejected(kRejectUnknownFunction);
       if (undefined) return unsupportedTag(out, capacity, raw);
       // a scheme these wires do not read, defined (targetsel) or not
       if (lock_len && lock[0] != reg::common::kTargetIdSchemeWchDmi7f) return unsupportedTag(out, capacity, raw);
-      if (!endpoint_.interfaceAt(wire_fn)) return rejected(kRejectUnknownFunction);
       int place = -1;
       for (size_t k = 0; k < place_count_; ++k) if (places_[k].wire_fn == wire_fn) place = static_cast<int>(k);
       if (place < 0) return unsupportedTag(out, capacity, raw);                                  // a wire without a target id scheme (swd), or not a wire
@@ -332,25 +333,30 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       return completed();
     }
     case cfg::kTlvItemBind: {
+      // core §4.3's order: the form (every element there, a manual selection inside the list), the fns named
+      // (unknown_function), what this probe cannot take (unsupported), the count (unavailable cause 2)
       if (len < 4 || v[3] < 1) return rejected(kRejectMalformed);
-      if (v[3] > Binds::kMaxStreams) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
-      for (uint8_t k = 0; k < v[3]; ++k)   // the form first: every element there (malformed before unsupported)
+      for (uint8_t k = 0; k < v[3]; ++k)
         if (!bindStreamAt(v, len, k)) return rejected(kRejectMalformed);
+      if (v[1] == Binds::kManual && v[2] >= v[3]) return rejected(kRejectMalformed);
+      for (uint8_t k = 0; k < v[3]; ++k) {
+        const size_t at = bindStreamAt(v, len, k);
+        if (v[at] == Binds::kFixtureUart && !endpoint_.interfaceAt(getU16(v + at + 1))) return rejected(kRejectUnknownFunction);
+      }
       for (uint8_t k = 0; k < v[3]; ++k) {
         const size_t at = bindStreamAt(v, len, k);
         // a stream kind a later revision may define: unsupported with the item's tag (C-02)
         if (v[at] != Binds::kSlotConsole && v[at] != Binds::kFixtureUart) return unsupportedTag(out, capacity, raw);
         if (v[at] == Binds::kFixtureUart) {
           const uint16_t fn = getU16(v + at + 1);
-          if (!endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
           bool is_uart = false;
           for (size_t i = 0; i < uart_count_; ++i) is_uart |= uarts_[i].fn == fn;
           if (!is_uart) return unsupportedTag(out, capacity, raw);
         }
       }
       if (v[1] > Binds::kMixed) return unsupportedTag(out, capacity, raw);
-      if (v[1] == Binds::kManual && v[2] >= v[3]) return rejected(kRejectMalformed);
       if (v[0] >= Binds::kMaxPorts || !endpoint_.isSerialPort(v[0])) return unsupportedTag(out, capacity, raw);
+      if (v[3] > Binds::kMaxStreams) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
       return completed();
     }
     case cfg::kTlvItemUart: {
@@ -619,41 +625,67 @@ Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, siz
   uint16_t plan_fns[16];
   size_t plan_fn_count = 0;
   uint8_t plan_raw = cfg::kTlvItemPlan;   // a plan item's tag as received, for a plan the interface cannot take
-  // first pass: every item's shape and what this probe has; the same key twice is malformed
+  // first pass: every item's form and what this probe has, refused in core §4.3's order over the whole request (C-21):
+  // malformed anywhere (an item's form, the same key twice) first, then an fn named inside an item that does not
+  // exist (unknown_function, the end of order 5), then the first item this probe cannot take (unsupported, its tag as
+  // received), then the first over a count (unavailable cause 2). An item's refusal is worked out again when it is the
+  // one answered (its payload was written over by the items after it).
   size_t at = 0, vlen = 0;
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
+  bool unknown_fn = false, over_plans = false;
+  size_t unsupported_at = SIZE_MAX, unavailable_at = SIZE_MAX;
+  auto one = [&](uint8_t item_raw, const uint8_t *item_v, size_t item_len) {
+    const uint8_t t = item_raw & ~kTagCritical;
+    // an item this probe does not declare (describe items): unsupported with its tag as received (§1, core §4.3)
+    if (!keyLength(t) || !declares(t)) return unsupportedTag(out, capacity, item_raw);
+    return checkItem(item_raw, item_v, item_len, out, capacity);
+  };
   while (at < length) {
     size_t next = 0;
     if (!tlvAt(payload, length, at, tag, v, vlen, next)) return rejected(kRejectMalformed);
     const uint8_t raw = tag;
     tag &= ~kTagCritical;
     if (tag == kTagValue || tag == kTagIgnored || tag == kTagInvalid) return rejected(kRejectMalformed);
-    // an item this probe does not declare (describe items): unsupported with its tag as received (§1, core §4.3)
-    if (!keyLength(tag) || !declares(tag)) return unsupportedTag(out, capacity, raw);
-    const Result r = checkItem(raw, v, vlen, out, capacity);
-    if (refused(r)) return r;
-    const size_t klen = keyLength(tag);
-    size_t at2 = 0, vlen2 = 0;
-    uint8_t tag2 = 0;
-    const uint8_t *v2 = nullptr;
-    while (at2 < at) {   // the items before this one: the same key twice?
-      size_t next2 = 0;
-      tlvAt(payload, length, at2, tag2, v2, vlen2, next2);
-      at2 = next2;
-      if ((tag2 & ~kTagCritical) == tag && memcmp(v, v2, klen) == 0) return rejected(kRejectMalformed);
+    const Result r = one(raw, v, vlen);
+    if (r.resolution == kResolutionRejected) {
+      if (r.detail == kRejectMalformed) return r;
+      if (r.detail == kRejectUnknownFunction) unknown_fn = true;
+      else if (r.detail == kRejectUnsupported) { if (unsupported_at == SIZE_MAX) unsupported_at = at; }
+      else if (unavailable_at == SIZE_MAX) unavailable_at = at;
     }
-    if (tag == cfg::kTlvItemPlan) {
+    if (keyLength(tag) && declares(tag)) {
+      const size_t klen = keyLength(tag);
+      size_t at2 = 0, vlen2 = 0;
+      uint8_t tag2 = 0;
+      const uint8_t *v2 = nullptr;
+      while (at2 < at) {   // the items before this one: the same key twice?
+        size_t next2 = 0;
+        tlvAt(payload, length, at2, tag2, v2, vlen2, next2);
+        at2 = next2;
+        if ((tag2 & ~kTagCritical) == tag && vlen2 >= klen && vlen >= klen && memcmp(v, v2, klen) == 0)
+          return rejected(kRejectMalformed);
+      }
+    }
+    if (tag == cfg::kTlvItemPlan && r.resolution == kResolutionCompleted) {
       plan_raw = raw;
       bool listed = false;
       for (size_t k = 0; k < plan_fn_count; ++k) listed |= plan_fns[k] == getU16(v);
       if (!listed) {
-        if (plan_fn_count >= 16) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
-        plan_fns[plan_fn_count++] = getU16(v);
+        if (plan_fn_count >= 16) over_plans = true;
+        else plan_fns[plan_fn_count++] = getU16(v);
       }
     }
     at = next;
   }
+  if (unknown_fn) return rejected(kRejectUnknownFunction);
+  if (unsupported_at != SIZE_MAX || (unavailable_at != SIZE_MAX && !over_plans)) {
+    const size_t item = unsupported_at != SIZE_MAX ? unsupported_at : unavailable_at;
+    size_t next = 0;
+    tlvAt(payload, length, item, tag, v, vlen, next);
+    return one(tag, v, vlen);
+  }
+  if (over_plans) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
   // second pass: the keys replaced come out (a plan's fn: its whole plan), the items go in
   for (size_t k = 0; k < plan_fn_count; ++k) {
     uint8_t fn[2];
@@ -674,19 +706,23 @@ Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, s
   if (length < 1) return rejected(kRejectMalformed);
   const uint8_t n = payload[0];
   size_t at = 1;
-  for (uint8_t i = 0; i < n; ++i) {   // the shape first
+  int undeclared = -1;   // the first key whose tag this probe does not declare
+  for (uint8_t i = 0; i < n; ++i) {   // the shape of every key first (core §4.3: malformed before unsupported)
     if (at >= length || at + 1u + payload[at] > length || payload[at] < 1) return rejected(kRejectMalformed);
     // the tag is the item's tag itself (no critical bit here): one this probe does not declare (describe items) is
     // unsupported with the tag as received (§2, core §4.3)
     const uint8_t tag = payload[at + 1];
     const size_t klen = tag == cfg::kTlvItemPlan ? 2 : keyLength(tag);
-    if (!klen || !declares(tag)) return unsupportedTag(out, capacity, tag);
-    if (payload[at] < 1u + klen) return rejected(kRejectMalformed);
+    if (!klen || !declares(tag)) { if (undeclared < 0) undeclared = tag; }
+    else if (payload[at] < 1u + klen) return rejected(kRejectMalformed);
     at += 1u + payload[at];
   }
   Tail tail;
-  const Result parsed = tail.parse(payload + at, length - at, out, capacity);
+  Result unknown_critical;
+  const Result parsed = tail.parse(payload + at, length - at, nullptr, 0, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
+  if (undeclared >= 0) return unsupportedTag(out, capacity, static_cast<uint8_t>(undeclared));
+  if (refused(unknown_critical)) return unknown_critical;
   static uint8_t candidate[kMaxItems];
   memcpy(candidate, items_, items_length_);
   size_t clen = items_length_;

@@ -292,6 +292,7 @@ class PlanSink final : public Interface {
   const char *name() const override { return "io.github.test.plan"; }
   uint16_t instance() const override { return 0; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
   bool planApply(const RoleAssignment *, size_t) override { return true; }
 };
@@ -526,6 +527,7 @@ class PlanUndeclared final : public Interface {
   const char *name() const override { return "io.github.test.undeclared"; }
   uint16_t instance() const override { return 0; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return kRejectUnsupported; }
 };
 
@@ -556,6 +558,7 @@ class PlanAlone final : public Interface {
   const char *name() const override { return "io.github.test.alone"; }
   uint16_t instance() const override { return 0; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
   bool planApply(const RoleAssignment *, size_t) override { return true; }
   bool planShares() const override { return false; }
@@ -1039,7 +1042,37 @@ static void testConfirmBoundsAndFixedList() {
   CHECK(Endpoint::kMaxOpMs >= 1 && Endpoint::kMaxOpMs <= reg::kLimitMaxOpMsMax);
 }
 
+// core §4.3 (C-21): plan_apply's form over the whole request comes first (order 5: a role_assignment of another length,
+// fn 0 - §8's table says malformed, it was unknown_function), then at the end of order 5 the fns named inside it
+// (unknown_function), then an unknown critical tag (unsupported, order 6). core §1.2: a probe none of whose interfaces
+// has plan roles answers plan_apply / plan_release with unknown_operation (before the session, order 1) and
+// declares no plan_roles; one with them does.
+static void testPlanApplyOrder() {
+  Bulk b;
+  PlanSink sink;
+  b.ep.add(sink);   // fn 1
+  b.send(request(1, 0, 0x10, openPayload(9, 3000)));
+  auto reject = [](const Bytes &r) { return r.size() >= 2 && r[0] == kResolutionRejected ? r[1] : 0xff; };
+  CHECK(reject(b.send(request(2, 0, 0x04, {0x90, 5, 0, 0, 0, 3, 0}, true, 9))) == kRejectMalformed);   // fn 0
+  CHECK(reject(b.send(request(3, 0, 0x04, {0x90, 5, 7, 0, 0, 3, 0, 0x90, 4, 1, 0, 0, 3}, true, 9))) == kRejectMalformed);
+  CHECK(reject(b.send(request(4, 0, 0x04, {0xB0, 0, 0x90, 5, 7, 0, 0, 3, 0}, true, 9))) == kRejectUnknownFunction);
+  const Bytes r = b.send(request(5, 0, 0x04, {0xB0, 0, 0x90, 5, 1, 0, 0, 3, 0}, true, 9));
+  CHECK(r.size() == 3 && reject(r) == kRejectUnsupported && r[2] == 0xB0);
+  CHECK(reject(b.send(request(6, 0, 0x04, {0x90, 5, 1, 0, 0, 3, 0}, true, 9))) == 0xff);   // fine
+  Bytes d = b.send(request(7, 0, reg::core::kOpDescribe, {0, 0, 0, 0}));
+  const Bytes roles = {reg::core::kTlvDescribePlanRoles, 4};
+  CHECK(std::search(d.begin(), d.end(), roles.begin(), roles.end()) != d.end());
+  Bulk none;   // no interface with plan roles
+  FailsEarly other;
+  none.ep.add(other);
+  CHECK(reject(none.send(request(1, 0, 0x04, {0x90, 5, 1, 0, 0, 3, 0}))) == kRejectUnknownOperation);
+  CHECK(reject(none.send(request(2, 0, 0x05, {0}))) == kRejectUnknownOperation);
+  d = none.send(request(3, 0, reg::core::kOpDescribe, {0, 0, 0, 0}));
+  CHECK(!d.empty() && d[0] == kResolutionCompleted && std::search(d.begin(), d.end(), roles.begin(), roles.end()) == d.end());
+}
+
 int main() {
+  testPlanApplyOrder();
   testConfirmBoundsAndFixedList();
   testBootIdAndClock();
   testBlockLength();

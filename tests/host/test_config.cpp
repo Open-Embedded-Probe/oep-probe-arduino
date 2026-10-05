@@ -135,6 +135,26 @@ int main() {
   const Bytes cut = {bind_raw, 6, 0, 0, 0, 1, 3, 3};   // the element's 3 bytes are not all there
   CHECK(malformed(set(config, cut, out)));
 
+  // core §4.3 (C-21) over the whole set: an earlier item's unknown_function or unsupported does not win over a later
+  // item's malformed; an fn named inside an item that does not exist (unknown_function) comes before another item's
+  // unsupported, which carries that item's tag as received
+  auto concat = [](Bytes a, const Bytes &b) { a.insert(a.end(), b.begin(), b.end()); return a; };
+  const uint8_t plan_raw = cfg::kTlvItemPlan | kTagCritical;
+  const Bytes plan_fn9 = {plan_raw, 5, 9, 0, 0, 1, 0};   // fn 9: no such fn
+  const Bytes plan_fn0 = {plan_raw, 5, 0, 0, 0, 1, 0};   // fn 0: malformed
+  CHECK(malformed(set(config, concat(plan_fn9, plan_fn0), out)));
+  CHECK(malformed(set(config, concat(slotItem(2, 0), plan_fn0), out)));   // an unsupported slot before it
+  CHECK(malformed(set(config, concat(plan_fn9, slotItem(0, 0, lock_short)), out)));
+  Result r = set(config, concat(slotItem(2, 0), plan_fn9), out);
+  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnknownFunction);
+  CHECK(unsupportedWith(set(config, concat(slotItem(2, 0), Bytes{0xB5, 0}), out), out, slot_raw));
+  CHECK(unsupportedWith(set(config, concat(Bytes{0xB5, 0}, slotItem(2, 0)), out), out, 0xB5));   // the first one
+  // a slot naming a wire fn that does not exist: unknown_function before its undefined attach (unsupported)
+  Bytes slot_fn9 = slotItem(2, 0);
+  slot_fn9[2 + 1] = 9;
+  r = set(config, slot_fn9, out);
+  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnknownFunction);
+
   printf("config: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

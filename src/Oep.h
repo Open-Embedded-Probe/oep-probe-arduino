@@ -239,7 +239,11 @@ class Tail {
  public:
   static constexpr size_t kMaxIgnored = RequestIgnored::kMax;
 
-  Result parse(const uint8_t *p, size_t n, const uint8_t *known, size_t known_count, uint8_t *out, size_t capacity) {
+  // The whole tail's form is checked before any unknown critical tag is refused (core §4.3: malformed, order 5, comes
+  // before unsupported, order 6). deferred: the unsupported refusal is not returned but stored there (the first one;
+  // completed when there is none), for a handler with checks of its own that come first (plan_apply's fns).
+  Result parse(const uint8_t *p, size_t n, const uint8_t *known, size_t known_count, uint8_t *out, size_t capacity,
+               Result *deferred = nullptr) {
     p_ = p;
     n_ = n;
     g_request_ignored.reset();
@@ -250,11 +254,18 @@ class Tail {
     while (at < n) {
       if (!step(at, raw, value, len)) return rejected(kRejectMalformed);
       if (raw == kTagInvalid || raw == kTagIgnored || raw == kTagValue) return rejected(kRejectMalformed);   // results only / never
+    }
+    if (deferred) *deferred = completed();
+    for (at = 0; at < n && step(at, raw, value, len);) {
       const uint8_t tag = raw & ~kTagCritical;
       bool is_known = false;
       for (size_t i = 0; i < known_count && !is_known; ++i) is_known = (known[i] & ~kTagCritical) == tag;
       if (is_known) continue;
-      if (raw & kTagCritical) return unsupportedTag(out, capacity, raw);
+      if (raw & kTagCritical) {
+        if (!deferred) return unsupportedTag(out, capacity, raw);
+        if (deferred->resolution == kResolutionCompleted) *deferred = unsupportedTag(out, capacity, raw);
+        continue;
+      }
       ignore(tag);
     }
     return completed();
@@ -263,8 +274,9 @@ class Tail {
     return parse(p, n, nullptr, 0, out, capacity);
   }
   template <size_t N>
-  Result parse(const uint8_t *p, size_t n, const uint8_t (&known)[N], uint8_t *out, size_t capacity) {
-    return parse(p, n, known, N, out, capacity);
+  Result parse(const uint8_t *p, size_t n, const uint8_t (&known)[N], uint8_t *out, size_t capacity,
+               Result *deferred = nullptr) {
+    return parse(p, n, known, N, out, capacity, deferred);
   }
 
   // A known tag's value (its last occurrence), nullptr when absent. critical: whether the host marked it.
@@ -466,6 +478,10 @@ class Interface {
   // Operations that change nothing may run without the lock (and without a session id).
   virtual bool lockFree(uint8_t op) const { (void)op; return false; }
   virtual Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) = 0;
+  // Whether this interface has plan roles (core §1.2: roles its document assigns through the plan, §8; the pins a
+  // wire's attach selects by argument are not). A probe none of whose interfaces has any answers plan_apply and
+  // plan_release with unknown_operation. An interface that overrides planCheck / planApply says true.
+  virtual bool planRoles() const { return false; }
   // Pin plan (core plan_apply / plan_release): check without side effects (0 = acceptable, else a
   // reject reason), apply, undo. The plan is probe state: it outlives sessions until released.
   virtual uint8_t planCheck(const RoleAssignment *roles, size_t count) {

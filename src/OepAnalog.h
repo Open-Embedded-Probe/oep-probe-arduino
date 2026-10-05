@@ -62,6 +62,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_analog::kLockFreeOps, op); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   uint8_t planRefusalCause() const override { return refusal_cause_; }   // capturing: 6; the roles' count: 2
   bool planApply(const RoleAssignment *roles, size_t count) override;

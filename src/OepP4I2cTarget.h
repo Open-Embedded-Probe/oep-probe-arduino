@@ -60,6 +60,7 @@ class P4I2cTarget final : public Interface {
   bool lockFree(uint8_t op) const override { return op == kOpStatus; }
   Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   size_t describe(uint8_t *out, size_t capacity) override;
+  bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
