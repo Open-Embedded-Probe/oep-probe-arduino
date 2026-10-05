@@ -17,8 +17,10 @@
 #include "openembeddedprobe_version.h"
 
 #if defined(ARDUINO_ARCH_ESP32)
+#include <esp_random.h>
 #include <esp_timer.h>
 #elif defined(ARDUINO_ARCH_RP2040)
+#include <Arduino.h>
 #include <pico/time.h>
 #else
 #include <Arduino.h>
@@ -89,16 +91,51 @@ inline void putU64(uint8_t *p, uint64_t v) { putU32(p, static_cast<uint32_t>(v))
 // bit n of a registry kLockFreeOps mask = op n needs no lock
 inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> op) & 1); }
 
-// The probe's one clock (core §2.6a): ns since boot, u64, never wrapping. Marks, segments, the heartbeat and the slots'
-// "last tried" all use it; "not yet" is all ones.
+// The probe's one clock (core §2.6a): ns since boot, u64; it does not decrease and does not wrap while the boot_id is
+// the same. Marks, segments, the heartbeat and the slots' "last tried" all use it; "not yet" is all ones.
 constexpr uint64_t kNeverNs = ~uint64_t{0};
+#if !defined(ARDUINO_ARCH_ESP32) && !defined(ARDUINO_ARCH_RP2040)
+// A platform with a 32-bit micros() (it wraps every 71.6 minutes): extended with a count of its wraps. Every read
+// counts one it sees; the endpoint's poll() reads it each pass, far more often than once per wrap.
+struct MicrosExtender {
+  uint32_t last = 0, wraps = 0;
+  uint64_t read(uint32_t us) {
+    if (us < last) ++wraps;
+    last = us;
+    return static_cast<uint64_t>(wraps) << 32 | us;
+  }
+};
+inline MicrosExtender g_micros_extender;
+#endif
 inline uint64_t nowNs() {
 #if defined(ARDUINO_ARCH_ESP32)
-  return static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
+  return static_cast<uint64_t>(esp_timer_get_time()) * 1000u;   // 64-bit
 #elif defined(ARDUINO_ARCH_RP2040)
-  return time_us_64() * 1000u;
+  return time_us_64() * 1000u;                                   // 64-bit
 #else
-  return static_cast<uint64_t>(micros()) * 1000u;
+  return g_micros_extender.read(micros()) * 1000u;
+#endif
+}
+
+// The boot_id (core §6.5), in the order of preference the core gives: a hardware random source where the platform has
+// one (ESP32 esp_random, RP2 hwrand32); elsewhere the count of the free-running microsecond timer when the first
+// message arrives (an external event: the endpoint picks the value then, not at a fixed point of the start-up code),
+// mixed so that nearby counts give unrelated values. Such a probe may repeat a boot_id; the host accepts that.
+inline uint32_t mix32(uint32_t x) {   // MurmurHash3's finaliser
+  x ^= x >> 16;
+  x *= 0x85ebca6bu;
+  x ^= x >> 13;
+  x *= 0xc2b2ae35u;
+  x ^= x >> 16;
+  return x;
+}
+inline uint32_t bootIdSource() {
+#if defined(ARDUINO_ARCH_ESP32)
+  return esp_random();
+#elif defined(ARDUINO_ARCH_RP2040)
+  return rp2040.hwrand32();
+#else
+  return mix32(micros());
 #endif
 }
 

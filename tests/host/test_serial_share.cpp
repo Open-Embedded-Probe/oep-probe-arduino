@@ -979,7 +979,47 @@ static void testBlockLength() {
   CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && r.length == 1 && out[0] == 0x00);
 }
 
+// core §6.5 (C-19): a sketch that sets no boot_id gets one picked when the first message arrives - on a platform with
+// no hardware random source (the host build's), from the timer's count at that moment, so two boots whose first
+// message comes at different times differ; it stays the same for the boot. core §2.6a (C-31): the clock does not
+// decrease or wrap while the boot_id is the same - a 32-bit micros() is extended past its wrap at 71.6 minutes.
+static void testBootIdAndClock() {
+  const Bytes confirm = request(1, 0, 0x01, {'O', 'E', 'P', '?', 1, 1});
+  uint32_t ids[2];
+  for (int boot = 0; boot < 2; ++boot) {
+    Bulk b;
+    g_millis += 1234 + 777 * boot;                  // the first message comes at another time
+    Bytes r = b.send(confirm);
+    CHECK(r.size() == 2 + 17 && r[0] == 1);
+    ids[boot] = getU32(&r[2 + 13]);
+    g_millis += 5000;
+    r = b.send(request(2, 0, 0x01, {'O', 'E', 'P', '?', 1, 1}));
+    CHECK(r.size() == 2 + 17 && getU32(&r[2 + 13]) == ids[boot]);   // fixed for the boot
+  }
+  CHECK(ids[0] != ids[1]);
+  Bulk set;
+  set.ep.setBootId(0);                              // a sketch's own value, 0 included
+  Bytes r = set.send(confirm);
+  CHECK(r.size() == 2 + 17 && getU32(&r[2 + 13]) == 0);
+  // the clock across the 32-bit micros() wrap
+  const uint32_t saved = g_millis;
+  g_millis = 4294967;                               // micros() = 4294967000, 295 ms before it wraps
+  set.ep.poll();
+  const uint64_t before = nowNs();
+  g_millis += 200;
+  set.ep.poll();
+  g_millis += 200;                                  // micros() wrapped
+  set.ep.poll();
+  const uint64_t after = nowNs();
+  CHECK(after > before && after - before == 400000000ull);
+  g_millis += 1000;
+  CHECK(nowNs() > after);                           // further on: still never back
+  g_millis = saved;                                 // a new boot for the tests after this one
+  g_micros_extender = MicrosExtender{};
+}
+
 int main() {
+  testBootIdAndClock();
   testBlockLength();
   testPortSpeed();
   testDisabledChannel();

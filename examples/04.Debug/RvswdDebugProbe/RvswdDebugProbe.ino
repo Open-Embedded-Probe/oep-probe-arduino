@@ -68,7 +68,7 @@ void setup() {
 #if defined(ARDUINO_ARCH_RP2040)
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
 #else
-  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §2.5)
+  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3)
 #if defined(USB_SERIAL_JTAG_CHIP_RST_REG)   // the P4: opening the port must not reset the chip (an S3 has no such bit)
   REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
 #endif
@@ -77,7 +77,6 @@ void setup() {
   Serial.begin(115200);
   phy.begin(kSwdio, kSwclk);   // the wires rest released (Hi-Z) until a host attaches
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(oep::platformRandom32());
   endpoint.add(wire);       // fn 1
   endpoint.add(riscvDm);    // fn 2
   endpoint.add(console);    // fn 3

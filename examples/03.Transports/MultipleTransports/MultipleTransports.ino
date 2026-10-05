@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // One probe, four ways in: an ESP32-P4 answering the same endpoint on four USB transports at once (oep-spec
-// docs/oep-core.ja.md §3, §7.5; probe-development-guide §3.8). A host uses whichever it can open:
+// docs/oep-core.ja.md §3, §7.5; probe-development-guide §8). A host uses whichever it can open:
 //
 //   0 vendor bulk      the HS port, the fastest (libusb)                     OEP only        (the endpoint's own)
 //   1 USB-Serial/JTAG  the P4's built-in port (the upload port)               a serial port   addTransport(Serial)
@@ -15,7 +15,7 @@
 //
 // The HS vendor bulk interface is written directly (build_opt.h: CFG_TUD_VENDOR_TXRX_BUFFERED=0 and friends; compile
 // with --clean after changing it): oep::DirectBulkStream hands whole frames to the USB stack. The HS device says
-// iProduct "OEP ..." (free text; starting "OEP" is a host's temporary clue until the project's VID:PID, host guide §1.7)
+// iProduct "OEP ..." (free text; starting "OEP" is a host's temporary clue until the project's VID:PID, host guide §4)
 // and a serial number of the chip's MAC (the unit_id, how a host finds a probe named by it, core §3.3).
 //
 // One interface, oep.fixture.gpio, so there is something to use; add yours the same way.
@@ -60,7 +60,7 @@ static size_t describeProbe() {
 }
 
 void setup() {
-  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §2.5)
+  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3)
   REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);   // opening the port must not reset
   Serial.setTxTimeoutMs(0);   // a port nobody reads never stops loop()
   Serial.begin(115200);
@@ -85,7 +85,6 @@ void setup() {
   // describe discoverable stays 0: it is 1 only on the project's own USB VID:PID, none listed yet (core §3.3 / §7.5)
 
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(oep::platformRandom32());
   endpoint.add(gpio);
 }
 

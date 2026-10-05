@@ -63,7 +63,6 @@ void setup() {
   const bool ok = usbDevice.begin(config);
   const bool direct = bulk.begin();   // needs the direct build; results and pushes then go through writeDirect()
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(esp_random());
   endpoint.setPushQueue(4096);
   if (direct) endpoint.setDirect(&bulk);
   endpoint.setFlushAfterBurst(true);

@@ -19,7 +19,7 @@ namespace oep {
 namespace {
 
 namespace cap = reg::fixture_logic;
-// configure / query TLVs (oep-spec logic-capture §5.3); bit 7 of the tag = critical
+// configure / query TLVs (oep-spec oep-if-capture §3.3); bit 7 of the tag = critical
 enum : uint8_t { kTagMode = cap::kTlvConfigureMode, kTagRate = cap::kTlvConfigureRate,
                  kTagSamples = cap::kTlvConfigureSamples, kTagSegments = cap::kTlvConfigureSegments,
                  kTagTrigger = cap::kTlvConfigureTrigger, kTagPretrigger = cap::kTlvConfigurePretrigger };

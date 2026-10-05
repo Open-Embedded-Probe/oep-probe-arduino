@@ -3,7 +3,7 @@
 
 // Classic ESP32 (profile esp32), on a board with a USB-UART bridge (DevKitC and the like).
 //
-// Transport: UART0 through the bridge at 115200 (probe guide §3.5; a host may raise it for its session: port_speed,
+// Transport: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
 // below) - the probe's one transport, serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-core §3.4). The bridge's auto-reset
 // circuit resets the ESP32 when the port is opened with DTR / RTS in the wrong order: a host opens it with both on
 // (host guide §1). A UART has no iProduct: a host finds this probe by opening the port and asking (confirm).
@@ -104,7 +104,7 @@ static size_t describeProbe() {
 }
 
 void setup() {
-  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §2.5): UART0 is the transport
+  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3): UART0 is the transport
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(kBootBaud);
@@ -123,7 +123,6 @@ void setup() {
   swio.pins = &pins;
   swio.reset_allowed = kChannels & ~unusable;   // attach's reset TLV: the channel the host names (no default), nobody holding it
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(esp_random());
 #if OEP_PORT_SPEED
   endpoint.setPortSpeed(portSpeed, kBootBaud);
 #endif

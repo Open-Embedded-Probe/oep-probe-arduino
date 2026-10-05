@@ -51,7 +51,7 @@ a CDC port); the others show one.
 
 USB probes say iProduct `OEP probe (...)` and their unit_id as the USB serial number. A host finds a probe you name by
 its unit_id (`usb:<unit_id>`); until the project has a VID:PID of its own, hosts may also try devices whose iProduct
-starts with `OEP`, sending only a confirm first (a temporary clue, oep-spec host guide §1.7).
+starts with `OEP`, sending only a confirm first (a temporary clue, oep-spec host guide §4).
 
 ## 4. Use it
 

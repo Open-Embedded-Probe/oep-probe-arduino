@@ -40,7 +40,9 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   動いている間に変わるものは入れません。
   unit_id は必須です（core §7.5）。ライブラリが固有の番号を知らないチップでは、`-DOEP_UNIT_ID='"..."'`
   （`a-z 0-9 -` で 1〜16 文字、個体ごとに違う値）を与えるまでビルドが止まります。
-- `setBootId(platformRandom32())` を 1 度。host は probe が起動し直したことを知ります。
+- boot_id（core §6.5）は、最初のメッセージが届いたときに endpoint が自分で選びます。プラットフォームにハードウェアの乱数源があれば
+  それ、無ければそのときのタイマーの値です。もっと良い源（不揮発の記憶に保つ起動回数など）を持つスケッチは、`setup()` で
+  `setBootId` で渡します。
 - `loop()` から `poll()`。長く止まりません。インターフェースも止まってはいけません。
 
 ## 3. インターフェース
@@ -152,7 +154,7 @@ class Blink final : public oep::Interface {
 ## 9. USB の名乗り
 
 USB の probe は、`OEP` で始まる iProduct（表示の自由な文字列。プロジェクトの VID:PID ができるまでの host の暫定の手がかり、
-oep-spec host 開発ガイド §1.7）、個体ごとに違う serial number（unit_id。名指した probe を host はこれで探す）、VID:PID を名乗ります。
+oep-spec host 開発ガイド §4）、個体ごとに違う serial number（unit_id。名指した probe を host はこれで探す）、VID:PID を名乗ります。
 VID:PID はボードの既定（ESP32-P4 では `303a:0002`）です。これは仮の USB の ID で、配布には使えません。専用の PID を取得できたら、
 それに切り替える予定です（[PID-USE.ja.md](../../PID-USE.ja.md)）。
 vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /

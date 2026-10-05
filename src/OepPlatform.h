@@ -242,16 +242,10 @@ inline bool describeChip(TlvWriter &w) {
   return n ? w.put(reg::core::kTlvDescribeChip, chip, n) : true;
 }
 
-// A hardware random number (the endpoint's boot id, core §7.1).
-inline uint32_t platformRandom32() {
-#if defined(ARDUINO_ARCH_RP2040)
-  return rp2040.hwrand32();
-#elif defined(ARDUINO_ARCH_ESP32)
-  return esp_random();
-#else
-  return static_cast<uint32_t>(micros());
-#endif
-}
+// A random number: the platform's hardware source (ESP32, RP2). Elsewhere only the microsecond timer's count, which
+// is no boot_id when read at a fixed point of the start-up code (core §6.5): the endpoint picks its boot_id itself
+// (Endpoint::bootId).
+inline uint32_t platformRandom32() { return bootIdSource(); }
 
 // Sizes are hints: a core that cannot resize its buffers keeps its default.
 inline void platformUartBuffers(OepUart &serial, size_t rx, size_t tx) {

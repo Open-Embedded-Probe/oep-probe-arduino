@@ -83,7 +83,6 @@ void setup() {
   phy.begin(kSwdio, kSwclk);
   endpoint.setRawPorts(&binds);       // the serial ports' raw bytes go through the binds
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(oep::platformRandom32());
   endpoint.add(wire);
   endpoint.add(riscvDm);
   endpoint.add(console);

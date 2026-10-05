@@ -40,7 +40,9 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   describe is declarations only (core §7.3): nothing that changes while the probe runs goes in it.
   unit_id is mandatory (core §7.5): on a chip the library has no unique number for, the build stops until you give
   `-DOEP_UNIT_ID='"..."'` (1 to 16 of `a-z 0-9 -`, a different value per unit).
-- `setBootId(platformRandom32())` once: a host sees that the probe restarted.
+- The boot_id (core §6.5): the endpoint picks it itself when the first message arrives - a hardware random source where
+  the platform has one, else the timer's count at that moment. A sketch with a better source (a boot counter it keeps in
+  non-volatile storage) passes it with `setBootId` in `setup()`.
 - `poll()` from `loop()`: it never blocks long. Neither may your interfaces.
 
 ## 3. An interface
@@ -157,7 +159,7 @@ fixture UART and the capture do this.
 ## 9. USB identity
 
 A USB probe says an iProduct starting `OEP` (free text; a host's temporary clue until the project's VID:PID, oep-spec host
-guide §1.7), a serial number unique per unit (the unit_id: how a host finds a probe named by it), and the VID:PID:
+guide §4), a serial number unique per unit (the unit_id: how a host finds a probe named by it), and the VID:PID:
 the board's default (`303a:0002` on the ESP32-P4). That is a temporary USB ID, which may not be used for distribution; when the
 project obtains a PID of its own, the firmware will switch to it ([PID-USE.md](../../PID-USE.md)).
 The vendor bulk interface carries bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45 and a vendor HID says usage page

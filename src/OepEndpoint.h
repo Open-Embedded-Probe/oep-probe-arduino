@@ -115,9 +115,15 @@ class Endpoint {
   uint32_t listHash() const;
   // oep.core's describe: the probe itself, as TLV bytes (kept by the caller). Declarations only (core §7.3).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
-  // A value that changes every boot (a 32-bit random number does; 0 is as good as any other), returned by confirm and
-  // open (core §6.5).
-  void setBootId(uint32_t boot_id) { boot_id_ = boot_id; }
+  // The boot_id returned by confirm, open and the heartbeat (core §6.5): a value that changes every boot. Without a
+  // call the endpoint picks it itself when the first message arrives (bootIdSource: a hardware random source, or on a
+  // platform without one the timer's count at that external event). A sketch with a better source of its own (a
+  // counter it keeps in non-volatile storage) sets it in setup(); 0 is as good as any other value.
+  void setBootId(uint32_t boot_id) { boot_id_ = boot_id; boot_id_set_ = true; }
+  uint32_t bootId() {
+    if (!boot_id_set_) setBootId(bootIdSource());
+    return boot_id_;
+  }
   // The optional port_speed (core §3.5, fn 0 op 0x14): a host raises a UART bridge's baud for its session. Setting a
   // handler turns the feature on (describe port_speed 1, the op taken; without one the op is unknown_operation).
   // fn(port, baud, apply): apply false = the rate the port would run at for `baud` (0: this UART cannot make it, the
@@ -190,6 +196,7 @@ class Endpoint {
   struct PlanRefusal { uint8_t cause; uint16_t channel, holder_fn; uint8_t holder_kind; };
   PlanRefusal plan_refusal_ = {0, 0xffff, 0xffff, 0};
   uint32_t boot_id_ = 0;
+  bool boot_id_set_ = false;
   // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed; one
   // broken candidate after the first good frame at the new speed reverts) or committed (idle_ms, at most
   // kPortSpeedIdleMaxMs, with no good frame - not counted while a request runs, like the lease - or kSpeedBadRun broken

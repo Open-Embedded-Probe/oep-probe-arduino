@@ -194,7 +194,7 @@ void Endpoint::push() {
   if (heartbeat_ && static_cast<uint32_t>(millis() - heartbeat_last_) >= heartbeat_ms_) {
     heartbeat_last_ = millis();
     uint8_t hb[12];   // boot_id(u32) uptime_ns(u64) (core §11.2)
-    putU32(hb, boot_id_);
+    putU32(hb, bootId());
     putU64(hb + 4, nowNs());
     queueEvent(0, kEventHeartbeat, hb, sizeof hb);
   }
@@ -281,6 +281,7 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length,
 }
 
 void Endpoint::poll() {
+  (void)nowNs();   // the clock counts the wraps of a 32-bit timer as it reads it (core §2.6a): read it every pass
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
     current_ = i;   // results go back on this transport
@@ -386,6 +387,7 @@ Result Endpoint::checkSession(bool has_session, uint32_t session, uint8_t *out, 
 
 void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   if (length < kRequestHeader || (message[0] & ~kRoleSession) != kRoleRequest) return;   // other roles: drop
+  bootId();   // picked now if the sketch set none: the first message is the external event (core §6.5)
   const bool has_session = message[0] & kRoleSession;
   const uint16_t corr = getU16(message + 1), fn = getU16(message + 3);
   const uint8_t op = message[5];
@@ -503,7 +505,7 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       putU16(out + 6, limits_.max_frame);
       putU32(out + 8, limits_.window_bytes);
       out[12] = limits_.max_inflight;
-      putU32(out + 13, boot_id_);                     // a host without the lock learns of a restart here (core §6.5)
+      putU32(out + 13, bootId());                     // a host without the lock learns of a restart here (core §6.5)
       return tail.finish(completed(17), out, capacity);
     }
     case kOpList: return list(payload, length, out, capacity);
@@ -717,7 +719,7 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   lease_ms_ = lease == 0 ? kLeaseDefaultMs : (lease > kLeaseMaxMs ? kLeaseMaxMs : lease < kLeaseMinMs ? kLeaseMinMs : lease);
   expires_ms_ = millis() + lease_ms_;
   putU32(out, lease_ms_);
-  putU32(out + 4, boot_id_);
+  putU32(out + 4, bootId());
   out[8] = resumed;
   return tail.finish(completed(9), out, capacity);
 }

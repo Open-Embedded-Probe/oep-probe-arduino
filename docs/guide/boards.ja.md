@@ -81,7 +81,7 @@ host は iProduct の `OEP` と describe で probe を見つけます（[PID-USE
    `RvswdDebugProbe` にはこの profile がもうあり、`arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe` で
    ビルドできます。
 3. `Serial` が何かで**経路を選ぶ**。USB-Serial/JTAG（`USBMode=hwcdc`: `kUsbSerialJtag`）、TinyUSB の CDC（`USBMode=default`:
-   `kUsbCdc`。製品名を `OEP` で始めると、プロジェクトの VID:PID ができるまでの host の暫定の手がかりになる（oep-spec host 開発ガイド §1.7）:
+   `kUsbCdc`。製品名を `OEP` で始めると、プロジェクトの VID:PID ができるまでの host の暫定の手がかりになる（oep-spec host 開発ガイド §4）:
    `USB.productName("OEP probe (ESP32-S3)")`）、USB-UART bridge
    （`kUartBridge`。classic ESP32、UART0 の ESP32-C3）。
 4. **ピンを選ぶ。** flash / PSRAM のピン、USB のピン、起動のストラップ、ボードが部品につないだピンを外し、`describeCore` で

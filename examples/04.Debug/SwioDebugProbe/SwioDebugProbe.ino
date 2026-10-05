@@ -46,13 +46,12 @@ static size_t describeProbe() {
 }
 
 void setup() {
-  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §2.5): UART0 is the transport
+  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3): UART0 is the transport
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
   phy.begin(kSwio);
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(oep::platformRandom32());
   endpoint.add(wire);
   endpoint.add(riscvDm);
   console.setMaxRead(480);   // a console read's data fits a 512-byte frame

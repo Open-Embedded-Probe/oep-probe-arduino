@@ -47,7 +47,6 @@ void setup() {
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(oep::platformRandom32());
   endpoint.add(wire);
   endpoint.add(adi);
 }

@@ -152,8 +152,8 @@ static size_t describeProbe() {
 }
 
 void setup() {
-  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §2.5)
-  // USB-Serial/JTAG: opening and closing the port must not reset the probe (probe guide §3.7)
+  esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3)
+  // USB-Serial/JTAG: opening and closing the port must not reset the probe (probe guide §7)
   REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
@@ -165,7 +165,7 @@ void setup() {
   usb.vid = kUsbVid;
   usb.pid = kUsbPid;
   usb.manufacturer = "Open Embedded Probe";
-  usb.product = "OEP probe (ESP32-P4)";   // free text; starting "OEP" is a host's temporary clue (host guide §1.7)
+  usb.product = "OEP probe (ESP32-P4)";   // free text; starting "OEP" is a host's temporary clue (host guide §4)
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
   usbDevice.begin(usb);
@@ -186,7 +186,6 @@ void setup() {
   swio.reset_allowed = kChannels;
   riscvDm.addPort(swio);
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setBootId(esp_random());
   endpoint.add(wire);
   endpoint.add(riscvDm);
   endpoint.add(console);
