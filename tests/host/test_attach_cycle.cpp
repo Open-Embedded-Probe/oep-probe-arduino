@@ -283,6 +283,34 @@ int main() {
     }
   }
 
+  // ---- F: the target's power gone and back under a live connection: attach answers the same connection, its link
+  // woken again. On RVSWD a read of the sleeping link fails its parity and the PHY's re-sync wakes it inside the read;
+  // on SWIO the line reads all ones with no parity to fail, and 0.0.28+68d9694 answered timeout until a forced detach
+  // (P4 + CH32V003 bench) - WireRvswd::attach now brings the link up afresh (test_wire's stale PHY). ----
+  for (uint32_t off_ms : {300u, 2000u}) {
+    phy.beginRequest();
+    Result r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
+    CHECK(ok(r) && port.connected);
+    const uint16_t number = port.number;
+    t.awake = false;                          // power gone: the line rests on its pull-up
+    g_millis += off_ms;
+    t.dmcontrol = 0;                          // power back: a fresh module, the hart running, the link asleep
+    t.hart_bits = 3u << 10;
+    for (uint8_t method : {uint8_t(0), uint8_t(1)}) {
+      phy.beginRequest();
+      const uint32_t t0 = micros();
+      r = call(w, WireRvswd::kOpAttach, attachRequest(method, kHz, 0, 1, true), out);
+      const uint32_t took = micros() - t0;
+      CHECK(ok(r) && out.size() >= 11 && port.connected && port.number == number && (out[6] & wire::kAttachFlagsExisting));
+      CHECK(took <= (reg::kLimitAttachBudgetMs + 20) * 1000u);
+      if (method == 1) CHECK(out[6] & wire::kAttachFlagsHalted);
+      printf("  F power off %4u ms, attach %s: %s %u.%03u ms (sim)\n", off_ms, method ? "halt" : "run ",
+             ok(r) ? "answer" : "status", took / 1000, took % 1000);
+    }
+    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);
+    CHECK(!port.connected);
+  }
+
   printf("attach-cycle: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

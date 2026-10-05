@@ -277,7 +277,28 @@ int main() {
     g_swd.absent = false;
   }
 
-  // ---- a scan through the live connection runs the wire-loss clock and closes it once lost (oep-if-debug §2) ----
+  // ---- the target's power gone and back under a live connection: attach answers it as it is (oep-if-debug §1), the
+  // DPIDR read's wire retries bring the port back (line reset, wake); a scan through the live connection runs the
+  // wire-loss clock and closes it once lost (§2) ----
+  for (uint32_t gone_ms : {500u, 1500u}) {
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && fixed.connected);
+    const uint16_t number = fixed.number;
+    Bytes t = u16(fixed.number);
+    t.insert(t.end(), {1, 0, 0x06});
+    g_swd.absent = true;
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(out.size() >= 3 && out[2] == kStatusLine && fixed.connected);
+    g_millis += gone_ms;
+    g_swd.absent = false;
+    g_swd.locked = true;   // powered up again: DPIDR first
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && fixed.connected && fixed.number == number && out.size() >= 11 && (out[6] & sw::kAttachFlagsExisting));
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(ok(r) && out[2] == kStatusOk);
+    r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+  }
   {
     r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
     CHECK(ok(r) && fixed.connected);

@@ -110,7 +110,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
                    bool *no_answer) {
   if (no_answer) *no_answer = false;
   if (port.connected) {
-    if (!port.dm.readDmi(kDmStatus, dmstatus)) { if (no_answer) *no_answer = true; return false; }
+    if (!moduleAnswers(port.dm, dmstatus)) { if (no_answer) *no_answer = true; return false; }
   } else {
     DmiPhy &phy = port.dm.phy();
     if (!phy.setMaxHz(max_hz)) phy.setMaxHz(0);   // the slot's settings were checked when it was set
@@ -542,11 +542,27 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   AttachDeadline budget(phy, with_reset ? hold_ms : 0);
   phy.clearSearchRetries();
   bool searched = !port_.connected || with_reset;   // a search ran (search_retries goes in the answer)
+  // The live connection's module does not answer (the target lost its power and came back, a wire that lost its
+  // sync): the same connection, its bring-up done afresh under max_speed - the attach budget's search, as for a new one
+  // (oep-if-debug §1). Answering line instead held the stale link: every attach after the power came back timed out
+  // until a forced detach (0.0.28+68d9694, P4 and a CH32V003). An attach with the reset TLV brings the link up anyway.
+  bool revive = false;
+  if (port_.connected && !with_reset) revive = !moduleAnswers(port_.dm, status);
   if (port_.connected) {
     // Already attached: the same connection, nothing redone (a one-command-per-process host gets its link back).
     // A running link over the new ceiling is slowed to it (going slower is safe); only a link that cannot keep
     // the ceiling refuses it.
-    if (phy.clockHz() > max_hz) {
+    if (revive) {
+      searched = true;
+      if (!phy.setMaxHz(max_hz)) {   // a ceiling this link cannot keep (a fixed speed above it)
+        const Result r = tail.refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
+        if (refused(r)) return r;
+        phy.setMaxHz(0);
+      }
+      port_.dm.detach();
+      if (!attachAndRead(port_.dm, status)) failure = kStatusLine;
+      else if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
+    } else if (phy.clockHz() > max_hz) {
       searched = true;
       if (!(phy.setMaxHz(max_hz) && phy.retune() && phy.clockHz() <= max_hz)) {
         const Result r = tail.refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);

@@ -614,6 +614,52 @@ int main() {
     phy.stuck = false;
   }
 
+  // ---- attach to a live connection whose module does not answer: the same connection, brought up afresh ----
+  // The target's power floated and came back: the link the probe held reads all ones. 0.0.28+68d9694: every attach
+  // answered timeout (the all-ones DMSTATUS read as halted, the halt never landed) until a forced detach.
+  for (bool lost : {false, true}) {
+    phy.halted = false;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    const uint16_t number = fixed.number;
+    const uint32_t closes = fixed.closes;
+    phy.stale = true;
+    phy.havereset = true;
+    if (lost) {   // the clock ran out with no request to see it (idle connections are not watched)
+      CHECK(checkConnection(fixed));   // the clock starts
+      g_millis += reg::kLimitWireLostMs + 500;
+    }
+    const int attaches = phy.attaches;
+    for (uint8_t method : {uint8_t(0), uint8_t(1)}) {
+      r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(method), out);
+      CHECK(ok(r) && fixed.connected && fixed.number == number && fixed.closes == closes);
+      CHECK(out.size() >= 11 && (out[0] | out[1] << 8) == number && (out[6] & wire::kAttachFlagsExisting));
+      if (method == 0) {
+        CHECK(phy.attaches == attaches + 1);                          // brought up afresh
+        CHECK(out[6] & wire::kAttachFlagsHaveresetAcked);             // the power-up's havereset acknowledged
+        size_t len = 0;
+        CHECK(answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) != nullptr);   // a bring-up ran
+      } else {
+        CHECK(phy.halted && (out[6] & wire::kAttachFlagsHalted));     // the halt lands on the fresh link
+      }
+    }
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.halted = false;
+  }
+  // ... and one whose target is still gone: line, the connection kept until wire_lost_ms
+  {
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    phy.present = false;
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(r.detail == kOutcomeFailed && out.size() >= 1 && out[0] == kStatusLine && fixed.connected);
+    g_millis += reg::kLimitWireLostMs;
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(r.detail == kOutcomeFailed && out[0] == kStatusLine && !fixed.connected && fixed.lost);
+    phy.present = true;
+  }
+
   // ---- the console's reads run the same clock: lost only after wire_lost_ms of reads that got nothing ----
   {
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
