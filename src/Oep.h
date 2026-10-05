@@ -54,6 +54,7 @@ constexpr uint8_t kRejectExpired = reg::kRejectExpired;                  // the 
 
 // The longest one request may take (core §7.5 max_op_ms, declared in oep.core's describe): the reference firmware's value.
 constexpr uint32_t kMaxOpMs = reg::kReferenceMaxOpMs;
+static_assert(kMaxOpMs >= 1 && kMaxOpMs <= reg::kLimitMaxOpMsMax, "max_op_ms is 1 to max_op_ms_max (core §7.5)");
 
 // core (fn 0)
 constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpList, kOpDescribe = reg::core::kOpDescribe;

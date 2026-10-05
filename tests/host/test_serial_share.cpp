@@ -792,6 +792,8 @@ static void testPortSpeed() {
     CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectUnknownOperation);
   }
   Uart u;
+  SlowSink slow;
+  CHECK(u.ep.add(slow));   // fn 1, before the first poll (core §7.2: the list is fixed for a boot)
   CHECK(describesPortSpeed(u));
   Bytes r = u.send(request(1, 0, 0x14, speedReq(0, 1500000, 0, 2000, 0)));   // the lock is needed
   CHECK(r.size() >= 2 && r[0] == 0 && r[1] == kRejectSessionRequired);
@@ -939,8 +941,6 @@ static void testPortSpeed() {
   CHECK(g_baud == 115200);
   // condition 3: idle_ms is not counted while a request runs (like the lease, it runs from the answer). A request
   // that takes longer than idle_ms itself leaves the port at the raised speed, and the count starts over after it.
-  SlowSink slow;
-  CHECK(u.ep.add(slow));   // fn 1
   u.send(request(45, 0, 0x14, speedReq(0, 500000, 0, 2000, 0), true, 8));
   u.send(request(46, 0, 0x14, speedReq(0, 500000, 1, 0, 1000), true, 8));
   CHECK(u.ep.portSpeedCommitted());
@@ -1018,7 +1018,29 @@ static void testBootIdAndClock() {
   g_micros_extender = MicrosExtender{};
 }
 
+// core §7.1 (C-20): confirm's values stay within the bounds whatever the sketch gave (max_frame >= 64, window >=
+// max_frame, max_inflight >= 1). core §7.2 (C-39): the interface list is fixed for a boot - an add() after the first
+// poll() is refused. core §7.5 (C-47): max_op_ms is 1 to max_op_ms_max (a static_assert in Oep.h; checked here too).
+static void testConfirmBoundsAndFixedList() {
+  MemStream stream;
+  static uint8_t rx[1100], tx[1100];
+  Endpoint ep{stream, rx, sizeof rx, tx, sizeof tx, {32, 16, 0}, Endpoint::kVendorBulk, 0};
+  const Bytes m = request(1, 0, 0x01, {'O', 'E', 'P', '?', 1, 1});
+  stream.send({uint8_t(m.size()), 0});
+  stream.send(m);
+  ep.poll();
+  CHECK(stream.tx.size() == 2 + 5 + 17);
+  if (stream.tx.size() == 2 + 5 + 17) {
+    const uint8_t *c = stream.tx.data() + 7;
+    CHECK(getU16(c + 6) == 64 && getU32(c + 8) == 64 && c[12] == 1);   // max_frame window max_inflight
+  }
+  FailsEarly late;
+  CHECK(!ep.add(late));   // after poll(): the list a host has seen stays
+  CHECK(Endpoint::kMaxOpMs >= 1 && Endpoint::kMaxOpMs <= reg::kLimitMaxOpMsMax);
+}
+
 int main() {
+  testConfirmBoundsAndFixedList();
   testBootIdAndClock();
   testBlockLength();
   testPortSpeed();

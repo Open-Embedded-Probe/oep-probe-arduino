@@ -58,8 +58,16 @@ class Endpoint {
 
   Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
            Limits limits, uint8_t kind, uint8_t usb_interface = 0xff)
-      : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(limits) {
+      : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(bounded(limits)) {
     addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
+  }
+  // confirm's values within core §7.1's bounds, whatever the sketch gave: max_frame 64 or more, window max_frame or
+  // more, max_inflight 1 or more (a host treats a transport answering outside them as not usable).
+  static constexpr Limits bounded(Limits l) {
+    if (l.max_frame < reg::kMinMaxFrame) l.max_frame = reg::kMinMaxFrame;
+    if (l.window_bytes < l.max_frame) l.window_bytes = l.max_frame;
+    if (l.max_inflight < 1) l.max_inflight = 1;
+    return l;
   }
 
   // Another way in to the same probe (core §3.3). Every transport shares the one session and lock; a result goes back
@@ -90,6 +98,8 @@ class Endpoint {
   }
   Interface *interfaceAt(uint16_t fn) const { return fn >= 1 && fn <= count_ ? interfaces_[fn - 1] : nullptr; }
 
+  // An interface, numbered fn 1, 2, ... in the order added. The list stays the same for a boot (core §7.2): every add
+  // comes before the first poll(), and one after it is refused (false).
   bool add(Interface &interface);
   // The plan (oep-core §8, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
   // a replacement of the fns listed that is all or nothing and outlives sessions (0: applied; else the reject reason,
@@ -187,6 +197,7 @@ class Endpoint {
   Limits limits_;
   Interface *interfaces_[kMaxInterfaces] = {};
   size_t count_ = 0;
+  bool polled_ = false;   // poll() ran: the interface list is fixed (core §7.2)
   const uint8_t *probe_tlv_ = nullptr;
   size_t probe_tlv_length_ = 0;
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)

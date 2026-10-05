@@ -56,7 +56,7 @@ size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, 
 }  // namespace
 
 bool Endpoint::add(Interface &interface) {
-  if (count_ >= kMaxInterfaces) return false;
+  if (count_ >= kMaxInterfaces || polled_) return false;
   interfaces_[count_++] = &interface;
   interface.setFrameLimit(limits_.max_frame);
   return true;
@@ -281,6 +281,7 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length,
 }
 
 void Endpoint::poll() {
+  polled_ = true;
   (void)nowNs();   // the clock counts the wraps of a 32-bit timer as it reads it (core §2.6a): read it every pass
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
