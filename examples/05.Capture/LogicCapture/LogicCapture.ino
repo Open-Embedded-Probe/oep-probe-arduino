@@ -12,8 +12,8 @@
 //   - 16 KiB frames (confirm's max_frame): one bulk transfer per push.
 //
 // With nothing wired, io.github.open-embedded-probe.test-signal (this example's own interface, TestSignal.h) puts an
-// LEDC square on a pin so the capture has something to see. The USB device is VID:PID 303a:0002 (the board's default, a temporary
-// USB ID), iProduct "OEP capture (ESP32-P4)", serial = the unit id (the board MAC, lowercase hex; one usbipd bind lasts across reflashes).
+// LEDC square on a pin so the capture has something to see. The USB device is the project's VID:PID 1209:4F45 (registry usb;
+// PID-USE.md), serial = the unit id (the board MAC, lowercase hex); its iProduct "OEP capture (ESP32-P4)" is a name for people.
 // USB-Serial/JTAG stays for uploads and a status line. Host: host/stream_test.py (streams at a rate, checks every edge).
 #include <esp_mac.h>
 #include <EspUsbDevice.h>
@@ -55,10 +55,10 @@ void setup() {
   oep::platformParkMask(((1ull << 55) - 1) & ~kReserved);   // every channel Hi-Z, no pull, before the first answer (core §8)
   oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig config;
-  config.vid = 0x303a;
-  config.pid = 0x0002;
+  config.vid = oep::reg::kUsbProjectVid;   // the project's VID:PID (registry usb, PID-USE.md)
+  config.pid = oep::reg::kUsbProjectPid;
   config.manufacturer = "Open Embedded Probe";
-  config.product = "OEP capture (ESP32-P4)";   // iProduct "OEP...": how discovery knows it (oep-core §3.3)
+  config.product = "OEP capture (ESP32-P4)";   // a name for people; no host identifies the probe by it
   config.serialNumber = serial_;
   config.controller = EspUsbController::HighSpeed;
   const bool ok = usbDevice.begin(config);
@@ -67,6 +67,9 @@ void setup() {
   endpoint.setPushQueue(4096);
   if (direct) endpoint.setDirect(&bulk);
   endpoint.setFlushAfterBurst(true);
+  // describe discoverable 1: OEP's one transport here is the HS device, so a host that asks reached it through the
+  // project's VID:PID (core §3.3 / §7.5)
+  endpoint.setDiscoverable(true);
   endpoint.add(capture);
   endpoint.add(signal_);
   Serial.printf("# OEP P4 capture probe usb_begin=%d direct=%d serial=%s\n", ok ? 1 : 0, direct ? 1 : 0, serial_);
