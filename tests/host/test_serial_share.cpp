@@ -1095,7 +1095,24 @@ static void testUnknownOperationFirst() {
   CHECK(r.size() == 2 && r[0] == kResolutionCompleted);
 }
 
+// core §2.4 (C-36): the probe discards, unanswered, a message whose role is not a request role and a request shorter
+// than its header (6 bytes, 10 with session_id); the next good request is answered as usual.
+static void testShortAndWrongRoleDiscarded() {
+  Bulk b;
+  const Bytes confirm = request(1, 0, 0x01, {'O', 'E', 'P', '?', 1, 1});
+  for (uint8_t role : {0x02, 0x05, 0x06, 0x00, 0x7f}) {
+    Bytes m = confirm;
+    m[0] = role;
+    CHECK(b.send(m).empty() && b.stream.tx.empty());
+  }
+  CHECK(b.send({0x01, 1, 0, 0, 0}).empty() && b.stream.tx.empty());               // 5 bytes
+  CHECK(b.send({0x81, 1, 0, 0, 0, 0x12, 7, 0, 0}).empty() && b.stream.tx.empty());   // 9 bytes with session
+  const Bytes r = b.send(confirm);
+  CHECK(r.size() == 2 + 17 && r[0] == kResolutionCompleted);
+}
+
 int main() {
+  testShortAndWrongRoleDiscarded();
   testUnknownOperationFirst();
   testPlanApplyOrder();
   testConfirmBoundsAndFixedList();
