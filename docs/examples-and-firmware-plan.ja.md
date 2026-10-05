@@ -36,7 +36,7 @@
 | `OepProbe-esp32` | ESP32 DevKitC ほか | UART bridge | swio | gpio、uart | console、probe.config |
 | `OepProbe-esp32p4` | ESP32-P4 | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | rvswd | gpio、uart、capture | console、probe.config、I2C / SPI target |
 
-どれも iProduct は `OEP` で始め、VID:PID はボードの既定（仮の USB の ID で、配布には使えない。専用の PID を取得できたら、それに切り替える予定。PID-USE.md）。describe の probe の名前はボード
+USB の口を自分で持つもの（RP2、ESP32-P4 の HS）はプロジェクトの VID:PID `1209:4F45` で列挙し、serial は unit id（PID-USE.md）。iProduct は人のための名前。describe の probe の名前はボード
 （`raspberrypi-pico` など）で、治具の profile（`io.github.ch32-riscv-ug.rp2350-l103` など）は付けない。
 
 Firmware の workflow は、`examples/Firmware/` の各 sketch の sketch.yaml の profile ごとに作って付ける
@@ -103,7 +103,7 @@ a. **線がピンの組を host から受ける**（済: oep-spec 29990da / dfa4
    使えるピンを出し、scan / attach の pins で組を受ける（oep-if-debug §1）。RVSWD（ESP32 の dedicated GPIO、RP2 の SIO）、SWIO、SWD の
    それぞれで、ピンを実行中に替えられるようにする。
 b. **RP2040 / RP2350 の probe.config の保存**（済: flash の最後の領域、arduino-pico の EEPROM）（今は ESP32 の NVS だけ）。flash の最後の領域など。
-c. **USB の名乗り**（RP2 は済: `Firmware/OepProbe` が `USB.setProduct`）: RP2 と ESP32-S3 でも iProduct `OEP…` と個体ごとの serial を出す（今は ESP32-P4 だけ）。
+c. **USB の名乗り**（RP2 と ESP32-P4 は済: `Firmware/OepProbe` がプロジェクトの VID:PID `1209:4F45` と unit id の serial を出す）: ESP32-S3 でも同じにする。
 d. **reset 線に既定は無い**（済: oep-spec 5bfe052、firmware 620594c）: attach_under_reset の channel は必須。probe は reset に使ってよい
    channel を describe の role_channels の role 3 で宣言し、plan が持つ channel は断る。
 e. **線の設定は probe の中に持たない**（済: 同上）: 休ませ方は rvswd の attach の idle_clock、速さの上限は max_speed で host が渡す。

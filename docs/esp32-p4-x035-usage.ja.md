@@ -8,7 +8,7 @@ v0 の prototype（`Esp32P4X035Prototype`、`python -m oep_client` の CLI）の
 - probe: ESP32-P4（`examples/Esp32P4X035Probe`）
 - target: CH32X035F8U6 の治具
 - OEP transport（describe の順）: 0 HS の vendor bulk、1 USB-Serial/JTAG（シリアルの口）、2 HS の HID、3 HS の CDC
-  「OEP console」（シリアルの口）。HS の device は 303a:0002、serial は MAC + `-hs`。シリアルの口は COBS のフレームと bind の生のバイトを
+  「OEP console」（シリアルの口）。HS の device は 1209:4F45（プロジェクトの VID:PID）、serial は unit id（MAC の小文字の 16 進）。シリアルの口は COBS のフレームと bind の生のバイトを
   1 本で運ぶ
 - target transport: RVSWD（dedicated GPIO の bit-bang）
 
