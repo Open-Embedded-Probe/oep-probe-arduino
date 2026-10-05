@@ -42,6 +42,9 @@ static constexpr uint8_t kInterface = 0xff;   // built-in USB serial: the number
 static constexpr uint8_t kSwdio = 2, kSwclk = 3;   // GPIO2 -> SWDIO, GPIO3 -> SWCLK
 #endif
 
+static constexpr uint64_t kChannels = (1ull << kSwdio) | (1ull << kSwclk);
+static constexpr uint16_t kChannelCount = (kSwdio > kSwclk ? kSwdio : kSwclk) + 1;
+
 static uint8_t rxBuffer[1100];
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport,
@@ -61,9 +64,10 @@ static uint8_t probeTlv[64];
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  // the pair is the probe's own: reserved, so no plan takes it
-  oep::describeCore(w, "rvswd-debug-probe", id, oep::platformUnitId(id, sizeof id), 64,
-                    (1ull << kSwdio) | (1ull << kSwclk));
+  // the channels up to the wire's pair: the pair is the wire's (role_channels), the ones below it are not offered
+  // (reserved); this probe has no plan, so no other channel is declared
+  oep::describeCore(w, "rvswd-debug-probe", id, oep::platformUnitId(id, sizeof id), kChannelCount,
+                    ((1ull << kChannelCount) - 1) & ~kChannels);
   return w.ok() ? w.length() : 0;
 }
 
@@ -78,6 +82,7 @@ void setup() {
   Serial.setTxTimeoutMs(0);
 #endif
   Serial.begin(115200);
+  oep::platformParkMask(kChannels);   // every channel not reserved Hi-Z, no pull, before the first answer (core §8)
   phy.begin(kSwdio, kSwclk);   // the wires rest released (Hi-Z) until a host attaches
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.add(wire);       // fn 1

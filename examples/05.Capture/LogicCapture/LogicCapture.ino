@@ -52,6 +52,7 @@ void setup() {
   esp_log_level_set("*", ESP_LOG_NONE);
   Serial.setTxTimeoutMs(0);   // nobody may be reading USB-Serial/JTAG: a write there must never stall loop()
   Serial.begin(115200);
+  oep::platformParkMask(((1ull << 55) - 1) & ~kReserved);   // every channel Hi-Z, no pull, before the first answer (core §8)
   oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig config;
   config.vid = 0x303a;

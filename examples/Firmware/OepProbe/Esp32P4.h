@@ -189,7 +189,6 @@ void setup() {
   endpoint.add(wire);
   endpoint.add(riscvDm);
   endpoint.add(console);
-  // The channels are left as the P4 boots them (inputs, nothing driven) until the host takes one.
   endpoint.add(gpio);
   endpoint.add(uart1);
   endpoint.add(uart2);
@@ -212,6 +211,11 @@ void setup() {
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   config.load();
+  // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
+  // disable items' channels, which are never touched (probe.config §2: applied before any idle / park; applySaved
+  // gives them back if the settings are not applied).
+  pins.setDisabled(config.savedDisabled());
+  oep::platformParkMask(kChannels & ~pins.disabledMask());
   // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
   // slots' attach last (on its poll), so a target powered through an output idle is up before it.
   config.applySaved();

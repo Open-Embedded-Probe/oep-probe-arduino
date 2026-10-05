@@ -163,6 +163,7 @@ void setup() {
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3): UART0 is the transport
 #endif
   Serial.begin(115200);
+  oep::platformParkMask(kChannels);   // every channel Hi-Z, no pull, before the first answer (core §8)
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.add(blink);
 }

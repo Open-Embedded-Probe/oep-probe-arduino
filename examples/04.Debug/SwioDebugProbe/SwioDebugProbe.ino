@@ -41,7 +41,8 @@ static uint8_t probeTlv[64];
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "swio-debug-probe", id, oep::platformUnitId(id, sizeof id), 40, 1ull << kSwio);
+  // the channels up to the wire's pin: the pin is the wire's, the ones below it are not offered (reserved)
+  oep::describeCore(w, "swio-debug-probe", id, oep::platformUnitId(id, sizeof id), kSwio + 1, (1ull << kSwio) - 1);
   return w.ok() ? w.length() : 0;
 }
 
@@ -50,6 +51,7 @@ void setup() {
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(115200);
+  oep::platformParkMask(1ull << kSwio);   // every channel not reserved Hi-Z, no pull, before the first answer (core §8)
   phy.begin(kSwio);
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.add(wire);

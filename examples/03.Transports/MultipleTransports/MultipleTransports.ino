@@ -64,6 +64,7 @@ void setup() {
   REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);   // opening the port must not reset
   Serial.setTxTimeoutMs(0);   // a port nobody reads never stops loop()
   Serial.begin(115200);
+  oep::platformParkMask(kChannels);   // every channel Hi-Z, no pull, before the first answer (core §8)
 
   oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig usb;

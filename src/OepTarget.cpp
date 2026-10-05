@@ -569,7 +569,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     }
     flags |= wire::kAttachFlagsExisting;
     if (with_reset) {
-      // the reset op's NRST on this connection (mark reset 3), then stopped at the vector or left running
+      // attach's reset TLV on this connection (mark reset 3), then stopped at the vector or left running
       if (halt) {
         if (!port_.dm.attachUnderReset(holdReset, releaseReset, &reset_line, hold_ms, dpc)) failure = kStatusTimeout;
         else have_dpc = true;

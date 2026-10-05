@@ -42,8 +42,10 @@ class PositionStream {
   }
   uint64_t oldest() const { return total_ - base_ > capacity_ ? total_ - capacity_ : base_; }
   void mark(uint8_t kind, uint8_t detail = 0) {
-    marks_[serial_ % mark_capacity_] = {serial_, total_, kind, nowNs(), detail};
-    ++serial_;
+    marks_[slot_] = {serial_, total_, kind, nowNs(), detail};
+    slot_ = (slot_ + 1) % mark_capacity_;
+    if (kept_ < mark_capacity_) ++kept_;
+    ++serial_;   // wraps at 2^32 (common §1.3); the slots and the count kept do not depend on it (core §2.6)
   }
   void clear() {   // nothing before now is kept
     base_ = total_;
@@ -63,9 +65,8 @@ class PositionStream {
       start = oldest();
     } else if (from == reg::common::kReadFromLastMark) {
       start = total_;   // no such mark kept (never, or pushed out of the ring): from now (common §1.2)
-      const uint32_t kept = serial_ < mark_capacity_ ? serial_ : static_cast<uint32_t>(mark_capacity_);
-      for (uint32_t k = 0; k < kept; ++k) {
-        const Mark &mk = marks_[(serial_ - 1 - k) % mark_capacity_];
+      for (uint32_t k = 0; k < kept_; ++k) {
+        const Mark &mk = marks_[slotBack(k + 1)];
         if ((arg & 0xff) == 0 || mk.kind == (arg & 0xff)) { start = mk.position; break; }
       }
     }
@@ -87,15 +88,14 @@ class PositionStream {
 
   // Marks from serial `from` on (serial arithmetic; an older one starts at the oldest kept). -> bytes written.
   size_t marks(uint32_t from, uint8_t *out, size_t capacity) const {
-    const uint32_t kept = serial_ < mark_capacity_ ? serial_ : static_cast<uint32_t>(mark_capacity_);
-    const uint32_t first = serial_ - kept;
+    const uint32_t first = serial_ - kept_;   // serial number arithmetic (core §2.6)
     if (static_cast<int32_t>(from - first) < 0) from = first;
     uint8_t count = 0;
     size_t used = 2;
     bool more = false;
     for (uint32_t s = from; static_cast<int32_t>(s - serial_) < 0; ++s) {
       if (used + 1 + kMarkBytes > capacity || count == 255) { more = true; break; }
-      const Mark &mk = marks_[s % mark_capacity_];
+      const Mark &mk = marks_[slotBack(serial_ - s)];
       out[used++] = kMarkBytes;   // the element's length (core §2.3)
       putU32(out + used, mk.serial);
       putU64(out + used + 4, mk.position);
@@ -117,7 +117,12 @@ class PositionStream {
   size_t mark_capacity_;
   uint64_t total_ = 0;    // bytes ever collected = the position of the next byte
   uint64_t base_ = 0;     // nothing before this position is kept (clear)
-  uint32_t serial_ = 0;   // marks ever made = the serial of the next one
+  uint32_t serial_ = 0;   // the serial of the next mark (u32, wraps)
+  size_t slot_ = 0;       // where the next mark goes
+  uint32_t kept_ = 0;     // marks kept (at most mark_capacity_)
+  size_t slotBack(uint32_t back) const {   // the slot of the mark `back` before the next one (1: the newest)
+    return (slot_ + mark_capacity_ - back % mark_capacity_) % mark_capacity_;
+  }
 };
 
 // A stream a serial port's bind can carry (oep.probe.config §1.2): the target's console of a slot, a fixture UART's
