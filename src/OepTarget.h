@@ -120,6 +120,10 @@ class WireRvswd final : public Interface {
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::wire_rvswd::kRevision; }   // oep.wire.swio: the same (1)
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::wire_rvswd::kLockFreeOps, op); }
+  // scan, attach, detach, connections: required on every wire (oep-if-debug §0)
+  bool offers(uint8_t op) const override {
+    return opIn(op, reg::wire_rvswd::kOpScan, reg::wire_rvswd::kOpDetach) || op == reg::wire_rvswd::kOpConnections;
+  }
   size_t describe(uint8_t *out, size_t capacity) override;
   DebugPort &port() const { return port_; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
@@ -161,6 +165,8 @@ class TargetRiscvDm final : public Interface {
   const char *name() const override { return reg::target_riscv_dm::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::target_riscv_dm::kRevision; }
+  // dmi .. step: read_block / write_block, run, reset, step are optional and all declared (features)
+  bool offers(uint8_t op) const override { return opIn(op, reg::target_riscv_dm::kOpDmi, reg::target_riscv_dm::kOpStep); }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void setFrameLimit(size_t max_frame) override { max_frame_ = max_frame; }

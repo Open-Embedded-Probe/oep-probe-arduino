@@ -222,6 +222,22 @@ int main() {
     phy.idle_low = false;
   }
 
+  // ---- swio: a listed combination with swclk other than 0xFFFF is one the declaration does not allow: unsupported
+  // (payload 0x00) in scan as in attach (oep-if-debug §3; it was malformed in scan)
+  {
+    static FakePhy phy_swio;
+    static Ch32Dm dm_swio(phy_swio);
+    static DebugPort one{dm_swio, 0xfffe, 0xffff};   // one wire, no channel chosen yet
+    one.pin_choice = (1ull << 8) | (1ull << 9);
+    static WireRvswd wire_swio(one, 7, reg::wire_swio::kName);
+    Result r = call(wire_swio, WireRvswd::kOpScan, {1, 8, 0, 9, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 && out[0] == 0);
+    r = call(wire_swio, WireRvswd::kOpScan, {1, 8, 0, 9}, out);   // cut short: still malformed
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0, 8, 9), out);   // attach alike (pins TLV, critical)
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && !one.connected);
+  }
+
   // ---- host-chosen pins: a closed connection, a scan's try and a failed attach leave each channel at its idle ----
   {
     static FakePhy phy2;

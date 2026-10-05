@@ -93,6 +93,8 @@ class ProbeConfig final : public Interface {
   uint16_t instance() const override { return 0; }
   uint8_t revision() const override { return reg::probe_config::kRevision; }
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_config::kLockFreeOps, op); }
+  // get .. state; save and erase are offered as describe's storage max_bytes is above 0 (always here)
+  bool offers(uint8_t op) const override { return opIn(op, reg::probe_config::kOpGet, reg::probe_config::kOpState); }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 

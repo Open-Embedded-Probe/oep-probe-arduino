@@ -54,6 +54,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   uint8_t revision() const override { return reg::target_console::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::target_console::kLockFreeOps, op); }
+  bool offers(uint8_t op) const override { return opIn(op, reg::target_console::kOpOpen, reg::target_console::kOpStreams); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   // The host's session lapsed or was taken over: its share of the stream goes (mark closed 2 when it was the last).
   void sessionLapsed() override { release(kUserHost, reg::common::kMarkDetailClosedExpired); }

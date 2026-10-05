@@ -294,6 +294,9 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       if (payload[0] > 0x7f) return rejected(kRejectMalformed);
       // an undefined mode (0, 4+: a later revision may define it, core §2.5): unsupported, payload 0x00 (fixture §3)
       if (payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return unsupportedValue(out, capacity);
+      // the addresses the I2C specification reserves (general call, start byte, the 10-bit prefix, ...): 0x00 - 0x07 and
+      // 0x78 - 0x7F, unsupported, payload 0x00 (fixture §3)
+      if (payload[0] < 0x08 || payload[0] > 0x77) return unsupportedValue(out, capacity);
       if (sda_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §3: unavailable cause 6)
       stop();
       clearTarget();   // frames, the wait, slots, rx_frames and errors go; stretch stays

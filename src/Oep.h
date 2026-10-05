@@ -91,6 +91,8 @@ inline uint64_t getU64(const uint8_t *p) { return getU32(p) | (static_cast<uint6
 inline void putU64(uint8_t *p, uint64_t v) { putU32(p, static_cast<uint32_t>(v)); putU32(p + 4, static_cast<uint32_t>(v >> 32)); }
 // bit n of a registry kLockFreeOps mask = op n needs no lock
 inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> op) & 1); }
+// op among first .. last (an interface's op table, for Interface::offers)
+constexpr bool opIn(uint8_t op, uint8_t first, uint8_t last) { return op >= first && op <= last; }
 
 // The probe's one clock (core §2.6a): ns since boot, u64; it does not decrease and does not wrap while the boot_id is
 // the same. Marks, segments, the heartbeat and the slots' "last tried" all use it; "not yet" is all ones.
@@ -477,6 +479,10 @@ class Interface {
   virtual size_t describe(uint8_t *out, size_t capacity) { (void)out; (void)capacity; return 0; }
   // Operations that change nothing may run without the lock (and without a session id).
   virtual bool lockFree(uint8_t op) const { (void)op; return false; }
+  // Whether this interface offers op (core §1.2): an op its document defines - an optional one only when declared.
+  // The endpoint answers any other op unknown_operation before it looks at the session (core §4.3 order 1). The
+  // default leaves the answer to handle() (an interface of the sketch's own that does not say).
+  virtual bool offers(uint8_t op) const { (void)op; return true; }
   virtual Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) = 0;
   // Whether this interface has plan roles (core §1.2: roles its document assigns through the plan, §8; the pins a
   // wire's attach selects by argument are not). A probe none of whose interfaces has any answers plan_apply and

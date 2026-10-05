@@ -430,7 +430,9 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     result = rejected(kRejectUnknownFunction);
   } else {
     Interface &it = *interfaces_[fn - 1];
-    result = it.lockFree(op) ? completed() : checkSession(has_session, session, out, capacity);
+    // an op the interface does not offer (core §1.2): unknown_operation before the session (core §4.3 order 1)
+    if (!it.offers(op)) result = rejected(kRejectUnknownOperation);
+    else result = it.lockFree(op) ? completed() : checkSession(has_session, session, out, capacity);
     if (result.resolution == kResolutionCompleted) result = it.handle(op, payload, payload_length, out, capacity);
   }
   if (result.length > capacity) result = failed(0);

@@ -49,6 +49,7 @@ class FixtureGpio final : public Interface {
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_gpio::kRevision; }
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_gpio::kLockFreeOps, op); }
+  bool offers(uint8_t op) const override { return opIn(op, reg::fixture_gpio::kOpSet, reg::fixture_gpio::kOpRead); }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
@@ -79,6 +80,7 @@ class FixtureUart final : public Interface, public BindSource {
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_uart::kRevision; }
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_uart::kLockFreeOps, op); }
+  bool offers(uint8_t op) const override { return opIn(op, reg::fixture_uart::kOpConfigure, reg::fixture_uart::kOpStatus); }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }

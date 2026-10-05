@@ -134,6 +134,13 @@ int main() {
   // an undefined mode (0, 4+): unsupported, payload 0x00 (fixture §3, C-02)
   CHECK(rejectedAs(configure(t, 0x42, 0), kRejectUnsupported));
   CHECK(rejectedAs(configure(t, 0x42, 4), kRejectUnsupported));
+  // the reserved addresses 0x00 - 0x07 and 0x78 - 0x7F: unsupported, payload 0x00 (fixture §3, △5); 0x08 / 0x77 taken
+  for (const uint8_t a : {0x00, 0x01, 0x07, 0x78, 0x7C, 0x7F}) {
+    CHECK(rejectedAs(call(t, P4I2cTarget::kOpConfigure, {a, P4I2cTarget::kModeFixedRx}, out), kRejectUnsupported) &&
+          out.size() == 1 && out[0] == 0);
+  }
+  CHECK(ok(configure(t, 0x08, P4I2cTarget::kModeFixedRx)));
+  CHECK(ok(configure(t, 0x77, P4I2cTarget::kModeFixedRx)));
 
   // ---- mode 1
   CHECK(ok(configure(t, 0x42, P4I2cTarget::kModeFixedRx)));

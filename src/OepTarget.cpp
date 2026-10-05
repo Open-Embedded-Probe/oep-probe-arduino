@@ -338,8 +338,6 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   if (refused(parsed)) return parsed;
   DmiPhy &phy = port_.dm.phy();
   const bool one_wire = port_.swclk == 0xffff;
-  for (uint8_t k = 0; k < count && one_wire; ++k)
-    if (getU16(payload + 3 + 4 * k) != 0xffff) return rejected(kRejectMalformed);   // swio: swclk is always 0xFFFF
   uint16_t skip = 0;
   {
     size_t len = 0;

@@ -69,6 +69,10 @@ class WireSwd final : public Interface {
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::wire_swd::kRevision; }
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::wire_swd::kLockFreeOps, op); }
+  // scan, attach, detach, connections: required on every wire (oep-if-debug §0)
+  bool offers(uint8_t op) const override {
+    return opIn(op, reg::wire_swd::kOpScan, reg::wire_swd::kOpDetach) || op == reg::wire_swd::kOpConnections;
+  }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   // core §9 / oep-if-debug §2: a host that fell away (its lease lapsed) keeps nothing open; the host is this link's only user
@@ -100,6 +104,8 @@ class TargetArmAdi final : public Interface {
   const char *name() const override { return reg::target_arm_adi::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::target_arm_adi::kRevision; }
+  // transfer, read_block, write_block: all required, no features (oep-if-debug §5)
+  bool offers(uint8_t op) const override { return opIn(op, reg::target_arm_adi::kOpTransfer, reg::target_arm_adi::kOpWriteBlock); }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void setFrameLimit(size_t max_frame) override { max_frame_ = max_frame; }

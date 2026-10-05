@@ -68,6 +68,7 @@ class P4SpiTarget final : public Interface {
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_spi_target::kRevision; }
   bool lockFree(uint8_t op) const override { return op == kOpStatus; }
+  bool offers(uint8_t op) const override { return opIn(op, reg::fixture_spi_target::kOpConfigure, reg::fixture_spi_target::kOpReset); }
   Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   size_t describe(uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }

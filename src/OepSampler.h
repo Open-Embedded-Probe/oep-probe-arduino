@@ -43,6 +43,8 @@ class SamplerCapture final : public Interface, public GroupTrack {
   uint8_t revision() const override { return reg::fixture_logic::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
+  // every op of capture §3.2 (query and force declared by features bits 0 / 1; calibration is analog's)
+  bool offers(uint8_t op) const override { return opIn(op, reg::fixture_logic::kOpConfigure, reg::fixture_logic::kOpQuery); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;

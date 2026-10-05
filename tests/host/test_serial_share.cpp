@@ -1071,7 +1071,32 @@ static void testPlanApplyOrder() {
   CHECK(!d.empty() && d[0] == kResolutionCompleted && std::search(d.begin(), d.end(), roles.begin(), roles.end()) == d.end());
 }
 
+// core §1.2 / §4.3 order 1: an op the interface does not offer (one it does not define, or an optional one it does not
+// declare) is unknown_operation before the session is looked at - not session_required.
+class OffersTwo final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.offers"; }
+  uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1 || op == 2; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
+};
+static void testUnknownOperationFirst() {
+  Bulk b;
+  OffersTwo two;
+  b.ep.add(two);   // fn 1
+  Bytes r = b.send(request(1, 1, 3, {}));
+  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectUnknownOperation);
+  r = b.send(request(2, 1, 1, {}));   // an op it offers, no session: session_required
+  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectSessionRequired);
+  b.send(request(3, 0, 0x10, openPayload(4, 3000)));
+  r = b.send(request(4, 1, 0x7F, {}, true, 4));
+  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectUnknownOperation);
+  r = b.send(request(5, 1, 2, {}, true, 4));
+  CHECK(r.size() == 2 && r[0] == kResolutionCompleted);
+}
+
 int main() {
+  testUnknownOperationFirst();
   testPlanApplyOrder();
   testConfirmBoundsAndFixedList();
   testBootIdAndClock();
