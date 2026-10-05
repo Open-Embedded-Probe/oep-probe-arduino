@@ -43,6 +43,8 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
 - The boot_id (core §6.5): the endpoint picks it itself when the first message arrives - a hardware random source where
   the platform has one, else the timer's count at that moment. A sketch with a better source (a boot counter it keeps in
   non-volatile storage) passes it with `setBootId` in `setup()`.
+- At boot, before the first `poll()`, put every channel you do not reserve in its free state - Hi-Z, no pull
+  (`platformParkMask`; core §8), or the idle of the saved settings when the probe has them.
 - `poll()` from `loop()`: it never blocks long. Neither may your interfaces.
 
 ## 3. An interface

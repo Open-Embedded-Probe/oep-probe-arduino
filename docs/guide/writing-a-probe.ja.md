@@ -43,6 +43,8 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
 - boot_id（core §6.5）は、最初のメッセージが届いたときに endpoint が自分で選びます。プラットフォームにハードウェアの乱数源があれば
   それ、無ければそのときのタイマーの値です。もっと良い源（不揮発の記憶に保つ起動回数など）を持つスケッチは、`setup()` で
   `setBootId` で渡します。
+- 起動時、最初の `poll()` より前に、予約しない channel をすべて空きの状態にします。Hi-Z、pull 無し（`platformParkMask`。
+  core §8）、または probe が保存した設定を持つならその idle です。
 - `loop()` から `poll()`。長く止まりません。インターフェースも止まってはいけません。
 
 ## 3. インターフェース
