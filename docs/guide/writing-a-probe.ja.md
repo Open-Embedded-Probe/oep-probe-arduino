@@ -155,14 +155,16 @@ class Blink final : public oep::Interface {
 
 ## 9. USB の名乗り
 
-USB の probe は、`OEP` で始まる iProduct（表示の自由な文字列。プロジェクトの VID:PID ができるまでの host の暫定の手がかり、
-oep-spec host 開発ガイド §4）、個体ごとに違う serial number（unit_id。名指した probe を host はこれで探す）、VID:PID を名乗ります。
-VID:PID はボードの既定（ESP32-P4 では `303a:0002`）です。これは仮の USB の ID で、配布には使えません。専用の PID を取得できたら、
-それに切り替える予定です（[PID-USE.ja.md](../../PID-USE.ja.md)）。
+USB の probe は、プロジェクトの VID:PID `1209:4F45`（`oep::reg::kUsbProjectVid` / `kUsbProjectPid`。これで firmware を
+出してよい条件は [PID-USE.ja.md](../../PID-USE.ja.md)）と、個体ごとに違う serial number（unit_id。host はこれで個体を区別し、
+名指した probe を探す）を名乗ります。iProduct は人が読むための自由な文字列で（firmware では `OEP probe (ESP32-P4)`）、host は
+これで probe を見分けません。同じ device の OEP の外のインターフェース（ESP32-P4 のアプリの中の DFU など）も、その device の一部です。
 vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /
 usage 0x45 を持ちます（core §3.3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
-`endpoint.setDiscoverable(true)`（describe の discoverable、core §7.5）を呼ぶのは、プロジェクトの VID:PID で列挙する probe だけです。
-その VID:PID が registry に載るまでは、どの probe も呼びません。
+probe は、プロジェクトの VID:PID で実際に列挙したら `endpoint.setDiscoverable(true)`（describe の discoverable、core §7.5）を
+呼びます。別の口（USB-Serial/JTAG）から開いた host にもそれが分かります。`Firmware/OepProbe` は、RP2 では起動時に、ESP32-P4 では
+HS の口が列挙したとき（`usbDevice.ready()`）に呼びます。決まった ID の口（USB-UART bridge、USB-Serial/JTAG）でしか届かない probe
+は 0 のままにします。
 
 ## 10. 試す
 

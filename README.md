@@ -48,10 +48,10 @@ another device's VID:PID) is different: the only way to know whether an OEP prob
 OEP frames come back, and opening an arbitrary serial port can disturb whatever is on it (a board that resets on DTR, a modem,
 another tool's device). A host cannot do that on its own for every port, so the user has to pick such a port explicitly. The
 links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
-browsers. Hosts identify OEP probes automatically only by the project's own USB VID:PID (none obtained yet), open a probe
-named by its unit_id (the USB serial number) and check it with describe, and until then may try devices with an iProduct
-starting `OEP` as a temporary clue, sending only a confirm first (oep-spec core §3.3, docs/usb-identity.md). The firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the
-ESP32-P4), which may not be used for distribution. When the project obtains a PID of its own, the firmware will switch to it.
+browsers. Hosts identify OEP probes automatically only by the project's USB VID:PID, `1209:4F45`, and open a probe named by
+its unit_id (the USB serial number) and check it with describe (oep-spec core §3.3, docs/usb-identity.md). The firmware's own
+USB ports (the ESP32-P4's high-speed port, the RP2040 / RP2350's USB) enumerate with `1209:4F45`; a port behind a USB-UART
+bridge or the ESP32-P4's USB-Serial/JTAG keeps its fixed ID and is chosen by the user.
 
 A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume
 (some bridges and boards do not run 921600 reliably), so a host stays at 115200 unless the probe and the host agree on more.
@@ -72,9 +72,11 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
   [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml).
 - Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
   `oep` command, a fake probe for tests).
-- USB VID:PID: the firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the ESP32-P4)
-  with an iProduct starting `OEP`, which may not be used for distribution. When the project obtains a PID of its own, the firmware
-  will switch to it ([PID-USE.md](PID-USE.md)).
+- USB VID:PID: `1209:4F45` (pid.codes), the project's own; who may use it: [PID-USE.md](PID-USE.md). On Linux, opening
+  the vendor bulk / DFU interfaces (libusb) and the HID (hidraw) as an ordinary user needs the udev rule shipped in
+  oep-client-python, [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules), installed once with administrator
+  rights (`sudo install -m 0644 70-oep-probe.rules /etc/udev/rules.d/`, then `sudo udevadm control --reload-rules && sudo
+  udevadm trigger`).
 
 ## Wiring: no schematic, no fixed pin map
 

@@ -52,12 +52,18 @@ works (the GPIO matrix).
 
 | Firmware | VID:PID | iProduct | Serial number |
 |---|---|---|---|
-| RP2040 / RP2350 | the board's (arduino-pico's) | `OEP probe (RP2040)` / `(RP2350)` | the board's (flash unique id) |
-| ESP32-P4 (HS port) | `303a:0002` | `OEP probe (ESP32-P4)` | the MAC + `-hs` |
-| classic ESP32 | the bridge's | - (a UART: a host opens it and asks) | the bridge's |
+| RP2040 / RP2350 | `1209:4F45` | `OEP probe (RP2040)` / `(RP2350)` | the unit id (the flash's unique id) |
+| ESP32-P4 (HS port) | `1209:4F45` | `OEP probe (ESP32-P4)` | the unit id (the MAC, lowercase hex) |
+| ESP32-P4 (USB-Serial/JTAG) | the chip's fixed ID | the chip's | the chip's |
+| classic ESP32 | the bridge's | the bridge's | the bridge's |
 
-The firmware currently runs with a temporary USB ID (the board's default VID:PID), which may not be used for distribution. When the project obtains a PID of its own, the firmware will switch to it. Hosts find probes by iProduct `OEP` and
-describe ([PID-USE.md](../../PID-USE.md)).
+`1209:4F45` is the project's own VID:PID: hosts identify a probe by it and tell probes apart by the serial number (the unit
+id). iProduct is only a name for people. Who may ship firmware with the VID:PID: [PID-USE.md](../../PID-USE.md). describe's
+`discoverable` is 1 when the probe enumerates with it (`endpoint.setDiscoverable(true)`): always on an RP2, on the ESP32-P4
+once its HS port has enumerated (a board with only USB-Serial/JTAG wired says 0), never on the classic ESP32. A port with a
+fixed ID (a USB-UART bridge, USB-Serial/JTAG) is chosen by the user. On Linux, the udev rule shipped in oep-client-python,
+[`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules), lets an ordinary user open `1209:4F45`'s
+vendor bulk, DFU and HID interfaces; installing it needs administrator rights.
 
 ## Building for another board
 
@@ -82,8 +88,10 @@ minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
    `RvswdDebugProbe` already has this profile: `arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe`
    builds.
 3. **Pick the transport** by what `Serial` is: USB-Serial/JTAG (`USBMode=hwcdc`: `kUsbSerialJtag`), TinyUSB CDC
-   (`USBMode=default`: `kUsbCdc`; a product name starting with `OEP` - `USB.productName("OEP probe (ESP32-S3)")` -
-   is the hosts' temporary clue until the project's VID:PID, oep-spec host guide §4), or a USB-UART bridge (`kUartBridge`, a classic ESP32 or an ESP32-C3 on its UART0).
+   (`USBMode=default`: `kUsbCdc`; `USB.VID(oep::reg::kUsbProjectVid)`, `USB.PID(oep::reg::kUsbProjectPid)`, the unit id
+   as `USB.serialNumber(...)` and `endpoint.setDiscoverable(true)` when the firmware may carry the project's VID:PID,
+   [PID-USE.md](../../PID-USE.md)), or a USB-UART bridge (`kUartBridge`, a classic ESP32 or an ESP32-C3 on its UART0).
+   USB-Serial/JTAG and a bridge keep their fixed ID: leave discoverable 0.
 4. **Choose the pins.** Leave out the flash / PSRAM pins, the USB pins, the boot straps and anything the board wires to a
    part; reserve them in `describeCore`, offer the rest (the pin table's mask, `pin_choice` for host-chosen pins).
 5. **Build and flash**: `arduino-cli compile --profile esp32s3 <dir>`, then `arduino-cli upload -p <port> --profile esp32s3

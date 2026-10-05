@@ -46,11 +46,10 @@ docs/logic-capture.ja.md §2.7、docs/probe-cdc-and-persistence.ja.md §5.3 / §
 任意のシリアルの口を開くと、その先にあるもの（DTR でリセットするボード、モデム、ほかのツールのデバイス）を乱しうるので、host が
 すべての口について自動で試すことはできず、利用者がその口を明示的に選ぶ必要があります。
 さらに上のリンクには、シリアルの口でない USB のデバイスが要ります（速さのための vendor bulk、ソフトウェア USB とブラウザのための
-HID）。host が自動で OEP の probe と見分けるのはプロジェクトの USB の VID:PID だけで（まだ取得していない）、unit_id（USB の serial number）で
-名指した probe は開いて describe で確かめます。それまでは iProduct が `OEP` で始まる device を暫定の手がかりとして、最初に confirm だけを
-送って試すことがあります（oep-spec core §3.3、docs/usb-identity.ja.md）。
-今は仮の USB の ID（ボードの既定の VID:PID。ESP32-P4 では `303a:0002`）で動かしていて、配布には使えません。専用の PID を
-取得できたら、それに切り替える予定です。
+HID）。host が自動で OEP の probe と見分けるのはプロジェクトの USB の VID:PID `1209:4F45` だけで、unit_id（USB の serial number）で
+名指した probe は開いて describe で確かめます（oep-spec core §3.3、docs/usb-identity.ja.md）。firmware が自分で持つ USB の口
+（ESP32-P4 の high-speed の口、RP2040 / RP2350 の USB）は `1209:4F45` で列挙します。USB-UART の変換チップの後ろの口と ESP32-P4 の
+USB-Serial/JTAG の口は決まった ID のままで、利用者が選びます。
 
 UART の 115200 baud は、どのボードと変換チップでも通る速さです。それより速い速さを probe は前提にできません（921600 を安定して
 通せない変換チップやボードがある）。host は、probe と host が合意しない限り 115200 のままにします。
@@ -69,8 +68,10 @@ classic ESP32 の firmware は任意の `port_speed`（oep-core §3.5）を持�
   [docs/conformance.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
 - host のライブラリ: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python)（`pip install oep-client-python`、
   `oep` の命令、試験のための偽の probe）。
-- USB の VID:PID: 今は仮の USB の ID（ボードの既定の VID:PID。ESP32-P4 では `303a:0002`）と `OEP` で始まる iProduct で動かしていて、
-  配布には使えない。専用の PID を取得できたら、それに切り替える予定（[PID-USE.ja.md](PID-USE.ja.md)）。
+- USB の VID:PID: プロジェクト自身の `1209:4F45`（pid.codes）。使ってよい範囲は [PID-USE.ja.md](PID-USE.ja.md)。Linux で vendor bulk / DFU の
+  インターフェース（libusb）と HID（hidraw）を一般の利用者で開くには、oep-client-python が配る udev の規則
+  [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) を、管理者の権限で 1 回入れる
+  （`sudo install -m 0644 70-oep-probe.rules /etc/udev/rules.d/` の後に `sudo udevadm control --reload-rules && sudo udevadm trigger`）。
 
 ## 配線: 回路図も、決まったピンの割り当ても無い
 

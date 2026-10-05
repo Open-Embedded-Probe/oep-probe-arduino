@@ -37,6 +37,15 @@ pip install oep-client-python
 `oep` の命令と Python の `oep_client` が入ります。ほかの host（ch32rv、ArduinoCore-CH32RV の書き込み）も同じプロトコルを
 話します。この手引きでは Python のものを使います。
 
+Linux で probe の vendor bulk、DFU、HID のインターフェースを一般の利用者で開くには、oep-client-python が配る udev の規則
+[`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) が要ります（シリアルの口はいつもの `dialout` の
+group だけで足ります）。管理者の権限で 1 回入れます:
+
+```sh
+sudo install -m 0644 udev/70-oep-probe.rules /etc/udev/rules.d/   # oep-client-python の checkout か sdist の中で
+sudo udevadm control --reload-rules && sudo udevadm trigger   # または probe を抜き挿しする
+```
+
 ## 3. probe を見つけて、何を持つかを見る
 
 ```sh
@@ -48,9 +57,9 @@ oep dump --port usb                 # または USB の最初の OEP の probe�
 probe を使っていても邪魔しません。ESP32-P4 は 4 つの経路（HS vendor bulk、USB-Serial/JTAG、HID、CDC の口）を、ほかは 1 つを
 出します。
 
-USB の probe は iProduct `OEP probe (...)` を名乗り、USB の serial number が unit_id です。host は unit_id で名指した probe
-（`usb:<unit_id>`）をこれで見つけます。プロジェクトの VID:PID ができるまでは、iProduct が `OEP` で始まる device も、最初に confirm
-だけを送って試すことがあります（暫定の手がかり。oep-spec host 開発ガイド §4）。
+USB の probe はプロジェクトの VID:PID `1209:4F45` で列挙し、USB の serial number が unit_id です。host はこの VID:PID で probe を
+見つけ（`usb`）、unit_id で名指した probe（`usb:<unit_id>`）は serial number で見つけます。iProduct `OEP probe (...)` は人が読む
+ための名前です。決まった ID の口（USB-UART bridge、ESP32-P4 の USB-Serial/JTAG）は名指して使います。
 
 ## 4. 使う
 

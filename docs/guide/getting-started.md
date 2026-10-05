@@ -38,6 +38,15 @@ pip install oep-client-python
 This gives the `oep` command and the Python package `oep_client`. Other hosts speak the same protocol (ch32rv, the
 ArduinoCore-CH32RV upload tool); this guide uses the Python one.
 
+On Linux, opening a probe's vendor bulk, DFU and HID interfaces as an ordinary user needs the udev rule shipped in
+oep-client-python, [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) (the serial ports need only the
+usual `dialout` group). Install it once with administrator rights:
+
+```sh
+sudo install -m 0644 udev/70-oep-probe.rules /etc/udev/rules.d/   # from an oep-client-python checkout or sdist
+sudo udevadm control --reload-rules && sudo udevadm trigger   # or unplug and replug the probe
+```
+
 ## 3. Find the probe and see what it offers
 
 ```sh
@@ -49,9 +58,9 @@ oep dump --port usb                 # or: the first OEP probe on USB (its vendor
 never disturbs another program using the probe. An ESP32-P4 shows four transports (HS vendor bulk, USB-Serial/JTAG, HID,
 a CDC port); the others show one.
 
-USB probes say iProduct `OEP probe (...)` and their unit_id as the USB serial number. A host finds a probe you name by
-its unit_id (`usb:<unit_id>`); until the project has a VID:PID of its own, hosts may also try devices whose iProduct
-starts with `OEP`, sending only a confirm first (a temporary clue, oep-spec host guide §4).
+USB probes enumerate with the project's VID:PID, `1209:4F45`, and say their unit_id as the USB serial number. A host finds
+them by that VID:PID (`usb`), and a probe you name by its unit_id (`usb:<unit_id>`). The iProduct `OEP probe (...)` is
+only a name for people. A port with a fixed ID (a USB-UART bridge, the ESP32-P4's USB-Serial/JTAG) is one you name.
 
 ## 4. Use it
 

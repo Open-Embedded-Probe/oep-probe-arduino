@@ -51,12 +51,18 @@ RP2 の UART の fixture は UART0 で、RX / TX は GP1/0、GP13/12、GP17/16�
 
 | firmware | VID:PID | iProduct | serial number |
 |---|---|---|---|
-| RP2040 / RP2350 | ボード（arduino-pico）の既定 | `OEP probe (RP2040)` / `(RP2350)` | ボードの既定（flash の unique id） |
-| ESP32-P4（HS の口） | `303a:0002` | `OEP probe (ESP32-P4)` | MAC + `-hs` |
-| classic ESP32 | bridge のもの | -（UART なので、host が開いて聞く） | bridge のもの |
+| RP2040 / RP2350 | `1209:4F45` | `OEP probe (RP2040)` / `(RP2350)` | unit id（flash の unique id） |
+| ESP32-P4（HS の口） | `1209:4F45` | `OEP probe (ESP32-P4)` | unit id（MAC の小文字の 16 進） |
+| ESP32-P4（USB-Serial/JTAG） | チップの決まった ID | チップのもの | チップのもの |
+| classic ESP32 | bridge のもの | bridge のもの | bridge のもの |
 
-今は仮の USB の ID（ボードの既定の VID:PID）で動かしていて、配布には使えません。専用の PID を取得できたら、それに切り替える予定です。
-host は iProduct の `OEP` と describe で probe を見つけます（[PID-USE.ja.md](../../PID-USE.ja.md)）。
+`1209:4F45` はプロジェクト自身の VID:PID です。host はこれで probe を見分け、serial number（unit id）で個体を区別します。iProduct
+は人が読むための名前です。この VID:PID で firmware を出してよい条件は [PID-USE.ja.md](../../PID-USE.ja.md)。describe の
+`discoverable` は、probe がこの VID:PID で列挙するときに 1 です（`endpoint.setDiscoverable(true)`）: RP2 ではいつも、ESP32-P4 では
+HS の口が列挙した後（USB-Serial/JTAG だけを配線した基板では 0）、classic ESP32 では 0。決まった ID の口（USB-UART bridge、
+USB-Serial/JTAG）は利用者が選びます。Linux では、oep-client-python が配る udev の規則
+[`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) で、一般の利用者が `1209:4F45` の vendor bulk、
+DFU、HID のインターフェースを開けます。入れるには管理者の権限が要ります。
 
 ## ほかのボード向けのビルド
 
@@ -81,9 +87,10 @@ host は iProduct の `OEP` と describe で probe を見つけます（[PID-USE
    `RvswdDebugProbe` にはこの profile がもうあり、`arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe` で
    ビルドできます。
 3. `Serial` が何かで**経路を選ぶ**。USB-Serial/JTAG（`USBMode=hwcdc`: `kUsbSerialJtag`）、TinyUSB の CDC（`USBMode=default`:
-   `kUsbCdc`。製品名を `OEP` で始めると、プロジェクトの VID:PID ができるまでの host の暫定の手がかりになる（oep-spec host 開発ガイド §4）:
-   `USB.productName("OEP probe (ESP32-S3)")`）、USB-UART bridge
-   （`kUartBridge`。classic ESP32、UART0 の ESP32-C3）。
+   `kUsbCdc`。プロジェクトの VID:PID を使ってよい firmware なら `USB.VID(oep::reg::kUsbProjectVid)`、
+   `USB.PID(oep::reg::kUsbProjectPid)`、unit id を `USB.serialNumber(...)` に、`endpoint.setDiscoverable(true)`。
+   [PID-USE.ja.md](../../PID-USE.ja.md)）、USB-UART bridge（`kUartBridge`。classic ESP32、UART0 の ESP32-C3）。
+   USB-Serial/JTAG と bridge は決まった ID のままなので、discoverable は 0 のままにする。
 4. **ピンを選ぶ。** flash / PSRAM のピン、USB のピン、起動のストラップ、ボードが部品につないだピンを外し、`describeCore` で
    予約とし、残りを出す（ピンの表の mask、host が選ぶなら `pin_choice`）。
 5. **ビルドして焼く**: `arduino-cli compile --profile esp32s3 <dir>`、`arduino-cli upload -p <port> --profile esp32s3 <dir>`。
