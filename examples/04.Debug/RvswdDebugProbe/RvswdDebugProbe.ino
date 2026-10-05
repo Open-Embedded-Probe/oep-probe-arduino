@@ -32,17 +32,20 @@
 
 #if defined(ARDUINO_ARCH_RP2040)
 static constexpr uint8_t kTransport = oep::Endpoint::kUsbCdc;   // USB CDC
+static constexpr uint8_t kInterface = 0;   // the CDC communication interface's bInterfaceNumber (core §7.5)
 static constexpr uint8_t kSwdio = 2, kSwclk = 3;                  // GP2 -> SWDIO, GP3 -> SWCLK
 #else
 #include <soc/usb_serial_jtag_reg.h>
 // an ESP32 with dedicated GPIO (the P4; an S3, C3 or C6 builds too): its USB-Serial/JTAG is the Serial port
 static constexpr uint8_t kTransport = oep::Endpoint::kUsbSerialJtag;
+static constexpr uint8_t kInterface = 0xff;   // built-in USB serial: the number is not the probe's to know (core §7.5)
 static constexpr uint8_t kSwdio = 2, kSwclk = 3;   // GPIO2 -> SWDIO, GPIO3 -> SWCLK
 #endif
 
 static uint8_t rxBuffer[1100];
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport);
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport,
+                              kInterface);
 
 // The PHY drives the two wires (the RP2's SIO, the P4's dedicated GPIO), Ch32Dm speaks DMI over it, and one DebugPort is
 // the wire's one connection that the three interfaces share.

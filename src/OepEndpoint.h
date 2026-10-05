@@ -56,6 +56,9 @@ class Endpoint {
   // A serial port's frames are decoded here (one at a time): max_frame may not exceed this with a serial port.
   static constexpr size_t kMaxSerialFrame = 2048;
 
+  // usb_interface (describe transport, core §7.5): for USB CDC the bInterfaceNumber of the CDC communication interface
+  // (the first of the function); for built-in USB serial that number as the hardware presents it, or 0xFF when the
+  // probe cannot know it; for vendor bulk and HID that interface's number; 0xFF for a UART bridge and TCP.
   Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
            Limits limits, uint8_t kind, uint8_t usb_interface = 0xff)
       : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(bounded(limits)) {

@@ -23,12 +23,14 @@
 
 #if defined(ARDUINO_ARCH_RP2040)
 static constexpr uint8_t kTransport = oep::Endpoint::kUsbCdc;
+static constexpr uint8_t kInterface = 0;   // the CDC communication interface's bInterfaceNumber (core §7.5)
 // A Pico's GP0-GP22 and GP26-GP28. The UART is UART0: RX / TX on GP1/0, GP13/12, GP17/16 or GP29/28.
 static constexpr uint64_t kChannels = ((1ull << 23) - 1) | (0x7ull << 26);
 static constexpr uint16_t kChannelCount = 30;
 #define FIXTURE_UART Serial1
 #else
 static constexpr uint8_t kTransport = oep::Endpoint::kUartBridge;
+static constexpr uint8_t kInterface = 0xff;   // a UART bridge: no USB interface of the probe's (core §7.5)
 // A classic ESP32 DevKitC's free GPIOs (not UART0 1/3, the flash 6-11 or the straps 0/2/12/15; 34-39 input only).
 static constexpr uint64_t kChannels = (1ull << 4) | (1ull << 5) | (1ull << 13) | (1ull << 14) | (1ull << 16) | (1ull << 17) |
                                       (1ull << 18) | (1ull << 19) | (1ull << 21) | (1ull << 22) | (1ull << 23) | (1ull << 25) |
@@ -40,7 +42,8 @@ static constexpr uint16_t kChannelCount = 40;
 
 static uint8_t rxBuffer[1100];
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport);
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport,
+                              kInterface);
 
 // The pins the fixtures share. Each interface claims what its plan names under its own owner id (1, 2), so one never
 // drives a pin another holds (core §8.1); a released pin goes back to Hi-Z (or its idle state).

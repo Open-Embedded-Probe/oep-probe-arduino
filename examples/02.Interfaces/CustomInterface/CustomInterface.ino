@@ -30,10 +30,12 @@
 
 #if defined(ARDUINO_ARCH_RP2040)
 static constexpr uint8_t kTransport = oep::Endpoint::kUsbCdc;
+static constexpr uint8_t kInterface = 0;   // the CDC communication interface's bInterfaceNumber (core §7.5)
 static constexpr uint64_t kChannels = ((1ull << 23) - 1) | (0x7ull << 26) | (1ull << 25);   // with the LED (GP25)
 static constexpr uint16_t kChannelCount = 30;
 #else
 static constexpr uint8_t kTransport = oep::Endpoint::kUartBridge;
+static constexpr uint8_t kInterface = 0xff;   // a UART bridge: no USB interface of the probe's (core §7.5)
 static constexpr uint64_t kChannels = (1ull << 2) | (1ull << 4) | (1ull << 5) | (0xfull << 12) | (0xfull << 16) |
                                       (0x7ull << 21) | (0x7ull << 25) | (0x3ull << 32);   // with GPIO2 (the LED)
 static constexpr uint16_t kChannelCount = 40;
@@ -140,7 +142,8 @@ class Blink final : public oep::Interface {
 
 static uint8_t rxBuffer[1100];
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport);
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport,
+                              kInterface);
 static oep::PinTable pins(kChannels);
 static Blink blink(pins);
 static uint8_t probeTlv[64];

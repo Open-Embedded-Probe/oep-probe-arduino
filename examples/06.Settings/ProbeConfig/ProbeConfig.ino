@@ -47,7 +47,7 @@ static constexpr uint64_t kChannels = (((1ull << 23) - 1) | (0x7ull << 26)) & ~k
 static uint8_t rxBuffer[1100];
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
-                              oep::Endpoint::kUsbCdc);   // transport 0, serial port 0: the bind's "--port 0"
+                              oep::Endpoint::kUsbCdc, 0);   // transport 0, serial port 0: the bind's "--port 0"; CDC interface 0
 
 static oep::RvswdPhy phy;
 static oep::Ch32Dm dm(phy);

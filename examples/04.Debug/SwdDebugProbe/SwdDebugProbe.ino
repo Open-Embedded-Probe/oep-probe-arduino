@@ -25,7 +25,7 @@ static constexpr uint8_t kSwclk = 2, kSwdio = 3;   // GP2 -> SWCLK, GP3 -> SWDIO
 static uint8_t rxBuffer[1100];
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
-                              oep::Endpoint::kUsbCdc);
+                              oep::Endpoint::kUsbCdc, 0);   // CDC communication interface 0 (core §7.5)
 
 static oep::SwdPort port{kSwdio, kSwclk};
 static oep::WireSwd wire(port, 0);
