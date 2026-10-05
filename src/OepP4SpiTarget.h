@@ -110,13 +110,20 @@ class P4SpiTarget final : public Interface {
 #endif
 #if defined(OEP_SPI_MISO_GATE)
  public:
-  // The core the CS handler runs on (not loop()'s, which the SWIO frames mask), and the declared worst-case delay from
-  // CS falling to MISO driven (describe cs_setup_ns): one level-3 GPIO interrupt there, about 1.5 us (1-2 us measured on
-  // the bench with nothing masking the core), plus the longest the core masks level 3 itself - FreeRTOS's and ESP-IDF's
-  // critical sections on core 0, a few us. An estimate from the code, to be measured on the bench. Not covered: a logic
-  // capture of the core-0 sampler running at the same time (it masks core 0 for its whole window, up to 164 ms).
+  // The core the CS handler runs on (not loop()'s, which the SWIO frames mask), and the declared delay (describe
+  // cs_setup_ns) that covers both of the gate's moves: CS falling to MISO driven with the first bit, and CS rising to
+  // MISO undriven (fixture §4: one value for both). Measured on the bench (classic ESP32, a CH32V003 master, the
+  // console of an attached debug wire running, 2026-10): the first bit right from 2.0 us after CS fell at 1 MHz and
+  // from 3.1 us at 3 MHz; MISO still driven up to 11.9 us after CS rose. 15 us is the longest of those with margin.
+  // Not covered: a logic capture of the core-0 sampler running at the same time (it masks core 0 for its whole window,
+  // up to 164 ms).
   static constexpr uint32_t kGateCore = 0;
-  static constexpr uint32_t kCsSetupNs = 10000;
+  static constexpr uint32_t kCsSetupNs = 15000;
+  // SPI modes this target offers (bit n: mode n). Modes 1 and 3 sample on the second SCK edge: there the classic's
+  // slave puts 0 on MISO from CS falling to the first SCK edge, whatever the first bit (bench, 2026-10) - neither
+  // undriven nor the first bit (fixture §4), and the gate only switches the output enable. They are refused
+  // unsupported (core §4.3 order 6, payload tag 0x00).
+  static constexpr uint8_t kModes = 0x05;
 
  private:
   bool gated_ = false;

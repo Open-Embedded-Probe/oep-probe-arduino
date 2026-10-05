@@ -7,7 +7,8 @@
 // read_rx in state 0 is unavailable cause 6, configure clears the counts, releasing the plan goes back to describe's
 // state. The next transaction is loaded at the CS rising edge that ended the last one, never inside a frame: the bench
 // sequence of 0.0.28 (a 0-bit frame before a 64-byte one, loop() running during it), and an unarmed frame right after
-// an armed one. arm does not restart the driver. MISO is driven only while CS is low.
+// an armed one. arm does not restart the driver. MISO is driven only while CS is low. Modes 1 / 3 are refused unsupported
+// (the classic), describe cs_setup_ns 15000.
 #include <stdio.h>
 
 #include <vector>
@@ -157,9 +158,9 @@ int main() {
 
   // configure makes the target anew: queue, wait and counts go
   CHECK(ok(arm(t, 4, {})));
-  CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {3, 1}, out)));
+  CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {2, 1}, out)));
   s = status(t);
-  CHECK(s.state == 1 && s.mode == 3 && s.bit_order == 1 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
+  CHECK(s.state == 1 && s.mode == 2 && s.bit_order == 1 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
   CHECK(fakeSpiTransfer(8, mosi));
   t.service();
   s = status(t);
@@ -173,7 +174,7 @@ int main() {
   {
     const uint8_t p4[] = {0xa5, 0x5a, 0x0f, 0x01};
     const Bytes a4 = {0x3c, 0x96, 0xc3, 0x0f};
-    for (uint8_t mode : {0, 1, 2, 3, 0}) {
+    for (uint8_t mode : {0, 2, 0}) {
       CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {mode, 0}, out)));
       CHECK(ok(arm(t, 4, a4)));
       CHECK(fakeSpiTransfer(32, p4));
@@ -242,7 +243,7 @@ int main() {
     CHECK(!fakeMisoDriven());
     CHECK(ok(call(t, P4SpiTarget::kOpReset, {}, out)));
     CHECK(!fakeMisoDriven());                               // reset
-    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {1, 0}, out)));
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {2, 0}, out)));
     CHECK(!fakeMisoDriven());                               // configured anew
     // configured while selected: driven at once
     CHECK(fakeCsLow() || true);
@@ -273,7 +274,28 @@ int main() {
     for (size_t at = 0; at + 2 <= n; at += 2u + d[at + 1])
       if (d[at] == 0x43 && d[at + 1] == 4)
         found = (d[at + 2] | d[at + 3] << 8 | d[at + 4] << 16 | uint32_t(d[at + 5]) << 24) == P4SpiTarget::kCsSetupNs;
-    CHECK(found && P4SpiTarget::kCsSetupNs == 10000);
+    CHECK(found && P4SpiTarget::kCsSetupNs == 15000);   // the bench's 11.9 us (CS rising to MISO undriven) with margin
+  }
+
+  // Modes 1 and 3 are not offered on the classic (its slave drives 0 on MISO before the first SCK edge, whatever the
+  // first bit): configure is refused unsupported, payload tag 0x00 (core §4.3 order 6), and the running target and its
+  // state are left as they were. Unsupported comes before the plan's unavailable (order 6 before 7); a mode over 3 stays
+  // malformed.
+  {
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {2, 1}, out)));
+    CHECK(ok(arm(t, 4, {})));
+    for (uint8_t mode : {1, 3}) {
+      const Result r = call(t, P4SpiTarget::kOpConfigure, {mode, 0}, out);
+      CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 && out[0] == 0x00);
+    }
+    s = status(t);
+    CHECK(s.state == 1 && s.mode == 2 && s.bit_order == 1 && s.armed);
+    const Result bad = call(t, P4SpiTarget::kOpConfigure, {4, 0}, out);
+    CHECK(bad.resolution == kResolutionRejected && bad.detail == kRejectMalformed);
+    P4SpiTarget unplanned(pins);
+    const Result r = call(unplanned, P4SpiTarget::kOpConfigure, {3, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
+    CHECK(unavailableCause(call(unplanned, P4SpiTarget::kOpConfigure, {0, 0}, out), out, 6));
   }
 
   // releasing the plan, then a new one: the state right after describe (state 0, mode and bit_order 0, no counts)

@@ -161,11 +161,11 @@ int main() {
   arm.push_back(0x81);
   arm.push_back(0x42);
   CHECK(completed(p.send(fn, P4SpiTarget::kOpArm, arm, true, sid)));
-  for (uint8_t mode = 1; mode <= 3; ++mode)   // configured again: the service is not installed twice
+  for (uint8_t mode : {2, 0, 2})   // configured again: the service is not installed twice
     CHECK(completed(p.send(fn, P4SpiTarget::kOpConfigure, {mode, 0}, true, sid)));
   CHECK(g_fake_gpio_error_logs == 0 && g_fake_ipc_deadlocks == 0);
   const Bytes st = p.send(fn, P4SpiTarget::kOpStatus, {}, true, sid);
-  CHECK(completed(st) && st.size() >= 4 && st[2] == 1 && st[3] == 3);   // running, mode 3
+  CHECK(completed(st) && st.size() >= 4 && st[2] == 1 && st[3] == 2);   // running, mode 2
   CHECK(completed(p.send(0, reg::core::kOpKeepalive, {}, true, sid)));   // the session still held
 
   printf("broker-spi: %d checks, %d failures\n", checks, failures);
