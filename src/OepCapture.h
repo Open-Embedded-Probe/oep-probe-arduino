@@ -27,7 +27,8 @@
 #include "OepCaptureGroup.h"
 #include "OepPinTable.h"
 
-#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
+// OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
+#if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
 #include <driver/parlio_rx.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>

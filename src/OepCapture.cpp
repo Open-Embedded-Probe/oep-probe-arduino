@@ -3,7 +3,8 @@
 
 #include "OepCapture.h"
 
-#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
+// OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
+#if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
 
 #include <esp_cache.h>
 #include <esp_heap_caps.h>
@@ -750,9 +751,11 @@ bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples,
   if (!ring_) ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kRingBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
   queue_ = xQueueCreate(128, sizeof(Chunk));
   if (!ring_ || !queue_) return false;
-  if (direct_) {
-    if (!openStages()) return false;
-  } else {
+  // Without internal RAM for two stages (taken by the DMA ring, a trigger's segment, the rest of the firmware), the
+  // stream goes the copied way instead: the segments in the store, pushed by the endpoint like any notification.
+  // It failed configure (0.0.28 on the bench: a streaming configure after other captures answered failed).
+  if (direct_ && !openStages()) direct_ = false;
+  if (!direct_) {
     uint32_t caps = 0;
     storeBudget(caps);
     store_bytes_ = static_cast<size_t>(segment_bytes_) * segment_count_;
