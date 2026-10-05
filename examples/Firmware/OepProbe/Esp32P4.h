@@ -8,7 +8,7 @@
 //   2 HID              HS port, vendor HID reports                                           OEP only
 //   3 USB CDC          HS port                                                               serial port: OEP + raw
 //
-//   (and a DFU interface on the HS port: the probe's own firmware update, outside OEP)
+//   (and a DFU interface on the HS port: the probe's own firmware update, outside OEP, part of the same USB device)
 //
 // Updating the firmware over the HS port alone: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the release's app image)
 // writes the other app partition, checks it and restarts into it; settings (NVS) stay. The new firmware counts as good
@@ -17,8 +17,10 @@
 // with the merged image.
 //
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
-// a slot's console, a fixture UART). The HS device is VID:PID 303a:0002 (the board's default, a temporary USB ID; PID-USE.md),
-// iProduct "OEP probe (ESP32-P4)", serial = the unit id (the MAC, lowercase hex; one usbipd bind lasts across reflashes).
+// a slot's console, a fixture UART). The HS device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial =
+// the unit id (the MAC, lowercase hex); its iProduct "OEP probe (ESP32-P4)" is a name for people. USB-Serial/JTAG keeps the
+// chip's fixed ID: a host reaches it by the user choosing its port. describe discoverable is 1 once the HS port has
+// enumerated (a board with only USB-Serial/JTAG wired never gets there and says 0).
 // How a host tells the ports apart inside a device known to be OEP (core §3.3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
@@ -54,7 +56,6 @@
 #include <OepTarget.h>
 #include "UsbStreams.h"
 
-static constexpr uint16_t kUsbVid = 0x303a, kUsbPid = 0x0002;   // the board's default: a temporary USB ID, not for distribution
 static constexpr uint16_t kUnset = 0xfffe;                        // no pair chosen yet
 
 // The vendor bulk function with OEP's subclass / protocol in its interface descriptor (core §3.3).
@@ -162,10 +163,10 @@ void setup() {
 
   oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
   EspUsbDeviceConfig usb;
-  usb.vid = kUsbVid;
-  usb.pid = kUsbPid;
+  usb.vid = oep::reg::kUsbProjectVid;   // the project's VID:PID (registry usb, PID-USE.md)
+  usb.pid = oep::reg::kUsbProjectPid;
   usb.manufacturer = "Open Embedded Probe";
-  usb.product = "OEP probe (ESP32-P4)";   // free text; starting "OEP" is a host's temporary clue (host guide §4)
+  usb.product = "OEP probe (ESP32-P4)";   // a name for people; no host identifies the probe by it
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
   usbDevice.begin(usb);
@@ -175,7 +176,7 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
-  // describe discoverable stays 0: it is 1 only on the project's own USB VID:PID, none listed yet (core §3.3 / §7.5)
+  // describe discoverable: set in loop() once the HS port has enumerated with the project's VID:PID (core §3.3 / §7.5)
 
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;
@@ -223,9 +224,10 @@ void setup() {
 
 void loop() {
   static bool confirmed = false;
-  if (!confirmed && usbDevice.ready()) {   // the HS port enumerated: this firmware is good (see verifyRollbackLater)
+  if (!confirmed && usbDevice.ready()) {   // the HS port enumerated (configured by a host)
     confirmed = true;
-    EspUsbDeviceFirmwareUpdate::markValid();
+    EspUsbDeviceFirmwareUpdate::markValid();   // this firmware is good (see verifyRollbackLater)
+    endpoint.setDiscoverable(true);            // the probe enumerates with the project's VID:PID (core §7.5)
   }
   endpoint.poll();
   console.poll();

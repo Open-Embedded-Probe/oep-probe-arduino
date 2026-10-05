@@ -6,7 +6,8 @@
 // Transport: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
 // below) - the probe's one transport, serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-core §3.4). The bridge's auto-reset
 // circuit resets the ESP32 when the port is opened with DTR / RTS in the wrong order: a host opens it with both on
-// (host guide §1). A UART has no iProduct: a host finds this probe by opening the port and asking (confirm).
+// (host guide §1). The bridge's USB ID is not the project's VID:PID, so describe discoverable stays 0: a host reaches this
+// probe by the user choosing its port, then asking (confirm).
 //
 // Interfaces (revision 1): oep.core; oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
 // oep.fixture.gpio / uart / capture (the core-0 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C

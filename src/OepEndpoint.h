@@ -89,8 +89,9 @@ class Endpoint {
   // A session has taken the lock at least once since boot (oep-if-probe-config §3.1: no retry with reset after that).
   bool lockEverTaken() const { return have_last_; }
   bool held(size_t port) const { return locked_ && ((held_ >> port) & 1); }
-  // The probe also enumerates with the project's own USB VID:PID (describe discoverable, core §3.3 / §7.5). Until that
-  // VID:PID is listed in the registry, no probe sets this.
+  // The probe enumerates with the project's USB VID:PID, registry usb project_vid / project_pid (describe discoverable,
+  // core §3.3 / §7.5). Set it only once it actually does: a probe behind a UART bridge or on a fixed-ID built-in USB
+  // serial leaves it 0.
   void setDiscoverable(bool on) { discoverable_ = on; }
   // The longest one request takes (describe max_op_ms, core §7.5): what every interface's long op is bounded by.
   static constexpr uint32_t kMaxOpMs = oep::kMaxOpMs;

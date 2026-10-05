@@ -3,9 +3,9 @@
 
 // RP2040 / RP2350 (built for the Raspberry Pi Pico / Pico 2; profiles rp2040 / rp2350).
 //
-// Transport: USB CDC (Serial), a serial port: COBS frames (oep-core §3.1). The USB device says iProduct "OEP probe
-// (RP2040)" / "(RP2350)" (free text; starting "OEP" is a host's temporary clue, host guide §4), the board's own VID:PID and serial number (the VID:PID
-// is a temporary USB ID, not for distribution; PID-USE.md).
+// Transport: USB CDC (Serial), a serial port: COBS frames (oep-core §3.1). The USB device is the project's VID:PID
+// 1209:4F45 (registry usb; PID-USE.md), serial = the unit id, describe discoverable 1; its iProduct "OEP probe (RP2040)" /
+// "(RP2350)" is a name for people.
 //
 // Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all).
@@ -88,7 +88,8 @@ static size_t describeProbe() {
 void setup() {
   USB.disconnect();
   USB.setManufacturer("Open Embedded Probe");
-  USB.setProduct(kProduct);   // iProduct "OEP...": discovery (oep-core §3.3)
+  USB.setVIDPID(oep::reg::kUsbProjectVid, oep::reg::kUsbProjectPid);   // the project's VID:PID (registry usb, PID-USE.md)
+  USB.setProduct(kProduct);   // a name for people; no host identifies the probe by it
   static uint8_t serial[17];
   oep::platformUnitId(serial, sizeof serial);
   USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (core §3.3)
@@ -107,7 +108,7 @@ void setup() {
   swd.pin_choice = kChannels;
   swd.pins = &pins;
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  // describe discoverable stays 0: it is 1 only on the project's own USB VID:PID, none listed yet (core §3.3 / §7.5)
+  endpoint.setDiscoverable(true);   // its one transport is USB with the project's VID:PID (core §3.3 / §7.5)
   endpoint.add(wireRvswd);
   endpoint.add(riscvDm);
   endpoint.add(console);
