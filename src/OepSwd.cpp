@@ -299,6 +299,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         bool ok = false;
         if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state
           ok = xferDpidr(dpidr);
+          // a scan is a request on the connection: it runs the wire-loss clock, and closes it once lost (§2)
+          if (lostAfter(port_, ok ? kStatusOk : kStatusLine)) close();
         } else if (move(d, c)) {
           bool dormant = false;
           ok = wake(scan_select ? &scan_targetsel : nullptr, half, dpidr, dormant);

@@ -185,9 +185,9 @@ bool Ch32Dm::resume() {
   int halted_reads = 0;
   for (int i = 0; i < 25 && !ok; ++i) {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status)) continue;
+    if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) continue;   // all ones has allresumeack set too
     if (status & (1u << 17)) ok = true;                          // allresumeack
-    else if (dmVersionKnown(status) && (status & (1u << 11)) && !(status & (1u << 9)))
+    else if ((status & (1u << 11)) && !(status & (1u << 9)))
       ok = true;                                                 // allrunning, not halted
     else if (dmHalted(status) && ++halted_reads >= 3) break;
   }

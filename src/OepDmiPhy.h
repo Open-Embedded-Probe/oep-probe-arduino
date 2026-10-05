@@ -46,8 +46,9 @@ class DmiPhy {
   // A good exchange is a read that came back with a value other than all zeros or all ones: a line held low, or one
   // that rises through its pull-up with no module behind it, reads one of those (a read cell, a parity bit included,
   // comes back as the line rests). Such a value is no answer on DMSTATUS - the probe answers status line for it
-  // (TargetRiscvDm::failure, checkConnection) - so the clock runs on as for a read that got nothing; on any other
-  // register it may be the register's value, so it leaves the clock as it is. A read that got nothing back starts it.
+  // (TargetRiscvDm::failure, a dmi read step, checkConnection) - so the clock runs on as for a read that got nothing;
+  // on any other register it may be the register's value, so it leaves the clock as it is. A read that got nothing
+  // back starts it.
   bool read(uint8_t address, uint32_t &value) {
     const bool ok = readWire(address, value);
     const Outcome o = outcomeOf(address, ok, value);

@@ -173,6 +173,7 @@ class TargetRiscvDm final : public Interface {
   Result dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   Result dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity);
   uint8_t failure(uint8_t otherwise);   // line when the link does not answer, else `otherwise`
+  static Result asLine(uint8_t op, uint8_t *out, const Result &r);   // a completed answer as status line, form kept
   bool line_lost_ = false;              // set by failure() once the wire is lost (§2): the answer goes out, then the close
   DebugPort *ports_[2] = {};
   DebugPort *port_ = nullptr;           // the port of the request being handled (chosen in handle)

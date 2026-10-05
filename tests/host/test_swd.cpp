@@ -277,6 +277,21 @@ int main() {
     g_swd.absent = false;
   }
 
+  // ---- a scan through the live connection runs the wire-loss clock and closes it once lost (oep-if-debug §2) ----
+  {
+    r = call(wire, WireSwd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && fixed.connected);
+    Bytes t = u16(fixed.number);
+    t.insert(t.end(), {1, 0, 0x06});
+    g_swd.absent = true;
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(out[2] == kStatusLine && fixed.connected);
+    g_millis += reg::kLimitWireLostMs;
+    r = call(wire, WireSwd::kOpScan, {0}, out);
+    CHECK(ok(r) && out.size() >= 2 && out[1] == 0 && !fixed.connected);   // 68d9694: kept
+    g_swd.absent = false;
+  }
+
   printf("swd: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

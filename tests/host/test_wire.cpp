@@ -59,10 +59,14 @@ class FakePhy final : public DmiPhy {
   // stuck: every read comes back with this value (a line held low: 0; one rising through its pull-up, no module: ~0)
   bool stuck = false;
   uint32_t stuck_value = 0;
+  // stale: the target lost its power and came back - the link the probe holds is out of step and reads all ones
+  // until it is brought up afresh (attach() from not attached); the module then answers with havereset set
+  bool stale = false, havereset = false;
 
   bool attach() override {
     if (attached_flag) return true;
     ++attaches;
+    stale = false;
     g_millis += attach_ms;
     state = kDriven;
     if (!present || fail_attaches > 0) { --fail_attaches; state = kReleased; return false; }
@@ -87,6 +91,7 @@ class FakePhy final : public DmiPhy {
   bool readWire(uint8_t address, uint32_t &value) override {
     if (!present || !attached_flag) return false;
     if (stuck) { value = stuck_value; return true; }
+    if (stale) { value = 0xffffffffu; return true; }
     if (flaky) {   // the RVSWD PHY's way: retries while the request's allowance lasts, then a failed read
       while (retryLeft()) { g_millis += 1; spentRetrying(1000); ++retry_reads; }
       return false;
@@ -96,7 +101,8 @@ class FakePhy final : public DmiPhy {
       case 0x05: value = data1; break;
       case 0x10: value = 1; break;   // DMCONTROL: dmactive
       case 0x11:                     // DMSTATUS: version, authenticated, all/any halted or running, allresumeack
-        value = version | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (resumeack ? (3u << 16) : 0);
+        value = version | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (resumeack ? (3u << 16) : 0) |
+                (havereset ? (3u << 18) : 0);
         break;
       case 0x12: value = 0x0002'1000u | 0x380; break;   // HARTINFO: DATA0 at 0x380 (memory-mapped), datacount 2
       case 0x16: value = 2; break;                       // ABSTRACTCS: datacount 2, not busy, no cmderr
@@ -112,6 +118,7 @@ class FakePhy final : public DmiPhy {
     if (address == 0x10) {
       if (value & (1u << 31)) { halted = true; resumeack = false; }
       if (value & (1u << 30)) { halted = false; resumeack = true; }
+      if (value & (1u << 28)) havereset = false;   // ackhavereset
     }
   }
   bool setIdleClockLow(bool low) override { idle_low = low; return true; }
@@ -531,6 +538,80 @@ int main() {
     CHECK(out.size() == 1 && out[0] == kStatusLine && !fixed.connected);
     phy.stuck = false;
     phy.halted = false;
+  }
+
+  // ---- every request on the connection looks at the wire-loss clock, whatever its op answered (oep-if-debug §2) ----
+  // The target's power floating: DMSTATUS reads all ones. 0.0.28+68d9694: a host's dmi read of DMSTATUS answered ok
+  // with 0xffffffff, and the connection never closed.
+  {
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    Bytes read = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x02, 0x11};
+    phy.stuck = true;
+    phy.stuck_value = 0xffffffffu;
+    // a DMSTATUS of all ones is no answer: the step fails with line, no value; one such request keeps the connection
+    r = call(riscv, TargetRiscvDm::kOpDmi, read, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 5 && out[0] == 0 && out[2] == kStatusLine && out[3] == 0);
+    CHECK(fixed.connected);
+    // a poll of DMSTATUS for allhalted is not met by all ones (0.0.28+68d9694: met at once)
+    Bytes poll = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x03, 0x11};
+    for (uint32_t v : {1u << 9, 1u << 9}) for (int b = 0; b < 4; ++b) poll.push_back(uint8_t(v >> (8 * b)));
+    poll.insert(poll.end(), {10, 0});
+    r = call(riscv, TargetRiscvDm::kOpDmi, poll, out);
+    CHECK(out.size() == 5 && out[2] == kStatusLine && fixed.connected);
+    // resume is not acknowledged by all ones (allresumeack reads set): line, not ok
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
+    CHECK(out.size() == 1 && out[0] == kStatusLine && fixed.connected);
+    // a block op on a hart whose DMSTATUS reads all ones: line, not state
+    const Bytes block = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 0, 0, 0, 0x20, 1, 0};
+    r = call(riscv, TargetRiscvDm::kOpReadBlock, block, out);
+    CHECK(out.size() >= 3 && out[2] == kStatusLine && fixed.connected);
+    // wire_lost_ms after the first: the request that sees it answers line and the connection closes after it
+    g_millis += reg::kLimitWireLostMs;
+    r = call(riscv, TargetRiscvDm::kOpDmi, read, out);
+    CHECK(out.size() == 5 && out[2] == kStatusLine && !fixed.connected && fixed.lost);
+
+    // reads of another register (all ones may be its own value: no answer either way) once the clock runs: ok until
+    // wire_lost_ms, then the step that sees it fails with line, its value left out, and the connection closes
+    phy.stuck = false;
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    read[0] = uint8_t(fixed.number);
+    read[1] = uint8_t(fixed.number >> 8);
+    phy.stuck = true;
+    r = call(riscv, TargetRiscvDm::kOpDmi, read, out);   // DMSTATUS: the clock starts
+    CHECK(out[2] == kStatusLine && fixed.connected);
+    const Bytes data0 = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 2, 0, 0x02, 0x04, 0x02, 0x04};
+    g_millis += 500;
+    r = call(riscv, TargetRiscvDm::kOpDmi, data0, out);
+    CHECK(ok(r) && out.size() == 13 && fixed.connected);
+    g_millis += 500;
+    r = call(riscv, TargetRiscvDm::kOpDmi, data0, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 5 && out[0] == 0 && out[2] == kStatusLine && out[3] == 0);
+    CHECK(!fixed.connected && fixed.lost);
+
+    // a request with no read at all (a delay) on a clock that has run out: the answer is line all the same, closed
+    phy.stuck = false;
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    phy.stuck = true;
+    r = call(riscv, TargetRiscvDm::kOpDmi, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x02, 0x11}, out);
+    g_millis += reg::kLimitWireLostMs;
+    r = call(riscv, TargetRiscvDm::kOpDmi, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x04, 0, 0, 0, 0}, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 5 && out[2] == kStatusLine && !fixed.connected);   // a delay alone
+    phy.stuck = false;
+    phy.halted = false;
+
+    // scan through the live connection runs the same clock: lost there, the connection closes
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    phy.stuck = true;
+    CHECK(checkConnection(fixed));
+    g_millis += reg::kLimitWireLostMs;
+    r = call(wire_fixed, WireRvswd::kOpScan, {0}, out);
+    CHECK(ok(r) && out.size() >= 2 && out[1] == 0 && !fixed.connected && fixed.lost);
+    phy.stuck = false;
   }
 
   // ---- the console's reads run the same clock: lost only after wire_lost_ms of reads that got nothing ----

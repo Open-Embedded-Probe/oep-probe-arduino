@@ -15,6 +15,12 @@ namespace wire = reg::wire_rvswd;
 
 constexpr uint8_t kDmStatus = 0x11;
 
+// A DMSTATUS read that came back with a module behind it: all zeros / all ones is a line held low or floating up
+// through its pull-up (DmiPhy::outcomeOf), no answer.
+bool moduleAnswers(Ch32Dm &dm, uint32_t &status) {
+  return dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
+}
+
 // A cold CH32 ignores the first wake now and then (the CH32L103 answered on the fifth, 2026-09-23), and one that
 // sat idle past its link timeout has dropped the link: bring the bus up afresh and try again before saying no - while
 // the attach budget lasts (the PHY's deadline). Each try again counts in search_retries.
@@ -381,7 +387,9 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     if (port_.connected) {
       // the live connection: look through it - re-attaching (and detaching on a miss) would pull the link out
       // from under the host that holds it
-      ok = port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
+      ok = moduleAnswers(port_.dm, status);
+      // a scan is a request on the connection: wire loss decided here closes it (oep-if-debug §2)
+      if (!ok && phy.loss().lost()) releaseConnection(port_, 0xff, true, true);
     } else if (usePair(port_, d, c)) {
       {
         AttachDeadline budget(phy);
@@ -565,8 +573,11 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       else if ((halt || (status & (1u << 9))) && !(port_.dm.halt() && port_.dm.readDmi(kDmStatus, status)))
         failure = kStatusTimeout;
     }
-    // nothing back: status line; the connection closes after the answer only once the wire is lost (oep-if-debug §2)
-    if (failure == kStatusLine && phy.loss().lost()) releaseConnection(port_, 0xff, true, true);
+    // the connection closes after the answer only once the wire is lost (oep-if-debug §2): that answer is line
+    if (phy.loss().lost()) {
+      failure = kStatusLine;
+      releaseConnection(port_, 0xff, true, true);
+    }
   } else {
     if (!phy.setMaxHz(max_hz)) {   // a ceiling this link cannot keep (a fixed speed above it)
       const Result r = tail.refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
@@ -698,6 +709,16 @@ uint8_t TargetRiscvDm::failure(uint8_t otherwise) {
   return kStatusLine;
 }
 
+// An answer that ran (completed) turned into status line, its form kept: the status byte is out[0] (halt, resume, reset,
+// step, run) or out[2] after done(u16) (dmi, read_block, write_block); done stays what the op progressed.
+Result TargetRiscvDm::asLine(uint8_t op, uint8_t *out, const Result &r) {
+  const bool with_done = op == kOpDmi || op == kOpReadBlock || op == kOpWriteBlock;
+  const size_t at = with_done ? 2 : 0;
+  if (r.length <= at) return r;   // no status in it (not expected for a completed answer)
+  out[at] = kStatusLine;
+  return outcome(kStatusLine, with_done ? getU16(out) : 0, r.length);
+}
+
 Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 2) return rejected(kRejectMalformed);
   // The wire whose live connection the request names (one riscv-dm serves every wire's connections).
@@ -707,7 +728,14 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
   if (!port_) return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
   line_lost_ = false;
   port_->dm.phy().beginRequest();   // the request's allowance for wire retries (oep-if-debug §2)
-  const Result r = dispatch(op, payload + 2, length - 2, out, capacity);
+  Result r = dispatch(op, payload + 2, length - 2, out, capacity);
+  // Wire loss is looked at after every request on the connection, whatever the op answered (oep-if-debug §2): an op
+  // that ran on reads which may be a register's own all zeros / all ones (a raw dmi read of DATA0, say) leaves the
+  // clock running. Decided here, the answer says line and the connection closes after it.
+  if (!line_lost_ && r.resolution == kResolutionCompleted && port_->dm.phy().loss().lost()) {
+    line_lost_ = true;
+    r = asLine(op, out, r);
+  }
   if (line_lost_) releaseConnection(*port_, 0xff, true, true);   // the answer says line; the connection goes with it
   return r;
 }
@@ -779,8 +807,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
         const bool ok = dm.step(before, after, moved);
         // an unmoved dpc is not a failure: a self jump (j .) truly steps to itself; the host reads the instruction
         status = !ok ? (dm.lastCmderr() ? kStatusFault : failure(kStatusTimeout)) : kStatusOk;
-      } else if (!dm.attached()) {
-        status = failure(kStatusState);
+      } else {
+        status = failure(kStatusState);   // not halted (the module answers), or no answer at all: line
       }
       out[0] = status;
       out[1] = moved;
@@ -809,8 +837,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
         } else {
           status = cmderr && cmderr != 3 ? kStatusFault : failure(kStatusFault);
         }
-      } else if (!dm.attached()) {
-        status = failure(kStatusState);
+      } else {
+        status = failure(kStatusState);   // not halted (the module answers), or no answer at all: line
       }
       putU16(out, done);
       out[2] = status;
@@ -838,8 +866,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
         } else {
           status = dm.lastCmderr() ? kStatusFault : failure(kStatusFault);
         }
-      } else if (!dm.attached()) {
-        status = failure(kStatusState);
+      } else {
+        status = failure(kStatusState);   // not halted (the module answers), or no answer at all: line
       }
       putU16(out, done);
       out[2] = status;
@@ -884,8 +912,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
           nvals = outs;
           for (uint8_t i = 0; i < outs; ++i) putU32(out + 11 + 4 * i, out_values[i]);
         }
-      } else if (!dm.attached()) {
-        status = failure(kStatusState);
+      } else {
+        status = failure(kStatusState);   // not halted (the module answers), or no answer at all: line
       }
       out[0] = status;
       out[10] = nvals;
@@ -934,6 +962,13 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
   if (5 + 4 * values > capacity) return rejected(kRejectMalformed);   // the answer would not fit a frame
   if (wait_us > static_cast<uint64_t>(kMaxOpMs) * 1000u) return unsupportedValue(out, capacity);
   Ch32Dm &dm = port_->dm;
+  WireLossClock &loss = dm.phy().loss();
+  // One read of a step: a DMSTATUS of all zeros / all ones is no answer (no module behind it, DmiPhy::outcomeOf) and
+  // fails the step with line like a read that got nothing - the same reads the wire-loss clock counts as no answer
+  // (oep-if-debug §2: the failures it counts are status line). Any other register's value is the register's.
+  auto readStep = [&](uint8_t address, uint32_t &v) {
+    return dm.readDmi(address, v) && DmiPhy::outcomeOf(address, true, v) != DmiPhy::kNoAnswer;
+  };
   size_t written = 5;
   uint16_t done = 0, nvals = 0;
   uint8_t status = kStatusOk;
@@ -941,6 +976,8 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
   for (uint16_t i = 0; i < count && status == kStatusOk; ++i) {
     const uint8_t kind = p[at];
     const uint8_t *s = p + at + 1;
+    const size_t step_written = written;
+    const uint16_t step_nvals = nvals;
     switch (kind) {
       case kStepWrite:
         if (!dm.writeDmi(s[0], getU32(s + 1))) status = kStatusLine;
@@ -948,7 +985,7 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
         break;
       case kStepRead: {
         uint32_t v = 0;
-        if (!dm.readDmi(s[0], v)) status = kStatusLine;
+        if (!readStep(s[0], v)) status = kStatusLine;
         else { putU32(out + written, v); written += 4; ++nvals; }
         at += 2;
         break;
@@ -960,7 +997,7 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
         uint32_t last = 0;
         for (uint16_t k = 0; k < (max ? max : 1) && !met && status == kStatusOk; ++k) {   // max 0: one read
           uint32_t v = 0;
-          if (!dm.readDmi(s[0], v)) status = kStatusLine;
+          if (!readStep(s[0], v)) status = kStatusLine;
           else { last = v; met = (v & mask) == want; }
         }
         if (status == kStatusOk && !met) status = kStatusTimeout;
@@ -979,7 +1016,7 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
         const uint32_t started = micros();
         do {
           uint32_t v = 0;
-          if (!dm.readDmi(s[0], v)) status = kStatusLine;
+          if (!readStep(s[0], v)) status = kStatusLine;
           else { last = v; met = (v & mask) == want; }
         } while (!met && status == kStatusOk && micros() - started < max_us);
         if (status == kStatusOk && !met) status = kStatusTimeout;
@@ -988,9 +1025,17 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
         break;
       }
     }
+    // Wire loss decided at this step (oep-if-debug §2: no good exchange for wire_lost_ms, a register's own all zeros /
+    // all ones read meanwhile): the step fails with line, its value out, and the connection closes after the answer.
+    if (status != kStatusLine && loss.lost()) {
+      status = kStatusLine;
+      written = step_written;
+      nvals = step_nvals;
+      line_lost_ = true;
+    }
     if (status == kStatusOk) ++done;
   }
-  if (status == kStatusLine) failure(kStatusLine);   // no answer at all: the connection closes after this answer
+  if (status == kStatusLine && !line_lost_) failure(kStatusLine);   // the connection closes after this answer once lost
   putU16(out, done);
   out[2] = status;
   putU16(out + 3, nvals);
