@@ -8,7 +8,7 @@ Open Embedded Probe（OEP）は、**probe**（開発中のチップにつなぐ�
 プロトコルです。1 つの probe が、デバッガ（WCH の CH32 の RVSWD / SWIO、ARM の SWD）、target のコンソール、試験の治具（GPIO、
 UART、SPI / I2C のデバイス、ロジックのキャプチャ）を兼ね、どの host（書き込みの道具、IDE のモニタ、pytest）も同じ方法で話します。
 
-**プロトコルは決まっていて、probe の能力は決まっていません。** OEP が定めるのは、要求と結果、ロック、発見の仕組みです。
+**プロトコルが定めるのは仕組みで、probe の能力は開いています。** OEP が定めるのは、要求と結果、ロック、発見の仕組みです。
 何ができるかは開いています。
 
 - probe は**自分にできることを宣言する**（名前で探すインターフェースと、そのピンや上限）。host はボードの表を持たず、probe が
@@ -62,8 +62,11 @@ classic ESP32 の firmware は任意の `port_speed`（oep-core §3.5）を持�
 
 - 手引き: [使い始める](docs/guide/getting-started.ja.md)（焼く、見つける、Python から使う）、[probe を書く](docs/guide/writing-a-probe.ja.md)
   （ライブラリの中身、自分のインターフェース）、[ボード](docs/guide/boards.ja.md)（チップごとにできること、ほかのボード向けのビルド）。
-- 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) — まず [レビューの手引き](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md) から。プロトコルの本体は
-  [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
+- 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)（英語の本文が正で、`.ja.md` はその訳。食い違えば英語が正しい）—
+  まず [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.ja.md) と [レビューの手引き](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md) から。
+  [使い始める](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.ja.md) が最小の probe と host を作り、プロトコルの本体は
+  [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、適合に要ることは
+  [docs/conformance.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
 - host のライブラリ: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python)（`pip install oep-client-python`、
   `oep` の命令、試験のための偽の probe）。
 - USB の VID:PID: 今は仮の USB の ID（ボードの既定の VID:PID。ESP32-P4 では `303a:0002`）と `OEP` で始まる iProduct で動かしていて、
@@ -84,7 +87,7 @@ classic ESP32、RP2040 / RP2350）の市販の開発ボードにこのファー�
   要る。これらの線は、そのピンにつなぐ。チップごとの一覧は [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン) にある。
 - **target がどこにつながっているかは、host が探す。** oep-client-python の `oep pins` は、probe の pull をかけて probe が出す
   すべてのピンを読み、候補の上で debug の線を scan し、target を ID で見分け、リセットの線を見つける。最後に、保存する
-  スロットを示す（oep-spec の host 開発ガイド §9。target ごとの記録は oep-spec の docs/target-scan-notes.ja.md）。
+  スロットを示す（oep-spec の host 開発ガイド §19。target ごとの記録は oep-spec の docs/target-scan-notes.ja.md）。
 - **残りの線は、target を通して探せる。** debug の線がつながれば、host はその線を通して target 自身の GPIO を動かし、probe の
   どのピンが追いかけるかを見られる。そのため、target のほかの線（UART、電源のスイッチ、アプリケーションのピン）も、配線の表
   なしに同じやり方で見つかる。
@@ -133,7 +136,7 @@ ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につない�
 ## このライブラリ
 
 Open Embedded Probe（OEP）の probe を Arduino で書くためのライブラリと、各 probe のファームウェア（`examples/`）。
-v1（oep-spec の `docs/oep-core.ja.md` と標準インターフェースの `docs/oep-if-*.ja.md`、固める候補の形）を話す。破壊的変更を前提とする実験段階で、互換は約束しない。
+v1（oep-spec の `docs/oep-core.ja.md` と標準インターフェースの `docs/oep-if-*.ja.md`）を話す。凍結の前の v1 で、凍結までは仕様が壊れることがある。破壊的変更を前提とする実験段階で、互換は約束しない。
 
 wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で、その生成物を `src/OepRegistry.h` に写している。
 
@@ -198,7 +201,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 
    Python からは `oep_client.link.open_host(<port>)` でセッションを得る。シリアルの口（USB-Serial/JTAG、USB CDC、UART bridge）は
    OEP のフレーム（`0x00 <COBS> 0x00`）と bind の生のバイトを 1 本で運ぶ。host は排他（TIOCEXCL）で開き、フレームの外は雑音として
-   捨てる（oep-spec の host 開発ガイド §1.6、§2）。
+   捨てる（oep-spec の host 開発ガイド §1、§2）。
 3. **設定**: 起動時から target のコンソールをシリアルの口に流すには、スロットと bind を登録する（`oep.probe.config`、ESP32 は
    NVS、RP2040 / RP2350 は flash に保存）。線の設定は target のもので、host が渡す（CH32L103 は、休ませる間は SWCLK を low、reset 直後は 1 MHz まで）:
 

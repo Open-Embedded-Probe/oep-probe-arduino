@@ -9,8 +9,8 @@ Open Embedded Probe (OEP) is an open protocol between a **probe** - a small boar
 and a test fixture (GPIO, UART, SPI / I2C devices, logic capture) at once, and every host (a flash tool, an IDE monitor,
 pytest) talks to it the same way.
 
-**The protocol is fixed; what a probe can do is not.** OEP specifies how requests, results, the lock and discovery work, and
-leaves the capabilities open:
+**The protocol defines the mechanics; what a probe can do is left open.** OEP specifies how requests, results, the lock and
+discovery work, and leaves the capabilities open:
 
 - a probe **declares what it can do** - interfaces found by name, each with its pins and limits - so a host needs no table of
   boards and adapts to whatever the probe has;
@@ -50,7 +50,7 @@ another tool's device). A host cannot do that on its own for every port, so the 
 links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
 browsers. Hosts identify OEP probes automatically only by the project's own USB VID:PID (none obtained yet), open a probe
 named by its unit_id (the USB serial number) and check it with describe, and until then may try devices with an iProduct
-starting `OEP` as a temporary clue, sending only a confirm first (oep-spec core §3.3, docs/usb-identity.ja.md). The firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the
+starting `OEP` as a temporary clue, sending only a confirm first (oep-spec core §3.3, docs/usb-identity.md). The firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the
 ESP32-P4), which may not be used for distribution. When the project obtains a PID of its own, the firmware will switch to it.
 
 A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume
@@ -64,9 +64,12 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
 - Guides: [Getting started](docs/guide/getting-started.md) (flash, find, use a probe from Python), [Writing a probe](docs/guide/writing-a-probe.md)
   (the library from the inside, your own interfaces), [Boards](docs/guide/boards.md) (what each chip does, building for
   another board).
-- Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) - start with [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md); the protocol
-  core is [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md), the wire numbers [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)
-  (Japanese first; English follows once it settles).
+- Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (the English text is authoritative) - start with
+  its [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.md) and [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.md);
+  [getting started](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.md) builds the smallest probe and host, the protocol core is
+  [docs/oep-core.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.md), what a probe must do to conform is
+  [docs/conformance.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.md), and the wire numbers are
+  [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml).
 - Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
   `oep` command, a fake probe for tests).
 - USB VID:PID: the firmware currently runs with a temporary USB ID (the board's default VID:PID, `303a:0002` on the ESP32-P4)
@@ -88,7 +91,7 @@ follow. Nor is there a fixed pin map:
   GPIO32. Wire those lines to such a pin; [Boards](docs/guide/boards.md#pins-of-the-released-firmware) lists them per chip.
 - **The host finds where the target is.** `oep pins` (oep-client-python) reads every offered pin under the probe's pulls,
   scans the debug wire over the candidates, identifies the target by its ID, and finds its reset line. It then suggests a
-  slot to save (oep-spec host-development-guide §9; per-target notes in oep-spec docs/target-scan-notes.ja.md).
+  slot to save (oep-spec host-development-guide §19; per-target notes in oep-spec docs/target-scan-notes.ja.md).
 - **The rest can be found through the target.** Once the debug link is up, the host can drive the target's own GPIOs
   through it and see which probe pin follows, so its other lines (UART, power switch, application pins) are found the same
   way, without a wiring list.
@@ -138,8 +141,8 @@ This library does not deal with voltage levels: the probe's pins are the MCU's o
 ## This library
 
 A library for writing Open Embedded Probe (OEP) probes with Arduino, and the firmware of each probe (`examples/`). It speaks
-the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.ja.md` and the standard
-interfaces `docs/oep-if-*.ja.md`, a candidate being settled). This is an experimental stage: breaking changes are expected and
+the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.md` and the standard
+interfaces `docs/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
 no compatibility is promised.
 
 The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its generated header is copied to
@@ -208,7 +211,7 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
 
    In Python, `oep_client.link.open_host(<port>)` gives a host session. A serial port (USB-Serial/JTAG, USB CDC, a UART bridge)
    carries OEP frames (`0x00 <COBS> 0x00`) and its bind's raw bytes on one line; the host opens it exclusively (TIOCEXCL)
-   and skips the bytes outside frames as noise (oep-spec host guide §1.6, §2).
+   and skips the bytes outside frames as noise (oep-spec host guide §1, §2).
 3. **Settings.** To carry a target's console on a serial port from boot, register a slot and a bind (`oep.probe.config`,
    kept in NVS on ESP32, in flash on RP2040 / RP2350). The line's settings are the target's and come from the host (a CH32L103 wants SWCLK low while the
    line rests and at most 1 MHz right after a reset):
