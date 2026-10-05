@@ -299,8 +299,10 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   for (uint8_t k = 0; k < channels_; ++k) {
     const Frontend &f = *frontendOf(chosen[k]);
     uint8_t scale[9] = {k};
-    putU32(scale + 1, 0);                                                          // zero
-    putU32(scale + 5, static_cast<uint32_t>(static_cast<uint64_t>(f.max_mv) * 1000000u / kFull));   // nV a value
+    int32_t zero = 0, scale_nv = 0;   // the frontend's whole range over 0 .. kFull (min_mv may be above 0 V)
+    analogScale(f.min_mv, f.max_mv, kFull, zero, scale_nv);
+    putU32(scale + 1, static_cast<uint32_t>(zero));
+    putU32(scale + 5, static_cast<uint32_t>(scale_nv));
     w.put(ana::kTlvConfigureAnswerScale, scale, sizeof scale);
     uint8_t skew[5] = {k};
     uint8_t slot = 0;

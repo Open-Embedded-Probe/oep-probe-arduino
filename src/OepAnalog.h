@@ -39,6 +39,17 @@ namespace oep {
 
 class Endpoint;
 
+// The answer's scale (oep-if-capture §1.2 rule 4, §3.3 tag 0x55) for a frontend whose values 0 .. full span
+// min_mv .. max_mv at the input pin: voltage = (value - zero) x scale_nv, so zero is the value that would read 0 V -
+// below 0 for a range that starts above 0 V (the classic ESP32's ADC reads 0 up to about 150 mV at 12 dB), rounded
+// to the nearest value; scale_nv rounded to the nearest nV.
+inline void analogScale(int32_t min_mv, int32_t max_mv, uint32_t full, int32_t &zero, int32_t &scale_nv) {
+  const int64_t span_nv = (static_cast<int64_t>(max_mv) - min_mv) * 1000000;
+  scale_nv = static_cast<int32_t>((span_nv + full / 2) / full);
+  const int64_t num = -static_cast<int64_t>(min_mv) * full, den = static_cast<int64_t>(max_mv) - min_mv;
+  zero = static_cast<int32_t>(num >= 0 ? (num + den / 2) / den : -((-num + den / 2) / den));
+}
+
 class AnalogCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 4;
