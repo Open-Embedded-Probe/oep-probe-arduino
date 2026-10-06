@@ -254,10 +254,10 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
   // failed at 212 ms with status line, a mode 0 reset answered ok and the next requests got line). So after the resume
   // the op looks at the module once more (after the same 1 ms the confirmation gives the image) and, when it is silent,
   // waits for it to answer again - relinking, its havereset acknowledged - before it confirms or answers: a host's next
-  // request finds the module answering. The wait ends kResetSettleMs after the op started, so that with the
-  // confirmation's halt and resume (dm_wait_ms each) the answer still comes within the host's wait for a request with
-  // no time argument (host_wait_add_ms, core §4.4). Still silent then: bit0 cleared, no redo (a redo restarts the
-  // target into the same hand-over), and the caller answers status line.
+  // request finds the module answering. The silent waits together end kResetSettleMs (limits.reset_settle_ms) after the
+  // op started - at most that much waiting, as oep-if-debug §4.3 bounds it; the host counts it as argument time
+  // (core §4.4). Still silent then: bit0 cleared, no redo (a redo restarts the target into the same hand-over), and the
+  // caller answers status line with the connection kept.
   ResetReport report = {0, 0, 0};
   cmderr_ = 0;   // a cmderr of this reset's own abstract commands says fault (§4.3)
   const uint32_t settle_end = millis() + kResetSettleMs;

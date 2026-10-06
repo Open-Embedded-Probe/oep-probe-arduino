@@ -45,7 +45,7 @@ class Ch32Dm {
   // halt, dpc read, resume), bit2 the sequence was redone, bit3 a confirmation halt / resume failed. It answers once the
   // module answers again after the release (a target that restarts itself on the way: awaitModule), at most
   // kResetSettleMs after it started; still silent then, bit0 is cleared (the caller answers status line).
-  static constexpr uint32_t kResetSettleMs = v1::reg::kHostWaitAddMs - 3 * v1::reg::kLimitDmWaitMs;
+  static constexpr uint32_t kResetSettleMs = v1::reg::kLimitResetSettleMs;   // limits.reset_settle_ms (oep-if-debug §4.3)
   struct ResetReport { uint8_t flags; uint8_t attempts; uint32_t pc; };
   ResetReport reset(bool confirm = true);
   void detach();          // haltreq and the rest lowered, dmactive kept, lines Hi-Z (target keeps running or stays halted)
