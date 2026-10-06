@@ -40,10 +40,18 @@ class FakePhy final : public DmiPhy {
   uint32_t data0 = 0, data1 = 0;
   int reads = 0, status_reads = 0, data0_reads = 0;
   std::vector<uint32_t> data0_writes;
+  // faults: the next `bad_havereset` DMSTATUS reads come back with havereset set though none is pending (a bad read);
+  // the next `lose_data0` writes of DATA0 do not land; `dropped`: the link reads all ones until reinit() (a CH32L103
+  // after a change of hart state)
+  int bad_havereset = 0, lose_data0 = 0, reinits = 0;
+  bool dropped = false;
+  void reinit() override { dropped = false; ++reinits; }
   bool attach() override { attached_flag = true; return true; }
   void release() override { attached_flag = false; }
   bool attached() const override { return attached_flag; }
   void write(uint8_t address, uint32_t value) override {
+    if (dropped) return;
+    if (address == 0x04 && lose_data0 > 0) { --lose_data0; return; }
     if (address == 0x04) { data0 = value; data0_writes.push_back(value); }
     if (address == 0x05) data1 = value;
     if (address == 0x10) {
@@ -66,13 +74,15 @@ class FakePhy final : public DmiPhy {
     advanceMicros(10);   // a read takes time (the waits for DM state are bounded by time)
     if (!attached_flag) return false;
     ++reads;
+    if (dropped) { value = 0xffffffffu; return true; }
     switch (address) {
       case 0x04: value = data0; ++data0_reads; break;
       case 0x05: value = data1; break;
       case 0x10: value = 1; break;
       case 0x11:
         ++status_reads;
-        value = 2 | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (havereset ? (3u << 18) : 0);
+        value = 2 | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (havereset || bad_havereset > 0 ? (3u << 18) : 0);
+        if (bad_havereset > 0) --bad_havereset;
         break;
       case 0x12: value = 0x0002'1000u | 0x380; break;
       case 0x16: value = 2; break;
@@ -495,6 +505,58 @@ int main() {
     ResourceNumbers::close(swd);
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);   // closed: unknown
     CHECK(rejectedWith(r, kRejectNoConnection));
+  }
+
+  // ---- one bad DMSTATUS read with havereset set is no restart (ackHaveReset's own read decides): it unsynced dmseq,
+  // which dropped the input chunk on its way - here the one whose answer was lost - and the target never got "RE" of
+  // "READ 13" (a command left unanswered, X035 on the P4 under gpio activity); and a DMSTATUS of all ones brings the bus
+  // back in step (a link that dropped: it read all ones until wire_lost_ms closed the stream) ----
+  {
+    static FakePhy phy3;
+    static Ch32Dm dm3(phy3);
+    static DebugPort port3{dm3, 4, 5};
+    static WireRvswd wire3(port3, 2);
+    static DmConsole driver3(dm3, phy3);
+    static TargetConsoleStream console3(port3, driver3, 2);
+    r = call(wire3, WireRvswd::kOpAttach, attachRequest(), out);
+    CHECK(ok(r) && port3.connected);
+    r = call(console3, TargetConsoleStream::kOpOpen, cat(le16(port3.number), {con::kMechanismDmseq}), out);
+    CHECK(ok(r));
+    const uint16_t s3 = uint16_t(out[0] | out[1] << 8);
+    SeqTarget target(phy3.data0);
+    uint32_t next = millis();
+    auto run = [&](uint32_t us) {
+      for (uint32_t t = 0; t < us; t += 250) {
+        advanceMicros(250);
+        console3.poll();
+        if (int32_t(millis() - next) >= 0) { target.available(); next += 5; }
+      }
+    };
+    run(100 * 1000);   // synced
+    const size_t marks_before = marksOf(console3, s3).size();
+    const uint8_t line[] = {'R', 'E', 'A', 'D', ' ', '1', '3', '\n'};
+    r = call(console3, TargetConsoleStream::kOpWrite, cat(cat(le16(s3), {uint8_t(sizeof line), 0}), Bytes(line, line + sizeof line)), out);
+    CHECK(ok(r) && out == Bytes({uint8_t(sizeof line), 0}));
+    phy3.lose_data0 = 1;       // the answer that carries "RE" (to the target's next frame) does not land
+    for (int i = 0; i < 100 && phy3.lose_data0; ++i) run(250);
+    CHECK(phy3.lose_data0 == 0 && target.rx.empty());
+    phy3.bad_havereset = 1;    // the next DMSTATUS look reads havereset once
+    g_millis += 25;
+    run(200 * 1000);
+    CHECK(target.rx == std::vector<uint8_t>(line, line + sizeof line));
+    CHECK(marksOf(console3, s3).size() == marks_before);   // no restart marked
+    CHECK(driver3.resyncs() == 1);
+    // all ones: re-synced (reinit), and the console goes on
+    const int reinits = phy3.reinits;
+    phy3.dropped = true;
+    g_millis += 25;
+    run(1000);
+    CHECK(phy3.reinits > reinits && !phy3.dropped && console3.isOpen());
+    target.rx.clear();
+    r = call(console3, TargetConsoleStream::kOpWrite, cat(le16(s3), {2, 0, 'o', 'k'}), out);
+    CHECK(ok(r));
+    run(100 * 1000);
+    CHECK(target.rx == std::vector<uint8_t>({'o', 'k'}));
   }
 
   // ---- the console's write latency (oep-if-console §2): a host's line goes in one write and reaches the target one

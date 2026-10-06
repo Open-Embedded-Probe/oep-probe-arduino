@@ -55,10 +55,19 @@ void DmConsole::poll() {
     last_status_ms_ = millis();
     uint32_t status = 0;
     if (!readData(0x11, status)) return;
-    if (!dmVersionKnown(status)) return;
+    if (!dmVersionKnown(status)) {
+      // No module's (all ones): the link may have dropped - a CH32L103 drops it at every change of hart state, its own
+      // restarts too - and back-to-back polls leave the PHY no idle time to revive it. The bus is brought back in step
+      // (the wire's configuration sequence, no debug-module register written); it read all ones until wire_lost_ms
+      // closed the stream.
+      phy_.reinit();
+      return;
+    }
     if (status & (3u << 18)) {   // havereset: the target restarted on its own
-      dm_.ackHaveReset();
-      unsync();
+      // Only once ackHaveReset's own read confirms it: one bad read with bit 18 set unsynced dmseq, which dropped the
+      // input chunk on its way (up to 2 bytes of a command the target then never answered) and took the next repeat of
+      // a frame for a new one (its bytes twice).
+      if (dm_.ackHaveReset()) unsync();
       return;
     }
     hart_halted_ = (status & (1u << 9)) != 0;
