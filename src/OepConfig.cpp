@@ -866,7 +866,9 @@ bool ProbeConfig::retryWithReset(uint8_t i, uint32_t &dmstatus) {
 uint16_t ProbeConfig::lineOf(uint8_t slot, const char *line) const {
   const char *name = slot < kMaxSlots && slots_[slot].set ? slots_[slot].name : nullptr;
   if (slot != 0xff && !name) return 0xffff;
-  return findLine(items_, items_length_, name, line);
+  size_t firmware_length = 0;
+  const uint8_t *firmware = endpoint_.probeDescription(firmware_length);   // its labels: step (c) of §1.3
+  return findLine(items_, items_length_, name, line, firmware, firmware_length);
 }
 
 void ProbeConfig::poll() {
@@ -1236,8 +1238,9 @@ bool labelNames(const uint8_t *text, size_t n, const char *slot, const char *lin
   return part(line) && at == n;
 }
 
-// How many label items name the line, the channel of the last one in `channel`.
-size_t labelsNaming(const uint8_t *items, size_t length, const char *slot, const char *line, uint16_t &channel) {
+// How many labels (TLVs `tag`: channel(u16) text) name the line, the channel of the last one in `channel`.
+size_t labelsNaming(const uint8_t *items, size_t length, const char *slot, const char *line, uint16_t &channel,
+                    uint8_t tag_wanted = reg::probe_config::kTlvItemLabel) {
   size_t at = 0, found = 0;
   while (at < length) {
     uint8_t tag = 0;
@@ -1245,7 +1248,7 @@ size_t labelsNaming(const uint8_t *items, size_t length, const char *slot, const
     size_t vlen = 0, next = 0;
     if (!tlvAt(items, length, at, tag, v, vlen, next)) break;
     at = next;
-    if (tag != reg::probe_config::kTlvItemLabel || vlen < 2 || !labelNames(v + 2, vlen - 2, slot, line)) continue;
+    if (tag != tag_wanted || vlen < 2 || !labelNames(v + 2, vlen - 2, slot, line)) continue;
     channel = getU16(v);
     ++found;
   }
@@ -1254,9 +1257,10 @@ size_t labelsNaming(const uint8_t *items, size_t length, const char *slot, const
 
 }  // namespace
 
-uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line) {
+uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line, const uint8_t *firmware,
+                  size_t firmware_length) {
   uint16_t channel = 0xffff;
-  if (slot) {
+  if (slot) {   // (a)
     const size_t n = labelsNaming(items, length, slot, line, channel);
     if (n) return n == 1 ? channel : 0xffff;   // "S.N": one channel, or none when two or more
     size_t slots = 0, at = 0;
@@ -1270,7 +1274,10 @@ uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const c
     }
     if (slots > 1) return 0xffff;              // "N" alone names a line only with at most one slot
   }
-  return labelsNaming(items, length, nullptr, line, channel) == 1 ? channel : 0xffff;
+  const size_t n = labelsNaming(items, length, nullptr, line, channel);   // (b) a settings label "N"
+  if (n) return n == 1 ? channel : 0xffff;
+  // (c) a firmware label "N" (fn 0 describe's label 0x46)
+  return labelsNaming(firmware, firmware_length, nullptr, line, channel, reg::core::kTlvDescribeLabel) == 1 ? channel : 0xffff;
 }
 
 }  // namespace oep

@@ -148,6 +148,7 @@ class Endpoint {
   uint32_t listHash() const;
   // oep.core's describe: the probe itself, as TLV bytes (kept by the caller). Declarations only (core §7.3).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
+  const uint8_t *probeDescription(size_t &length) const { length = probe_tlv_length_; return probe_tlv_; }
   // The boot_id returned by confirm, open and the heartbeat (core §6.5): a value that changes every boot. Without a
   // call the endpoint picks it itself when the first message arrives (bootIdSource: a hardware random source, or on a
   // platform without one the timer's count at that external event). A sketch with a better source of its own (a

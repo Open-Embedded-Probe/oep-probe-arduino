@@ -210,10 +210,13 @@ uint32_t crc32Ieee(const uint8_t *data, size_t length);
 
 namespace oep {
 
-// The label convention (oep-if-probe-config §1.3) over a store of items (TLVs as probe.config keeps them): the channel
-// of line `line` (nrst, power_hi, power_lo) for the slot named `slot` - the label whose text is "slot.line", else, only
-// when the items hold at most one slot item, the one whose text is "line"; slot nullptr (settings without slots): the
-// label "line". Texts compared ignoring ASCII case; two or more channels at the step that matches: none. 0xFFFF: none.
-uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line);
+// The label convention (oep-if-probe-config §1.3) over a store of items (TLVs as probe.config keeps them) and the
+// firmware's labels (`firmware`: fn 0's describe TLVs, its label 0x46): the channel of line `line` (nrst, power_hi,
+// power_lo) for the slot named `slot` - (a) the settings label whose text is "slot.line", else, only when the items hold
+// at most one slot item, (b) the settings label whose text is "line", else (c) the firmware label "line"; slot nullptr
+// (settings without slots): steps (b) and (c). Texts compared ignoring ASCII case; the first step that finds a channel
+// ends the search, with none when it finds two or more. 0xFFFF: none.
+uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line,
+                  const uint8_t *firmware = nullptr, size_t firmware_length = 0);
 
 }  // namespace oep
