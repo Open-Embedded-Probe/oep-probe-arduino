@@ -1,0 +1,111 @@
+{
+  "about": "list, describe and the header refusals of the example probe (docs/getting-started.md §2, §3, with its §6 steps 1 and 4 done): only fn 0 (oep.core, instance 0, revision 1) whose ops are fn 0's required ops of core §1.2 (confirm, list, describe, open, end, keepalive, lock_state, subscribe, unsubscribe; no plan role, so no plan_apply / plan_release) in describe's common tag ops, one UART bridge (transport index 0, interface 0xFF), unit_id \"a1b2c3d4\", discoverable 0 (it does not enumerate with the project's USB VID:PID), max_op_ms 1000. The corrs continue confirm.json's first exchange (corr 1): list 2, describe 3, describe past the end 4, the refusals 5 and 6. Those values are an example probe's.",
+  "exchanges": [
+    {
+      "name": "list everything from the first",
+      "spec": "core §7.2",
+      "request": {
+        "corr": 2,
+        "flags": 0,
+        "first": 0,
+        "prefix": ""
+      },
+      "request_hex": "0102000000020000000000000000",
+      "request_serial_frame_hex": "00030102010102020101010101010103aa9e00",
+      "answer": {
+        "corr": 2,
+        "total": 1,
+        "entries": [
+          {
+            "fn": 0,
+            "instance": 0,
+            "revision": 1,
+            "flags": 0,
+            "name": "oep.core"
+          }
+        ]
+      },
+      "answer_hex": "0202000100010001000000000100086f65702e636f7265",
+      "answer_serial_frame_hex": "0003020202010201020101010102010c086f65702e636f7265cb7000"
+    },
+    {
+      "name": "describe fn 0 from the first",
+      "spec": "core §7.3, §7.5",
+      "request": {
+        "corr": 3,
+        "fn": 0,
+        "first": 0
+      },
+      "request_hex": "0103000000030000000000000000",
+      "request_serial_frame_hex": "00030103010102030101010101010103ea3000",
+      "answer": {
+        "corr": 3,
+        "more": 0,
+        "ops": [
+          1,
+          2,
+          3,
+          16,
+          17,
+          18,
+          19,
+          48,
+          50
+        ],
+        "unit_id": "a1b2c3d4",
+        "transports": [
+          {
+            "index": 0,
+            "kind": 1,
+            "interface": 255
+          }
+        ],
+        "discoverable": 0,
+        "max_op_ms": 1000
+      },
+      "answer_hex": "020300010000090800010780070000800242080061316232633364344903000001ff4a0100004d0400e8030000",
+      "answer_serial_frame_hex": "0003020302010103090805010780070105800242080b61316232633364344903010501ff4a0101034d0403e8030103c3c200"
+    },
+    {
+      "name": "describe fn 0 from beyond the last: more 0 and no TLVs",
+      "spec": "core §7.3 end of paging",
+      "request": {
+        "corr": 4,
+        "fn": 0,
+        "first": 5
+      },
+      "request_hex": "0104000000030000000000000500",
+      "answer": {
+        "corr": 4,
+        "more": 0
+      },
+      "answer_hex": "020400010000"
+    }
+  ],
+  "refusals": [
+    {
+      "name": "a fn the probe does not have",
+      "spec": "core §4.3 order 1",
+      "request": {
+        "corr": 5,
+        "fn": 7,
+        "op": 1
+      },
+      "request_hex": "01050007000100000000",
+      "answer": "unknown_function",
+      "answer_hex": "0205000001"
+    },
+    {
+      "name": "an op fn 0 does not define",
+      "spec": "core §1.2, §4.3 order 1",
+      "request": {
+        "corr": 6,
+        "fn": 0,
+        "op": 80
+      },
+      "request_hex": "01060000005000000000",
+      "answer": "unknown_operation",
+      "answer_hex": "0206000002"
+    }
+  ]
+}
