@@ -117,6 +117,74 @@ static uint8_t crc8(const uint8_t *p, size_t n) {   // dmseq's CRC-8: poly 0x07,
 }
 static Bytes attachRequest() { return {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00}; }
 
+// A dmseq target as the reference one (oep-spec experiments/dm-console-seq DmSeq.h): its sketch calls available() every
+// `period` ms, which takes an answer and, idle, posts an empty frame; input rides on the answers.
+struct SeqTarget {
+  uint32_t &d0;
+  uint8_t s = 0, last_h = 1;
+  bool posted = false, syn = true;
+  uint32_t w0 = 0;
+  std::vector<uint8_t> rx;
+  explicit SeqTarget(uint32_t &data0) : d0(data0) {}
+  void post() {
+    uint8_t b[2] = {uint8_t(0x80 | (s << 5) | (last_h << 4) | (syn ? 0x08 : 0)), 0};
+    b[1] = crc8(b, 1);
+    w0 = d0 = b[0] | uint32_t(b[1]) << 8;
+    posted = true;
+  }
+  void service() {
+    if (!posted) return;
+    const uint32_t w = d0;
+    if (w & 0x80u) { if (w != w0) d0 = w0; return; }   // target rule 0
+    if (w == 0) return;
+    const uint8_t a[4] = {uint8_t(w), uint8_t(w >> 8), uint8_t(w >> 16), uint8_t(w >> 24)};
+    const uint8_t k = (a[0] >> 5) & 1, h = (a[0] >> 4) & 1, m = a[0] & 7;
+    if (k != s || m > 2 || crc8(a, 1 + m) != a[1 + m]) { d0 = w0; return; }
+    posted = syn = false;
+    s ^= 1;
+    if (m && h != last_h) { rx.insert(rx.end(), a + 1, a + 1 + m); last_h = h; }
+  }
+  void available() { service(); if (!posted) post(); }
+};
+
+// The time from a host's first write of "PING\n" until the target has all of it (oep-if-console §2: write takes the
+// send slot; the host writes the rest as the slot frees, retrying every 5 ms when it is not free; each request takes
+// `rtt_ms` there and back). The probe polls the console every 250 us between requests.
+static uint32_t pingDeliveryMs(Interface &wire, DebugPort &port, TargetConsoleStream &console, FakePhy &phy,
+                               uint32_t period_ms, uint32_t rtt_ms) {
+  Bytes out;
+  if (!port.connected) call(wire, WireRvswd::kOpAttach, attachRequest(), out);
+  call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+  const uint16_t stream = uint16_t(out[0] | out[1] << 8);
+  SeqTarget target(phy.data0);
+  uint32_t next = millis();
+  auto run = [&](uint32_t us) {
+    for (uint32_t t = 0; t < us; t += 250) {
+      advanceMicros(250);
+      console.poll();
+      if (int32_t(millis() - next) >= 0) { target.available(); next += period_ms; }
+    }
+  };
+  run(200 * 1000);   // synced
+  const uint8_t msg[] = {'P', 'I', 'N', 'G', '\n'};
+  size_t sent = 0;
+  const uint32_t start = millis();
+  while (target.rx.size() < sizeof msg && millis() - start < 5000) {
+    if (sent == sizeof msg) { run(250); continue; }
+    run(rtt_ms * 500);
+    Bytes req = cat(le16(stream), {uint8_t(sizeof msg - sent), 0});
+    req.insert(req.end(), msg + sent, msg + sizeof msg);
+    call(console, TargetConsoleStream::kOpWrite, req, out);
+    const size_t took = out.size() >= 2 ? size_t(out[0] | out[1] << 8) : 0;
+    run(rtt_ms * 500);
+    sent += took;
+    if (!took) run(5000);
+  }
+  const uint32_t ms = millis() - start;
+  call(console, TargetConsoleStream::kOpClose, le16(stream), out);
+  return target.rx == std::vector<uint8_t>(msg, msg + sizeof msg) ? ms : 99999;
+}
+
 int main() {
   static FakePhy phy;
   static Ch32Dm dm(phy);
@@ -344,6 +412,25 @@ int main() {
     ResourceNumbers::close(swd);
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);   // closed: unknown
     CHECK(rejectedWith(r, kRejectNoConnection));
+  }
+
+  // ---- the console's write latency (oep-if-console §2): a host's line reaches the target one chunk per target poll,
+  // as when write queued it whole (0.0.28: 13-26 ms for a PING / PONG); a slot that freed only at the target's ack missed
+  // that same exchange and took two polls a chunk (50 ms and more) ----
+  {
+    static FakePhy phy2;
+    static Ch32Dm dm2(phy2);
+    static DebugPort port2{dm2, 2, 3};
+    static WireRvswd wire2(port2, 1);
+    static DmConsole driver2(dm2, phy2);
+    static TargetConsoleStream console2(port2, driver2, 1);
+    for (const uint32_t period : {1u, 5u, 10u}) {
+      for (const uint32_t rtt : {1u, 4u}) {
+        const uint32_t ms = pingDeliveryMs(wire2, port2, console2, phy2, period, rtt);
+        printf("  PING delivered: target poll %u ms, request %u ms: %u ms\n", period, rtt, ms);
+        CHECK(ms <= 3 * period + 3 * rtt + 2);
+      }
+    }
   }
 
   printf("console: %d checks, %d failures\n", checks, failures);

@@ -35,10 +35,13 @@ class DmConsole {
   size_t queue(const uint8_t *data, size_t length);
   size_t room() const { return kTxCapacity - 1 - pending(); }   // what queue() takes now (a bind's input)
   // The mechanism's send slot (oep-if-console §2, oep-if-common §1.4): what one exchange carries - 3 bytes for DMDATA,
-  // 2 for dmseq - and free only while nothing waits to go (queued, or a dmseq payload not yet acknowledged); nothing on
-  // a one-way mechanism (SDI). A write op takes at most this (it took the whole queue's room).
+  // 2 for dmseq - held by the probe until the target's next frame takes it, and free while nothing waits there; nothing
+  // on a one-way mechanism (SDI). A write op takes at most this (it took the whole queue's room). A dmseq payload on its
+  // way (sent, not yet acknowledged) is not in the slot: the next one waits in the slot meanwhile and goes out on the
+  // answer to the frame that acknowledges it. A slot that freed only at that ack missed that same exchange, and every
+  // 2 bytes cost two of the target's polls (a 5-byte PING took 50 ms and more against 13-26 ms in 0.0.28).
   size_t slot() const {
-    if (!enabled_ || mechanism_ == 0 || pending() || (mechanism_ == 2 && seq_chunk_len_)) return 0;
+    if (!enabled_ || mechanism_ == 0 || pending()) return 0;
     return mechanism_ == 2 ? 2 : 3;
   }
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.

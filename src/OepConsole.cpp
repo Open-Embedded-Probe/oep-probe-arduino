@@ -226,6 +226,8 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (checking_) return completed();
       if (!open_) return wrongState(out, capacity);
       if (capacity < 2) return failed();
+      poll();   // a frame waiting takes what the slot holds, so the slot is looked at as it is now
+      if (!open_) return wrongState(out, capacity);
       const size_t slot = driver_.slot();
       const size_t queued = driver_.queue(p + 2, count < slot ? count : slot);
       driver_.poll();   // start it on its way
