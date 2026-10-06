@@ -18,6 +18,11 @@
 #include <Arduino.h>
 
 #include "OepDmiPhy.h"
+#include "OepWireGate.h"
+
+#ifndef OEP_SWIO_PAUSE_CONSOLE
+#define OEP_SWIO_PAUSE_CONSOLE 0
+#endif
 
 namespace oep {
 
@@ -56,6 +61,15 @@ class SwioPhy final : public DmiPhy {
   uint32_t minClockHz() const override { return kNominalHz; }
   uint32_t maxClockHz() const override { return kNominalHz; }
   uint32_t transactions() const override { return transactions_; }
+  // The classic ESP32: no frame while the core-0 sampler has a window open (OepWireGate.h) - a request's frames wait
+  // it out (at most one window: up to 164 ms immediate, 250 ms a burst of a trigger search) and then hold the wire until
+  // loop() comes round. The console's reading (backgroundTurn) does not wait: oep-if-console §3 lets the probe stop
+  // reading only for a riscv-dm request of the connection or a halted hart, so it reads on through a window as before
+  // (its frames there may be garbled; dmseq's CRC and the reads twice take most of that). Test hook, off unless a build
+  // defines it: OEP_SWIO_PAUSE_CONSOLE=1 pauses the reading instead (the wire's turn refused while a window is open) -
+  // the bench's check of the mechanism; a spec change would be needed before it is the behaviour.
+  bool backgroundTurn() override;
+  void backgroundDone() override;
 
  protected:
   bool readWire(uint8_t address, uint32_t &value) override;   // with bounded retry (DmiPhy::read)

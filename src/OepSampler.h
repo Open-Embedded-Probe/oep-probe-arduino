@@ -17,6 +17,7 @@
 #include "Oep.h"
 #include "OepCaptureGroup.h"
 #include "OepPinTable.h"
+#include "OepWireGate.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
 #include <freertos/FreeRTOS.h>
@@ -56,7 +57,9 @@ class SamplerCapture final : public Interface, public GroupTrack {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
-  void poll();   // from loop(): a finished window becomes the segment and stopped events
+  // From loop(), every time round: a finished window becomes the segment and stopped events; and the SWIO wire is let
+  // go of (OepWireGate.h) - a sketch with this sampler and a SwioPhy calls it each loop(), or no window opens.
+  void poll();
   // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot
   bool trackReady() const override { return state_ == reg::fixture_logic::kStateConfigured || state_ == reg::fixture_logic::kStateDone; }
   bool trackCanStart() const override { return (trackReady() || state_ == reg::fixture_logic::kStateError) && buffer_; }
@@ -103,6 +106,9 @@ class SamplerCapture final : public Interface, public GroupTrack {
   volatile uint32_t late_cycles_ = 0;     // the most it was behind, in CPU cycles
   // the trigger, as configured; what the search found (written by the sampler task, read by poll)
   static constexpr uint64_t kOffNs = 250000000;   // the longest a burst keeps interrupts off (watchdog: 300 ms)
+  // After a burst of a trigger search during which the SWIO wire was refused (OepWireGate.h): its turn before the next
+  // burst - a few console polls, or the start of a request, which then holds the wire until it ends.
+  static constexpr uint32_t kWireTurnMs = 5;
   static constexpr uint8_t kControlForce = 1, kControlAbort = 2;
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0;

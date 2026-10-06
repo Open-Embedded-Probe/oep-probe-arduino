@@ -205,6 +205,12 @@ Each source file starts with the spec sections it follows.
   `onReceiveError` / `onReceive` of your own: arduino-esp32's event task would take them), and reads no byte the events
   have not counted - a FIFO overflow lands exactly at the gap. RP2: arduino-pico's receive queue overflow lands exactly
   at the gap; the PL011's overrun and a break, read in `poll()` as flags, at the bytes counted at the look before.
+- The classic ESP32's sampler and a SWIO wire share the GPIO registers' bus: the sampler's back-to-back GPIO.in reads
+  move the SWIO pulses of the other core enough to garble frames, and SWIO has no parity. `OepWireGate.h` keeps them
+  apart: a request's frames wait out a sampler window and then hold the wire until `loop()` comes round; a window waits
+  for the holder. `SamplerCapture::poll()` lets the wire go, so a sketch with both calls it every `loop()` (or no window
+  opens). The console's poll does not wait (oep-if-console §3 lets it stop only for a riscv-dm request or a halted
+  hart); `-DOEP_SWIO_PAUSE_CONSOLE=1` is a test hook that pauses it during windows instead.
 
 ## 8. Pushes and events
 

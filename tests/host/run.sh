@@ -12,7 +12,8 @@
 # the send slot, the marks), and of the RVSWD PHY's attach on a
 # simulated target (what is written before the speed is verified, the checks, the budget), of the swio stack on a
 # simulated CH32V003 whose reset goes through its bootloader (the connection kept, a silent bootloader waited out by
-# the reset op and by attach's reset TLV), of the whole rvswd stack's
+# the reset op and by attach's reset TLV), of the classic ESP32's gate between its sampler's windows and the SWIO frames
+# (two threads; the console's pause hook built both ways), of the whole rvswd stack's
 # attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries), and of the ESP32-P4 logic capture's configure on a fake PARLIO RX
 # driver and heap (samples rounded down, streaming without internal RAM for stages), of the analog scale from a frontend's
@@ -82,6 +83,11 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWIO -I"$he
   "$here/test_swio.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepSwioPhy.cpp" "$src/OepFrame.cpp" \
   "$src/OepDmConsole.cpp"
 "$out-swio"
+for pause in 0 1; do   # the classic's gate between the sampler and the SWIO frames; 1: the console's pause test hook
+  g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -pthread -DOEP_HOST_FAKE_SWIO -DOEP_SWIO_PAUSE_CONSOLE=$pause \
+    -I"$here/shim" -I"$src" -o "$out-wire-gate" "$here/test_wire_gate.cpp" "$src/OepSwioPhy.cpp"
+  "$out-wire-gate"
+done
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWD -I"$here/shim" -I"$src" -o "$out-swd" \
   "$here/test_swd.cpp" "$src/OepSwd.cpp" "$src/OepFrame.cpp"
 "$out-swd"

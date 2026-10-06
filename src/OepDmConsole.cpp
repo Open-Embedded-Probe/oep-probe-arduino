@@ -65,6 +65,11 @@ void DmConsole::poll() {
   // at once. A reset the target did by itself (havereset) is acknowledged there too (oep-if-debug §4.6: the stream marks
   // a restart, dmseq starts over).
   if (!enabled_ || lost_) return;
+  if (!phy_.backgroundTurn()) return;   // the wire paused (DmiPhy::backgroundTurn): nothing read, the next poll reads
+  struct TurnDone {
+    DmiPhy &phy;
+    ~TurnDone() { phy.backgroundDone(); }
+  } turn_done{phy_};
   phy_.beginRequest();   // one console read: its own allowance for wire retries (oep-if-debug §2)
   if (!phy_.attached()) {
     // A reset detaches, and the console has to outlive that: the point of it is to watch

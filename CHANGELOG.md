@@ -1,6 +1,43 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32: no SWIO frame of a request while the core-0 sampler has a window open (bench, the V003 jig,
+  aca403e with ch32rv e94dae6: uart_sweep with the capture on failed in 2 of 3 runs - a console command the DUT never
+  acted on, once the DUT silent from just after one - every time in the wire step, where the command goes out 20 ms
+  after the capture's start, inside its window; the capture-off runs passed but never send that command). From the
+  code (not yet seen on the jig): the sampler reads GPIO.in back to back with interrupts off, the SWIO frames of
+  loop()'s core are bit times made of GPIO register writes and reads over the same peripheral bus, and an access of one
+  core waits for the other's in flight - the sampler already sees it from its side as samples taken late (slipped);
+  one GPIO.in read is tens of cycles against a 262.5 ns short pulse, so a one can read as a zero, a pulse shrink or
+  vanish and a frame be parsed as another register or value, with no parity on the wire and no read-back of a DMI
+  write. OepWireGate.h: the sampler announces a window and waits for the wire's holder; loop()'s core takes the wire
+  before a frame and holds it until loop() comes round (SamplerCapture::poll, and waitIdle before it waits for the
+  sampler) - a request's frames wait out a window (up to 164 ms immediate, one burst of a search) and are never split
+  by one; between the bursts of a trigger search a request kept waiting gets 5 ms (kWireTurnMs) before the next. The
+  immediate segment's start_ns is taken as its window begins (it was the start op's time, before the task ran). The
+  console's poll (DmiPhy::backgroundTurn) still reads through a window: oep-if-console §3 lets the probe stop reading
+  only for the connection's riscv-dm request or a halted hart; pausing it there needs a spec change (proposed, not
+  made). Test hook OEP_SWIO_PAUSE_CONSOLE=1: the console's poll skips while a window is open (the bench's check of the
+  mechanism). Host tests test_wire_gate (two threads; built with and without the hook: no frame inside a window, 1579
+  of 3000 inside without the gate) and test_console (a paused wire reads nothing, the queued line arrives whole after);
+  guides getting-started / writing-a-probe (EN / JA); not run on hardware yet
+- (JA) classic ESP32: core 0 の sampler が窓を開いている間、要求の SWIO のフレームを出さないようにしました（bench、V003 の
+  jig、aca403e と ch32rv e94dae6: キャプチャ有りの uart_sweep が 3 回中 2 回失敗 - DUT が動かなかったコンソールのコマンド、
+  1 回はその直後から DUT が黙った - どれも wire の段で、コマンドはキャプチャの start の 20 ms 後、その窓の中で出る。
+  キャプチャ無しの回は通ったが、そのコマンドを一度も送らない）。コードから（jig ではまだ見ていない）: sampler は割り込みを止めて
+  GPIO.in を続けて読み、loop() の core の SWIO のフレームは同じ周辺のバス越しの GPIO のレジスタの書き込みと読み出しでできた
+  ビットの時間で、片方の core のアクセスはもう片方の進行中のアクセスを待つ - sampler は自分の側でそれを遅れたサンプル
+  （slipped）として既に見ている。GPIO.in の読み 1 回は数十サイクルで、短いパルスは 262.5 ns なので、1 が 0 に読まれ、パルスが
+  縮んだり消えたりし、フレームが別のレジスタや値と解釈されうる。線にパリティは無く、DMI の書き込みは読み戻さない。
+  OepWireGate.h: sampler は窓を告げてから線の持ち主を待つ。loop() の core はフレームの前に線を取り、loop() が一回りするまで
+  持つ（SamplerCapture::poll、および sampler を待つ前の waitIdle）- 要求のフレームは窓が終わるのを待ち（即時で 164 ms まで、
+  探索なら区切り 1 つ）、窓に割られない。トリガの探索の区切りの間では、待たされた要求に次の区切りの前に 5 ms（kWireTurnMs）を
+  渡す。即時の区画の start_ns は窓が始まるときに取る（start の op の時刻だった。タスクが動く前）。コンソールの poll
+  （DmiPhy::backgroundTurn）は窓の間も読み続ける: oep-if-console §3 が読みを止めてよいとするのは、その接続の riscv-dm の要求と
+  止まった hart だけ。そこで止めるには spec の変更が要る（提案のみ、していない）。テスト用の仕掛け OEP_SWIO_PAUSE_CONSOLE=1:
+  窓が開いている間コンソールの poll を飛ばす（bench で仕組みを確かめるため）。host のテスト test_wire_gate（2 つのスレッド。
+  仕掛けの有りと無しで build: 窓の中のフレームは 0、門が無いと 3000 中 1579）と test_console（止まった線は何も読まず、待っていた
+  行は後で丸ごと届く）。guide の getting-started / writing-a-probe（EN / JA）。実機ではまだ動かしていない
 - (EN) What ended the boot before is in fn 0's describe firmware text, after the version (bench, the X035 P4: b55bc68
   -> 462e180 by DFU, the HS port back within seconds, nothing touching the board, describe about 35 s later said
   b55bc68 - a rollback with no visible cause; the same DFU 30 s later stayed). BootGuard::lastBoot(): the reset

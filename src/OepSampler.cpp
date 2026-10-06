@@ -69,6 +69,10 @@ inline __attribute__((always_inline)) uint8_t takeSample(Pace &p) {
 // watchdog). Triggered: bursts, each with interrupts off for at most kOffNs - the search, then the rest of the
 // segment after the trigger - and on between them (a gap: the search starts over, the pretrigger fills again). The
 // buffer is a ring during the search; the segment is turned to start at 0 afterwards.
+// Every window goes through the wire's gate (OepWireGate.h): it opens once loop()'s core has let go of the SWIO wire
+// (the request on it ended and loop() came round), and no SWIO frame starts until it closes - the GPIO.in reads here
+// move the SWIO pulses of the other core enough to garble its frames. Its start time is taken as it begins. Between the
+// bursts of a search, a wire that was refused during the burst gets kWireTurnMs before the next.
 // (A template cannot be IRAM_ATTR - its literals land after their use - so it is inlined into runLow / runHigh.)
 template <bool kHigh>
 inline __attribute__((always_inline)) void SamplerCapture::run() {
@@ -79,10 +83,13 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
   p.lines = channels_;
   for (uint32_t l = 0; l < p.lines; ++l) { p.m0[l] = masks0_[l]; p.m1[l] = masks1_[l]; }
   if (trig_type_ == cap::kTriggerImmediate) {
+    gWireGate.beginWindow([] { vTaskDelay(1); });
     portDISABLE_INTERRUPTS();
+    start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;   // the first sample's time (the op's was earlier)
     p.next = esp_cpu_get_cycle_count();
     for (uint32_t i = 0; i < p.size; ++i) takeSample<kHigh, false>(p);
     portENABLE_INTERRUPTS();
+    gWireGate.endWindow();
     late_cycles_ = static_cast<uint32_t>(p.late);
     slipped_ = p.late > static_cast<int32_t>(p.step);
     return;
@@ -95,8 +102,14 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
   const uint32_t arm = edge && pre == 0 ? 1 : pre;             // an edge needs the sample before it
   for (;;) {
     p.at = 0;
-    const uint64_t burst_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
+    gWireGate.beginWindow([] { vTaskDelay(1); });
+    if (control_ & kControlAbort) {                             // asked to end while the wire was waited for
+      gWireGate.endWindow();
+      aborted_ = true;
+      return;
+    }
     portDISABLE_INTERRUPTS();
+    const uint64_t burst_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
     p.next = esp_cpu_get_cycle_count();
     uint8_t last = 0, stop = 0;
     bool hit = false;
@@ -115,6 +128,7 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
       trig_seen_ = true;                                        // poll sends triggered while the rest comes in
       for (uint32_t i = 0; i < post; ++i) takeSample<kHigh, true>(p);
       portENABLE_INTERRUPTS();
+      gWireGate.endWindow();
       std::rotate(p.out, p.out + p.at, p.out + p.size);         // the ring's oldest sample (c - pre) first
       seg_start_ns_ = burst_ns + static_cast<uint64_t>(c - pre) * p.step * 1000000000ull / cpu_hz_;
       late_cycles_ = static_cast<uint32_t>(p.late);
@@ -122,8 +136,10 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
       return;
     }
     portENABLE_INTERRUPTS();
+    gWireGate.endWindow();
     if (stop & kControlAbort) { aborted_ = true; return; }
-    vTaskDelay(1);                                              // the core's own tasks (and its watchdog) run
+    // the core's own tasks (and its watchdog) run; a wire refused during the burst has its turn
+    vTaskDelay(gWireGate.takeWanted() ? pdMS_TO_TICKS(kWireTurnMs) : 1);
   }
 }
 
@@ -142,7 +158,9 @@ void IRAM_ATTR SamplerCapture::samplerTask(void *context) {
 }
 
 void SamplerCapture::waitIdle() {
-  // a search for the trigger ends at its next sample; a window cannot be cut short (interrupts are off on core 0)
+  // a search for the trigger ends at its next sample; a window cannot be cut short (interrupts are off on core 0).
+  // The wire is let go of first: a window waiting for it would otherwise wait for this loop, which waits for it.
+  gWireGate.release();
   if (sampler_) control_ = kControlAbort;
   while (sampler_) delay(1);
 }
@@ -330,6 +348,7 @@ size_t SamplerCapture::segmentInfo(uint8_t *out) const {   // the segment record
 }
 
 void SamplerCapture::poll() {
+  gWireGate.release();   // loop() came round: the SWIO wire's request has ended, a window may open (OepWireGate.h)
   if (state_ == cap::kStateWaiting && trig_seen_) {
     state_ = cap::kStateCapturing;
     if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64)

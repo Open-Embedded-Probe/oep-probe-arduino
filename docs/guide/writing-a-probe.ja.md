@@ -194,6 +194,12 @@ class Blink final : public oep::Interface {
   `onReceiveError` / `onReceive` を付けないでください。arduino-esp32 の出来事のタスクが取ってしまいます）。FIFO のあふれは抜けた所
   ちょうどに付きます。RP2 は arduino-pico の受信の列のあふれが抜けた所ちょうど、PL011 の overrun と break（`poll()` で印として
   読みます）は一つ前に見たときに数えたバイトの所です。
+- classic ESP32 の sampler と SWIO の線は GPIO のレジスタのバスを分け合います: sampler が続けて読む GPIO.in は、もう一方の
+  core の SWIO のパルスをフレームが乱れるほど動かし、SWIO にはパリティがありません。`OepWireGate.h` が両者を分けます: 要求の
+  フレームは sampler の窓が終わるのを待ち、その後 `loop()` が一回りするまで線を持ちます。窓は持ち主を待ちます。
+  `SamplerCapture::poll()` が線を手放すので、両方を持つスケッチは毎回の `loop()` でそれを呼びます（呼ばないと窓が開きません）。
+  コンソールの poll は待ちません（oep-if-console §3 が読みを止めてよいとするのは riscv-dm の要求と止まった hart だけ）。
+  `-DOEP_SWIO_PAUSE_CONSOLE=1` は、代わりに窓の間それを止めるテスト用の仕掛けです。
 
 ## 8. push と出来事
 
