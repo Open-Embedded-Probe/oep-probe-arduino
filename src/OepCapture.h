@@ -192,9 +192,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint64_t ext_sample_ = 0;
   uint32_t rate_hz_ = 0;                     // as asked (a follower opens the ring at it)
   void harvestTriggered(const Chunk &chunk);
+  // What an open could not get: storage (refused unavailable cause 3) or the peripheral (failed, state 6).
+  enum class Open : uint8_t { kOk, kNoMemory, kFailed };
   bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at, uint64_t min_at);
   Result startTriggered(uint8_t *out, size_t capacity);
-  bool openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
+  Open openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
   void pollTriggered();
   struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_ns; uint8_t flags; };
   // serial u32, position u64, samples u32, start_ns u64, start_uncertainty_ns u32, trigger_index u32, flags u8, generation u32
@@ -203,6 +205,12 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t mode_ = 1;
   uint32_t segment_bytes_ = 0, segment_count_ = 0;
   uint8_t *ring_ = nullptr, *store_ = nullptr;
+  // The DMA ring is taken once and never freed (takeRing): giving it up to the one-shot's segment let the rest of the
+  // firmware take a piece of its 128 KiB, and no later triggered or repeat configure found a block again. An immediate
+  // one-shot's segment is the ring itself (buffer_in_ring_).
+  bool buffer_in_ring_ = false;
+  bool takeRing();
+  Result noStorage(uint8_t *out, size_t capacity);
   QueueHandle_t queue_ = nullptr;
   TaskHandle_t task_ = nullptr;
   volatile bool harvesting_ = false;
@@ -223,7 +231,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   void harvest(const Chunk &chunk);
   void harvestDirect(const Chunk &chunk);
   void finishSegment(uint32_t bytes, uint8_t flags);
-  bool openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples, uint32_t segments, uint32_t &num, uint32_t &den,
+  Open openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples, uint32_t segments, uint32_t &num, uint32_t &den,
                   uint32_t &actual_samples, uint32_t &actual_segments);
   Result startRepeat(uint8_t *out, size_t capacity);
   void stopRepeat();

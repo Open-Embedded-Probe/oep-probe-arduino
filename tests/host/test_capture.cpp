@@ -488,7 +488,57 @@ static void testImmediateAfterFollowing() {
   CHECK(getU32(out.data() + 3 + 28) == 0xFFFFFFFFu);
 }
 
+// One large immediate one-shot breaks no later triggered configure (0.0.28: 523264 samples on 1 line freed the DMA
+// ring for its segment, the rest of the firmware took a piece of the freed 128 KiB, and every triggered configure after
+// it failed with an empty payload, state 6, until a reboot): the ring is taken with the plan and never freed, the
+// immediate segment is the ring. A configure that finds no memory is refused unavailable cause 3, the configuration it
+// would replace left as it was.
+static void testRingKept() {
+  Bytes out;
+  Config trig;
+  trig.rate = 1000000;
+  trig.samples = 1024;
+  trig.trigger = true;
+  trig.pretrigger = 100;
+  {
+    board(LogicCapture::kRingBytes + 40 * 1024, size_t(32) << 20);
+    Rig rig(1);
+    CHECK(ok(configure(rig.cap, trig, out)));
+    Config big;
+    big.rate = 1000000;
+    big.samples = 523264;
+    CHECK(ok(configure(rig.cap, big, out)));
+    void *firmware = heap_caps_malloc(30 * 1024, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);   // the rest of the firmware
+    CHECK(firmware != nullptr);
+    CHECK(ok(configure(rig.cap, trig, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured);
+    CHECK(ok(configure(rig.cap, big, out)));
+    CHECK(ok(configure(rig.cap, trig, out)));
+    heap_caps_free(firmware);
+  }
+
+  // no room for the ring at all (no PSRAM, little internal RAM): immediate runs on a block of its own, triggered and
+  // repeat are refused cause 3 and the immediate configuration stays
+  board(100 * 1024, 0);
+  Rig small(1);
+  Config imm;
+  imm.samples = 40000;
+  CHECK(ok(configure(small.cap, imm, out)));
+  Result r = configure(small.cap, trig, out);
+  CHECK(rejectedAs(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1,
+                                                           reg::core::kUnavailableCauseStorageFull}));
+  CHECK(ok(raw(small.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured);
+  Config rep;
+  rep.mode = 2;
+  rep.samples = 16384;
+  r = configure(small.cap, rep, out);
+  CHECK(rejectedAs(r, kRejectUnavailable));
+  CHECK(ok(raw(small.cap, LogicCapture::kOpStart, {}, out)));   // the immediate one still runs
+  CHECK(ok(raw(small.cap, LogicCapture::kOpStop, {}, out)));
+}
+
 int main() {
+  testRingKept();
   testImmediateAfterFollowing();
   testPositions();
   testTriggeredStop();

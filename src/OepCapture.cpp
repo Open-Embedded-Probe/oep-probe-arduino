@@ -473,6 +473,7 @@ uint8_t LogicCapture::planCheck(const RoleAssignment *roles, size_t count) {
 bool LogicCapture::planApply(const RoleAssignment *roles, size_t count) {
   close();
   forget();
+  takeRing();   // up front, while the internal heap still has the block; a configure that needs it and finds none refuses
   for (size_t i = 0; i < count; ++i) pins_[roles[i].role] = roles[i].channel;
   channels_ = static_cast<uint8_t>(count);
   state_ = kStateUnconfigured;
@@ -569,8 +570,24 @@ void LogicCapture::close() {
   }
   if (delimiter_) { parlio_del_rx_delimiter(delimiter_); delimiter_ = nullptr; }
   if (unit_) { parlio_del_rx_unit(unit_); unit_ = nullptr; }
-  if (buffer_) { heap_caps_free(buffer_); buffer_ = nullptr; }
+  if (buffer_ && !buffer_in_ring_) heap_caps_free(buffer_);   // the ring stays (takeRing)
+  buffer_ = nullptr;
+  buffer_in_ring_ = false;
   done_ = false;
+}
+
+bool LogicCapture::takeRing() {
+  if (!ring_) ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, kRingBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+  return ring_ != nullptr;
+}
+
+// A configure that could not get the memory it needs: refused unavailable cause 3 (core §4.3 order 7, the resources),
+// not failed with an empty payload and state 6. What the earlier configuration held is gone (close): state 0.
+Result LogicCapture::noStorage(uint8_t *out, size_t capacity) {
+  close();
+  forget();
+  state_ = kStateUnconfigured;
+  return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
 }
 
 Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query) {
@@ -683,8 +700,12 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == kStateCapturing || state_ == kStatePaused || state_ == kStateWaiting) && !query) return wrongState(out, capacity);
-  if (mode == 3 && actual_segments < 2) return failed();   // not even two segments of store
+  // Not even two segments of store, or no DMA ring for a mode that runs through it: refused unavailable cause 3
+  // before anything is touched (core §4.3; it answered failed with an empty payload).
+  if (mode == 3 && actual_segments < 2) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
   const bool triggered = mode == cap::kModeOneShot && trig_type != cap::kTriggerImmediate;
+  if (!query && (triggered || mode != cap::kModeOneShot) && !takeRing())
+    return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
 
   uint32_t num = 0, den = 1;
   if (query) {
@@ -705,7 +726,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     close();
     direct_ = mode == 3 && endpoint_.direct() != nullptr;
     uint32_t got_samples = 0, got_segments = 0;
-    if (!openRepeat(rate, width, samples, actual_segments, num, den, got_samples, got_segments)) {
+    const Open opened = openRepeat(rate, width, samples, actual_segments, num, den, got_samples, got_segments);
+    if (opened == Open::kNoMemory) return noStorage(out, capacity);
+    if (opened != Open::kOk) {
       close();
       state_ = kStateError;
       return failed();
@@ -714,24 +737,29 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     actual_segments = got_segments;
   } else if (triggered) {   // the repeat's ring, searched; the segment copied out of it (harvestTriggered)
     close();
-    if (!openTriggered(rate, width, bytes, num, den)) {
+    const Open opened = openTriggered(rate, width, bytes, num, den);
+    if (opened == Open::kNoMemory) return noStorage(out, capacity);
+    if (opened != Open::kOk) {
       close();
       state_ = kStateError;
       return failed();
     }
   } else {
     close();
-    if (!open(rate, width, bytes, num, den)) return failed();
-    // The DMA writes the segment itself: internal RAM. The ring a trigger or repeat left allocated (128 KiB, kept so
-    // that it does not fragment the heap) can leave no 64 KiB piece of it: 5 MHz x 4 ch x 130816 samples failed
-    // configure after triggered captures (0.0.15, the X035 jig). Then the ring goes, and PSRAM is the last resort.
-    buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-    if (!buffer_ && ring_) {
-      heap_caps_free(ring_);
-      ring_ = nullptr;
+    // The DMA writes the segment itself, into internal RAM: the ring (a segment is at most half of it; nothing else
+    // uses the ring while an immediate one-shot is configured). It used to take a block of its own and, finding none,
+    // freed the ring for it - and once the rest of the firmware had taken a piece of the freed 128 KiB, every later
+    // triggered configure failed until a reboot (523264 samples on 1 line, 0.0.28). Without the ring, a block of its
+    // own, PSRAM the last resort; none of them: refused, cause 3.
+    if (takeRing()) {
+      buffer_ = ring_;
+      buffer_in_ring_ = true;
+    } else {
       buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+      if (!buffer_) buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM));
     }
-    if (!buffer_) buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM));
+    if (!buffer_) return noStorage(out, capacity);
+    if (!open(rate, width, bytes, num, den)) { close(); state_ = kStateError; return failed(); }
     parlio_rx_event_callbacks_t cb = {};
     cb.on_receive_done = receiveDone;
     parlio_rx_soft_delimiter_config_t d = {};
@@ -779,7 +807,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   return w.ok() ? tail.finish(completed(w.length()), out, capacity) : failed();
 }
 
-bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples, uint32_t segments, uint32_t &num,
+LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples, uint32_t segments, uint32_t &num,
                               uint32_t &den, uint32_t &actual_samples, uint32_t &actual_segments) {
   segment_bytes_ = samples * width / 8;
   segment_count_ = segments;
@@ -788,9 +816,8 @@ bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples,
   sent_seg_ = 0;
   sent_off_ = 0;
   captured_ = dropped_ = 0;
-  if (!ring_) ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kRingBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
   queue_ = xQueueCreate(128, sizeof(Chunk));
-  if (!ring_ || !queue_) return false;
+  if (!takeRing() || !queue_) return Open::kNoMemory;
   // Without internal RAM for two stages (taken by the DMA ring, a trigger's segment, the rest of the firmware), the
   // stream goes the copied way instead: the segments in the store, pushed by the endpoint like any notification.
   // It failed configure (0.0.28 on the bench: a streaming configure after other captures answered failed).
@@ -800,9 +827,9 @@ bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples,
     storeBudget(caps);
     store_bytes_ = static_cast<size_t>(segment_bytes_) * segment_count_;
     store_ = static_cast<uint8_t *>(heap_caps_malloc(store_bytes_, caps));
-    if (!store_) return false;
+    if (!store_) return Open::kNoMemory;
   }
-  if (!open(rate_hz, width, kRingBytes, num, den)) return false;
+  if (!open(rate_hz, width, kRingBytes, num, den)) return Open::kFailed;
   parlio_rx_event_callbacks_t cb = {};
   cb.on_partial_receive = partialReceive;
   parlio_rx_soft_delimiter_config_t d = {};
@@ -811,20 +838,19 @@ bool LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples,
   d.eof_data_len = kSegmentBytes;
   if (parlio_rx_unit_register_event_callbacks(unit_, &cb, this) != ESP_OK ||
       parlio_new_rx_soft_delimiter(&d, &delimiter_) != ESP_OK || parlio_rx_unit_enable(unit_, true) != ESP_OK)
-    return false;
+    return Open::kFailed;
   actual_samples = samples;
   actual_segments = segment_count_;
-  return true;
+  return Open::kOk;
 }
 
-bool LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den) {
-  if (!ring_) ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kRingBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
+LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den) {
   queue_ = xQueueCreate(128, sizeof(Chunk));
   uint32_t caps = 0;
   storeBudget(caps);                         // PSRAM when there is some: the segment is filled by the CPU, not the DMA
   buffer_ = static_cast<uint8_t *>(heap_caps_malloc(bytes, caps));
-  if (!ring_ || !queue_ || !buffer_) return false;
-  if (!open(rate_hz, width, kRingBytes, num, den)) return false;
+  if (!takeRing() || !queue_ || !buffer_) return Open::kNoMemory;
+  if (!open(rate_hz, width, kRingBytes, num, den)) return Open::kFailed;
   parlio_rx_event_callbacks_t cb = {};
   cb.on_partial_receive = partialReceive;
   parlio_rx_soft_delimiter_config_t d = {};
@@ -832,7 +858,9 @@ bool LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes
   d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
   d.eof_data_len = kSegmentBytes;
   return parlio_rx_unit_register_event_callbacks(unit_, &cb, this) == ESP_OK &&
-         parlio_new_rx_soft_delimiter(&d, &delimiter_) == ESP_OK && parlio_rx_unit_enable(unit_, true) == ESP_OK;
+                 parlio_new_rx_soft_delimiter(&d, &delimiter_) == ESP_OK && parlio_rx_unit_enable(unit_, true) == ESP_OK
+             ? Open::kOk
+             : Open::kFailed;
 }
 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
@@ -884,7 +912,7 @@ bool LogicCapture::trackStartFollowing() {
   if (!triggered_) {
     uint32_t num = 0, den = 1;
     close();
-    if (!openTriggered(rate_hz_, width_, bytes_, num, den)) { close(); state_ = kStateError; return false; }
+    if (openTriggered(rate_hz_, width_, bytes_, num, den) != Open::kOk) { close(); state_ = kStateError; return false; }
     triggered_ = true;
   }
   follow_ = true;

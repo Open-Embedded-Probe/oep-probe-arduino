@@ -308,14 +308,18 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
       if (pins_[order[b]] < pins_[order[a]]) { const uint8_t t = order[a]; order[a] = order[b]; order[b] = t; }
 #endif
   if (!query) {
-    const size_t bytes = static_cast<size_t>(samples) * channels_ * 2u;
-    uint16_t *buffer = static_cast<uint16_t *>(realloc(buffer_, bytes));
-    if (!buffer) return failed();
-    buffer_ = buffer;
+    // Memory it cannot get is refused unavailable cause 3 (core §4.3 order 7; it answered failed with an empty
+    // payload), with the earlier configuration left as it was: the ring first (taken once, kept), then the segment's
+    // buffer (realloc keeps the old one when it fails). The ring's failure after a resize left the old samples_ over a
+    // smaller buffer.
 #if defined(OEP_ANALOG_RP2)
     if (trig_type && !ring_) ring_ = static_cast<uint16_t *>(aligned_alloc(kRingBytes, kRingBytes));   // the DMA's ring
-    if (trig_type && !ring_) return failed();
+    if (trig_type && !ring_) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
 #endif
+    const size_t bytes = static_cast<size_t>(samples) * channels_ * 2u;
+    uint16_t *buffer = static_cast<uint16_t *>(realloc(buffer_, bytes));
+    if (!buffer) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+    buffer_ = buffer;
     trig_type_ = trig_type;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;

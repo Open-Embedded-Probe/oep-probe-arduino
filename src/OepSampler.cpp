@@ -286,7 +286,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   if (!query) {
     waitIdle();
     if (!buffer_) buffer_ = static_cast<uint8_t *>(heap_caps_malloc(kBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-    if (!buffer_) return failed();
+    if (!buffer_) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);   // core §4.3 order 7
     for (uint8_t l = 0; l < channels_; ++l) {
       masks0_[l] = pins_[l] < 32 ? 1u << pins_[l] : 0;
       masks1_[l] = pins_[l] >= 32 ? 1u << (pins_[l] - 32) : 0;
