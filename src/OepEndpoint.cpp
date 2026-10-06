@@ -497,11 +497,22 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
     case kOpConfirm: {
       // "OEP?" min_rev(u8) max_rev(u8) [TLV]
       //   ->  "OEP!" revision(u8) flags(u8) max_frame(u16) window(u32) max_inflight(u8) boot_id(u32) [TLV]  (core §7.1)
+      // TLV 0x01 transport (u8): the index (§7.5) of the transport this confirm came on, always attached. A range
+      // with min_rev > max_rev is malformed; one without this probe's revision is unsupported with the supported range.
       if (length < 6 || memcmp(payload, reg::kConfirmRequestMagic, 4) != 0) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 6, length - 6, out, capacity);
       if (refused(parsed)) return parsed;
-      if (reg::kProtocolRevision < payload[4] || reg::kProtocolRevision > payload[5]) return unsupportedValue(out, capacity);
-      if (capacity < 17) return failed();
+      if (payload[4] > payload[5]) return rejected(kRejectMalformed);
+      if (reg::kProtocolRevision < payload[4] || reg::kProtocolRevision > payload[5]) {
+        if (capacity < 5) return unsupportedValue(out, capacity);
+        out[0] = kTagValue;
+        out[1] = reg::core::kTlvUnsupportedPayloadSupported;
+        out[2] = 2;
+        out[3] = reg::kProtocolRevision;   // min
+        out[4] = reg::kProtocolRevision;   // max
+        return {kResolutionRejected, kRejectUnsupported, 5};
+      }
+      if (capacity < 20) return failed();
       memcpy(out, reg::kConfirmResultMagic, 4);
       out[4] = reg::kProtocolRevision;
       out[5] = 0;                                     // flags: reserved
@@ -509,7 +520,10 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       putU32(out + 8, limits_.window_bytes);
       out[12] = limits_.max_inflight;
       putU32(out + 13, bootId());                     // a host without the lock learns of a restart here (core §6.5)
-      return tail.finish(completed(17), out, capacity);
+      out[17] = reg::core::kTlvConfirmAnswerTransport;
+      out[18] = 1;
+      out[19] = transports_[current_].index;          // the entry of describe's transport list it came on
+      return tail.finish(completed(20), out, capacity);
     }
     case kOpList: return list(payload, length, out, capacity);
     case kOpLinkSource: {   // length(u32) [TLV] -> that many bytes (as many as fit one frame), byte k = k & 0xff
@@ -1007,7 +1021,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
       const uint8_t v[3] = {static_cast<uint8_t>(i), transports_[i].kind, transports_[i].usb_interface};
       w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
     }
-    if (discoverable_) w.u8(reg::core::kTlvDescribeDiscoverable, 1);
+    w.u8(reg::core::kTlvDescribeDiscoverable, discoverable_ ? 1 : 0);   // always: 0 without the project's VID:PID
     if (anyPlanRoles()) w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);   // no plan ops, no plan to count
     w.u32(reg::core::kTlvDescribeMaxOpMs, kMaxOpMs);
     if (port_speed_) w.u8(reg::core::kTlvDescribePortSpeed, 1);   // the optional port_speed is on (core §3.5)

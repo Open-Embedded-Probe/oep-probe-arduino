@@ -399,7 +399,7 @@ static void testSessionTable() {
   Bulk b;
   b.ep.setBootId(0x11223344);
   Bytes r = b.send(request(1, 0, 0x01, {'O', 'E', 'P', '?', 1, 1}));
-  CHECK(r.size() == 2 + 17 && r[0] == 1 && getU32(&r[2 + 13]) == 0x11223344);   // confirm: ... boot_id(u32)
+  CHECK(r.size() == 2 + 20 && r[0] == 1 && getU32(&r[2 + 13]) == 0x11223344);   // confirm: ... boot_id(u32)
   r = b.send(request(2, 0, 0x10, openPayload(7, 1000)));
   CHECK(r.size() == 2 + 9 && r[0] == 1 && r[2 + 8] == reg::core::kResumedNew && getU32(&r[2 + 4]) == 0x11223344);
   // an open sent with role 0x81, or with session_id 0, is malformed (core §6.3 / §6.4; 0.0.28 took both)
@@ -993,17 +993,17 @@ static void testBootIdAndClock() {
     Bulk b;
     g_millis += 1234 + 777 * boot;                  // the first message comes at another time
     Bytes r = b.send(confirm);
-    CHECK(r.size() == 2 + 17 && r[0] == 1);
+    CHECK(r.size() == 2 + 20 && r[0] == 1);
     ids[boot] = getU32(&r[2 + 13]);
     g_millis += 5000;
     r = b.send(request(2, 0, 0x01, {'O', 'E', 'P', '?', 1, 1}));
-    CHECK(r.size() == 2 + 17 && getU32(&r[2 + 13]) == ids[boot]);   // fixed for the boot
+    CHECK(r.size() == 2 + 20 && getU32(&r[2 + 13]) == ids[boot]);   // fixed for the boot
   }
   CHECK(ids[0] != ids[1]);
   Bulk set;
   set.ep.setBootId(0);                              // a sketch's own value, 0 included
   Bytes r = set.send(confirm);
-  CHECK(r.size() == 2 + 17 && getU32(&r[2 + 13]) == 0);
+  CHECK(r.size() == 2 + 20 && getU32(&r[2 + 13]) == 0);
   // the clock across the 32-bit micros() wrap
   const uint32_t saved = g_millis;
   g_millis = 4294967;                               // micros() = 4294967000, 295 ms before it wraps
@@ -1032,8 +1032,8 @@ static void testConfirmBoundsAndFixedList() {
   stream.send({uint8_t(m.size()), 0});
   stream.send(m);
   ep.poll();
-  CHECK(stream.tx.size() == 2 + 5 + 17);
-  if (stream.tx.size() == 2 + 5 + 17) {
+  CHECK(stream.tx.size() == 2 + 5 + 20);
+  if (stream.tx.size() == 2 + 5 + 20) {
     const uint8_t *c = stream.tx.data() + 7;
     CHECK(getU16(c + 6) == 64 && getU32(c + 8) == 64 && c[12] == 1);   // max_frame window max_inflight
   }
@@ -1108,7 +1108,7 @@ static void testShortAndWrongRoleDiscarded() {
   CHECK(b.send({0x01, 1, 0, 0, 0}).empty() && b.stream.tx.empty());               // 5 bytes
   CHECK(b.send({0x81, 1, 0, 0, 0, 0x12, 7, 0, 0}).empty() && b.stream.tx.empty());   // 9 bytes with session
   const Bytes r = b.send(confirm);
-  CHECK(r.size() == 2 + 17 && r[0] == kResolutionCompleted);
+  CHECK(r.size() == 2 + 20 && r[0] == kResolutionCompleted);
 }
 
 int main() {

@@ -1,7 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Open Embedded Probe
-# Host tests of the portable core (serial-port framing, the endpoint's serial-port rules, the binds) and of the
+# Host tests of the portable core (fn 0's conformance: confirm's transport TLV on every transport kind, discoverable;
+# serial-port framing, the endpoint's serial-port rules, the binds) and of the
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, also behind a relaying broker's sequence on a UART bridge,
 # the I2C one with a fake controller), of the pin table's idle
 # states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
@@ -18,6 +19,9 @@ out=${TMPDIR:-/tmp}/oep-probe-host-test
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out" "$here/test_serial_share.cpp" \
   "$src/OepFrame.cpp" "$src/OepEndpoint.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-core" "$here/test_core_conformance.cpp" \
+  "$src/OepFrame.cpp" "$src/OepEndpoint.cpp"
+"$out-core"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-bulk" "$here/test_bulk_stream.cpp"
 "$out-bulk"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_SLAVE -I"$here/shim" -I"$src" -o "$out-spi" \
