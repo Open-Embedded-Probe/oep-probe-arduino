@@ -168,6 +168,23 @@ class Endpoint {
   // runs at. `base` is the boot speed every revert goes back to.
   using PortSpeedFn = uint32_t (*)(uint8_t port, uint32_t baud, bool apply);
   void setPortSpeed(PortSpeedFn fn, uint32_t base) { port_speed_ = fn; speed_base_ = base; }
+  // The optional restart (fn 0 op 0x14, core §6.6). Setting a handler puts restart in fn 0's ops and restart_max_ms
+  // (describe 0x4F, core §7.5) in its describe; without one the op is unknown_operation and the tag is not sent.
+  // fn restarts the chip as from power-on and does not return (oep::platformRestart: esp_restart on an ESP32, the
+  // watchdog on an RP2). max_ms: the longest from the answer leaving the transport until the probe answers confirm on
+  // that transport again - boot, USB re-enumeration included; at least restart_after_answer_ms (raised to it).
+  // A restart taken: the session's notifications end and the zero-copy data already queued goes out first (at most
+  // kRestartDrainMs), then the answer; it is flushed (a UART's flush waits for its last bit), the session ends, every
+  // interface lets go of its connections (probeRestart) and every plan goes, the settings' too, so each channel is in
+  // its free state (core §8); kRestartSettleMs after the flush - the host's USB stack takes the last packet meanwhile,
+  // well within restart_after_answer_ms - fn is called. From the answer on nothing is served or sent (restarting()).
+  using RestartFn = void (*)();
+  static constexpr uint32_t kRestartSettleMs = 20, kRestartDrainMs = 200;
+  void setRestart(RestartFn fn, uint32_t max_ms) {
+    restart_ = fn;
+    restart_max_ms_ = max_ms < reg::kLimitRestartAfterAnswerMs ? reg::kLimitRestartAfterAnswerMs : max_ms;
+  }
+  bool restarting() const { return restarting_; }
   // The rate a sped-up port runs at now (0: every port at its boot speed), and whether it is committed (else trying).
   uint32_t portSpeedNow() const { return speed_state_ == kSpeedBase ? 0 : speed_rate_; }
   bool portSpeedCommitted() const { return speed_state_ == kSpeedCommitted; }
@@ -263,6 +280,11 @@ class Endpoint {
   void speedRevert();            // back to the boot speed (nothing when there already)
   void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
   void speedBad();               // a broken candidate on the sped-up port
+  RestartFn restart_ = nullptr;  // setRestart: restart in fn 0's ops
+  uint32_t restart_max_ms_ = 0;
+  bool restart_taken_ = false;   // this request is a restart answered success: the probe restarts after the answer
+  volatile bool restarting_ = false;
+  void restartNow();
   volatile bool locked_ = false;
   uint32_t holder_ = 0, last_ = 0;
   bool have_last_ = false;

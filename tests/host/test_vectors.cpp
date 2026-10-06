@@ -508,6 +508,9 @@ struct OpsProbe {
   LogicCapture logic{ep, pins};
   uint16_t corr = 1;
   uint32_t actual_samples = 0;   // the logic configure's answer
+  bool no_open = false;          // the case's state has the lock free: the vector's session is not opened
+  static inline int restarts = 0;   // fn 0 restart's handler (a chip would restart there)
+  static void restartHook() { ++restarts; }
   OpsProbe() {
     ep.addTransport(bulk, rx2, sizeof rx2, Endpoint::kVendorBulk, 0);
     ep.setBootId(0x12345678);
@@ -571,6 +574,11 @@ static uint32_t sessionOf(const Bytes &m) { return m.size() >= kRequestHeader ? 
 // The state a case of ops.json / refusals.json assumes (its name and `state`), from boot; false: not set up.
 static bool setUp(OpsProbe &p, const std::string &name, const std::string &state) {
   auto has = [&](const char *s) { return name.find(s) != std::string::npos || state.find(s) != std::string::npos; };
+  if (has("core restart")) {   // fn 0 restart (core §6.6): in the ops with a handler, which here only counts
+    if (has("restart set in fn 0's ops")) p.ep.setRestart(OpsProbe::restartHook, 2000);
+    p.no_open = has("lock free");
+    return true;
+  }
   if (has("ignored TLV") || has("ignored and listed") || (has("gpio") && (has("channel 3") || has("not in the plan")))) {
     if (!p.open() || !p.plan(2, reg::fixture_gpio::kRoleLine, 3)) return false;
     if (has("gpio read")) {   // after the set: channel 3 output high
@@ -664,15 +672,50 @@ static void testOps(const char *file, const char *list) {
       CHECK(false);
       continue;
     }
-    if (sessionOf(req) == kS && !p.ep.locked()) CHECK(p.open());
+    if (sessionOf(req) == kS && !p.ep.locked() && !p.no_open) CHECK(p.open());
     Bytes want = hex(c["answer_hex"].string);
+    OpsProbe::restarts = 0;
     Bytes got = p.send(req);
+    if (name.find("core restart") != std::string::npos)   // the restart follows its success answer only (core §6.6)
+      CHECK(OpsProbe::restarts == (name.find("completed success") != std::string::npos ? 1 : 0));
     if (name.find("logic segments") != std::string::npos && want.size() == 5 + 2 + 37 && got.size() == want.size()) {
       putU32(&want[5 + 2 + 12], p.actual_samples);                   // the probe's own values (see the top)
       putU32(&want[5 + 2 + 24], LogicCapture::kStartUncertaintyNs);
     }
     CHECK(same(file, name, got, want));
   }
+}
+
+// fn 0 restart on the whole probe (core §6.6): a slot's connection on the rvswd wire with its console bound (the
+// settings'), the session's gpio plan, a settings plan - all let go of before the handler runs: the connection closed
+// without a reset of the target (the hart left halted), the stream closed, every channel free; the answer out first.
+static void testRestartLetsGo() {
+  ++cases;
+  boot();
+  OpsProbe p;
+  p.corr = 100;
+  CHECK(setUp(p, "probe.config state", ""));   // the slot at boot attached, its console bound (session S open)
+  CHECK(p.port.connected && p.console.isOpen() && p.phy.halted);
+  CHECK(p.plan(2, reg::fixture_gpio::kRoleLine, 3));
+  const RoleAssignment settings[] = {{5, reg::fixture_uart::kRoleTx, 6}};
+  const uint16_t fn_uart = 5;
+  CHECK(p.ep.replacePlan(settings, 1, &fn_uart, 1) == 0);
+  CHECK(p.pins.owner(3) != 0 && p.pins.owner(6) != 0);
+  static OpsProbe *seen;
+  static bool connected, open, held, halted;
+  seen = &p;
+  OpsProbe::restarts = 0;
+  p.ep.setRestart([]() {
+    ++OpsProbe::restarts;
+    connected = seen->port.connected;
+    open = seen->console.isOpen();
+    held = seen->pins.owner(1) || seen->pins.owner(2) || seen->pins.owner(3) || seen->pins.owner(6);
+    halted = seen->phy.halted;
+  }, 2000);
+  const Bytes a = p.request(0, kOpRestart, {});
+  CHECK(a.size() == 5 && a[3] == kResolutionCompleted && a[4] == kOutcomeSuccess);
+  CHECK(OpsProbe::restarts == 1 && !connected && !open && !held && halted && !p.ep.locked());
+  CHECK(p.request(0, kOpLockState, {}, 0).empty());   // nothing served after it
 }
 
 static void testProbeConfigHash() {
@@ -703,6 +746,7 @@ int main() {
   testSessions();
   testOps("refusals.json", "cases");
   testOps("ops.json", "cases");
+  testRestartLetsGo();
   testProbeConfigHash();
   printf("vectors: %d cases, %d checks, %d failures\n", cases, checks, failures);
   return failures ? 1 : 0;

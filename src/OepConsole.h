@@ -61,6 +61,8 @@ class TargetConsoleStream final : public Interface, public BindSource {
   // readable until the same place and mechanism is opened again (oep-if-console §2).
   void sessionOver() override { release(kUserHost, reg::common::kMarkDetailClosedSessionEnded); }
   bool sessionOverFirst() const override { return true; }
+  // fn 0 restart (core §6.6): the slot's share goes too, before the wire closes the connection
+  void probeRestart() override { release(kUserHost | kUserSlot, reg::common::kMarkDetailClosedAllReleased); }
   void poll();   // from loop()
   // What one read may return: declare it within the probe's frame (1000 suits a 1 KiB frame).
   void setMaxRead(uint16_t bytes) { max_read_ = bytes; }

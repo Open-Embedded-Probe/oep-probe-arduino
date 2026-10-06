@@ -247,6 +247,19 @@ inline bool describeChip(TlvWriter &w) {
 // (Endpoint::bootId).
 inline uint32_t platformRandom32() { return bootIdSource(); }
 
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
+// The chip restarted as from power-on, for fn 0 restart (core §6.6, Endpoint::setRestart). Does not return. ESP32:
+// esp_restart (the system reset: on the ESP32-P4 the HS USB device drops off the bus with it). RP2: arduino-pico's
+// rp2040.reboot(), a watchdog reset 10 ms on, which resets the USB controller too (the device re-enumerates).
+inline void platformRestart() {
+#if defined(ARDUINO_ARCH_ESP32)
+  esp_restart();
+#else
+  rp2040.reboot();
+#endif
+}
+#endif
+
 // Sizes are hints: a core that cannot resize its buffers keeps its default.
 inline void platformUartBuffers(OepUart &serial, size_t rx, size_t tx) {
 #if defined(ARDUINO_ARCH_RP2040)

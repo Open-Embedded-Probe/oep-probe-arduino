@@ -5,10 +5,12 @@
 // (the index of the describe entry it came on), describe's discoverable always sent and the ops tag first in every fn's
 // describe, list's reserved flags and prefix text, open's force and owner, a repeated non-repeating TLV, the header
 // refusals (§4.3 order 1) neither kept nor restarting the lease, the ignored list's 16 entries, no resume (§6.2, §9),
-// and the length-prefixed reader's over-long length and TCP pause rules (transports §1, §2). The byte vectors of
+// the length-prefixed reader's over-long length and TCP pause rules (transports §1, §2), and the optional restart
+// (§6.6: its ops bit and restart_max_ms, its refusals, the answer first, nothing served or sent after it). The byte vectors of
 // oep-spec tests/vectors are test_vectors.cpp's.
 #include <stdio.h>
 #include <string.h>
+#include <utility>
 #include <vector>
 
 #include "OepFrame.h"
@@ -304,7 +306,7 @@ static void testHeaderRefusalsNotKept() {
   CHECK(reason(exchange(ep, s, false, request(2, 5, 0x01, {}, true, 7))) == kRejectUnknownFunction);
   CHECK(reason(exchange(ep, s, false, request(3, 0, 0x50, {}, true, 7))) == kRejectUnknownOperation);
   CHECK(reason(exchange(ep, s, false, request(4, 0, 0x04, {}, true, 7))) == kRejectUnknownOperation);   // no plan roles
-  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x14, {}, true, 7))) == kRejectUnknownOperation);   // not fn 0's (oep.link)
+  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x14, {}, true, 7))) == kRejectUnknownOperation);   // restart: no handler
   CHECK(reason(exchange(ep, s, false, request(6, 0, 0x12, {}))) == kRejectSessionRequired);              // session_id 0
   g_millis += 200;   // 1100 ms after the open: the refusals did not extend it
   ep.poll();
@@ -433,6 +435,121 @@ static void testNamesAndTokens() {
   CHECK(!describeCore(w3, "my-probe", bad_id, sizeof bad_id, 0, 0));
 }
 
+// core §6.6, §7.5, §12: fn 0 restart. In fn 0's ops, and restart_max_ms (0x4F) in its describe, only with a handler
+// (raised to restart_after_answer_ms at least). It needs the lock - session_required, no_session, locked, the handler not
+// called; a critical TLV is unsupported (no restart), another is ignored and listed. The answer goes first: the session's
+// notifications end, it is written, then everything is let go of - the session (sessionOver), what the settings keep
+// (probeRestart), every plan, the settings' too - and the handler is called kRestartSettleMs after it, well within
+// restart_after_answer_ms. Nothing after the answer is served or sent, on any transport: the request behind it in the
+// same read, a heartbeat that falls due, a request on another transport.
+class PlanToy final : public Interface {
+ public:
+  explicit PlanToy(const char *name) : name_(name) {}
+  const char *name() const override { return name_; }
+  uint16_t instance() const override { return 0; }
+  uint8_t revision() const override { return 1; }
+  bool planRoles() const override { return true; }
+  uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
+  bool planApply(const RoleAssignment *, size_t) override { planned = true; return true; }
+  void planRelease() override { planned = false; ++releases; }
+  void sessionOver() override { ++session_overs; }
+  void probeRestart() override { ++probe_restarts; restart_saw_planned = planned; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
+  bool planned = false, restart_saw_planned = false;
+  int releases = 0, session_overs = 0, probe_restarts = 0;
+
+ private:
+  const char *name_;
+};
+struct RestartSeen {
+  int calls = 0;
+  size_t tx = 0;             // what the transport had been given when the handler ran
+  uint32_t at_ms = 0;
+  bool locked = true, planned = true;
+  MemStream *stream = nullptr;
+  Endpoint *ep = nullptr;
+  PlanToy *a = nullptr, *b = nullptr;
+};
+static RestartSeen g_seen;
+static bool opSet(const Bytes &describe, uint8_t op) {   // fn 0's ops tag (core §7.4): base, bitmap
+  const Bytes v = describeTlv(describe, kTagOps);
+  if (v.empty() || op < v[0]) return false;
+  const size_t bit = op - v[0];
+  return bit / 8 + 1 < v.size() && (v[1 + bit / 8] >> (bit % 8) & 1);
+}
+static void testRestart() {
+  MemStream s, u;
+  static uint8_t rx[1200], rx2[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  CHECK(ep.addTransport(u, rx2, sizeof rx2, Endpoint::kUartBridge));
+  PlanToy a("io.github.test.a"), b("io.github.test.b");
+  ep.add(a);
+  ep.add(b);
+  auto restartMaxMs = [&](uint16_t corr, bool *found) {
+    const Bytes d = exchange(ep, s, false, request(corr, 0, 0x03, {0, 0, 0, 0}));
+    const Bytes v = describeTlv(d, reg::core::kTlvDescribeRestartMaxMs, found);
+    return std::make_pair(opSet(d, kOpRestart), v.size() == 4 ? getU32(v.data()) : 0u);
+  };
+  bool found = true;
+  // no handler: not in the ops, no restart_max_ms, unknown_operation before the session (core §4.3 order 1)
+  CHECK(!restartMaxMs(1, &found).first && !found);
+  CHECK(reason(exchange(ep, s, false, request(2, 0, kOpRestart, {}, true, 7))) == kRejectUnknownOperation);
+  g_seen = RestartSeen{};
+  g_seen.stream = &s;
+  g_seen.ep = &ep;
+  g_seen.a = &a;
+  g_seen.b = &b;
+  auto hook = []() {
+    ++g_seen.calls;
+    g_seen.tx = g_seen.stream->tx.size();
+    g_seen.at_ms = g_millis;
+    g_seen.locked = g_seen.ep->locked();
+    RoleAssignment roles[4];
+    g_seen.planned = g_seen.ep->plan(roles, 4) != 0 || g_seen.a->planned || g_seen.b->planned;
+  };
+  ep.setRestart(hook, 50);   // raised to restart_after_answer_ms
+  auto got = restartMaxMs(3, &found);
+  CHECK(got.first && found && got.second == reg::kLimitRestartAfterAnswerMs);
+  ep.setRestart(hook, 1500);
+  CHECK(restartMaxMs(4, &found).second == 1500);
+  // the lock (core §6.3, §4.3): session_required, no_session, locked - nothing restarts
+  CHECK(reason(exchange(ep, s, false, request(5, 0, kOpRestart, {}))) == kRejectSessionRequired);
+  CHECK(reason(exchange(ep, s, false, request(6, 0, kOpRestart, {}, true, 7))) == kRejectNoSession);
+  CHECK(exchange(ep, s, false, request(7, 0, 0x10, openReq(7, 5000)))[3] == kResolutionCompleted);
+  CHECK(reason(exchange(ep, s, false, request(8, 0, kOpRestart, {}, true, 9))) == kRejectLocked);
+  // a critical TLV restart does not know: unsupported with its tag (core §2.3)
+  Bytes r = exchange(ep, s, false, request(9, 0, kOpRestart, withTlv({}, 0xa0, {1}), true, 7));
+  CHECK(reason(r) == kRejectUnsupported && r.size() == 6 && r[5] == 0xa0);
+  CHECK(g_seen.calls == 0 && ep.locked() && !ep.restarting());
+  // a session's plan (a), the settings' plan (b), and the heartbeat subscribed (every 10 ms)
+  CHECK(exchange(ep, s, false, request(10, 0, kOpPlanApply, withTlv({}, 0x90, {1, 0, 0, 3, 0}), true, 7))[3] == kResolutionCompleted);
+  const RoleAssignment settings[] = {{2, 0, 4}};
+  const uint16_t fn_b = 2;
+  CHECK(ep.replacePlan(settings, 1, &fn_b, 1) == 0 && a.planned && b.planned);
+  CHECK(exchange(ep, s, false, request(11, 0, kOpSubscribe, {0, 0, 0, 0, 10, 0, 0, 0}, true, 7))[3] == kResolutionCompleted);
+  // restart with a TLV it ignores, and a lock_state right behind it in the same read
+  s.tx.clear();
+  const Bytes m1 = request(12, 0, kOpRestart, withTlv({}, 0x20, {}), true, 7), m2 = request(13, 0, kOpLockState, {});
+  for (const Bytes *m : {&m1, &m2}) { s.send({uint8_t(m->size()), uint8_t(m->size() >> 8)}); s.send(*m); }
+  g_millis += 20;   // the heartbeat is due
+  const uint32_t before = g_millis;
+  ep.poll();
+  // one answer: completed success, no payload but the ignored list (core §2.3)
+  CHECK(s.tx == hex("0900020c0001007f010020"));
+  CHECK(g_seen.calls == 1 && g_seen.tx == s.tx.size() && ep.restarting());
+  CHECK(g_seen.at_ms - before >= Endpoint::kRestartSettleMs && g_seen.at_ms - before < reg::kLimitRestartAfterAnswerMs);
+  CHECK(!g_seen.locked && !g_seen.planned);   // let go of before the handler
+  CHECK(a.session_overs == 1 && b.session_overs == 1 && a.probe_restarts == 1 && b.probe_restarts == 1);
+  CHECK(b.restart_saw_planned && !a.restart_saw_planned);   // the session's plan went with the session, the settings' after probeRestart
+  CHECK(a.releases == 1 && b.releases == 1);
+  // nothing more: a heartbeat due, a request on either transport
+  s.tx.clear();
+  g_millis += 1000;
+  CHECK(exchange(ep, s, false, request(14, 0, 0x01, confirmReq())).empty() && s.tx.empty());
+  CHECK(exchange(ep, u, true, request(15, 0, 0x01, confirmReq())).empty() && u.tx.empty());
+  CHECK(g_seen.calls == 1);
+}
+
 int main() {
   testConfirmTransportEveryKind();
   testOps();
@@ -447,6 +564,7 @@ int main() {
   testResourceReuseDistance();
   testInstanceNumbering();
   testNamesAndTokens();
+  testRestart();
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Open Embedded Probe
-# Host tests of the portable core (the capture-group and a bound track's plan; fn 0's conformance: confirm's transport TLV on every transport kind, discoverable,
+# Host tests of the portable core (the capture-group and a bound track's plan; fn 0's conformance: confirm's transport TLV on every transport kind, discoverable, restart,
 # the header refusals, the length-prefixed reader's over-long length and TCP pause; serial-port framing, the endpoint's serial-port rules, the binds) and of the
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, also behind a relaying broker's sequence on a UART bridge,
 # the I2C one with a fake controller), of the pin table's idle

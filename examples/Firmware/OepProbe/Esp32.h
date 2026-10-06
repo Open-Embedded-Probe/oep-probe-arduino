@@ -65,6 +65,13 @@ static uint32_t portSpeed(uint8_t, uint32_t baud, bool apply) {   // port 0, UAR
 }
 #endif
 
+// fn 0 restart (core §6.6): esp_restart, UART0 back at 115200 as at every boot. restart_max_ms (describe, core §7.5):
+// the UART bridge stays on the bus (no re-enumeration, the host's port stays), and the chip is back in about 0.5 s -
+// the ROM (its banner goes out on UART0 as raw bytes), the bootloader checking the app image (about 0.4 MB), setup()
+// reading the settings; the host's reopen after restart_after_answer_ms and its confirms at 115200 add little. 1500 ms
+// is about three times that (an estimate from the boot path, to be measured on the bench).
+static constexpr uint32_t kRestartMaxMs = 1500;
+
 // The GPIOs a DevKitC brings out, less UART0 (1, 3: the transport), the SPI flash (6-11) and the boot straps (0, 2, 12,
 // 15). 34-39 are inputs only.
 static constexpr uint64_t kChannels = (1ull << 4) | (1ull << 5) | (1ull << 13) | (1ull << 14) | (1ull << 16) | (1ull << 17) |
@@ -132,6 +139,7 @@ void setup() {
 #if OEP_PORT_SPEED
   endpoint.setPortSpeed(portSpeed, kBootBaud);
 #endif
+  endpoint.setRestart(oep::platformRestart, kRestartMaxMs);
   endpoint.add(wire);
   endpoint.add(riscvDm);
   console.setMaxRead(480);   // 512-byte frames

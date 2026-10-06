@@ -59,7 +59,7 @@ static_assert(kMaxOpMs >= 1 && kMaxOpMs <= reg::kLimitMaxOpMsMax, "max_op_ms is 
 // core (fn 0)
 constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpList, kOpDescribe = reg::core::kOpDescribe;
 constexpr uint8_t kOpOpen = reg::core::kOpOpen, kOpEnd = reg::core::kOpEnd, kOpKeepalive = reg::core::kOpKeepalive,
-                  kOpLockState = reg::core::kOpLockState;
+                  kOpLockState = reg::core::kOpLockState, kOpRestart = reg::core::kOpRestart;
 constexpr uint8_t kOpSubscribe = reg::core::kOpSubscribe, kOpUnsubscribe = reg::core::kOpUnsubscribe;
 constexpr uint8_t kOpPlanApply = reg::core::kOpPlanApply, kOpPlanRelease = reg::core::kOpPlanRelease;
 constexpr uint8_t kTagRoleAssignment = reg::core::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), sent critical (0x90)
@@ -626,6 +626,11 @@ class Interface {
   // true: this interface's resources sit on another interface's (a console's streams on a wire's connections): at the
   // session's end the endpoint releases its share first (oep-if-console §2: the stream closes with session_ended).
   virtual bool sessionOverFirst() const { return false; }
+  // The probe restarts right after this (fn 0 restart, core §6.6), its session already over (sessionOver ran): let go
+  // of what the settings keep as well - a slot's connection, a bind's stream - without touching the target (no reset;
+  // a halted hart stays halted), so that no line is driven when the chip resets. sessionOverFirst orders it the same
+  // way. The endpoint releases every plan after it, the settings' too.
+  virtual void probeRestart() {}
   // The endpoint's frame limit, told when the interface is added: what a describe may promise.
   virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
   // Push (core §11): while subscribed, the endpoint asks for a data frame's payload. Write up to `capacity` bytes of it

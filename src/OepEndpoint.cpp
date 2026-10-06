@@ -282,6 +282,7 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length,
 }
 
 void Endpoint::poll() {
+  if (restarting_) return;   // fn 0 restart answered: nothing more is served or sent (core §6.6)
   polled_ = true;
   (void)nowNs();   // the clock counts the wraps of a 32-bit timer as it reads it (core §2.6a): read it every pass
   for (size_t i = 0; i < transport_count_; ++i) {
@@ -302,6 +303,7 @@ void Endpoint::poll() {
             if (message) { speed_good_ms_ = millis(); speed_heard_ = true; speed_bad_run_ = 0; }   // a good frame: the run ends
           }
           if (message) handleMessage(t.serial.message(), t.serial.length());
+          if (restarting_) return;   // what came after the restart is not served (core §6.6)
         }
       }
       t.serial.idle(rawSink, &t);
@@ -315,6 +317,7 @@ void Endpoint::poll() {
         while (n) {
           if (!t.reader.feed(p, n)) continue;
           handleMessage(t.reader.message(), t.reader.length());
+          if (restarting_) return;   // what came after the restart is not served (core §6.6)
           t.reader.consume();
         }
       }
@@ -428,6 +431,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     if (have_newest_ && static_cast<int16_t>(corr - newest_corr_) <= 0) { sendReject(corr, kRejectResultLost); return; }
   }
   Result result;
+  restart_taken_ = false;
   g_request_ignored.reset();   // this request's ignored tags (core §2.3), from its tail's parse
   // core §6.2 (order 3): every request with a session_id but open - lock-free ones too (core §4.1) - goes through it
   if (session != 0 && !is_open) result = checkSession(session, out, capacity);
@@ -468,9 +472,43 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     d.length = d.kept ? static_cast<uint16_t>(total) : 0;
     if (d.kept) memcpy(d.result, tx_, total);
   }
+  if (restart_taken_) {
+    // fn 0 restart (core §6.6): no notification after its answer - the session's end, and the zero-copy data already
+    // queued (it would follow the answer) goes out before it
+    endSubscriptions();
+    if (direct_)
+      for (const uint32_t start = millis(); direct_->queued() && static_cast<uint32_t>(millis() - start) < kRestartDrainMs;)
+        delay(1);
+  }
   OEP_LOGF("ans corr %u res %u detail %u len %u", corr, result.resolution, result.detail, static_cast<unsigned>(result.length));
   send(total);
+  if (restart_taken_) { restartNow(); return; }
   speedApply();   // port_speed: the answer went out at the old speed; now switch (or revert)
+}
+
+// After restart's answer (core §6.6): it leaves the probe, every line is let go of, and the chip restarts as from
+// power-on - a new boot_id, the saved settings applied, every serial port at its boot speed, no session, connection, plan
+// or table kept.
+void Endpoint::restartNow() {
+  restart_taken_ = false;
+  restarting_ = true;
+  Transport &t = transports_[current_];
+  // The answer out first: a UART's flush returns once its last bit is sent, a USB stream's starts the transfer. Not
+  // USB-Serial/JTAG's: HWCDC's flush with no TX timeout drops what still waits; its interrupt sends it as the host reads.
+  if (t.kind != kUsbSerialJtag) t.stream->flush();
+  t.wrote = false;
+  const uint32_t out = millis();
+  // The lines let go of (core §6.6, §8): the session ends as at its end (everything it created), every interface closes
+  // what the settings keep too (a slot's connection, a bind's stream) without touching the target, and every plan goes,
+  // the settings' included - each channel to its free state.
+  if (locked_) releaseLock();
+  for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->sessionOverFirst()) interfaces_[i]->probeRestart();
+  for (size_t i = 0; i < count_; ++i) if (!interfaces_[i]->sessionOverFirst()) interfaces_[i]->probeRestart();
+  planRelease(nullptr, 0);
+  // The host's USB stack takes the last packet meanwhile; the restart still starts well within restart_after_answer_ms.
+  while (static_cast<uint32_t>(millis() - out) < kRestartSettleMs) delay(1);
+  OEP_LOGF("restart");
+  if (restart_) restart_();   // does not return on a chip
 }
 
 void Endpoint::sendReject(uint16_t corr, uint8_t reason) {
@@ -498,6 +536,7 @@ bool Endpoint::coreOffers(uint8_t op) const {
     case kOpSubscribe: case kOpUnsubscribe:
       return true;
     case kOpPlanApply: case kOpPlanRelease: return anyPlanRoles();
+    case kOpRestart: return restart_ != nullptr;   // optional: with a handler (setRestart)
     default: return false;
   }
 }
@@ -571,6 +610,14 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
     case kOpSubscribe:
     case kOpUnsubscribe:   // the lock holder only (handleMessage checked the session), and they end with the lock
       return subscription(op, payload, length, out, capacity);
+    case kOpRestart: {
+      // [TLV] -> nothing (core §6.6): the lock holder's (handleMessage checked the session), in fn 0's ops only with a
+      // handler. completed success, sent first; the restart follows the answer (handleMessage, restartNow).
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      restart_taken_ = true;
+      return tail.finish(completed(), out, capacity);
+    }
     case kOpEnd:
     case kOpKeepalive:
     case kOpPlanApply:
@@ -1031,7 +1078,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   if (fn > count_) return rejected(kRejectUnknownFunction);
   // every fn's describe starts with its ops (core §1.2, §7.4)
   const size_t ops = opsTlv(fn, scratch_, sizeof scratch_);
-  if (fn == 0) {   // the ops, the sketch's part, then the transports, discoverable, plan_roles and max_op_ms (core §7.5)
+  if (fn == 0) {   // the ops, the sketch's part, then the transports, discoverable, plan_roles, max_op_ms, restart_max_ms (core §7.5)
     const size_t sketch = probe_tlv_length_ <= sizeof scratch_ - ops ? probe_tlv_length_ : 0;
     if (sketch) memcpy(scratch_ + ops, probe_tlv_, sketch);
     TlvWriter w(scratch_ + ops + sketch, sizeof scratch_ - ops - sketch);
@@ -1042,6 +1089,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
     w.u8(reg::core::kTlvDescribeDiscoverable, discoverable_ ? 1 : 0);   // always: 0 without the project's VID:PID
     if (anyPlanRoles()) w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);   // no plan ops, no plan to count
     w.u32(reg::core::kTlvDescribeMaxOpMs, max_op_ms_);
+    if (restart_) w.u32(reg::core::kTlvDescribeRestartMaxMs, restart_max_ms_);   // with restart only (core §6.6, §7.5)
     tlv = scratch_;
     tlv_length = ops + sketch + w.length();
   } else {

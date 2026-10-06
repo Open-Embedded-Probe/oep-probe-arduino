@@ -36,6 +36,7 @@
 #include <esp_mac.h>
 #include <soc/usb_serial_jtag_reg.h>
 #include <EspUsbDevice.h>
+#include <device/usbd.h>   // tud_disconnect (EspUsbDevice's TinyUSB)
 
 #include <OepAnalog.h>
 #include <OepBind.h>
@@ -145,6 +146,20 @@ static oep::CaptureGroup group(endpoint, 0);
 static uint8_t probeTlv[160];
 static char serial_[20];
 
+// fn 0 restart (core §6.6): the HS device detaches first so the host records an unplug rather than a device that went
+// silent (as EspUsbDevice's own restarts do), then esp_restart. restart_max_ms (describe, core §7.5): the chip is in
+// setup() after about 0.5 s (the ROM, the bootloader checking the app image of about 0.6 MB with rollback on, the
+// PSRAM); then the host enumerates the HS device again - a composite of HID, vendor bulk, CDC and DFU, for which an OS
+// binds four drivers (Windows about 1 s or more) - and the transport opens again before it confirms (USB-Serial/JTAG,
+// whose own device may stay on the bus, is back no later). 3000 ms is about twice the slow end (an estimate from the
+// boot path, to be measured on the bench).
+static constexpr uint32_t kRestartMaxMs = 3000;
+static void restartProbe() {
+  tud_disconnect();
+  delay(20);
+  esp_restart();
+}
+
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
@@ -178,6 +193,7 @@ void setup() {
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
   // describe discoverable: set in loop() once the HS port has enumerated with the project's VID:PID (transports §3, core §7.5)
+  endpoint.setRestart(restartProbe, kRestartMaxMs);
 
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;
