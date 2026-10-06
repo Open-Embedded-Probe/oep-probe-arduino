@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) docs/implementation-limits.ja.md (new; docs/implementation-limits.md an English stub): the values the OEP
+  specification leaves to the probe and this implementation's limits, by platform - gathered after oep-spec's rule review
+  of 2026-10-07 moved them out of the specification (the wire's times and counts, max_op_ms 10000, restart_max_ms,
+  search_retries' counting, the per-request dmi link check, the boot guard and safe boot, the reset note in the firmware
+  text, the P4's DFU image valid at start-up, the RVSWD / SWIO / SWD notes, the classic ESP32's sampler windows and the
+  wire / console, the P4's TinyUSB DWC2 panic on a SETUP in a status stage (EspUsbDevice 2.5.1, a reboot), SDI / DMDATA
+  not telling a lost write, USB-UART bridges losing bytes on long probe-to-host streams with 500000 the practical rate).
+  Documentation only; no code change
+- (JA) docs/implementation-limits.ja.md（新規。docs/implementation-limits.md は英語の stub）: OEP の仕様が probe に任せた値と、
+  この実装の限界を platform ごとにまとめました。oep-spec の 2026-10-07 の規則の見直しで仕様から外れたもの（線の時間と回数、
+  max_op_ms 10000、restart_max_ms、search_retries の数え方、dmi の要求ごとの線の確かめ、boot guard と safe boot、firmware の
+  文字列のリセットの印、P4 の DFU の image は起動で確定、RVSWD / SWIO / SWD の注、classic ESP32 の sampler の窓と線 / コンソール、
+  P4 の TinyUSB DWC2 が status stage の SETUP で panic すること（EspUsbDevice 2.5.1、再起動になる）、SDI / DMDATA が失われた
+  書き込みを見分けられないこと、USB-UART の変換器が長い probe → host の流れで byte を落とし 500000 が実用の速さであること）。
+  文書だけで、コードは変えていません
 - (EN) ESP32-P4: a DFU update's image is confirmed as it starts, with no trial (the user's decision: an update is taken
   as working, the firmware is not designed for a broken image). The sketch no longer defines verifyRollbackLater, so
   arduino-esp32 3.3.x's own (false) stands and initArduino marks the image valid
