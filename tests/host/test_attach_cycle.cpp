@@ -66,7 +66,7 @@ struct Target {
   // the GPRs), ABSTRACTCS - and a link that comes back from a drop flickering: for flicker_us after the re-sync that
   // brought it back, one transaction in flicker_every misses (a write lost, a read answering the value of the read
   // before it), the looks around it passing
-  uint32_t data0 = 0, gpr[32] = {};
+  uint32_t data0 = 0, gpr[32] = {}, dcsr = 0x40000003u, dpc = 0;
   uint32_t flicker_us = 0;
   int flicker_every = 0, flicker_n = 0, flickers = 0;
   uint64_t back_at_us = 0;
@@ -110,6 +110,11 @@ struct Target {
     if (a == 0x17 && (v & (1u << 17)) && (v & 0xffe0u) == 0x1000u && (hart_bits & (1u << 8))) {   // access a GPR
       if (v & (1u << 16)) gpr[v & 0x1f] = data0;
       else data0 = gpr[v & 0x1f];
+    }
+    if (a == 0x17 && (v & (1u << 17)) && ((v & 0xffff) == 0x7b0 || (v & 0xffff) == 0x7b1) && (hart_bits & (1u << 8))) {
+      uint32_t &csr = (v & 0xffff) == 0x7b0 ? dcsr : dpc;   // dcsr / dpc (the probe reads dpc twice over sentinels)
+      if (v & (1u << 16)) csr = data0;
+      else data0 = csr;
     }
   }
   bool parityOf(uint32_t v) { bool p = false; while (v) { p ^= v & 1; v >>= 1; } return p; }

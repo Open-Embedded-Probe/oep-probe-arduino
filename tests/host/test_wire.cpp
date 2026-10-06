@@ -138,9 +138,20 @@ class FakePhy final : public DmiPhy {
   // pending_drop_access: the drop after that many more DMI accesses, reads and writes alike (pending_drop counts reads
   // only): a drop between two writes - after the one that started the block writer, say - and not only at a read
   int pending_drop_access = -1, accesses = 0;
-  void countAccess() {
+  // A glitch: the access glitch_at (glitch_at2: a second one) accesses on is missed on its own and the link is up again
+  // at the next one - nothing to relink, the looks around it pass. A write is lost - with cmderr 6 set when
+  // glitch_parity (the module took the frame for one with a bad parity: QingKe's cmderr 6 "parity bit error during
+  // communication") - and a read answers the value of the read before it.
+  int glitch_at = -1, glitch_at2 = -1, glitches = 0;
+  bool glitch_parity = false;
+  bool countAccess() {
     ++accesses;
     if (pending_drop_access >= 0 && pending_drop_access-- == 0) { dropped = true; dropped_at_us = micros(); }
+    const bool glitch = glitch_at == 0 || glitch_at2 == 0;
+    if (glitch_at >= 0) --glitch_at;
+    if (glitch_at2 >= 0) --glitch_at2;
+    if (glitch) ++glitches;
+    return glitch;
   }
 
   bool attach() override {
@@ -179,16 +190,18 @@ class FakePhy final : public DmiPhy {
   bool model_dcsr = false;        // dcsr as a register of its own (abstract reads of it give it back); else DATA0 as is
   uint32_t dcsr = 0;
   uint32_t read_us = 10, dmcontrol = 0;
+  std::map<uint32_t, uint32_t> regs;   // the registers an access-register command reaches, without model_block
   int reads = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
     ++reads;
     advanceMicros(read_us);
     if (!present || !attached_flag) return false;
-    countAccess();
+    const bool glitch = countAccess();
     if (stuck) { value = stuck_value; return true; }
     if (stale) { value = 0xffffffffu; return true; }
     if (pending_drop >= 0 && pending_drop-- == 0) { dropped = true; dropped_at_us = micros(); }
     if (dropped) { value = drop_stale ? last_read : 0xffffffffu; return true; }
+    if (glitch) { value = last_read; return true; }
     if (address == 0x11 && running_reads > 0 && --running_reads == 0) {   // the run reaches its ebreak
       halted = true;
       if (loader_pc) dpc = loader_pc + 0x40;
@@ -210,7 +223,7 @@ class FakePhy final : public DmiPhy {
       case 0x12: value = 0x0002'1000u | 0x380; break;   // HARTINFO: DATA0 at 0x380 (memory-mapped), datacount 2
       case 0x16: value = 2 | ((model_block ? cmderr : abstract_cmderr) << 8); break;   // ABSTRACTCS: datacount 2, cmderr
       case 0x18: value = abstractauto; break;
-      default: value = 0; break;
+      default: value = address >= 0x20 && address < 0x28 ? progbuf[address - 0x20] : 0; break;   // the program buffer
     }
     last_read = value;
     if (model_block && address == 0x04 && (abstractauto & 1)) { ++autoexec_runs; execute(last_command); }
@@ -219,8 +232,13 @@ class FakePhy final : public DmiPhy {
   void write(uint8_t address, uint32_t value) override {
     ++writes;
     if (!present || !attached_flag) return;
-    countAccess();
+    const bool glitch = countAccess();
     if (dropped && drop_loses_writes) { ++lost_writes; return; }
+    if (glitch) {
+      ++lost_writes;
+      if (glitch_parity && model_block && !cmderr) cmderr = 6;
+      return;
+    }
     if (model_block) {
       if (address == 0x04) { data0 = value; if (abstractauto & 1) { ++autoexec_runs; execute(last_command); } return; }
       if (address == 0x05) { data1 = value; return; }
@@ -231,12 +249,24 @@ class FakePhy final : public DmiPhy {
     }
     if (address == 0x04) data0 = value;
     if (address == 0x05) data1 = value;
+    if (address == 0x18) abstractauto = value;
+    if (address >= 0x20 && address < 0x28) progbuf[address - 0x20] = value;
     if (address == 0x17 && (value & (1u << 16)) && (value & 0xffff) == 0x7b0) {   // write dcsr
       dcsr_written = data0;
       dcsr_writes.push_back(data0);
       dcsr = data0;
     }
     if (model_dcsr && address == 0x17 && !(value & (1u << 16)) && (value & 0xffff) == 0x7b0) data0 = dcsr;   // read it
+    // the other registers as a plain store: an access-register command writes DATA0 into one and reads one into DATA0
+    // (the probe reads a register twice over two sentinels in DATA0, and reads what it writes back)
+    if (address == 0x17 && (value & (1u << 17)) && !abstract_cmderr && (value & 0xffff) != 0x7b0) {
+      if (value & (1u << 16)) regs[value & 0xffff] = data0;
+      else data0 = regs[value & 0xffff];
+    }
+    if (address == 0x17 && (value & (1u << 17)) && !abstract_cmderr && !model_dcsr && (value & 0xffff) == 0x7b0) {
+      if (value & (1u << 16)) regs[0x7b0] = data0;
+      else data0 = regs[0x7b0];
+    }
     if (address == 0x10) {
       dmcontrol = value;
       hartsel = value & 0x07ffffc0u;
@@ -1429,6 +1459,116 @@ int main() {
     phy.halted = false;
   }
 
+  // ---- a glitch anywhere inside a block op: one DMI access missed on its own, the link up again at once and every look
+  // passing - a write lost (cmderr 6 set or not), a read answering the value of the read before it - at every access of
+  // read_block and write_block in turn, singly and in pairs, a host's abstractauto set or not. Every GPR, dpc, dcsr,
+  // DATA0 / DATA1 and abstractauto as found after any answer; an ok answer with the right words (bench,
+  // 0.0.29-dev+4c310a2, tests/hw test_wire on the L103 through the RP2350: a1 0x20004f6e came back 0x00000002 after a
+  // read_block answered ok, read so twice over two sentinels by the host - and s1 -> 0x00000002 four times with
+  // bd19b00) ----
+  {
+    phy.halted = false;
+    phy.model_block = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.mem.clear();
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    int cases = 0, answered_ok = 0, changed_ok = 0, changed_other = 0, wrong_words = 0, stray = 0, glitched = 0;
+    int op_accesses[2] = {0, 0};
+    int single_cases = 0, single_bad = 0;   // one glitch: the cases, and those with state changed, a stray store or wrong words
+    for (int pairs = 0; pairs < 2; ++pairs)
+      for (int parity = 0; parity < 2; ++parity)
+        for (int op = 0; op < 2; ++op)
+          for (int at = -1; at < op_accesses[op]; ++at)
+            for (int at2 = pairs ? at + 1 : -1; at2 < (pairs ? op_accesses[op] : 0); ++at2) {
+              if (pairs && (at < 0 || at2 >= op_accesses[op])) break;
+              ++cases;
+              const uint32_t tag = uint32_t(at * 131 + at2 + 7);
+              uint32_t gpr[32];
+              for (uint32_t k = 0; k < 32; ++k) gpr[k] = phy.gpr[k] = k ? 0x5a000000u | (k << 16) | (tag & 0xffff) : 0;
+              phy.gpr[9] = gpr[9] = 0x20000000u;
+              phy.dpc = 0x00000a3cu;
+              phy.dcsr = 0x4000b003u;
+              phy.data0 = 0x0000aa55u;
+              phy.data1 = 0x12345678u;
+              const uint32_t autoexec = (at >= 0 && (at & 1)) ? 1 : 0;   // counted with 0 (the shorter op)
+              phy.abstractauto = autoexec;
+              phy.last_command = 0x00221000u;
+              phy.cmderr = 0;
+              for (uint32_t k = 0; k < 12; ++k) phy.mem[0x20000000u + 4 * k] = 0x0b000000u | (k << 8) | (tag & 0xff);
+              const uint32_t fence = phy.mem[0x20000000u + 4 * 8];
+              phy.stray_stores = 0;
+              phy.glitch_parity = parity;
+              phy.glitches = 0;
+              phy.glitch_at = at;
+              phy.glitch_at2 = at2;
+              const int accesses_before = phy.accesses;
+              if (op == 0) {
+                r = call(riscv, TargetRiscvDm::kOpReadBlock, {conn[0], conn[1], 0, 0, 0, 0x20, 8, 0}, out);
+              } else {
+                Bytes wb = conn;
+                wb.insert(wb.end(), {0, 0, 0, 0x20, 8, 0});
+                for (uint32_t k = 0; k < 8; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0xc0000000u | (k << 8) | (tag & 0xff)) >> (8 * b)));
+                r = call(riscv, TargetRiscvDm::kOpWriteBlock, wb, out);
+              }
+              if (at < 0) op_accesses[op] = phy.accesses - accesses_before;
+              if (phy.glitches) ++glitched; else if (getenv("OEP_SHOW_UNGLITCHED")) printf("  no glitch: op %d at %d / %d\n", op, at, at2);
+              phy.glitch_at = phy.glitch_at2 = -1;
+              bool same = phy.dpc == 0x00000a3cu && phy.dcsr == 0x4000b003u && phy.data0 == 0x0000aa55u &&
+                          phy.data1 == 0x12345678u && phy.abstractauto == autoexec;
+              for (uint32_t k = 0; k < 32; ++k) same = same && phy.gpr[k] == gpr[k];
+              const bool good = ok(r) && out.size() >= 3 && out[2] == kStatusOk;
+              if (!same) {
+                if (changed_ok + changed_other < 6) {
+                  printf("  %s, glitch at access %d / %d (cmderr 6 %d, auto %u): %s, changed", op ? "write_block" : "read_block",
+                         at, at2, parity, autoexec, good ? "ok" : "not ok");
+                  for (uint32_t k = 0; k < 32; ++k)
+                    if (phy.gpr[k] != gpr[k]) printf(" x%u %08x -> %08x", k, gpr[k], phy.gpr[k]);
+                  printf(" data0 %08x data1 %08x auto %u\n", phy.data0, phy.data1, phy.abstractauto);
+                }
+                ++(good ? changed_ok : changed_other);
+              }
+              const bool strayed = phy.stray_stores || phy.mem[0x20000000u + 4 * 8] != fence;
+              if (strayed) ++stray;
+              const int wrong_before = wrong_words;
+              if (good) {
+                ++answered_ok;
+                bool right = out[0] == 8;
+                for (uint32_t k = 0; k < 8 && right; ++k) {
+                  if (op == 0) {
+                    uint32_t w = 0;
+                    for (int b = 0; b < 4; ++b) w |= uint32_t(out[3 + 4 * k + b]) << (8 * b);
+                    right = out.size() == 3 + 32 && w == (0x0b000000u | (k << 8) | (tag & 0xff));
+                  } else {
+                    right = phy.mem[0x20000000u + 4 * k] == (0xc0000000u | (k << 8) | (tag & 0xff));
+                  }
+                }
+                if (!right) ++wrong_words;
+              }
+              if (!pairs && at >= 0) {
+                ++single_cases;
+                if (!same || strayed || wrong_words != wrong_before) ++single_bad;
+              }
+              phy.cmderr = 0;
+              g_millis += 2;
+            }
+    CHECK(changed_ok == 0);
+    CHECK(changed_other == 0);
+    CHECK(stray == 0);
+    CHECK(wrong_words == 0);
+    CHECK(glitched == cases - 4);   // every glitch met the op (4: the counting runs)
+    printf("  block ops with glitches inside (%d / %d accesses, singly and in pairs): %d cases, %d ok, %d changed with ok, "
+           "%d changed otherwise, %d stray stores, %d wrong words; one glitch: %d of %d cases wrong\n", op_accesses[0],
+           op_accesses[1], cases, answered_ok, changed_ok, changed_other, stray, wrong_words, single_bad, single_cases);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.model_block = false;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.glitch_parity = false;
+    phy.halted = false;
+  }
+
   // ---- write_block's stores exactly once over a link that drops (bench, f594f04: ch32rv writes the CH32L103's flash
   // keys - KEYR KEY1 / KEY2, MODEKEYR KEY1 / KEY2 - as four 1-word write_blocks; in 1 of 60 uploads CTLR stayed locked
   // after every write_block answered success). The link dropped at every DMI access of a 1-word and an 8-word
@@ -1599,6 +1739,103 @@ int main() {
     phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
     phy.loader_pc = 0;
     phy.drop_hold_us = 0;
+    phy.halted = false;
+  }
+
+  // ---- a glitch anywhere inside a run and a step (one access missed on its own, the looks around it passing; a write
+  // lost - cmderr 6 set or not - or a read answering the read before it), at every access in turn: a run stops at its
+  // ebreak with its arguments in place and its outputs read right, or (the resumereq itself lost) where it started;
+  // never a timeout, a wrong argument, a wrong dpc or output, or dcsr's ebreaks / ebreaku left changed; a step answers
+  // the right dpcs with dcsr.step clear after it ----
+  {
+    phy.halted = false;
+    phy.model_block = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.loader_pc = 0x20000000u;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    Bytes run = conn;   // pc 0x20000000, 1000 ms, a0 = 0x20000400 and a1 = 16 in, a0 out
+    run.insert(run.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 2, 0x0a, 0x10, 0, 0x04, 0, 0x20, 0x0b, 0x10, 16, 0, 0, 0,
+                           1, 0x0a, 0x10});
+    int cases = 0, stopped = 0, not_started = 0, bad = 0, accesses_seen = 0;
+    for (int parity = 0; parity < 2; ++parity)
+      for (int at = -1; at < accesses_seen; ++at) {
+        ++cases;
+        phy.halted = true;
+        phy.dpc = 0x00000a3cu;
+        phy.dcsr = 0x40000003u;
+        phy.gpr[10] = 0x5a5a0010u;
+        phy.gpr[11] = 0x5a5a0011u;
+        phy.cmderr = 0;
+        phy.abstractauto = 0;
+        phy.run_reads = 6;
+        phy.glitch_parity = parity;
+        phy.glitch_at = at;
+        const int before = phy.accesses;
+        r = call(riscv, TargetRiscvDm::kOpRun, run, out);
+        if (at < 0) accesses_seen = phy.accesses - before;
+        phy.glitch_at = -1;
+        const bool answered_ok = ok(r) && out.size() >= 15 && out[0] == kStatusOk;
+        if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped && getU32(out.data() + 2) == 0x20000040u &&
+            getU32(out.data() + 11) == 0x20000400u && phy.gpr[11] == 16 && (phy.dcsr & 0x3000u) == 0) {
+          ++stopped;
+        } else if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped &&
+                   getU32(out.data() + 2) == 0x20000000u && phy.gpr[11] == 16) {
+          ++not_started;   // the resumereq lost: stopped at pc, dpc unmoved (the host judges, oep-if-debug §4.4)
+        } else {
+          if (++bad <= 3)
+            printf("  run, glitch at access %d (cmderr 6 %d): status %02x dpc %08x a0 %08x a1 %08x dcsr %08x\n", at, parity,
+                   out.size() ? out[0] : 0xff, out.size() >= 6 ? getU32(out.data() + 2) : 0,
+                   out.size() >= 15 ? getU32(out.data() + 11) : 0, phy.gpr[11], phy.dcsr);
+        }
+        phy.halted = true;
+        phy.run_reads = 0;
+        g_millis += 2;
+      }
+    CHECK(accesses_seen > 40);
+    CHECK(bad == 0);
+    printf("  runs with a glitch inside (%d accesses): %d cases, %d stopped at the ebreak, %d not started, %d other\n",
+           accesses_seen, cases, stopped, not_started, bad);
+    // step: one instruction (the fake's resumereq comes back halted at once), dpc moved by the probe's view only
+    phy.loader_pc = 0;
+    phy.step_returns = true;
+    cases = 0;
+    bad = 0;
+    accesses_seen = 0;
+    for (int parity = 0; parity < 2; ++parity)
+      for (int at = -1; at < accesses_seen; ++at) {
+        ++cases;
+        phy.halted = true;
+        phy.dpc = 0x00000a3cu;
+        phy.dcsr = 0x40000003u;
+        phy.cmderr = 0;
+        phy.abstractauto = 0;
+        phy.glitch_parity = parity;
+        phy.glitch_at = at;
+        const int before = phy.accesses;
+        r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
+        if (at < 0) accesses_seen = phy.accesses - before;
+        phy.glitch_at = -1;
+        const bool good = ok(r) && out.size() == 10 && out[0] == kStatusOk && getU32(out.data() + 2) == 0x00000a3cu &&
+                          getU32(out.data() + 6) == 0x00000a3cu && (phy.dcsr & 0x4u) == 0;
+        const bool failed_clean = !ok(r) && (phy.dcsr & 0x4u) == 0;   // not done, nothing left set
+        if (!good && !failed_clean && ++bad <= 3)
+          printf("  step, glitch at access %d (cmderr 6 %d): status %02x before %08x after %08x dcsr %08x\n", at, parity,
+                 out.size() ? out[0] : 0xff, out.size() >= 6 ? getU32(out.data() + 2) : 0,
+                 out.size() >= 10 ? getU32(out.data() + 6) : 0, phy.dcsr);
+        phy.halted = true;
+        g_millis += 2;
+      }
+    phy.step_returns = false;
+    CHECK(accesses_seen > 30);
+    CHECK(bad == 0);
+    printf("  steps with a glitch inside (%d accesses): %d cases, %d wrong\n", accesses_seen, cases, bad);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.model_block = false;
+    phy.glitch_parity = false;
+    phy.abstractauto = phy.cmderr = 0;
     phy.halted = false;
   }
 

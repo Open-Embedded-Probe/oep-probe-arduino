@@ -1,6 +1,70 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm's block ops, run, step and the dpc reads stand up to a link that misses a single access and is up
+  again at the next one (a glitch: a write lost - the module may take the frame for one with a bad parity and set
+  cmderr 6 - or a read answering the value of the read before it), which the look after a held group does not see.
+  Bench (0.0.29-dev+4c310a2, tests/hw test_wire on the CH32L103 through the RP2350, oep-client-python eb2e128): a1
+  0x20004f6e came back 0x00000002 after a read_block answered ok, read so twice over two sentinels by the host. The op
+  keeps s0 / s1 / a0 / a1 from one read each (command, ABSTRACTCS, DATA0) and puts back what it kept, read back; 2 is
+  no register's value there but ABSTRACTCS's datacount, the register read just before DATA0 - a missed DATA0 read is
+  the likely way in (the whole register reads 0x08000002 on the bench; what a missed read returns exactly is not
+  measured). bd19b00's four s1 -> 0x00000002 fit the same, and its a0 -> s1's value is the access-register command lost.
+  Now a value that is kept, given back or answered is read twice and taken only when both agree: a register read twice
+  with DMCONTROL / DMSTATUS before them (readSure: two missed reads cannot agree), an abstract register read twice over
+  sentinels 0 / all ones in DATA0 (readRegisterSure, as oep-client-python's read_register) - abstractauto, the mailbox,
+  s0 / s1 / a0 / a1, dpc, dcsr, run's outputs, step's dpcs. Every write an op relies on is read back first: abstractauto
+  off (a lost write left a host's autoexec running the last command on the op's DATA0 accesses), the block program's
+  set-up before it runs (HARTINFO read twice, a0 / a1, the program buffer, DATA1 = address: a lost a0 / a1 write had the
+  program store into the target's memory at its own pointers, a lost program word ran another program), run's dcsr
+  (ebreakm, prv), registers and dpc, step's dcsr.step, what goes back (over the sentinels). write_block reads DATA1
+  after every store of its autoexec stream and stops at the first that did not move it on: read once at the end, a
+  DATA0 write lost in the middle stored every later word one place back and the last one again in the last place, and
+  the op answered success. A cmderr 6 met there is a missed access, not the writer's fault: cleared, and the op goes on
+  from DATA1's count (cmderr 3 still ends it with fault). A block op leaves no cmderr behind (ABSTRACTCS read twice
+  last). checkHalted's re-sync no longer clears abstractauto before the op keeps it. A block op costs more DMI accesses
+  (read_block of 8 words 79 -> 188, write_block 86 -> 207). The "cmderr 6" of 4c310a2 runs 5 / 6 ("read_register
+  0x100a / 0x1009 failed (cmderr 6)", the host's first read after its halt) is QingKe's "parity bit error during
+  communication": a frame of the host's group the module took for a bad one - the same glitch - not a hart that left
+  halt (QingKe answers a hart that is not halted with cmderr 4); a host should take it for a failed try and run its
+  group again (oep-client-python raised it).
+  Host tests (test_wire, the fake's glitch: a write lost - cmderr 6 set or not - or a read giving the read before it, at
+  one access, the link up again at once): a glitch at every access of read_block and write_block, singly and in pairs,
+  a host's abstractauto set or not - 0 of 790 single and 0 of 78592 in all with state changed, a stray store or wrong
+  words (before: 61 of 330 single; 2958 answered ok with a GPR, the mailbox or abstractauto changed - s0 -> 0x00000002
+  among them -, 982 with stores outside the block, 793 with wrong words); a glitch at every access of run and step:
+  every run stops at its ebreak with its arguments and outputs right, or where it started (the resumereq lost), every
+  step answers the right dpcs and leaves dcsr.step clear (before: 18 of 136 runs, 8 of 124 steps wrong); the fakes model
+  the program buffer, ABSTRACTAUTO, the registers and dpc / dcsr as read back.
+- (JA) riscv-dm のブロック操作、run、step、dpc の読みは、1 回のアクセスだけが抜けて次にはリンクが戻る線（glitch: 書き込みが
+  消える - module が parity 誤りの frame と取って cmderr 6 を立てることがある - か、読みが前に読んだ値を返す）に耐える。held
+  group の後の見張りではこれは見えない。bench（0.0.29-dev+4c310a2、RP2350 越しの CH32L103 で tests/hw test_wire、
+  oep-client-python eb2e128）: read_block が ok で答えた後、a1 0x20004f6e が 0x00000002 になっていた（host が 2 つの番兵で
+  2 回読んで同じ値）。操作は s0 / s1 / a0 / a1 をそれぞれ 1 回の読み（command、ABSTRACTCS、DATA0）で保存し、保存した値を
+  書き戻して読み戻す。2 はそこでどのレジスタの値でもなく、DATA0 の直前に読む ABSTRACTCS の datacount - DATA0 の読みが抜けた
+  のが最もありうる経路（bench ではレジスタ全体は 0x08000002 と読める。抜けた読みが正確に何を返すかは測っていない）。bd19b00 の
+  s1 -> 0x00000002 の 4 回も同じ形で、a0 -> s1 の値は access-register の command が消えたもの。今は保存し、書き戻し、答える値は 2 回読み、一致したときだけ取る: レジスタは DMCONTROL / DMSTATUS を
+  前に置いて 2 回（readSure: 2 回抜けても誤った値で一致しない）、abstract のレジスタは DATA0 に番兵 0 / 全 1 を置いて 2 回
+  （readRegisterSure、oep-client-python の read_register と同じ）- abstractauto、mailbox、s0 / s1 / a0 / a1、dpc、dcsr、run の
+  出力、step の dpc。操作が頼る書き込みは、頼る前に読み戻す: abstractauto の 0（書き込みが消えると host の autoexec が操作の
+  DATA0 アクセスで前の command を実行していた）、ブロック program の準備（HARTINFO を 2 回、a0 / a1、program buffer、
+  DATA1 = address: a0 / a1 の書き込みが消えると program は target 自身のポインタの先の memory に store していた。program の語が
+  消えると別の program が走った）、run の dcsr（ebreakm、prv）・レジスタ・dpc、step の dcsr.step、書き戻すもの（番兵越し）。
+  write_block は autoexec の流れの中で store ごとに DATA1 を読み、進まなかった最初の所で止まる: 最後に 1 回読むだけだと、途中の
+  DATA0 書き込みが消えたとき以降の語が 1 つずつ前にずれて store され、最後の語がもう一度最後の場所に書かれ、操作は success と
+  答えていた。そこで会う cmderr 6 は抜けたアクセスで writer の fault ではない: 消して DATA1 の数から続ける（cmderr 3 は今まで
+  どおり fault で終える）。ブロック操作は cmderr を残さない（最後に ABSTRACTCS を 2 回読む）。checkHalted の同期の取り直しは、
+  操作が abstractauto を保存する前にそれを消さなくなった。ブロック操作の DMI アクセスは増える（8 語の read_block 79 -> 188、
+  write_block 86 -> 207）。4c310a2 の 5 / 6 回目の「cmderr 6」（「read_register 0x100a / 0x1009 failed (cmderr 6)」、halt 後の
+  host の最初の読み）は QingKe の「通信時の parity 誤り」: host の group の frame を module が誤りと取ったもの - 同じ glitch -
+  で、hart が halt を離れたのではない（止まっていない hart に QingKe は cmderr 4 を返す）。host はこれを失敗した試行として group
+  をやり直すべき（oep-client-python は例外にしていた）。host test（test_wire。fake の glitch: 1 回のアクセスで書き込みが消える - cmderr 6 あり / なし - か読みが
+  前の読みの値を返し、次にはリンクが戻る）: read_block と write_block の全アクセスに 1 つずつ・2 つずつ glitch、host の
+  abstractauto あり / なし - 状態が変わる・範囲外の store・誤った語は 1 つの glitch で 790 通り中 0、全体で 78592 通り中 0
+  （前: 1 つで 330 通り中 61。2958 通りが GPR・mailbox・abstractauto を変えたまま ok - s0 -> 0x00000002 を含む -、982 通りが
+  ブロック外へ store、793 通りが誤った語）。run と step の全アクセスに glitch: run はすべて ebreak で引数と出力が正しく止まるか、
+  始めた所で止まる（resumereq が消えた）。step はすべて正しい dpc を答え dcsr.step を 0 に戻す（前: run 136 通り中 18、step
+  124 通り中 8 が誤り）。fake は program buffer、ABSTRACTAUTO、レジスタと dpc / dcsr を読み戻せるようにした。
 - (EN) README / guides / PID-USE (EN / JA): the spec this implements is oep-spec 498ae95 (the 2026-10-06 structure: the
   nameless core with clock, oep.probe.plan, oep.probe.restart, oep.probe.link, subscribe on the emitting interface, no
   heartbeat), the interface documents under interfaces/; writing a probe: the endpoint's own interfaces listed after the

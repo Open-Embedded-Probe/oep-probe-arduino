@@ -16,7 +16,11 @@
 // all ones or the last value read until it is brought up again. So what an op keeps and gives back, and the register
 // accesses it acts on, are done in groups each followed by a look at the link (linkHeld): a good look says nothing in
 // the group met a drop; a bad one brings the link up again (steady) and redoes the group. What goes back is read back
-// and compared too.
+// and compared too. A link may also miss a single access and be up again at the next (a glitch: a write lost - cmderr 6
+// if the module took it for a bad parity - or a read answering the read before it), which the look after does not see:
+// so every value an op keeps, gives back or answers is read twice and taken only when both reads agree (readSure,
+// readRegisterSure), every write the op relies on is read back before it is relied on (the block program's set-up,
+// abstractauto off, the run's registers, dcsr), and write_block reads DATA1 after every store.
 #pragma once
 
 #include <Arduino.h>
@@ -166,7 +170,17 @@ class Ch32Dm {
   bool moduleStatus(uint32_t &status);    // DMSTATUS read and a module's (a found version); false: relink
   void retune();                          // PHY speed search + the same
   void settleHalted(bool ack_reset);      // after the hart stopped: ack a pending reset, relink, halted_
-  bool loadRegisters(uint32_t &data0_address);
+  // the block program's set-up (a0 / a1, the program buffer, DATA1 = address), each read back
+  bool loadBlock(const uint32_t *program, size_t words, uint32_t address);
+  // Reads and writes a link that misses one access now and then (the looks around it passing) cannot fake: a register
+  // read twice with a different read between (readSure), an abstract register read twice over two sentinels in DATA0
+  // (readRegisterSure, abstractauto off), a register write read back in `mask` (writeRegisterSeen), abstractauto
+  // written 0 and read back 0 (autoOffSure), no cmderr left (cmderrClear)
+  bool readSure(uint8_t address, uint32_t &value);
+  bool readRegisterSure(uint16_t regno, uint32_t &value);
+  bool writeRegisterSeen(uint16_t regno, uint32_t value, uint32_t mask = 0xffffffffu);
+  bool autoOffSure();
+  bool cmderrClear();
   bool keepBlock();                       // a block op's start: abstractauto, the mailbox, the GPRs (each held)
   bool restoreBlock();                    // a block op's exit: GPRs, the mailbox, then abstractauto (each held, read back)
 };
