@@ -1,6 +1,35 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) write_block stores each word exactly once and answers success only with every word stored. ch32rv writes the
+  CH32L103's flash keys (KEYR KEY1 / KEY2, MODEKEYR KEY1 / KEY2) as four 1-word write_blocks; in 1 of 60 uploads through
+  the RP2350 (f594f04) CTLR stayed locked (0x00008080) after every write_block answered success. The writer was redone
+  whole, from its set-up, whenever its check (DATA1's run count, a look) failed - also when the link dropped after the
+  store had run: the key went in twice, the wrong sequence, and the redo answered success. Now the set-up (a0 / a1, the
+  writer, DATA1 = address) and the first word in DATA0 are each read back over a held link before the writer runs
+  (abstractauto off: they store nothing, and are redone freely); from the command on nothing is redone blind - after a
+  drop the link is brought up again and DATA1, read over a held link, says how many words were stored (the writer bumps
+  it in the same run as its store; a run that faults leaves it), and the op goes on from the first word not stored. A
+  cmderr (the store's exception) or a DATA1 that is no count of the op's runs ends it with fault, and write_block's done
+  is then the words stored, in order (was 0). Host test (test_wire; the fake counts the hart's stores per address and
+  can drop the link before any DMI access, writes too): the link dropped at each access of a 1-word, an 8-word and an
+  8-word write_block whose 4th store faults (stale or all ones, held 0 / 0.7 / 2.1 ms): no word stored twice, every
+  success with every word stored once, every failure fault / line with done = the words stored, the faulting store fault
+  with done 3, GPRs / DATA / abstractauto as found (before: 444 of 912 cases stored a word twice and answered success;
+  the faulting store went in 3 times, done 0).
+- (JA) write_block は各語をちょうど 1 回書き、すべての語を書いたときだけ success で答える。ch32rv は CH32L103 の flash の鍵
+  （KEYR KEY1 / KEY2、MODEKEYR KEY1 / KEY2）を 1 語の write_block 4 回で書く。RP2350 越しの upload 60 回に 1 回（f594f04）、
+  write_block がすべて success と答えたのに CTLR がロックのまま（0x00008080）だった。書き手は、確かめ（DATA1 の実行回数、見張り）
+  が失敗するたびに準備から丸ごとやり直していた - 書き込みが走った後にリンクが落ちたときも: 鍵が 2 回入り（順序の誤り）、やり直しは
+  success と答えた。今は、準備（a0 / a1、書き手、DATA1 = 番地）と DATA0 に入れた最初の語を、書き手を走らせる前に、それぞれ保たれた
+  リンクで読み戻して確かめる（abstractauto は off: これらは何も書かないので、自由にやり直す）。command から先は確かめずにやり直さない
+  - 落ちの後はリンクを戻し、保たれたリンクで読んだ DATA1 が書けた語の数を示す（書き手は同じ実行の中で書き込みの後に DATA1 を進める。
+  例外になった実行は進めない）ので、まだ書いていない最初の語から続ける。cmderr（書き込みの例外）か、この op の実行回数でない DATA1
+  では fault で終え、そのときの write_block の done は書けた語の数（順に。以前は 0）。host test（test_wire。fake は hart の書き込みを
+  番地ごとに数え、書き込みを含むどの DMI アクセスの前でもリンクを落とせる）: 1 語、8 語、4 語目の書き込みが例外になる 8 語の
+  write_block の各アクセスで順にリンクを落とす（stale か全 1、0 / 0.7 / 2.1 ms 保つ）: 2 回書かれた語は無く、success はすべての語を
+  1 回ずつ書き、失敗はすべて fault / line で done = 書けた語の数、例外の書き込みは fault で done 3、GPR / DATA / abstractauto は
+  元のまま（前: 912 通り中 444 通りで語を 2 回書いて success、例外の書き込みは 3 回試され done 0）。
 - (EN) oep.wire.rvswd no longer restarts a CH32L103 under a live connection. The PHY's revive (the first transaction
   after 300 us of rest reads DMSTATUS; a link that does not answer is brought back in step) re-synced once and then sent
   the wake pattern - and the wake restarts the L103 itself, not just its debug interface. Its link drops for 0.7 - 2.1 ms

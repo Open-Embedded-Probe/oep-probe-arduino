@@ -115,7 +115,9 @@ class FakePhy final : public DmiPhy {
       if (progbuf[0] == 0x40044180u) {                      // reader: lw s0,0(a1); lw s1,0(s0); addi s0,4; sw s1,0(a0); sw s0,0(a1)
         gpr[8] = load(gpr[11]); gpr[9] = load(gpr[8]); gpr[8] += 4; store(gpr[10], gpr[9]); store(gpr[11], gpr[8]);
       } else if (progbuf[0] == 0x41044180u) {               // writer: lw s0,0(a1); lw s1,0(a0); sw s1,0(s0); addi s0,4; sw s0,0(a1)
-        gpr[8] = load(gpr[11]); gpr[9] = load(gpr[10]); store(gpr[8], gpr[9]); gpr[8] += 4; store(gpr[11], gpr[8]);
+        gpr[8] = load(gpr[11]); gpr[9] = load(gpr[10]);
+        if (fault_store && gpr[8] == fault_store) { cmderr = 3; return; }   // the store's exception: nothing stored
+        store(gpr[8], gpr[9]); gpr[8] += 4; store(gpr[11], gpr[8]);
       } else {
         cmderr = 3;
       }
@@ -124,11 +126,21 @@ class FakePhy final : public DmiPhy {
   // the hart's view of memory: DATA0 / DATA1 at 0xe0000380 / 0xe0000384, the rest a word memory (a0 or a1 left wrong
   // would read or write the target's memory somewhere else - stray_stores counts the stores outside 0x20000000-0x2000ffff)
   int stray_stores = 0;
+  uint32_t fault_store = 0;         // a store to this address faults (cmderr 3), nothing stored (0: none)
+  std::map<uint32_t, int> stores;   // the hart's stores to memory, by address (a register with side effects - a flash
+                                    // key register - takes each write as one: written twice is not written once)
   uint32_t load(uint32_t a) { return a == 0xe0000380u ? data0 : a == 0xe0000384u ? data1 : mem[a]; }
   void store(uint32_t a, uint32_t v) {
     if (a == 0xe0000380u) data0 = v;
     else if (a == 0xe0000384u) data1 = v;
-    else { if ((a >> 16) != 0x2000u) ++stray_stores; mem[a] = v; }
+    else { if ((a >> 16) != 0x2000u) ++stray_stores; mem[a] = v; ++stores[a]; }
+  }
+  // pending_drop_access: the drop after that many more DMI accesses, reads and writes alike (pending_drop counts reads
+  // only): a drop between two writes - after the one that started the block writer, say - and not only at a read
+  int pending_drop_access = -1, accesses = 0;
+  void countAccess() {
+    ++accesses;
+    if (pending_drop_access >= 0 && pending_drop_access-- == 0) { dropped = true; dropped_at_us = micros(); }
   }
 
   bool attach() override {
@@ -172,6 +184,7 @@ class FakePhy final : public DmiPhy {
     ++reads;
     advanceMicros(read_us);
     if (!present || !attached_flag) return false;
+    countAccess();
     if (stuck) { value = stuck_value; return true; }
     if (stale) { value = 0xffffffffu; return true; }
     if (pending_drop >= 0 && pending_drop-- == 0) { dropped = true; dropped_at_us = micros(); }
@@ -206,6 +219,7 @@ class FakePhy final : public DmiPhy {
   void write(uint8_t address, uint32_t value) override {
     ++writes;
     if (!present || !attached_flag) return;
+    countAccess();
     if (dropped && drop_loses_writes) { ++lost_writes; return; }
     if (model_block) {
       if (address == 0x04) { data0 = value; if (abstractauto & 1) { ++autoexec_runs; execute(last_command); } return; }
@@ -1402,6 +1416,108 @@ int main() {
     CHECK(answered_ok == cases);             // and the ops came through them, all (checkHalted waits out a drop too)
     printf("  block ops with a drop inside (%d / %d reads): %d cases, %d ok, %d with state changed, %d stray stores, "
            "%d wrong words\n", op_reads[0], op_reads[1], cases, answered_ok, clobbered, stray, wrong_words);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
+    phy.drop_hold_us = 0;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.halted = false;
+  }
+
+  // ---- write_block's stores exactly once over a link that drops (bench, f594f04: ch32rv writes the CH32L103's flash
+  // keys - KEYR KEY1 / KEY2, MODEKEYR KEY1 / KEY2 - as four 1-word write_blocks; in 1 of 60 uploads CTLR stayed locked
+  // after every write_block answered success). The link dropped at every DMI access of a 1-word and an 8-word
+  // write_block in turn - reads and writes alike, stale or all ones, held 0 / 0.7 / 2.1 ms, writes lost. A success has
+  // every word stored exactly once; a failure (fault / line) has no word stored twice, and its done says how many were
+  // stored, in order. f594f04 redid the whole writer after a drop met past the store: the key written twice is the
+  // wrong sequence, the flash stays locked, and the answer said success ----
+  {
+    phy.halted = false;
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = true;
+    phy.abstractauto = phy.cmderr = 0;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    int cases = 0, succeeded = 0, failed_ok = 0, twice = 0, unstored_success = 0, wrong_done = 0, clobbered = 0;
+    int other = 0, accesses_seen[3] = {0, 0, 0}, faulted = 0;
+    for (int stale = 0; stale < 2; ++stale)
+      for (uint32_t hold : {0u, 700u, 2100u})
+        for (int big = 0; big < 3; ++big)   // 1 word, 8 words, 8 words whose 4th store faults
+          for (int at = -1; at < accesses_seen[big]; ++at) {
+            ++cases;
+            const uint32_t words = big ? 8 : 1, address = 0x20000400u;
+            phy.fault_store = big == 2 ? address + 12 : 0;
+            for (uint32_t k = 0; k < 32; ++k) phy.gpr[k] = k ? 0x3c000000u | (k << 16) : 0;
+            phy.data0 = 0x0000aa55u;
+            phy.data1 = 0x12345678u;
+            phy.cmderr = phy.abstractauto = 0;
+            phy.mem.clear();
+            phy.stores.clear();
+            phy.stray_stores = 0;
+            phy.dropped = false;
+            phy.drop_stale = stale;
+            phy.drop_hold_us = hold;
+            phy.drop_delay_reads = 0;
+            phy.pending_drop = -1;
+            Bytes wb = conn;
+            wb.insert(wb.end(), {uint8_t(address), uint8_t(address >> 8), uint8_t(address >> 16), uint8_t(address >> 24),
+                                 uint8_t(words), 0});
+            for (uint32_t k = 0; k < words; ++k)
+              for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0x45670123u + k) >> (8 * b)));
+            const int before = phy.accesses;
+            phy.pending_drop_access = at;   // the drop after `at` more accesses, whatever the op is doing then
+            r = call(riscv, TargetRiscvDm::kOpWriteBlock, wb, out);
+            if (at < 0) accesses_seen[big] = phy.accesses - before;
+            phy.pending_drop_access = -1;
+            int stored = 0;
+            bool in_order = true;
+            for (uint32_t k = 0; k < words; ++k) {
+              const int n = phy.stores[address + 4 * k];
+              if (n > 1) ++twice;
+              if (n == 1 && phy.mem[address + 4 * k] == 0x45670123u + k) {
+                if (stored != static_cast<int>(k)) in_order = false;
+                ++stored;
+              } else if (n) {
+                in_order = false;
+              }
+            }
+            bool same = phy.data0 == 0x0000aa55u && phy.data1 == 0x12345678u && phy.abstractauto == 0;
+            for (uint32_t k = 0; k < 32; ++k) same = same && phy.gpr[k] == (k ? 0x3c000000u | (k << 16) : 0);
+            if (!same || phy.stray_stores) ++clobbered;
+            const bool good = ok(r) && out.size() >= 3 && out[2] == kStatusOk;
+            const uint16_t done = out.size() >= 2 ? uint16_t(out[0] | out[1] << 8) : 0xffff;
+            if (big == 2) {   // never success; fault with the 3 words before it stored once (a drop may stop it sooner)
+              if (good || stored > 3) ++unstored_success;
+              if (out.size() >= 3 && out[2] == kStatusFault && done == 3) ++faulted;
+            }
+            if (good) {
+              ++succeeded;
+              if (stored != static_cast<int>(words) || done != words) ++unstored_success;
+            } else if (out.size() >= 3 && (out[2] == kStatusFault || out[2] == kStatusLine)) {
+              ++failed_ok;
+              if (!in_order || done != stored) ++wrong_done;   // done: the words stored, in order (none twice)
+            } else {
+              ++other;
+            }
+            if (getenv("OEP_SHOW_NOT_OK") && !good)
+              printf("  write_block %u words, drop at access %d (hold %u, stale %d): status %02x done %u stored %d\n", words,
+                     at, hold, stale, out.size() >= 3 ? out[2] : 0xff, done, stored);
+            phy.dropped = false;
+            g_millis += 2;
+          }
+    CHECK(accesses_seen[0] > 30 && accesses_seen[1] > accesses_seen[0]);
+    CHECK(faulted >= accesses_seen[2]);     // the faulting store: fault, done 3, at least whenever no drop stopped it first
+    phy.fault_store = 0;
+    CHECK(twice == 0);
+    CHECK(unstored_success == 0);
+    CHECK(wrong_done == 0);
+    CHECK(clobbered == 0);
+    CHECK(other == 0);
+    CHECK(succeeded + failed_ok == cases);
+    printf("  write_block with a drop at each access (%d / %d / %d accesses): %d cases, %d success, %d fault / line "
+           "(%d of the faulting store: fault, done 3), %d stored twice, %d success not stored once, %d wrong done, "
+           "%d state changed\n", accesses_seen[0], accesses_seen[1], accesses_seen[2], cases, succeeded, failed_ok,
+           faulted, twice, unstored_success, wrong_done, clobbered);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;

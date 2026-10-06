@@ -59,7 +59,10 @@ class Ch32Dm {
   // the end. Both put s0, s1, a0, a1, DATA1, DATA0 and abstractauto back before returning (§4.5), read back and seen
   // back over a held link; false when that could not be done.
   bool readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr = nullptr);
-  bool writeWordsFast(uint32_t address, const uint32_t *words, size_t count);
+  // writeWordsFast stores each word exactly once - never redone after its store may have run - and says how many it
+  // stored (written: in order, seen over a held link; false and fewer than count after a cmderr or a link that did not
+  // hold).
+  bool writeWordsFast(uint32_t address, const uint32_t *words, size_t count, size_t *written = nullptr);
   // Abstract register access (hart halted). They use DATA0: an op that calls them restores DATA (keepMailbox /
   // giveMailbox) around the whole of itself.
   bool readRegister(uint16_t regno, uint32_t &value);

@@ -985,11 +985,14 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
         status = kStatusOk;   // nothing to write: success, done 0
       } else if (dm.checkHalted() && dm.halted()) {
         for (size_t i = 0; i < count; ++i) words_[i] = getU32(p + 6 + 4 * i);
-        if (dm.writeWordsFast(address, words_, count)) {
+        // done: the words stored, in order (a failure may come after some of them; none is stored twice)
+        size_t written = 0;
+        if (dm.writeWordsFast(address, words_, count, &written)) {
           status = kStatusOk;
           done = count;
         } else {
           status = dm.lastCmderr() ? kStatusFault : failure(kStatusFault);
+          done = static_cast<uint16_t>(written);
         }
       } else {
         status = failure(kStatusState);   // not halted (the module answers), or no answer at all: line

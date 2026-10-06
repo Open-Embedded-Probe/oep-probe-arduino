@@ -550,35 +550,83 @@ bool Ch32Dm::writeRegister(uint16_t regno, uint32_t value) {
   return waitAbstract();
 }
 
-bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t count) {
+// write_block's stores, each exactly once. A store is a write to the target - a flash key register, a peripheral's FIFO
+// - that may count as an event, not a value: written twice is not the same as written once (ch32rv's flash keys on a
+// CH32L103, KEYR KEY1 then KEY2, as 1-word write_blocks: in 1 of 60 uploads the flash stayed locked after every
+// write_block answered success - f594f04 redid the whole writer from its set-up when a drop met it past the store,
+// and the key went in twice, the wrong sequence). So:
+// - the set-up (a0 / a1, the writer, DATA1 = address) touches nothing of the target's memory and is redone freely until
+//   it is seen over a held link (DATA1 read back);
+// - the first word goes into DATA0 and is read back there (with abstractauto off nothing runs on it);
+// - from the command that runs the writer on, nothing is redone blind. The writer stores its
+//   word, then bumps DATA1 by 4 in the same run - a run that faults stores nothing and leaves DATA1 - so DATA1, read
+//   over a held link, says exactly how many words went in. After a drop (a lost write, or a look that did not pass)
+//   the op brings the link up again (steady), reads DATA1 and ABSTRACTCS in a held group and goes on from the first word
+//   not stored; a cmderr stops it (fault). A DATA1 that is no run count of this op stops it too (nothing more is
+//   written).
+// written: the words stored, in order, as last seen over a held link (all of them when true).
+bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t count, size_t *written) {
+  if (written) *written = 0;
   if (!halted_ || !count || (address & 3)) return false;
   if (!keepBlock()) { restoreBlock(); return false; }
-  // Plain memory, so a failed attempt is simply redone from the start. As with readWords, the
-  // address the writer leaves in DATA1 counts the runs and catches a missed or doubled trigger.
-  bool done = false;
-  for (int attempt = 0; attempt < 3 && !done; ++attempt) {
-    uint32_t data0_address = 0;
-    if (!loadRegisters(data0_address)) { steady(); continue; }
+  // the set-up: redone until it is seen to have landed (DATA1 = address, read back, a look after it)
+  const bool set = held([&] {
+    uint32_t data0_address = 0, next = 0;
+    if (!loadRegisters(data0_address)) return false;
     for (size_t i = 0; i < sizeof kBlockWriter / sizeof kBlockWriter[0]; ++i) phy_.write(kProgBuf0 + i, kBlockWriter[i]);
     phy_.write(kData1, address);
-    phy_.write(kData0, words[0]);
-    phy_.write(kCommand, 0x00240000);  // run the writer for word 0 (also arms autoexec's command)
+    return phy_.read(kData1, next) && next == address;
+  });
+  size_t stored = 0;
+  bool fault = false;
+  // the stores: a try from word `stored` on; after one that met a drop, DATA1 says where the writer got to
+  for (int attempt = 0; set && attempt < 4 && stored < count && !fault; ++attempt) {
+    cmderr_ = 0;
+    // the word in DATA0, seen there over a held link before the writer runs on it (abstractauto is off: writing DATA0
+    // runs nothing, so this is redone freely)
+    if (!held([&] {
+          uint32_t d0 = 0;
+          phy_.write(kData0, words[stored]);
+          return phy_.read(kData0, d0) && d0 == words[stored];
+        }))
+      break;
+    const uint32_t revives = phy_.revives();
+    phy_.write(kCommand, 0x00240000);  // run the writer for this word (also arms autoexec's command)
     bool ok = waitAbstract();
-    if (ok && count > 1) {
+    if (ok && stored + 1 < count) {
       autoOn();
-      for (size_t i = 1; i < count; ++i) phy_.write(kData0, words[i]);
+      for (size_t i = stored + 1; i < count; ++i) phy_.write(kData0, words[i]);
       ok = waitAbstract();
-      autoOff();
     }
+    autoOff();
     uint32_t next = 0;
-    done = ok && phy_.read(kData1, next) && next == address + 4u * static_cast<uint32_t>(count) && linkHeld();
-    if (!done) {
-      phy_.write(kAbstractAuto, 0);
+    if (ok && phy_.read(kData1, next) && next == address + 4u * static_cast<uint32_t>(count) && linkHeld() &&
+        phy_.revives() == revives) {
+      stored = count;
+      break;
+    }
+    // Not seen through: how far the writer got, read over a held link after steady (whose relink clears abstractauto
+    // and cmderr: a cmderr waitAbstract saw is kept from before it). A cmderr with words left says the writer faulted
+    // (its store's exception: nothing stored, DATA1 left) and ends the op; a drop alone goes on from DATA1's count.
+    uint8_t err = cmderr_;
+    steady();
+    uint32_t cs = 0;
+    if (!held([&] { return phy_.read(kData1, next) && phy_.read(kAbstractCs, cs); })) break;
+    if (next < address + 4u * static_cast<uint32_t>(stored) || next > address + 4u * static_cast<uint32_t>(count) ||
+        (next & 3)) {
+      fault = true;   // DATA1 is no count of this op's runs: nothing more is written
+      break;
+    }
+    stored = (next - address) / 4u;
+    if ((cs >> 8) & 7) err = static_cast<uint8_t>((cs >> 8) & 7);
+    if (err && stored < count) {   // the writer faulted (cmderr 3: the store's exception) - not a drop
+      cmderr_ = err;
       phy_.write(kAbstractCs, 0x700);
-      steady();
+      fault = true;
     }
   }
-  return restoreBlock() && done;
+  if (written) *written = stored;
+  return restoreBlock() && stored == count;
 }
 
 bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
