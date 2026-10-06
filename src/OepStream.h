@@ -135,6 +135,9 @@ class BindSource {
   virtual size_t bindInput(const uint8_t *data, size_t length) = 0;   // the port's raw bytes: how many were taken
   // Resets of this stream's target that last-reset counts (riscv-dm reset, attach's reset TLV); 0 for a UART.
   virtual uint32_t hostResets() const { return 0; }
+  // The position of the reset mark (common §1.3) the stream placed when hostResets() reached `resets`; false: none
+  // placed for it (yet, or the stream was not open). A port resumes from it after a session (probe.config §1.2).
+  virtual bool hostResetMark(uint32_t resets, uint64_t &position) const { (void)resets; (void)position; return false; }
 
  protected:
   ~BindSource() = default;

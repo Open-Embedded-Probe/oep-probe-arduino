@@ -114,6 +114,15 @@ class FakeSource final : public BindSource {
   uint16_t bindStreamNumber() const override { return 1; }
   size_t bindInput(const uint8_t *d, size_t n) override { input.insert(input.end(), d, d + n); return n; }
   uint32_t hostResets() const override { return resets; }
+  bool marked = false;   // a reset mark placed (as the console does on its own poll): for which count, where
+  uint32_t mark_resets = 0;
+  uint64_t mark_at = 0;
+  bool hostResetMark(uint32_t r, uint64_t &position) const override {
+    if (!marked || mark_resets != r) return false;
+    position = mark_at;
+    return true;
+  }
+  void markReset() { marked = true; mark_resets = resets; mark_at = stream.end(); stream.mark(reg::common::kMarkKindReset, 1); }
 };
 
 static std::string text(const Bytes &b) { return std::string(b.begin(), b.end()); }
@@ -239,6 +248,32 @@ static void testEndpointSerialPort() {
   for (size_t i = 6; i + 5 <= d.size(); ++i)
     if (d[i] == 0x49 && d[i + 1] == 3) { vendor |= d[i + 2] == 0 && d[i + 3] == 4 && d[i + 4] == 1; usjSeen |= d[i + 2] == 1 && d[i + 3] == 3; }
   CHECK(vendor && usjSeen);
+
+  // a console resumes from its reset's mark (probe.config §1.2): the target's first bytes after the reset that came in
+  // before the binds saw it are carried (the mark placed first), and so are those after a mark placed later
+  for (int later = 0; later < 2; ++later) {
+    usj.tx.clear();
+    usj.send(frame(request(uint16_t(5 + 2 * later), 0, 0x10, openPayload(0x52, 3000))));
+    ep.poll();
+    CHECK(ep.held(1));
+    console.say("held\n");
+    ++console.resets;
+    if (!later) console.markReset();
+    console.say("banner\n");   // in before the binds' poll
+    ep.poll();
+    if (later) {
+      console.mark_resets = console.resets;   // the mark at the reset, placed after the binds' poll saw the count
+      console.marked = true;
+      console.mark_at = console.stream.end() - 7;
+      ep.poll();
+    }
+    console.say("more\n");
+    usj.tx.clear();
+    usj.send(frame(request(uint16_t(6 + 2 * later), 0, 0x11, {}, true, 0x52)));   // end
+    ep.poll();
+    split(usj.tx, frames, raw);
+    CHECK(!ep.held(1) && text(raw) == "banner\nmore\n");
+  }
 }
 
 // ---- mixed ------------------------------------------------------------------------------------------------------------------

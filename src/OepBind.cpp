@@ -133,7 +133,8 @@ bool Binds::mixedLine(uint8_t port) {
 }
 
 // Host resets (probe.config §1.2): last-reset follows the reset target; during a session each stream's position at
-// the reset is kept for the port to start from when the session ends (a UART's at any host reset).
+// the reset is kept for the port to start from when the session ends (a console's its reset mark's, a UART's its end
+// at any host reset).
 void Binds::poll(bool session) {
   for (uint8_t port = 0; port < kMaxPorts; ++port) {
     const Spec &b = specs_[port];
@@ -149,16 +150,30 @@ void Binds::poll(bool session) {
       if (b.mode == kLastReset) selected_[port] = i;
       if (session) {
         if (const PositionStream *s = src->bindStream())
-          resets_[port][i] = {true, src->bindStreamNumber(), s->end()};
+          resets_[port][i] = {true, false, src->bindStreamNumber(), s->end(), r};
       }
     }
+    for (uint8_t i = 0; i < b.count; ++i) toMark(port, i);
     if (!any || !session) continue;
     for (uint8_t i = 0; i < b.count; ++i) {
       const BindSource *src = b.sources[i].stream;
       if (!src || b.sources[i].kind != kFixtureUart) continue;
-      if (const PositionStream *s = src->bindStream()) resets_[port][i] = {true, src->bindStreamNumber(), s->end()};
+      if (const PositionStream *s = src->bindStream()) resets_[port][i] = {true, true, src->bindStreamNumber(), s->end(), 0};
     }
   }
+}
+
+// A console stream resumes from the position of its reset's mark (probe.config §1.2, common §1.3), not from where the
+// stream had got to when the binds saw the reset: the console places the mark on its own poll, before or after this
+// one, and its target's first bytes after the reset may already be in. Without a mark (a stream opened by that very
+// attach), the end at the reset stays.
+void Binds::toMark(uint8_t port, uint8_t index) {
+  Reset &r = resets_[port][index];
+  const BindSource *src = specs_[port].sources[index].stream;
+  uint64_t at = 0;
+  if (!r.have || r.marked || !src || r.number != src->bindStreamNumber() || !src->hostResetMark(r.resets, at)) return;
+  r.pos = at;
+  r.marked = true;
 }
 
 void Binds::sessionOver(uint32_t held) {
@@ -168,6 +183,7 @@ void Binds::sessionOver(uint32_t held) {
       BindSource *src = b.sources[i].stream;
       const PositionStream *s = src ? src->bindStream() : nullptr;
       if (!s) continue;
+      toMark(port, i);
       Flow &f = flows_[port][i];
       const Reset &r = resets_[port][i];
       f.known = true;

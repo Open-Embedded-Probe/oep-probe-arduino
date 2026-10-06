@@ -52,6 +52,9 @@ void TargetConsoleStream::poll() {
   if (!open_) return;
   if (port_.resets != seen_resets_) {     // a reset the host asked for (riscv-dm reset, attach's reset TLV)
     seen_resets_ = port_.resets;
+    reset_marked_ = true;                 // where a bind's port resumes after a session (probe.config §1.2)
+    reset_mark_resets_ = port_.resets;
+    reset_mark_position_ = stream_.end();
     stream_.mark(kMarkReset, port_.reset_detail);
   }
   if (port_.dm.restarts() != seen_restarts_) {   // havereset seen and acknowledged: the target restarted by itself

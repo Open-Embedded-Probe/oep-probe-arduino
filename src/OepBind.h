@@ -63,7 +63,9 @@ class Binds final : public RawPorts {
     uint8_t line_length = 0;
     uint32_t last_ms = 0;
   };
-  struct Reset { bool have = false; uint16_t number = 0; uint64_t pos = 0; };
+  // A host reset during a session: the stream's number, the position to resume from (a console's: its reset mark's
+  // once the console has placed it, `marked`; until then the end at the reset), the resets count it was seen at.
+  struct Reset { bool have = false; bool marked = false; uint16_t number = 0; uint64_t pos = 0; uint32_t resets = 0; };
   Spec specs_[kMaxPorts];
   uint8_t selected_[kMaxPorts] = {};
   Flow flows_[kMaxPorts][kMaxStreams];
@@ -75,6 +77,7 @@ class Binds final : public RawPorts {
   void *namer_context_ = nullptr;
   const PositionStream *follow(uint8_t port, uint8_t index);   // the stream, with its flow brought up to date
   bool mixedLine(uint8_t port);                                // one closed line into pending_, if there is one
+  void toMark(uint8_t port, uint8_t index);                    // a console's reset: its mark's position, once placed
 };
 
 }  // namespace oep
