@@ -517,6 +517,76 @@ static void testImmediateStop() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
 }
 
+// Every start is a clean capture, with or without a configure before it: its receive goes to a PARLIO RX unit made for
+// it, as configure leaves one (a unit that had run kept what its last transaction left: after a stop of an immediate
+// one-shot the next start's done came after the rest of the window only, a third to a half of the segment unwritten,
+// and after a completed run each start began with 258 bytes of the previous capture - P4 bench, 0.0.28+1c940ca).
+static void testEveryStartFresh() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(1);
+  Bytes out;
+  Config c;
+  c.samples = 40000;   // 5000 bytes at w = 1
+  CHECK(ok(configure(rig.cap, c, out)));
+  const int reused = g_fake_parlio_reused;
+  auto complete = [](uint8_t value) {   // the whole segment, then the driver's done
+    Dma dma;
+    dma.deliver(g_fake_parlio_size, value);
+    parlio_rx_event_data_t e = {g_fake_parlio_buffer, g_fake_parlio_size};
+    g_fake_parlio_callbacks.on_receive_done(nullptr, &e, g_fake_parlio_context);
+  };
+  // a completed run, then a start without a configure: a new unit, the segment all the new data
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  complete(0x00);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone);
+  int made = g_fake_parlio_made;
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  CHECK(g_fake_parlio_made == made + 1 && g_fake_parlio_units == 1);
+  uint32_t generation = getU32(out.data() + 4);
+  complete(0xFF);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 200), out)) && getU32(out.data() + 9) == 200);
+  CHECK(std::all_of(out.begin() + 13, out.begin() + 213, [](uint8_t b) { return b == 0xFF; }));
+  // stopped part way, then a start without a configure: a new unit again, done only at the whole window
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  {
+    Dma dma;
+    dma.deliver(4096, 0x00);
+  }
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  made = g_fake_parlio_made;
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  CHECK(g_fake_parlio_made == made + 1 && g_fake_parlio_size == 5120);
+  generation = getU32(out.data() + 4);
+  complete(0xFF);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone && getU64(out.data() + 5) == 5120);
+  for (uint32_t at : {0u, 4000u, 4920u}) {   // before, across and after where the stopped run had got to
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at, 200), out)) && getU32(out.data() + 9) == 200);
+    CHECK(std::all_of(out.begin() + 13, out.begin() + 213, [](uint8_t b) { return b == 0xFF; }));
+  }
+  // a repeat and a one-shot through the ring alike: start, stop, start
+  Config rep;
+  rep.mode = 2;
+  rep.samples = 16384;
+  Config trig;
+  trig.samples = 4000;
+  trig.trigger = true;
+  for (const Config &k : {rep, trig}) {
+    Dma dma;
+    CHECK(ok(configure(rig.cap, k, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    dma.deliver(4096, 0xFF);
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+    made = g_fake_parlio_made;
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    CHECK(g_fake_parlio_made == made + 1);
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  }
+  CHECK(g_fake_parlio_reused == reused);   // no receive on a unit that had one
+}
+
 // One large immediate one-shot breaks no later triggered configure (0.0.28: 523264 samples on 1 line freed the DMA
 // ring for its segment, the rest of the firmware took a piece of the freed 128 KiB, and every triggered configure after
 // it failed with an empty payload, state 6, until a reboot): the ring is taken with the plan and never freed, the
@@ -569,6 +639,7 @@ static void testRingKept() {
 int main() {
   testRingKept();
   testImmediateStop();
+  testEveryStartFresh();
   testImmediateAfterFollowing();
   testPositions();
   testTriggeredStop();

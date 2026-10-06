@@ -19,7 +19,9 @@
 enum parlio_clock_source_t { PARLIO_CLK_SRC_PLL_F160M = 1 };
 enum parlio_sample_edge_t { PARLIO_SAMPLE_EDGE_NEG = 0, PARLIO_SAMPLE_EDGE_POS = 1 };
 enum parlio_bit_pack_order_t { PARLIO_BIT_PACK_ORDER_LSB = 0, PARLIO_BIT_PACK_ORDER_MSB = 1 };
-struct FakeParlioUnit { size_t max_recv_size; uint32_t rate; };
+// receives: the transactions mounted on the unit. A real unit that has run keeps what its last transaction left (the
+// DMA's progress, the FIFO's bytes): g_fake_parlio_reused counts receives on a unit that had one already.
+struct FakeParlioUnit { size_t max_recv_size; uint32_t rate; int receives = 0; };
 struct FakeParlioDelimiter { size_t eof_data_len; };
 typedef FakeParlioUnit *parlio_rx_unit_handle_t;
 typedef FakeParlioDelimiter *parlio_rx_delimiter_handle_t;
@@ -41,7 +43,7 @@ typedef struct {
 } parlio_rx_soft_delimiter_config_t;
 typedef struct { parlio_rx_delimiter_handle_t delimiter; struct { uint32_t partial_rx_en : 1, indirect_mount : 1; } flags; } parlio_receive_config_t;
 
-inline int g_fake_parlio_units = 0, g_fake_parlio_delimiters = 0;
+inline int g_fake_parlio_units = 0, g_fake_parlio_delimiters = 0, g_fake_parlio_reused = 0, g_fake_parlio_made = 0;
 inline esp_err_t parlio_new_rx_unit(const parlio_rx_unit_config_t *c, parlio_rx_unit_handle_t *unit) {
   if (g_fake_parlio_units) return ESP_FAIL;   // one RX unit
   uint32_t n = (160000000u + c->exp_clk_freq_hz / 2) / c->exp_clk_freq_hz;
@@ -51,6 +53,7 @@ inline esp_err_t parlio_new_rx_unit(const parlio_rx_unit_config_t *c, parlio_rx_
   HP_SYS_CLKRST.peri_clk_ctrl118.reg_parlio_rx_clk_div_denominator = 0;
   *unit = new FakeParlioUnit{c->max_recv_size, c->exp_clk_freq_hz};
   ++g_fake_parlio_units;
+  ++g_fake_parlio_made;
   return ESP_OK;
 }
 inline esp_err_t parlio_del_rx_unit(parlio_rx_unit_handle_t unit) { delete unit; --g_fake_parlio_units; return ESP_OK; }
@@ -73,7 +76,8 @@ inline esp_err_t parlio_rx_unit_register_event_callbacks(parlio_rx_unit_handle_t
 }
 inline esp_err_t parlio_rx_unit_enable(parlio_rx_unit_handle_t, bool) { return ESP_OK; }
 inline esp_err_t parlio_rx_unit_disable(parlio_rx_unit_handle_t) { return ESP_OK; }
-inline esp_err_t parlio_rx_unit_receive(parlio_rx_unit_handle_t, void *buffer, size_t size, const parlio_receive_config_t *) {
+inline esp_err_t parlio_rx_unit_receive(parlio_rx_unit_handle_t unit, void *buffer, size_t size, const parlio_receive_config_t *) {
+  if (unit && ++unit->receives > 1) ++g_fake_parlio_reused;
   g_fake_parlio_buffer = static_cast<uint8_t *>(buffer);
   g_fake_parlio_size = size;
   return ESP_OK;

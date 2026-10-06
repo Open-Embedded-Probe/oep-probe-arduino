@@ -341,6 +341,7 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   done_ = false;
   produced_ = queue_overflow_ = overruns_ = 0;
   captured_ = 0;
+  if (!reopenUnit()) { state_ = kStateError; return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
   if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
@@ -561,6 +562,50 @@ bool LogicCapture::open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t 
   return true;
 }
 
+// The PARLIO RX unit for the configuration, its callbacks and soft delimiter, enabled: the segment's own receive
+// (an immediate one-shot: done at `bytes`, the DMA nodes counted for a stop) or the DMA ring's (repeat, streaming and
+// a one-shot through the ring: partial receives into the harvest's queue).
+bool LogicCapture::openUnit(uint32_t rate_hz, uint8_t width, bool ring, uint32_t bytes, uint32_t &num, uint32_t &den) {
+  if (!open(rate_hz, width, ring ? kRingBytes : bytes, num, den)) return false;
+  parlio_rx_event_callbacks_t cb = {};
+  if (ring) {
+    cb.on_partial_receive = partialReceive;
+  } else {
+    cb.on_receive_done = receiveDone;
+    cb.on_partial_receive = oneShotProgress;   // how far it got, for a stop that cuts it short
+  }
+  parlio_rx_soft_delimiter_config_t d = {};
+  d.sample_edge = PARLIO_SAMPLE_EDGE_POS;
+  d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
+  d.eof_data_len = ring ? kSegmentBytes : bytes;
+  return parlio_rx_unit_register_event_callbacks(unit_, &cb, this) == ESP_OK &&
+         parlio_new_rx_soft_delimiter(&d, &delimiter_) == ESP_OK && parlio_rx_unit_enable(unit_, true) == ESP_OK;
+}
+
+void LogicCapture::closeUnit() {
+  if (unit_) {
+    if (delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
+    parlio_rx_unit_disable(unit_);
+  }
+  if (delimiter_) { parlio_del_rx_delimiter(delimiter_); delimiter_ = nullptr; }
+  if (unit_) { parlio_del_rx_unit(unit_); unit_ = nullptr; }
+}
+
+// Every start mounts its receive on a unit made for it, as configure leaves one: a unit that had run kept what the last
+// transaction left - after a stop of an immediate one-shot the next start's done came after only the rest of the
+// window, with a third to a half of the segment never written (zeros where the line was high), and after a completed
+// run each start began with 258 bytes (2064 samples at w = 1) of the previous capture (P4 bench, 0.0.28+1c940ca). Same
+// rate, width, buffer and callbacks; the divider is the same, read back again.
+bool LogicCapture::reopenUnit() {
+  closeUnit();
+  uint32_t num = 0, den = 1;
+  const bool ring = triggered_ || mode_ != cap::kModeOneShot;
+  if (!openUnit(rate_hz_, width_, ring, bytes_, num, den)) { closeUnit(); return false; }
+  rate_num_ = num;
+  rate_den_ = den;
+  return true;
+}
+
 void LogicCapture::close() {
   stopRepeat();
   // the DMA ring stays allocated (see openStages): taking 128 KiB of internal RAM again and again fragmented it
@@ -569,12 +614,7 @@ void LogicCapture::close() {
   freeStages();
   direct_ = false;
   if (queue_) { vQueueDelete(queue_); queue_ = nullptr; }
-  if (unit_) {
-    if (delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
-    parlio_rx_unit_disable(unit_);
-  }
-  if (delimiter_) { parlio_del_rx_delimiter(delimiter_); delimiter_ = nullptr; }
-  if (unit_) { parlio_del_rx_unit(unit_); unit_ = nullptr; }
+  closeUnit();
   if (buffer_ && !buffer_in_ring_) heap_caps_free(buffer_);   // the ring stays (takeRing)
   buffer_ = nullptr;
   buffer_in_ring_ = false;
@@ -764,16 +804,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
       if (!buffer_) buffer_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, bytes, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM));
     }
     if (!buffer_) return noStorage(out, capacity);
-    if (!open(rate, width, bytes, num, den)) { close(); state_ = kStateError; return failed(); }
-    parlio_rx_event_callbacks_t cb = {};
-    cb.on_receive_done = receiveDone;
-    cb.on_partial_receive = oneShotProgress;   // how far it got, for a stop that cuts it short
-    parlio_rx_soft_delimiter_config_t d = {};
-    d.sample_edge = PARLIO_SAMPLE_EDGE_POS;
-    d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
-    d.eof_data_len = bytes;
-    if (!buffer_ || parlio_rx_unit_register_event_callbacks(unit_, &cb, this) != ESP_OK ||
-        parlio_new_rx_soft_delimiter(&d, &delimiter_) != ESP_OK || parlio_rx_unit_enable(unit_, true) != ESP_OK) {
+    if (!openUnit(rate, width, false, bytes, num, den)) {
       close();
       state_ = kStateError;
       return failed();
@@ -835,16 +866,7 @@ LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uin
     store_ = static_cast<uint8_t *>(heap_caps_malloc(store_bytes_, caps));
     if (!store_) return Open::kNoMemory;
   }
-  if (!open(rate_hz, width, kRingBytes, num, den)) return Open::kFailed;
-  parlio_rx_event_callbacks_t cb = {};
-  cb.on_partial_receive = partialReceive;
-  parlio_rx_soft_delimiter_config_t d = {};
-  d.sample_edge = PARLIO_SAMPLE_EDGE_POS;
-  d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
-  d.eof_data_len = kSegmentBytes;
-  if (parlio_rx_unit_register_event_callbacks(unit_, &cb, this) != ESP_OK ||
-      parlio_new_rx_soft_delimiter(&d, &delimiter_) != ESP_OK || parlio_rx_unit_enable(unit_, true) != ESP_OK)
-    return Open::kFailed;
+  if (!openUnit(rate_hz, width, true, 0, num, den)) return Open::kFailed;
   actual_samples = samples;
   actual_segments = segment_count_;
   return Open::kOk;
@@ -856,17 +878,7 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
   storeBudget(caps);                         // PSRAM when there is some: the segment is filled by the CPU, not the DMA
   buffer_ = static_cast<uint8_t *>(heap_caps_malloc(bytes, caps));
   if (!takeRing() || !queue_ || !buffer_) return Open::kNoMemory;
-  if (!open(rate_hz, width, kRingBytes, num, den)) return Open::kFailed;
-  parlio_rx_event_callbacks_t cb = {};
-  cb.on_partial_receive = partialReceive;
-  parlio_rx_soft_delimiter_config_t d = {};
-  d.sample_edge = PARLIO_SAMPLE_EDGE_POS;
-  d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
-  d.eof_data_len = kSegmentBytes;
-  return parlio_rx_unit_register_event_callbacks(unit_, &cb, this) == ESP_OK &&
-                 parlio_new_rx_soft_delimiter(&d, &delimiter_) == ESP_OK && parlio_rx_unit_enable(unit_, true) == ESP_OK
-             ? Open::kOk
-             : Open::kFailed;
+  return openUnit(rate_hz, width, true, 0, num, den) ? Open::kOk : Open::kFailed;
 }
 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
@@ -879,6 +891,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   captured_ = dropped_ = 0;
   gap_pending_ = paused_ = false;
   reported_ = 0;
+  if (!reopenUnit()) { state_ = kStateError; return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
   if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
@@ -1100,7 +1113,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       follow_ = false;
       if (triggered_) return tail.finish(startTriggered(out, capacity), out, capacity);
       if (capacity < 8) return failed();
-      if (state_ == kStateDone) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
+      if (!reopenUnit()) { state_ = kStateError; return failed(); }   // a unit made for this start
       done_ = false;
       produced_ = 0;
       kept_samples_ = 0;   // the last generation's segment goes
