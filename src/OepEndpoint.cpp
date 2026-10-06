@@ -598,6 +598,9 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
           for (size_t k = 0; k < n; ++k) hit |= getU16(payload + 1 + 2 * k) == i + 1;
           if (hit) fns[m++] = static_cast<uint16_t>(i + 1);
         }
+        for (size_t k = 0; k < m; ++k)   // a track bound into a capture-group: the group's (oep-if-capture §4.1)
+          if (const uint16_t group = interfaces_[fns[k] - 1]->boundTo())
+            return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup, 0xFFFF, group);
         if (m) planRelease(fns, m);   // m == 0 must not reach it: there an empty list means every fn
         return tail.finish(completed(), out, capacity);
       }
@@ -828,6 +831,13 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
   // The old plans are released and the new ones applied as one change: a channel in both keeps its state and drive
   // (a power line through a gpio plan does not blink off), one leaving goes to its idle state at the end, a new one
   // stays in its idle state until its first set (oep-core §8, oep-if-fixture §1). The undo path settles the same way.
+  for (size_t k = 0; k < nfns; ++k) {   // a track bound into a capture-group: the group's (oep-if-capture §4.1)
+    const uint16_t group = fns[k] >= 1 && fns[k] <= count_ ? interfaces_[fns[k] - 1]->boundTo() : 0;
+    if (group) {
+      plan_refusal_ = {reg::core::kUnavailableCauseBoundInGroup, 0xffff, group, 0};
+      return kRejectUnavailable;
+    }
+  }
   struct Settle {
     PinTable *pins;
     explicit Settle(PinTable *p) : pins(p) { if (pins) pins->deferIdle(); }

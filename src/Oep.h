@@ -579,6 +579,9 @@ class Interface {
   // false: this interface's planned channels are shared with no other fn's plan (core §8.1) - an analog input that
   // takes its pad from the digital side (oep-if-capture §1.2). The endpoint refuses the overlap whichever comes second.
   virtual bool planShares() const { return true; }
+  // The capture-group fn this interface is bound into, 0 = none (oep-if-capture §4.1): plan_apply and plan_release of
+  // its fn are refused unavailable cause 4 with that holder_fn, before anything changes.
+  virtual uint16_t boundTo() const { return 0; }
   // The lock holder's lease lapsed, or another host took the lock by force (core §9): drop what that session used (a
   // wire: the host's use of its connection; a console: the host's share of its stream). An explicit end does not come here.
   virtual void sessionLapsed() {}

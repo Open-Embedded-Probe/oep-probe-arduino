@@ -21,6 +21,7 @@ void (*g_on_wait)() = nullptr;
 using namespace oep;
 using Bytes = std::vector<uint8_t>;
 namespace cap = reg::fixture_logic;
+namespace grp = reg::fixture_capture_group;
 
 static int failures = 0, checks = 0;
 #define CHECK(cond)                                                              \
@@ -82,6 +83,15 @@ static Result configure(LogicCapture &c, const Config &cfg, Bytes &out, bool que
   const Bytes p = request(cfg);
   out.assign(256, 0);
   const Result r = c.handle(query ? LogicCapture::kOpQuery : LogicCapture::kOpConfigure, p.data(), p.size(), out.data(), out.size());
+  out.resize(r.length);
+  return r;
+}
+
+static bool rejectedAs(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
+
+static Result raw(LogicCapture &c, uint8_t op, const Bytes &p, Bytes &out) {
+  out.assign(256, 0);
+  const Result r = c.handle(op, p.data(), p.size(), out.data(), out.size());
   out.resize(r.length);
   return r;
 }
@@ -190,15 +200,6 @@ static void testStreamingWithoutStages() {
   }
 }
 
-static bool rejectedAs(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
-
-static Result raw(LogicCapture &c, uint8_t op, const Bytes &p, Bytes &out) {
-  out.assign(256, 0);
-  const Result r = c.handle(op, p.data(), p.size(), out.data(), out.size());
-  out.resize(r.length);
-  return r;
-}
-
 // mode, rate, trigger and pretrigger are critical whether or not bit 7 is set (capture §3.3, core §2.3): a value the
 // probe cannot honour refuses configure and query with the tag as received; never ignored, never listed in ignored.
 static void testSentCritical() {
@@ -275,7 +276,41 @@ static void testRateLimit() {
   }
 }
 
+// Bound into a capture-group (§4.1): the track's own configure / start / stop / force are refused unavailable cause 4
+// with the group's fn - after the request's form (core §4.3: a malformed request is malformed first) - and its plan is
+// the group's (boundTo: the endpoint refuses plan_apply / plan_release of its fn).
+static void testBound() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  CaptureGroup group(rig.ep);
+  rig.ep.add(rig.cap);   // fn 1
+  rig.ep.add(group);     // fn 2
+  group.addTrack(rig.cap, rig.cap);
+  Bytes out;
+  Config c;
+  CHECK(ok(configure(rig.cap, c, out)));
+  const uint8_t bind[] = {1, 1, 0};
+  uint8_t g[16];
+  CHECK(ok(group.handle(grp::kOpBind, bind, sizeof bind, g, sizeof g)));
+  CHECK(rig.cap.boundTo() == 2);
+  const Bytes cause4 = {0x01, 1, 4, 0x03, 2, 2, 0};
+  CHECK(rejectedAs(configure(rig.cap, c, out), kRejectUnavailable) && out == cause4);
+  Bytes p;
+  tlv(p, kCrit | cap::kTlvConfigureRate, {1});   // short: malformed comes first
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, p, out), kRejectMalformed));
+  CHECK(ok(configure(rig.cap, c, out, true)));   // query: not the group's
+  const Bytes bad_tail = {0x7F, 0};
+  for (const uint8_t op : {LogicCapture::kOpStart, LogicCapture::kOpStop, LogicCapture::kOpForce}) {
+    CHECK(rejectedAs(raw(rig.cap, op, bad_tail, out), kRejectMalformed));
+    CHECK(rejectedAs(raw(rig.cap, op, {}, out), kRejectUnavailable) && out == cause4);
+  }
+  const uint8_t unbind[] = {0};
+  CHECK(ok(group.handle(grp::kOpBind, unbind, sizeof unbind, g, sizeof g)));
+  CHECK(rig.cap.boundTo() == 0);
+}
+
 int main() {
+  testBound();
   testRateLimit();
   testSentCritical();
   testConfigureOrder();

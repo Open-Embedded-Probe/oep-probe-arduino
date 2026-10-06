@@ -73,6 +73,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint8_t planRefusalCause() const override { return refusal_cause_; }   // capturing: 6; the roles' count: 2
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
+  uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   void poll();   // from loop(): collects the conversions, a finished capture becomes the segment and stopped events

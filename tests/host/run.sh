@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Open Embedded Probe
-# Host tests of the portable core (fn 0's conformance: confirm's transport TLV on every transport kind, discoverable,
+# Host tests of the portable core (the capture-group and a bound track's plan; fn 0's conformance: confirm's transport TLV on every transport kind, discoverable,
 # the header refusals, the length-prefixed reader's over-long length and TCP pause; serial-port framing, the endpoint's serial-port rules, the binds) and of the
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, also behind a relaying broker's sequence on a UART bridge,
 # the I2C one with a fake controller), of the pin table's idle
@@ -20,6 +20,9 @@ out=${TMPDIR:-/tmp}/oep-probe-host-test
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out" "$here/test_serial_share.cpp" \
   "$src/OepFrame.cpp" "$src/OepEndpoint.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-group" "$here/test_capture_group.cpp" \
+  "$src/OepFrame.cpp" "$src/OepEndpoint.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
+"$out-group"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-core" "$here/test_core_conformance.cpp" \
   "$src/OepFrame.cpp" "$src/OepEndpoint.cpp"
 "$out-core"
