@@ -1,6 +1,33 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32: UART0's RX interrupt at 32 bytes in the 128-byte FIFO, not arduino-esp32's 120 (bench, the V003 jig,
+  47e4b05, a CH340 bridge: frames broke at 500000 and the probe reverted to the boot speed mid-upload; 500000 was
+  clean there on 2026-10-02). The UART's interrupt runs on loop()'s core, which each SWIO frame keeps from it
+  (portENTER_CRITICAL); at 120 the FIFO had 8 bytes left - 160 us at 500000, 87 us at 921600 - against a frame of about
+  60 us plus its wait for the line to rise (per bit, 32 x 1000 polls at most, until the commit before; now per frame).
+  At 32 it has 96: 1.9 ms at 500000, 1.04 ms at 921600, 480 us at 2000000. A byte lost from a request breaks its frame
+  and three broken in a row revert a raised speed (oep-if-link §3). SwioPhy::kIrqOffMaxUs (200 us, the classic's
+  1000 polls estimated at about 0.1 us each, not measured) and a static_assert that the rest of the FIFO outlasts it
+  twice at 2000000. From the code, the probe's sending side cannot drop or reorder bytes: one writer (loop()), the
+  driver's 8 KiB TX ring with a blocking write, a bind's raw bytes only between frames (Endpoint::rawOut after the
+  results and pushes) and none on a port a session holds, nothing else on UART0 (IDF log off, no printf); an
+  interrupt-off frame only pauses the line (the TX FIFO refills at 10 bytes left, 200 us at 500000), far below any gap
+  rule (probe_frame_gap_ms 200 ms). Answers breaking in the probe -> host direction are not explained by the code; not
+  run on hardware yet; CHANGELOG (EN / JA)
+- (JA) classic ESP32: UART0 の受けの割り込みを、128 byte の FIFO に 32 byte たまったときにしました（arduino-esp32 の既定は
+  120）。（bench、V003 の治具、47e4b05、CH340 のブリッジ: 500000 でフレームが壊れ、upload の途中で probe が起動時の速さに
+  戻った。2026-10-02 にはそこで 500000 がきれいだった。）UART の割り込みは loop() の core で動き、SWIO のフレームはそれを
+  止める（portENTER_CRITICAL）。120 では FIFO の残りが 8 byte - 500000 で 160 us、921600 で 87 us - で、フレームは約 60 us に
+  線が上がるのを待つ時間（一つ前の commit まではビットごとで最大 32 x 1000 回、今はフレームごと）。32 では残りが 96 byte:
+  500000 で 1.9 ms、921600 で 1.04 ms、2000000 で 480 us。要求の 1 byte が失われるとそのフレームが壊れ、3 つ続けて壊れると
+  上げた速さが戻る（oep-if-link §3）。SwioPhy::kIrqOffMaxUs（200 us。classic の 1000 回は 1 回約 0.1 us の見積もりで、測って
+  いない）と、FIFO の残りが 2000000 でその 2 倍より長いことの static_assert。コードからは、probe の送る側はバイトを落とすことも
+  順を変えることもできない: 書き手は 1 つ（loop()）、ドライバの 8 KiB の送りのリングに止まって書く、bind の生のバイトはフレームの
+  間だけ（Endpoint::rawOut は応答と push の後）で、セッションが持つ口には出さない、UART0 にはほかに何も書かない（IDF の log は
+  切ってある、printf は無い）。割り込みを止めたフレームは線を止めるだけ（送りの FIFO は残り 10 byte で補う。500000 で 200 us）
+  で、どの途切れの規則（probe_frame_gap_ms 200 ms）よりずっと短い。probe -> host の向きで応答が壊れることはコードでは説明が
+  つかない。実機ではまだ動かしていない。CHANGELOG (EN / JA)
 - (EN) A probe never stays wedged, and the saved settings cannot crash it at every boot (bench, 0.0.29-dev+3c0cd99, SWD
   on a Pro Micro RP2350, arduino-pico 6.1.1, usbstack=picosdk: after a restart, during the host's first GET_DESCRIPTOR,
   the USB interrupt ended in TinyUSB 0.18's panic "Can't continue xfer on inactive ep" (dcd_rp2040_irq ->

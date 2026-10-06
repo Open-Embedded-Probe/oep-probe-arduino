@@ -50,6 +50,15 @@ static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 #define OEP_PORT_SPEED 1
 #endif
 static constexpr uint32_t kBootBaud = 115200;
+// UART0's RX interrupt fires at kRxFifoFull bytes in the 128-byte hardware FIFO (arduino-esp32's default 120 left 8 bytes:
+// 160 us at 500000, 87 us at 921600, before a byte is lost); the SWIO frames keep loop()'s core - where the UART's
+// interrupt runs - from it for up to SwioPhy::kIrqOffMaxUs. The rest of the FIFO must outlast that at the fastest
+// port_speed in use (2000000 checked; 96 bytes there 480 us): a byte lost from a request breaks its frame, and three
+// broken in a row revert a raised speed (oep-if-link §3).
+static constexpr uint8_t kRxFifoFull = 32;
+static constexpr uint32_t kUartFifo = 128, kFastestCheckedBaud = 2000000;
+static_assert((kUartFifo - kRxFifoFull) * 10ull * 1000000ull / kFastestCheckedBaud >= 2 * oep::SwioPhy::kIrqOffMaxUs,
+              "UART0's RX FIFO must outlast an interrupt-off SWIO frame twice over");
 #if OEP_PORT_SPEED
 // The rate UART0 runs at for `baud`, as arduino-esp32 3.3 sets it: the 1 MHz REF_TICK up to 250000, the 80 MHz APB
 // above, a 20.4 fixed-point divider (0: not makeable; 5 Mbaud is the UART's limit).
@@ -123,6 +132,7 @@ void setup() {
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.begin(kBootBaud);
+  Serial.setRxFIFOFull(kRxFifoFull);   // after begin(): begin() sets its own (120 above 57600 baud)
   // Every channel genuinely Hi-Z until the host takes it (a pull on a target's USB line breaks its enumeration, E132).
   // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
   // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied

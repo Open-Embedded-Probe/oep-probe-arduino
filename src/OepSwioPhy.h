@@ -43,6 +43,11 @@ class SwioPhy final : public DmiPhy {
   // was the rate one read's wall time implies over its 41 slots (41 s / dmi_ns: the read slots' waits for the line and
   // the frame's set-up counted in) - 732142 or 745454 Hz on the ESP32-P4, under the 888888 declared, so a max_speed
   // of 800 kHz was refused while the connections said they ran slower than that.
+  // The longest a frame keeps interrupts off on its core (loop()'s), the bound a sketch sizes what interrupts must
+  // serve against (the classic's UART0 RX FIFO threshold, Firmware/OepProbe/Esp32.h): a read about 60 us (the bench
+  // fitted 70 us a read with the 8 us gap and the call, 0.0.29-dev+526a881) plus one frame's wait for the line to rise
+  // (the P4 100 us; the classic 1000 polls of GPIO.in, about 0.1 us each - an estimate, not measured).
+  static constexpr uint32_t kIrqOffMaxUs = 200;
   static constexpr uint32_t kNominalHz = 888888;
   uint32_t clockHz() const override { return dmi_ns_ ? kNominalHz : 0; }   // once an attach has run
   uint32_t retries() const override { return retries_; }
