@@ -7,6 +7,7 @@
 // every mode at the lowest declared rate succeeds on boards with and without PSRAM.
 #include <stdio.h>
 
+#include <algorithm>
 #include <vector>
 
 #include <esp_heap_caps.h>
@@ -189,7 +190,74 @@ static void testStreamingWithoutStages() {
   }
 }
 
+static bool rejectedAs(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
+
+static Result raw(LogicCapture &c, uint8_t op, const Bytes &p, Bytes &out) {
+  out.assign(256, 0);
+  const Result r = c.handle(op, p.data(), p.size(), out.data(), out.size());
+  out.resize(r.length);
+  return r;
+}
+
+// mode, rate, trigger and pretrigger are critical whether or not bit 7 is set (capture §3.3, core §2.3): a value the
+// probe cannot honour refuses configure and query with the tag as received; never ignored, never listed in ignored.
+static void testSentCritical() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Bytes out;
+  for (const uint8_t bit : {uint8_t(0), kCrit}) {
+    for (const uint8_t op : {LogicCapture::kOpConfigure, LogicCapture::kOpQuery}) {
+      Bytes p;
+      tlv(p, bit | cap::kTlvConfigureMode, {7});                                  // a mode it does not have
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureMode)});
+      p.clear();
+      tlv(p, bit | cap::kTlvConfigureRate, u32(1000));                            // below rate_range
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureRate)});
+      p.clear();
+      tlv(p, kCrit | cap::kTlvConfigureMode, {2});
+      tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerEdge, 0, 0, 0, 0, 0}); // an edge in repeat
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureTrigger)});
+      p.clear();
+      tlv(p, bit | cap::kTlvConfigurePretrigger, u32(0x7FFFFFFF));                // more than the ring holds
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigurePretrigger)});
+      p.clear();
+      tlv(p, bit | cap::kTlvConfigureMode, {1, 0});                               // longer than it knows (core §2.3)
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureMode)});
+    }
+  }
+  // samples goes by its bit: longer and not critical, ignored and listed
+  Bytes p;
+  tlv(p, cap::kTlvConfigureSamples, {1, 0, 0, 0, 0});
+  const Bytes ignored = {0x7F, 1, cap::kTlvConfigureSamples};
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)) &&
+        std::search(out.begin(), out.end(), ignored.begin(), ignored.end()) != out.end());
+}
+
+// core §4.3: malformed before unsupported before unavailable, over the whole request; the plan (cause 6) last.
+static void testConfigureOrder() {
+  board(512 * 1024, size_t(32) << 20);
+  NullStream stream;
+  uint8_t rx[512], tx[512];
+  Endpoint ep{stream, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kVendorBulk, 0};
+  PinTable pins{0xFFFFull};
+  LogicCapture c{ep, pins};   // no plan
+  Bytes out, p;
+  tlv(p, kCrit | cap::kTlvConfigureRate, u32(1000000));
+  CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectUnavailable));
+  tlv(p, kCrit | cap::kTlvConfigureTrigger, {cap::kTriggerEdge, 15, 0, 0, 0, 0});   // a role it has: the plan decides
+  CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectUnavailable));
+  tlv(p, kCrit | 0x60, {1});                                                          // an unknown critical tag
+  CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectUnsupported) && out == Bytes{kCrit | 0x60});
+  tlv(p, cap::kTlvConfigureSegments, {1});                                            // and a short segments
+  CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectMalformed));
+  p.clear();
+  tlv(p, kCrit | cap::kTlvConfigureRate, u32(0));                                     // 0 Hz: excluded (1 Hz or more)
+  CHECK(rejectedAs(raw(c, LogicCapture::kOpQuery, p, out), kRejectMalformed));
+}
+
 int main() {
+  testSentCritical();
+  testConfigureOrder();
   testStreamingWithoutStages();
   testOverLimitRoundsDown();
   testEveryModeAtTheLowestRate();

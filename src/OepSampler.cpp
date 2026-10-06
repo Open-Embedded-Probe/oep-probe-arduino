@@ -214,59 +214,65 @@ void SamplerCapture::planRelease() {
 }
 
 Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query) {
+  // core §4.3's order over the whole request: the form (malformed), an unknown critical tag and a value this probe
+  // cannot honour (unsupported), then the plan, the group and the state (unavailable). mode, rate, trigger and
+  // pretrigger are critical whether or not bit 7 is set (capture §3.3 sent critical, core §2.3): refused with the tag
+  // as received, never ignored. samples and segments go by their bit.
   static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger};
   Tail tail;
-  const Result parsed = tail.parse(p, n, kKnown, out, capacity);
+  Result unknown_critical;
+  const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
+  struct Item { uint8_t tag; size_t size; bool always; const uint8_t *v; size_t len; bool critical; };
+  Item items[] = {{kTagMode, 1, true, nullptr, 0, false},     {kTagRate, 4, true, nullptr, 0, false},
+                  {kTagSamples, 4, false, nullptr, 0, false}, {kTagSegments, 4, false, nullptr, 0, false},
+                  {kTagTrigger, 6, true, nullptr, 0, false},  {kTagPretrigger, 4, true, nullptr, 0, false}};
+  Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &trigger_tlv = items[4],
+       &pretrigger_tlv = items[5];
+  for (Item &it : items) {
+    it.v = tail.find(it.tag, it.len, &it.critical);
+    if (it.v && it.len < it.size) return rejected(kRejectMalformed);   // shorter than its definition (core §2.3)
+  }
+  if (rate_tlv.v && getU32(rate_tlv.v) == 0) return rejected(kRejectMalformed);   // 1 Hz or more (capture §3.3)
+  if (refused(unknown_critical)) return unknown_critical;
+  for (Item &it : items) {   // longer than this probe knows (core §2.3)
+    if (!it.v || it.len == it.size) continue;
+    if (it.always) return Tail::refuseCritical(it.tag, it.critical, out, capacity);
+    const Result r = tail.refuse(it.tag, it.critical, out, capacity);
+    if (refused(r)) return r;
+    it.v = nullptr;   // ignored (and listed)
+  }
   uint32_t rate = 1000000, samples = 0;
-  size_t len = 0;
-  bool critical = false;
-  if (const uint8_t *v = tail.find(kTagMode, len, &critical)) {   // one-shot only
-    if (len != 1) return rejected(kRejectMalformed);
-    if (v[0] != cap::kModeOneShot) {
-      const Result r = tail.refuse(kTagMode, critical, out, capacity);
-      if (refused(r)) return r;
-    }
+  if (mode_tlv.v && mode_tlv.v[0] != cap::kModeOneShot)   // one-shot only
+    return Tail::refuseCritical(kTagMode, mode_tlv.critical, out, capacity);
+  if (const uint8_t *v = rate_tlv.v) {   // outside rate_range (capture §3.3)
+    if (getU32(v) < kMinHz || getU32(v) > kMaxHz) return Tail::refuseCritical(kTagRate, rate_tlv.critical, out, capacity);
+    rate = getU32(v);
   }
-  if (const uint8_t *v = tail.find(kTagRate, len, &critical)) {
-    if (len != 4) return rejected(kRejectMalformed);
-    if (getU32(v) >= kMinHz && getU32(v) <= kMaxHz) rate = getU32(v);
-    else {
-      const Result r = tail.refuse(kTagRate, critical, out, capacity);
-      if (refused(r)) return r;
-    }
-  }
-  if (const uint8_t *v = tail.find(kTagSamples, len)) {
-    if (len != 4) return rejected(kRejectMalformed);
-    samples = getU32(v);
-  }
-  if (tail.find(kTagSegments, len) && len != 4) return rejected(kRejectMalformed);
-  if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
+  if (samples_tlv.v) samples = getU32(samples_tlv.v);
+  // the trigger's role against the plan; without one against the roles this capture has (the plan's refusal follows)
+  const uint8_t planned = channels_ ? channels_ : kMaxChannels;
   uint8_t trig_type = cap::kTriggerImmediate, trig_role = 0;
   uint32_t trig_value = 0;
-  if (const uint8_t *v = tail.find(kTagTrigger, len, &critical)) {   // type(u8) role(u8) value(u32)
-    if (len != 6) return rejected(kRejectMalformed);
+  if (const uint8_t *v = trigger_tlv.v) {   // type(u8) role(u8) value(u32)
     const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == cap::kTriggerImmediate ||
-                    (v[1] < channels_ && ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2)));
-    if (ok) { trig_type = v[0]; trig_role = v[1]; trig_value = value; }
-    else {
-      const Result r = tail.refuse(kTagTrigger, critical, out, capacity);
-      if (refused(r)) return r;
-    }
+                    (v[1] < planned && ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2)));
+    if (!ok) return Tail::refuseCritical(kTagTrigger, trigger_tlv.critical, out, capacity);
+    trig_type = v[0];
+    trig_role = v[1];
+    trig_value = value;
   }
-  if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   if (samples == 0 || samples > kBufferBytes) samples = kBufferBytes;
   uint32_t pretrigger = 0;
-  if (const uint8_t *v = tail.find(kTagPretrigger, len, &critical)) {   // only with a trigger, inside the segment
-    if (len != 4) return rejected(kRejectMalformed);
+  if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger, inside the segment
     pretrigger = getU32(v);
-    if (pretrigger && (trig_type == cap::kTriggerImmediate || pretrigger >= samples)) {
-      const Result r = tail.refuse(kTagPretrigger, critical, out, capacity);
-      if (refused(r)) return r;
-      pretrigger = 0;
-    }
+    if (pretrigger && (trig_type == cap::kTriggerImmediate || pretrigger >= samples))
+      return Tail::refuseCritical(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   }
+  if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
+  if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
+  if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   // Paced in software, the loop keeps up to kMaxHz only while every channel is on GPIO0..31 (one register read per
   // sample); with GPIO32..39 in the plan it keeps 1 MHz, not 2 (1.52 MHz actually sampled, 2026-09-29). The answer
   // carries the rate that is really paced.
@@ -345,8 +351,8 @@ void SamplerCapture::poll() {
 }
 
 Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
-  if (bound() && !group_op_ && (op == cap::kOpConfigure || op == cap::kOpStart || op == cap::kOpStop || op == cap::kOpForce))
-    return boundInGroup(*this, out, capacity);   // bound in a capture-group: the group starts and stops it (cause 4)
+  // bound in a capture-group: the group starts and stops it (unavailable cause 4, after the request's form, core §4.3)
+  auto boundRefused = [&]() { return bound() && !group_op_; };
   Tail tail;
   switch (op) {
     case cap::kOpConfigure: return configure(p, n, out, capacity, false);
@@ -354,6 +360,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
     case cap::kOpStart: {   // -> blocking_ms(u32) generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (boundRefused()) return boundInGroup(*this, out, capacity);
       if (state_ != cap::kStateConfigured && state_ != cap::kStateDone && state_ != cap::kStateError) return wrongState(out, capacity);
       if (capacity < 8) return failed();
       waitIdle();
@@ -376,6 +383,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
     case cap::kOpStop: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (boundRefused()) return boundInGroup(*this, out, capacity);
       poll();
       if (state_ == cap::kStateWaiting) {   // no trigger yet: nothing captured
         waitIdle();
@@ -448,6 +456,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
     case cap::kOpForce: {          // waiting for the trigger: take the segment from the next sample on
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (boundRefused()) return boundInGroup(*this, out, capacity);
       if (state_ == cap::kStateWaiting) control_ = kControlForce;
       return tail.finish(completed(), out, capacity);
     }

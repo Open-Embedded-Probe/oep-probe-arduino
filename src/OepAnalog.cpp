@@ -15,12 +15,12 @@
 #elif defined(CONFIG_IDF_TARGET_ESP32P4)
 #include <esp_efuse_rtc_calib.h>
 #endif
-#elif defined(ARDUINO_ARCH_RP2040)
+#elif defined(OEP_ANALOG_RP2)
 #include <hardware/adc.h>
 #include <hardware/dma.h>
 #endif
 
-#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
+#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_ANALOG_RP2)
 
 namespace oep {
 namespace ana = reg::fixture_analog;
@@ -67,7 +67,7 @@ const Frontend *frontendOf(uint8_t number) {
   return nullptr;
 }
 
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
 bool gAdcReady = false;
 #endif
 
@@ -96,7 +96,7 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   w.put(ana::kTlvDescribeChannels, channels, sizeof channels);
   uint8_t trig[8];   // types(u32) max_pretrigger(u32)
   putU32(trig, (1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown));
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
   putU32(trig + 4, kRingBytes / 4 - kPretriggerRoom);   // a triggered segment is at most half the ring (one channel)
 #else
   putU32(trig + 4, static_cast<uint32_t>(kMaxBytes / 2) - kPretriggerRoom);
@@ -159,84 +159,107 @@ void AnalogCapture::planRelease() {
 // ---- configure ----------------------------------------------------------------------------------------------------
 
 Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query) {
-  if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
-  if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return wrongState(out, capacity);
+  // core §4.3's order over the whole request: the form first (malformed: the TLVs' encoding, a known TLV shorter than
+  // its definition, a value the definition excludes, two frontends for one role), then an unknown critical tag and a
+  // value this probe cannot honour (unsupported), then the plan, the group and the state (unavailable). mode, rate,
+  // trigger, pretrigger and frontend are critical whether or not bit 7 is set (capture §3.3 sent critical, core
+  // §2.3): one this probe cannot honour, or longer than it knows, refuses the configure with the tag as received -
+  // never ignored, never listed in ignored. samples and segments go by their bit.
   static const uint8_t kKnown[] = {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
                                    ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
                                    ana::kTlvConfigureFrontend};
   static const uint8_t kRepeating[] = {ana::kTlvConfigureFrontend};   // one per channel (capture §3.3)
   Tail tail;
   tail.repeats(kRepeating);
-  const Result parsed = tail.parse(payload, length, kKnown, out, capacity);
+  Result unknown_critical;
+  const Result parsed = tail.parse(payload, length, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
-  if (!channels_) return wrongState(out, capacity);   // plan the channels first (cause 6)
-  size_t len = 0;
-  bool critical = false;
-  if (const uint8_t *v = tail.find(ana::kTlvConfigureMode, len, &critical)) {
-    if (len != 1) return rejected(kRejectMalformed);
-    if (v[0] != ana::kModeOneShot) {
-      const Result r = tail.refuse(ana::kTlvConfigureMode, critical, out, capacity);
-      if (refused(r)) return r;
+  struct Item { uint8_t tag; size_t size; bool always; const uint8_t *v; size_t len; bool critical; };
+  Item items[] = {{ana::kTlvConfigureMode, 1, true, nullptr, 0, false},
+                  {ana::kTlvConfigureRate, 4, true, nullptr, 0, false},
+                  {ana::kTlvConfigureSamples, 4, false, nullptr, 0, false},
+                  {ana::kTlvConfigureSegments, 4, false, nullptr, 0, false},
+                  {ana::kTlvConfigureTrigger, 6, true, nullptr, 0, false},
+                  {ana::kTlvConfigurePretrigger, 4, true, nullptr, 0, false}};
+  Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &trigger_tlv = items[4],
+       &pretrigger_tlv = items[5];
+  for (Item &it : items) {
+    it.v = tail.find(it.tag, it.len, &it.critical);
+    if (it.v && it.len < it.size) return rejected(kRejectMalformed);   // shorter than its definition (core §2.3)
+  }
+  if (!rate_tlv.v || getU32(rate_tlv.v) == 0) return rejected(kRejectMalformed);   // 1 Hz or more (capture §3.3)
+  if (samples_tlv.v && getU32(samples_tlv.v) == 0) return rejected(kRejectMalformed);
+  {   // frontend(role u8, frontend u8): at most one per role (capture §3.3)
+    size_t at = 0, vlen = 0;
+    uint8_t raw = 0;
+    const uint8_t *v = nullptr;
+    uint32_t roles = 0;
+    while (tail.next(at, raw, v, vlen)) {
+      if ((raw & ~kTagCritical) != ana::kTlvConfigureFrontend) continue;
+      if (vlen < 2) return rejected(kRejectMalformed);
+      if (v[0] < 32 && ((roles >> v[0]) & 1)) return rejected(kRejectMalformed);   // two for the same role
+      if (v[0] < 32) roles |= 1u << v[0];
     }
   }
-  const uint8_t *rv = tail.find(ana::kTlvConfigureRate, len);
-  if (!rv || len != 4 || getU32(rv) == 0) return rejected(kRejectMalformed);
-  uint64_t total = static_cast<uint64_t>(getU32(rv)) * channels_;
+  if (refused(unknown_critical)) return unknown_critical;
+  for (Item &it : items) {   // longer than this probe knows (core §2.3)
+    if (!it.v || it.len == it.size) continue;
+    if (it.always) return Tail::refuseCritical(it.tag, it.critical, out, capacity);
+    const Result r = tail.refuse(it.tag, it.critical, out, capacity);
+    if (refused(r)) return r;
+    it.v = nullptr;   // ignored (and listed)
+  }
+  // a channel count for what follows; without a plan, one (the plan's refusal follows)
+  const uint8_t count = channels_ ? channels_ : 1;
+  const uint8_t planned = channels_ ? channels_ : kMaxChannels;
+  if (mode_tlv.v && mode_tlv.v[0] != ana::kModeOneShot)
+    return Tail::refuseCritical(ana::kTlvConfigureMode, mode_tlv.critical, out, capacity);
+  uint64_t total = static_cast<uint64_t>(getU32(rate_tlv.v)) * count;
   if (total < kMinTotalHz) total = kMinTotalHz;
   if (total > kMaxTotalHz) total = kMaxTotalHz;
-  uint32_t samples = 1024;
-  if (const uint8_t *v = tail.find(ana::kTlvConfigureSamples, len)) {
-    if (len != 4 || getU32(v) == 0) return rejected(kRejectMalformed);
-    samples = getU32(v);
-  }
+  uint32_t samples = samples_tlv.v ? getU32(samples_tlv.v) : 1024;
   // type(u8) role(u8) value(u32): the ADC value crossed up (from below to at or above) or down (above to at or below)
   uint8_t trig_type = ana::kTriggerImmediate, trig_role = 0;
   uint32_t trig_value = 0;
-  if (const uint8_t *v = tail.find(ana::kTlvConfigureTrigger, len, &critical)) {
-    if (len != 6) return rejected(kRejectMalformed);
+  if (const uint8_t *v = trigger_tlv.v) {
     const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == ana::kTriggerImmediate ||
-                    ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && v[1] < channels_ && value <= kFull);
-    if (ok) { trig_type = v[0]; trig_role = v[1]; trig_value = value; }
-    else {
-      const Result r = tail.refuse(ana::kTlvConfigureTrigger, critical, out, capacity);
-      if (refused(r)) return r;
-    }
+                    ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && v[1] < planned && value <= kFull);
+    if (!ok) return Tail::refuseCritical(ana::kTlvConfigureTrigger, trigger_tlv.critical, out, capacity);
+    trig_type = v[0];
+    trig_role = v[1];
+    trig_value = value;
   }
-  uint32_t most = kMaxBytes / (2u * channels_);
-#if defined(ARDUINO_ARCH_RP2040)
-  if (trig_type) most = kRingBytes / 4 / channels_;   // half the ring: the DMA runs on while poll sees it is full
+  uint32_t most = kMaxBytes / (2u * count);
+#if defined(OEP_ANALOG_RP2)
+  if (trig_type) most = kRingBytes / 4 / count;   // half the ring: the DMA runs on while poll sees it is full
 #endif
   if (samples > most) samples = most;
   uint32_t pretrigger = 0;
-  if (const uint8_t *v = tail.find(ana::kTlvConfigurePretrigger, len, &critical)) {   // with a trigger, in the segment
-    if (len != 4) return rejected(kRejectMalformed);
+  if (const uint8_t *v = pretrigger_tlv.v) {   // with a trigger, in the segment
     pretrigger = getU32(v);
     // with an immediate trigger it is kept for a group that makes this track follow another's trigger
-    if (pretrigger && pretrigger + kPretriggerRoom > samples) {
-      const Result r = tail.refuse(ana::kTlvConfigurePretrigger, critical, out, capacity);
-      if (refused(r)) return r;
-      pretrigger = 0;
-    }
+    if (pretrigger && pretrigger + kPretriggerRoom > samples)
+      return Tail::refuseCritical(ana::kTlvConfigurePretrigger, pretrigger_tlv.critical, out, capacity);
   }
   uint8_t chosen[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) chosen[k] = kWidest;
-  {   // frontend(role u8, frontend u8), once per channel
-    size_t at = 0;
+  {   // frontend(role u8, frontend u8): a role it does not have or not planned, a frontend it does not declare
+    size_t at = 0, vlen = 0;
     uint8_t raw = 0;
-    size_t vlen = 0;
     const uint8_t *v = nullptr;
     while (tail.next(at, raw, v, vlen)) {
       if ((raw & ~kTagCritical) != ana::kTlvConfigureFrontend) continue;
-      if (vlen != 2) return rejected(kRejectMalformed);
-      if (v[0] >= channels_) return rejected(kRejectMalformed);
-      if (!frontendOf(v[1])) return unsupportedTag(out, capacity, raw);   // not a frontend this probe declares
+      if (vlen > 2 || v[0] >= planned || !frontendOf(v[1])) return unsupportedTag(out, capacity, raw);
       chosen[v[0]] = v[1];
     }
   }
+  if (!channels_) return wrongState(out, capacity);   // plan the channels first (cause 6)
+  if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
+  if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return wrongState(out, capacity);
   // the actual rate
   uint32_t total_hz, num, den;
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
   uint32_t cycles = static_cast<uint32_t>((kAdcClockHz + total / 2) / total);   // whole ADC clock cycles
   if (cycles < 96) cycles = 96;
   total_hz = kAdcClockHz / cycles;
@@ -252,7 +275,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     uint16_t *buffer = static_cast<uint16_t *>(realloc(buffer_, bytes));
     if (!buffer) return failed();
     buffer_ = buffer;
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
     if (trig_type && !ring_) ring_ = static_cast<uint16_t *>(aligned_alloc(kRingBytes, kRingBytes));   // the DMA's ring
     if (trig_type && !ring_) return failed();
 #endif
@@ -265,7 +288,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     rate_num_ = num;
     rate_den_ = den;
     memcpy(frontend_, chosen, sizeof frontend_);
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
     cycles_ = cycles;
     // the round robin goes through the inputs in ascending order: frame slot m is the role on the m-th lowest input
     uint8_t sorted[kMaxChannels];
@@ -388,7 +411,7 @@ bool AnalogCapture::startNow() {
   ext_ready_ = false;
   phase_ = 0;
   end_frame_ = ringMode() ? UINT32_MAX : samples_;
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
   ring_len_ = ringMode() ? kRingBytes / 2 : samples_ * channels_;
 #else
   ring_len_ = samples_ * channels_;
@@ -466,7 +489,7 @@ bool AnalogCapture::startNow() {
   return true;
 }
 
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
 // The round robin from the lowest input, its FIFO copied by DMA into `to`: `count` values, or on and on round a
 // kRingBytes ring (to aligned to it).
 void AnalogCapture::armDma(uint16_t *to, uint32_t count, bool ring) {
@@ -599,7 +622,7 @@ void AnalogCapture::drain() {
 #endif
 
 uint16_t *AnalogCapture::ring() const {
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
   if (ringMode()) return ring_;
 #endif
   return buffer_;
@@ -650,7 +673,7 @@ void AnalogCapture::hitAt(uint32_t t) {
 }
 
 bool AnalogCapture::trackCanFollow() const {
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
   if (static_cast<size_t>(samples_) * channels_ > kRingBytes / 4) return false;   // a triggered segment's most
 #endif
   return trackReady();
@@ -658,7 +681,7 @@ bool AnalogCapture::trackCanFollow() const {
 
 bool AnalogCapture::trackStartFollowing() {
   if (!trackCanFollow()) return false;
-#if defined(ARDUINO_ARCH_RP2040)
+#if defined(OEP_ANALOG_RP2)
   if (!ring_) ring_ = static_cast<uint16_t *>(aligned_alloc(kRingBytes, kRingBytes));
   if (!ring_) return false;
 #endif

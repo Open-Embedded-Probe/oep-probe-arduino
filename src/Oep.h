@@ -372,6 +372,12 @@ class Tail {
     ignore(tag);
     return completed();
   }
+  // A known tag its interface's definition makes critical whether or not bit 7 is set (core §2.3; capture §3.3 sent
+  // critical): a value this probe cannot honour is always refused - unsupported, the tag byte as received (bit 7 as
+  // the host sent it) - and never ignored.
+  static Result refuseCritical(uint8_t tag, bool critical, uint8_t *out, size_t capacity) {
+    return unsupportedTag(out, capacity, critical ? tag | kTagCritical : tag & ~kTagCritical);
+  }
   bool anyIgnored() const { return g_request_ignored.count != 0; }
   // One more TLV of `tag` ignored (a known tag whose value this probe skips without a refusal, like gpio set's drive).
   void ignore(uint8_t tag) {

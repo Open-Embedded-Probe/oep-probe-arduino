@@ -543,64 +543,66 @@ void LogicCapture::close() {
 }
 
 Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query) {
+  // core §4.3's order over the whole request: the form first (malformed: the TLVs' encoding, a known TLV shorter than
+  // its definition, a value the definition excludes), then an unknown critical tag and a value this probe cannot honour
+  // (unsupported), then the plan, the group and the state (unavailable). mode, rate, trigger and pretrigger are
+  // critical whether or not bit 7 is set (capture §3.3 sent critical, core §2.3): one this probe cannot honour, or
+  // longer than it knows, refuses the configure with the tag as received - never ignored, never listed in ignored.
+  // samples and segments go by their bit.
   static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger};
   Tail tail;
-  const Result parsed = tail.parse(p, n, kKnown, out, capacity);   // unknown: critical refused, others ignored
+  Result unknown_critical;
+  const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
-  // The known ones, each checked for shape (malformed) and for what this probe can do: a value it cannot honour
-  // refuses the configure when critical and is ignored (and listed) when not.
+  struct Item { uint8_t tag; size_t size; bool always; const uint8_t *v; size_t len; bool critical; };
+  Item items[] = {{kTagMode, 1, true, nullptr, 0, false},     {kTagRate, 4, true, nullptr, 0, false},
+                  {kTagSamples, 4, false, nullptr, 0, false}, {kTagSegments, 4, false, nullptr, 0, false},
+                  {kTagTrigger, 6, true, nullptr, 0, false},  {kTagPretrigger, 4, true, nullptr, 0, false}};
+  Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5];
+  for (Item &it : items) {
+    it.v = tail.find(it.tag, it.len, &it.critical);
+    if (it.v && it.len < it.size) return rejected(kRejectMalformed);   // shorter than its definition (core §2.3)
+  }
+  if (rate_tlv.v && getU32(rate_tlv.v) == 0) return rejected(kRejectMalformed);   // 1 Hz or more (capture §3.3)
+  if (refused(unknown_critical)) return unknown_critical;
+  for (Item &it : items) {   // longer than this probe knows (core §2.3)
+    if (!it.v || it.len == it.size) continue;
+    if (it.always) return Tail::refuseCritical(it.tag, it.critical, out, capacity);
+    const Result r = tail.refuse(it.tag, it.critical, out, capacity);
+    if (refused(r)) return r;
+    it.v = nullptr;   // ignored (and listed)
+  }
   uint8_t mode = cap::kModeOneShot;
   uint32_t rate = 1000000, samples = 0, segments = 0;
-  size_t len = 0;
-  bool critical = false;
-  if (const uint8_t *v = tail.find(kTagMode, len, &critical)) {
-    if (len != 1) return rejected(kRejectMalformed);
-    if (v[0] == cap::kModeOneShot || v[0] == cap::kModeRepeat || v[0] == cap::kModeStreaming) mode = v[0];
-    else {
-      const Result r = tail.refuse(kTagMode, critical, out, capacity);
-      if (refused(r)) return r;
-    }
+  if (const uint8_t *v = mode_tlv.v) {
+    if (v[0] != cap::kModeOneShot && v[0] != cap::kModeRepeat && v[0] != cap::kModeStreaming)
+      return Tail::refuseCritical(kTagMode, mode_tlv.critical, out, capacity);
+    mode = v[0];
   }
-  if (const uint8_t *v = tail.find(kTagRate, len, &critical)) {
-    if (len != 4) return rejected(kRejectMalformed);
-    // out of range: the driver would silently run at 160 MHz instead
-    if (getU32(v) >= kMinHz && getU32(v) <= kSourceHz) rate = getU32(v);
-    else {
-      const Result r = tail.refuse(kTagRate, critical, out, capacity);
-      if (refused(r)) return r;
-    }
+  if (const uint8_t *v = rate_tlv.v) {   // outside rate_range (capture §3.3); the driver would silently run at 160 MHz
+    if (getU32(v) < kMinHz || getU32(v) > kSourceHz) return Tail::refuseCritical(kTagRate, rate_tlv.critical, out, capacity);
+    rate = getU32(v);
   }
-  if (const uint8_t *v = tail.find(kTagSamples, len)) {
-    if (len != 4) return rejected(kRejectMalformed);
-    samples = getU32(v);
-  }
-  if (const uint8_t *v = tail.find(kTagSegments, len)) {
-    if (len != 4) return rejected(kRejectMalformed);
-    segments = getU32(v);
-  }
-  if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
-  // type(u8) role(u8) value(u32): level and edge in a one-shot (repeat and streaming start at once: immediate only)
+  if (samples_tlv.v) samples = getU32(samples_tlv.v);
+  if (segments_tlv.v) segments = getU32(segments_tlv.v);
+  // type(u8) role(u8) value(u32): level and edge in a one-shot (repeat and streaming start at once: immediate only).
+  // The role against the plan; without one against the roles this capture has (the plan's refusal follows).
+  const uint8_t planned = channels_ ? channels_ : kMaxChannels;
   uint8_t trig_type = 0, trig_role = 0;
   uint32_t trig_value = 0;
   uint32_t pretrigger = 0;
-  bool pretrigger_critical = false;
-  if (const uint8_t *v = tail.find(kTagTrigger, len, &critical)) {
-    if (len != 6) return rejected(kRejectMalformed);
+  if (const uint8_t *v = trigger_tlv.v) {
     const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == cap::kTriggerImmediate ||
-                    (mode == cap::kModeOneShot && v[1] < channels_ &&
+                    (mode == cap::kModeOneShot && v[1] < planned &&
                      ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2)));
-    if (ok) { trig_type = v[0]; trig_role = v[1]; trig_value = value; }
-    else {
-      const Result r = tail.refuse(kTagTrigger, critical, out, capacity);
-      if (refused(r)) return r;
-    }
+    if (!ok) return Tail::refuseCritical(kTagTrigger, trigger_tlv.critical, out, capacity);
+    trig_type = v[0];
+    trig_role = v[1];
+    trig_value = value;
   }
-  if (const uint8_t *v = tail.find(kTagPretrigger, len, &pretrigger_critical)) {   // checked against samples below
-    if (len != 4) return rejected(kRejectMalformed);
-    pretrigger = getU32(v);
-  }
-  if ((state_ == kStateCapturing || state_ == kStatePaused || state_ == kStateWaiting) && !query) return wrongState(out, capacity);
+  if (pretrigger_tlv.v) pretrigger = getU32(pretrigger_tlv.v);   // checked against samples below
   const uint8_t width = widthFor(channels_);
   uint32_t actual_segments = 1;
   uint32_t store_caps = 0;
@@ -612,7 +614,6 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     while (seg > kSegmentMin && budget / seg < 4) seg /= 2;   // a small store: at least 4 segments
     actual_segments = static_cast<uint32_t>(budget / seg);
     if (actual_segments > kInfos) actual_segments = kInfos;
-    if (actual_segments < 2) return failed();
     samples = seg * 8 / width;
   } else if (mode == 2) {   // repeat: segments of whole 4 KiB, as many as fit the PSRAM budget (or as asked)
     // in 64 bits: a samples above the limit is rounded down to it (capture §3.3), never wrapped (samples x width
@@ -641,11 +642,12 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // segment starts on a whole byte, up to 7 samples earlier (w < 8): the trigger stays inside it.
   const uint32_t max_pretrigger = static_cast<uint32_t>(kPretriggerBytes * 8 / width);
   // with an immediate trigger it is kept for a group that makes this track follow another's trigger
-  if (pretrigger && (mode != cap::kModeOneShot || pretrigger + 8 > samples || pretrigger > max_pretrigger)) {
-    const Result r = tail.refuse(kTagPretrigger, pretrigger_critical, out, capacity);
-    if (refused(r)) return r;
-    pretrigger = 0;
-  }
+  if (pretrigger && (mode != cap::kModeOneShot || pretrigger + 8 > samples || pretrigger > max_pretrigger))
+    return Tail::refuseCritical(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
+  if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
+  if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
+  if ((state_ == kStateCapturing || state_ == kStatePaused || state_ == kStateWaiting) && !query) return wrongState(out, capacity);
+  if (mode == 3 && actual_segments < 2) return failed();   // not even two segments of store
   const bool triggered = mode == cap::kModeOneShot && trig_type != cap::kTriggerImmediate;
 
   uint32_t num = 0, den = 1;
@@ -1003,8 +1005,6 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
 }
 
 Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
-  if (bound() && !group_op_ && (op == kOpConfigure || op == kOpStart || op == kOpStop || op == kOpForce))
-    return boundInGroup(*this, out, capacity);   // bound in a capture-group: the group starts and stops it (cause 4)
   if (op == kOpConfigure || op == kOpQuery) return configure(p, n, out, capacity, op == kOpQuery);
   // Every other request: a fixed part (start / stop / force / status: none; read: generation position max = 16;
   // segments: 4; release: generation serial = 8), then TLVs, none of which these ops read.
@@ -1014,6 +1014,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
     const Result parsed = plainTail(tail, p, n, fixed, out, capacity);
     if (refused(parsed)) return parsed;
   }
+  // bound in a capture-group: the group starts and stops it (unavailable cause 4, after the request's form, core §4.3)
+  if (bound() && !group_op_ && (op == kOpStart || op == kOpStop || op == kOpForce)) return boundInGroup(*this, out, capacity);
   switch (op) {
     case kOpStart: {   // -> blocking_ms(u32) generation(u32) [TLV]
       if (state_ != kStateConfigured && state_ != kStateDone && state_ != kStateError) return wrongState(out, capacity);

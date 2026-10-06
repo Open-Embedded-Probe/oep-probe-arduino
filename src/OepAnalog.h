@@ -34,6 +34,10 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include <esp_adc/adc_continuous.h>
 #endif
+// The RP2's build (its ADC round robin and DMA); OEP_HOST_FAKE_RP2_ADC: a host test with fakes of them (tests/host/shim)
+#if defined(ARDUINO_ARCH_RP2040) || (defined(OEP_HOST_FAKE_RP2_ADC) && !defined(ARDUINO_ARCH_ESP32))
+#define OEP_ANALOG_RP2 1
+#endif
 
 namespace oep {
 
@@ -149,7 +153,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool overflow_seen_ = false;               // triggered: an overflow was seen ...
   uint32_t overflow_frame_ = 0;              // ... when this many frames had come (the loss was before)
   void drain();
-#elif defined(ARDUINO_ARCH_RP2040)
+#elif defined(OEP_ANALOG_RP2)
   int dma_ = -1;
   uint32_t cycles_ = 96;                     // 48 MHz ADC clock cycles a conversion
   static constexpr uint32_t kRingBytes = 32768, kRingCount = 0x0FFFFFFF;   // the write ring; transfers a run
