@@ -63,13 +63,16 @@ class Endpoint {
            Limits limits, uint8_t kind, uint8_t usb_interface = 0xff)
       : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(bounded(limits)) {
     addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
+    setPushQueue(1024);
   }
   // confirm's values within core §7.1's bounds, whatever the sketch gave: max_frame 64 or more, window max_frame or
-  // more, max_inflight 1 or more (a host treats a transport answering outside them as not usable).
+  // more, max_inflight 1 or more (a host treats a transport answering outside them as not usable). max_inflight is at
+  // most the resend table's entries: the table remembers at least max_inflight requests (core §5.2).
   static constexpr Limits bounded(Limits l) {
     if (l.max_frame < reg::kMinMaxFrame) l.max_frame = reg::kMinMaxFrame;
     if (l.window_bytes < l.max_frame) l.window_bytes = l.max_frame;
     if (l.max_inflight < 1) l.max_inflight = 1;
+    if (l.max_inflight > kDedupEntries) l.max_inflight = kDedupEntries;
     return l;
   }
 
@@ -158,9 +161,13 @@ class Endpoint {
   // Events the interface lost before handing them over (its own queue overflowed): the seq skips them, so the
   // host sees the gap. Every event generated must take a seq number, sent or not.
   void eventsLost(Interface &from, uint16_t count);
-  // Experimental: at most this many bytes of pushes may wait in the transport (0 = no limit). Size it to the link:
-  // a result waits behind up to this much (256 B is about 0.3 ms on USB-Serial/JTAG, 23 ms on a 115200 UART).
-  void setPushQueue(size_t bytes) { push_queue_ = bytes; }
+  // Experimental: at most this many bytes of pushes may wait in the transport. Size it to the link: a result waits
+  // behind up to this much (256 B is about 0.3 ms on USB-Serial/JTAG, 23 ms on a 115200 UART). Never more than
+  // max_frame x 2 (core §11.4 obligation 2): 0, or a larger value, is that bound.
+  void setPushQueue(size_t bytes) {
+    const size_t bound = 2u * limits_.max_frame;
+    push_queue_ = bytes == 0 || bytes > bound ? bound : bytes;
+  }
   // Flush the stream after each poll that wrote something: a buffered USB vendor interface sends a short frame only
   // when flushed (E160). Off for streams that send by themselves (USB-Serial/JTAG, UART).
   void setFlushAfterBurst(bool on) { transports_[0].flush_after_burst = on; }

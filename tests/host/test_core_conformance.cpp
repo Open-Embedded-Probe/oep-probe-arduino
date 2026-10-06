@@ -254,6 +254,37 @@ static void testRequestText() {
   CHECK(!requestText(del, 1) && !requestText(tab, 1) && requestText(nullptr, 0));
 }
 
+// core §5.2: the resend table remembers at least max_inflight requests - confirm never offers more than it has entries.
+static void testInflightWithinTable() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 64}, Endpoint::kVendorBulk, 0);
+  const Bytes r = exchange(ep, s, false, request(1, 0, 0x01, confirmReq()));
+  CHECK(r.size() == 5 + 20 && r[5 + 12] >= 1 && r[5 + 12] <= 8);
+}
+
+// core §9: a closed resource number is not given out again while it is among the last 1024 closed
+// (resource_reuse_distance), also when the counter comes round to it soon after it closed.
+static void testResourceReuseDistance() {
+  using RN = ResourceNumbers;
+  const uint16_t a = RN::take(RN::kConnection);   // held while the counter goes round
+  CHECK(a != 0);
+  const uint16_t stop = static_cast<uint16_t>(a > 151 ? a - 151 : a - 151 - 1);   // 150 numbers before a (0 skipped)
+  for (uint32_t i = 0; i < 0x20000; ++i) {
+    const uint16_t n = RN::take(RN::kStream);
+    RN::close(n);
+    if (n == stop) break;
+  }
+  RN::close(a);   // closed now: 150 more closes until the counter is back at a
+  bool reused = false;
+  for (int i = 0; i < 400; ++i) {
+    const uint16_t n = RN::take(RN::kStream);
+    reused |= n == a;
+    RN::close(n);
+  }
+  CHECK(!reused);
+}
+
 int main() {
   testConfirmTransportEveryKind();
   testConfirmVectors();
@@ -262,6 +293,8 @@ int main() {
   testHeaderRefusalsNotKept();
   testLengthPrefixedReader();
   testRequestText();
+  testInflightWithinTable();
+  testResourceReuseDistance();
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

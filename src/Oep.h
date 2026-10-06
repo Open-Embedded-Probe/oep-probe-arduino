@@ -458,7 +458,8 @@ class TlvWriter {
 class ResourceNumbers {
  public:
   enum Kind : uint8_t { kNone = 0, kConnection = 1, kStream = 2 };
-  static constexpr size_t kRecent = 64, kLive = 16;
+  // A closed number is not taken again while it is among the last resource_reuse_distance closed (core §9).
+  static constexpr size_t kRecent = reg::kLimitResourceReuseDistance, kLive = 16;
   // The next free number, registered live as `kind` (0 when every number is live or recently closed - not in practice).
   static uint16_t take(Kind kind) {
     for (uint32_t tries = 0; tries < 0x10000; ++tries) {

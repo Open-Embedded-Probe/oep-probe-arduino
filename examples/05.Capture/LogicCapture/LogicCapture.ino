@@ -28,7 +28,7 @@ static EspUsbDeviceVendor vendor(usbDevice);
 static oep::DirectBulkStream bulk(vendor);
 static uint8_t rxBuffer[16384];  // a whole max_frame request (link_sink sends full frames)
 static uint8_t txBuffer[16384];
-static oep::Endpoint endpoint(bulk, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {16384, 16384, 16},
+static oep::Endpoint endpoint(bulk, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {16384, 16384, 8},
                                   oep::Endpoint::kVendorBulk, 0);
 // board pull-ups (7, 8), the old 8-wire link (24, 25), straps (35), UART0 (37, 38), the LED (51)
 static constexpr uint64_t kReserved = (1ull << 7) | (1ull << 8) | (1ull << 24) | (1ull << 25) | (1ull << 35) |
