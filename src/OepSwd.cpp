@@ -414,11 +414,12 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           (have_targetsel != port_.active_targetsel || (have_targetsel && targetsel != port_.targetsel)))
         return wrongState(out, capacity);   // another target on these pins: the host detaches first
       if (port_.connected) {
-        // Already attached: the same connection, nothing redone. A ceiling the live link is over cannot be met
-        // without attaching again.
+        // Already attached: the same connection, nothing redone - a live link faster than this max_speed is slowed to
+        // it and returned (oep-if-debug §1; going slower is safe). It refused the ceiling.
         if (hzOf(port_.active_half_ns) > max_hz) {
-          const Result r = tail.refuse(sw::kTlvAttachMaxSpeed, critical, out, capacity);
-          if (refused(r)) return r;
+          port_.active_half_ns = half;
+          port_.io.setHalfNs(half);
+          searched = true;   // its speed lowered: search_retries in the answer (§1), the DPIDR read below the check
         }
         flags |= sw::kAttachFlagsExisting;
         ok = xferDpidr(dpidr);

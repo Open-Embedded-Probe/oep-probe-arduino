@@ -284,6 +284,17 @@ int main() {
     CHECK(v && len == 2 && v[0] == 1 && v[1] == 0);
     r = call(wire, WireSwd::kOpAttach, attachRequest(), out);   // joining: no search, no search_retries
     CHECK(ok(r) && !tlv(out, 11, sw::kTlvAttachAnswerSearchRetries, len));
+    // joining with a lower max_speed (100 kHz): the connection slowed to it and returned (oep-if-debug §1; it refused)
+    const uint16_t number = fixed.number;
+    Bytes slower = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0xa0, 0x86, 0x01, 0x00};
+    r = call(wire, WireSwd::kOpAttach, slower, out);
+    CHECK(ok(r) && out.size() >= 11 && (out[6] & sw::kAttachFlagsExisting) && fixed.number == number);
+    CHECK((out[7] | out[8] << 8 | out[9] << 16 | uint32_t(out[10]) << 24) <= 100000u && fixed.io.half_ns >= 5000);
+    CHECK(tlv(out, 11, sw::kTlvAttachAnswerSearchRetries, len) != nullptr);
+    Bytes dp = u16(fixed.number);
+    dp.insert(dp.end(), {1, 0, 0x06});
+    r = call(adi, TargetArmAdi::kOpTransfer, dp, out);   // and works at that speed
+    CHECK(ok(r) && out[2] == kStatusOk);
     r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
     CHECK(ok(r));
     g_swd.absent = true;

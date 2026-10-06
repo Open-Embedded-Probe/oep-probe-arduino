@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) swd attach joining a live connection faster than its max_speed slows that connection to max_speed or below and returns it (oep-if-debug §1; it refused the max_speed TLV unsupported, or ignored it when not critical), with search_retries in the answer. Host test.
+- (JA) swd の attach が、その max_speed より速い生きている接続に加わるときは、その接続を max_speed 以下に下げて返す（oep-if-debug §1。max_speed の TLV を unsupported で断るか、critical でなければ無視していた）。答えに search_retries を付ける。host test。
 - (EN) rvswd / swio attach joining a live connection acknowledges a pending havereset first and says so with flags bit0 (oep-if-debug §3, §4.6; only a new connection or a revived link did) - the console marks restart 1 for it; a slot's own attach joining a connection acknowledges it too. Host test.
 - (JA) rvswd / swio の attach が生きている接続に加わるときも、保留中の havereset をまず acknowledge し、flags bit0 でそう言う（oep-if-debug §3、§4.6。新しい接続と立て直した link だけがしていた）- console はそれに restart 1 の mark を付ける。slot 自身の attach が接続に加わるときも acknowledge する。host test。
 - (EN) riscv-dm run sets only ebreakm and prv = M in dcsr (oep-if-debug §4.4): (dcsr | 0x8003); it also set ebreaks and ebreaku (0xb003), which the hart kept after the run. Changes what the target is left with. Host test.
