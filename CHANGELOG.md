@@ -1,6 +1,35 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fix: riscv-dm run on a CH32V003 (bench, 0.0.29-dev+82e1ec9, the V003 jig - classic ESP32, SWIO, ch32rv 9cb4f08:
+  every upload, 5 of 5, failed "run: timeout" at the loader's run, stopped 2; 3c0cd99 passed). ch32rv's loader run sets
+  mstatus = 0, and the V003's mstatus reads 0x00001800 before and after that write (read on the jig: MPP fixed at M,
+  WARL). e7b903c's check of a register other than a GPR or dpc (read before, written, read back) took a value read back
+  as it was, and not as asked, for a lost write: every try of the set-up failed and the run never started - answered
+  stopped 2 (could not be halted), the form an early return of runUntilHalt takes. Parts with U mode (X035, L103) read
+  back 0. Now (Ch32Dm::writeRegisterTaken) such a register is written again and read back again (each read twice over
+  the sentinels): the same value twice is what the register holds once a write of it landed - one missed access cannot
+  lose both writes; a second read back that differs (the first write lost) fails the group, whose redo reads the
+  register as it now is. x0 (0x1000) goes the same way (it reads 0 whatever is written); x1..x31 and dpc are read back
+  whole as before. Host tests (test_wire; the fake's mstatus with MPP fixed or writable, and a run that reaches its
+  ebreak only with mstatus.MIE clear): a run with mstatus = 0 in, MPP fixed / writable, 0x1800 / 0x1888 / 0 before,
+  with a glitch at every access (cmderr 6 set or not): 0 of 1524 wrong (before: 595 of 1692 answered timeout, stopped
+  2); the run with a drop anywhere inside now also sets mstatus = 0 (MIE set before) on both kinds: 0 of 4124 (before:
+  84 timeouts - a redo after a drop read 0x1800 as it was). The cost of a GPR-only run is unchanged.
+- (JA) 修正: CH32V003 での riscv-dm の run（bench、0.0.29-dev+82e1ec9、V003 の治具 - classic ESP32、SWIO、ch32rv 9cb4f08: どの
+  書き込みも 5 回中 5 回、loader の run で "run: timeout"、stopped 2 で失敗。3c0cd99 では通っていた）。ch32rv の loader の run は
+  mstatus = 0 を設定し、V003 の mstatus はその書き込みの前も後も 0x00001800 と読める（治具で読んだ: MPP が M に固定、WARL）。
+  e7b903c の GPR と dpc 以外のレジスタの確かめ（前に読み、書き、読み戻す）は、頼んだ値でなく前のままに読み戻った値を、書き込み
+  の消失と取っていた: 準備のどの試みも失敗し、run は始まらず、stopped 2（止められなかった）と答えていた。runUntilHalt の早い
+  return がとる形。U モードのある部品（X035、L103）では 0 が読み戻る。いまは（Ch32Dm::writeRegisterTaken）そういうレジスタは
+  もう一度書いてもう一度読み戻す（どちらの読みも sentinel を挟んで 2 回）: 2 回とも同じ値なら、それがその値の書き込みが通った
+  あとのレジスタの値 - 1 回のアクセスの取りこぼしでは 2 回の書き込みを両方失えない。2 回目の読み戻しが違えば（1 回目の書き込みが
+  消えた）まとまりを失敗にし、やり直しがその時のレジスタを読む。x0（0x1000）も同じ扱い（何を書いても 0 と読める）。x1..x31 と
+  dpc は今までどおり全体を読み戻す。host の試験（test_wire。偽物の mstatus は MPP 固定または書ける、run は mstatus.MIE が 0 の
+  ときだけ ebreak に着く）: mstatus = 0 を渡す run を、MPP 固定 / 書ける、前の値 0x1800 / 0x1888 / 0、すべてのアクセスで
+  glitch（cmderr 6 あり / なし）: 1524 通り中 0 が誤り（前: 1692 中 595 が timeout、stopped 2）。中のどこかで link が落ちる run
+  も、両方の種類で mstatus = 0（前は MIE が立っている）を渡す: 4124 中 0（前: 84 が timeout - 落ちた後のやり直しが 0x1800 を
+  前のままと読んだ）。GPR だけの run の費用は変わらない。
 - (EN) The same discipline as the block ops (a value acted on, answered or written from is read twice and taken only
   when both agree) everywhere else the probe acted on one DMI read, for a link that misses a single access and is up
   again at the next (a glitch: a write lost, a read answering the read before it). The console (DmConsole): a word it

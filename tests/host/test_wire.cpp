@@ -104,6 +104,11 @@ class FakePhy final : public DmiPhy {
   // 0xe0000380 / 0xe0000384 (HARTINFO)
   bool model_block = false;
   uint32_t gpr[32] = {}, dpc = 0, progbuf[8] = {}, abstractauto = 0, last_command = 0, cmderr = 0, autoexec_runs = 0;
+  // mstatus (0x300) with model_block: mpp_fixed - MPP (12:11) reads 3 whatever is written (WARL: a hart with machine mode
+  // only, the CH32V003's QingKe V2A), so a write of 0 reads back 0x1800, the value it had. With loader_pc, a run with
+  // mstatus.MIE set does not reach its ebreak (an interrupt takes the hart into the application: a lost write)
+  uint32_t mstatus = 0;
+  bool mpp_fixed = false;
   std::map<uint32_t, uint32_t> mem;
   void execute(uint32_t command) {
     if (cmderr) return;                                     // sticky: nothing runs until cleared
@@ -111,9 +116,10 @@ class FakePhy final : public DmiPhy {
     const uint16_t regno = command & 0xffff;
     if (command & (1u << 17)) {                             // transfer
       uint32_t *r = regno >= 0x1000 && regno < 0x1020 ? &gpr[regno - 0x1000] : regno == 0x7b1 ? &dpc
-                    : regno == 0x7b0 ? &dcsr : nullptr;
+                    : regno == 0x7b0 ? &dcsr : regno == 0x300 ? &mstatus : nullptr;
       if (!r) { cmderr = 2; return; }
       if (command & (1u << 16)) *r = data0; else data0 = *r;
+      if (mpp_fixed) mstatus |= 0x1800u;
     }
     if (command & (1u << 18)) {                             // postexec: the program buffer, through a0 / a1 as they are
       if (progbuf[0] == 0x40044180u) {                      // reader: lw s0,0(a1); lw s1,0(s0); addi s0,4; sw s1,0(a0); sw s0,0(a1)
@@ -282,7 +288,10 @@ class FakePhy final : public DmiPhy {
         halted = step_returns && !run_reads;
         resumeack = true;
         running_reads = run_reads;
-        if (loader_pc && run_reads && (dpc != loader_pc || !(dcsr & 0x8000u))) { halted = false; running_reads = 0; }
+        if (loader_pc && run_reads && (dpc != loader_pc || !(dcsr & 0x8000u) || (model_block && (mstatus & 8u)))) {
+          halted = false;
+          running_reads = 0;
+        }
       }
       if (drop_on_change && ((value & (3u << 30)) && (halted != was || (value & (1u << 30))))) startDrop();
       if (value & (1u << 28)) havereset = false;   // ackhavereset
@@ -1771,16 +1780,20 @@ int main() {
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
     CHECK(ok(r) && phy.halted && fixed.connected);
     const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
-    // pc 0x20000000, 1000 ms, a0 = 0x20000400 and a1 = 16 in, a0 out
+    // pc 0x20000000, 1000 ms, a0 = 0x20000400, a1 = 16 and mstatus = 0 in (MIE set before; MPP writable, and fixed at
+    // M as on a CH32V003), a0 out
     Bytes run = conn;
-    run.insert(run.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 2, 0x0a, 0x10, 0, 0x04, 0, 0x20, 0x0b, 0x10, 16, 0, 0, 0,
-                           1, 0x0a, 0x10});
+    run.insert(run.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 3, 0x0a, 0x10, 0, 0x04, 0, 0x20, 0x0b, 0x10, 16, 0, 0, 0,
+                           0x00, 0x03, 0, 0, 0, 0, 1, 0x0a, 0x10});
     int cases = 0, stopped = 0, timeouts = 0, not_started = 0, other = 0, bad_args = 0, run_reads_seen = 0;
+    for (int fixed = 0; fixed < 2; ++fixed)
     for (int stale = 0; stale < 2; ++stale)
       for (uint32_t hold : {0u, 700u, 2100u})
         for (int at = -1; at < run_reads_seen; ++at) {
           ++cases;
           phy.halted = true;
+          phy.mpp_fixed = fixed;
+          phy.mstatus = 0x1888u;
           phy.dpc = 0x00000a3cu;           // where the application was stopped
           phy.dcsr = 0x40000003u;          // ebreakm clear: the application's ebreak traps
           phy.gpr[10] = 0x5a5a0010u;
@@ -1800,7 +1813,8 @@ int main() {
           const bool answered_ok = ok(r) && out.size() >= 15 && out[0] == kStatusOk;
           if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped && getU32(out.data() + 2) == 0x20000040u) {
             ++stopped;
-            if (getU32(out.data() + 11) != 0x20000400u) ++bad_args;   // a0 as the run left it: the argument
+            // a0 as the run left it: the argument; mstatus.MIE clear (the fake's run reaches its ebreak only so)
+            if (getU32(out.data() + 11) != 0x20000400u || phy.mstatus != (fixed ? 0x1800u : 0u)) ++bad_args;
           } else if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped && getU32(out.data() + 2) == 0x00000a3cu) {
             ++not_started;   // the resumereq lost: stopped where it was, dpc unmoved (the host judges, oep-if-debug §4.4)
           } else if (out.size() >= 1 && out[0] == kStatusTimeout) {
@@ -1822,8 +1836,8 @@ int main() {
            run_reads_seen, cases, stopped, not_started, timeouts, other);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
-    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
-    phy.loader_pc = 0;
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = phy.mpp_fixed = false;
+    phy.loader_pc = phy.mstatus = 0;
     phy.drop_hold_us = 0;
     phy.halted = false;
   }
@@ -1921,6 +1935,81 @@ int main() {
     CHECK(ok(r) && !fixed.connected);
     phy.model_block = false;
     phy.glitch_parity = false;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.halted = false;
+  }
+
+  // ---- run with a CSR whose WARL bits keep the value it had (bench, 0.0.29-dev+82e1ec9, the V003 jig: every ch32rv
+  // upload failed "run: timeout" at the loader's run - stopped 2, could not be halted - where 3c0cd99 passed; the
+  // CH32V003's mstatus reads 0x00001800 before and after a write of 0, MPP fixed at M: e7b903c's check took a CSR read
+  // back as it was, and not as asked, for a lost write in every try, and the run never started). ch32rv's loader run:
+  // a0, a1 and mstatus = 0 in. mstatus as on a V003 (MPP fixed) and as on a part with U mode (writable), MIE set or not
+  // before: every run stops at its ebreak with mstatus.MIE clear; with a glitch at every access in turn (cmderr 6 set
+  // or not), every run stops at its ebreak with its arguments in place, or (the resumereq lost) where it started ----
+  {
+    phy.halted = false;
+    phy.model_block = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.loader_pc = 0x20000000u;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    Bytes run = conn;   // pc 0x20000000, 1000 ms, a0 = 0x20000400, a1 = 16 and mstatus = 0 in, a0 out
+    run.insert(run.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 3, 0x0a, 0x10, 0, 0x04, 0, 0x20, 0x0b, 0x10, 16, 0, 0, 0,
+                           0x00, 0x03, 0, 0, 0, 0, 1, 0x0a, 0x10});
+    struct Kind { bool fixed; uint32_t before; };
+    const Kind kinds[] = {{true, 0x1800u}, {true, 0x1888u}, {false, 0x1888u}, {false, 0u}};
+    int cases = 0, stopped = 0, not_started = 0, bad = 0;
+    for (const Kind &kind : kinds) {
+      int accesses_seen = 0;
+      for (int parity = 0; parity < 2; ++parity)
+        for (int at = -1; at < accesses_seen; ++at) {
+          if (parity && at < 0) continue;
+          ++cases;
+          phy.halted = true;
+          phy.mpp_fixed = kind.fixed;
+          phy.mstatus = kind.before;
+          phy.dpc = 0x00000a3cu;
+          phy.dcsr = 0x40000003u;
+          phy.gpr[10] = 0x5a5a0010u;
+          phy.gpr[11] = 0x5a5a0011u;
+          phy.cmderr = 0;
+          phy.abstractauto = 0;
+          phy.run_reads = 6;
+          phy.glitch_parity = parity;
+          phy.glitch_at = at;
+          const int before = phy.accesses;
+          r = call(riscv, TargetRiscvDm::kOpRun, run, out);
+          if (at < 0) accesses_seen = phy.accesses - before;
+          phy.glitch_at = -1;
+          const uint32_t mstatus_ok = kind.fixed ? 0x1800u : 0u;
+          const bool answered_ok = ok(r) && out.size() >= 15 && out[0] == kStatusOk;
+          if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped && getU32(out.data() + 2) == 0x20000040u &&
+              getU32(out.data() + 11) == 0x20000400u && phy.gpr[11] == 16 && phy.mstatus == mstatus_ok) {
+            ++stopped;
+          } else if (at >= 0 && answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped &&
+                     getU32(out.data() + 2) == 0x20000000u && phy.gpr[11] == 16 && phy.mstatus == mstatus_ok) {
+            ++not_started;   // the resumereq lost: stopped at pc, dpc unmoved (the host judges, oep-if-debug §4.4)
+          } else if (++bad <= 3) {
+            printf("  run with mstatus = 0 (MPP %s, %08x before), glitch at access %d (cmderr 6 %d): status %02x stopped "
+                   "%02x dpc %08x mstatus %08x\n", kind.fixed ? "fixed" : "writable", kind.before, at, parity,
+                   out.size() ? out[0] : 0xff, out.size() >= 2 ? out[1] : 0xff,
+                   out.size() >= 6 ? getU32(out.data() + 2) : 0, phy.mstatus);
+          }
+          phy.halted = true;
+          phy.run_reads = 0;
+          g_millis += 2;
+        }
+      CHECK(accesses_seen > 40);
+    }
+    CHECK(bad == 0);
+    printf("  runs with mstatus = 0 in (MPP fixed / writable), a glitch inside: %d cases, %d stopped at the ebreak, %d not "
+           "started, %d other\n", cases, stopped, not_started, bad);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.model_block = phy.mpp_fixed = false;
+    phy.glitch_parity = false;
+    phy.loader_pc = phy.mstatus = 0;
     phy.abstractauto = phy.cmderr = 0;
     phy.halted = false;
   }

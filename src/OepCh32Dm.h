@@ -198,6 +198,9 @@ class Ch32Dm {
   template <typename Seen> bool statusConfirms(Seen seen);
   bool readRegisterSure(uint16_t regno, uint32_t &value);
   bool writeRegisterSeen(uint16_t regno, uint32_t value, uint32_t mask = 0xffffffffu);
+  // a write whose register may keep another value (WARL: a CSR, x0): read before and after; read back as it was and
+  // not as asked, written and read back once more and taken when the two read-backs agree
+  bool writeRegisterTaken(uint16_t regno, uint32_t value);
   bool autoOffSure();
   bool cmderrClear();
   bool keepBlock();                       // a block op's start: abstractauto, the mailbox, the GPRs (each held)

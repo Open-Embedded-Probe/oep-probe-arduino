@@ -286,6 +286,21 @@ bool Ch32Dm::writeRegisterSeen(uint16_t regno, uint32_t value, uint32_t mask) {
   return writeRegister(regno, value) && readRegisterSure(regno, now) && ((now ^ value) & mask) == 0;
 }
 
+// A register write seen to land where WARL bits may keep a value other than the one written (a CSR; x0): read before
+// (readRegisterSure), written, read back. As asked, or changed from before: it landed. Read back as it was, it may
+// have been lost to a missed access, or the register keeps that value - a CH32V003's mstatus, MPP fixed at M, reads
+// 0x00001800 before and after a write of 0 (bench, 0.0.29-dev+82e1ec9: e7b903c took that for a lost write in every
+// try, and every ch32rv loader run on the V003 jig failed before it started, answered stopped 2). Then it is written
+// again and read back again: one missed access cannot lose both writes, so the same value read back twice is what the
+// register holds once a write of the value has landed. A second read back that differs (the first write was lost,
+// the second landed) fails the group, whose redo reads the register as it now is.
+bool Ch32Dm::writeRegisterTaken(uint16_t regno, uint32_t value) {
+  uint32_t was = 0, now = 0, again = 0;
+  if (!readRegisterSure(regno, was) || !writeRegister(regno, value) || !readRegisterSure(regno, now)) return false;
+  if (now == value || now != was) return true;
+  return writeRegister(regno, value) && readRegisterSure(regno, again) && again == now;
+}
+
 // ABSTRACTAUTO written 0 and read back 0 (readSure): before the op writes DATA0 (with autoexecdata set, a DATA0 access
 // runs the last command again). A lost write left it as it was.
 bool Ch32Dm::autoOffSure() {
@@ -792,8 +807,8 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   // code with a register as it was; a stale read would be taken for dcsr). A redo of the second writes the same values.
   // The read twice (readRegisterSure) and every write read back (writeRegisterSeen: a missed access lost one with the
   // link up again at once and the look after the group passing): dcsr's ebreakm and prv (its other bits may be WARL),
-  // the GPRs and dpc whole, another CSR changed or as asked (its WARL bits may keep it as it was only when asked for
-  // what it holds).
+  // the GPRs x1..x31 and dpc whole, another register (a CSR, x0) by writeRegisterTaken - its WARL bits may keep it as
+  // it was.
   uint32_t dcsr = 0;
   if (!held([&] { return readRegisterSure(0x07b0, dcsr); })) {
     OEP_LOGF("dm run: dcsr read failed (cmderr %u)", cmderr_);
@@ -804,13 +819,11 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     if (!writeRegisterSeen(0x07b0, dcsr | 0x8003u | kEbreakSU, 0x8003u)) return false;
     for (size_t i = 0; i < count; ++i) {
       const uint16_t r = regnos[i];
-      if ((r >= 0x1000 && r < 0x1020) || r == 0x07b1) {
+      if ((r > 0x1000 && r < 0x1020) || r == 0x07b1) {
         if (!writeRegisterSeen(r, values[i])) return false;
         continue;
       }
-      uint32_t was = 0, now = 0;
-      if (!readRegisterSure(r, was) || !writeRegister(r, values[i]) || !readRegisterSure(r, now)) return false;
-      if (now != values[i] && now == was) return false;   // not changed: the write lost (or WARL kept it - redone)
+      if (!writeRegisterTaken(r, values[i])) return false;
     }
     return writeRegisterSeen(0x07b1, pc);
   });
