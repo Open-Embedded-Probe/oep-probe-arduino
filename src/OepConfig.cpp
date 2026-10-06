@@ -154,7 +154,7 @@ size_t ProbeConfig::nameOf(void *self, uint8_t kind, uint16_t id, char *out, siz
       }
     }
     const Interface *it = c.endpoint_.interfaceAt(id);
-    const int n2 = snprintf(out, room, "%s#%u", it ? it->name() : "?", it ? static_cast<unsigned>(it->instance()) : 0u);
+    const int n2 = snprintf(out, room, "%s#%u", it ? it->name() : "?", static_cast<unsigned>(c.endpoint_.instanceOf(id)));
     return n2 < 0 ? 0 : (static_cast<size_t>(n2) < room ? static_cast<size_t>(n2) : room);
   }
   const int n = snprintf(out, room, "?");
@@ -904,7 +904,7 @@ size_t ProbeConfig::identities(const uint8_t *items, size_t length, uint8_t *out
     const size_t name_len = strlen(name);
     if (used + 6 + name_len > capacity) return 0;
     putU16(out + used, fns[k]);
-    putU16(out + used + 2, it ? it->instance() : 0);
+    putU16(out + used + 2, endpoint_.instanceOf(fns[k]));
     out[used + 4] = it ? it->revision() : 0;
     out[used + 5] = static_cast<uint8_t>(name_len);
     memcpy(out + used + 6, name, name_len);
@@ -977,7 +977,7 @@ void ProbeConfig::applySavedItems() {
     for (uint16_t f = 1; f <= 255 && !now; ++f) {
       const Interface *it = endpoint_.interfaceAt(f);
       if (!it) break;
-      if (it->instance() == instance && it->revision() == revision && strlen(it->name()) == name_len &&
+      if (endpoint_.instanceOf(f) == instance && it->revision() == revision && strlen(it->name()) == name_len &&
           memcmp(it->name(), name, name_len) == 0) now = f;
     }
     if (!now) {   // gone, or another revision: nothing is applied (a jig half set up is worse than none)

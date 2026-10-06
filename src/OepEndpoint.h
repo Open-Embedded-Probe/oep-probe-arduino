@@ -15,6 +15,8 @@
 #include "OepFrame.h"
 #include "Oep.h"
 
+#include <string.h>
+
 namespace oep {
 
 // The raw side of the serial ports (core §3.4): what a serial port carries outside the frames. The binds implement it
@@ -104,6 +106,16 @@ class Endpoint {
     return 0;
   }
   Interface *interfaceAt(uint16_t fn) const { return fn >= 1 && fn <= count_ ? interfaces_[fn - 1] : nullptr; }
+  // list's instance of fn (core §7.2): the interfaces with the same (name, revision) numbered from 0 in ascending fn -
+  // counted here, whatever instance() the interface was built with.
+  uint16_t instanceOf(uint16_t fn) const {
+    const Interface *it = interfaceAt(fn);
+    if (!it) return 0;
+    uint16_t n = 0;
+    for (uint16_t f = 1; f < fn; ++f)
+      if (interfaces_[f - 1]->revision() == it->revision() && strcmp(interfaces_[f - 1]->name(), it->name()) == 0) ++n;
+    return n;
+  }
 
   // An interface, numbered fn 1, 2, ... in the order added. The list stays the same for a boot (core §7.2): every add
   // comes before the first poll(), and one after it is refused (false).

@@ -974,7 +974,8 @@ uint32_t Endpoint::listHash() const {
   };
   entry(0, 0, reg::core::kRevision, reg::core::kName);
   for (size_t i = 0; i < count_; ++i)
-    entry(static_cast<uint16_t>(i + 1), interfaces_[i]->instance(), interfaces_[i]->revision(), interfaces_[i]->name());
+    entry(static_cast<uint16_t>(i + 1), instanceOf(static_cast<uint16_t>(i + 1)), interfaces_[i]->revision(),
+          interfaces_[i]->name());
   return ~c;
 }
 
@@ -1016,7 +1017,7 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
   consider(0, 0, reg::core::kRevision, 0, reg::core::kName);
   for (size_t i = 0; i < count_; ++i) {
     Interface &it = *interfaces_[i];
-    consider(static_cast<uint16_t>(i + 1), it.instance(), it.revision(), it.flags(), it.name());
+    consider(static_cast<uint16_t>(i + 1), instanceOf(static_cast<uint16_t>(i + 1)), it.revision(), it.flags(), it.name());
   }
   putU16(out, total);
   out[2] = count;

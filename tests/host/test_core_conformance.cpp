@@ -285,6 +285,36 @@ static void testResourceReuseDistance() {
   CHECK(!reused);
 }
 
+// core §7.2: interfaces with the same (name, revision) are numbered from 0 in ascending fn, whatever instance() the
+// interface was built with.
+class Named final : public Interface {
+ public:
+  explicit Named(const char *name, uint8_t revision = 1) : name_(name), revision_(revision) {}
+  const char *name() const override { return name_; }
+  uint16_t instance() const override { return 7; }   // wrong on purpose: the endpoint counts
+  uint8_t revision() const override { return revision_; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
+ private:
+  const char *name_;
+  uint8_t revision_;
+};
+static void testInstanceNumbering() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  Named a("io.github.test.x"), b("io.github.test.y"), c("io.github.test.x"), d("io.github.test.x", 2);
+  ep.add(a);
+  ep.add(b);
+  ep.add(c);
+  ep.add(d);
+  const Bytes r = exchange(ep, s, false, request(1, 0, 0x02, {0, 0, 0, 0}));
+  // total(u16) count(u8), then len(u8) fn(u16) instance(u16) ...: oep.core, then fn 1 to 4
+  std::vector<uint16_t> instances;
+  for (size_t at = 5 + 3; at < r.size() && instances.size() < 5; at += 1 + r[at]) instances.push_back(getU16(&r[at + 3]));
+  CHECK(instances == std::vector<uint16_t>({0, 0, 0, 1, 0}));
+  CHECK(ep.instanceOf(3) == 1 && ep.instanceOf(4) == 0);
+}
+
 int main() {
   testConfirmTransportEveryKind();
   testConfirmVectors();
@@ -295,6 +325,7 @@ int main() {
   testRequestText();
   testInflightWithinTable();
   testResourceReuseDistance();
+  testInstanceNumbering();
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }
