@@ -128,7 +128,8 @@ class FixtureUart final : public Interface, public BindSource {
   uint32_t item_baud_ = kDefaultBaud;
   uint8_t item_format_ = 0;
   uint16_t max_read_ = 1000;
-  // Receive errors the UART driver reports (ESP32: onReceiveError, from its event task): counted there, marked lost in
+  // Receive errors the UART driver reports (ESP32: onReceiveError, from its event task; RP2: SerialUART's overflow and
+  // break, read in poll() - a framing / parity error without a break is dropped by the core unreported): counted there, marked lost in
   // poll() at the stream's position (fixture §2 / common §1.3: detail 1 overflow, 2 framing, 3 parity). Before this a
   // byte lost in the hardware FIFO at 2 Mbaud left no mark (X035, 2026-10-01).
   volatile uint16_t rx_overflows_ = 0, rx_framing_ = 0, rx_parity_ = 0;

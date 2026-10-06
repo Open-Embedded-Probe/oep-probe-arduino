@@ -285,6 +285,12 @@ void FixtureUart::poll() {
     if (!k) break;
     for (size_t i = 0; i < k; ++i) stream_.put(chunk[i]);
   }
+#if defined(ARDUINO_ARCH_RP2040)
+  // arduino-pico's SerialUART reports a full receive queue and a break, read here after the bytes kept before them;
+  // it drops a byte with a framing or parity error without telling (SerialUART::_handleIRQ, 6.1.1), so those leave no mark
+  if (serial_.overflow()) ++rx_overflows_;
+  if (serial_.getBreakReceived()) ++rx_framing_;   // a break is a framing error (as the ESP32's UART_BREAK_ERROR)
+#endif
   markReceiveErrors();
 }
 
