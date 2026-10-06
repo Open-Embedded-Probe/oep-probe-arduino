@@ -248,7 +248,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       const uint8_t count = payload[0];
       const size_t fixed = 1u + 4u * count;
       static const uint8_t kScanTags[] = {sw::kTlvScanMaxSpeed, sw::kTlvScanSkip, sw::kTlvScanTargetsel};
-      const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, out, capacity);
+      Result unknown = completed();   // an unknown critical tag: unsupported once the format is checked (core §4.3)
+      const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, out, capacity, &unknown);
       if (refused(parsed)) return parsed;
       uint16_t skip = 0;
       uint32_t max_hz = 0, scan_targetsel = 0;
@@ -269,6 +270,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           scan_select = true;
         }
       }
+      if (refused(unknown)) return unknown;
       // every pair listed allowed (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index), all of them before
       // any is looked at for what holds it (core §4.3: order 6 before order 7)
       for (uint8_t k = 0; k < count; ++k)
@@ -344,9 +346,11 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       // method(u8: 0 only) [TLV 0x01 max_speed u32 Hz (required), 0x02 targetsel u32, 0x03 pins]
       //   ->  connection(u16) DPIDR(u32) flags(u8: bit1 existing connection, bit2 woke from dormant) speed_hz(u32) [TLV]
       if (length < 1) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity);
+      // every format check before anything this probe does not handle (core §4.3: malformed, order 5, before
+      // unsupported, order 6): an unknown critical tag (the reset TLV among them) is held back until then
+      Result unknown = completed();
+      const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity, &unknown);
       if (refused(parsed)) return parsed;
-      if (payload[0] != 0) return unsupportedValue(out, capacity);   // 0 only: arm-adi has no halt (oep-if-debug §5)
       size_t len = 0;
       bool critical = false;
       uint32_t max_hz = 0, targetsel = 0;
@@ -361,16 +365,20 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         targetsel = getU32(v);
         have_targetsel = true;
       }
+      size_t plen = 0;
+      bool pins_critical = false;
+      const uint8_t *pins = tail.find(sw::kTlvAttachPins, plen, &pins_critical);
+      if (pins && plen != 4) return rejected(kRejectMalformed);
+      if (refused(unknown)) return unknown;
+      if (payload[0] != 0) return unsupportedValue(out, capacity);   // 0 only: arm-adi has no halt (oep-if-debug §5)
       if (max_hz < hzOf(kSlowHalfNs)) return unsupportedTag(out, capacity, sw::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
+      // a pair this wire does not declare: unsupported with the tag as received when critical, else ignored (core §2.3)
+      if (pins && !allowed(getU16(pins), getU16(pins + 2))) {
+        if (pins_critical) return unsupportedTag(out, capacity, sw::kTlvAttachPins | kTagCritical);
+        tail.ignore(sw::kTlvAttachPins);
+        pins = nullptr;
+      }
       {
-        size_t plen = 0;
-        bool pins_critical = false;
-        const uint8_t *pins = tail.find(sw::kTlvAttachPins, plen, &pins_critical);
-        // a pair this wire does not declare: unsupported with the tag as received when critical, else ignored (core §2.3)
-        if (pins && plen == 4 && !allowed(getU16(pins), getU16(pins + 2)) && !pins_critical) {
-          tail.ignore(sw::kTlvAttachPins);
-          pins = nullptr;
-        }
         if (!pins) {   // the live connection's pair (join it), the fixed pair, else the host names one
           if (port_.pin_choice && !port_.connected) return unavailable(out, capacity, reg::core::kUnavailableCauseWrongState);
           const uint16_t off = port_.connected ? 0xffff : disabledOf(port_.swdio, port_.swclk);
@@ -381,9 +389,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
                                                   reg::core::kHolderKindSettingsIdle);
         } else {
-          if (plen != 4) return rejected(kRejectMalformed);
           const uint16_t d = getU16(pins), c = getU16(pins + 2);
-          if (!allowed(d, c)) return unsupportedTag(out, capacity, sw::kTlvAttachPins | kTagCritical);   // critical, above
           const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
           if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);

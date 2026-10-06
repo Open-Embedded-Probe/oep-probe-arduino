@@ -334,7 +334,8 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   const size_t fixed = 1u + 4u * count;
   static const uint8_t kScanTags[] = {wire::kTlvScanMaxSpeed, wire::kTlvScanSkip, wire::kTlvScanIdleClock};
   Tail tail;
-  const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, isRvswd() ? 3 : 2, out, capacity);
+  Result unknown = completed();   // an unknown critical tag: unsupported once the format is checked (core §4.3)
+  const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, isRvswd() ? 3 : 2, out, capacity, &unknown);
   if (refused(parsed)) return parsed;
   DmiPhy &phy = port_.dm.phy();
   const bool one_wire = port_.swclk == 0xffff;
@@ -350,6 +351,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   bool critical = false, idle_low = false, idle_critical = false;
   if (!maxSpeed(tail, wire::kTlvScanMaxSpeed, max_hz, critical)) return rejected(kRejectMalformed);
   if (isRvswd() && !idleClock(tail, wire::kTlvScanIdleClock, idle_low, idle_critical)) return rejected(kRejectMalformed);
+  if (refused(unknown)) return unknown;
   if (max_hz && phy.minClockHz() && max_hz < phy.minClockHz()) return unsupportedTag(out, capacity, wire::kTlvScanMaxSpeed | (critical ? kTagCritical : 0));
   // every pair listed is one this wire allows (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index), all of
   // them before any is looked at for what holds it (core §4.3: order 6 before order 7)
@@ -447,11 +449,11 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
                                         wire::kTlvAttachIdleClock};
   if (length < 1) return rejected(kRejectMalformed);
   Tail tail;
-  const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, isRvswd() ? 4 : 3, out, capacity);
+  // Every format check of the request before anything it does not handle (core §4.3: malformed, order 5, before
+  // unsupported, order 6): an unknown critical tag is held back until then.
+  Result unknown = completed();
+  const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, isRvswd() ? 4 : 3, out, capacity, &unknown);
   if (refused(parsed)) return parsed;
-  // not a method of the table: unsupported, payload 0x00 (oep-if-debug §3; a later revision may define it, core §2.5)
-  if (payload[0] > wire::kAttachMethodHalt) return unsupportedValue(out, capacity);
-  const bool halt = payload[0] == wire::kAttachMethodHalt;
   DmiPhy &phy = port_.dm.phy();
   uint32_t max_hz = 0;
   bool critical = false, idle_low = false, idle_critical = false;
@@ -459,43 +461,45 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       (isRvswd() && !idleClock(tail, wire::kTlvAttachIdleClock, idle_low, idle_critical)))
     return rejected(kRejectMalformed);
   if (!max_hz) return rejected(kRejectMalformed);   // max_speed is required (oep-if-debug §1)
+  size_t plen = 0, rlen = 0;
+  bool pins_critical = false, reset_critical = false;
+  const uint8_t *pins = tail.find(wire::kTlvAttachPins, plen, &pins_critical);
+  const uint8_t *reset_value = tail.find(wire::kTlvAttachReset, rlen, &reset_critical);
+  if ((pins && plen != 4) || (reset_value && rlen != 4)) return rejected(kRejectMalformed);
+  if (refused(unknown)) return unknown;
+  // not a method of the table: unsupported, payload 0x00 (oep-if-debug §3; a later revision may define it, core §2.5)
+  if (payload[0] > wire::kAttachMethodHalt) return unsupportedValue(out, capacity);
+  const bool halt = payload[0] == wire::kAttachMethodHalt;
   // reset(channel u16, hold_ms u16): the line to hold first; one this probe allows (unsupported otherwise) and nobody
   // holds (unavailable), held at most max_op_ms (core §7.5)
   bool with_reset = false;
   int reset_channel = -1;
   uint16_t hold_ms = 0;
-  {
-    size_t len = 0;
-    bool reset_critical = false;
-    if (const uint8_t *v = tail.find(wire::kTlvAttachReset, len, &reset_critical)) {
-      if (len != 4) return rejected(kRejectMalformed);
-      const uint8_t raw = wire::kTlvAttachReset | (reset_critical ? kTagCritical : 0);
-      reset_channel = getU16(v);
-      hold_ms = getU16(v + 2);
-      // a value it cannot take: unsupported with the tag as received when critical, else ignored (core §2.3)
-      if (reset_channel > 63 || !((port_.reset_allowed >> reset_channel) & 1) || hold_ms > kMaxOpMs) {
-        if (reset_critical) return unsupportedTag(out, capacity, raw);
-        tail.ignore(wire::kTlvAttachReset);
-      } else {
-        with_reset = true;
-      }
+  if (reset_value) {
+    const uint8_t raw = wire::kTlvAttachReset | (reset_critical ? kTagCritical : 0);
+    reset_channel = getU16(reset_value);
+    hold_ms = getU16(reset_value + 2);
+    // a value it cannot take: unsupported with the tag as received when critical, else ignored (core §2.3)
+    if (reset_channel > 63 || !((port_.reset_allowed >> reset_channel) & 1) || hold_ms > kMaxOpMs) {
+      if (reset_critical) return unsupportedTag(out, capacity, raw);
+      tail.ignore(wire::kTlvAttachReset);
+    } else {
+      with_reset = true;
     }
   }
   if (phy.minClockHz() && max_hz < phy.minClockHz())
     return unsupportedTag(out, capacity, wire::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
+  // a pair this wire does not declare: unsupported with the tag as received when critical, else ignored (core §2.3)
+  if (pins && !pairAllowed(port_, getU16(pins), getU16(pins + 2))) {
+    if (pins_critical) return unsupportedTag(out, capacity, wire::kTlvAttachPins | kTagCritical);
+    tail.ignore(wire::kTlvAttachPins);
+    pins = nullptr;
+  }
   {
-    size_t plen = 0;
-    bool pins_critical = false;
-    const uint8_t *pins = tail.find(wire::kTlvAttachPins, plen, &pins_critical);
-    // a pair this wire does not declare: unsupported with the tag as received when critical, else ignored (core §2.3)
-    if (pins && plen == 4 && !pairAllowed(port_, getU16(pins), getU16(pins + 2)) && !pins_critical) {
-      tail.ignore(wire::kTlvAttachPins);
-      pins = nullptr;
-    }
     // a channel the settings disable - the pins asked for, the fixed pair, the reset line: cause 5 with the channel
     // (probe.config §1), before choosePair moves anything
     uint16_t off = 0xffff;
-    if (pins && plen == 4 && pairAllowed(port_, getU16(pins), getU16(pins + 2)))
+    if (pins)
       off = pairDisabled(port_, getU16(pins), getU16(pins + 2));
     else if (!pins && !port_.pin_choice)
       off = pairDisabled(port_, port_.swdio, port_.swclk);
@@ -506,7 +510,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     // an idle item (debug §1): pins naming a channel whose idle is an output, or - no pins, no live connection - the
     // fixed pair with any idle item (the candidates leave it out, so none is left): cause 5, holder_kind 7
     uint16_t idle = 0xffff;
-    if (pins && plen == 4 && pairAllowed(port_, getU16(pins), getU16(pins + 2)))
+    if (pins)
       idle = pairIdle(port_, getU16(pins), getU16(pins + 2), true);
     else if (!pins && !port_.pin_choice && !port_.connected)
       idle = pairIdle(port_, port_.swdio, port_.swclk, false);
@@ -776,13 +780,16 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       //   ->  status(u8) flags(u8) attempts(u8) pc(u32) (mode 2: dpc)
       static const uint8_t kKnown[] = {reg::target_riscv_dm::kTlvResetMethod};
       if (n < 1) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(p + 1, n - 1, kKnown, out, capacity);
+      Result unknown = completed();   // core §4.3: the method's length (malformed) before the mode and unknown tags
+      const Result parsed = tail.parse(p + 1, n - 1, kKnown, out, capacity, &unknown);
       if (refused(parsed)) return parsed;
-      if (p[0] > kResetHalt) return unsupportedValue(out, capacity);   // mode 3 or more (oep-if-debug §4.3, core §2.5)
       size_t len = 0;
       bool critical = false;
-      if (const uint8_t *method = tail.find(reg::target_riscv_dm::kTlvResetMethod, len, &critical)) {
-        if (len != 1) return rejected(kRejectMalformed);
+      const uint8_t *method = tail.find(reg::target_riscv_dm::kTlvResetMethod, len, &critical);
+      if (method && len != 1) return rejected(kRejectMalformed);
+      if (refused(unknown)) return unknown;
+      if (p[0] > kResetHalt) return unsupportedValue(out, capacity);   // mode 3 or more (oep-if-debug §4.3, core §2.5)
+      if (method) {
         // Every reset here is ndmreset with haltreq held; a target system reset (PFIC) is the host's to write.
         if (method[0] != reg::target_riscv_dm::kResetMethodProbeDefault &&
             method[0] != reg::target_riscv_dm::kResetMethodNdmreset) {

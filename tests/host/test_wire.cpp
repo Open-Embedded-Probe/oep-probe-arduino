@@ -448,6 +448,30 @@ int main() {
   {
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(2), out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() == 1 && out[0] == 0);
+    // ... but a format error anywhere in the request comes first (core §4.3 order 5 before 6; it answered unsupported):
+    // max_speed absent, a reset TLV of the wrong length, an unknown critical tag with a max_speed of the wrong length
+    r = call(wire_fixed, WireRvswd::kOpAttach, {2}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    Bytes bad_reset = attachRequest(2);
+    bad_reset.insert(bad_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 2, 8, 0});
+    r = call(wire_fixed, WireRvswd::kOpAttach, bad_reset, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(wire_fixed, WireRvswd::kOpAttach, {0, 0xbf, 0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 2, 1, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0, uint8_t(wire::kTlvScanMaxSpeed), 2, 1, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0}, out);   // the unknown critical tag alone: unsupported
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0xbf}));
+    // riscv-dm reset: a method TLV of the wrong length is malformed before a mode of 3 is unsupported
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3,
+                                              uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical), 2, 0, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0}));
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
   }
 
   // ---- the attach budget: attach() tried again only while it lasts ----

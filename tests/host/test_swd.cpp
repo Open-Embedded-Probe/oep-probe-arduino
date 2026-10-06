@@ -92,6 +92,23 @@ int main() {
   r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
   CHECK(ok(r) && !fixed.connected);
 
+  // ---- core §4.3's order: every format error before anything unsupported (it answered unsupported first) ----
+  {
+    r = call(wire, WireSwd::kOpAttach, {1}, out);   // method 1 (unsupported) without max_speed (malformed)
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    // the reset TLV (not offered: an unknown critical tag) with a pins TLV of the wrong length
+    Bytes a = attachRequest();
+    a.insert(a.end(), {uint8_t(sw::kTlvAttachReset | kTagCritical), 4, 8, 0, 10, 0,
+                       uint8_t(sw::kTlvAttachPins | kTagCritical), 2, 2, 0});
+    r = call(wire, WireSwd::kOpAttach, a, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    a.resize(a.size() - 4);   // the reset TLV alone: unsupported, the tag as received
+    r = call(wire, WireSwd::kOpAttach, a, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0x85}));
+    r = call(wire, WireSwd::kOpScan, {0, 0xbf, 0, uint8_t(sw::kTlvScanSkip), 1, 0}, out);   // skip of the wrong length
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+  }
+
   // ---- idle items on the fixed pair (debug §1) ----
   {
     CHECK(fixed_pins.setIdle(3, PinTable::kIdlePullUp));
