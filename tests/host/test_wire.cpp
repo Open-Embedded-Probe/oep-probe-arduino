@@ -88,7 +88,11 @@ class FakePhy final : public DmiPhy {
   }
   void free() override { state = kFree; attached_flag = false; }
   bool attached() const override { return attached_flag; }
+  // stubborn: haltreq / resumereq do not change the hart (a halt or resume that never lands); each read takes read_us
+  bool stubborn = false;
+  uint32_t read_us = 10, dmcontrol = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
+    advanceMicros(read_us);
     if (!present || !attached_flag) return false;
     if (stuck) { value = stuck_value; return true; }
     if (stale) { value = 0xffffffffu; return true; }
@@ -116,8 +120,9 @@ class FakePhy final : public DmiPhy {
     if (address == 0x04) data0 = value;
     if (address == 0x05) data1 = value;
     if (address == 0x10) {
-      if (value & (1u << 31)) { halted = true; resumeack = false; }
-      if (value & (1u << 30)) { halted = false; resumeack = true; }
+      dmcontrol = value;
+      if ((value & (1u << 31)) && !stubborn) { halted = true; resumeack = false; }
+      if ((value & (1u << 30)) && !stubborn) { halted = false; resumeack = true; }
       if (value & (1u << 28)) havereset = false;   // ackhavereset
     }
   }
@@ -442,6 +447,35 @@ int main() {
     CHECK(v && len == 2 && v[0] == 1 && v[1] == 0);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r));
+  }
+
+  // ---- halt / resume wait dm_wait_ms of time (oep-if-debug §4, §4.2): halt then clears haltreq and answers timeout,
+  // resume answers state (halt went by 8 rounds of polls, resume by 25 reads, and halt left haltreq set) ----
+  {
+    phy.halted = false;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    phy.stubborn = true;
+    uint32_t before = millis();
+    r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
+    const uint32_t halt_ms = millis() - before;
+    CHECK(r.detail == kOutcomeFailed && out.size() == 1 && out[0] == kStatusTimeout);
+    CHECK(halt_ms >= reg::kLimitDmWaitMs && halt_ms <= reg::kLimitDmWaitMs + 5);
+    CHECK(phy.dmcontrol == 1 && !dm.halted());   // haltreq cleared, dmactive kept
+    phy.stubborn = false;
+    r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
+    CHECK(ok(r) && phy.halted);
+    phy.stubborn = true;
+    before = millis();
+    r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
+    const uint32_t resume_ms = millis() - before;
+    CHECK(r.detail == kOutcomeFailed && out.size() == 1 && out[0] == kStatusState);
+    CHECK(resume_ms >= reg::kLimitDmWaitMs && resume_ms <= reg::kLimitDmWaitMs + 5);
+    phy.stubborn = false;
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.halted = false;
   }
 
   // ---- an undefined attach method (2+): unsupported, payload 0x00 (C-02) ----

@@ -58,6 +58,7 @@ class FakePhy final : public DmiPhy {
 
  protected:
   bool readWire(uint8_t address, uint32_t &value) override {
+    advanceMicros(10);   // a read takes time (the waits for DM state are bounded by time)
     if (!attached_flag) return false;
     ++reads;
     switch (address) {

@@ -5,6 +5,7 @@
 
 namespace oep {
 namespace {
+constexpr uint32_t kDmWaitMs = v1::reg::kLimitDmWaitMs;   // one wait for DM state inside a high-level op (oep-if-debug §4)
 constexpr uint8_t kData0 = 0x04, kData1 = 0x05, kDmControl = 0x10, kDmStatus = 0x11, kDmHartInfo = 0x12,
                   kAbstractCs = 0x16, kCommand = 0x17, kAbstractAuto = 0x18, kProgBuf0 = 0x20;
 // E156 reader: lw s0,0(a1); lw s1,0(s0); addi s0,4; sw s1,0(a0); sw s0,0(a1); ebreak
@@ -150,14 +151,17 @@ bool Ch32Dm::halt() {
   // probe (2026-09-23): DMCONTROL reads the request back as set while the hart keeps
   // running, and abstract commands fail cmderr=4; repeating it makes the halt land every
   // time. minichlink writes it three or four times in a row for the same reason, so
-  // re-issue between polls instead of only polling.
-  for (int round = 0; round < 8 && !(round && phy_.pastBudget()); ++round) {
+  // re-issue between polls instead of only polling - for dm_wait_ms of time at most (oep-if-debug §4: the wait for
+  // allhalted; the attach budget's end too, inside an attach).
+  const uint32_t started = millis();
+  auto waited = [&]() { return millis() - started >= kDmWaitMs || phy_.pastBudget(); };
+  for (int round = 0; round == 0 || !waited(); ++round) {
     // A request that does not take leaves the bus out of step, and every attempt that
     // worked on the bench had a fresh bring-up in front of it, so start each round from
     // one (2026-09-23, CH32L103: without this, halt landed on every other attempt).
     relink();
     for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x80000001);
-    for (int i = 0; i < 25; ++i) {
+    for (int i = 0; i < 25 && (i == 0 || !waited()); ++i) {
       uint32_t status = 0;
       if (phy_.read(kDmStatus, status) && dmHalted(status)) {
         // Keep haltreq asserted while halted (E156/E157 ran this way; oep-if-debug §4 allows it). The hart changing
@@ -168,6 +172,9 @@ bool Ch32Dm::halt() {
       }
     }
   }
+  // Not halted within the wait: haltreq cleared before the answer (oep-if-debug §4.2, status timeout), so the hart is
+  // not stopped later behind the host's back.
+  phy_.write(kDmControl, 0x00000001);
   return false;
 }
 
@@ -181,16 +188,16 @@ bool Ch32Dm::resume() {
   // nothing is given back here (§4).
   relink();                                                      // a change of state drops the CH32's link
   phy_.write(kDmControl, 0x40000001);                            // resumereq, once (haltreq lowered)
+  // Looked for in DMSTATUS for dm_wait_ms of time (oep-if-debug §4, §4.2: not seen by then, status state).
   bool ok = false;
-  int halted_reads = 0;
-  for (int i = 0; i < 25 && !ok; ++i) {
+  const uint32_t started = millis();
+  do {
     uint32_t status = 0;
     if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) continue;   // all ones has allresumeack set too
     if (status & (1u << 17)) ok = true;                          // allresumeack
     else if ((status & (1u << 11)) && !(status & (1u << 9)))
       ok = true;                                                 // allrunning, not halted
-    else if (dmHalted(status) && ++halted_reads >= 3) break;
-  }
+  } while (!ok && millis() - started < kDmWaitMs);
   phy_.write(kDmControl, 0x00000001);
   halted_ = !ok;
   return ok;
