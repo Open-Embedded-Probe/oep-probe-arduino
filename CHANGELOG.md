@@ -1,6 +1,82 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) **Breaking: the 2026-10-06 wire (oep-spec 59dd028, the v1 simplification).** A host, a fake or a broker of
+  the wire before this does not talk to this probe, and saved settings must be set again. Implements oep-spec
+  b69ec26..59dd028 (no `v0.x` tag yet):
+  - one 10-byte request header with session_id (0 = no session; role 0x81 gone): a lock-free op with 0 skips the
+    session check, one with an id goes through it; an op that needs the lock with 0 is session_required; open carries
+    its id in the header (0 = malformed) and answers lease_ms boot_id. A request shorter than 10 bytes is dropped.
+  - every TLV is tag(u8) len(u16) value (the long form gone); the ignored TLV keeps 19 bytes of room, more than 16
+    ignored: the first 15 and 0x00, fewer that fit: the last 0x00.
+  - sequences without element lengths: list, connections, scan, marks, console streams, capture segments, probe.config
+    state (slot_state with reset_at_ns before the tid) and bind items (3 bytes a stream).
+  - closed fixed forms: a request TLV or a probe.config item longer than its form is never an extension - critical:
+    unsupported with the tag as received; else ignored (an item: not applied, its key neither replaced nor created).
+    probe.config items have one form each: idle 6 bytes with drive_kind 2 = default (an input idle carries kind 2 value
+    0), slot with boot_reset after attach and the lock last, bind streams of 3 bytes. gpio set's drive takes kind 2.
+  - the `ops` describe tag (0x09, base + bitmap) first in every fn's describe, written by the endpoint from
+    `Interface::offers` (which now defaults to none: a sketch's own interface overrides it); features no longer declare
+    ops (riscv-dm none, i2c-target stretch, logic / analog query / force, capture-group force). fn 0's port_speed tag
+    0x4E gone. `TargetRiscvDm::offerOptional(false)` and `ProbeConfig::setStorage(false)` leave the optional ops out.
+  - no resume (D1): end, a lapse and force all release everything the session created (its plan, its shares of
+    connections and console streams - a stream it was the last user of closes with mark closed 2, session_ended,
+    before the connection's share - its subscriptions, its capture-group bind); any id while the lock is free is
+    no_session; a resent end is answered from the resend table, which a successful open drops; the owner comes from the
+    open that takes the lock. `Interface::sessionLapsed` is now `sessionOver` (called at every session end) with
+    `sessionOverFirst`. Console streams stay the probe's per place and mechanism; slot connections stay; an attach on a
+    live combination returns the existing connection.
+  - oep.link (D3): the link test (source len(u16) data, at most max_frame - 26; sink count(u16) data) and port_speed
+    move from fn 0 to `oep::Link`, which the firmware adds as its last fn (the fns before it keep their numbers);
+    port_speed is in its ops when the endpoint has a handler (classic ESP32).
+  - 59dd028: an attach joining a live connection keeps the settings it does not carry - only a carried idle_clock
+    changes how the line rests (a slot's low rest no longer went high under a host's attach without the TLV); a scan
+    never changes a live connection's settings.
+  - the saved settings: NVS key "items5" / EEPROM magic "OEP5"; a blob of the form before ("items4" / "OEP4") reads as
+    unreadable reason 1 until the host sets and saves again.
+  - registry synced (the constants added by hand for f0c68bf now generated); `tools/sync_registry.sh` also copies the
+    spec's test vectors to `tests/vectors/` (`OEP_SPEC_REF` picks the commit); `tests/host/test_vectors.cpp` runs every
+    one of them (headers, cobs, checks, confirm, discovery, sessions, refusals, ops, probe_config_hash) against the
+    endpoint byte for byte. `cobsEncode` / `cobsDecode` and `DmConsole::crc8` public; `Endpoint::setMaxOpMs`;
+    `ResourceNumbers::reset` for host tests.
+  - after 59dd028: oep-spec a193272 (a failed attach does not add the session to the connection's users) is what attach
+    already does; ecd1ab9 (fn 0 restart) is not implemented yet.
+- (JA) **破壊的: 2026-10-06 の wire（oep-spec 59dd028、v1 の単純化）。** これより前の wire の host、fake、ブローカーはこの
+  probe と話せず、保存した設定は入れ直す。oep-spec b69ec26..59dd028 を実装する（`v0.x` の tag はまだ無い）:
+  - session_id を持つ 10 byte の要求の見出し一つ（0 = セッションなし。role 0x81 は無くなった）: ロックなしの op は 0 なら
+    セッションを確かめず、id があれば確かめる。ロックの要る op の 0 は session_required。open は id を見出しに持ち（0 は
+    malformed）、lease_ms boot_id で答える。10 byte より短い要求は捨てる。
+  - TLV はすべて tag(u8) len(u16) value（長い形は無くなった）。ignored の場所は 19 byte、16 を超えたら最初の 15 と 0x00、
+    入らなければ最後を 0x00。
+  - 要素の長さの無い並び: list、connections、scan、marks、console の streams、capture の segments、probe.config の state
+    （slot_state の reset_at_ns は tid の前）、bind の項目（ストリーム 1 つ 3 byte）。
+  - 閉じた固定の形: 形より長い要求の TLV と probe.config の項目は伸ばしたものではない - critical なら受け取ったままの tag で
+    unsupported、そうでなければ ignored（項目は適用せず、キーを置き換えも作りもしない）。probe.config の項目は tag ごとに形が
+    一つ: idle は 6 byte で drive_kind 2 = 既定（入力の idle は kind 2 value 0）、slot は boot_reset を attach の後に置き錠で
+    終わる、bind のストリームは 3 byte。gpio set の drive も kind 2 を受ける。
+  - describe の `ops` の tag（0x09、base + bitmap）を、すべての fn の describe の最初に endpoint が `Interface::offers` から書く
+    （offers の既定は「何も無い」に変わった: スケッチ自身のインターフェースは上書きする）。features は op を宣言しない
+    （riscv-dm は features 無し、i2c-target の stretch、logic / analog の query / force、capture-group の force）。fn 0 の
+    port_speed の tag 0x4E は無くなった。`TargetRiscvDm::offerOptional(false)` と `ProbeConfig::setStorage(false)` で任意の op を外せる。
+  - 再開なし（D1）: end、リースの期限切れ、force はどれも、セッションが作ったものをすべて解放する（plan、接続とコンソールの
+    ストリームの分 - そのセッションが最後に使っていたストリームは、接続の分より先に、mark closed 2（session_ended）で閉じる -、
+    購読、capture-group の bind）。ロックが空いている間はどの id も no_session。送り直した end には送り直しの表から答え、表は
+    成功した open で捨てる。owner はロックを取る open から取る。`Interface::sessionLapsed` は `sessionOver` になり（セッションの
+    終わりのたびに呼ぶ）、`sessionOverFirst` を足した。コンソールのストリームは場所と mechanism ごとの probe のもの、スロットの
+    接続は残る、生きている組への attach は今の接続を返す。
+  - oep.link（D3）: 線の試験（source は len(u16) data で多くても max_frame - 26、sink は count(u16) data）と port_speed は fn 0 から
+    `oep::Link` へ移った。firmware はこれを最後の fn として足す（前の fn の番号は変わらない）。port_speed は endpoint に handler が
+    あるとき（classic ESP32）ops に入る。
+  - 59dd028: 生きている接続に加わる attach は、運ばない設定を変えない - 休み方を変えるのは運んだ idle_clock だけ（スロットの
+    low の休み方が、TLV の無い host の attach で high に戻っていた）。scan は生きている接続の設定を変えない。
+  - 保存した設定: NVS のキー "items5" / EEPROM の magic "OEP5"。前の形の blob（"items4" / "OEP4"）は、host が入れ直して保存する
+    まで unreadable reason 1 と読む。
+  - registry を同期した（f0c68bf のために手で足した定数も生成物になった）。`tools/sync_registry.sh` は仕様の test vector も
+    `tests/vectors/` に写す（`OEP_SPEC_REF` で commit を選ぶ）。`tests/host/test_vectors.cpp` がそのすべて（headers、cobs、checks、
+    confirm、discovery、sessions、refusals、ops、probe_config_hash）を endpoint に byte ごとに当てる。`cobsEncode` / `cobsDecode` と
+    `DmConsole::crc8` を公開し、`Endpoint::setMaxOpMs` と host の試験のための `ResourceNumbers::reset` を足した。
+  - 59dd028 の後: oep-spec a193272（失敗した attach はセッションを接続の users に加えない）は attach がすでにそうしている。
+    ecd1ab9（fn 0 の restart）はまだ実装していない。
 - (EN) Console (DMDATA / dmseq / SDI reading): a havereset in the console's DMSTATUS look counts only once ackHaveReset's own read confirms it. One bad read with bit 18 set unsynced dmseq, which dropped the input chunk on its way - up to 2 bytes of a command, which the target then never answered (a READ command left unanswered for 3 s on the X035 behind the P4 among many answered ones, gpio_matrix: a likely way) - and took the next repeat of a frame for a new one (its bytes twice, a restart marked). A DMSTATUS of all ones brings the bus back in step (the wire's configuration sequence, no debug-module register written): a link that dropped (a CH32L103 at its own restarts) read all ones under back-to-back polls with no idle time for the PHY's revive, until wire_lost_ms closed the stream. Host test: the answer carrying "RE" of "READ 13" lost, then one bad havereset read: the target gets the whole line, no restart; all ones, then the console goes on.
 - (JA) console（DMDATA / dmseq / SDI の読み）: console が DMSTATUS を見たときの havereset は、ackHaveReset 自身の読みがそれを確かめたときだけ数える。bit 18 の立った悪い読み 1 回で dmseq を未同期に戻し、送っている途中の入力のかたまり（コマンドの 2 byte まで）を捨てていて、target はそのコマンドに答えなかった（P4 の後ろの X035 の gpio_matrix で、多くの答えの中で READ が 1 回 3 s 答えなかった: ありうる道筋）。また次に出し直されたフレームを新しいものと取っていた（そのバイトが 2 回、restart の mark）。DMSTATUS が全 1 なら線の設定の手順で bus を合わせ直す（debug module のレジスタは書かない）: 落ちた link（自分で再起動した CH32L103）は、間を空けない poll では PHY の revive が働かず、wire_lost_ms でストリームが閉じるまで全 1 を読んでいた。host test: 「READ 13」の「RE」を運ぶ答えが失われ、havereset の悪い読みが 1 回: target は行をすべて受け、restart は無い。全 1 の後も console は続く。
 - (EN) riscv-dm read_block, write_block, run and step put abstractauto back as they found it (oep-if-debug §4's table: the value read in the op before touching it): read at the op's start and cleared before DATA0 is first touched, written back last, after DATA0 (a read that does not answer counts as 0). They forced it to 0 at the end, and the probe's own view of it (auto_on_) followed only its own writes: after a host's raw ABSTRACTAUTO = 1 the op's first DATA0 access - keeping the target's mailbox, moving a register through DATA0 - ran the last abstract command again. Host test: a host's raw ABSTRACTAUTO = 1, then write_block: the words land, nothing past them is written, the mailbox and GPRs as found, abstractauto 1 again.

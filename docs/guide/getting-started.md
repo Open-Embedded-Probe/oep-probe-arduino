@@ -65,7 +65,10 @@ only a name for people. A port with a fixed ID (a USB-UART bridge, the ESP32-P4'
 ## 4. Use it
 
 A host takes the session lock, plans the pins it needs, uses the interfaces, and ends the session. The lock keeps two
-programs from driving the probe at once; the lease (5 s below) frees it if the program dies.
+programs from driving the probe at once; the lease (5 s below) frees it if the program dies. Ending the session - or
+its lease running out - releases everything it made (its plan, its share of connections and console streams,
+subscriptions): nothing passes to the next program. What should stay between programs is the settings' (a slot keeps
+its connection, a bind its console), and a console reopened at the same place gives its stream back with what it read.
 
 ### GPIO and UART (a test fixture)
 

@@ -49,13 +49,13 @@ OEP frames come back, and opening an arbitrary serial port can disturb whatever 
 another tool's device). A host cannot do that on its own for every port, so the user has to pick such a port explicitly. The
 links above also need USB devices that are not serial ports - vendor bulk for speed, HID for software USB and
 browsers. Hosts identify OEP probes automatically only by the project's USB VID:PID, `1209:4F45`, and open a probe named by
-its unit_id (the USB serial number) and check it with describe (oep-spec core §3.3, docs/usb-identity.md). The firmware's own
+its unit_id (the USB serial number) and check it with describe (oep-spec transports §3, docs/usb-identity.md). The firmware's own
 USB ports (the ESP32-P4's high-speed port, the RP2040 / RP2350's USB) enumerate with `1209:4F45`; a port behind a USB-UART
 bridge or the ESP32-P4's USB-Serial/JTAG keeps its fixed ID and is chosen by the user.
 
 A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume
 (some bridges and boards do not run 921600 reliably), so a host stays at 115200 unless the probe and the host agree on more.
-The classic ESP32 firmware offers the optional `port_speed` (oep-core §3.5): a host that asks tries a rate, checks it with
+The classic ESP32 firmware offers the optional `port_speed` (in `oep.link`, oep-if-link §3): a host that asks tries a rate, checks it with
 a sized transfer both ways, and commits it for its session; the probe goes back to 115200 by itself when the check never
 comes, frames break, the line goes quiet or the session ends (build with `-DOEP_PORT_SPEED=0` to leave it out).
 
@@ -147,14 +147,22 @@ the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (
 interfaces `docs/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
 no compatibility is promised.
 
+**The spec this implements: oep-spec commit `59dd028`** (no `v0.x` tag yet, versioning §6) - the 2026-10-06
+simplification: one 10-byte request header with session_id, TLV tag(u8) len(u16), sequences without element lengths,
+closed fixed forms, the `ops` describe tag on every fn, no resume (end releases everything the session created), the
+link test and port_speed in `oep.link`, and the 59dd028 rule that an attach joining a live connection keeps the settings
+it does not carry. Until the freeze the Japanese text (`docs/*.ja.md`) is the working text. Since then: a193272 (a failed
+attach adds no user) is what attach already does; fn 0 `restart` (ecd1ab9) is not implemented yet.
+
 The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its generated header is copied to
-`src/OepRegistry.h`.
+`src/OepRegistry.h`, and the spec's shared byte vectors to `tests/vectors/` (`tests/host/test_vectors.cpp` runs every
+one of them against this endpoint).
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core): frames, interfaces by name, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (core §3.4), the plan, notifications |
+| `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core, oep-transports): frames, interfaces by name and their ops, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (transports §4), the plan, notifications; `oep::Link` is `oep.link` (the link test, port_speed) |
 | `src/OepBind.*` | what each serial port carries (binds: last-reset / manual / mixed, held during a session and resumed from its last reset) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
@@ -162,7 +170,7 @@ The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its gene
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
 | `examples/` | the board firmware and examples to learn from: see [Examples](#examples) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
-| `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` |
+| `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` and its `tests/vectors/*.json` to `tests/vectors/` (`OEP_SPEC_REF` picks the commit) |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
 | `docs/guide/` | the guides (English and Japanese): getting started, writing a probe, boards |
 | `docs/` | the rest: the examples plan and dated work records (history) |

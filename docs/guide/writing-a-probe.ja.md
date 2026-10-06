@@ -56,6 +56,7 @@ class Blink final : public oep::Interface {
   uint16_t instance() const override { return 0; }
   uint8_t revision() const override { return 1; }                      // 固定部分の形
   bool lockFree(uint8_t op) const override { return op == 0x03; }      // 何も変えない読み出し
+  bool offers(uint8_t op) const override { return op >= 0x01 && op <= 0x03; }   // 持つ op（ops の tag）
   size_t describe(uint8_t *out, size_t capacity) override;             // 使う前に host が読むもの
   oep::Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 };
@@ -63,21 +64,36 @@ class Blink final : public oep::Interface {
 
 - **名前**で host が探します。標準のインターフェースは `oep.*`（oep-spec が定める）で、自分のものは自分が持っている名前の
   逆 DNS（`io.github.<you>.<name>`）にします。誰の承認も要らず、知らない host は使わないだけです。これが OEP の拡張の仕方です。
-- **revision** は、すべての payload の固定部分の形を決めます。形を変えたら上げます。任意の TLV を足すだけなら変えません。
+- **revision** は、すべての固定の形を決めます（core §2.3、§2.7）: payload の固定部分、TLV の値、並びの要素。固定の形は
+  後ろに伸ばしません。足すものは新しい TLV、任意の op、新しい値にし、固定の形を変えるときだけ revision を上げます。
+- **offers** は持つ op を言います（core §1.2）: 表の必須の op すべてと、この probe が持つ任意の op。endpoint はそれから
+  describe の `ops` の tag（0x09、base + bitmap）をすべての fn の describe の最初に書き、ほかの op にはセッションを見る前に
+  `unknown_operation` で答えます。既定は何も持たないので、上書きしないインターフェースは何にも答えません。任意の op は
+  ここで宣言し、`features` では宣言しません。
 - **handle** は要求を 1 つ受け、結果の payload を `out` に書きます。
   - `completed(n)`: 実行して成功した。payload は n バイト。
   - `failed(n)` / `partial(n)`: 実行したが、うまくいかなかった（全部 / 一部）。payload は成功のときの形。
   - `rejected(reason)`: 実行していない。`kRejectMalformed`、`kRejectUnavailable`、`kRejectUnsupported`、`kRejectUnknownOperation`。
+- **TLV** は `tag(u8) len(u16) value` で、長さによらず形は一つです（core §2.2。`TlvWriter`、`tlvAt`、`kTlvHeader`）。
+  並びは `count、count × 要素` で、要素の長さは置きません。
 - **TLV の後ろの部分**: どの要求も最後に TLV を付けられます。`plainTail(tail, payload, length, fixed, out, capacity)` が固定部分の
   後ろを読みます。知らない critical の TLV は要求を断り（`refused()` で分かる）、それ以外の知らない TLV は覚えておき、
   `tail.finish(result, out, capacity)` が ignored として返します。知っている tag があるときは `tail.parse(...)`、
-  `tail.find(tag, len, &critical)`、守れない値には `tail.refuse(tag, critical, ...)`。ignored は、status が failed のものも含めて
+  `tail.find(tag, len, &critical)`、決まった長さの TLV には `tail.fixed(tag, size, value, ...)`（短ければ malformed。長ければ、
+  要求の TLV は伸ばさないので、critical なら unsupported、そうでなければ ignored）、守れない値には `tail.refuse(tag, critical, ...)`。
+  可変の量（ページ、読み）は `tail.room()` を ignored のために残して決めます。ignored は、status が failed のものも含めて
   completed の応答すべてに付きます（core §2.3）。一覧は要求ごとに持つので、handler が `finish` を通さずに早めに `failed(n)` を返しても
   endpoint が付けます。payload の後ろに場所を残しておきます。
-- **ロック**は endpoint が見ます。`lockFree` でない op は、ロックを持つセッションにだけ実行されます。そのセッションのリースが
-  切れると `sessionLapsed()` が呼ばれるので、残したもの（線の接続など）を片付けます。
-- **describe** は `TlvWriter` で書きます。共通の tag（`roleChannels`、`u32(kTagMaxClockHz, ...)`、`u32(kTagFeatures, ...)`）と、
-  自分の tag（0x40 から）。
+- **ロック**は endpoint が見ます。どの要求も見出しに session_id を持ちます（0 = なし）。`lockFree` でない op は、ロックを持つ
+  セッションにだけ実行されます（session_id 0 は `session_required`）。そのセッションのロックが終わるたびに（end、リースの
+  期限切れ、ほかの host の force、どれも同じ。core §6.4、§9）`sessionOver()` が呼ばれるので、作ったものと共有の分（線の接続の
+  分、コンソールのストリームの分）をすべて外します。次のセッションには何も渡しません。設定が持つもの（スロットの接続）は
+  残ります。資源がほかのインターフェースの資源の上にあるもの（線の接続の上のコンソールのストリーム）は `sessionOverFirst()` で
+  そう言い、先に外されます。
+- **describe** は `TlvWriter` で書きます。共通の tag（`roleChannels`、`u32(kTagMaxClockHz, ...)`、op でない任意の機能には
+  `u32(kTagFeatures, ...)`）と、自分の tag（0x40 から）。`ops` の tag は書きません（endpoint が書きます）。
+- **oep.link**（線の試験と、UART bridge の port_speed）は任意のインターフェースです: `oep::Link link(endpoint);
+  endpoint.add(link);`。前の fn の番号が変わらないよう最後に足します。`endpoint.setPortSpeed(...)` で port_speed が ops に入ります。
 
 ## 4. ピン: 表と plan
 
@@ -138,7 +154,7 @@ class Blink final : public oep::Interface {
 
 - シリアルの口は OEP のフレームと、その間の生のバイトを運びます。生のバイトは **bind** のとおり（スロットのコンソール、fixture の
   UART、名前の印つきの複数）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
-  生の流れは止まり、終わった後に target の最後の reset から続きます（core §3.4）。
+  生の流れは止まり、終わった後に target の最後の reset から続きます（transports §4）。
 - `ProbeConfig` はスロット、bind、plan、label、空きのときの状態、fixture UART の設定（uart の項目）、無効にした channel
   （disable の項目）を持ち、保存し（ESP32 は NVS、RP2 は flash の最後の領域）、起動時に行います。`state`（op 0x06）がスロットと
   bind の状態を、`unset`（0x05）がキーでの削除です。最後に `add(config)` し、`addPlace(wire, console)`、`addUart(uart)`、
@@ -160,7 +176,7 @@ USB の probe は、プロジェクトの VID:PID `1209:4F45`（`oep::reg::kUsbP
 名指した probe を探す）を名乗ります。iProduct は人が読むための自由な文字列で（firmware では `OEP probe (ESP32-P4)`）、host は
 これで probe を見分けません。同じ device の OEP の外のインターフェース（ESP32-P4 のアプリの中の DFU など）も、その device の一部です。
 vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /
-usage 0x45 を持ちます（core §3.3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
+usage 0x45 を持ちます（transports §3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
 probe は、プロジェクトの VID:PID で実際に列挙したら `endpoint.setDiscoverable(true)`（describe の discoverable、core §7.5）を
 呼びます。別の口（USB-Serial/JTAG）から開いた host にもそれが分かります。`Firmware/OepProbe` は、RP2 では起動時に、ESP32-P4 では
 HS の口が列挙したとき（`usbDevice.ready()`）に呼びます。決まった ID の口（USB-UART bridge、USB-Serial/JTAG）でしか届かない probe

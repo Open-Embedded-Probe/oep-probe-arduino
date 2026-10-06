@@ -56,6 +56,7 @@ class Blink final : public oep::Interface {
   uint16_t instance() const override { return 0; }
   uint8_t revision() const override { return 1; }                      // the fixed parts' shape
   bool lockFree(uint8_t op) const override { return op == 0x03; }      // reads that change nothing
+  bool offers(uint8_t op) const override { return op >= 0x01 && op <= 0x03; }   // the ops it has (the ops tag)
   size_t describe(uint8_t *out, size_t capacity) override;             // what a host reads before using it
   oep::Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 };
@@ -64,22 +65,39 @@ class Blink final : public oep::Interface {
 - **The name** is how hosts find it. Standard interfaces are `oep.*` (specified in oep-spec); yours take a reverse-DNS
   name of something you own (`io.github.<you>.<name>`). Nobody has to approve it, and a host that does not know it leaves
   it alone - this is how OEP is extended.
-- **The revision** fixes the shape of the fixed parts of every payload. Change it when they change; add optional TLVs
-  without changing it.
+- **The revision** fixes the shape of every fixed form (core §2.3, §2.7): the fixed parts of every payload, every TLV's
+  value, every element of a sequence. A fixed form never grows at its end; add a new TLV, an optional op or a new
+  value, and change the revision only when a fixed form changes.
+- **offers** says which ops it has (core §1.2): every required op of its table and the optional ones this probe has.
+  The endpoint writes the describe's `ops` tag (0x09, base + bitmap) from it, first in every fn's describe, and answers
+  any other op `unknown_operation` before the session is looked at. The default offers nothing: an interface that does
+  not override it answers nothing. Optional ops are declared there and never by `features`.
 - **handle** gets one request and writes the result's payload to `out`:
   - `completed(n)` - it ran and succeeded, n bytes of payload;
   - `failed(n)` / `partial(n)` - it ran and did not work (all / part), with the success-shaped payload;
   - `rejected(reason)` - not run: `kRejectMalformed`, `kRejectUnavailable`, `kRejectUnsupported`, `kRejectUnknownOperation`.
+- **TLVs** are `tag(u8) len(u16) value`, one form whatever the length (core §2.2; `TlvWriter`, `tlvAt`,
+  `kTlvHeader`). Sequences are `count, count x element` with no element length.
 - **TLV tails**: any request may end with TLVs. `plainTail(tail, payload, length, fixed, out, capacity)` parses what
   follows the fixed part: an unknown critical TLV refuses the request (`refused()` tells), an unknown other one is
   recorded, and `tail.finish(result, out, capacity)` lists it as ignored. With known tags: `tail.parse(...)`,
-  `tail.find(tag, len, &critical)`, and `tail.refuse(tag, critical, ...)` for a value you cannot honour. Every
+  `tail.find(tag, len, &critical)`, `tail.fixed(tag, size, value, ...)` for a TLV of one fixed size (shorter:
+  malformed; longer - a request TLV never grows - unsupported when critical, else ignored), and
+  `tail.refuse(tag, critical, ...)` for a value you cannot honour. Size variable data (a page, a read) with
+  `tail.room()` left for the ignored list. Every
   completed answer carries ignored, a failed status too (core §2.3); the list lives for the request, so the endpoint
   appends it when a handler returns `failed(n)` early without `finish` - leave room for it after the payload.
-- **The lock** is the endpoint's: an op not `lockFree` only runs for the session holding the lock. `sessionLapsed()` is
-  called when that session's lease ran out - drop what it left (a wire's connection).
-- **describe** uses `TlvWriter`: common tags (`roleChannels`, `u32(kTagMaxClockHz, ...)`, `u32(kTagFeatures, ...)`) and
-  your own (0x40 and up).
+- **The lock** is the endpoint's: every request carries a session_id in its header (0 = none); an op not `lockFree`
+  only runs for the session holding the lock (session_id 0: `session_required`). `sessionOver()` is called whenever
+  that session's lock ends - end, its lease running out, another host's force, all alike (core §6.4, §9): drop
+  everything it created or shared (a wire's use of its connection, a console's share of its stream). Nothing passes to
+  the next session; what the settings keep (a slot's connection) stays. An interface whose resources sit on another
+  interface's (a console stream on a wire's connection) says `sessionOverFirst()`, so its share goes first.
+- **describe** uses `TlvWriter`: common tags (`roleChannels`, `u32(kTagMaxClockHz, ...)`, `u32(kTagFeatures, ...)` for
+  optional functions that are not ops) and your own (0x40 and up). Do not write the `ops` tag: the endpoint does.
+- **oep.link** (the link test, and port_speed on a UART bridge) is an optional interface: `oep::Link link(endpoint);
+  endpoint.add(link);` - add it last so the fns before it keep their numbers. `endpoint.setPortSpeed(...)` puts
+  port_speed in its ops.
 
 ## 4. Pins: the table and the plan
 
@@ -142,7 +160,7 @@ Each source file starts with the spec sections it follows.
 
 - A serial port carries OEP frames and, between them, raw bytes: what its **bind** says (a slot's console, a fixture
   UART, several marked by name). `endpoint.setRawPorts(&binds)` turns it on; while a session holds the lock the raw
-  transfer on the port it uses waits, and resumes afterwards from the target's last reset (core §3.4).
+  transfer on the port it uses waits, and resumes afterwards from the target's last reset (transports §4).
 - `ProbeConfig` keeps slots, binds, plans, labels, idle states, the fixture UARTs' settings (the uart item) and the
   disabled channels (the disable item), saves them (NVS on ESP32, the flash's last sector on RP2) and applies them at
   boot; `state` (op 0x06) tells how the slots and binds are doing, `unset` (0x05) removes items by key. Add it last
@@ -165,7 +183,7 @@ firmware with it: [PID-USE.md](../../PID-USE.md)), and a serial number unique pe
 probes apart and finds a probe named by it). iProduct is free text for people (`OEP probe (ESP32-P4)` in the firmware); no
 host identifies a probe by it. Interfaces outside OEP on the same device, such as the ESP32-P4's in-app DFU, are part of it.
 The vendor bulk interface carries bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45 and a vendor HID says usage page
-0xFF4F, usage 0x45 (core §3.3; `Firmware/OepProbe/Esp32P4.h` patches EspUsbDevice's descriptors for that).
+0xFF4F, usage 0x45 (transports §3; `Firmware/OepProbe/Esp32P4.h` patches EspUsbDevice's descriptors for that).
 A probe calls `endpoint.setDiscoverable(true)` (describe discoverable, core §7.5) once it actually enumerates with the
 project's VID:PID, so a host that opened it another way (its USB-Serial/JTAG port) knows: `Firmware/OepProbe` does so on an
 RP2 at start-up and on the ESP32-P4 when its HS port has enumerated (`usbDevice.ready()`). A probe reached only through a
