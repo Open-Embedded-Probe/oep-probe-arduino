@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The console's mark attach carries detail 0 (oep-if-common §1.3: attach has no detail; it carried the mechanism number). Host test.
+- (JA) console の attach の mark の detail は 0（oep-if-common §1.3: attach に detail は無い。mechanism の番号を入れていた）。host test。
 - (EN) The console keeps reading while the hart runs, judged from DMSTATUS read at least every 20 ms (oep-if-console §3, registry console_dmstatus_poll_ms): it stopped whenever the probe's own view said halted, so a hart the probe halted and the host then resumed through raw DMI went unread until the next high-level op. A DMSTATUS that says running also clears Ch32Dm's halted view; a halt by the probe still stops the reading at once. Host test.
 - (JA) console は hart が走っている間は読み続け、それを少なくとも 20 ms ごとに読む DMSTATUS で判断する（oep-if-console §3、registry の console_dmstatus_poll_ms）: probe 自身の見方が halted のときはいつも止まっていたので、probe が止めた後に host が raw DMI で走らせた hart は、次の高水準の op まで読まれなかった。running を示す DMSTATUS は Ch32Dm の halted の見方も下ろす。probe による halt はこれまでどおりすぐに読みを止める。host test。
 - (EN) Console write takes only what the mechanism's send slot carries in one go (oep-if-console §2, oep-if-common §1.4): 2 bytes for dmseq, 3 for DMDATA, and accepted 0 (completed failed) while the slot is not free - bytes still queued, or a dmseq payload not yet acknowledged (it queued up to 255 bytes). A host writes the rest after the progress it reads. A bind's serial input still queues what the driver's queue takes (DmConsole::room) and goes out a slot at a time. Host test.

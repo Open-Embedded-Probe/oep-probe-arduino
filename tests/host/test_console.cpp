@@ -91,6 +91,22 @@ static bool ok(const Result &r) { return r.resolution == kResolutionCompleted &&
 static bool rejectedWith(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
 static Bytes le16(uint16_t v) { return {uint8_t(v), uint8_t(v >> 8)}; }
 static Bytes cat(Bytes a, const Bytes &b) { a.insert(a.end(), b.begin(), b.end()); return a; }
+struct MarkSeen { uint32_t serial; uint64_t position; uint8_t kind, detail; };
+// Every mark the stream keeps (marks from serial 0; the ring holds 16).
+static std::vector<MarkSeen> marksOf(Interface &console, uint16_t stream) {
+  Bytes out;
+  const Bytes req = {uint8_t(stream), uint8_t(stream >> 8), 0, 0, 0, 0};
+  std::vector<MarkSeen> all;
+  if (call(console, TargetConsoleStream::kOpMarks, req, out).resolution != kResolutionCompleted || out.size() < 2) return all;
+  size_t at = 2;
+  for (uint8_t i = 0; i < out[1] && at + 23 <= out.size(); ++i, at += 23) {
+    const uint8_t *m = out.data() + at + 1;
+    uint64_t position = 0;
+    for (int b = 7; b >= 0; --b) position = position << 8 | m[4 + b];
+    all.push_back({uint32_t(m[0] | m[1] << 8 | m[2] << 16 | uint32_t(m[3]) << 24), position, m[12], m[21]});
+  }
+  return all;
+}
 static Bytes attachRequest() { return {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00}; }
 
 int main() {
@@ -107,6 +123,11 @@ int main() {
   r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
   CHECK(ok(r) && out.size() == 3);
   const uint16_t stream = uint16_t(out[0] | out[1] << 8);
+  {
+    // mark attach carries no detail (common §1.3: "—"; it carried the mechanism, 2)
+    const std::vector<MarkSeen> marks = marksOf(console, stream);
+    CHECK(!marks.empty() && marks.back().kind == reg::common::kMarkKindAttach && marks.back().detail == 0);
+  }
 
   // ---- core §4.3: the form first, an unknown stream number last (it answered no_connection first) ----
   {

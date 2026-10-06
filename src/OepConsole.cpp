@@ -107,7 +107,7 @@ bool TargetConsoleStream::openStream(uint8_t mechanism, uint8_t user, bool &exis
   seen_restarts_ = port_.dm.restarts();
   seen_closes_ = port_.closes;
   seen_resyncs_ = driver_.resyncs();
-  stream_.mark(kMarkAttach, mechanism);
+  stream_.mark(kMarkAttach);   // detail: none for attach (oep-if-common §1.3; it carried the mechanism)
   existing = same_place;
   return true;
 }
