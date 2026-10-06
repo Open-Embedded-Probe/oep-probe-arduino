@@ -231,7 +231,8 @@ int main() {
     one.pin_choice = (1ull << 8) | (1ull << 9);
     static WireRvswd wire_swio(one, 7, reg::wire_swio::kName);
     Result r = call(wire_swio, WireRvswd::kOpScan, {1, 8, 0, 9, 0}, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 && out[0] == 0);
+    // tag 0x00, then TLV 0x40 index: the combination's position in the request (oep-if-debug §1; it had no index)
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 0}));
     r = call(wire_swio, WireRvswd::kOpScan, {1, 8, 0, 9}, out);   // cut short: still malformed
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0, 8, 9), out);   // attach alike (pins TLV, critical)
@@ -254,6 +255,10 @@ int main() {
     const Bytes scan_out_idle = {1, 4, 0, 5, 0};
     r = call(wire_chosen, WireRvswd::kOpScan, scan_out_idle, out);
     CHECK(isSettingsIdle(r, out, 5));
+    // a combination the declaration does not allow comes first, wherever it is listed: unsupported with its index
+    // (core §4.3 order 6 before 7; it answered unavailable for the output idle of the first)
+    r = call(wire_chosen, WireRvswd::kOpScan, {2, 4, 0, 5, 0, 9, 0, 5, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 1}));
     CHECK(pins.setIdle(5, PinTable::kIdlePullDown));   // an input idle, named: accepted
     // attach on 4 / 5, then detach: 4 pulled up, 5 pulled down by its idle, the PHY's own drive gone
     r = call(wire_chosen, WireRvswd::kOpAttach, attachRequest(0, 4, 5, true), out);

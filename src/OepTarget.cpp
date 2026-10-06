@@ -351,10 +351,13 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   if (!maxSpeed(tail, wire::kTlvScanMaxSpeed, max_hz, critical)) return rejected(kRejectMalformed);
   if (isRvswd() && !idleClock(tail, wire::kTlvScanIdleClock, idle_low, idle_critical)) return rejected(kRejectMalformed);
   if (max_hz && phy.minClockHz() && max_hz < phy.minClockHz()) return unsupportedTag(out, capacity, wire::kTlvScanMaxSpeed | (critical ? kTagCritical : 0));
-  // every pair listed: one this wire allows, whose pins nothing else holds, and - the one seat taken - the live one
+  // every pair listed is one this wire allows (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index), all of
+  // them before any is looked at for what holds it (core §4.3: order 6 before order 7)
+  for (uint8_t k = 0; k < count; ++k)
+    if (!pairAllowed(port_, getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k))) return unsupportedIndex(out, capacity, k);
+  // then whose pins nothing else holds, and - the one seat taken - the live one
   for (uint8_t k = 0; k < count; ++k) {
     const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
-    if (!pairAllowed(port_, d, c)) return unsupportedValue(out, capacity);
     const uint16_t off = pairDisabled(port_, d, c);   // the settings disable it: cause 5 (probe.config §1)
     if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);

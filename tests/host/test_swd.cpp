@@ -147,6 +147,10 @@ int main() {
     const Bytes scan67 = {1, 6, 0, 7, 0};
     r = call(wire2, WireSwd::kOpScan, scan67, out);
     CHECK(isHeld(r, out, 7, reg::core::kHolderKindPlan));
+    // a combination the declaration does not allow, listed after the held one: unsupported, tag 0x00 and TLV 0x40 its
+    // index, before any held channel (oep-if-debug §1, core §4.3 order 6 before 7; it answered unavailable)
+    r = call(wire2, WireSwd::kOpScan, {2, 6, 0, 7, 0, 7, 0, 7, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 1}));
     pins.release(0x01);
   }
 

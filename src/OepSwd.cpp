@@ -269,9 +269,12 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           scan_select = true;
         }
       }
-      for (uint8_t k = 0; k < count; ++k) {   // allowed, free, and - the one seat taken - the live pair
+      // every pair listed allowed (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index), all of them before
+      // any is looked at for what holds it (core §4.3: order 6 before order 7)
+      for (uint8_t k = 0; k < count; ++k)
+        if (!allowed(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k))) return unsupportedIndex(out, capacity, k);
+      for (uint8_t k = 0; k < count; ++k) {   // free, and - the one seat taken - the live pair
         const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
-        if (!allowed(d, c)) return unsupportedValue(out, capacity);
         const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
         if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
                                            reg::core::kHolderKindDisabled);

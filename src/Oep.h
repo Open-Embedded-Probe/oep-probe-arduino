@@ -163,6 +163,15 @@ inline Result unsupportedAt(uint8_t *out, size_t capacity, uint16_t channel, uin
   out[7] = index;
   return {kResolutionRejected, kRejectUnsupported, 8};
 }
+// The same with the index alone (a list whose elements are not channels: a scan's combinations, oep-if-debug §1).
+inline Result unsupportedIndex(uint8_t *out, size_t capacity, uint8_t index) {
+  if (capacity < 4) return unsupportedValue(out, capacity);
+  out[0] = kTagValue;
+  out[1] = reg::core::kTlvUnsupportedPayloadIndex;
+  out[2] = 1;
+  out[3] = index;
+  return {kResolutionRejected, kRejectUnsupported, 4};
+}
 
 // One read_block / write_block's length (core §7.4 max_length; oep-if-debug §4.5, §6): bytes, a multiple of 4. The
 // value a target declares must let both the read_block answer (header 5, done 2, status 1, words) and the write_block
