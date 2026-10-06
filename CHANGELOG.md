@@ -1,6 +1,37 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4: a DFU update's image is confirmed as it starts, with no trial (the user's decision: an update is taken
+  as working, the firmware is not designed for a broken image). The sketch no longer defines verifyRollbackLater, so
+  arduino-esp32 3.3.x's own (false) stands and initArduino marks the image valid
+  (esp_ota_mark_app_valid_cancel_rollback) before setup() - the earliest point an app can; a panic, a watchdog, a
+  brownout or a host's re-enumeration after that never goes back to the image before. Removed: the confirmation at
+  BootGuard::stable() (30 s of loop() rounds) and stable() itself, oep.probe.restart's "confirm first", and with them
+  the declared "a DFU update during the 30 s trial is refused (errTARGET)" and "a power cycle within it goes back".
+  Kept: the fast crash-boot count and the safe boot (3 crash-boots within 30 s each: the at-boot slots' attach
+  skipped), which guards against a crash loop the saved settings set off. BootGuard::lastBoot(): "rolled back from
+  <slot>: ..." is gone (the RTC record no longer keeps a slot on trial); a panic / watchdog / brownout is "<reset> at
+  <n> s" as before, and what the bootloader can still do - go back because the new image failed its check, or a reset
+  came before the core confirmed it - is "update to <slot> did not reach setup: <reset>" (that boot's begin() never
+  ran). Same mechanism elsewhere: the classic ESP32 has bootloader rollback in the core's sdkconfig too, but no in-app
+  update and the core's verifyRollbackLater, so nothing pending; the RP2040 / RP2350 have no in-app update. Host test
+  test_boot_guard (37 checks: an update that started then a task watchdog stays on app1, the kStableMs edge of a fast
+  crash-boot); guides getting-started / writing-a-probe (EN / JA); not run on hardware yet; CHANGELOG (EN / JA)
+- (JA) ESP32-P4: DFU で更新した image は、起動したときに確定するようにしました。試しの期間はありません（利用者の決定: 更新は
+  動くものとして扱い、壊れた image のための作りはしない）。スケッチは verifyRollbackLater を定義しなくなったので、
+  arduino-esp32 3.3.x のもの（false）が効き、initArduino が setup() の前に image を valid にする
+  （esp_ota_mark_app_valid_cancel_rollback）- app ができる最も早いところ。その後の panic、watchdog、brownout、host の列挙
+  し直しで前の image に戻ることはない。外したもの: BootGuard::stable()（loop() が 30 秒回った）での確定と stable() 自体、
+  oep.probe.restart の「先に確定」、それに伴い宣言していた「30 秒の試しの期間の DFU 更新は断る（errTARGET）」と「その間の
+  電源の入れ直しで前に戻る」。残したもの: すぐに落ちた起動の数え方と safe boot（30 秒以内に落ちた起動が 3 回続いたら at boot の
+  スロットの attach を飛ばす）。保存した設定が起こす crash の繰り返しへの守り。BootGuard::lastBoot(): "rolled back from
+  <slot>: ..." は無くなった（RTC の記録は試しの期間の slot を持たない）。panic / watchdog / brownout は前のとおり
+  "<reset> at <n> s"。bootloader がまだしうること - 新しい image が自分の確認に通らないか、core が確定する前にリセットが来て
+  前に戻る - は "update to <slot> did not reach setup: <reset>"（その起動の begin() は走っていない）。同じ仕組みのほか:
+  classic ESP32 も core の sdkconfig に bootloader の rollback があるが、app の中の更新は無く、core の verifyRollbackLater の
+  ままなので待ちの image は無い。RP2040 / RP2350 に app の中の更新は無い。host のテスト test_boot_guard（37 checks: 始まった
+  更新の後の task watchdog は app1 のまま、すぐに落ちた起動の kStableMs の境）。guide の getting-started / writing-a-probe
+  （EN / JA）。実機ではまだ動かしていない。CHANGELOG (EN / JA)
 - (EN) Classic ESP32: no SWIO frame of a request while the core-0 sampler has a window open (bench, the V003 jig,
   aca403e with ch32rv e94dae6: uart_sweep with the capture on failed in 2 of 3 runs - a console command the DUT never
   acted on, once the DUT silent from just after one - every time in the wire step, where the command goes out 20 ms

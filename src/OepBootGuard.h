@@ -43,7 +43,7 @@ class BootGuard {
   static_assert(kWatchdogMs <= 8388 && kFeedMs * 4 <= kWatchdogMs, "the RP2040 watchdog counts at most 8388 ms");
   static_assert(kStableMs > kStallMs + kWatchdogMs, "a stall's reset still counts as a fast crash-boot");
   static_assert(kStableMs > kAttachGraceMs + kUsbSettleMs + kStallMs,
-                "a stall in the at-boot attach resets before the boot is stable (a firmware on trial rolls back)");
+                "a stall in the at-boot attach still counts as a fast crash-boot");
 
   // First thing in setup(): reads and updates the count, starts the watchdogs.
   static void begin();
@@ -53,17 +53,14 @@ class BootGuard {
   static uint8_t crashes();
   // From loop(): loop() is alive (the stall watch); kStableMs up, the count goes back to 0.
   static void poll();
-  // This boot is stable: up kStableMs with loop() coming round (poll), no crash so far. A firmware update on trial
-  // (the ESP32-P4's DFU with bootloader rollback) is confirmed here: a crash or a stall before it rolls back.
-  static bool stable();
   // Before a restart the firmware makes on purpose (oep.probe.restart, a firmware update): not a crash. A firmware
   // update written to the other app slot is noted (the next boot tells if the bootloader did not start it).
   static void planned();
   // What ended the boot before this one, as text, "" for a power-on or a restart on purpose: the reset ("panic",
   // "task-wdt", "int-wdt", "wdt", "brownout", "usb", "jtag", "reset-pin", "cpu-lockup", "software" not by the probe,
   // "other"; RP2 "wdt": a crash, a stall or a hard watchdog reset) and the seconds that boot was up, as
-  // "<reset> at <n> s"; an update on trial rolled back: "rolled back from <slot>: <reset> at <n> s"; an update the
-  // bootloader did not start, or that ended before setup(): "update to <slot> did not reach setup: <reset>". The
+  // "<reset> at <n> s"; an update the bootloader did not start (the image failed its check, the bootloader went back
+  // to the one before), or that ended before setup(): "update to <slot> did not reach setup: <reset>". The
   // reference firmware puts it after its version in fn 0's describe firmware text (describeCore), so a host's describe
   // shows it with no field of its own.
   static const char *lastBoot();
@@ -76,12 +73,11 @@ class BootGuard {
 
 #if defined(OEP_HOST_FAKE_BOOT)
 // Host tests: what a reset leaves (the record, valid or not) and whether the reset before this boot was a crash.
-struct FakeBootRecord { bool valid = false; uint32_t state = 0, count = 0, up_s = 0, trial = 0, next = 0; };
+struct FakeBootRecord { bool valid = false; uint32_t state = 0, count = 0, up_s = 0, next = 0; };
 extern FakeBootRecord g_boot_record;
 extern bool g_boot_reset_crash;
 extern uint8_t g_boot_reset_kind;          // the reset when not a crash: 0 power-on, 1 software, 9 the reset pin, ...
 extern uint32_t g_boot_running_slot, g_boot_next_slot;   // the app slot running, the one the bootloader boots next
-extern bool g_boot_on_trial;               // the running image is on trial
 #endif
 
 }  // namespace oep

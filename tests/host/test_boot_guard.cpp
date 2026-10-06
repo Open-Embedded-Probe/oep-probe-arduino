@@ -1,9 +1,8 @@
 // Host tests: BootGuard (OepBootGuard.h) - fast crash-boots counted over resets, a safe boot after kSafeAfter of them in
 // a row, the count back to 0 after a boot up kStableMs, a restart on purpose, a reset that was no crash or a record a
 // power-on left; the USB gate of the at-boot attach (configured for kUsbSettleMs, or kAttachGraceMs without a host);
-// stable(), where a firmware update on trial is confirmed: kStableMs of loop() rounds, whatever USB or a planned restart
-// do before it; lastBoot(), what ended the boot before: nothing for a power-on or a restart on purpose, the reset and
-// the seconds up, an update on trial rolled back (the slot it was in), an update the bootloader did not start.
+// lastBoot(), what ended the boot before: nothing for a power-on or a restart on purpose, the reset and the seconds up,
+// an update the bootloader did not start; an update that started is not undone by any later reset.
 #include <stdio.h>
 #include <string.h>
 
@@ -35,13 +34,12 @@ static void run(uint32_t ms) {
 // lastBoot(): what the reset before this boot was, the seconds the boot before was up, and the app slots (app0 0x10000,
 // app1 0x150000 in the fake).
 static void testLastBoot() {
-  auto reset = [](uint8_t kind, uint32_t running, bool trial = false) {
+  auto reset = [](uint8_t kind, uint32_t running) {
     g_millis = 0;
     g_boot_reset_crash = false;
     g_boot_reset_kind = kind;   // 0 power-on, 1 software, 2 panic, 4 task-wdt, 9 the reset pin
     g_boot_running_slot = running;
     g_boot_next_slot = running;
-    g_boot_on_trial = trial;
     BootGuard::begin();
   };
   auto is = [](const char *text) { return strcmp(BootGuard::lastBoot(), text) == 0; };
@@ -64,25 +62,20 @@ static void testLastBoot() {
   BootGuard::planned();
   reset(1, 0x10000);
   CHECK(is("update to app1 did not reach setup: software"));
-  // a DFU update into app1: started on trial, reset by the task watchdog at 12 s, rolled back to app0
+  // a DFU update into app1 that started (confirmed as it starts), then the task watchdog at 12 s: still app1, the
+  // reset said as any other and counted as a fast crash-boot
   run(40000);
   g_boot_next_slot = 0x150000;
   BootGuard::planned();
-  reset(1, 0x150000, true);
+  reset(1, 0x150000);
   CHECK(is(""));
   run(12000);
-  reset(4, 0x10000);
-  CHECK(is("rolled back from app1: task-wdt at 12 s") && BootGuard::crashes() == 1);
-  // the same update confirmed (stable), then the reset pin at 40 s: no rollback
+  reset(4, 0x150000);
+  CHECK(is("task-wdt at 12 s") && BootGuard::crashes() == 1);
+  // then the reset pin at 40 s
   run(40000);
-  g_boot_next_slot = 0x150000;
-  BootGuard::planned();
-  reset(1, 0x150000, true);
-  run(40000);
-  CHECK(BootGuard::stable());
-  g_boot_on_trial = false;   // confirmed
   reset(9, 0x150000);
-  CHECK(is("reset-pin at 40 s"));
+  CHECK(is("reset-pin at 40 s") && BootGuard::crashes() == 0);
 }
 
 int main() {
@@ -156,25 +149,16 @@ int main() {
   g_millis = BootGuard::kAttachGraceMs;
   CHECK(BootGuard::attachReady(false));
 
-  // ---- stable(): the point a firmware update on trial is confirmed ----
+  // ---- kStableMs: a crash just before it is a fast one, just after it not ----
+  g_boot_record = {};
   boot(false);
-  CHECK(!BootGuard::stable());
-  CHECK(!BootGuard::attachReady(true));   // a host configuring the USB device does not make the boot stable
-  run(BootGuard::kAttachGraceMs + BootGuard::kUsbSettleMs);
-  CHECK(BootGuard::attachReady(true) && !BootGuard::stable());   // nor does the at-boot attach's gate opening
-  BootGuard::planned();   // a restart on purpose being made: not stable either (the sketch confirms before it itself)
-  CHECK(!BootGuard::stable());
-  run(BootGuard::kStableMs - BootGuard::kAttachGraceMs - BootGuard::kUsbSettleMs - 100);
-  CHECK(!BootGuard::stable());   // kStableMs - 100 ms up
-  run(100);
-  CHECK(BootGuard::stable());
-  boot(true);   // the next boot after a crash starts again
-  CHECK(!BootGuard::stable());
+  run(BootGuard::kStableMs - 100);
+  boot(true);
+  CHECK(BootGuard::crashes() == 1);
   run(BootGuard::kStableMs);
-  CHECK(BootGuard::stable());
-  boot(false);   // without a host at all, the same point
-  run(BootGuard::kStableMs);
-  CHECK(BootGuard::stable() && BootGuard::attachReady(false));
+  boot(true);
+  CHECK(BootGuard::crashes() == 0);
+  // a stall in the at-boot attach (gate open at the latest kAttachGraceMs + kUsbSettleMs, reset kStallMs later) is fast
   CHECK(BootGuard::kStableMs > BootGuard::kAttachGraceMs + BootGuard::kUsbSettleMs + BootGuard::kStallMs);
 
   testLastBoot();

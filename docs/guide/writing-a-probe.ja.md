@@ -178,11 +178,12 @@ class Blink final : public oep::Interface {
   （`OepBootGuard.h`）: `setup()` の最初に `begin()`、`loop()` で `poll()`。watchdog を動かし、すぐに落ちた起動を数え、
   `kSafeAfter` 回続いたら `safe()` が真になるので、その起動では `config.skipBootAttach()` を呼びます。RP2 では SDK の `_exit` と
   `isr_hardfault` を `BootGuard::crashed()` に向けます（`Firmware/OepProbe/Rp2.h`）。panic で止まらず、チップを reset します。
-  試しの期間の firmware 更新（bootloader の rollback がある ESP32）は、host が最初に device を configure したときではなく、
-  `stable()`（`loop()` が回りながら `kStableMs` たった）で確かなものにします。それまではどのリセットでも前に戻り、遅い host が
-  試しの期間を延ばしてしまうためです（`Firmware/OepProbe/Esp32P4.h`）。前の起動が何で終わったか（リセットの種類、上がっていた秒数、
-  更新が戻されたか・始まらなかったか）は `BootGuard::lastBoot()` が文字列で言います。`Firmware/OepProbe` はそれを fn 0 の describe
-  の firmware の文字列で版の後ろに付けます（`describeCore` の最後の引数。例 `0.0.29 (rolled back from app1: panic at 12 s)`）。
+  firmware 更新（bootloader の rollback がある ESP32）は動くものとして扱い、起動したときに確かなものにします: `verifyRollbackLater`
+  を定義しなければ ESP32 の core が `setup()` の前に image を確定するので、その後のどのリセットでも前には戻りません
+  （`Firmware/OepProbe/Esp32P4.h`）。保存した設定が起こす crash の繰り返しは safe boot が受け持ちます。前の起動が何で終わったか
+  （リセットの種類、上がっていた秒数、bootloader が更新を起動しなかったか）は `BootGuard::lastBoot()` が文字列で言います。
+  `Firmware/OepProbe` はそれを fn 0 の describe の firmware の文字列で版の後ろに付けます（`describeCore` の最後の引数。
+  例 `0.0.29 (panic at 12 s)`）。
 - fixture の UART は UART の割り込みで受けます。ビットを自分で刻む線のフレームは、その core の割り込みを止めます（フレームごと:
   SWIO は `SwioPhy::kIrqOffMaxUs` まで、RVSWD は最も遅い max_speed で約 1.1 ms まで）。ESP32 では割り込みが 128 byte の RX FIFO の
   `kUartRxFifoFull`（32）byte で起き、2000000 で 480 us の余りがあります。`loop()` がそうした線を動かすデュアルコアの ESP32 は、

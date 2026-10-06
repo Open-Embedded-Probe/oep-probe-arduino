@@ -34,10 +34,9 @@ volatile uint32_t gBeatMs = 0;   // loop()'s last round (RP2: read by the feedin
 char gLastBoot[72] = "";          // lastBoot()
 
 // What a reset leaves for the next boot: the state (kRunning / kSettled / kPlanned), the fast crash-boots so far, the
-// seconds the boot was up (poll), the app slot it ran on trial (an update not yet confirmed: the bootloader rolls it back
-// at the next reset) and the slot a planned restart was to boot (an update just written). Slots: the partition's flash
-// address, 0 none.
-struct Record { uint32_t state, count, up_s, trial, next; };
+// seconds the boot was up (poll) and the slot a planned restart was to boot (an update just written). Slots: the
+// partition's flash address, 0 none.
+struct Record { uint32_t state, count, up_s, next; };
 Record gRecord{};
 
 // What reset the chip before this boot.
@@ -52,7 +51,7 @@ const char *resetName(Reset r) {
 #if defined(ARDUINO_ARCH_RP2040)
 // Watchdog scratch 0 / 1 / 2 (4-7 are the boot ROM's): kept over a watchdog reset, cleared by power-on and the RUN pin.
 bool recordRead(Record &r) {
-  r = {watchdog_hw->scratch[0], watchdog_hw->scratch[1], watchdog_hw->scratch[2], 0, 0};
+  r = {watchdog_hw->scratch[0], watchdog_hw->scratch[1], watchdog_hw->scratch[2], 0};
   return true;
 }
 void recordWrite(const Record &r) {
@@ -65,13 +64,12 @@ Reset resetKind() { return watchdog_caused_reboot() ? Reset::kWdt : Reset::kPowe
 bool crashReset(Reset r) { return r == Reset::kWdt; }
 bool plannedReset(Reset r) { return r == Reset::kWdt; }
 uint32_t runningSlot() { return 0; }
-bool runningOnTrial() { return false; }
 uint32_t bootSlot() { return 0; }
 const char *slotName(uint32_t) { return "?"; }
 #elif defined(ARDUINO_ARCH_ESP32)
 RTC_NOINIT_ATTR Record gKept;
 RTC_NOINIT_ATTR uint32_t gKeptCheck;
-uint32_t recordCheck(const Record &r) { return r.state ^ r.count ^ r.up_s ^ r.trial ^ r.next ^ 0xa5a5a5a5u; }
+uint32_t recordCheck(const Record &r) { return r.state ^ r.count ^ r.up_s ^ r.next ^ 0xa5a5a5a5u; }
 bool recordRead(Record &r) {
   r = gKept;
   return gKeptCheck == recordCheck(r);   // power-on leaves the memory as it comes up
@@ -108,11 +106,6 @@ uint32_t runningSlot() {
   const esp_partition_t *p = esp_ota_get_running_partition();
   return p ? p->address : 0;
 }
-bool runningOnTrial() {
-  esp_ota_img_states_t state;
-  const esp_partition_t *p = esp_ota_get_running_partition();
-  return p && esp_ota_get_state_partition(p, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY;
-}
 uint32_t bootSlot() {
   const esp_partition_t *p = esp_ota_get_boot_partition();
   return p ? p->address : 0;
@@ -130,15 +123,14 @@ const char *slotName(uint32_t address) {   // the app partition's label
 }
 #elif defined(OEP_HOST_FAKE_BOOT)
 bool recordRead(Record &r) {
-  r = {g_boot_record.state, g_boot_record.count, g_boot_record.up_s, g_boot_record.trial, g_boot_record.next};
+  r = {g_boot_record.state, g_boot_record.count, g_boot_record.up_s, g_boot_record.next};
   return g_boot_record.valid;
 }
-void recordWrite(const Record &r) { g_boot_record = {true, r.state, r.count, r.up_s, r.trial, r.next}; }
+void recordWrite(const Record &r) { g_boot_record = {true, r.state, r.count, r.up_s, r.next}; }
 Reset resetKind() { return g_boot_reset_crash ? Reset::kPanic : static_cast<Reset>(g_boot_reset_kind); }
 bool crashReset(Reset r) { return r == Reset::kPanic || r == Reset::kTaskWdt || r == Reset::kWdt; }
 bool plannedReset(Reset r) { return r == Reset::kSoftware; }
 uint32_t runningSlot() { return g_boot_running_slot; }
-bool runningOnTrial() { return g_boot_on_trial; }
 uint32_t bootSlot() { return g_boot_next_slot; }
 const char *slotName(uint32_t address) { return address == 0x10000 ? "app0" : address == 0x150000 ? "app1" : "?"; }
 #else
@@ -148,7 +140,6 @@ Reset resetKind() { return Reset::kPowerOn; }
 bool crashReset(Reset) { return false; }
 bool plannedReset(Reset) { return false; }
 uint32_t runningSlot() { return 0; }
-bool runningOnTrial() { return false; }
 uint32_t bootSlot() { return 0; }
 const char *slotName(uint32_t) { return "?"; }
 #endif
@@ -158,10 +149,9 @@ void describeLastBoot(bool valid, const Record &before, Reset reset) {
   gLastBoot[0] = 0;
   if (!valid) return;
   const uint32_t running = runningSlot();
-  if (before.trial && running != before.trial) {   // the bootloader went back to the image before
-    snprintf(gLastBoot, sizeof gLastBoot, "rolled back from %s: %s at %lu s", slotName(before.trial), resetName(reset),
-             static_cast<unsigned long>(before.up_s));
-  } else if (before.state == kPlanned && before.next && running != before.next) {   // the update never ran
+  // An update written and the bootloader went back to the image before: the new one failed the bootloader's check, or
+  // a reset came before the ESP32 core confirmed it (at its start, before setup(): this boot's begin() never ran).
+  if (before.state == kPlanned && before.next && running != before.next) {
     snprintf(gLastBoot, sizeof gLastBoot, "update to %s did not reach setup: %s", slotName(before.next), resetName(reset));
   } else if (reset != Reset::kPowerOn && !(before.state == kPlanned && plannedReset(reset))) {
     snprintf(gLastBoot, sizeof gLastBoot, "%s at %lu s", resetName(reset), static_cast<unsigned long>(before.up_s));
@@ -207,7 +197,6 @@ FakeBootRecord g_boot_record;
 bool g_boot_reset_crash = false;
 uint8_t g_boot_reset_kind = 0;
 uint32_t g_boot_running_slot = 0, g_boot_next_slot = 0;
-bool g_boot_on_trial = false;
 #endif
 
 void BootGuard::begin() {
@@ -219,7 +208,7 @@ void BootGuard::begin() {
   describeLastBoot(valid, before, reset);
   gSettled = gUsbSeen = gAttachOpen = false;
   gUsbSince = 0;
-  gRecord = {kRunning, gCrashes, 0, runningOnTrial() ? runningSlot() : 0, 0};
+  gRecord = {kRunning, gCrashes, 0, 0};
   recordWrite(gRecord);
   gBeatMs = millis();
   startWatchdogs();
@@ -245,8 +234,6 @@ void BootGuard::poll() {
   }
   if (write) recordWrite(gRecord);
 }
-
-bool BootGuard::stable() { return gSettled; }
 
 void BootGuard::planned() {
   gRecord.state = kPlanned;
