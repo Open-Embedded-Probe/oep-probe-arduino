@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) probe.config on a probe with slots_max 0 (no wire place added; probe.config §4: 0 does not handle slots): describe's items leave slot out, and a slot item in set / unset is refused unsupported with the item's tag as received (it listed slot and refused the item malformed). Host test.
+- (JA) slots_max 0 の probe の probe.config（wire の place を足していない。probe.config §4: 0 は slot を扱わない）: describe の items は slot を入れず、set / unset の slot の項目は受け取ったままの項目の tag で unsupported で断る（slot を挙げ、項目を malformed で断っていた）。host test。
 - (EN) probe.config idle item (core §4.3 "Contradictions and undefined values"): a mode of 5 or more that carries a drive is refused unsupported with the item's tag, for the mode (it was malformed, for a drive on a mode other than 3 / 4); a value of 4 or 5 bytes stays malformed first. Host test.
 - (JA) probe.config の idle の項目（core §4.3「Contradictions and undefined values」）: drive を持つ 5 以上の mode は、mode について項目の tag で unsupported で断る（3 / 4 以外の mode の drive として malformed だった）。4 か 5 バイトの値はこれまでどおり先に malformed。host test。
 - (EN) probe.config label item (probe.config §1): a text of 0 or more than 32 bytes (registry label_max_bytes), or one that is not valid text (C0 controls, 0x7F, invalid UTF-8), is refused malformed, and a channel at or beyond channels or reserved unsupported with the item's tag (both were taken). A probe without a pin table no longer declares label (as idle and disable: it has no channels to name). Host test.

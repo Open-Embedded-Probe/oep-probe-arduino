@@ -190,6 +190,18 @@ int main() {
     CHECK(unsupportedWith(set(pinned, Bytes{idle_raw, 3, 1, 0, 5}, out), out, idle_raw));
     CHECK(malformed(set(pinned, Bytes{idle_raw, 6, 1, 0, 2, 0, 0, 0}, out)));
     CHECK(malformed(set(pinned, Bytes{idle_raw, 4, 1, 0, 5, 0}, out)));   // the length still first
+    // slots_max 0 (no wire place): describe's items leave slot out, and a slot item is unsupported with its tag
+    uint8_t d[64];
+    const size_t dn = pinned.describe(d, sizeof d);
+    bool listed = false, slots_max0 = false;
+    for (size_t at = 0; at + 2 <= dn; at += 2u + d[at + 1]) {
+      if (d[at] == cfg::kTlvDescribeItems)
+        for (size_t k = 0; k < d[at + 1]; ++k) listed |= d[at + 2 + k] == cfg::kTlvItemSlot;
+      if (d[at] == cfg::kTlvDescribeSlotsMax) slots_max0 = d[at + 1] == 1 && d[at + 2] == 0;
+    }
+    CHECK(dn > 0 && !listed && slots_max0);
+    CHECK(unsupportedWith(set(pinned, slotItem(0, 0), out), out, slot_raw));
+    CHECK(unsupportedWith(set(pinned, Bytes{slot_raw, 1, 0}, out), out, slot_raw));   // its form is not looked at
     // a probe without a pin table has no channels to name: label is not declared (unsupported, its tag)
     CHECK(unsupportedWith(set(config, label(1, {'x'}), out), out, label_raw));
   }
