@@ -113,6 +113,9 @@ class TargetArmAdi final : public Interface {
  private:
   // with WAIT retries and the request's wire retries (retry_); returns the last ACK
   uint8_t xfer(bool ap, bool read, uint8_t a23, uint32_t &data);
+  // the request after its connection; checking_: its form and values only, nothing run (handle: core §4.3 order 8 last)
+  Result run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
+  bool checking_ = false;
   WireRetry retry_;
   // describe's max_length (oep-if-debug §6): bytes of one block op that fit the frame (the words go straight
   // between the frame and the line, no buffer of this interface's own)

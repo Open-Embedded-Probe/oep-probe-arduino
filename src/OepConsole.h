@@ -100,6 +100,8 @@ class TargetConsoleStream final : public Interface, public BindSource {
   bool reset_marked_ = false;          // the last reset mark placed: the resets count it was for, its position
   uint32_t reset_mark_resets_ = 0;
   uint64_t reset_mark_position_ = 0;
+  bool checking_ = false;   // streamOp only checks the request's form and values (handle: core §4.3 order 8 last)
+  Result streamOp(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   bool openStream(uint8_t mechanism, uint8_t user, bool &existing);
   void closeStream(uint8_t detail, bool link_lost = false);
   void release(uint8_t user, uint8_t detail);

@@ -742,8 +742,12 @@ Result TargetRiscvDm::asLine(uint8_t op, uint8_t *out, const Result &r) {
 
 Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 2) return rejected(kRejectMalformed);
-  // The wire whose live connection the request names (one riscv-dm serves every wire's connections).
+  // The request's form and values first, nothing run (port_ null): an unknown connection is the last refusal of
+  // core §4.3 (order 8), after malformed and unsupported.
   port_ = nullptr;
+  const Result checked = dispatch(op, payload + 2, length - 2, out, capacity);
+  if (refused(checked)) return checked;
+  // The wire whose live connection the request names (one riscv-dm serves every wire's connections).
   for (DebugPort *port : ports_)
     if (port && port->connected && getU16(payload) == port->number) port_ = port;
   if (!port_) return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
@@ -761,8 +765,9 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
   return r;
 }
 
+// port_ null: the request is only checked (a refusal, or completed when it would run).
 Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
-  Ch32Dm &dm = port_->dm;
+  Ch32Dm *const target = port_ ? &port_->dm : nullptr;
   Tail tail;
   switch (op) {
     case kOpDmi: return dmi(p, n, out, capacity);
@@ -770,6 +775,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
     case kOpResume: { // [TLV] -> status(u8); ok = the hart left debug mode once (re-issue rules in Ch32Dm::resume)
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (!target) return completed();
+      Ch32Dm &dm = *target;
       if (capacity < 1) return failed();
       const bool ok = op == kOpHalt ? dm.halt() : dm.resume();
       out[0] = ok ? kStatusOk : failure(op == kOpHalt ? kStatusTimeout : kStatusState);
@@ -797,6 +804,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
           if (refused(r)) return r;
         }
       }
+      if (!target) return completed();
+      Ch32Dm &dm = *target;
       if (capacity < 7) return failed();
       bool ok;
       if (p[0] == kResetHalt) {   // flags bit0 = halted, pc = dpc; haltreq lowered afterwards, the hart stays halted
@@ -823,6 +832,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
     case kOpStep: {   // [TLV] -> status(u8) moved(u8) dpc_before(u32) dpc_after(u32); one resume only, prv kept
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (!target) return completed();
+      Ch32Dm &dm = *target;
       if (capacity < 10) return failed();
       uint32_t before = 0, after = 0;
       bool moved = false;
@@ -848,6 +859,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       if (address & 3) return rejected(kRejectMalformed);
       // count x 4 over the declared max_length: unsupported, payload 0x00 (oep-if-debug §4.5); the answer's room too
       if (!blockCountFits(count, maxLength()) || 3u + 4u * count > capacity) return unsupportedValue(out, capacity);
+      if (!target) return completed();
+      Ch32Dm &dm = *target;
       if (capacity < 3) return failed();
       uint8_t status = kStatusState;
       uint16_t done = 0;
@@ -877,6 +890,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       if (refused(parsed)) return parsed;
       if (address & 3) return rejected(kRejectMalformed);
       if (!blockCountFits(count, maxLength())) return unsupportedValue(out, capacity);   // over max_length (oep-if-debug §4.5)
+      if (!target) return completed();
+      Ch32Dm &dm = *target;
       if (capacity < 3) return failed();
       uint8_t status = kStatusState;
       uint16_t done = 0;
@@ -911,6 +926,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       const uint32_t timeout_ms = getU32(p + 4);
       if (timeout_ms == 0 || 11u + 4u * outs > capacity) return rejected(kRejectMalformed);
       if (timeout_ms > kMaxOpMs || regs > kMaxRegs || outs > kMaxRegs) return unsupportedValue(out, capacity);
+      if (!target) return completed();
+      Ch32Dm &dm = *target;
       uint16_t regnos[kMaxRegs], out_regnos[kMaxRegs];
       uint32_t values[kMaxRegs], out_values[kMaxRegs];
       for (uint8_t i = 0; i < regs; ++i) {
@@ -985,6 +1002,7 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
   if (refused(parsed)) return parsed;
   if (5 + 4 * values > capacity) return rejected(kRejectMalformed);   // the answer would not fit a frame
   if (wait_us > static_cast<uint64_t>(kMaxOpMs) * 1000u) return unsupportedValue(out, capacity);
+  if (!port_) return completed();   // checked only (handle)
   Ch32Dm &dm = port_->dm;
   WireLossClock &loss = dm.phy().loss();
   // One read of a step: a DMSTATUS of all zeros / all ones is no answer (no module behind it, DmiPhy::outcomeOf) and

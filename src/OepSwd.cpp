@@ -523,11 +523,20 @@ uint8_t TargetArmAdi::xfer(bool ap, bool read, uint8_t a23, uint32_t &data) {
 
 Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 2) return rejected(kRejectMalformed);
+  // The request's form and values first, nothing run: an unknown connection is the last refusal of core §4.3 (order 8),
+  // after malformed and unsupported.
+  checking_ = true;
+  const Result checked = run(op, payload + 2, length - 2, out, capacity);
+  checking_ = false;
+  if (refused(checked)) return checked;
   if (!port_.connected || getU16(payload) != port_.number)
     return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
   retry_ = WireRetry();   // the request's allowance for wire retries (oep-if-debug §2)
-  const uint8_t *p = payload + 2;
-  const size_t n = length - 2;
+  return run(op, payload + 2, length - 2, out, capacity);
+}
+
+// One request after its connection (checking_: only checked - a refusal, or completed when it would run).
+Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (op) {
     case kOpTransfer: {
@@ -547,6 +556,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       const Result parsed = tail.parse(p + at, n - at, out, capacity);
       if (refused(parsed)) return parsed;
       if (6 + 4 * reads > capacity) return rejected(kRejectMalformed);   // the answer would not fit a frame
+      if (checking_) return completed();
       size_t o = 6;
       uint16_t done = 0, nvals = 0;
       uint8_t status = kStatusOk, ack = swd::kOk;
@@ -580,6 +590,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       if (address & 3) return rejected(kRejectMalformed);
       // count x 4 over the declared max_length: unsupported, payload 0x00 (oep-if-debug §6); the answer's room too
       if (!blockCountFits(count, maxLength()) || 3 + size_t(count) * 4 > capacity) return unsupportedValue(out, capacity);
+      if (checking_) return completed();
       if (capacity < 3) return failed();
       size_t o = 3;
       uint16_t left = count;
@@ -617,6 +628,7 @@ Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, u
       if (refused(parsed)) return parsed;
       if (address & 3) return rejected(kRejectMalformed);
       if (!blockCountFits(count, maxLength())) return unsupportedValue(out, capacity);   // over max_length (oep-if-debug §6)
+      if (checking_) return completed();
       if (capacity < 3) return failed();
       size_t index = 0;
       uint16_t done = 0;

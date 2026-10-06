@@ -6,7 +6,8 @@
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, also behind a relaying broker's sequence on a UART bridge,
 # the I2C one with a fake controller), of the pin table's idle
 # states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
-# unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the RVSWD PHY's attach on a
+# unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the target console on it (core §4.3's order,
+# the send slot, the marks), and of the RVSWD PHY's attach on a
 # simulated target (what is written before the speed is verified, the checks, the budget), of the whole rvswd stack's
 # attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries), and of the ESP32-P4 logic capture's configure on a fake PARLIO RX
@@ -52,6 +53,9 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-wire" "$here/test_wire.cpp" \
   "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepFrame.cpp" "$src/OepDmConsole.cpp"
 "$out-wire"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-console" "$here/test_console.cpp" \
+  "$src/OepConsole.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepFrame.cpp" "$src/OepDmConsole.cpp"
+"$out-console"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RVSWD -I"$here/shim" -I"$src" -o "$out-rvswd" \
   "$here/test_rvswd_phy.cpp" "$src/OepRvswdPhy.cpp"
 "$out-rvswd"

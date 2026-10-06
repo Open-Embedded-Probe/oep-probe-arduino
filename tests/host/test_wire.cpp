@@ -470,6 +470,16 @@ int main() {
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0}));
+    // a connection it does not know is the last refusal (core §4.3 order 8; it answered no_connection first)
+    const uint16_t gone = uint16_t(fixed.number + 100);
+    r = call(riscv, TargetRiscvDm::kOpDmi, {uint8_t(gone), uint8_t(gone >> 8), 1, 0, 0x07}, out);   // unknown step kind
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(riscv, TargetRiscvDm::kOpReadBlock, {uint8_t(gone), uint8_t(gone >> 8), 2, 0, 0, 0x20, 1, 0}, out);   // address & 3
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(gone), uint8_t(gone >> 8), 3}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
+    r = call(riscv, TargetRiscvDm::kOpHalt, {uint8_t(gone), uint8_t(gone >> 8)}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectNoConnection);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
   }

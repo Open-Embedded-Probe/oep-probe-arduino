@@ -91,6 +91,16 @@ int main() {
   }
   r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
   CHECK(ok(r) && !fixed.connected);
+  // arm-adi on a connection it does not know: the form first, no_connection last (core §4.3 order 8)
+  {
+    Bytes t = u16(uint16_t(fixed.number + 100));
+    t.insert(t.end(), {1, 0, 0x16});   // req with bit 4 set: malformed
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    t.back() = 0x06;
+    r = call(adi, TargetArmAdi::kOpTransfer, t, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectNoConnection);
+  }
 
   // ---- core §4.3's order: every format error before anything unsupported (it answered unsupported first) ----
   {
