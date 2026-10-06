@@ -50,6 +50,13 @@ class P4I2cTarget final : public Interface {
   static constexpr uint32_t kMaxStretchUs = 0;
 #endif
 
+  // The pads' internal pull-ups start() enables on SDA / SCL while configured (fixture §3: declared with features bit2 and
+  // pullup_ohms). The typical R_PU of both chips' datasheets: ESP32-P4 Series Datasheet v1.2 / Pre-release v0.7,
+  // Table 5-4 DC Characteristics (3.3 V, 25 °C), "R_PU Internal weak pull-up resistor - 45 - kOhm"; ESP32 Series
+  // Datasheet v5.3, Table 5-3 DC Characteristics (3.3 V, 25 °C), "R_PU Resistance of internal pull-up resistor - 45 -
+  // kOhm" (typical only; no min / max given).
+  static constexpr uint32_t kPullupOhms = 45000;
+
   enum : uint8_t { kOpConfigure = 0x01, kOpArmRx = 0x02, kOpReadRx = 0x03, kOpPreloadTx = 0x04, kOpStatus = 0x05,
                    kOpReset = 0x06, kOpStretch = 0x07 };
 

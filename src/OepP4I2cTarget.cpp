@@ -58,10 +58,13 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   w.roleChannels(kRoles, sizeof kRoles, pins_.allowedMask());
   w.u16(kTagMaxLength, kMaxFrame);
   w.u32(kTagMaxClockHz, 1000000u);
-  w.u32(kTagFeatures, kStretch ? 0b11 : 0b01);   // bit0 preloaded tx, bit1 clock stretching
+  namespace i2c = reg::fixture_i2c_target;
+  // bit0 preloaded tx, bit1 clock stretching, bit2 the internal pull-ups start() enables (fixture §3)
+  w.u32(kTagFeatures, i2c::kFeaturesPreloadedTx | (kStretch ? i2c::kFeaturesStretch : 0) | i2c::kFeaturesInternalPullups);
   w.u8(kTagImplementation, 2);   // a dedicated peripheral
-  w.u8(reg::fixture_i2c_target::kTlvDescribeQueueDepth, kQueueDepth);
-  if (kStretch) w.u32(reg::fixture_i2c_target::kTlvDescribeMaxStretchUs, kMaxStretchUs);
+  w.u8(i2c::kTlvDescribeQueueDepth, kQueueDepth);
+  if (kStretch) w.u32(i2c::kTlvDescribeMaxStretchUs, kMaxStretchUs);
+  w.u32(i2c::kTlvDescribePullupOhms, kPullupOhms);
   return w.ok() ? w.length() : 0;
 }
 
@@ -214,7 +217,8 @@ bool P4I2cTarget::start() {
   // The slave driver enables no pull-ups and the fixture has none (2026-09-22: an X035 pin left as
   // input read 0 on the wire), so a real bus needs them here: the GPIO matrix lets the pad keep its
   // ~45 kOhm internal pull-up while the I2C peripheral owns it, as the IDF master driver does with
-  // enable_internal_pullup. Weak, but a bus for master tests at <= 400 kHz rather than no bus.
+  // enable_internal_pullup. Weak, but a bus for master tests at <= 400 kHz rather than no bus. Declared in describe
+  // (features bit2, pullup_ohms kPullupOhms: fixture §3).
   gpio_set_pull_mode(static_cast<gpio_num_t>(sda_), GPIO_PULLUP_ONLY);
   gpio_set_pull_mode(static_cast<gpio_num_t>(scl_), GPIO_PULLUP_ONLY);
   // This handler on the driver's shared interrupt: added later, so it runs first (esp_intr_alloc chains the newest

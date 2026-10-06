@@ -124,6 +124,14 @@ int main() {
       if (d[i] == reg::fixture_i2c_target::kTlvDescribeMaxStretchUs && d[i + 1] == 4)
         found = getU32(d + i + 2) == P4I2cTarget::kMaxStretchUs;
     CHECK(found && P4I2cTarget::kMaxStretchUs >= 30000);
+    // the internal pull-ups start() enables: features bit2 and pullup_ohms (0x42, u32) (fixture §3)
+    bool bit2 = false, ohms = false;
+    for (size_t i = 0; i + 1 < n; i += 2 + d[i + 1]) {
+      if (d[i] == reg::kDescribeFeatures && d[i + 1] == 4)
+        bit2 = (getU32(d + i + 2) & reg::fixture_i2c_target::kFeaturesInternalPullups) != 0;
+      if (d[i] == reg::fixture_i2c_target::kTlvDescribePullupOhms && d[i + 1] == 4) ohms = getU32(d + i + 2) == 45000;
+    }
+    CHECK(bit2 && ohms);
     CHECK(P4I2cTarget::kQueueDepth >= 2);
   }
 
