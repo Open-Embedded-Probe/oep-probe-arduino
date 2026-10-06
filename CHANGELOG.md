@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Console write takes only what the mechanism's send slot carries in one go (oep-if-console §2, oep-if-common §1.4): 2 bytes for dmseq, 3 for DMDATA, and accepted 0 (completed failed) while the slot is not free - bytes still queued, or a dmseq payload not yet acknowledged (it queued up to 255 bytes). A host writes the rest after the progress it reads. A bind's serial input still queues what the driver's queue takes (DmConsole::room) and goes out a slot at a time. Host test.
+- (JA) console の write は、mechanism の送り枠が一度に運ぶ分だけを受け取る（oep-if-console §2、oep-if-common §1.4）: dmseq は 2 byte、DMDATA は 3 byte。枠が空いていない間 - まだ queue にある byte、まだ ack されていない dmseq の payload - は accepted 0（completed failed）（255 byte まで queue に入れていた）。host は読みで進みを見て残りを書く。bind のシリアルの入力は、これまでどおり driver の queue が取るだけ入れ（DmConsole::room）、枠ずつ送る。host test。
 - (EN) read from 3 (the last mark of kind arg) with arg over 0xFF is refused malformed (oep-if-common §1.2: a mark kind is u8; it looked up kind arg & 0xFF), in the console and in the fixture UART alike, before from 4+ is refused unsupported (PositionStream::checkRead). Host test.
 - (JA) from 3（種類 arg の最後の mark から）で arg が 0xFF を超える read は malformed で断る（oep-if-common §1.2: mark の種類は u8。arg & 0xFF の種類を探していた）。console でも fixture の UART でも同じで、from 4 以上を unsupported で断るより先（PositionStream::checkRead）。host test。
 - (EN) Console open on a live connection the console does not ride on - an arm-adi (swd) connection - is refused unavailable cause 6 (oep-if-console §1, §3; it answered no_connection); a number no live connection has stays no_connection. On a probe with one console per wire, a connection of the other wire gets the same answer. Host test.

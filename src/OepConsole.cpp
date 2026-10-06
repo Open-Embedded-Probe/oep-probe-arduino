@@ -16,9 +16,11 @@ size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   return w.ok() ? w.length() : 0;
 }
 
+// A bind's input (probe.config §1.2) is not the write op: it queues what the driver's queue takes, and the driver sends it
+// one slot at a time.
 size_t TargetConsoleStream::bindInput(const uint8_t *data, size_t length) {
   if (!open_) return 0;
-  const size_t room = driver_.slot();
+  const size_t room = driver_.room();
   const size_t n = driver_.queue(data, length < room ? length : room);
   if (n) driver_.poll();
   return n;

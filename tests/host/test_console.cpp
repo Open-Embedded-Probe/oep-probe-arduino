@@ -140,6 +140,27 @@ int main() {
     CHECK(ok(r));
   }
 
+  // ---- write takes only what the send slot carries in one go (oep-if-console §2: 2 bytes for dmseq, 3 for DMDATA),
+  // nothing while it is not free; a bind's input still queues what the driver's queue takes (write took up to 255) ----
+  {
+    const Bytes five = cat(le16(stream), {5, 0, 'a', 'b', 'c', 'd', 'e'});
+    r = call(console, TargetConsoleStream::kOpWrite, five, out);
+    CHECK(r.detail == kOutcomePartial && out == Bytes({2, 0}));
+    r = call(console, TargetConsoleStream::kOpWrite, five, out);   // the slot not free yet: accepted 0, failed
+    CHECK(r.detail == kOutcomeFailed && out == Bytes({0, 0}));
+    r = call(console, TargetConsoleStream::kOpClose, le16(stream), out);
+    CHECK(ok(r) && !console.isOpen());
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    CHECK(ok(r) && console.isOpen());
+    const uint16_t dmdata = uint16_t(out[0] | out[1] << 8);
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(dmdata), {5, 0, 'a', 'b', 'c', 'd', 'e'}), out);
+    CHECK(r.detail == kOutcomePartial && out == Bytes({3, 0}));
+    const uint8_t typed[10] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    CHECK(console.bindInput(typed, sizeof typed) == sizeof typed);
+    r = call(console, TargetConsoleStream::kOpClose, le16(dmdata), out);
+    CHECK(ok(r));
+  }
+
   // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6
   // (oep-if-console §1; it answered no_connection) ----
   {

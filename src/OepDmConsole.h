@@ -30,10 +30,14 @@ class DmConsole {
   void stop() { enabled_ = false; }
   bool enabled() const { return enabled_; }
   size_t queue(const uint8_t *data, size_t length);
-  size_t room() const { return kTxCapacity - 1 - pending(); }   // what queue() takes now
-  // The mechanism's one send slot (oep-if-common §1.4): what a write may hand over right now - the queue's room, and
-  // nothing on a one-way mechanism (SDI).
-  size_t slot() const { return mechanism_ == 0 ? 0 : room(); }
+  size_t room() const { return kTxCapacity - 1 - pending(); }   // what queue() takes now (a bind's input)
+  // The mechanism's send slot (oep-if-console §2, oep-if-common §1.4): what one exchange carries - 3 bytes for DMDATA,
+  // 2 for dmseq - and free only while nothing waits to go (queued, or a dmseq payload not yet acknowledged); nothing on
+  // a one-way mechanism (SDI). A write op takes at most this (it took the whole queue's room).
+  size_t slot() const {
+    if (!enabled_ || mechanism_ == 0 || pending() || (mechanism_ == 2 && seq_chunk_len_)) return 0;
+    return mechanism_ == 2 ? 2 : 3;
+  }
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
   uint32_t resyncs() const { return seq_resyncs_; }
   // The target restarted (havereset seen while reading): dmseq goes back to unsynced (oep-if-console §2).
