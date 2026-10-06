@@ -1012,6 +1012,15 @@ void ProbeConfig::applySavedItems() {
         if (const size_t s = bindStreamAt(v, vlen, k))
           if (v[s] == Binds::kFixtureUart) putU16(v + s + 1, map(getU16(v + s + 1)));
   }
+  // a bind whose port is not a serial port of this firmware: unreadable reason 2, as an interface gone (probe.config §2;
+  // not a refusal of applying, reason 3)
+  at = 0;
+  while (nextItem(items, saved_length_, at, tag, cv, vlen))
+    if (tag == cfg::kTlvItemBind && vlen >= 1 && !endpoint_.isSerialPort(cv[0])) {
+      storage_state_ = cfg::kStorageStateUnreadable;
+      unreadable_ = cfg::kStorageUnreadableInterface;
+      return;
+    }
   // the renumbered items may be out of the canonical order (fns moved): sorted into a fresh store, then set as a whole
   uint8_t scratch[64];
   static uint8_t candidate[kMaxItems];

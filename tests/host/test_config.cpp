@@ -156,6 +156,28 @@ int main() {
   r = set(config, slot_fn9, out);
   CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnknownFunction);
 
+  {   // a saved bind whose port is not a serial port of this firmware (probe.config §2): unreadable reason 2, not 3.
+      // The settings above (a slot, a bind on port 0) saved on `ep` (port 0 a UART bridge), read on a firmware with the
+      // same interfaces whose port 0 is TCP.
+    out.assign(64, 0);
+    CHECK(ok(config.handle(cfg::kOpSave, nullptr, 0, out.data(), out.size())));
+    static NullStream s3;
+    static uint8_t rx3[512], tx3[512];
+    static Endpoint ep3(s3, rx3, sizeof rx3, tx3, sizeof tx3, {512, 1024, 2}, Endpoint::kTcp);
+    static Binds binds3;
+    static ProbeConfig other(ep3, binds3);
+    ep3.add(wire);
+    ep3.add(console);
+    ep3.add(other);
+    other.addPlace(wire, console);
+    other.load();
+    other.applySaved();
+    const uint8_t first[2] = {0, 0};
+    out.assign(64, 0);
+    const Result st = other.handle(cfg::kOpState, first, sizeof first, out.data(), out.size());
+    CHECK(ok(st) && st.length >= 7 && out[1] == cfg::kStorageStateUnreadable && out[6] == cfg::kStorageUnreadableInterface);
+  }
+
   {   // label (probe.config §1): text 1-32 bytes of valid UTF-8 without C0 controls / 0x7F, else malformed; a channel
       // not below channels or reserved (not in the pin table) unsupported with the item's tag
     static NullStream s2;
