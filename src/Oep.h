@@ -208,6 +208,31 @@ inline bool requestText(const uint8_t *p, size_t n) {
   return true;
 }
 
+// A token of `a-z 0-9 -` only, 1 to `max` bytes (core §7.5: model, unit_id).
+inline bool lowerToken(const uint8_t *p, size_t n, size_t max) {
+  if (n == 0 || n > max) return false;
+  for (size_t i = 0; i < n; ++i)
+    if (!((p[i] >= 'a' && p[i] <= 'z') || (p[i] >= '0' && p[i] <= '9') || p[i] == '-')) return false;
+  return true;
+}
+// An interface name (core §13 rule 1): 1 to 64 bytes, at least two labels separated by `.`, each label 1 or more of
+// `a-z 0-9 -` that does not start or end with `-`.
+inline bool interfaceName(const char *name) {
+  const size_t n = name ? strlen(name) : 0;
+  if (n == 0 || n > reg::kLimitInterfaceNameMaxBytes) return false;
+  size_t labels = 0, start = 0;
+  for (size_t i = 0; i <= n; ++i) {
+    if (i < n && name[i] != '.') continue;
+    const size_t len = i - start;
+    if (len == 0 || name[start] == '-' || name[i - 1] == '-' ||
+        !lowerToken(reinterpret_cast<const uint8_t *>(name + start), len, len))
+      return false;
+    ++labels;
+    start = i + 1;
+  }
+  return labels >= 2;
+}
+
 // One TLV's header (core §2.2): tag, len(u8) for 0..254 bytes, or tag, 0xFF, len(u16) for 255 and more. The encoding is
 // unique: a long form carrying 254 or fewer is malformed. false: cut short, or not the unique form.
 inline bool tlvAt(const uint8_t *p, size_t n, size_t at, uint8_t &tag, const uint8_t *&value, size_t &length, size_t &next) {
@@ -580,13 +605,18 @@ class DirectTransport {
 
 // The part of oep.core's describe every probe writes the same way: firmware, model, unit id, channel count and
 // the reserved-channel bitmap. The sketch adds its profile and fixed labels after it; the endpoint adds the transports,
-// discoverable, plan_roles and max_op_ms. unit_id is mandatory (core §7.5, 1 to 32 bytes): without one the writer
-// fails rather than send a describe that leaves it out.
+// discoverable, plan_roles and max_op_ms. unit_id is mandatory (core §7.5, 1 to 32 bytes of a-z 0-9 -): without one the
+// writer fails rather than send a describe that leaves it out; a model outside its form (core §7.5) fails it too.
 inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id, size_t unit_id_length,
                          uint16_t channels, uint64_t reserved) {
   w.text(kCoreFirmware, kFirmwareVersion);
+  // model: lowercase a-z 0-9 -, 1 to 32 bytes (core §7.5); unit_id: the same characters, 1 to 32 bytes
+  if (!lowerToken(reinterpret_cast<const uint8_t *>(model), model ? strlen(model) : 0, reg::kLimitModelMaxBytes)) {
+    w.fail();
+    return false;
+  }
   w.text(kCoreModel, model);
-  if (unit_id_length == 0 || unit_id_length > reg::kLimitUnitIdMaxBytes) {
+  if (!lowerToken(unit_id, unit_id_length, reg::kLimitUnitIdMaxBytes)) {
     w.fail();
     return false;
   }

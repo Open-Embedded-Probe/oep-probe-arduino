@@ -315,6 +315,25 @@ static void testInstanceNumbering() {
   CHECK(ep.instanceOf(3) == 1 && ep.instanceOf(4) == 0);
 }
 
+// core §13 rule 1 / §7.5: an interface name outside the form is not added; describeCore refuses a model or unit_id
+// outside a-z 0-9 -.
+static void testNamesAndTokens() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  Named bad1("single"), bad2("io.Github.x"), bad3("io..x"), bad4("io.-x"), bad5("io.x-"), good("io.github.a-b.c9");
+  CHECK(!ep.add(bad1) && !ep.add(bad2) && !ep.add(bad3) && !ep.add(bad4) && !ep.add(bad5));
+  CHECK(ep.add(good));
+  uint8_t buf[200];
+  const uint8_t id[] = {'a', '1'}, bad_id[] = {'A', '1'};
+  TlvWriter w1(buf, sizeof buf);
+  CHECK(describeCore(w1, "my-probe", id, sizeof id, 0, 0));
+  TlvWriter w2(buf, sizeof buf);
+  CHECK(!describeCore(w2, "My-Probe", id, sizeof id, 0, 0));
+  TlvWriter w3(buf, sizeof buf);
+  CHECK(!describeCore(w3, "my-probe", bad_id, sizeof bad_id, 0, 0));
+}
+
 int main() {
   testConfirmTransportEveryKind();
   testConfirmVectors();
@@ -326,6 +345,7 @@ int main() {
   testInflightWithinTable();
   testResourceReuseDistance();
   testInstanceNumbering();
+  testNamesAndTokens();
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

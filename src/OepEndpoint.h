@@ -118,7 +118,7 @@ class Endpoint {
   }
 
   // An interface, numbered fn 1, 2, ... in the order added. The list stays the same for a boot (core §7.2): every add
-  // comes before the first poll(), and one after it is refused (false).
+  // comes before the first poll(), and one after it is refused (false), as is a name outside core §13 rule 1.
   bool add(Interface &interface);
   bool anyPlanRoles() const {
     for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->planRoles()) return true;

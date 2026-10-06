@@ -56,7 +56,8 @@ size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, 
 }  // namespace
 
 bool Endpoint::add(Interface &interface) {
-  if (count_ >= kMaxInterfaces || polled_) return false;
+  // a name outside core §13 rule 1 is refused: list would show what no host may rely on
+  if (count_ >= kMaxInterfaces || polled_ || !interfaceName(interface.name())) return false;
   interfaces_[count_++] = &interface;
   interface.setFrameLimit(limits_.max_frame);
   return true;
