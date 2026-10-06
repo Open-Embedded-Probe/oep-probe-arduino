@@ -63,8 +63,17 @@ class DmiPhy {
     const Outcome o = outcomeOf(address, ok, value);
     if (o == kNoAnswer) loss_.silent();
     else if (o == kAnswered) loss_.answered();
+    last_known_ = ok;
+    if (ok) last_read_ = value;
+    revives_at_read_ = revives();
     return ok;
   }
+  // The value the last read() came back with - what a read the link misses gives instead of its own (Ch32Dm::readIs
+  // makes sure it is not the value looked for). lastKnown() false: the last read got nothing back, none was made, or the
+  // PHY may have read on its own since (a revive, a re-sync, an attach: forgetRead).
+  uint32_t lastRead() const { return last_read_; }
+  bool lastKnown() const { return last_known_ && revives() == revives_at_read_; }
+  void forgetRead() { last_known_ = false; }
   static constexpr uint8_t kDmStatusAddress = 0x11;
   // One read as an exchange of oep-if-debug §2: answered (a good exchange), no answer (nothing came back, or a DMSTATUS
   // of all zeros / all ones), or neither (another register's all zeros / all ones: it may be the register's value).
@@ -150,6 +159,8 @@ class DmiPhy {
   uint32_t deadline_ms_ = 0, end_ms_ = 0;
   bool has_deadline_ = false;
   uint32_t retry_us_ = 0;
+  uint32_t last_read_ = 0, revives_at_read_ = 0;
+  bool last_known_ = false;
   WireLossClock loss_;
 };
 

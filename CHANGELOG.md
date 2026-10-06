@@ -1,6 +1,54 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm's checked groups cost fewer DMI accesses (bench, 0.0.29-dev+526a881, the V003 jig - classic ESP32,
+  SWIO bit-banged, a UART bridge; ch32rv's upload of a 9168-byte image, traced A/B against 3c0cd99 with no broker
+  between: the same 86 riscv-dm requests took 0.77 s longer on the probe - write_block 122 words 21.3 -> 36.9 ms,
+  write_block 6 words 9.4 -> 17.0 ms, run 57.6 -> 66.7 ms, read_block 122 words 21.2 -> 28.4 ms, x18 each. Fitted to
+  the access counts: a read about 70 us, a write about 41 us on this PHY - every read is a whole frame, a second one
+  too. Of the 0.77 s: the block ops' fixed cost about 0.47 s, write_block's DATA1 check after every word about 0.15 s,
+  run about 0.17 s, the console's DMSTATUS look (3 reads instead of 1 every 20 ms while a slot's console is open)
+  about 0.015 s. The rest of that traced run's 6.56 s - 3.0 s with no answer to one read_block and the reads at the
+  boot speed after the host fell back - is the UART link: answers of 491 bytes came broken at 921600 in both
+  firmwares, 6 of 18 with 3c0cd99). A value the probe has just written or puts back, known to it, is read back once
+  against it, the read before it made sure not to be that value - a DMCONTROL read, and DMSTATUS when that is it too,
+  put between when it is (Ch32Dm::readIs; DmiPhy::lastRead) - and an abstract register over the value inverted in
+  DATA0, written twice (Ch32Dm::readRegisterIs): a lost write and a read missed can no longer agree on it, as two
+  missed reads could not before; all ones (a line's own value) is still read twice. Used for the GPRs and the mailbox
+  given back, the run's GPRs and dpc, write_block's first word in DATA0 and ABSTRACTAUTO = 0; what is kept or
+  answered (an unknown value) and dcsr's bits are read twice as before. ABSTRACTAUTO seen 0 in an op is not written
+  and read again until the op itself writes it (auto_seen_off_: only a write sets it, and inside an op only the probe
+  writes it), and keepAuto writes nothing when it reads 0. DMI accesses (test_wire's fake; ch32rv's loader run with
+  a0-a3, a5 and mstatus in, a0 out): read_block 182 + n -> 136 + n, write_block 191 + 2n -> 139 + 2n (1 word: 193 ->
+  137), run 230 -> 188 (3c0cd99: 71 + n, 78 + n, 74); the upload estimated 0.27 s shorter on the probe, about 2.6 s
+  where 3c0cd99 took 2.07 s. Host tests (test_wire): the block ops with glitches in pairs also with values alike what
+  a missed read gives or a line reads (s0 = 2 - ABSTRACTCS here, the bench's a1 -> 0x00000002 -, a0 = 1, a1 all ones,
+  DATA0 a halted DMSTATUS, DATA1 0, words all ones and 2) - 0 of 92928 wrong; a run with glitches in pairs, also with
+  a0 = 1 and a1 = 2 in: 0 of 36992 wrong (16 answer a failure); without the read put between, 4 / 2 wrong there; the
+  drop-inside block-op cases' values no longer all ones in the counting run (every drop met); the rest as before.
+- (JA) riscv-dm の確かめたまとまりの DMI アクセスを減らす（bench、0.0.29-dev+526a881、V003 の治具 - classic ESP32、ソフトで
+  叩く SWIO、UART bridge。ch32rv による 9168 バイトのイメージの書き込みを、間にブローカーを置かずに 3c0cd99 と A/B で trace:
+  同じ 86 の riscv-dm の要求が probe 側で 0.77 秒長くかかった - 122 語の write_block 21.3 -> 36.9 ms、6 語の write_block
+  9.4 -> 17.0 ms、run 57.6 -> 66.7 ms、122 語の read_block 21.2 -> 28.4 ms、それぞれ 18 回。アクセスの数に合わせると、この
+  PHY で読み 1 回が約 70 us、書き 1 回が約 41 us - 読みは毎回まるごと 1 フレーム、2 回目の読みも同じ。0.77 秒のうち、block op
+  の固定の分が約 0.47 秒、write_block の 1 語ごとの DATA1 の確かめが約 0.15 秒、run が約 0.17 秒、コンソールの DMSTATUS の
+  確かめ（スロットのコンソールが開いている間 20 ms ごとに 1 回でなく 3 回の読み）が約 0.015 秒。その trace の 6.56 秒の残り -
+  read_block の 1 つに答えが来なかった 3.0 秒と、host が起動時の速さに戻ったあとの読み - は UART の link のもの: 491 バイトの
+  答えが 921600 で壊れていた、どちらの firmware でも（3c0cd99 で 18 回中 6 回））。probe が書いたばかりの値・戻す値（probe が
+  知っている値）は、それと比べて 1 回だけ読み戻す。その前の読みがその値でないことを確かめてから - そうなら DMCONTROL の読みを、
+  それも同じなら DMSTATUS の読みを間に入れる（Ch32Dm::readIs、DmiPhy::lastRead）。抽象レジスタは値を反転した sentinel を
+  DATA0 に 2 回書いてから（Ch32Dm::readRegisterIs）。書き込みの消失と取りこぼした読みがそろってその値になることはない - 前に
+  取りこぼした 2 回の読みがそろわなかったのと同じ。全部 1（何もつながっていない線の値）は今までどおり 2 回読む。使うのは、戻す
+  GPR とメールボックス、run の GPR と dpc、write_block の最初の語の DATA0、ABSTRACTAUTO = 0。取っておく値・答える値（わからない
+  値）と dcsr のビットは今までどおり 2 回読む。op の中で 0 と確かめた ABSTRACTAUTO は、op 自身が書くまでは書き直しも読み直しも
+  しない（auto_seen_off_: 立てるのは書き込みだけで、op の中で書くのは probe だけ）。keepAuto は 0 と読めたら何も書かない。DMI
+  アクセス（test_wire の偽物。ch32rv の loader の run は a0-a3、a5、mstatus を入れ a0 を出す）: read_block 182 + n -> 136 + n、
+  write_block 191 + 2n -> 139 + 2n（1 語: 193 -> 137）、run 230 -> 188（3c0cd99: 71 + n、78 + n、74）。書き込みは probe 側で約
+  0.27 秒短くなる見込み、3c0cd99 の 2.07 秒に対して約 2.6 秒。host の試験（test_wire）: block op にグリッチを 2 つずつ、取りこぼした
+  読みが返す値や線の値に似た値でも（s0 = 2 - ここでの ABSTRACTCS、bench の a1 -> 0x00000002 -、a0 = 1、a1 = 全部 1、DATA0 = 止まった
+  hart の DMSTATUS、DATA1 = 0、語は全部 1 と 2）- 92928 回中 0 回の誤り。run にグリッチを 2 つずつ、a0 = 1、a1 = 2 を入れる場合も:
+  36992 回中 0 回の誤り（16 回は失敗を答える）。間に入れる読みを外すと、それぞれ 4 回 / 2 回の誤り。落ちる link の block op の試験の
+  数える回の値が全部 1 でなくなった（どの落ち方も op に当たる）。ほかは今までどおり。
 - (EN) Fix: riscv-dm run on a CH32V003 (bench, 0.0.29-dev+82e1ec9, the V003 jig - classic ESP32, SWIO, ch32rv 9cb4f08:
   every upload, 5 of 5, failed "run: timeout" at the loader's run, stopped 2; 3c0cd99 passed). ch32rv's loader run sets
   mstatus = 0, and the V003's mstatus reads 0x00001800 before and after that write (read on the jig: MPP fixed at M,

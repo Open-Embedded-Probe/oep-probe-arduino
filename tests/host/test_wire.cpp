@@ -1476,8 +1476,11 @@ int main() {
         for (int op = 0; op < 2; ++op)
           for (int at = -1; at < op_reads[op]; ++at) {   // -1: no drop, the op's reads counted
             ++cases;
+            // the values tagged by the case, the counting run's (at -1) alike: the op's DMI accesses may depend on the
+            // values it puts back (all ones is read back twice), and every case must meet its drop
+            const uint32_t tag = uint32_t(at + 1) & 0xffu;
             uint32_t gpr[32];
-            for (uint32_t k = 0; k < 32; ++k) gpr[k] = phy.gpr[k] = k ? 0x5a000000u | (k << 16) | uint32_t(at) : 0;
+            for (uint32_t k = 0; k < 32; ++k) gpr[k] = phy.gpr[k] = k ? 0x5a000000u | (k << 16) | tag : 0;
             phy.gpr[9] = gpr[9] = 0x20000000u;   // s1 holding the block's address (as a sketch's pointer may)
             phy.dpc = 0x00000a3cu;
             phy.dcsr = 0x4000b003u;
@@ -1487,7 +1490,7 @@ int main() {
             phy.abstractauto = autoexec;
             phy.last_command = 0x00221000u;                    // the host's last command: read zero (harmless when re-run)
             phy.cmderr = 0;
-            for (uint32_t k = 0; k < 10; ++k) phy.mem[0x20000000u + 4 * k] = 0x0b000000u | (k << 8) | uint32_t(at);
+            for (uint32_t k = 0; k < 10; ++k) phy.mem[0x20000000u + 4 * k] = 0x0b000000u | (k << 8) | tag;
             const uint32_t fence = phy.mem[0x20000000u + 4 * 8];
             phy.stray_stores = 0;
             phy.dropped = false;
@@ -1501,7 +1504,7 @@ int main() {
             } else {
               Bytes wb = conn;
               wb.insert(wb.end(), {0, 0, 0, 0x20, 8, 0});
-              for (uint32_t k = 0; k < 8; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0xc0000000u | (k << 8) | uint32_t(at)) >> (8 * b)));
+              for (uint32_t k = 0; k < 8; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0xc0000000u | (k << 8) | tag) >> (8 * b)));
               r = call(riscv, TargetRiscvDm::kOpWriteBlock, wb, out);
             }
             if (at < 0) op_reads[op] = phy.reads - reads_before;
@@ -1529,9 +1532,9 @@ int main() {
                 if (op == 0) {
                   uint32_t w = 0;
                   for (int b = 0; b < 4; ++b) w |= uint32_t(out[3 + 4 * k + b]) << (8 * b);
-                  right = out.size() == 3 + 32 && w == (0x0b000000u | (k << 8) | uint32_t(at));
+                  right = out.size() == 3 + 32 && w == (0x0b000000u | (k << 8) | tag);
                 } else {
-                  right = phy.mem[0x20000000u + 4 * k] == (0xc0000000u | (k << 8) | uint32_t(at));
+                  right = phy.mem[0x20000000u + 4 * k] == (0xc0000000u | (k << 8) | tag);
                 }
               }
               if (!right) ++wrong_words;
@@ -1570,8 +1573,13 @@ int main() {
     CHECK(ok(r) && phy.halted && fixed.connected);
     const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
     int cases = 0, answered_ok = 0, changed_ok = 0, changed_other = 0, wrong_words = 0, stray = 0, glitched = 0;
-    int op_accesses[2] = {0, 0};
+    int op_accesses[2] = {0, 0}, counted[2][2] = {{0, 0}, {0, 0}};
     int single_cases = 0, single_bad = 0;   // one glitch: the cases, and those with state changed, a stray store or wrong words
+    // values: 0 tagged by the case; 1 alike what a missed read gives or a line reads - s0 = 2 (ABSTRACTCS here, the
+    // bench's a1 -> 0x00000002), a0 = 1 (DMCONTROL), a1 all ones, DATA0 = a halted DMSTATUS, DATA1 = 0, the first word
+    // written all ones and the second 2 - where a value put back or written is read back once only when it cannot be the
+    // read before it nor all ones (readIs)
+    for (int values = 0; values < 2; ++values)
     for (int pairs = 0; pairs < 2; ++pairs)
       for (int parity = 0; parity < 2; ++parity)
         for (int op = 0; op < 2; ++op)
@@ -1583,10 +1591,19 @@ int main() {
               uint32_t gpr[32];
               for (uint32_t k = 0; k < 32; ++k) gpr[k] = phy.gpr[k] = k ? 0x5a000000u | (k << 16) | (tag & 0xffff) : 0;
               phy.gpr[9] = gpr[9] = 0x20000000u;
+              const uint32_t data0 = values ? 0x00000382u : 0x0000aa55u, data1 = values ? 0u : 0x12345678u;
+              if (values) {
+                phy.gpr[8] = gpr[8] = 2;
+                phy.gpr[10] = gpr[10] = 1;
+                phy.gpr[11] = gpr[11] = 0xffffffffu;
+              }
+              auto word = [&](uint32_t k) {   // write_block's k-th word
+                return values && k == 0 ? 0xffffffffu : values && k == 1 ? 2u : 0xc0000000u | (k << 8) | (tag & 0xff);
+              };
               phy.dpc = 0x00000a3cu;
               phy.dcsr = 0x4000b003u;
-              phy.data0 = 0x0000aa55u;
-              phy.data1 = 0x12345678u;
+              phy.data0 = data0;
+              phy.data1 = data1;
               const uint32_t autoexec = (at >= 0 && (at & 1)) ? 1 : 0;   // counted with 0 (the shorter op)
               phy.abstractauto = autoexec;
               phy.last_command = 0x00221000u;
@@ -1604,14 +1621,14 @@ int main() {
               } else {
                 Bytes wb = conn;
                 wb.insert(wb.end(), {0, 0, 0, 0x20, 8, 0});
-                for (uint32_t k = 0; k < 8; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0xc0000000u | (k << 8) | (tag & 0xff)) >> (8 * b)));
+                for (uint32_t k = 0; k < 8; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t(word(k) >> (8 * b)));
                 r = call(riscv, TargetRiscvDm::kOpWriteBlock, wb, out);
               }
-              if (at < 0) op_accesses[op] = phy.accesses - accesses_before;
+              if (at < 0) op_accesses[op] = counted[values][op] = phy.accesses - accesses_before;
               if (phy.glitches) ++glitched; else if (getenv("OEP_SHOW_UNGLITCHED")) printf("  no glitch: op %d at %d / %d\n", op, at, at2);
               phy.glitch_at = phy.glitch_at2 = -1;
-              bool same = phy.dpc == 0x00000a3cu && phy.dcsr == 0x4000b003u && phy.data0 == 0x0000aa55u &&
-                          phy.data1 == 0x12345678u && phy.abstractauto == autoexec;
+              bool same = phy.dpc == 0x00000a3cu && phy.dcsr == 0x4000b003u && phy.data0 == data0 &&
+                          phy.data1 == data1 && phy.abstractauto == autoexec;
               for (uint32_t k = 0; k < 32; ++k) same = same && phy.gpr[k] == gpr[k];
               const bool good = ok(r) && out.size() >= 3 && out[2] == kStatusOk;
               if (!same) {
@@ -1636,7 +1653,7 @@ int main() {
                     for (int b = 0; b < 4; ++b) w |= uint32_t(out[3 + 4 * k + b]) << (8 * b);
                     right = out.size() == 3 + 32 && w == (0x0b000000u | (k << 8) | (tag & 0xff));
                   } else {
-                    right = phy.mem[0x20000000u + 4 * k] == (0xc0000000u | (k << 8) | (tag & 0xff));
+                    right = phy.mem[0x20000000u + 4 * k] == word(k);
                   }
                 }
                 if (!right) ++wrong_words;
@@ -1652,10 +1669,11 @@ int main() {
     CHECK(changed_other == 0);
     CHECK(stray == 0);
     CHECK(wrong_words == 0);
-    CHECK(glitched == cases - 4);   // every glitch met the op (4: the counting runs)
-    printf("  block ops with glitches inside (%d / %d accesses, singly and in pairs): %d cases, %d ok, %d changed with ok, "
-           "%d changed otherwise, %d stray stores, %d wrong words; one glitch: %d of %d cases wrong\n", op_accesses[0],
-           op_accesses[1], cases, answered_ok, changed_ok, changed_other, stray, wrong_words, single_bad, single_cases);
+    CHECK(glitched == cases - 8);   // every glitch met the op (8: the counting runs)
+    printf("  block ops with glitches inside (%d / %d accesses; %d / %d with look-alike values; singly and in pairs): %d "
+           "cases, %d ok, %d changed with ok, %d changed otherwise, %d stray stores, %d wrong words; one glitch: %d of %d "
+           "cases wrong\n", counted[0][0], counted[0][1], counted[1][0], counted[1][1], cases, answered_ok, changed_ok,
+           changed_other, stray, wrong_words, single_bad, single_cases);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     phy.model_block = false;
@@ -1897,6 +1915,71 @@ int main() {
     CHECK(bad == 0);
     printf("  runs with a glitch inside (%d accesses): %d cases, %d stopped at the ebreak, %d not started, %d other\n",
            accesses_seen, cases, stopped, not_started, bad);
+    // the same run with glitches in pairs, and with arguments alike what a missed read gives (a0 = 1: DMCONTROL; a1 = 2:
+    // ABSTRACTCS here): the registers written are read back once (readRegisterIs) - never an ok answer with an argument,
+    // dpc or output wrong or dcsr's ebreaks / ebreaku left set; a run that answers a failure is the host's to retry
+    {
+      int pair_cases = 0, pair_stopped = 0, pair_not_started = 0, pair_failed = 0, pair_bad = 0, seen[2] = {0, 0};
+      for (int values = 0; values < 2; ++values) {
+        const uint32_t a0 = values ? 1u : 0x20000400u, a1 = values ? 2u : 16u;
+        Bytes run2 = conn;
+        run2.insert(run2.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 2, 0x0a, 0x10});
+        for (int b = 0; b < 4; ++b) run2.push_back(uint8_t(a0 >> (8 * b)));
+        run2.insert(run2.end(), {0x0b, 0x10});
+        for (int b = 0; b < 4; ++b) run2.push_back(uint8_t(a1 >> (8 * b)));
+        run2.insert(run2.end(), {1, 0x0a, 0x10});
+        auto start = [&] {
+          phy.halted = true;
+          phy.dpc = 0x00000a3cu;
+          phy.dcsr = 0x40000003u;
+          phy.gpr[10] = 0x5a5a0010u;
+          phy.gpr[11] = 0x5a5a0011u;
+          phy.cmderr = phy.abstractauto = 0;
+          phy.run_reads = 6;
+        };
+        start();   // the counting run, no glitch
+        const int before = phy.accesses;
+        r = call(riscv, TargetRiscvDm::kOpRun, run2, out);
+        seen[values] = phy.accesses - before;
+        CHECK(ok(r) && out.size() >= 15 && out[0] == kStatusOk && getU32(out.data() + 11) == a0);
+        for (int parity = 0; parity < 2; ++parity)
+          for (int at = 0; at < seen[values]; ++at)
+            for (int at2 = at + 1; at2 < seen[values]; ++at2) {
+              ++pair_cases;
+              start();
+              phy.glitch_parity = parity;
+              phy.glitch_at = at;
+              phy.glitch_at2 = at2;
+              r = call(riscv, TargetRiscvDm::kOpRun, run2, out);
+              phy.glitch_at = phy.glitch_at2 = -1;
+              const bool answered_ok = ok(r) && out.size() >= 15 && out[0] == kStatusOk;
+              const bool dcsr_back = (phy.dcsr & 0x3000u) == 0;
+              if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped &&
+                  getU32(out.data() + 2) == 0x20000040u && getU32(out.data() + 11) == a0 && phy.gpr[11] == a1 && dcsr_back) {
+                ++pair_stopped;
+              } else if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped &&
+                         getU32(out.data() + 2) == 0x20000000u && phy.gpr[11] == a1 && dcsr_back) {
+                ++pair_not_started;   // the resumereq lost: stopped at pc, dpc unmoved (the host judges)
+              } else if (!answered_ok && phy.halted) {
+                ++pair_failed;   // answered as failed, the hart halted: the host's to retry
+              } else if (++pair_bad <= 3) {
+                printf("  run (a0 %08x a1 %08x), glitches at accesses %d / %d (cmderr 6 %d): status %02x dpc %08x a0 out "
+                       "%08x a1 %08x dcsr %08x\n", a0, a1, at, at2, parity, out.size() ? out[0] : 0xff,
+                       out.size() >= 6 ? getU32(out.data() + 2) : 0, out.size() >= 15 ? getU32(out.data() + 11) : 0,
+                       phy.gpr[11], phy.dcsr);
+              }
+              phy.halted = true;
+              phy.run_reads = 0;
+              g_millis += 2;
+            }
+        phy.glitch_parity = false;
+      }
+      CHECK(pair_bad == 0);
+      CHECK(pair_stopped > pair_cases / 2);
+      printf("  runs with glitches in pairs (%d / %d accesses, the second with a0 = 1, a1 = 2): %d cases, %d stopped at the "
+             "ebreak, %d not started, %d answered a failure, %d wrong\n", seen[0], seen[1], pair_cases, pair_stopped,
+             pair_not_started, pair_failed, pair_bad);
+    }
     // step: one instruction (the fake's resumereq comes back halted at once), dpc moved by the probe's view only
     phy.loader_pc = 0;
     phy.step_returns = true;

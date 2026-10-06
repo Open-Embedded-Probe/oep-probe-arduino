@@ -18,12 +18,13 @@
 // the group met a drop; a bad one brings the link up again (steady) and redoes the group. What goes back is read back
 // and compared too. A link may also miss a single access and be up again at the next (a glitch: a write lost - cmderr 6
 // if the module took it for a bad parity - or a read answering the read before it), which the look after does not see:
-// so every value an op keeps, gives back or answers is read twice and taken only when both reads agree (readSure,
+// so every value an op keeps or answers is read twice and taken only when both reads agree (readSure,
 // readRegisterSure), every write the op relies on is read back before it is relied on (the block program's set-up,
-// abstractauto off, the run's registers, dcsr), and write_block reads DATA1 after every store. The same for what the ops
-// decide from DMSTATUS: checkHalted, halt's "already halted", havereset (ackHaveReset) read twice (readStatusSure), the end
-// of a wait for a change of hart state (halt, resume, run, step, the resets) seen twice (statusConfirms), and what attach,
-// scan and target_id answer (readDmiSure, moduleAnswersSure).
+// abstractauto off, the run's registers, dcsr, what goes back) - a value the probe wrote, known to it, once against it
+// with the read before made sure not to be it (readIs, readRegisterIs) -, and write_block reads DATA1 after every
+// store. The same for what the ops decide from DMSTATUS: checkHalted, halt's "already halted", havereset
+// (ackHaveReset) read twice (readStatusSure), the end of a wait for a change of hart state (halt, resume, run, step, the
+// resets) seen twice (statusConfirms), and what attach, scan and target_id answer (readDmiSure, moduleAnswersSure).
 #pragma once
 
 #include <Arduino.h>
@@ -142,8 +143,13 @@ class Ch32Dm {
   bool giveGprs();
   uint8_t cmderr_ = 0;
   bool auto_on_ = true;     // ABSTRACTAUTO may be set: autoOff() writes 0 only then (a block op's fixed cost is DMI round trips)
+  // ABSTRACTAUTO seen 0 in this op (two reads agreeing) and not written since but with 0: autoOffSure() has nothing to
+  // look at again. Only a write sets it - the probe's own, inside an op (autoOn, giveAuto); a lost write leaves it as
+  // it was, a dropped link or a module reset leaves it 0. Cleared at an op's start (keepAuto: a host's raw dmi may have
+  // set it between ops) and by every write that may set it.
+  bool auto_seen_off_ = false;
   void autoOff() { if (auto_on_) { phy_.write(0x18, 0); auto_on_ = false; } }
-  void autoOn() { phy_.write(0x18, 1); auto_on_ = true; }
+  void autoOn() { auto_seen_off_ = false; phy_.write(0x18, 1); auto_on_ = true; }
   // abstractauto as the op found it: read and cleared at its start, written back at its very end (oep-if-debug §4)
   bool auto_kept_ = false;
   uint32_t kept_auto_ = 0;
@@ -197,6 +203,14 @@ class Ch32Dm {
   // missed, gives DMCONTROL's value, no module's)
   template <typename Seen> bool statusConfirms(Seen seen);
   bool readRegisterSure(uint16_t regno, uint32_t &value);
+  // A value the probe itself has just written (or kept, and written back), read back once and compared: readIs (a DMI
+  // register) and readRegisterIs (an abstract register, over a sentinel of the value inverted in DATA0, written twice).
+  // A wrong match needs the write lost and the read back faked as well: a missed read gives the read before it, made
+  // sure here not to be the value (a DMCONTROL / DMSTATUS read put between when it is), and a lost read command leaves
+  // the sentinel. All ones - a line's own value with nothing answering - is read twice instead (readSure /
+  // readRegisterSure).
+  bool readIs(uint8_t address, uint32_t expected);
+  bool readRegisterIs(uint16_t regno, uint32_t expected);
   bool writeRegisterSeen(uint16_t regno, uint32_t value, uint32_t mask = 0xffffffffu);
   // a write whose register may keep another value (WARL: a CSR, x0): read before and after; read back as it was and
   // not as asked, written and read back once more and taken when the two read-backs agree

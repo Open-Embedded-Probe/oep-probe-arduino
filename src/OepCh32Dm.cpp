@@ -30,6 +30,7 @@ bool Ch32Dm::waitAbstract() {
 bool Ch32Dm::attach() {
   if (phy_.attached()) return true;
   if (!phy_.attach()) return false;
+  phy_.forgetRead();   // the PHY's own reads of its attach went before (readIs)
   // Leave the abstract-command block in a known state. A session that ended mid-sequence can leave autoexec armed
   // on DATA0 or a sticky cmderr behind (2026-09-23).
   phy_.write(kAbstractAuto, 0);
@@ -50,6 +51,7 @@ bool Ch32Dm::probe(uint32_t &dmstatus) {
 // known state: autoexec off, cmderr cleared.
 void Ch32Dm::relink(bool clear_auto) {
   phy_.reinit();
+  phy_.forgetRead();   // a re-sync may read on its own (readIs)
   if (clear_auto) {
     phy_.write(kAbstractAuto, 0);
     auto_on_ = false;
@@ -90,10 +92,16 @@ bool Ch32Dm::waitStatus(uint32_t &status, uint32_t &relinked_us) {
 // (the link did not stay up): false, nothing kept - the op does not run.
 bool Ch32Dm::keepAuto() {
   if (auto_kept_) return true;
+  auto_seen_off_ = false;   // an op's start: a host's raw dmi may have set it since the last op
   uint32_t value = 0;
   if (!held([&] { return readSure(kAbstractAuto, value) && value != 0xffffffffu; }, false)) return false;
   kept_auto_ = value;
   auto_kept_ = true;
+  if (!value) {   // read 0 twice, agreeing: off already, nothing to write
+    auto_on_ = false;
+    auto_seen_off_ = true;
+    return true;
+  }
   // off, read back off (a lost write left a host's autoexec on under the op's DATA0 accesses); not seen off: the op
   // does not run (giveAuto puts the kept value back)
   if (held([&] { return autoOffSure(); })) return true;
@@ -104,6 +112,7 @@ bool Ch32Dm::keepAuto() {
 bool Ch32Dm::giveAuto() {   // last: after DATA0 is back (writing ABSTRACTAUTO runs nothing)
   if (!auto_kept_) return true;
   auto_kept_ = false;
+  auto_seen_off_ = false;
   if (!kept_auto_) return true;   // autoOff() left it 0 (and a redo's relink writes 0)
   const bool back = held([&] {   // read back twice (a lost write and a missed read gave DMCONTROL's dmactive: 1)
     uint32_t now = 0;
@@ -118,6 +127,7 @@ bool Ch32Dm::giveAuto() {   // last: after DATA0 is back (writing ABSTRACTAUTO r
 // a known state: the search re-syncs the bus once per candidate and leaves whatever the probes did behind.
 void Ch32Dm::retune() {
   phy_.retune();
+  phy_.forgetRead();
   phy_.write(kAbstractAuto, 0);
   auto_on_ = false;
   phy_.write(kAbstractCs, 0x700);
@@ -279,9 +289,48 @@ bool Ch32Dm::readRegisterSure(uint16_t regno, uint32_t &value) {
   return true;
 }
 
+// readIs: a DMI register the probe has just written with `expected` (or written back), read back once. With one access
+// missed, or two: a lost write leaves the register as it was - not `expected`, or no harm done - and a read missed gives
+// the value of the read before it, which is made sure not to be `expected` first (DMCONTROL read, and DMSTATUS when
+// DMCONTROL is `expected` too: the two differ in bit 7 on a link that is up, as in readSure). Only a read that came
+// back counts as the read before (lastKnown). All ones is what a line with nothing behind it reads: read twice
+// (readSure), as before.
+bool Ch32Dm::readIs(uint8_t address, uint32_t expected) {
+  uint32_t value = 0;
+  if (expected == 0xffffffffu) return readSure(address, value) && value == expected;
+  if (!phy_.lastKnown() || phy_.lastRead() == expected) {
+    uint32_t other = 0;
+    if (!phy_.read(kDmControl, other)) return false;
+    if (other == expected && (!phy_.read(kDmStatus, other) || other == expected)) return false;
+  }
+  return phy_.read(address, value) && value == expected;
+}
+
+// readRegisterIs: an abstract register the probe has just written with `expected`, read back once over a sentinel of
+// `expected` inverted in DATA0 (abstractauto off), the sentinel written twice. A lost read command leaves the sentinel;
+// the read command reads the register over a lost sentinel write; a DATA0 read missed gives the read before it, which
+// readIs makes sure is not `expected`. DATA0 may still hold `expected` from the register's own write - then only both
+// sentinel writes and the read command lost leave it there. So a wrong match needs four accesses missed (the
+// register's write, both sentinels, the read command), where readRegisterSure's two reads need five, at 5 accesses
+// instead of 9. All ones: twice over the two sentinels (readRegisterSure).
+bool Ch32Dm::readRegisterIs(uint16_t regno, uint32_t expected) {
+  if (expected == 0xffffffffu) {
+    uint32_t value = 0;
+    return readRegisterSure(regno, value) && value == expected;
+  }
+  if (!halted_) return false;
+  phy_.write(kData0, ~expected);
+  phy_.write(kData0, ~expected);
+  phy_.write(kCommand, 0x00220000u | regno);
+  return waitAbstract() && readIs(kData0, expected);
+}
+
 // A register write seen to land: written, then read back (the bits in `mask`: dcsr's other bits may be WARL) over the
 // sentinels - read back once, a lost write command and a lost read command left DATA0 holding the value written.
+// The whole value asked for (a GPR, dpc): read back once over the inverted sentinel (readRegisterIs); some bits only
+// (dcsr's): twice over the two sentinels.
 bool Ch32Dm::writeRegisterSeen(uint16_t regno, uint32_t value, uint32_t mask) {
+  if (mask == 0xffffffffu) return writeRegister(regno, value) && readRegisterIs(regno, value);
   uint32_t now = 0;
   return writeRegister(regno, value) && readRegisterSure(regno, now) && ((now ^ value) & mask) == 0;
 }
@@ -301,13 +350,18 @@ bool Ch32Dm::writeRegisterTaken(uint16_t regno, uint32_t value) {
   return writeRegister(regno, value) && readRegisterSure(regno, again) && again == now;
 }
 
-// ABSTRACTAUTO written 0 and read back 0 (readSure): before the op writes DATA0 (with autoexecdata set, a DATA0 access
+// ABSTRACTAUTO written 0 and read back 0 (readIs): before the op writes DATA0 (with autoexecdata set, a DATA0 access
 // runs the last command again). A lost write left it as it was.
+//
+// Seen 0 already in this op and not written since but with 0 (auto_seen_off_): nothing can have set it - only a write
+// does, and the probe makes every one inside an op - so it is not written and read again (a block op asked it up to six
+// times: 5 DMI accesses each).
 bool Ch32Dm::autoOffSure() {
-  uint32_t now = 1;
+  if (auto_seen_off_) return true;
   phy_.write(kAbstractAuto, 0);
   auto_on_ = false;
-  return readSure(kAbstractAuto, now) && now == 0;
+  auto_seen_off_ = readIs(kAbstractAuto, 0);   // the value written, read back (readIs: the read before it is not 0)
+  return auto_seen_off_;
 }
 
 // What DMSTATUS says now: allhalted (bit 9) of a version-2 or -3 module, with no reset pending (a V00x freezes the
@@ -370,11 +424,10 @@ bool Ch32Dm::giveMailbox() {
   if (!kept_) return true;
   kept_ = false;
   return held([&] {
-    uint32_t d0 = 0, d1 = 0;
     if (!autoOffSure()) return false;   // a DATA0 write with autoexec on would run the last command on it
     phy_.write(kData1, kept1_);   // the order the target writes them in (dmseq: DATA1 before DATA0)
     phy_.write(kData0, kept0_);
-    return readSure(kData1, d1) && readSure(kData0, d0) && d1 == kept1_ && d0 == kept0_;
+    return readIs(kData1, kept1_) && readIs(kData0, kept0_);   // the values written, read back (readIs)
   });
 }
 
@@ -414,10 +467,8 @@ bool Ch32Dm::giveGprs() {
       phy_.write(kCommand, 0x00230000u | (0x1008 + k));
     }
     if (!waitAbstract()) return false;
-    for (uint16_t k = 0; k < 4; ++k) {   // over the sentinels: a lost write and a lost read left DATA0 a match
-      uint32_t now = 0;
-      if (!readRegisterSure(0x1008 + k, now) || now != gprs_[k]) return false;
-    }
+    for (uint16_t k = 0; k < 4; ++k)   // over the inverted sentinel: a lost write and a lost read left DATA0 a match
+      if (!readRegisterIs(0x1008 + k, gprs_[k])) return false;
     return true;
   });
 }
@@ -741,10 +792,9 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
     const size_t from = stored;
     cmderr_ = 0;
     if (!held([&] {
-          uint32_t d0 = 0;
           if (!autoOffSure()) return false;
           phy_.write(kData0, words[stored]);
-          return readSure(kData0, d0) && d0 == words[stored];
+          return readIs(kData0, words[stored]);
         }))
       break;
     const uint32_t revives = phy_.revives();
@@ -1010,6 +1060,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   // go and keep asking until the hart reports halted - before firmware that kills the debug pins gets that far.
   relink();
   phy_.attach();
+  phy_.forgetRead();
   // The part comes out of reset on its default clock: a speed tuned earlier to a sketch's raised clock garbles the
   // halt requests below and the hart runs into its image (2026-09-24, CH32L103: 2 in 10 stopped mid-sketch after a
   // plain attach had tuned the link). Same rule as the other resets - slowest period, retune once stopped.
