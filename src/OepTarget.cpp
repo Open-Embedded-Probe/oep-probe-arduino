@@ -160,7 +160,7 @@ void freeWire(DebugPort &port) {
   if (port.swclk != 0xffff) port.pins->rest(port.swclk);
 }
 
-void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost) {
+void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost, bool detached) {
   port.users &= static_cast<uint8_t>(~user);
   if (!port.connected || (port.users && !force)) return;
   port.dm.detach();   // haltreq lowered, dmactive kept (oep-if-debug §4.6)
@@ -168,6 +168,7 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost) {
   port.users = 0;
   port.has_tid = false;
   port.lost = lost;
+  port.detached = detached;
   ++port.closes;
   ResourceNumbers::close(port.number);
   freeWire(port);
@@ -742,7 +743,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
         return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
       size_t len = 0;
       const bool force = tail.find(wire::kTlvDetachForce, len) != nullptr;
-      releaseConnection(port_, DebugPort::kUserHost, force);
+      releaseConnection(port_, DebugPort::kUserHost, force, false, force);   // forced: its streams mark detach (§2)
       return tail.finish(completed(), out, capacity);
     }
     default:

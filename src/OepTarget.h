@@ -40,9 +40,11 @@ struct DebugPort {
   uint32_t resets = 0;
   uint8_t reset_detail = 0;
   // Times the connection closed, and whether the last close was the line lost (the console marks link-lost, then
-  // closed 4) or a detach / release (closed 4).
+  // closed 4), a host's detach with force (detach, then closed 4: oep-if-debug §2's table) or another detach / release
+  // (closed 4).
   uint32_t closes = 0;
   bool lost = false;
+  bool detached = false;
   // The target's reset line (attach's reset TLV): the host names the channel every time - there is no default
   // (oep-if-debug §3). Only channels in reset_allowed may be pulled (describe role_channels, role reset), and not one
   // another interface holds in `pins`.
@@ -86,8 +88,8 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`). lost: the line was found gone (the console
-// marks link-lost before closed).
-void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost = false);
+// marks link-lost before closed); detached: a host's detach with its force TLV (the console marks detach before closed).
+void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost = false, bool detached = false);
 // No connection holds the wire's pins (closed, a scan's try, a failed attach): to their free state (oep-core §8).
 void freeWire(DebugPort &port);
 // An at-boot slot's liveness check (oep-if-probe-config §3.1): DMSTATUS read once; false = the wire is lost (no good

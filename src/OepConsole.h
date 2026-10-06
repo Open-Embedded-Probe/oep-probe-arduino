@@ -103,7 +103,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   bool checking_ = false;   // streamOp only checks the request's form and values (handle: core §4.3 order 8 last)
   Result streamOp(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   bool openStream(uint8_t mechanism, uint8_t user, bool &existing);
-  void closeStream(uint8_t detail, bool link_lost = false);
+  void closeStream(uint8_t detail, bool link_lost = false, bool detached = false);
   void release(uint8_t user, uint8_t detail);
   static void take(void *self, uint8_t byte) { static_cast<TargetConsoleStream *>(self)->stream_.put(byte); }
   static void takeMark(void *self, uint8_t kind, uint8_t detail) {

@@ -265,6 +265,30 @@ int main() {
     CHECK(lostMarks() == 2);   // a new episode after the clear
   }
 
+  // ---- detach with force closes the connection: its stream marks detach, then closed 4 (oep-if-debug §2's table; it
+  // marked closed 4 alone); a plain detach that closes it marks closed 4 alone ----
+  for (bool force : {true, false}) {
+    if (!port.connected) {
+      r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
+      CHECK(ok(r) && port.connected);
+    }
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+    CHECK(ok(r) && console.isOpen());
+    const uint16_t s = uint16_t(out[0] | out[1] << 8);
+    Bytes detach = le16(port.number);
+    if (force) detach.insert(detach.end(), {uint8_t(wire::kTlvDetachForce | kTagCritical), 0});
+    r = call(wire_fn, WireRvswd::kOpDetach, detach, out);
+    CHECK(ok(r) && !port.connected);
+    console.poll();
+    CHECK(!console.isOpen());
+    const std::vector<MarkSeen> marks = marksOf(console, s);
+    CHECK(marks.size() >= 2 && marks.back().kind == reg::common::kMarkKindClosed &&
+          marks.back().detail == reg::common::kMarkDetailClosedConnectionClosed);
+    if (marks.size() >= 2) CHECK((marks[marks.size() - 2].kind == reg::common::kMarkKindDetach) == force);
+  }
+  r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
+  CHECK(ok(r) && port.connected);
+
   // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6
   // (oep-if-console §1; it answered no_connection) ----
   {

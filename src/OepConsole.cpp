@@ -27,10 +27,11 @@ size_t TargetConsoleStream::bindInput(const uint8_t *data, size_t length) {
 }
 
 // The stream closes (oep-if-console §2): the driver stops, the reason is marked, and what was collected stays readable.
-void TargetConsoleStream::closeStream(uint8_t detail, bool link_lost) {
+void TargetConsoleStream::closeStream(uint8_t detail, bool link_lost, bool detached) {
   if (!open_) return;
   driver_.stop();
   if (link_lost) stream_.mark(kMarkLinkLost);
+  if (detached) stream_.mark(kMarkDetach);   // a forced detach closed the connection (oep-if-debug §2's table)
   stream_.mark(kMarkClosed, detail);
   open_ = false;
   users_ = 0;
@@ -49,7 +50,7 @@ void TargetConsoleStream::release(uint8_t user, uint8_t detail) {
 void TargetConsoleStream::poll() {
   if (seen_closes_ != port_.closes) {     // the connection went: the stream ends with it, and stays readable
     seen_closes_ = port_.closes;
-    closeStream(reg::common::kMarkDetailClosedConnectionClosed, port_.lost);
+    closeStream(reg::common::kMarkDetailClosedConnectionClosed, port_.lost, port_.detached);
   }
   if (!open_) return;
   if (port_.resets != seen_resets_) {     // a reset the host asked for (riscv-dm reset, attach's reset TLV)
