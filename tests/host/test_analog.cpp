@@ -198,7 +198,41 @@ static void testOutputIdle() {
   CHECK(rig.ep.replacePlan(roles, 2, fns, 1) == 0);
 }
 
+static Bytes readReq(uint32_t generation, uint64_t position, uint32_t max) {
+  Bytes p(16);
+  putU32(p.data(), generation);
+  putU64(p.data() + 4, position);
+  putU32(p.data() + 12, max);
+  return p;
+}
+// The DMA writes `count` values of `value` (of the transfer the capture set up).
+static void convert(uint32_t count, uint16_t value) {
+  for (uint32_t i = 0; i < count && g_fake_dma.written < g_fake_dma.count; ++i) g_fake_dma.to[g_fake_dma.written++] = value;
+}
+
+// The plan released or replaced (capture §3.2): state 0, the data and the segment gone - read is empty (it read past
+// the buffer after a plan with more channels), status counts nothing.
+static void testPlanReleaseForgets() {
+  Rig rig;
+  CHECK(rig.plan({26}) == 0);
+  CHECK(ok(rig.op(ana::kOpConfigure, configureRequest(10000, 100))));
+  CHECK(ok(rig.op(ana::kOpStart)));
+  const uint32_t generation = getU32(rig.out.data() + 4);
+  convert(100, 0x123);
+  rig.cap.poll();
+  CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateDone && getU64(rig.out.data() + 5) == 200);
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 200);
+  CHECK(rig.plan({26, 27, 28, 29}) == 0);
+  CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateUnconfigured && getU32(rig.out.data() + 1) == 0 &&
+        getU64(rig.out.data() + 5) == 0);
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && rig.out.size() == 13 && getU32(rig.out.data() + 9) == 0);
+  CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 && rig.out[1] == 0);
+  rig.cap.planRelease();
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 0);
+}
+
 int main() {
+  testPlanReleaseForgets();
   testOutputIdle();
   testRateRange();
   testQueryAsConfigure();

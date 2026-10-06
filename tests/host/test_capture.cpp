@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <esp_heap_caps.h>
+#include <freertos/queue.h>
 
 #include "OepCapture.h"
 #include "OepEndpoint.h"
@@ -309,7 +310,68 @@ static void testBound() {
   CHECK(rig.cap.boundTo() == 0);
 }
 
+// Plays the PARLIO's DMA into the ring the capture handed the driver, and runs the harvest task (deferred by the fake
+// FreeRTOS) until its queue is empty.
+struct Dma {
+  struct Idle {};
+  size_t at = 0;
+  Dma() { g_fake_tasks_deferred = true; g_fake_task_fn = nullptr; }
+  ~Dma() { g_fake_tasks_deferred = false; }
+  void deliver(size_t n, uint8_t value) {
+    while (n) {
+      size_t k = g_fake_parlio_size - at;
+      if (k > n) k = n;
+      if (k > 4096) k = 4096;
+      memset(g_fake_parlio_buffer + at, value, k);
+      parlio_rx_event_data_t e = {g_fake_parlio_buffer + at, k};
+      g_fake_parlio_callbacks.on_partial_receive(nullptr, &e, g_fake_parlio_context);
+      at = (at + k) % g_fake_parlio_size;
+      n -= k;
+    }
+  }
+  void run() {
+    if (!g_fake_task_fn) return;
+    g_fake_queue_empty = [] { throw Idle{}; };
+    try { g_fake_task_fn(g_fake_task_arg); } catch (const Idle &) {}
+    g_fake_queue_empty = nullptr;
+  }
+};
+
+static Bytes readReq(uint32_t generation, uint64_t position, uint32_t max) {
+  Bytes p(16);
+  putU32(p.data(), generation);
+  putU64(p.data() + 4, position);
+  putU32(p.data() + 12, max);
+  return p;
+}
+
+// The plan released (capture §3.2): state 0, the data and the segments gone - read is empty, status and segments count
+// none (a repeat's read after it copied from the freed store).
+static void testPlanReleaseForgets() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.mode = 2;
+  c.samples = 16384;   // 4096 bytes at w = 2
+  c.segments = 2;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)) && out.size() == 8);
+  const uint32_t generation = getU32(out.data() + 4);
+  dma.deliver(4096, 0x55);
+  dma.run();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && getU32(out.data() + 1) == 1);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && getU32(out.data() + 9) == 100 && out[13] == 0x55);
+  rig.cap.planRelease();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 18);
+  CHECK(out[0] == cap::kStateUnconfigured && getU32(out.data() + 1) == 0 && getU64(out.data() + 5) == 0);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && out.size() == 13 && getU32(out.data() + 9) == 0);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 && out[1] == 0);
+}
+
 int main() {
+  testPlanReleaseForgets();
   testBound();
   testRateLimit();
   testSentCritical();

@@ -2,8 +2,9 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // A fake of ESP-IDF's PARLIO RX driver for host tests (OEP_HOST_FAKE_PARLIO): units and delimiters are made and
-// deleted (counted), the divider the unit would set is written to HP_SYS_CLKRST, nothing is ever received. Enough for
-// the logic capture's configure / query paths and its memory use.
+// deleted (counted), the divider the unit would set is written to HP_SYS_CLKRST; a test plays the DMA itself (the
+// receive's buffer, the callbacks). Enough for the logic capture's configure / query paths, its memory use, and its
+// harvest.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -59,8 +60,22 @@ inline esp_err_t parlio_new_rx_soft_delimiter(const parlio_rx_soft_delimiter_con
   return ESP_OK;
 }
 inline esp_err_t parlio_del_rx_delimiter(parlio_rx_delimiter_handle_t d) { delete d; --g_fake_parlio_delimiters; return ESP_OK; }
-inline esp_err_t parlio_rx_unit_register_event_callbacks(parlio_rx_unit_handle_t, const parlio_rx_event_callbacks_t *, void *) { return ESP_OK; }
+// What the capture handed the driver last: its callbacks and their context, the buffer and size of the receive. A test
+// that plays the DMA writes into the buffer and calls the callback as the driver's ISR would.
+inline parlio_rx_event_callbacks_t g_fake_parlio_callbacks = {};
+inline void *g_fake_parlio_context = nullptr;
+inline uint8_t *g_fake_parlio_buffer = nullptr;
+inline size_t g_fake_parlio_size = 0;
+inline esp_err_t parlio_rx_unit_register_event_callbacks(parlio_rx_unit_handle_t, const parlio_rx_event_callbacks_t *cb, void *context) {
+  g_fake_parlio_callbacks = *cb;
+  g_fake_parlio_context = context;
+  return ESP_OK;
+}
 inline esp_err_t parlio_rx_unit_enable(parlio_rx_unit_handle_t, bool) { return ESP_OK; }
 inline esp_err_t parlio_rx_unit_disable(parlio_rx_unit_handle_t) { return ESP_OK; }
-inline esp_err_t parlio_rx_unit_receive(parlio_rx_unit_handle_t, void *, size_t, const parlio_receive_config_t *) { return ESP_OK; }
+inline esp_err_t parlio_rx_unit_receive(parlio_rx_unit_handle_t, void *buffer, size_t size, const parlio_receive_config_t *) {
+  g_fake_parlio_buffer = static_cast<uint8_t *>(buffer);
+  g_fake_parlio_size = size;
+  return ESP_OK;
+}
 inline esp_err_t parlio_rx_soft_delimiter_start_stop(parlio_rx_unit_handle_t, parlio_rx_delimiter_handle_t, bool) { return ESP_OK; }

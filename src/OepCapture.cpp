@@ -469,6 +469,7 @@ uint8_t LogicCapture::planCheck(const RoleAssignment *roles, size_t count) {
 // (parlio_new_rx_unit when a capture is set up), so there is nothing to restore at release either.
 bool LogicCapture::planApply(const RoleAssignment *roles, size_t count) {
   close();
+  forget();
   for (size_t i = 0; i < count; ++i) pins_[roles[i].role] = roles[i].channel;
   channels_ = static_cast<uint8_t>(count);
   state_ = kStateUnconfigured;
@@ -477,8 +478,25 @@ bool LogicCapture::planApply(const RoleAssignment *roles, size_t count) {
 
 void LogicCapture::planRelease() {
   close();
+  forget();
   channels_ = 0;
   state_ = kStateUnconfigured;
+}
+
+// The plan released or replaced (capture §3.2): back to state 0, the configuration, the data and the segments gone - a
+// read finds nothing, status and segments count none.
+void LogicCapture::forget() {
+  mode_ = cap::kModeOneShot;
+  triggered_ = follow_ = false;
+  trig_type_ = 0;
+  pretrigger_ = 0;
+  samples_ = bytes_ = filled_ = 0;
+  trig_phase_ = 0;
+  trig_overrun_ = false;
+  completed_ = released_ = fill_ = queue_overflow_ = overruns_ = stage_drops_ = produced_ = 0;
+  captured_ = dropped_ = 0;
+  sent_seg_ = sent_off_ = reported_ = 0;
+  gap_pending_ = paused_ = false;
 }
 
 // The most the segment store can ever take: the PSRAM but a reserve, else the internal store's cap (describe mode).
@@ -1113,6 +1131,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (count) memcpy(out + kHead, data, count);
         return tail.finish(completed(kHead + count), out, capacity);
       };
+      // no plan or configuration (released: the data went with it), no store: nothing to read
+      if (state_ == kStateUnconfigured || (mode_ == 1 ? !buffer_ : (!store_ && !direct_))) return answer(position, 0, nullptr, 0);
       if (mode_ == 3) {   // streaming: what is still in the store, by stream position
         uint32_t serial = 0, offset = 0;
         uint8_t flags = 0;

@@ -156,7 +156,7 @@ bool AnalogCapture::planApply(const RoleAssignment *roles, size_t count) {
     if (table_ && table_->allowed(roles[i].channel)) table_->claim(roles[i].channel, owner_);
   }
   channels_ = static_cast<uint8_t>(count);
-  state_ = ana::kStateUnconfigured;   // the plan changed: configure again
+  forget();   // the plan changed: configure again
   return true;
 }
 
@@ -164,7 +164,21 @@ void AnalogCapture::planRelease() {
   stopNow();
   if (table_) table_->release(owner_);   // to their idle state, now that the ADC is off them
   channels_ = 0;
+  forget();
+}
+
+// The plan released or replaced (capture §3.2): state 0, the configuration, the data and the segment gone - a read
+// finds nothing (the buffer was sized for the old channels), status and segments count none.
+void AnalogCapture::forget() {
   state_ = ana::kStateUnconfigured;
+  frames_ = samples_ = 0;
+  short_ = trig_slipped_ = follow_ = false;
+  trig_type_ = 0;
+  pretrigger_ = 0;
+  phase_ = 0;
+#if defined(ARDUINO_ARCH_ESP32)
+  overflow_ = overflow_seen_ = false;
+#endif
 }
 
 // ---- configure ----------------------------------------------------------------------------------------------------
@@ -869,7 +883,8 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
       const uint64_t position = getU64(p + 4);
       const uint32_t most = getU32(p + 12);
-      const uint64_t end = static_cast<uint64_t>(frames_) * channels_ * 2u;
+      // no plan or configuration (released: the data went with it): nothing to read
+      const uint64_t end = state_ == ana::kStateUnconfigured || !buffer_ ? 0 : static_cast<uint64_t>(frames_) * channels_ * 2u;
       const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
       if (capacity < 13 + reserve) return failed();
       size_t take = position < end ? static_cast<size_t>(end - position) : 0;

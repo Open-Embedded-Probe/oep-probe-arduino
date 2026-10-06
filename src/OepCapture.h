@@ -140,6 +140,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   Result configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query);
   bool open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t &num, uint32_t &den);
   void close();
+  void forget();   // the plan released or replaced: no configuration, data or segments
   size_t segmentInfo(uint8_t *out) const;
   size_t storeBudget(uint32_t &caps) const;   // bytes the segments may take now (counting the store already held)
   // streaming through the endpoint's zero-copy transport: the harvest copies straight from the DMA ring into stages

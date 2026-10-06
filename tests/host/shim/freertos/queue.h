@@ -33,8 +33,13 @@ inline BaseType_t xQueueSendFromISR(QueueHandle_t q, const void *item, BaseType_
 #define pdMS_TO_TICKS(ms) (ms)
 #endif
 inline UBaseType_t uxQueueMessagesWaiting(QueueHandle_t q) { return static_cast<UBaseType_t>(q->items.size()); }
-inline BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t) {
-  if (q->items.empty()) return pdFALSE;
+// Called when a receive that would wait finds the queue empty: a test running a task loop itself ends it there (throws).
+inline void (*g_fake_queue_empty)() = nullptr;
+inline BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t wait) {
+  if (q->items.empty()) {
+    if (wait && g_fake_queue_empty) g_fake_queue_empty();
+    return pdFALSE;
+  }
   memcpy(item, q->items.front().data(), q->size);
   q->items.pop_front();
   return pdTRUE;

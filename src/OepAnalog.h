@@ -150,6 +150,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool startNow();
   void stopNow();
   void finish();
+  void forget();   // the plan released or replaced: no configuration, data or segment
   size_t segmentInfo(uint8_t *out) const;
 #if defined(ARDUINO_ARCH_ESP32)
   adc_continuous_handle_t handle_ = nullptr;
