@@ -465,7 +465,29 @@ static void testPositions() {
   }
 }
 
+// A track configured immediate that a group makes follow another's trigger opens the ring and starts (its start
+// answered into 4 bytes, failed, since the start answer carries the generation); a later start of its own runs.
+static void testImmediateAfterFollowing() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.samples = 4096;
+  c.pretrigger = 100;   // kept for following
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(rig.cap.trackStartFollowing());
+  rig.cap.trackStop();
+  CHECK(rig.cap.trackState() == cap::kStateConfigured);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  dma.deliver(4096, 0x5A);
+  dma.run();
+  rig.cap.poll();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 3 + 37 && out[1] == 1);
+}
+
 int main() {
+  testImmediateAfterFollowing();
   testPositions();
   testTriggeredStop();
   testPlanReleaseForgets();

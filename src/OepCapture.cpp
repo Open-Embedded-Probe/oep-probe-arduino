@@ -878,7 +878,7 @@ bool LogicCapture::trackStartFollowing() {
     triggered_ = true;
   }
   follow_ = true;
-  uint8_t out[4];
+  uint8_t out[8];   // blocking_ms, generation (a 4-byte one failed every follower's start since the generations)
   const Result r = startTriggered(out, sizeof out);
   return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
 }
