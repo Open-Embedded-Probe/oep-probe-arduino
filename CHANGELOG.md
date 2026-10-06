@@ -1,6 +1,22 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm on a link that drops at every change of hart state (CH32L103): after each change (halt, a run's or a
+  step's stop, resume, a hart found halted) the probe brings the link up and looks until it stays up (DMSTATUS a
+  module's, DMCONTROL dmactive with hart 0 - a stale read shows - 3 good looks in a row, 20 ms at most). The drop can
+  come a few transactions after the change, past the one relink, and the register reads after a run's stop or the
+  writes after a halt met it: ch32rv's uploads to the L103 through the RP2350 failed about 1 in 15 ("run: timeout",
+  once "run: fault"), 3 in 12 with other sessions between. Host test: ch32rv's upload sequence 100 times over the wire
+  fake with the drop at random timing - 71 failed before, none now. Bench trace, off by default: build with
+  `OEP_DEBUG_LOG=1` (and on RP2 `OEP_DEBUG_LOG_TX=<GP>`, Serial2 at 921600) for a line per request and the run's steps.
+- (JA) hart の状態が変わるたびに link が落ちる線（CH32L103）での riscv-dm: 変わるたびに（halt、run や step の停止、resume、
+  止まっていた hart を見つけたとき）probe は link を立て直し、落ちたままでないと分かるまで見る（DMSTATUS がモジュールのもの、
+  DMCONTROL が dmactive で hart 0 - 古い値の読みはここで分かる - を 3 回続けて、多くても 20 ms）。落ちるのは変わってから
+  何回か後のやりとりのことがあり、1 回の立て直しの後に来て、run の停止の後のレジスタの読みや halt の後の書き込みが
+  それに当たっていた: ch32rv の RP2350 を通した L103 への書き込みが約 15 回に 1 回（"run: timeout"、1 回は "run: fault"）、
+  間にほかのセッションがあると 12 回に 3 回失敗していた。host test: ch32rv の書き込みの手順を、落ちる時機が乱数の wire の
+  fake で 100 回 - 前は 71 回失敗、今は 0。bench の trace（既定は無効）: `OEP_DEBUG_LOG=1`（RP2 は `OEP_DEBUG_LOG_TX=<GP>` も。
+  Serial2、921600）でビルドすると、要求ごとと run の手順ごとに 1 行出る。
 - (EN) **Breaking: the 2026-10-06 wire (oep-spec 59dd028, the v1 simplification).** A host, a fake or a broker of
   the wire before this does not talk to this probe, and saved settings must be set again. Implements oep-spec
   b69ec26..59dd028 (no `v0.x` tag yet):
