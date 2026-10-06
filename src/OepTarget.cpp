@@ -111,6 +111,10 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
   if (no_answer) *no_answer = false;
   if (port.connected) {
     if (!moduleAnswers(port.dm, dmstatus)) { if (no_answer) *no_answer = true; return false; }
+    if (port.dm.ackHaveReset() && !port.dm.readDmi(kDmStatus, dmstatus)) {   // a pending one first (oep-if-debug §4.6)
+      if (no_answer) *no_answer = true;
+      return false;
+    }
   } else {
     DmiPhy &phy = port.dm.phy();
     if (!phy.setMaxHz(max_hz)) phy.setMaxHz(0);   // the slot's settings were checked when it was set
@@ -589,6 +593,9 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       if (failure == kStatusOk) { ++port_.resets; port_.reset_detail = reg::common::kMarkDetailResetAttachReset; }
     }
     if (failure == kStatusOk) {
+      // a pending havereset acknowledged first (oep-if-debug §4.6), and said (flags bit0): a DM may freeze DMSTATUS's
+      // halt / run bits until then
+      if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
       // halt() is idempotent and also brings this driver's own halted state in line with the hart: a hart left
       // halted (by an earlier process or a reset-halt) must count as halted here, or block reads refuse it
       if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;

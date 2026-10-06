@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) rvswd / swio attach joining a live connection acknowledges a pending havereset first and says so with flags bit0 (oep-if-debug §3, §4.6; only a new connection or a revived link did) - the console marks restart 1 for it; a slot's own attach joining a connection acknowledges it too. Host test.
+- (JA) rvswd / swio の attach が生きている接続に加わるときも、保留中の havereset をまず acknowledge し、flags bit0 でそう言う（oep-if-debug §3、§4.6。新しい接続と立て直した link だけがしていた）- console はそれに restart 1 の mark を付ける。slot 自身の attach が接続に加わるときも acknowledge する。host test。
 - (EN) riscv-dm run sets only ebreakm and prv = M in dcsr (oep-if-debug §4.4): (dcsr | 0x8003); it also set ebreaks and ebreaku (0xb003), which the hart kept after the run. Changes what the target is left with. Host test.
 - (JA) riscv-dm の run は dcsr の ebreakm と prv = M だけを立てる（oep-if-debug §4.4）: (dcsr | 0x8003)。ebreaks と ebreaku も立てていて（0xb003）、run の後も hart に残っていた。target に残すものが変わる。host test。
 - (EN) riscv-dm dmi within max_op_ms at run time (oep-if-debug §4.1): the probe tracks the request's elapsed time, and a request that reaches max_op_ms ends at the step running then (or the next to start) with status timeout and done = that step's index - a poll that read adds its last value, a wait is cut where the limit falls (a poll of max_reads, or waits plus the time of the reads between them, ran past it). Host test.

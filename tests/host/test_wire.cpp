@@ -444,6 +444,11 @@ int main() {
     // joining it again: no search, no search_retries
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting) && !answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len));
+    CHECK(!(out[6] & wire::kAttachFlagsHaveresetAcked));
+    // joining with a havereset pending: acknowledged, flags bit0 (oep-if-debug §4.6; it was left pending)
+    phy.havereset = true;
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting) && (out[6] & wire::kAttachFlagsHaveresetAcked) && !phy.havereset);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     // the first attach() fails, the second takes: search_retries 1
