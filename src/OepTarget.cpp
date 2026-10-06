@@ -89,12 +89,7 @@ void releaseReset(void *ctx) {
 }
 
 // The halted hart's dpc for the attach answer's TLV 0x11 (DATA0 is used and put back).
-bool readDpc(Ch32Dm &dm, uint32_t &dpc) {
-  dm.keepMailbox();
-  const bool ok = dm.readRegister(0x7b1, dpc);
-  dm.giveMailbox();
-  return ok;
-}
+bool readDpc(Ch32Dm &dm, uint32_t &dpc) { return dm.readDpc(dpc); }
 
 }  // namespace
 

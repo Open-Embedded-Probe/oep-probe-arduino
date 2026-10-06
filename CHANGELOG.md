@@ -1,6 +1,42 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm on a link that drops late after a change of hart state (CH32L103): what a block op keeps and gives
+  back, and the register accesses run / step / the resets act on, are done in held groups - each followed by a look at
+  the link (DMSTATUS a module's with authenticated set, then DMCONTROL with dmactive and hart 0 selected: a dropped link
+  reads all ones, or the same last value for both, which cannot pass both); a group that failed or met a drop is redone
+  from a link brought up again (steady), 4 tries at most. read_block / write_block keep abstractauto (redone without
+  clearing it), the mailbox and s0 / s1 / a0 / a1 that way, and give back the GPRs, the mailbox and abstractauto with
+  each read back and compared; an op whose GPRs could not be seen back answers no words (fault), and one that could not
+  keep them does not run. Bench (0.0.29-dev+9942787, L103 through the RP2350, tests/hw test_wire): in about 1 of 200
+  read_blocks a0 0x000ec8fe came back 0x20000000 with s0 / s1 / a1 unchanged - a drop met while the GPRs were kept: the
+  command reading a0 was lost and the DATA0 read gave the last value read (s1's), which was kept for a0 and written
+  back as it. The same for run (dcsr read; dcsr, the host's registers and dpc written; dpc, the out registers and the
+  dcsr fix-up read back), step (dpc / dcsr read, dcsr.step set and cleared), the mailbox around every op, and the dpc
+  read of attach / reset (`Ch32Dm::readDpc`). Retries inside the block ops use steady instead of one relink. Host test
+  (test_wire): the link dropped at every read of read_block and write_block in turn (stale or all ones, held 0 / 0.7 /
+  2.1 ms, writes lost, a host's abstractauto set or not; the fake's program buffer now goes through a0 / a1 as they are
+  and counts stores outside the block): every GPR, dpc, dcsr, DATA0 / DATA1 and abstractauto as found and no stray store
+  in all 558 cases (before: 122 of 294 changed - a0 / a1 taken from a stale read, the mailbox lost), an ok answer always
+  with the right words; the link-drop section and the upload loop check all 31 GPRs after every block op and the run's
+  arguments (100 uploads, and 800 with other seeds, none failed).
+- (JA) hart の状態が変わった後、遅れて落ちるリンク（CH32L103）での riscv-dm: block の op が取っておいて戻すものと、run / step /
+  reset が触るレジスタのアクセスを、保たれた組（held）で行う。組のあとにリンクを 1 回見る（DMSTATUS が module のもので
+  authenticated が立ち、続く DMCONTROL が dmactive と hart 0 の選択: 落ちたリンクは全 1 か、両方に同じ最後の値を返し、両方は
+  通らない）。失敗した組、落ちに会った組は、リンクを立て直して（steady）やり直す（最大 4 回）。read_block / write_block は
+  abstractauto（やり直しはそれを消さない）、mailbox、s0 / s1 / a0 / a1 をこうして取っておき、GPR、mailbox、abstractauto を
+  戻して、それぞれ読み戻して比べる。GPR が戻ったと確かめられない op は語を返さない（fault）。取っておけない op は走らない。
+  ベンチ（0.0.29-dev+9942787、RP2350 越しの L103、tests/hw test_wire）: read_block の約 200 回に 1 回、a0 0x000ec8fe が
+  0x20000000 になり、s0 / s1 / a1 は変わらなかった - GPR を取っておく途中で落ちに会い、a0 を読むコマンドが失われ、DATA0 の
+  読み出しが最後に読んだ値（s1 のもの）を返し、それを a0 として取っておいて書き戻していた。同じことを run（dcsr の読み出し、
+  dcsr・host のレジスタ・dpc の書き込み、dpc・出力のレジスタ・dcsr の戻しの読み出し）、step（dpc / dcsr の読み出し、
+  dcsr.step を立てて下ろす）、各 op の mailbox、attach / reset の dpc の読み出し（`Ch32Dm::readDpc`）にも行う。block の op の
+  中のやり直しは relink 1 回ではなく steady を使う。host test（test_wire）: read_block と write_block の読み出しの 1 つずつで
+  順にリンクを落とす（stale か全 1、0 / 0.7 / 2.1 ms 保つ、その間の書き込みは失われる、host の abstractauto あり / なし。
+  fake の program buffer は a0 / a1 をそのまま通り、block の外への store を数える）: 558 通りすべてで GPR 全部・dpc・dcsr・
+  DATA0 / DATA1・abstractauto が元のまま、外への store なし（前: 294 通り中 122 で変わった - stale の読み出しからの a0 / a1、
+  失われた mailbox）、ok の答えはいつも正しい語。リンクの落ちの節と upload のループは、block の op のたびに GPR 31 本と run の
+  引数を確かめる（upload 100 回、別の seed で 800 回、失敗なし）。
 - (EN) fn 0 `restart` (op 0x14) and `restart_max_ms` (describe 0x4F) - oep-spec ecd1ab9 and 3c96daf (core §6.6, §7.5,
   §12; transports §1): `Endpoint::setRestart(fn, max_ms)` puts restart in fn 0's ops and restart_max_ms in its
   describe (raised to `restart_after_answer_ms`, 100, at least); without it the op stays unknown_operation and the tag

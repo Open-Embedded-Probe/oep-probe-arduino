@@ -48,10 +48,12 @@ bool Ch32Dm::probe(uint32_t &dmstatus) {
 
 // Bring the link up again (the CH32 drops it on a change of state) and put the abstract-command block back in a
 // known state: autoexec off, cmderr cleared.
-void Ch32Dm::relink() {
+void Ch32Dm::relink(bool clear_auto) {
   phy_.reinit();
-  phy_.write(kAbstractAuto, 0);
-  auto_on_ = false;
+  if (clear_auto) {
+    phy_.write(kAbstractAuto, 0);
+    auto_on_ = false;
+  }
   phy_.write(kAbstractCs, 0x700);
 }
 
@@ -83,21 +85,31 @@ bool Ch32Dm::waitStatus(uint32_t &status, uint32_t &relinked_us) {
 // moved through it - would run the last command again. A read that does not answer (all ones) is not taken for a value:
 // 0 goes back then. auto_on_ followed only the probe's own writes, so a host's raw ABSTRACTAUTO = 1 went unseen and the
 // op's register writes ran the previous command on their DATA0.
-void Ch32Dm::keepAuto() {
-  if (auto_kept_) return;
+//
+// The read is a held group whose redo does not clear abstractauto (steady(false)): it has not been read yet. Not held
+// (the link did not stay up): false, nothing kept - the op does not run.
+bool Ch32Dm::keepAuto() {
+  if (auto_kept_) return true;
   uint32_t value = 0;
-  kept_auto_ = phy_.read(kAbstractAuto, value) && value != 0xffffffffu ? value : 0;
+  if (!held([&] { return phy_.read(kAbstractAuto, value) && value != 0xffffffffu; }, false)) return false;
+  kept_auto_ = value;
   auto_kept_ = true;
-  auto_on_ = true;   // so that autoOff() writes 0 whatever the read said
+  auto_on_ = true;   // so that autoOff() writes 0 whatever the read said (the next held group's look sees it landed)
   autoOff();
+  return true;
 }
 
-void Ch32Dm::giveAuto() {   // last: after DATA0 is back (writing ABSTRACTAUTO runs nothing)
-  if (!auto_kept_) return;
+bool Ch32Dm::giveAuto() {   // last: after DATA0 is back (writing ABSTRACTAUTO runs nothing)
+  if (!auto_kept_) return true;
   auto_kept_ = false;
-  if (!kept_auto_) return;   // autoOff() left it 0
-  phy_.write(kAbstractAuto, kept_auto_);
+  if (!kept_auto_) return true;   // autoOff() left it 0 (and a redo's relink writes 0)
+  const bool back = held([&] {
+    uint32_t now = 0;
+    phy_.write(kAbstractAuto, kept_auto_);
+    return phy_.read(kAbstractAuto, now) && now == kept_auto_;
+  });
   auto_on_ = true;
+  return back;
 }
 
 // Measure the link speed again (the target's clock may have changed), then put the abstract-command block back in
@@ -128,26 +140,52 @@ void Ch32Dm::settleHalted(bool ack_reset) {
 // module's (a found version) and DMCONTROL with dmactive set and hart 0 selected (hartsel and hasel 0: a stale read,
 // the DMSTATUS before it, has authenticated - bit 7 - set there; all ones has everything). kSteadyLooks good looks in
 // a row; a bad one relinks and starts the count again; kSteadyMs at most. false: it did not stay up.
-bool Ch32Dm::steady() {
-  relink();
+bool Ch32Dm::steady(bool clear_auto) {
+  relink(clear_auto);
   const uint32_t started = millis();
   int good = 0, bad = 0;
   while (good < kSteadyLooks) {
-    uint32_t status = 0, control = 0;
-    if (moduleStatus(status) && phy_.read(kDmControl, control) && (control & 1u) && !(control & 0x07ffffc0u)) {
+    if (linkHeld()) {
       ++good;
       continue;
     }
-    OEP_LOGF("dm steady: bad look %d status %08lx control %08lx", bad, static_cast<unsigned long>(status),
-             static_cast<unsigned long>(control));
+    OEP_LOGF("dm steady: bad look %d", bad);
     ++bad;
     good = 0;
     if (millis() - started >= kSteadyMs) { OEP_LOGF("dm steady: not up after %d bad looks", bad); return false; }
     delayMicroseconds(50);
-    relink();
+    relink(clear_auto);
   }
   if (bad) OEP_LOGF("dm steady: up after %d bad looks, %lu ms", bad, static_cast<unsigned long>(millis() - started));
   return true;
+}
+
+// One look at the link (steady's, and the end of every held group). DMSTATUS a module's (a found version) with
+// authenticated (bit 7: a module that needs no authentication; one that does is of no use to the probe either), then
+// DMCONTROL with dmactive set and hartsel / hasel 0 (bit 7 is hartselhi's: clear). A dropped link reads all ones, or
+// the last value it read for both: one value cannot have bit 7 set and clear. A drop stays until the link is brought up
+// again, so a good look after a group says every transaction of the group met the link up.
+bool Ch32Dm::linkHeld() {
+  uint32_t status = 0, control = 0;
+  return moduleStatus(status) && (status & (1u << 7)) && phy_.read(kDmControl, control) && (control & 1u) &&
+         !(control & 0x07ffffc0u);
+}
+
+// A group of register accesses that must all meet the link up: run, looked at, redone from a link brought up again
+// (steady) when it failed or the look did not pass. The groups are made so that a redo is the same as the first try:
+// they write values fixed before them and read what nothing in them changes. A link that drops at a change of hart state
+// (a CH32L103) does not always drop at once (d690cf8's steady waits for it to stay up, and it may still drop a few
+// transactions later): with writes lost and reads giving all ones or the last value read, a block op that met the drop
+// kept a wrong s0 / s1 / a0 / a1 or lost a write of one going back - a0 0x000ec8fe came back 0x20000000 in about 1 of
+// 200 read_blocks on the L103 through the RP2350.
+template <typename Group> bool Ch32Dm::held(Group group, bool clear_auto) {
+  for (int attempt = 1;; ++attempt) {
+    const bool done = group();
+    if (done && linkHeld()) return true;
+    OEP_LOGF("dm held: try %d %s", attempt, done ? "met a drop" : "failed");
+    if (attempt >= kHeldTries) return false;
+    steady(clear_auto);
+  }
 }
 
 // What DMSTATUS says now: allhalted (bit 9) of a version-2 or -3 module, with no reset pending (a V00x freezes the
@@ -190,50 +228,77 @@ void Ch32Dm::selectHart0() {
 // The target's mailbox across an op (oep-if-debug §4.2). A client's halt -> read_block -> resume left the abstract
 // command's word in DATA0; the target, missing its dmseq frame, read that as silence and waited out its timeout, and
 // the console went quiet for seconds (2026-09-30, CH32X035, ch32rv monitor + another client).
-void Ch32Dm::keepMailbox() {
-  if (kept_) return;
-  kept_ = phy_.read(kData0, kept0_) && phy_.read(kData1, kept1_);
+// Both are held groups (abstractauto is off: reading or writing DATA0 runs no command); giveMailbox reads them back.
+bool Ch32Dm::keepMailbox() {
+  if (kept_) return true;
+  kept_ = held([&] { return phy_.read(kData0, kept0_) && phy_.read(kData1, kept1_); });
+  return kept_;
 }
 
-void Ch32Dm::giveMailbox() {   // abstractauto is off here: writing DATA0 runs no command
-  if (!kept_) return;
-  phy_.write(kData1, kept1_);   // the order the target writes them in (dmseq: DATA1 before DATA0)
-  phy_.write(kData0, kept0_);
+bool Ch32Dm::giveMailbox() {
+  if (!kept_) return true;
   kept_ = false;
+  return held([&] {
+    uint32_t d0 = 0, d1 = 0;
+    phy_.write(kData1, kept1_);   // the order the target writes them in (dmseq: DATA1 before DATA0)
+    phy_.write(kData0, kept0_);
+    return phy_.read(kData1, d1) && phy_.read(kData0, d0) && d1 == kept1_ && d0 == kept0_;
+  });
+}
+
+bool Ch32Dm::readDpc(uint32_t &dpc) {
+  if (!keepMailbox()) return false;
+  const bool ok = held([&] { return readRegister(0x7b1, dpc); });
+  return giveMailbox() && ok;
 }
 
 // GPRs x8..x11 (s0, s1, a0, a1): what the block ops use (oep-if-debug §4.5). A sketch whose loop was stopped
 // 109 times by halt -> read_block -> resume died when they were not put back (2026-09-30, CH32X035).
+// Kept in one held group: a read over a dropped link (the command lost, DATA0 read stale) is never kept - not kept, the
+// op does not run (it would break the target).
 bool Ch32Dm::keepGprs() {
   if (gprs_kept_) return true;
-  for (uint16_t k = 0; k < 4; ++k)
-    if (!readRegister(0x1008 + k, gprs_[k])) return false;   // not kept: the op does not run (it would break the target)
-  gprs_kept_ = true;
-  return true;
+  gprs_kept_ = held([&] {
+    for (uint16_t k = 0; k < 4; ++k)
+      if (!readRegister(0x1008 + k, gprs_[k])) return false;
+    return true;
+  });
+  return gprs_kept_;
 }
 
-void Ch32Dm::giveGprs() {   // while still halted, before the mailbox (these writes go through DATA0)
-  if (!gprs_kept_) return;
-  // Four register writes, one completion check at the end (E156: an abstract command finishes within one DMI
-  // transaction, and nothing here acts on a failure beyond clearing cmderr). 9 round trips instead of 16.
-  autoOff();
-  for (uint16_t k = 0; k < 4; ++k) {
-    phy_.write(kData0, gprs_[k]);
-    phy_.write(kCommand, 0x00230000u | (0x1008 + k));
-  }
-  waitAbstract();
+// While still halted, before the mailbox (these go through DATA0). Four register writes with one completion check
+// (E156: an abstract command finishes within one DMI transaction), then each read back and compared, in one held
+// group: a write lost to a drop is written again. false: they could not be seen back (the link did not hold).
+bool Ch32Dm::giveGprs() {
+  if (!gprs_kept_) return true;
   gprs_kept_ = false;
+  return held([&] {
+    autoOff();
+    for (uint16_t k = 0; k < 4; ++k) {
+      phy_.write(kData0, gprs_[k]);
+      phy_.write(kCommand, 0x00230000u | (0x1008 + k));
+    }
+    if (!waitAbstract()) return false;
+    for (uint16_t k = 0; k < 4; ++k) {
+      uint32_t now = 0;
+      if (!readRegister(0x1008 + k, now) || now != gprs_[k]) return false;
+    }
+    return true;
+  });
 }
 
-// A block op's exit, whatever happened inside it: the GPRs back, autoexec off, cmderr clear, then the mailbox
-// (oep-if-debug §4 table: the probe carries nothing past the answer).
-void Ch32Dm::restoreBlock() {
-  autoOff();
-  giveGprs();
+// A block op's start: abstractauto (read, then off), the mailbox, the GPRs - each kept over a held link.
+bool Ch32Dm::keepBlock() { return keepAuto() && keepMailbox() && keepGprs(); }
+
+// A block op's exit, whatever happened inside it: the GPRs back, autoexec off, cmderr clear, then the mailbox and
+// abstractauto (oep-if-debug §4 table: the probe carries nothing past the answer). Each is read back over a held link;
+// what was not kept is not written. false: something could not be seen back.
+bool Ch32Dm::restoreBlock() {
+  bool back = giveGprs();
   autoOff();
   if (cmderr_) phy_.write(kAbstractCs, 0x700);
-  giveMailbox();
-  giveAuto();
+  back = giveMailbox() && back;
+  return giveAuto() && back;
 }
 
 bool Ch32Dm::halt() {
@@ -368,9 +433,7 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
       if (awaitModule(settle_end, status) == kModuleGone) { report.flags &= static_cast<uint8_t>(~1u); return report; }
       uint32_t pc = 0;
       if (!halt()) { report.flags |= 8; break; }            // the confirmation halt failed
-      keepMailbox();
-      const bool read = readRegister(0x7b1, pc);
-      giveMailbox();
+      const bool read = readDpc(pc);
       if (!resume()) { report.flags |= 8; break; }
       if (read && pc != 0) {
         report.flags = static_cast<uint8_t>((report.flags & ~8) | 2);
@@ -394,8 +457,7 @@ void Ch32Dm::detach() {
   phy_.park();   // floating both wires high is how this bus is told to reset
 }
 
-bool Ch32Dm::loadRegisters(uint32_t &data0_address) {
-  if (!keepGprs()) return false;
+bool Ch32Dm::loadRegisters(uint32_t &data0_address) {   // a0, a1: the reader's / writer's pointers (kept before)
   uint32_t info = 0;
   if (!phy_.read(kDmHartInfo, info)) return false;
   data0_address = 0xe0000000u | (info & 0x7ff);
@@ -408,8 +470,10 @@ bool Ch32Dm::loadRegisters(uint32_t &data0_address) {
 
 bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr) {
   if (!halted_ || !words) return false;
-  keepAuto();      // first: with autoexec on, reading DATA0 would run a command
-  keepMailbox();   // then: everything below goes through DATA0 / DATA1
+  if (cmderr) *cmderr = 0;
+  // abstractauto first (with autoexec on, reading DATA0 would run a command), then the mailbox (everything below goes
+  // through DATA0 / DATA1), then the GPRs the reader uses. Not kept: the op does not run; what was kept goes back.
+  if (!keepBlock()) { restoreBlock(); return false; }
   // Long runs of these hiccup now and then - roughly one chunk in a couple of hundred on
   // the CH32L103 jig, which is a whole-flash verify failing every few tries. The words
   // already read are then meaningless, so redo the chunk from its own bring-up rather
@@ -418,7 +482,7 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
   bool done = false;
   for (int attempt = 0; attempt < 3 && !done; ++attempt) {
     uint32_t data0_address = 0;
-    if (!loadRegisters(data0_address)) { relink(); continue; }
+    if (!loadRegisters(data0_address)) { steady(); continue; }
     for (size_t i = 0; i < sizeof kReader / sizeof kReader[0]; ++i) phy_.write(kProgBuf0 + i, kReader[i]);
     phy_.write(kData1, address);
     autoOn();
@@ -455,11 +519,12 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
     // cmderr 3 is the look-ahead walking off the end of a region and says nothing about
     // the words already read. Anything else means the program buffer did not run: the
     // reads then returned whatever was left in DATA0, which looks like data and is not.
-    done = ok && counted && (err == 0 || err == 3);
-    if (!done) relink();
+    // A good look last: no word above met a drop (a stale read).
+    done = ok && counted && (err == 0 || err == 3) && linkHeld();
+    if (!done) steady();   // a redo from a link that stays up
   }
-  restoreBlock();
-  return done;
+  // The words stand only with everything back: a block op that could not put the GPRs back answers no words.
+  return restoreBlock() && done;
 }
 
 bool Ch32Dm::readRegister(uint16_t regno, uint32_t &value) {
@@ -480,14 +545,13 @@ bool Ch32Dm::writeRegister(uint16_t regno, uint32_t value) {
 
 bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t count) {
   if (!halted_ || !count || (address & 3)) return false;
-  keepAuto();
-  keepMailbox();
+  if (!keepBlock()) { restoreBlock(); return false; }
   // Plain memory, so a failed attempt is simply redone from the start. As with readWords, the
   // address the writer leaves in DATA1 counts the runs and catches a missed or doubled trigger.
   bool done = false;
   for (int attempt = 0; attempt < 3 && !done; ++attempt) {
     uint32_t data0_address = 0;
-    if (!loadRegisters(data0_address)) { relink(); continue; }
+    if (!loadRegisters(data0_address)) { steady(); continue; }
     for (size_t i = 0; i < sizeof kBlockWriter / sizeof kBlockWriter[0]; ++i) phy_.write(kProgBuf0 + i, kBlockWriter[i]);
     phy_.write(kData1, address);
     phy_.write(kData0, words[0]);
@@ -500,15 +564,14 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
       autoOff();
     }
     uint32_t next = 0;
-    done = ok && phy_.read(kData1, next) && next == address + 4u * static_cast<uint32_t>(count);
+    done = ok && phy_.read(kData1, next) && next == address + 4u * static_cast<uint32_t>(count) && linkHeld();
     if (!done) {
       phy_.write(kAbstractAuto, 0);
       phy_.write(kAbstractCs, 0x700);
-      relink();
+      steady();
     }
   }
-  restoreBlock();
-  return done;
+  return restoreBlock() && done;
 }
 
 bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
@@ -516,7 +579,7 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
                           RunReport &report) {
   report = {false, false, 0, 0};
   if (!halted_) return false;
-  keepAuto();                 // abstractauto as found goes back before the answer (§4's table), whatever the way out
+  if (!keepAuto()) return false;   // abstractauto as found goes back before the answer (§4's table), whatever the way out
   AutoBack auto_back(*this);
   // Without ebreakm the final ebreak traps through mtvec and the application restarts
   // (the V003 loader finding, 2026-09-22). prv = M: the hart may have been stopped in U mode
@@ -527,15 +590,21 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   // stopped in its sketch (U mode) - and the run timed out: uploads by ch32rv through the RP2350 failed now and then
   // ("run: timeout"), where 0.0.28, which left them set, passed. Restoring them keeps the target as §4.4 says.
   constexpr uint32_t kEbreakSU = 0x3000u;   // ebreaks (13), ebreaku (12)
+  // dcsr read, then dcsr, the host's registers and dpc written: two held groups (a write lost to a drop would start the
+  // code with a register as it was; a stale read would be taken for dcsr). A redo of the second writes the same values.
   uint32_t dcsr = 0;
-  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0x8003u | kEbreakSU)) {
-    OEP_LOGF("dm run: dcsr read / write failed (cmderr %u)", cmderr_);
+  if (!held([&] { return readRegister(0x07b0, dcsr); })) {
+    OEP_LOGF("dm run: dcsr read failed (cmderr %u)", cmderr_);
     return false;
   }
   const uint32_t ebreak_su = dcsr & kEbreakSU;
-  for (size_t i = 0; i < count; ++i)
-    if (!writeRegister(regnos[i], values[i])) { OEP_LOGF("dm run: reg 0x%04x write failed (cmderr %u)", regnos[i], cmderr_); return false; }
-  if (!writeRegister(0x07b1, pc)) { OEP_LOGF("dm run: dpc write failed (cmderr %u)", cmderr_); return false; }
+  const bool set = held([&] {
+    if (!writeRegister(0x07b0, dcsr | 0x8003u | kEbreakSU)) return false;
+    for (size_t i = 0; i < count; ++i)
+      if (!writeRegister(regnos[i], values[i])) return false;
+    return writeRegister(0x07b1, pc);
+  });
+  if (!set) { OEP_LOGF("dm run: dcsr / register / dpc write failed (cmderr %u)", cmderr_); return false; }
   OEP_LOGF("dm run: pc %08lx dcsr %08lx, %u regs in, resumereq", static_cast<unsigned long>(pc),
            static_cast<unsigned long>(dcsr), static_cast<unsigned>(count));
   phy_.write(kAbstractAuto, 0);
@@ -578,20 +647,23 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   report.halted = true;
   // The caller judges success from dpc (its ebreak) and the registers it asked for; a stop somewhere else is a fault.
   // DATA0 carries them and goes back to what the hart left when it stopped (§4: as step).
-  keepMailbox();
-  bool ok = readRegister(0x07b1, report.dpc);
-  for (size_t i = 0; i < out_count; ++i) {
-    out_values[i] = 0;
-    if (!readRegister(outs[i], out_values[i])) ok = false;
-  }
-  uint32_t now = 0;   // ebreaks / ebreaku back as they were (cause, prv: where it stopped)
-  if (!readRegister(0x07b0, now) || ((now & kEbreakSU) != ebreak_su && !writeRegister(0x07b0, (now & ~kEbreakSU) | ebreak_su)))
-    ok = false;
+  // dpc, the registers asked for and dcsr in one held group (a stale read is never answered; the dcsr write, ebreaks /
+  // ebreaku back as they were - cause, prv: where it stopped -, is redone as it was)
+  bool ok = keepMailbox();
+  uint32_t now = 0;
+  ok = ok && held([&] {
+    bool read = readRegister(0x07b1, report.dpc);
+    for (size_t i = 0; i < out_count; ++i) {
+      out_values[i] = 0;
+      if (!readRegister(outs[i], out_values[i])) read = false;
+    }
+    return read && readRegister(0x07b0, now) &&
+           ((now & kEbreakSU) == ebreak_su || writeRegister(0x07b0, (now & ~kEbreakSU) | ebreak_su));
+  });
   OEP_LOGF("dm run: dpc %08lx dcsr %08lx, %u regs out, %s (cmderr %u)", static_cast<unsigned long>(report.dpc),
            static_cast<unsigned long>(now), static_cast<unsigned>(out_count), ok ? "ok" : "a read failed", cmderr_);
   autoOff();
-  giveMailbox();
-  return ok;   // auto_back: abstractauto as it was, after DATA0
+  return giveMailbox() && ok;   // auto_back: abstractauto as it was, after DATA0
 }
 
 bool Ch32Dm::ackHaveReset() {
@@ -642,10 +714,7 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   else { relink(); halted_ = false; }
   retune();                                // at the default clock this time
   if (!(released && halted)) return false;
-  keepMailbox();                           // what the fresh image put there (nothing, usually) goes back after the read
-  const bool ok = readRegister(0x07b1, dpc);
-  giveMailbox();
-  return ok;
+  return readDpc(dpc);                     // what the fresh image put in DATA (nothing, usually) goes back after the read
 }
 
 bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEnd &end) {
@@ -653,14 +722,19 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   moved = false;
   end = kStepped;
   if (!halted_) return false;
-  keepAuto();                              // before DATA0 is touched; back at every way out (auto_back)
+  if (!keepAuto()) return false;           // before DATA0 is touched; back at every way out (auto_back)
   AutoBack auto_back(*this);
-  keepMailbox();                           // the reads below go through DATA0
+  if (!keepMailbox()) return false;        // the reads below go through DATA0
+  // dpc and dcsr read, then dcsr.step set (the privilege level as it is): held groups, so that a stale read is never
+  // taken for dcsr - it goes back from it below - and the write is seen to land
   uint32_t dcsr = 0;
-  if (!readRegister(0x7b1, dpc_before) || !readRegister(0x7b0, dcsr)) { giveMailbox(); return false; }
-  if (!writeRegister(0x7b0, dcsr | 0x4u)) { giveMailbox(); return false; }   // dcsr.step, the privilege level as it is
+  if (!held([&] { return readRegister(0x7b1, dpc_before) && readRegister(0x7b0, dcsr); }) ||
+      !held([&] { return writeRegister(0x7b0, dcsr | 0x4u); })) {
+    giveMailbox();
+    return false;
+  }
   phy_.write(kAbstractAuto, 0);
-  giveMailbox();                           // the instruction runs on the target's own mailbox
+  if (!giveMailbox()) return false;        // the instruction runs on the target's own mailbox
   phy_.write(kDmControl, 0x40000001);      // resumereq, once
   // Back in debug mode by itself within dm_wait_ms of time (oep-if-debug §4.2)?
   bool halted = false;
@@ -683,12 +757,13 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
     if (!halt()) { end = kLeftRunning; return true; }
     end = kHaltedByProbe;
   }
-  keepMailbox();                           // before the dpc / dcsr reads below overwrite them again
-  const bool ok = readRegister(0x07b1, dpc_after) && writeRegister(0x07b0, dcsr & ~0x4u);
+  // the mailbox kept before the dpc / dcsr accesses below overwrite it again; those in one held group
+  const bool ok =
+      keepMailbox() && held([&] { return readRegister(0x07b1, dpc_after) && writeRegister(0x07b0, dcsr & ~0x4u); });
   phy_.write(kDmControl, 0x00000001);      // haltreq lowered after a step (§4); the hart stays halted
-  giveMailbox();
+  const bool back = giveMailbox();
   moved = dpc_after != dpc_before;
-  return ok;
+  return ok && back;
 }
 
 bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), void *ctx, uint32_t hold_ms,
@@ -719,10 +794,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   if (!halted) return false;
   settleHalted(true);
   retune();
-  keepMailbox();
-  const bool ok = readRegister(0x07b1, dpc);
-  giveMailbox();
-  return ok;
+  return readDpc(dpc);
 }
 
 void Ch32Dm::pulseReset(void (*hold)(void *), void (*release)(void *), void *ctx, uint32_t hold_ms) {

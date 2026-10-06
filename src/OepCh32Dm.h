@@ -11,6 +11,12 @@
 // returns; step puts dcsr.step and DATA back; run puts abstractauto and haltreq back (pc, the host's registers and dcsr
 // stay as the host asked). halt may keep haltreq asserted while the hart is halted (the L103 drops its DMI link on a
 // change of hart state); resume, step, reset, detach lower it. A raw DMI write is just that: the host owns DATA then.
+//
+// Held groups: a link that drops (a CH32L103's, at a change of hart state - not always at once) loses writes and reads
+// all ones or the last value read until it is brought up again. So what an op keeps and gives back, and the register
+// accesses it acts on, are done in groups each followed by a look at the link (linkHeld): a good look says nothing in
+// the group met a drop; a bad one brings the link up again (steady) and redoes the group. What goes back is read back
+// and compared too.
 #pragma once
 
 #include <Arduino.h>
@@ -50,7 +56,8 @@ class Ch32Dm {
   ResetReport reset(bool confirm = true);
   void detach();          // haltreq and the rest lowered, dmactive kept, lines Hi-Z (target keeps running or stays halted)
   // Memory (hart must be halted). readWords uses the autoexec reader with no per-word poll; cmderr is checked once at
-  // the end. Both put s0, s1, a0, a1, DATA1, DATA0 and abstractauto back before returning (§4.5).
+  // the end. Both put s0, s1, a0, a1, DATA1, DATA0 and abstractauto back before returning (§4.5), read back and seen
+  // back over a held link; false when that could not be done.
   bool readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr = nullptr);
   bool writeWordsFast(uint32_t address, const uint32_t *words, size_t count);
   // Abstract register access (hart halted). They use DATA0: an op that calls them restores DATA (keepMailbox /
@@ -66,9 +73,12 @@ class Ch32Dm {
     return true;
   }
   // DATA0 / DATA1 as the target left them (a dmseq frame or the answer to one): kept at the start of an op that uses
-  // them and written back (DATA1, then DATA0) before the op returns. Public for the ops composed above this class (run).
-  void keepMailbox();
-  void giveMailbox();
+  // them and written back (DATA1, then DATA0, read back) before the op returns. Public for the ops composed above this
+  // class (run). false: the link did not hold for it (not kept / not seen back).
+  bool keepMailbox();
+  bool giveMailbox();
+  // The halted hart's dpc, read in a held group with the mailbox kept and given back (attach's answer, the resets).
+  bool readDpc(uint32_t &dpc);
   // runUntilHalt: sets registers and dpc (dcsr: ebreakm, prv = M), resumes once, waits for the hart to stop on its
   // ebreak; at the timeout it halts the hart itself. Then dpc and the registers `outs` are read. It never re-issues the
   // resume (oep-if-debug §4.4). report.halted: the hart is halted at the end (false: it could not be stopped - stopped 2).
@@ -103,11 +113,12 @@ class Ch32Dm {
   bool halted_ = false;
   bool kept_ = false;
   uint32_t kept0_ = 0, kept1_ = 0;
-  // s0, s1, a0, a1 as the target had them: kept by a block op before it uses them and written back before it returns.
+  // s0, s1, a0, a1 as the target had them: kept by a block op before it uses them and written back (read back and
+  // compared) before it returns.
   bool gprs_kept_ = false;
   uint32_t gprs_[4] = {};
   bool keepGprs();
-  void giveGprs();
+  bool giveGprs();
   uint8_t cmderr_ = 0;
   bool auto_on_ = true;     // ABSTRACTAUTO may be set: autoOff() writes 0 only then (a block op's fixed cost is DMI round trips)
   void autoOff() { if (auto_on_) { phy_.write(0x18, 0); auto_on_ = false; } }
@@ -115,8 +126,8 @@ class Ch32Dm {
   // abstractauto as the op found it: read and cleared at its start, written back at its very end (oep-if-debug §4)
   bool auto_kept_ = false;
   uint32_t kept_auto_ = 0;
-  void keepAuto();
-  void giveAuto();
+  bool keepAuto();
+  bool giveAuto();
   struct AutoBack {   // giveAuto() on every way out of an op
     Ch32Dm &dm;
     explicit AutoBack(Ch32Dm &d) : dm(d) {}
@@ -134,16 +145,27 @@ class Ch32Dm {
   enum ModuleWait : uint8_t { kModuleThere, kModuleBack, kModuleGone };
   ModuleWait awaitModule(uint32_t until_ms, uint32_t &status);
   bool waitAbstract();
-  void relink();                          // PHY re-sync + abstract-command block back to a known state
+  // PHY re-sync + abstract-command block back to a known state (clear_auto false: abstractauto left as it is - keepAuto
+  // has not read it yet)
+  void relink(bool clear_auto = true);
   // After a change of hart state: relink, then looks until the link stays up (kSteadyLooks good ones in a row)
   static constexpr int kSteadyLooks = 3;
   static constexpr uint32_t kSteadyMs = 20;
-  bool steady();
+  bool steady(bool clear_auto = true);
+  // One look: the link is up and has not dropped since it was last brought up - DMSTATUS a module's with authenticated
+  // (bit 7) set, DMCONTROL with dmactive set and hart 0 selected (bit 7 clear). A dropped link reads all ones, or the
+  // same last value for both, which cannot pass both.
+  bool linkHeld();
+  // held(group): the group, then a look; a group that failed or a look that did not pass - steady, the group again -
+  // kHeldTries times at most. true: the group succeeded with the link held over it.
+  static constexpr int kHeldTries = 4;
+  template <typename Group> bool held(Group group, bool clear_auto = true);
   bool moduleStatus(uint32_t &status);    // DMSTATUS read and a module's (a found version); false: relink
   void retune();                          // PHY speed search + the same
   void settleHalted(bool ack_reset);      // after the hart stopped: ack a pending reset, relink, halted_
   bool loadRegisters(uint32_t &data0_address);
-  void restoreBlock();                    // a block op's exit: GPRs, abstractauto, then the mailbox
+  bool keepBlock();                       // a block op's start: abstractauto, the mailbox, the GPRs (each held)
+  bool restoreBlock();                    // a block op's exit: GPRs, the mailbox, then abstractauto (each held, read back)
 };
 
 }  // namespace oep

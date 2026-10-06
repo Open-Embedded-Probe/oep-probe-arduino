@@ -21,6 +21,7 @@
 // - How a live connection's line rests (oep-if-debug §1, §3): only an attach that carries idle_clock changes it; one
 //   joining without it keeps it, a new connection without it rests high, a scan never changes it.
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <map>
 #include <vector>
@@ -107,16 +108,24 @@ class FakePhy final : public DmiPhy {
       if (!r) { cmderr = 2; return; }
       if (command & (1u << 16)) *r = data0; else data0 = *r;
     }
-    if (command & (1u << 18)) {                             // postexec: the program buffer
-      if (gpr[10] != 0xe0000380u || gpr[11] != 0xe0000384u) { cmderr = 3; return; }
-      if (progbuf[0] == 0x40044180u) {                      // reader: s0 = DATA1, s1 = mem[s0], DATA0 = s1, DATA1 += 4
-        gpr[8] = data1; gpr[9] = mem[gpr[8]]; gpr[8] += 4; data0 = gpr[9]; data1 = gpr[8];
-      } else if (progbuf[0] == 0x41044180u) {               // writer: mem[DATA1] = DATA0, DATA1 += 4
-        gpr[8] = data1; gpr[9] = data0; mem[gpr[8]] = gpr[9]; gpr[8] += 4; data1 = gpr[8];
+    if (command & (1u << 18)) {                             // postexec: the program buffer, through a0 / a1 as they are
+      if (progbuf[0] == 0x40044180u) {                      // reader: lw s0,0(a1); lw s1,0(s0); addi s0,4; sw s1,0(a0); sw s0,0(a1)
+        gpr[8] = load(gpr[11]); gpr[9] = load(gpr[8]); gpr[8] += 4; store(gpr[10], gpr[9]); store(gpr[11], gpr[8]);
+      } else if (progbuf[0] == 0x41044180u) {               // writer: lw s0,0(a1); lw s1,0(a0); sw s1,0(s0); addi s0,4; sw s0,0(a1)
+        gpr[8] = load(gpr[11]); gpr[9] = load(gpr[10]); store(gpr[8], gpr[9]); gpr[8] += 4; store(gpr[11], gpr[8]);
       } else {
         cmderr = 3;
       }
     }
+  }
+  // the hart's view of memory: DATA0 / DATA1 at 0xe0000380 / 0xe0000384, the rest a word memory (a0 or a1 left wrong
+  // would read or write the target's memory somewhere else - stray_stores counts the stores outside 0x20000000-0x2000ffff)
+  int stray_stores = 0;
+  uint32_t load(uint32_t a) { return a == 0xe0000380u ? data0 : a == 0xe0000384u ? data1 : mem[a]; }
+  void store(uint32_t a, uint32_t v) {
+    if (a == 0xe0000380u) data0 = v;
+    else if (a == 0xe0000384u) data1 = v;
+    else { if ((a >> 16) != 0x2000u) ++stray_stores; mem[a] = v; }
   }
 
   bool attach() override {
@@ -155,7 +164,9 @@ class FakePhy final : public DmiPhy {
   bool model_dcsr = false;        // dcsr as a register of its own (abstract reads of it give it back); else DATA0 as is
   uint32_t dcsr = 0;
   uint32_t read_us = 10, dmcontrol = 0;
+  int reads = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
+    ++reads;
     advanceMicros(read_us);
     if (!present || !attached_flag) return false;
     if (stuck) { value = stuck_value; return true; }
@@ -784,7 +795,7 @@ int main() {
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
     CHECK(ok(r) && phy.halted && fixed.connected);
     const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
-    for (uint32_t k = 0; k < 4; ++k) phy.gpr[8 + k] = 0x11110000u + k;   // the target's s0, s1, a0, a1
+    for (uint32_t k = 1; k < 32; ++k) phy.gpr[k] = 0x11110000u + k;   // the target's GPRs (s0, s1, a0, a1 the ops use)
     phy.data0 = 0x0000aa55u;
     phy.data1 = 0x12345678u;
     auto writeBlock = [&](uint32_t address, uint32_t first, uint16_t n) {
@@ -798,8 +809,8 @@ int main() {
       for (uint16_t i = 0; i < n; ++i) if (phy.mem[address + 4u * i] != first + i) return false;
       return true;
     };
-    auto keptAsFound = [&]() {
-      for (uint32_t k = 0; k < 4; ++k) if (phy.gpr[8 + k] != 0x11110000u + k) return false;
+    auto keptAsFound = [&]() {   // every GPR
+      for (uint32_t k = 1; k < 32; ++k) if (phy.gpr[k] != 0x11110000u + k) return false;
       return phy.data0 == 0x0000aa55u && phy.data1 == 0x12345678u;
     };
     r = writeBlock(0x20000000u, 0xc0de0000u, 4);
@@ -1223,8 +1234,14 @@ int main() {
       Bytes wb = conn;
       wb.insert(wb.end(), {0, 0, 0, 0x20, 64, 0});   // the loader: 64 words at 0x20000000
       for (uint32_t k = 0; k < 64; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0x1000u * i + k) >> (8 * b)));
+      // every GPR as the block ops found it (the sketch's, then the loader's after its run)
+      uint32_t gprs[32];
+      auto snapshot = [&]() { for (int k = 0; k < 32; ++k) gprs[k] = phy.gpr[k] = k ? 0x3c000000u | (uint32_t(i) << 8) | uint32_t(k) : 0; };
+      auto unchanged = [&]() { for (int k = 0; k < 32; ++k) if (phy.gpr[k] != gprs[k]) return false; return true; };
+      snapshot();
       r = call(riscv, TargetRiscvDm::kOpWriteBlock, wb, out);
       expect(ok(r) && out.size() == 3 && out[2] == kStatusOk && phy.mem[0x20000000u + 4 * 63] == 0x1000u * i + 63, "write_block");
+      expect(unchanged(), "write_block's GPRs");
       // run: pc 0x20000000, 1000 ms, a0 = 0x20000400 and a1 = 16 in, a0 out
       Bytes run = conn;
       run.insert(run.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 2, 0x0a, 0x10, 0, 0x04, 0, 0x20, 0x0b, 0x10, 16, 0, 0, 0,
@@ -1234,8 +1251,13 @@ int main() {
       expect(ok(r) && out.size() >= 11 + 4 && out[0] == kStatusOk && out[1] == reg::target_riscv_dm::kRunStoppedStopped,
              "run");
       expect(millis() - t0 < 200, "run's time");
+      // the arguments landed (a write lost to a drop would start the loader on a register as it was) and a0 came back
+      expect(phy.gpr[10] == 0x20000400u && phy.gpr[11] == 16 && out.size() >= 15 && out[10] == 1 &&
+             out[11] == 0x00 && out[12] == 0x04 && out[13] == 0x00 && out[14] == 0x20, "run's registers");
+      snapshot();
       r = call(riscv, TargetRiscvDm::kOpReadBlock, {conn[0], conn[1], 0, 0x04, 0, 0x20, 16, 0}, out);
       expect(ok(r) && out.size() == 3 + 64 && out[2] == kStatusOk, "read_block");
+      expect(unchanged(), "read_block's GPRs");
       phy.run_reads = 0;   // the application runs on (no ebreak ahead)
       r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
       expect(ok(r) && out[0] == kStatusOk && !phy.halted, "resume");
@@ -1280,6 +1302,106 @@ int main() {
     phy.drop_hold_us = 0;
     phy.run_reads = 0;
     phy.idle_low = false;
+    phy.halted = false;
+  }
+
+  // ---- a drop anywhere inside a block op: the link drops (a CH32L103's, late after a change of hart state) at every
+  // point of read_block / write_block in turn - all ones or the last value read, held 0 / 0.7 / 2.1 ms against relinks,
+  // writes lost meanwhile, a host's abstractauto set or not. Every GPR, dpc, dcsr, DATA0 / DATA1 and abstractauto as
+  // found; no store outside the block; an ok answer with the right words (bench, 0.0.29-dev+9942787: in about 1 of 200
+  // read_blocks on the L103 through the RP2350 a0 0x000ec8fe came back 0x20000000 - kept from a stale read or a write
+  // going back lost to a drop) ----
+  {
+    phy.halted = false;
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.mem.clear();
+    phy.stray_stores = 0;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    int cases = 0, answered_ok = 0, clobbered = 0, wrong_words = 0, stray = 0, dropped_at_all = 0;
+    int op_reads[2] = {0, 0};   // an op's reads with no drop: the drop is put at each of them
+    for (int stale = 0; stale < 2; ++stale)
+      for (uint32_t hold : {0u, 700u, 2100u})
+        for (int op = 0; op < 2; ++op)
+          for (int at = -1; at < op_reads[op]; ++at) {   // -1: no drop, the op's reads counted
+            ++cases;
+            uint32_t gpr[32];
+            for (uint32_t k = 0; k < 32; ++k) gpr[k] = phy.gpr[k] = k ? 0x5a000000u | (k << 16) | uint32_t(at) : 0;
+            phy.gpr[9] = gpr[9] = 0x20000000u;   // s1 holding the block's address (as a sketch's pointer may)
+            phy.dpc = 0x00000a3cu;
+            phy.dcsr = 0x4000b003u;
+            phy.data0 = 0x0000aa55u;
+            phy.data1 = 0x12345678u;
+            const uint32_t autoexec = (at % 4 == 3) ? 1 : 0;   // a host's raw ABSTRACTAUTO = 1 now and then
+            phy.abstractauto = autoexec;
+            phy.last_command = 0x00221000u;                    // the host's last command: read zero (harmless when re-run)
+            phy.cmderr = 0;
+            for (uint32_t k = 0; k < 10; ++k) phy.mem[0x20000000u + 4 * k] = 0x0b000000u | (k << 8) | uint32_t(at);
+            const uint32_t fence = phy.mem[0x20000000u + 4 * 8];
+            phy.stray_stores = 0;
+            phy.dropped = false;
+            phy.drop_stale = stale;
+            phy.drop_hold_us = hold;
+            phy.drop_delay_reads = 0;
+            phy.pending_drop = at;   // the drop after `at` more reads, whatever the op is doing then
+            const int reads_before = phy.reads;
+            if (op == 0) {
+              r = call(riscv, TargetRiscvDm::kOpReadBlock, {conn[0], conn[1], 0, 0, 0, 0x20, 8, 0}, out);
+            } else {
+              Bytes wb = conn;
+              wb.insert(wb.end(), {0, 0, 0, 0x20, 8, 0});
+              for (uint32_t k = 0; k < 8; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0xc0000000u | (k << 8) | uint32_t(at)) >> (8 * b)));
+              r = call(riscv, TargetRiscvDm::kOpWriteBlock, wb, out);
+            }
+            if (at < 0) op_reads[op] = phy.reads - reads_before;
+            else if (phy.pending_drop < 0) ++dropped_at_all;
+            phy.pending_drop = -1;
+            bool same = phy.dpc == 0x00000a3cu && phy.dcsr == 0x4000b003u && phy.data0 == 0x0000aa55u &&
+                        phy.data1 == 0x12345678u && phy.abstractauto == autoexec;
+            for (uint32_t k = 0; k < 32; ++k) same = same && phy.gpr[k] == gpr[k];
+            if (!same) {
+              if (clobbered < 5) {
+                printf("  %s, drop at read %d (hold %u us, stale %d): changed", op ? "write_block" : "read_block", at, hold, stale);
+                for (uint32_t k = 0; k < 32; ++k)
+                  if (phy.gpr[k] != gpr[k]) printf(" x%u %08x -> %08x", k, gpr[k], phy.gpr[k]);
+                printf(" data0 %08x data1 %08x auto %u\n", phy.data0, phy.data1, phy.abstractauto);
+              }
+              ++clobbered;
+            }
+            if (phy.stray_stores || phy.mem[0x20000000u + 4 * 8] != fence) ++stray;
+            const bool good = ok(r) && out.size() >= 3 && out[2] == kStatusOk;
+            if (getenv("OEP_SHOW_NOT_OK") && !good) printf("  not ok: op %d at %d hold %u stale %d status %02x\n", op, at, hold, stale, out.size() >= 3 ? out[2] : 0xff);
+            if (good) {
+              ++answered_ok;
+              bool right = out[0] == 8;
+              for (uint32_t k = 0; k < 8 && right; ++k) {
+                if (op == 0) {
+                  uint32_t w = 0;
+                  for (int b = 0; b < 4; ++b) w |= uint32_t(out[3 + 4 * k + b]) << (8 * b);
+                  right = out.size() == 3 + 32 && w == (0x0b000000u | (k << 8) | uint32_t(at));
+                } else {
+                  right = phy.mem[0x20000000u + 4 * k] == (0xc0000000u | (k << 8) | uint32_t(at));
+                }
+              }
+              if (!right) ++wrong_words;
+            }
+            phy.dropped = false;
+            g_millis += 2;   // the host's next request
+          }
+    CHECK(clobbered == 0);
+    CHECK(stray == 0);
+    CHECK(wrong_words == 0);
+    CHECK(dropped_at_all == cases - 12);     // every drop met an op (12: the counting runs, no drop)
+    CHECK(answered_ok > cases * 9 / 10);     // and the ops came through them, nearly all
+    printf("  block ops with a drop inside (%d / %d reads): %d cases, %d ok, %d with state changed, %d stray stores, "
+           "%d wrong words\n", op_reads[0], op_reads[1], cases, answered_ok, clobbered, stray, wrong_words);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
+    phy.drop_hold_us = 0;
+    phy.abstractauto = phy.cmderr = 0;
     phy.halted = false;
   }
 
