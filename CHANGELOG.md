@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) probe.config label item (probe.config §1): a text of 0 or more than 32 bytes (registry label_max_bytes), or one that is not valid text (C0 controls, 0x7F, invalid UTF-8), is refused malformed, and a channel at or beyond channels or reserved unsupported with the item's tag (both were taken). A probe without a pin table no longer declares label (as idle and disable: it has no channels to name). Host test.
+- (JA) probe.config の label の項目（probe.config §1）: 0 バイトか 32 バイト（registry label_max_bytes）を超える text、正しい text でない（C0 制御文字、0x7F、不正な UTF-8）text は malformed、channels 以上か reserved の channel は項目の tag で unsupported で断る（どちらも受けていた）。pin の表を持たない probe はもう label を宣言しない（idle と disable と同じ。名付ける channel が無い）。host test。
 - (EN) Names and tokens (core §13 rule 1, §7.5): Endpoint::add refuses an interface whose name is outside the form (1 to 64 bytes, two or more labels of a-z 0-9 - not starting or ending with -); describeCore fails a model or a unit_id outside a-z 0-9 -, 1 to 32 bytes (it checked the unit_id's length only). Every name and model the library and its examples use passes. Host test.
 - (JA) 名前と token（core §13 規則 1、§7.5）: Endpoint::add は形から外れた名前（1 から 64 バイト、- で始まらず終わらない a-z 0-9 - の label が二つ以上）の interface を断る。describeCore は a-z 0-9 -、1 から 32 バイトから外れた model と unit_id で失敗する（unit_id の長さしか見ていなかった）。ライブラリと例が使う名前と model はすべて通る。host test。
 - (EN) list's instance (core §7.2): the endpoint numbers the interfaces with the same (name, revision) from 0 in ascending fn itself (Endpoint::instanceOf), in list, the list hash, probe.config's identities and a bind's line labels - the instance an interface was built with is no longer trusted (a sketch that gave two the same number listed them so). Host test.

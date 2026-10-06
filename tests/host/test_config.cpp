@@ -13,6 +13,7 @@
 #include "OepConsole.h"
 #include "OepDmConsole.h"
 #include "OepEndpoint.h"
+#include "OepPinTable.h"
 #include "OepTarget.h"
 
 uint32_t g_millis = 1000;
@@ -154,6 +155,37 @@ int main() {
   slot_fn9[2 + 1] = 9;
   r = set(config, slot_fn9, out);
   CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnknownFunction);
+
+  {   // label (probe.config §1): text 1-32 bytes of valid UTF-8 without C0 controls / 0x7F, else malformed; a channel
+      // not below channels or reserved (not in the pin table) unsupported with the item's tag
+    static NullStream s2;
+    static uint8_t rx2[512], tx2[512];
+    static Endpoint ep2(s2, rx2, sizeof rx2, tx2, sizeof tx2, {512, 1024, 2}, Endpoint::kUartBridge);
+    static Binds binds2;
+    static ProbeConfig pinned(ep2, binds2);
+    static PinTable pins(uint64_t{0xff});   // channels 0-7
+    ep2.add(pinned);
+    pinned.setPins(&pins);
+    const uint8_t label_raw = cfg::kTlvItemLabel | kTagCritical;
+    auto label = [&](uint16_t channel, const Bytes &text) {
+      Bytes item = {label_raw, uint8_t(2 + text.size()), uint8_t(channel), uint8_t(channel >> 8)};
+      item.insert(item.end(), text.begin(), text.end());
+      return item;
+    };
+    CHECK(ok(set(pinned, label(1, {'n', 'r', 's', 't'}), out)));
+    CHECK(ok(set(pinned, label(2, {0xC3, 0xA9}), out)));             // U+00E9
+    CHECK(ok(set(pinned, label(3, Bytes(32, 'a')), out)));            // label_max_bytes
+    CHECK(malformed(set(pinned, label(1, {}), out)));                 // no text
+    CHECK(malformed(set(pinned, label(1, Bytes(33, 'a')), out)));
+    CHECK(malformed(set(pinned, label(1, {'a', 0x0A}), out)));        // a C0 control
+    CHECK(malformed(set(pinned, label(1, {'a', 0x7F}), out)));
+    CHECK(malformed(set(pinned, label(1, {'a', 0xC3}), out)));        // cut short
+    CHECK(malformed(set(pinned, label(1, {0xC0, 0x80}), out)));       // over-long form
+    CHECK(unsupportedWith(set(pinned, label(8, {'x'}), out), out, label_raw));   // beyond the channels
+    CHECK(malformed(set(pinned, label(8, {0x01}), out)));             // malformed before unsupported
+    // a probe without a pin table has no channels to name: label is not declared (unsupported, its tag)
+    CHECK(unsupportedWith(set(config, label(1, {'x'}), out), out, label_raw));
+  }
 
   printf("config: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

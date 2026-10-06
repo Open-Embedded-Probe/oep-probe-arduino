@@ -175,9 +175,10 @@ DriveLevels ProbeConfig::driveLevels() const {
 
 // ---- the item store ------------------------------------------------------------------------------------------------
 
-// The items describe declares: idle and disable only on a probe with a pin table.
+// The items describe declares: label, idle and disable only on a probe with a pin table (their channel is one of it).
 bool ProbeConfig::declares(uint8_t tag) const {
-  return keyLength(tag) && (pins_ || (tag != cfg::kTlvItemIdle && tag != cfg::kTlvItemDisable));
+  return keyLength(tag) &&
+         (pins_ || (tag != cfg::kTlvItemLabel && tag != cfg::kTlvItemIdle && tag != cfg::kTlvItemDisable));
 }
 
 size_t ProbeConfig::keyLength(uint8_t tag) {
@@ -265,7 +266,10 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       return completed();
     }
     case cfg::kTlvItemLabel:
-      if (len < 3) return rejected(kRejectMalformed);   // a channel and at least one byte of text
+      // text: 1 to label_max_bytes of valid UTF-8 without C0 controls or 0x7F (probe.config §1, core §2.1): malformed
+      if (len < 3 || len - 2 > reg::kLimitLabelMaxBytes || !requestText(v + 2, len - 2)) return rejected(kRejectMalformed);
+      // the channel: below channels and not reserved, as idle and disable (probe.config §1)
+      if (!pins_ || !pins_->allowed(getU16(v))) return unsupportedTag(out, capacity, raw);
       return completed();
     case cfg::kTlvItemIdle: {
       if (len < 3) return rejected(kRejectMalformed);
@@ -1040,7 +1044,10 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {   // declarations 
   w.u32(cfg::kTlvDescribeStorage, kMaxItems);
   static const uint8_t kItems[] = {cfg::kTlvItemPlan, cfg::kTlvItemLabel, cfg::kTlvItemSlot, cfg::kTlvItemBind,
                                    cfg::kTlvItemUart, cfg::kTlvItemIdle, cfg::kTlvItemDisable};
-  w.put(cfg::kTlvDescribeItems, kItems, pins_ ? sizeof kItems : sizeof kItems - 2);   // idle and disable need the pins
+  uint8_t items[sizeof kItems];
+  size_t n = 0;
+  for (uint8_t tag : kItems) if (declares(tag)) items[n++] = tag;   // label, idle and disable need the pins
+  w.put(cfg::kTlvDescribeItems, items, n);
   w.u8(cfg::kTlvDescribeSlotsMax, place_count_ ? static_cast<uint8_t>(kMaxSlots) : 0);
   w.u32(cfg::kTlvDescribeBindModes, (1u << cfg::kBindModeLastReset) | (1u << cfg::kBindModeManual) | (1u << cfg::kBindModeMixed));
   return w.ok() ? w.length() : 0;
