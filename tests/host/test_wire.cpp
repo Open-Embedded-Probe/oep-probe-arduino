@@ -93,6 +93,7 @@ class FakePhy final : public DmiPhy {
   // read_us of time
   bool ignore_halt = false, ignore_resume = false, step_returns = false;
   uint32_t abstract_cmderr = 0;   // every abstract command fails with it (0: none)
+  uint32_t hartsel = 0;           // DMCONTROL's hasel / hartsello / hartselhi as last written
   uint32_t read_us = 10, dmcontrol = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
     advanceMicros(read_us);
@@ -106,7 +107,7 @@ class FakePhy final : public DmiPhy {
     switch (address) {
       case 0x04: value = data0; break;
       case 0x05: value = data1; break;
-      case 0x10: value = 1; break;   // DMCONTROL: dmactive
+      case 0x10: value = 1 | hartsel; break;   // DMCONTROL: dmactive, the hart selected (haltreq reads 0)
       case 0x11:                     // DMSTATUS: version, authenticated, all/any halted or running, allresumeack
         value = version | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (resumeack ? (3u << 16) : 0) |
                 (havereset ? (3u << 18) : 0);
@@ -124,6 +125,7 @@ class FakePhy final : public DmiPhy {
     if (address == 0x05) data1 = value;
     if (address == 0x10) {
       dmcontrol = value;
+      hartsel = value & 0x07ffffc0u;
       if ((value & (1u << 31)) && !ignore_halt) { halted = true; resumeack = false; }
       if ((value & (1u << 30)) && !ignore_resume) { halted = step_returns; resumeack = true; }
       if (value & (1u << 28)) havereset = false;   // ackhavereset
@@ -494,6 +496,13 @@ int main() {
     CHECK(!phy.halted && phy.dmcontrol == 1 && !dm.halted());
     CHECK(millis() - before >= 2 * reg::kLimitDmWaitMs && millis() - before <= 2 * reg::kLimitDmWaitMs + 10);
     phy.ignore_halt = false;
+    // the high-level ops on hart 0 (oep-if-debug §4): a hartsel the host's dmi left goes back to 0 (it was left)
+    for (uint8_t op : {TargetRiscvDm::kOpHalt, TargetRiscvDm::kOpResume, TargetRiscvDm::kOpHalt}) {
+      r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x10, 0x01, 0x00, 0x05, 0x00}, out);
+      CHECK(ok(r) && phy.hartsel == 0x00050000u);
+      r = call(riscv, op, conn, out);
+      CHECK(ok(r) && phy.hartsel == 0);
+    }
     // reset (oep-if-debug §4.3): the procedure redone at most once (reset_retries; it ran 3 times), and a cmderr of
     // its own abstract commands is status fault (it was timeout)
     phy.ignore_resume = true;

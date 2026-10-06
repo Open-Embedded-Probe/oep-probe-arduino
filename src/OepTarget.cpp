@@ -575,6 +575,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       }
     }
     flags |= wire::kAttachFlagsExisting;
+    port_.dm.selectHart0();   // the halt below and the DMSTATUS answered are hart 0's (oep-if-debug §4)
     if (with_reset) {
       // attach's reset TLV on this connection (mark reset 3), then stopped at the vector or left running
       if (halt) {
@@ -753,6 +754,8 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
   if (!port_) return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
   line_lost_ = false;
   port_->dm.phy().beginRequest();   // the request's allowance for wire retries (oep-if-debug §2)
+  // the ops other than dmi are on hart 0: hartsel 0 before, and so after (oep-if-debug §4); dmi is the host's own
+  if (op != kOpDmi) port_->dm.selectHart0();
   Result r = dispatch(op, payload + 2, length - 2, out, capacity);
   // Wire loss is looked at after every request on the connection, whatever the op answered (oep-if-debug §2): an op
   // that ran on reads which may be a register's own all zeros / all ones (a raw dmi read of DATA0, say) leaves the

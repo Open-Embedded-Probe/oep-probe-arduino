@@ -28,7 +28,10 @@ class Ch32Dm {
   // resumed the hart through raw DMI writes). false from checkHalted: the link did not answer.
   bool halted() const { return halted_; }
   bool checkHalted();
-  uint8_t lastCmderr() const { return cmderr_; }   // cmderr of the last abstract command that failed (0 = none)
+  uint8_t lastCmderr() const { return cmderr_; }
+  // DMCONTROL's hartsel (and hasel) back to 0 when the host's dmi left another there (oep-if-debug §4): before every
+  // high-level op, which then return with it 0.
+  void selectHart0();   // cmderr of the last abstract command that failed (0 = none)
   bool attach();
   // A scan's look (oep-if-debug §1): the PHY's bring-up (wake / configuration, dmactive) and DMSTATUS, no write check;
   // the link is not left attached. false: no module answered.

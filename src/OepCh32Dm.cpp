@@ -87,6 +87,15 @@ bool Ch32Dm::checkHalted() {
   return true;
 }
 
+// The high-level ops work on hart 0 (oep-if-debug §4): a hartsel (or hasel) the host left in DMCONTROL through dmi goes
+// back to 0 before the op, which then writes DMCONTROL with hartsel 0 only - it starts and returns with it 0. haltreq
+// reads 0 (write-only), so the write sets dmactive alone; a halted hart 0 stays halted.
+void Ch32Dm::selectHart0() {
+  uint32_t control = 0;
+  if (!attach() || !phy_.read(kDmControl, control) || control == 0xffffffffu) return;
+  if (control & 0x07ffffc0u) phy_.write(kDmControl, 0x00000001);   // hasel (26), hartsello (25:16), hartselhi (15:6)
+}
+
 // The target's mailbox across an op (oep-if-debug §4.2). A client's halt -> read_block -> resume left the abstract
 // command's word in DATA0; the target, missing its dmseq frame, read that as silence and waited out its timeout, and
 // the console went quiet for seconds (2026-09-30, CH32X035, ch32rv monitor + another client).
