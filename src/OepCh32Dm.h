@@ -20,7 +20,10 @@
 // if the module took it for a bad parity - or a read answering the read before it), which the look after does not see:
 // so every value an op keeps, gives back or answers is read twice and taken only when both reads agree (readSure,
 // readRegisterSure), every write the op relies on is read back before it is relied on (the block program's set-up,
-// abstractauto off, the run's registers, dcsr), and write_block reads DATA1 after every store.
+// abstractauto off, the run's registers, dcsr), and write_block reads DATA1 after every store. The same for what the ops
+// decide from DMSTATUS: checkHalted, halt's "already halted", havereset (ackHaveReset) read twice (readStatusSure), the end
+// of a wait for a change of hart state (halt, resume, run, step, the resets) seen twice (statusConfirms), and what attach,
+// scan and target_id answer (readDmiSure, moduleAnswersSure).
 #pragma once
 
 #include <Arduino.h>
@@ -72,6 +75,17 @@ class Ch32Dm {
   bool readRegister(uint16_t regno, uint32_t &value);
   bool writeRegister(uint16_t regno, uint32_t value);
   bool readDmi(uint8_t address, uint32_t &value) { return attach() && phy_.read(address, value); }
+  // A DMI register read so that a link missing one access cannot fake it (an answered value, or one a write or a decision
+  // depends on): read twice with another register between, taken when both agree - DMSTATUS: DMSTATUS, DMCONTROL,
+  // DMSTATUS (a missed second read gives DMCONTROL's value, never a module's DMSTATUS); any other: readSure. Up to
+  // kSureTries pairs (a value that changed between the two reads - a hart coming to a stop - is read again). false: no
+  // two agreed, or a read failed.
+  static constexpr int kSureTries = 3;
+  bool readDmiSure(uint8_t address, uint32_t &value);
+  // A DMSTATUS that says a module answers (a found version, not all zeros / ones), read so that one missed access can
+  // neither fake an answer nor hide one: answers = either of two reads (a DMCONTROL read between) answered; status is
+  // the read that did (the second when both did).
+  bool moduleAnswersSure(uint32_t &status);
   // Raw DMI write for host-built step lists (v1 oep.target.riscv-dm): nothing of the probe's is restored first - the
   // probe carries nothing across operations (§4). After raw dmcontrol writes checkHalted() brings halted() in line.
   bool writeDmi(uint8_t address, uint32_t value) {
@@ -177,6 +191,11 @@ class Ch32Dm {
   // (readRegisterSure, abstractauto off), a register write read back in `mask` (writeRegisterSeen), abstractauto
   // written 0 and read back 0 (autoOffSure), no cmderr left (cmderrClear)
   bool readSure(uint8_t address, uint32_t &value);
+  bool readStatusSure(uint32_t &status);   // DMSTATUS, DMCONTROL, DMSTATUS: both DMSTATUS reads agree
+  // A wait for a change of hart state saw what it waits for in `status` (halted, resumed): DMCONTROL, then DMSTATUS once
+  // more must say it too (a missed read gives the read before it - a DMSTATUS of before the change - and the second,
+  // missed, gives DMCONTROL's value, no module's)
+  template <typename Seen> bool statusConfirms(Seen seen);
   bool readRegisterSure(uint16_t regno, uint32_t &value);
   bool writeRegisterSeen(uint16_t regno, uint32_t value, uint32_t mask = 0xffffffffu);
   bool autoOffSure();

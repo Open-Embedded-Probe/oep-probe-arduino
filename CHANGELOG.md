@@ -1,6 +1,69 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The same discipline as the block ops (a value acted on, answered or written from is read twice and taken only
+  when both agree) everywhere else the probe acted on one DMI read, for a link that misses a single access and is up
+  again at the next (a glitch: a write lost, a read answering the read before it). The console (DmConsole): a word it
+  acts on - takes bytes from, answers, writes 0 over - is read again before it acts: DATA0 (the poll's read), DATA1 when
+  the frame reaches it, another register (SDI: DMSTATUS, whose low byte is no length; DMDATA / dmseq: DMCONTROL, bit 7
+  clear), DATA1 again, DATA0 again, both pairs agreeing; not agreeing, nothing is done and the next poll reads again.
+  Read once, a stale DATA0 (the frame already taken, a DATA1 of bytes, DMSTATUS) was taken as a new frame - its bytes
+  twice and the receipt / answer written over the frame the target had just posted (lost) - or DMSTATUS (bit 7, L 2) as
+  a DMDATA word to clear over the target's slot; dmseq had only its CRC-8 against a stale word. The DMSTATUS look every
+  console_dmstatus_poll_ms is read twice (DMCONTROL between; not agreeing: asked again at the next poll). An idle poll
+  still costs one read; a frame 4 / 6 accesses instead of 2 / 3 (with the answer), the DMSTATUS look 3 instead of 1. A
+  lost write stays a declared limit of SDI and DMDATA, which carry no sequence number: a lost receipt / answer cannot be
+  told from the same bytes posted again, so one frame's bytes come twice (DMDATA: that answer's input bytes lost); dmseq
+  covers it. Ch32Dm: checkHalted, halt's "already halted" and ackHaveReset read DMSTATUS twice (readStatusSure:
+  DMSTATUS, DMCONTROL, DMSTATUS); the end of each wait for a change of hart state (halt, resume, run, step, the resets'
+  halt, awaitModule, attach under reset) is seen twice (statusConfirms: DMCONTROL, DMSTATUS once more). riscv-dm /
+  the wire: attach's answered DMSTATUS and its halt decision, attachRunning's, scan's live pair and target_id
+  (readDmiSure, also what a slot's lock is checked against) read twice; whether a module answers (attach's revive of a
+  live link - a re-attach may wake and so restart an L103 -, scan's live pair, the failure status of an op) is either of
+  two DMSTATUS reads answering (moduleAnswersSure). Already safe, unchanged: scan of a pair not attached (both PHYs read
+  DMCONTROL just before DMSTATUS: a missed read gives version 1, no module), the slot's liveness check and the wire-loss
+  clock (wire_lost_ms of failures with no good exchange: one read cannot close a connection), selectHart0 (its one write
+  is hart 0 / dmactive, what the op wants anyway; a missed selection fails the op's looks), waitAbstract (a stale
+  ABSTRACTCS only fails a group, and every value through it is read back or counted), readWords' run count (a stale
+  DATA1 only fails the check). Host tests (test_wire, the fake's glitch at one access, singly and in pairs 1-3 apart): the
+  console's three mechanisms against targets that play by their rules, at every access of a 13-frame run with input
+  both ways - with only reads missed 0 of 931 / 1916 / 1930 cases wrong for SDI / DMDATA / dmseq (before: 46 of 698 / 42
+  of 521 / 0 of 399), dmseq 0 of 798 with a write missed, SDI 65 of 65 and DMDATA 66 of 500 with a write missed (the
+  declared limit; before 78 / 78); attach (method 0 on a live connection, a running hart), halt, resume that never
+  takes, read_block over a running hart and scan of the live pair with a misleading word read before them (halted-looking
+  with and without havereset, 0, all ones): 0 of 5856 wrong (before: 52 of 5488 - attach 36: the hart halted, a revive,
+  a restart counted or a wrong DMSTATUS / target_id answered; scan 16; halt 1). Costs (the fake, DMI accesses):
+  read_block 182 + n (805645b 180 + n, 4c310a2 71 + n), write_block 191 + 2n (189 + 2n, 78 + n), run 166 (162, 67),
+  step 144 (140, 61), attach joining a live connection 16 (7).
+- (JA) block op と同じ規律（それを元に動く・答える・書く値は 2 回読み、両方が一致したときだけ採る）を、probe が 1 回の DMI の
+  読みで動いていたほかのすべての所に当てる。1 回だけアクセスを取りこぼして次にはまた繋がっている link（glitch: 書き込みが消える、
+  読みが前の読みの値を返す）に対して。コンソール（DmConsole）: 動く元になる word - byte を取る、答える、0 を書く - は動く前に読み
+  直す: DATA0（poll の読み）、frame が届けば DATA1、別のレジスタ（SDI: 下の byte が長さにならない DMSTATUS。DMDATA / dmseq:
+  bit 7 が 0 の DMCONTROL）、DATA1 をもう一度、DATA0 をもう一度、両方の組が一致すること。一致しなければ何もせず、次の poll で読み
+  直す。1 回の読みでは、古い DATA0（取り終えた frame、byte の入った DATA1、DMSTATUS）を新しい frame と取り - byte を 2 回、target
+  が出したばかりの frame の上に受け取り / 答えを書いて（失う） - あるいは DMSTATUS（bit 7、L 2）を DMDATA の消す word と取って
+  target の枠の上に 0 を書いていた。dmseq は古い word に対して CRC-8 しか無かった。console_dmstatus_poll_ms ごとの DMSTATUS も
+  2 回読む（間に DMCONTROL。一致しなければ次の poll で聞き直す）。何も無い poll は今までどおり 1 回の読み。frame は（答えを含めて）
+  2 / 3 回でなく 4 / 6 回、DMSTATUS の見に行きは 1 回でなく 3 回。書き込みの消失は、順番の番号を持たない SDI と DMDATA の宣言した
+  限界のまま: 消えた受け取り / 答えは同じ byte がまた出されたのと見分けられず、1 つの frame の byte が 2 回来る（DMDATA: その答えの
+  入力の byte は失う）。dmseq はそれを覆う。Ch32Dm: checkHalted、halt の「もう止まっている」、ackHaveReset は DMSTATUS を 2 回読む
+  （readStatusSure: DMSTATUS、DMCONTROL、DMSTATUS）。hart の状態の変化を待つ所の終わり（halt、resume、run、step、reset の halt、
+  awaitModule、reset 中の attach）は 2 回見る（statusConfirms: DMCONTROL、もう一度 DMSTATUS）。riscv-dm / 線: attach が答える
+  DMSTATUS と halt するかの判断、attachRunning、scan の生きている組、target_id（readDmiSure。slot の lock もこれと比べる）は 2 回
+  読む。module が答えるか（attach の生きた link の立て直し - attach し直すと wake で L103 が再起動しうる -、scan の生きている組、
+  op の失敗の status）は、2 回の DMSTATUS の読みのどちらかが答えればよい（moduleAnswersSure）。もともと安全で変えない所: attach
+  していない組の scan（どちらの PHY も DMSTATUS の直前に DMCONTROL を読む: 取りこぼした読みは version 1 で module ではない）、slot
+  の生存確認と線の喪失の時計（wire_lost_ms の間良い交換が無いこと: 1 回の読みでは connection は閉じない）、selectHart0（書くのは
+  hart 0 / dmactive で、op がどのみち欲しいもの。選び損ねは op の確認で失敗になる）、waitAbstract（古い ABSTRACTCS はまとまりを
+  失敗させるだけで、通る値はすべて読み戻すか数える）、readWords の実行回数（古い DATA1 は確認を失敗させるだけ）。host の試験
+  （test_wire、偽物の 1 回のアクセスの glitch、1 つずつと 1〜3 離れた 2 つ）: コンソールの 3 つの方式を規則どおりの target に対して、
+  両方向の入出力がある 13 frame の流れのすべてのアクセスで - 読みだけが取りこぼされたとき SDI / DMDATA / dmseq で 931 / 1916 /
+  1930 通り中 0 が誤り（前: 698 中 46 / 521 中 42 / 399 中 0）、書き込みの消失を含むとき dmseq は 798 中 0、SDI は 65 中 65、
+  DMDATA は 500 中 66（宣言した限界。前 78 / 78）。attach（生きた connection に method 0、hart は走っている）、halt、効かない
+  resume、走っている hart の read_block、生きている組の scan を、直前に紛らわしい word（havereset の有無の止まった風、0、全部 1）を
+  読ませて: 5856 通り中 0 が誤り（前: 5488 中 52 - attach 36: hart が止まった、立て直し、再起動を数えた、誤った DMSTATUS /
+  target_id を答えた。scan 16。halt 1）。費用（偽物、DMI のアクセス数）: read_block 182 + n（805645b 180 + n、4c310a2 71 + n）、
+  write_block 191 + 2n（189 + 2n、78 + n）、run 166（162、67）、step 144（140、61）、生きた connection に加わる attach 16（7）。
 - (EN) oep.probe.restart takes a USB device off the bus before the chip resets (bench, 0.0.29-dev+3c0cd99: after a restart
   the RP2350 came back failing its device descriptor request - Windows: "unknown USB device (device descriptor request
   failed)" - until a replug; the WeAct ESP32-P4 the same after a DFU update's reboot). The reset came with the device

@@ -15,11 +15,10 @@ namespace wire = reg::wire_rvswd;
 
 constexpr uint8_t kDmStatus = 0x11, kDmControl = 0x10;
 
-// A DMSTATUS read that came back with a module behind it: all zeros / all ones is a line held low or floating up
-// through its pull-up (DmiPhy::outcomeOf), no answer.
-bool moduleAnswers(Ch32Dm &dm, uint32_t &status) {
-  return dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
-}
+// Whether a module answers on a live link: all zeros / all ones is a line held low or floating up through its pull-up
+// (DmiPhy::outcomeOf), no answer. Two reads (Ch32Dm::moduleAnswersSure): one missed read gives the read before it - a
+// DATA0 of 0 the console's idle poll read - and alone made attach bring a live link up afresh (a wake: an L103 restarts).
+bool moduleAnswers(Ch32Dm &dm, uint32_t &status) { return dm.moduleAnswersSure(status); }
 
 // A cold CH32 ignores the first wake now and then (the CH32L103 answered on the fifth, 2026-09-23), and one that
 // sat idle past its link timeout has dropped the link: bring the bus up afresh and try again before saying no - while
@@ -98,7 +97,9 @@ bool readDpc(Ch32Dm &dm, uint32_t &dpc) { return dm.readDpc(dpc); }
 // The attach result's target_id (oep-if-debug §1): scheme wch_dmi_7f, the u32 at DMI 0x7F; 0 and all ones = none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   uint32_t id = 0;
-  port.has_tid = port.dm.readDmi(0x7f, id) && id != 0 && id != 0xffffffffu;   // kept for connections / the slots
+  // read twice (readDmiSure): answered, and a slot's lock is checked against it - a missed read (the value read before it)
+  // made a slot let go of its target as another chip
+  port.has_tid = port.dm.readDmiSure(0x7f, id) && id != 0 && id != 0xffffffffu;   // kept for connections / the slots
   port.tid = port.has_tid ? id : 0;
   if (room < kTlvHeader + 5 || !port.has_tid) return 0;
   putTlvHeader(out, wire::kTlvAttachAnswerTargetId, 5);   // scheme(u8) id(u32)
@@ -112,7 +113,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
   if (no_answer) *no_answer = false;
   if (port.connected) {
     if (!moduleAnswers(port.dm, dmstatus)) { if (no_answer) *no_answer = true; return false; }
-    if (port.dm.ackHaveReset() && !port.dm.readDmi(kDmStatus, dmstatus)) {   // a pending one first (oep-if-debug §4.6)
+    if (port.dm.ackHaveReset() && !port.dm.readDmiSure(kDmStatus, dmstatus)) {   // a pending one first (oep-if-debug §4.6)
       if (no_answer) *no_answer = true;
       return false;
     }
@@ -135,7 +136,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
     };
     if (!attachAndRead(port.dm, dmstatus, reset != nullptr)) return fail(true);
     port.dm.ackHaveReset();
-    if (!port.dm.readDmi(kDmStatus, dmstatus)) return fail(true);
+    if (!port.dm.readDmiSure(kDmStatus, dmstatus)) return fail(true);
     const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
     if (!number) return fail(false);
     port.connected = true;
@@ -406,7 +407,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     if (port_.connected) {
       // the live connection: look through it - re-attaching (and detaching on a miss) would pull the link out
       // from under the host that holds it
-      ok = moduleAnswers(port_.dm, status);
+      ok = moduleAnswers(port_.dm, status) && port_.dm.readDmiSure(kDmStatus, status);   // the status answered: read twice
       // a scan is a request on the connection: wire loss decided here closes it (oep-if-debug §2)
       if (!ok && phy.loss().lost()) releaseConnection(port_, 0xff, true, true);
     } else if (usePair(port_, d, c)) {
@@ -662,8 +663,10 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
       // halt() is idempotent and also brings this driver's own halted state in line with the hart: a hart left
       // halted (by an earlier process or a reset-halt) must count as halted here, or block reads refuse it
-      if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
-      else if ((halt || (status & (1u << 9))) && !(port_.dm.halt() && port_.dm.readDmi(kDmStatus, status)))
+      // read twice (readDmiSure): answered, and a halted one is halted again - a missed read giving a halted-looking
+      // word had attach with method 0 halt a running hart
+      if (!port_.dm.readDmiSure(kDmStatus, status)) failure = kStatusLine;
+      else if ((halt || (status & (1u << 9))) && !(port_.dm.halt() && port_.dm.readDmiSure(kDmStatus, status)))
         failure = kStatusTimeout;
     }
     // the connection closes after the answer only once the wire is lost (oep-if-debug §2): that answer is line
@@ -682,11 +685,11 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     if (with_reset && halt) {
       if (!port_.dm.attachUnderReset(holdReset, releaseReset, &reset_line, hold_ms, dpc)) {
         // the module answers but the hart never stopped: timeout; no answer: line
-        const bool answers = port_.dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu;
+        const bool answers = moduleAnswers(port_.dm, status);
         failure = answers ? kStatusTimeout : kStatusLine;
       } else {
         have_dpc = true;
-        if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
+        if (!port_.dm.readDmiSure(kDmStatus, status)) failure = kStatusLine;
       }
     } else {
       if (with_reset) port_.dm.pulseReset(holdReset, releaseReset, &reset_line, hold_ms);
@@ -696,9 +699,9 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
         // A pending havereset freezes a V00x's DMSTATUS halt / run bits at their reset values (ch32rv 0.8.0):
         // acknowledge it first so the DMSTATUS returned is current, and say that it was there (flags bit0).
         if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
-        if (!port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;
+        if (!port_.dm.readDmiSure(kDmStatus, status)) failure = kStatusLine;
         else if (halt && !port_.dm.halt()) failure = kStatusTimeout;
-        else if (halt && !port_.dm.readDmi(kDmStatus, status)) failure = kStatusLine;   // the answer: DMSTATUS after the halt
+        else if (halt && !port_.dm.readDmiSure(kDmStatus, status)) failure = kStatusLine;   // the answer: DMSTATUS after the halt
       }
     }
     if (failure == kStatusOk) {
@@ -795,7 +798,7 @@ size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
 uint8_t TargetRiscvDm::failure(uint8_t otherwise) {
   uint32_t status = 0;
   WireLossClock &loss = port_->dm.phy().loss();
-  if (port_->dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return otherwise;
+  if (moduleAnswers(port_->dm, status)) return otherwise;   // two reads: a missed one alone is no "line"
   loss.silent();   // all zeros / ones: no module behind the answer
   if (loss.lost()) line_lost_ = true;
   return kStatusLine;

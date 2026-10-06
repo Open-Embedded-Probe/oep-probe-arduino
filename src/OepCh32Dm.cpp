@@ -218,6 +218,50 @@ bool Ch32Dm::readSure(uint8_t address, uint32_t &value) {
   return true;
 }
 
+// DMSTATUS itself: DMSTATUS, DMCONTROL, DMSTATUS, taken when the two agree. A missed first read gives the read before
+// it (whatever that was), a missed second one DMCONTROL's value - version 1 in DMSTATUS's place, no module's - so the two
+// agree only on what DMSTATUS holds.
+bool Ch32Dm::readStatusSure(uint32_t &status) {
+  uint32_t first = 0, control = 0, second = 0;
+  if (!phy_.read(kDmStatus, first) || !phy_.read(kDmControl, control) || !phy_.read(kDmStatus, second) ||
+      first != second)
+    return false;
+  status = first;
+  return true;
+}
+
+bool Ch32Dm::readDmiSure(uint8_t address, uint32_t &value) {
+  if (!attach()) return false;
+  for (int i = 0; i < kSureTries; ++i)
+    if (address == kDmStatus ? readStatusSure(value) : readSure(address, value)) return true;
+  return false;
+}
+
+// A module that answers, as the probe decides whether to bring a live link up afresh (attach's revive: a re-attach may
+// wake - restart - the target), whether a scan found the live pair, and which failure an op answers: one missed read
+// gives the read before it - a DATA0 of 0 or all ones the console or a host's register read left - and alone said "no
+// module". Either of two DMSTATUS reads (DMCONTROL between) answering is an answer; both silent is none.
+bool Ch32Dm::moduleAnswersSure(uint32_t &status) {
+  if (!attach()) return false;
+  auto answers = [](uint32_t v) { return v != 0 && v != 0xffffffffu; };
+  uint32_t first = 0, control = 0, second = 0;
+  const bool one = phy_.read(kDmStatus, first) && answers(first);
+  phy_.read(kDmControl, control);
+  const bool two = phy_.read(kDmStatus, second) && answers(second);
+  status = two ? second : first;
+  return one || two;
+}
+
+// The end of a wait for a change of hart state, confirmed: what `seen` waits for in DMSTATUS, read once more after a
+// DMCONTROL read. The wait's own read may be a missed one giving the read before it - a DMSTATUS from before the change
+// (a "halted" read just before a resume took, a "running" one before a halt), a register's value that looks like a
+// halted module's - and the op then went on as if the hart had stopped (run: haltreq written, the hart stopped wherever
+// it was and answered as stopped) or started (resume answered ok over a hart still halted).
+template <typename Seen> bool Ch32Dm::statusConfirms(Seen seen) {
+  uint32_t control = 0, status = 0;
+  return phy_.read(kDmControl, control) && moduleStatus(status) && seen(status);
+}
+
 // readRegisterSure: an abstract register read twice, DATA0 set to 0 before the first command and to all ones before
 // the second, DMSTATUS read before the second DATA0 read (oep-client-python's read_register does the same through dmi).
 // A lost command leaves its sentinel, a stale DATA0 read gives ABSTRACTCS the first time and DMSTATUS the second, so the
@@ -263,19 +307,22 @@ bool Ch32Dm::autoOffSure() {
 bool Ch32Dm::checkHalted() {
   if (!attach()) return false;
   uint32_t status = 0;
-  bool read = moduleStatus(status);
+  // read twice (readStatusSure): one missed read gave the read before it - a dmseq frame the console read in DATA0 looks
+  // like a halted module's DMSTATUS - and a block op ran over a running hart (its mailbox kept and written back over the
+  // target's newer word)
+  bool read = readStatusSure(status) && dmVersionKnown(status);
   if (!read || !(status & (1u << 9))) {
     // from a link that stays up (steady: a drop held against a relink - the L103's - read all ones or the stale
     // "running" again after one relink, and the op answered line or state without running). abstractauto is left as
     // it is: the op keeps it after this (keepAuto) and gives it back - a relink that cleared it here lost a host's
     // autoexec whenever one DMSTATUS read missed.
     steady(false);
-    read = moduleStatus(status);
+    read = readStatusSure(status) && dmVersionKnown(status);
   }
   if (!read) return false;
   if (status & (3u << 18)) {   // havereset: acknowledge, then read again
     ackHaveReset();
-    if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) return false;
+    if (!readStatusSure(status) || !dmVersionKnown(status)) return false;
   }
   const bool now = (status & (1u << 9)) != 0;
   if (now && !halted_) settleHalted(false);
@@ -392,8 +439,8 @@ bool Ch32Dm::halt() {
   // since the host may have resumed or halted the hart through raw DMI writes since. Not while a reset is pending:
   // a V00x keeps DMSTATUS's halt / run bits frozen until it is acknowledged.
   {
-    uint32_t status = 0;
-    if (phy_.read(kDmStatus, status) && dmVersionKnown(status) && (status & (1u << 9)) && !(status & (3u << 18))) {
+    uint32_t status = 0;   // read twice: a missed read taken for "halted" answered ok with the hart running
+    if (readStatusSure(status) && dmVersionKnown(status) && (status & (1u << 9)) && !(status & (3u << 18))) {
       if (!halted_) settleHalted(false);
       return true;
     }
@@ -414,7 +461,7 @@ bool Ch32Dm::halt() {
     for (int i = 0; i < 4; ++i) phy_.write(kDmControl, 0x80000001);
     for (int i = 0; i < 25 && (i == 0 || !waited()); ++i) {
       uint32_t status = 0;
-      if (phy_.read(kDmStatus, status) && dmHalted(status)) {
+      if (phy_.read(kDmStatus, status) && dmHalted(status) && statusConfirms([](uint32_t s) { return dmHalted(s); })) {
         // Keep haltreq asserted while halted (E156/E157 ran this way; oep-if-debug §4 allows it). The hart changing
         // state drops the DMI link on this part, and the first word of the first memory read after a halt came back as
         // the previous operation's leftover (2026-09-23): settleHalted starts the caller from a freshly brought-up bus.
@@ -446,9 +493,9 @@ bool Ch32Dm::resume() {
   do {
     uint32_t status = 0;
     if (!waitStatus(status, relinked_us)) continue;              // all ones has allresumeack set too
-    if (status & (1u << 17)) ok = true;                          // allresumeack
-    else if ((status & (1u << 11)) && !(status & (1u << 9)))
-      ok = true;                                                 // allrunning, not halted
+    // allresumeack, or allrunning and not halted - seen twice (statusConfirms)
+    auto resumed = [](uint32_t s) { return (s & (1u << 17)) || ((s & (1u << 11)) && !(s & (1u << 9))); };
+    ok = resumed(status) && statusConfirms(resumed);
   } while (!ok && millis() - started < kDmWaitMs);
   phy_.write(kDmControl, 0x00000001);
   if (ok) steady();                                              // the change: the link up again, and staying up
@@ -462,7 +509,9 @@ bool Ch32Dm::resume() {
 // reset drops its SWIO configuration and dmactive); each poll yields for 1 ms.
 Ch32Dm::ModuleWait Ch32Dm::awaitModule(uint32_t until_ms, uint32_t &status) {
   bool silent = false;
-  while (!(phy_.read(kDmStatus, status) && dmVersionKnown(status))) {
+  // answering: a module's DMSTATUS, confirmed by a second (a missed read gives the read before it)
+  while (!(phy_.read(kDmStatus, status) && dmVersionKnown(status) &&
+           statusConfirms([](uint32_t s) { return dmVersionKnown(s); }))) {
     silent = true;
     if (static_cast<int32_t>(millis() - until_ms) >= 0) return kModuleGone;
     delay(1);
@@ -470,7 +519,7 @@ Ch32Dm::ModuleWait Ch32Dm::awaitModule(uint32_t until_ms, uint32_t &status) {
   }
   if (!silent) return kModuleThere;
   halted_ = false;   // the target started over: no halt of the probe's is held (ackHaveReset keeps haltreq only then)
-  if ((status & (3u << 18)) && ackHaveReset() && !(phy_.read(kDmStatus, status) && dmVersionKnown(status))) status = 0;
+  if ((status & (3u << 18)) && ackHaveReset() && !(readStatusSure(status) && dmVersionKnown(status))) status = 0;
   halted_ = dmHalted(status);
   return kModuleBack;
 }
@@ -786,7 +835,9 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     ++looks;
     if (!waitStatus(status, relinked_us)) { ++unanswered; continue; }
     last_status = status;
-    if (status & (1u << 9)) { halted = true; break; }
+    // stopped, seen twice: haltreq goes in after the loop, and a missed read taken for "halted" stopped the hart wherever
+    // it was and answered it stopped
+    if ((status & (1u << 9)) && statusConfirms([](uint32_t s) { return (s & (1u << 9)) != 0; })) { halted = true; break; }
   }
   OEP_LOGF("dm run: %s after %lu us, %lu looks (%lu no module), DMSTATUS %08lx", halted ? "stopped" : "timeout",
            static_cast<unsigned long>(micros() - started), static_cast<unsigned long>(looks),
@@ -830,7 +881,9 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
 
 bool Ch32Dm::ackHaveReset() {
   uint32_t status = 0;
-  if (!attach() || !phy_.read(kDmStatus, status)) return false;
+  // read twice (readStatusSure): a missed read giving a word with bits 18 / 19 set (a mailbox word, a register's value)
+  // was taken for a restart - counted, the console's dmseq unsynced, attach's flags bit0 set
+  if (!attach() || !readStatusSure(status)) return false;
   if (!dmVersionKnown(status) || !(status & (3u << 18))) return false;   // anyhavereset / allhavereset of a module
   phy_.write(kDmControl, halted_ ? 0x90000001 : 0x10000001);   // ackhavereset, haltreq kept if we hold a halt
   ++restarts_;
@@ -866,7 +919,11 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
     uint32_t status = 0;
     if (!waitStatus(status, relinked_us)) continue;
     if (status & (1u << 13)) { delayMicroseconds(250); continue; }   // anyunavail
-    if (status & (1u << 9)) { halted = true; break; }
+    // halted, seen twice: a missed read gave the DMSTATUS from before the reset (halted)
+    if ((status & (1u << 9)) && statusConfirms([](uint32_t s) { return (s & (1u << 9)) && !(s & (1u << 13)); })) {
+      halted = true;
+      break;
+    }
     phy_.write(kDmControl, 0x80000001);
     delayMicroseconds(250);
   } while (millis() - released_at < kDmWaitMs);
@@ -905,7 +962,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   do {
     uint32_t status = 0;
     if (!waitStatus(status, relinked_us)) continue;
-    if (status & (1u << 9)) { halted = true; break; }
+    if ((status & (1u << 9)) && statusConfirms([](uint32_t s) { return (s & (1u << 9)) != 0; })) { halted = true; break; }
   } while (millis() - started < kDmWaitMs);
   if (halted) {
     phy_.write(kDmControl, 0x80000001);
@@ -951,7 +1008,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   while (!halted && micros() - started < 200000u && !phy_.pastDeadline()) {
     phy_.write(kDmControl, 0x80000001);
     uint32_t status = 0;
-    if (phy_.read(kDmStatus, status)) halted = dmHalted(status);
+    if (phy_.read(kDmStatus, status)) halted = dmHalted(status) && statusConfirms([](uint32_t s) { return dmHalted(s); });
     else relink();
   }
   if (!halted) return false;

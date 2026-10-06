@@ -29,6 +29,34 @@ bool DmConsole::readData(uint8_t address, uint32_t &value) {
   return ok;
 }
 
+// A link may miss one DMI access and be up again at the next (a glitch): a write lost, or a read answering the value of the
+// read before it - the last word of the poll before (a frame already taken, a DATA1 of bytes), DMSTATUS, a register a
+// host's op read. So a word the console acts on - takes bytes from, answers, writes 0 over - is read twice, and taken
+// only when both reads agree: DATA0 (the poll's read), DATA1 when the frame reaches it, a read of another register
+// (`between`), DATA1 again, DATA0 again. One missed read cannot make them agree on anything but what the mailbox holds:
+// the first DATA0 read missed gives the read before it, which the second does not (unless that is what DATA0 holds);
+// the first DATA1 read missed gives DATA0's word, the second (after `between`) `between`'s value; the second DATA0 read
+// missed gives DATA1's or `between`'s. `between` is a register whose value is no word to act on: DMSTATUS for SDI (its low
+// byte, 0x82 / 0x83, is no length), DMCONTROL for DMDATA and dmseq (bit 7 clear). A word read once that would have been
+// acted on took a stale frame for a new one (its bytes twice, and the 0 or the answer written over the frame the target
+// had just posted: lost), a DATA1 of the frame before for this one's bytes, or DMSTATUS (bit 7 set, L 2: "no slot") for
+// a DMDATA word to clear - over the target's real slot. Not agreeing: nothing is done, and the next poll reads again.
+// A word that is acted on by nobody (bit 7 clear, L 0) costs one read as before: an idle poll adds nothing.
+//
+// A lost write is not seen this way: SDI and DMDATA carry no sequence number, so a lost receipt (SDI's 0) or answer
+// (DMDATA's) leaves the target's word as it was, which the next poll cannot tell from the same bytes posted again - one
+// frame's bytes are then taken twice (and DMDATA's answer's input bytes are lost). dmseq's sequence numbers cover it (the
+// target posts the frame again; the host takes it for a duplicate).
+bool DmConsole::confirm(uint32_t data0, bool with_data1, uint32_t &data1, uint8_t between) {
+  uint32_t d1 = 0, other = 0, d1_again = 0, d0_again = 0;
+  if (with_data1 && !readData(0x05, d1)) return false;
+  if (!readData(between, other)) return false;
+  if (with_data1 && (!readData(0x05, d1_again) || d1_again != d1)) return false;
+  if (!readData(0x04, d0_again) || d0_again != data0) return false;
+  data1 = d1;
+  return true;
+}
+
 void DmConsole::poll() {
   // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless the target is attached and
   // running its own code. Whether the hart runs is judged from DMSTATUS, read every kStatusMs (oep-if-console §3: the
@@ -53,7 +81,7 @@ void DmConsole::poll() {
   }
   if (millis() - last_status_ms_ >= kStatusMs) {
     last_status_ms_ = millis();
-    uint32_t status = 0;
+    uint32_t status = 0, control = 0, again = 0;
     if (!readData(0x11, status)) return;
     if (!dmVersionKnown(status)) {
       // No module's (all ones): the link may have dropped - a CH32L103 drops it at every change of hart state, its own
@@ -61,6 +89,14 @@ void DmConsole::poll() {
       // (the wire's configuration sequence, no debug-module register written); it read all ones until wire_lost_ms
       // closed the stream.
       phy_.reinit();
+      return;
+    }
+    // read twice, DMCONTROL between (a missed second read gives DMCONTROL's value, no module's): a missed read gives the
+    // read before it - a mailbox word that looks like a running module's had the console read and answer DATA0 over a
+    // halted hart's abstract-command operands, one that looks halted stopped it for kStatusMs. Not agreeing: asked again
+    // at the next poll.
+    if (!readData(0x10, control) || !readData(0x11, again) || again != status) {
+      last_status_ms_ = millis() - kStatusMs;
       return;
     }
     if (status & (3u << 18)) {   // havereset: the target restarted on its own
@@ -91,7 +127,7 @@ void DmConsole::pollSdi() {
   const uint8_t length = static_cast<uint8_t>(data0 & 0xff);
   if (length == 0 || length > 7) return;       // 0 = nothing waiting; anything else is not a frame
   uint32_t data1 = 0;
-  if (!readData(0x05, data1)) return;
+  if (!confirm(data0, true, data1, 0x11)) return;   // the frame read twice (DATA1 too: §3.1 reads it for any L 1-7)
   const uint8_t bytes[7] = {
       static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
       static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
@@ -115,10 +151,13 @@ void DmConsole::pollDmdata() {
     return;
   }
   const uint32_t length = data0 & 0x3fu;   // bit 6 ignored
-  if (length >= 5 && length <= 11) {       // a target slot with n = L - 4 bytes: 0-2 in DATA0, 3-6 in DATA1 (after)
+  // a word with bit 7 is acted on whatever its L (bytes taken and answered, the empty slot's sighting, no slot cleared):
+  // read twice first (confirm), DATA1 too when the slot reaches it
+  const bool slot = length >= 5 && length <= 11;
+  uint32_t data1 = 0;
+  if (!confirm(data0, slot && length - 4u >= 4, data1, 0x10)) return;
+  if (slot) {                              // a target slot with n = L - 4 bytes: 0-2 in DATA0, 3-6 in DATA1 (after)
     const uint32_t count = length - 4u;
-    uint32_t data1 = 0;
-    if (count >= 4 && !readData(0x05, data1)) return;
     const uint8_t bytes[7] = {
         static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
         static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
@@ -203,7 +242,9 @@ void DmConsole::pollSeq() {
   if (!(w0 & 0x80u)) return;                   // our answer still there, or nothing yet
   ++stats_.frames;
   const uint8_t n = w0 & 0x07u;
-  if (n >= 3 && !readData(0x05, w1)) return;
+  // read twice (confirm), DATA1 too when the frame reaches it: the CRC-8 alone let one stale word in 256 through (a
+  // DATA1 read missed gives DATA0's word, a DATA0 read missed the last word of the poll before)
+  if (!confirm(w0, n >= 3, w1, 0x10)) return;
   if (seqFault()) w0 ^= 1u << (8 + (w0 & 7));  // test hook: a frame read corrupted
   const uint8_t b[8] = {static_cast<uint8_t>(w0), static_cast<uint8_t>(w0 >> 8), static_cast<uint8_t>(w0 >> 16),
                         static_cast<uint8_t>(w0 >> 24), static_cast<uint8_t>(w1), static_cast<uint8_t>(w1 >> 8),

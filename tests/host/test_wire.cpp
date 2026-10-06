@@ -20,6 +20,10 @@
 //   on is refused while a plan holds it.
 // - How a live connection's line rests (oep-if-debug §1, §3): only an attach that carries idle_clock changes it; one
 //   joining without it keeps it, a new connection without it rests high, a scan never changes it.
+// - A link that misses one DMI access (a glitch: a write lost, a read answering the read before it): the console's three
+//   mechanisms against targets that play by their rules take every byte once both ways with a read missed (dmseq with a
+//   write missed too); attach, halt, resume, read_block and scan with a misleading word read before them answer as the
+//   target is and change nothing they should not (a running hart left running, no revive, no restart counted).
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -142,7 +146,7 @@ class FakePhy final : public DmiPhy {
   // at the next one - nothing to relink, the looks around it pass. A write is lost - with cmderr 6 set when
   // glitch_parity (the module took the frame for one with a bad parity: QingKe's cmderr 6 "parity bit error during
   // communication") - and a read answers the value of the read before it.
-  int glitch_at = -1, glitch_at2 = -1, glitches = 0;
+  int glitch_at = -1, glitch_at2 = -1, glitches = 0, glitched_reads = 0, glitched_writes = 0;
   bool glitch_parity = false;
   bool countAccess() {
     ++accesses;
@@ -189,7 +193,7 @@ class FakePhy final : public DmiPhy {
   std::vector<uint32_t> dcsr_writes;   // every one
   bool model_dcsr = false;        // dcsr as a register of its own (abstract reads of it give it back); else DATA0 as is
   uint32_t dcsr = 0;
-  uint32_t read_us = 10, dmcontrol = 0;
+  uint32_t read_us = 10, dmcontrol = 0, target_id = 0;
   std::map<uint32_t, uint32_t> regs;   // the registers an access-register command reaches, without model_block
   int reads = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
@@ -201,7 +205,7 @@ class FakePhy final : public DmiPhy {
     if (stale) { value = 0xffffffffu; return true; }
     if (pending_drop >= 0 && pending_drop-- == 0) { dropped = true; dropped_at_us = micros(); }
     if (dropped) { value = drop_stale ? last_read : 0xffffffffu; return true; }
-    if (glitch) { value = last_read; return true; }
+    if (glitch) { ++glitched_reads; value = last_read; return true; }
     if (address == 0x11 && running_reads > 0 && --running_reads == 0) {   // the run reaches its ebreak
       halted = true;
       if (loader_pc) dpc = loader_pc + 0x40;
@@ -221,6 +225,7 @@ class FakePhy final : public DmiPhy {
                 (havereset ? (3u << 18) : 0);
         break;
       case 0x12: value = 0x0002'1000u | 0x380; break;   // HARTINFO: DATA0 at 0x380 (memory-mapped), datacount 2
+      case 0x7f: value = target_id; break;              // the WCH target id (wch_dmi_7f)
       case 0x16: value = 2 | ((model_block ? cmderr : abstract_cmderr) << 8); break;   // ABSTRACTCS: datacount 2, cmderr
       case 0x18: value = abstractauto; break;
       default: value = address >= 0x20 && address < 0x28 ? progbuf[address - 0x20] : 0; break;   // the program buffer
@@ -235,6 +240,7 @@ class FakePhy final : public DmiPhy {
     const bool glitch = countAccess();
     if (dropped && drop_loses_writes) { ++lost_writes; return; }
     if (glitch) {
+      ++glitched_writes;
       ++lost_writes;
       if (glitch_parity && model_block && !cmderr) cmderr = 6;
       return;
@@ -352,6 +358,86 @@ static bool isHeld(const Result &r, const Bytes &out, uint16_t channel, uint8_t 
   return cause && cause[0] == reg::core::kUnavailableCausePinInUse && ch && (ch[0] | ch[1] << 8) == channel && kind &&
          kind[0] == holder_kind;
 }
+
+// ---- the target's side of the console's mailbox, for the glitch tests (each writes DATA1 before DATA0, directly) ----
+// SDI (oep-if-console §3.1): waits for DATA0 to read 0, then posts the next frame of 1-7 bytes.
+struct SdiTarget {
+  SdiTarget(FakePhy &phy, const std::vector<Bytes> &f) : p(phy), frames(f) {}
+  FakePhy &p;
+  std::vector<Bytes> frames;
+  size_t next = 0;
+  void service() {
+    if (p.data0 != 0 || next >= frames.size()) return;
+    const Bytes &f = frames[next++];
+    uint8_t b[7] = {};
+    for (size_t i = 0; i < f.size(); ++i) b[i] = f[i];
+    p.data1 = b[3] | b[4] << 8 | b[5] << 16 | uint32_t(b[6]) << 24;
+    p.data0 = uint32_t(f.size()) | b[0] << 8 | b[1] << 16 | uint32_t(b[2]) << 24;
+  }
+};
+// DMDATA (§3.2): a word with bit 7 clear is the answer - it takes the answer's bytes (L 5-7), then posts its next slot
+// (or the empty one, 0x84, with nothing left to send).
+struct DmdataTarget {
+  DmdataTarget(FakePhy &phy, const std::vector<Bytes> &f) : p(phy), frames(f) {}
+  FakePhy &p;
+  std::vector<Bytes> frames;
+  size_t next = 0;
+  bool started = false;
+  Bytes rx;
+  void service() {
+    if (p.data0 & 0x80u) return;   // its slot still there
+    const uint32_t w = p.data0;
+    const uint32_t l = w & 0x3fu;
+    if (started && l >= 5 && l <= 7) for (uint32_t i = 0; i < l - 4; ++i) rx.push_back(uint8_t(w >> (8 + 8 * i)));
+    started = true;
+    if (next >= frames.size()) { p.data0 = 0x84u; return; }
+    const Bytes &f = frames[next++];
+    uint8_t b[7] = {};
+    for (size_t i = 0; i < f.size(); ++i) b[i] = f[i];
+    if (f.size() >= 4) p.data1 = b[3] | b[4] << 8 | b[5] << 16 | uint32_t(b[6]) << 24;
+    p.data0 = 0x80u | uint32_t(f.size() + 4) | b[0] << 8 | b[1] << 16 | uint32_t(b[2]) << 24;
+  }
+};
+// dmseq (target-console-dmseq): frames of up to 6 bytes with S / A / SYN and the CRC; target rules 0-3 (a word with
+// bit 7 that is not its own: posted again; 0: still waiting; an invalid answer or K != S: posted again; an ack: S
+// toggled, input taken once per H, the next frame posted - an empty one when there is nothing to send).
+struct SeqSender {
+  SeqSender(FakePhy &phy, const Bytes &o) : p(phy), out(o) {}
+  FakePhy &p;
+  Bytes out;
+  size_t at = 0;
+  uint8_t s = 0, last_h = 1, n = 0;
+  bool posted = false, syn = true;
+  uint32_t w0 = 0, w1 = 0;
+  Bytes rx;
+  void post() {
+    n = uint8_t(out.size() - at > 6 ? 6 : out.size() - at);
+    uint8_t b[8] = {uint8_t(0x80 | (s << 5) | (last_h << 4) | (syn ? 0x08 : 0) | n)};
+    for (uint8_t i = 0; i < n; ++i) b[1 + i] = out[at + i];
+    b[1 + n] = DmConsole::crc8(b, 1 + n);
+    w0 = b[0] | b[1] << 8 | b[2] << 16 | uint32_t(b[3]) << 24;
+    w1 = b[4] | b[5] << 8 | b[6] << 16 | uint32_t(b[7]) << 24;
+    p.data1 = w1;
+    p.data0 = w0;
+    posted = true;
+  }
+  void again() { p.data1 = w1; p.data0 = w0; }
+  void service() {
+    if (!posted) { post(); return; }
+    const uint32_t w = p.data0;
+    if (w & 0x80u) { if (w != w0) again(); return; }
+    if (w == 0) return;
+    const uint8_t a[4] = {uint8_t(w), uint8_t(w >> 8), uint8_t(w >> 16), uint8_t(w >> 24)};
+    const uint8_t k = (a[0] >> 5) & 1, h = (a[0] >> 4) & 1, m = a[0] & 7;
+    if (m > 2 || DmConsole::crc8(a, 1 + m) != a[1 + m] || k != s) { again(); return; }
+    at += n;
+    s ^= 1;
+    syn = false;
+    if (m && h != last_h) { rx.insert(rx.end(), a + 1, a + 1 + m); last_h = h; }
+    post();
+  }
+};
+static void pushTo(void *ctx, uint8_t byte) { static_cast<Bytes *>(ctx)->push_back(byte); }
 
 int main() {
   // A fixed pair (the wire's own channels 0 / 1, not in the pin table) and a host-chosen one among 4-7.
@@ -1837,6 +1923,200 @@ int main() {
     phy.glitch_parity = false;
     phy.abstractauto = phy.cmderr = 0;
     phy.halted = false;
+  }
+
+  // ---- the other places that act on one DMI read, with a glitch at every access, singly and in pairs 1-3 apart (a write
+  // lost, a read answering the value of the read before it), the read before the request leaving a word that misleads
+  // when read stale: one that looks like a halted module's DMSTATUS, with havereset (0x000c0398: version 8,
+  // authenticated, allhalted, havereset - a dmseq frame can read so) and without (0x00000398), 0 (the console's idle
+  // DATA0) and all ones (the sentinel a host's register read leaves).
+  // attach (method 0) joining a live connection with the hart running: the hart left running, no revive (a re-attach:
+  // a wake restarts an L103), the DMSTATUS and target_id answered as they are, no restart counted; halt: ok only with
+  // the hart halted; resume that never takes: never ok; read_block over a running hart: never ok (it was: the block op
+  // ran on the running hart); scan of the live pair: found with the DMSTATUS as it is ----
+  {
+    const uint32_t kRunning = 2u | (1u << 7) | (3u << 10);   // what the fake's DMSTATUS reads with the hart running
+    int cases = 0, bad[5] = {0, 0, 0, 0, 0}, seen[5] = {0, 0, 0, 0, 0};
+    const char *what[5] = {"attach", "halt", "resume", "read_block", "scan"};
+    for (const uint32_t stale : {0x000c0398u, 0x00000398u, 0u, 0xffffffffu}) {
+      for (int op = 0; op < 5; ++op) {
+        // every access (the first 300 of resume's wait, which goes on the same way), singly and in pairs 1-3 apart
+        for (int k = -1; k < 4 * (seen[op] < 300 ? seen[op] : 300) || k < 0; ++k) {
+          const int at = k < 0 ? -1 : k / 4, apart = k < 0 ? 0 : k % 4;
+          FakePhy p;
+          p.halted = op == 2;
+          p.ignore_resume = op == 2;
+          p.target_id = 0x2c5a1b03u;
+          Ch32Dm d(p);
+          DebugPort port{d, 0, 1};
+          WireRvswd w(port, 0);
+          TargetRiscvDm r(port, 0);
+          Bytes o;
+          CHECK(ok(call(w, WireRvswd::kOpAttach, attachRequest(op == 2 ? 1 : 0), o)) && port.connected);
+          const uint16_t number = port.number;
+          const int attaches = p.attaches;
+          const uint32_t restarts = d.restarts();
+          p.data0 = stale;
+          uint32_t x = 0;
+          d.readDmi(0x04, x);   // the read before the request: the stale word
+          p.glitch_at = at;
+          p.glitch_at2 = apart ? at + apart : -1;
+          const int before = p.accesses;
+          bool good = true;
+          if (op == 0) {
+            const Result res = call(w, WireRvswd::kOpAttach, attachRequest(0), o);
+            size_t len = 0;
+            const uint8_t *tid = answerTlv(o, 11, wire::kTlvAttachAnswerTargetId, len);
+            good = ok(res) && !p.halted && p.attaches == attaches && d.restarts() == restarts && o.size() >= 11 &&
+                   (o[2] | o[3] << 8 | o[4] << 16 | uint32_t(o[5]) << 24) == kRunning && tid && len == 5 &&
+                   (tid[1] | tid[2] << 8 | tid[3] << 16 | uint32_t(tid[4]) << 24) == 0x2c5a1b03u;
+          } else if (op == 1) {
+            const Result res = call(r, TargetRiscvDm::kOpHalt, detachRequest(number), o);
+            good = !(ok(res) && o.size() == 1 && o[0] == 0) || p.halted;
+          } else if (op == 2) {
+            const Result res = call(r, TargetRiscvDm::kOpResume, detachRequest(number), o);
+            good = !(ok(res) && o.size() == 1 && o[0] == 0);
+          } else if (op == 3) {
+            Bytes req = detachRequest(number);
+            req.insert(req.end(), {0x00, 0x00, 0x00, 0x20, 4, 0});
+            const Result res = call(r, TargetRiscvDm::kOpReadBlock, req, o);
+            good = !(ok(res) && o.size() >= 3 && o[2] == 0);
+          } else {
+            const Result res = call(w, WireRvswd::kOpScan, Bytes{0}, o);
+            good = ok(res) && o.size() == 11 && o[1] == 1 &&
+                   (o[7] | o[8] << 8 | o[9] << 16 | uint32_t(o[10]) << 24) == kRunning;
+          }
+          p.glitch_at = p.glitch_at2 = -1;
+          releaseConnection(port, 0xff, true);
+          if (at < 0) { seen[op] = p.accesses - before; CHECK(good); continue; }
+          ++cases;
+          if (!good) {
+            ++bad[op];
+            if (getenv("OEP_SHOW_ONE_READ"))
+              printf("  %s, stale %08x, glitch at %d / +%d: wrong (halted %d)\n", what[op], stale, at, apart, p.halted);
+          }
+        }
+      }
+    }
+    for (int op = 0; op < 5; ++op) CHECK(bad[op] == 0);
+    printf("  one-read places with glitches inside (attach %d, halt %d, resume %d, read_block %d, scan %d accesses; "
+           "4 stale words; singly and in pairs): %d cases, wrong: attach %d, halt %d, resume %d, read_block %d, scan %d\n", seen[0], seen[1],
+           seen[2], seen[3], seen[4], cases, bad[0], bad[1], bad[2], bad[3], bad[4]);
+  }
+
+  // ---- the console with a glitch inside (one DMI access missed on its own, the link up again at once: a write lost, a
+  // read answering the value of the read before it): SDI, DMDATA and dmseq against targets that play by their rules,
+  // a glitch at every access of the run, singly and in pairs 1-3 accesses apart. A word the console acts on is read
+  // twice (DmConsole::confirm): with a read missed, every byte arrives once and in order both ways. A write missed:
+  // dmseq's sequence numbers take it (exact both ways); SDI / DMDATA carry none - their receipt / answer lost, the next
+  // poll takes the same frame again (one frame's bytes twice; DMDATA's answer's input bytes lost) - counted, the
+  // mechanism's declared limit ----
+  {
+    // frames with bytes 1-7 at DATA1's low byte (a DATA1 read missed into DATA0's place looks like an SDI length), the
+    // same frame twice in a row, and every length
+    const std::vector<Bytes> frames = {{'a'}, {'b', 'c'}, {'d', 'e', 'f'}, {'g', 'h', 'i', 3, 'j'}, {'k', 'l', 'm', 1},
+                                       {'n', 'o', 'p', 'q', 'r', 's', 't'}, {'n', 'o', 'p', 'q', 'r', 's', 't'},
+                                       {0x85, 0x86}, {'u', 'v', 'w', 7, 7, 7, 7}, {0x81}, {'x', 'y', 'z', 2, 'Z'},
+                                       {'1', '2', '3', '4', '5', '6'}, {'!'}};
+    Bytes all_out;
+    for (const Bytes &f : frames) all_out.insert(all_out.end(), f.begin(), f.end());
+    const Bytes input = {'h', 'e', 'l', 'l', 'o', ' ', 'c', 'o', 'n', 's', 'o', 'l', 'e', '\n'};
+    constexpr int kPolls = 160;
+    struct Outcome { bool out_ok, in_ok; int glitches, read_glitches, write_glitches, accesses; };
+    auto runOnce = [&](uint8_t mechanism, int at, int at2) {
+      FakePhy p;
+      p.halted = false;
+      Ch32Dm d(p);
+      DmConsole c(d, p);
+      Bytes got;
+      c.setSink(pushTo, &got);
+      CHECK(c.start(mechanism));
+      if (mechanism) c.queue(input.data(), input.size());
+      SdiTarget sdi{p, frames};
+      DmdataTarget dmdata{p, frames};
+      SeqSender seq{p, all_out};
+      p.glitch_at = at;
+      p.glitch_at2 = at2;
+      const int before = p.accesses;
+      for (int i = 0; i < kPolls; ++i) {
+        if (mechanism == 0) sdi.service(); else if (mechanism == 1) dmdata.service(); else seq.service();
+        g_millis += 1;
+        c.poll();
+      }
+      const Bytes &rx = mechanism == 1 ? dmdata.rx : seq.rx;
+      return Outcome{got == all_out, mechanism == 0 || rx == input, p.glitches, p.glitched_reads, p.glitched_writes,
+                     p.accesses - before};
+    };
+    const char *names[3] = {"SDI", "DMDATA", "dmseq"};
+    for (uint8_t mechanism = 0; mechanism < 3; ++mechanism) {
+      const Outcome clean = runOnce(mechanism, -1, -1);
+      CHECK(clean.out_ok && clean.in_ok);
+      int cases = 0, glitched = 0, read_cases = 0, read_bad = 0, write_cases = 0, write_bad = 0, write_out_bad = 0,
+          write_in_bad = 0;
+      for (int at = 0; at < clean.accesses; ++at) {
+        for (int apart = 0; apart <= 3; ++apart) {
+          const Outcome o = runOnce(mechanism, at, apart ? at + apart : -1);
+          ++cases;
+          if (o.glitches) ++glitched;
+          const bool good = o.out_ok && o.in_ok;
+          if (!o.write_glitches) {
+            ++read_cases;
+            if (!good) {
+              ++read_bad;
+              if (getenv("OEP_SHOW_CONSOLE")) printf("  %s: glitch at %d / %d (reads only) wrong\n", names[mechanism], at, apart);
+            }
+          } else {
+            ++write_cases;
+            if (!good) ++write_bad;
+            if (!o.out_ok) ++write_out_bad;
+            if (!o.in_ok) ++write_in_bad;
+          }
+        }
+      }
+      CHECK(read_bad == 0);                       // a read missed: every byte once, in order, both ways
+      if (mechanism == 2) CHECK(write_bad == 0);  // dmseq: a write missed too
+      CHECK(glitched > cases * 9 / 10);           // the glitches met the console (the last ones fall after its run)
+      printf("  console %s with glitches inside (%d accesses, singly and in pairs): %d cases, reads only: %d of %d wrong; "
+             "a write among them: %d of %d wrong (%d output, %d input)\n", names[mechanism], clean.accesses, cases,
+             read_bad, read_cases, write_bad, write_cases, write_out_bad, write_in_bad);
+    }
+  }
+
+  // ---- the console's DMI accesses per poll: idle (nothing for the console), a short frame, a 7-byte one (6 on dmseq),
+  // the DMSTATUS look every kStatusMs ----
+  {
+    auto cost = [&](uint8_t mechanism, uint32_t data0, uint32_t data1, bool status_due) {
+      FakePhy p;
+      p.halted = false;
+      Ch32Dm d(p);
+      DmConsole c(d, p);
+      Bytes got;
+      c.setSink(pushTo, &got);
+      c.start(mechanism);
+      g_millis += DmConsole::kStatusMs;
+      c.poll();                                         // the DMSTATUS look done, the mailbox empty
+      p.data0 = data0;
+      p.data1 = data1;
+      if (status_due) g_millis += DmConsole::kStatusMs; else g_millis += 1;
+      const int before = p.accesses;
+      c.poll();
+      return p.accesses - before;
+    };
+    auto seqWord = [](uint8_t n, uint32_t &w1) {
+      uint8_t b[8] = {uint8_t(0x80 | 0x08 | n)};
+      for (uint8_t i = 0; i < n; ++i) b[1 + i] = uint8_t('a' + i);
+      b[1 + n] = DmConsole::crc8(b, 1 + n);
+      w1 = b[4] | b[5] << 8 | b[6] << 16 | uint32_t(b[7]) << 24;
+      return uint32_t(b[0] | b[1] << 8 | b[2] << 16 | uint32_t(b[3]) << 24);
+    };
+    uint32_t s1 = 0, s6 = 0;
+    const uint32_t seq2 = seqWord(2, s1), seq6 = seqWord(6, s6);
+    printf("  console DMI accesses per poll: SDI idle %d, 3 bytes %d, 7 bytes %d; DMDATA idle %d, 3 bytes %d, 7 bytes %d; "
+           "dmseq idle %d, 2 bytes %d, 6 bytes %d; the DMSTATUS look (every %u ms) adds %d\n",
+           cost(0, 0, 0, false), cost(0, 0x00636203u, 0, false), cost(0, 0x63626107u, 0x67666564u, false),
+           cost(1, 0, 0, false), cost(1, 0x636261 << 8 | 0x87u, 0, false), cost(1, 0x63626180u | 11u, 0x67666564u, false),
+           cost(2, 0, 0, false), cost(2, seq2, 0, false), cost(2, seq6, s6, false), unsigned(DmConsole::kStatusMs),
+           cost(0, 0, 0, true) - cost(0, 0, 0, false));
   }
 
   printf("wire: %d checks, %d failures\n", checks, failures);

@@ -74,6 +74,9 @@ class DmConsole {
   uint8_t take();                       // the queue's head byte, out of the queue
   void push(uint8_t byte);
   bool readData(uint8_t address, uint32_t &value);   // a DMI read that keeps the line-lost clock
+  // the word read again before it is acted on (DmConsole.cpp): DATA1 (with_data1), `between`, DATA1, DATA0 - both pairs
+  // agreeing; data1: DATA1's word
+  bool confirm(uint32_t data0, bool with_data1, uint32_t &data1, uint8_t between);
   void pollSdi();
   void pollDmdata();
   void answerDmdata();
