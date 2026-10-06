@@ -148,7 +148,9 @@ static uint8_t probeTlv[160];
 static char serial_[20];
 
 // oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
-// silent (as EspUsbDevice's own restarts do), then esp_restart. restart_max_ms (its describe): the chip is in
+// silent, waits oep::kRestartDetachMs for the host to see it (20 ms, as EspUsbDevice's own restarts wait, left the WeAct
+// P4 failing its device descriptor request after the restart until a replug, bench 0.0.29-dev+3c0cd99), then
+// esp_restart - within restart_after_answer_ms of the answer (Oep.h). restart_max_ms (its describe): the chip is in
 // setup() after about 0.5 s (the ROM, the bootloader checking the app image of about 0.6 MB with rollback on, the
 // PSRAM); then the host enumerates the HS device again - a composite of HID, vendor bulk, CDC and DFU, for which an OS
 // binds four drivers (Windows about 1 s or more) - and the transport opens again before it confirms (USB-Serial/JTAG,
@@ -157,7 +159,21 @@ static char serial_[20];
 static constexpr uint32_t kRestartMaxMs = 3000;
 static void restartProbe() {
   tud_disconnect();
-  delay(20);
+  delay(oep::kRestartDetachMs);
+  esp_restart();
+}
+
+// A DFU update's restart into the new image, done here and not by EspUsbDevice (restartWhenComplete off): its restart
+// detached and reset 20 ms later, and the P4 came back failing its device descriptor request until a replug (bench, as
+// oep.probe.restart's above). The host's last GETSTATUS is answered first (kDfuStatusMs, as EspUsbDevice waits), then
+// the device goes off the bus for kDfuDetachMs before esp_restart (no answer of OEP's is waiting: no time limit).
+static constexpr uint32_t kDfuStatusMs = 500, kDfuDetachMs = 100;
+static volatile bool dfuDone = false;
+static volatile uint32_t dfuDoneMs = 0;
+static void restartAfterDfu() {
+  if (!dfuDone || millis() - dfuDoneMs < kDfuStatusMs) return;
+  tud_disconnect();
+  delay(kDfuDetachMs);
   esp_restart();
 }
 
@@ -186,6 +202,12 @@ void setup() {
   usb.product = "OEP probe (ESP32-P4)";   // a name for people; no host identifies the probe by it
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
+  dfu.restartWhenComplete(false);   // restartAfterDfu, from loop()
+  dfu.onComplete([]() {             // the usbd task: the image verified, the host's last GETSTATUS still to answer
+    dfuDoneMs = millis();
+    dfuDone = true;
+    return true;
+  });
   usbDevice.begin(usb);
   bulk.begin();
   endpoint.setFlushAfterBurst(true);
@@ -248,6 +270,7 @@ void loop() {
     EspUsbDeviceFirmwareUpdate::markValid();   // this firmware is good (see verifyRollbackLater)
     endpoint.setDiscoverable(true);            // the probe enumerates with the project's VID:PID (core §7.5)
   }
+  restartAfterDfu();
   endpoint.poll();
   console.poll();
   swioConsole.poll();

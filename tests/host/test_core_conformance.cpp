@@ -462,7 +462,8 @@ static void testNamesAndTokens() {
 // unsupported (no restart), another is ignored and listed. The answer goes first: the session's notifications end (an
 // event queued is not sent), it is written, then everything is let go of - the session (sessionOver), what the
 // settings keep (probeRestart), every plan, the settings' too - and the handler is called kRestartSettleMs after it,
-// well within restart_after_answer_ms. Nothing after the answer is served or sent, on any transport: the request
+// early enough that the handler's own detach (kRestartDetachMs) and reset (kRestartResetMs) still start the reset within
+// restart_after_answer_ms. Nothing after the answer is served or sent, on any transport: the request
 // behind it in the same read, a request on another transport.
 class PlanToy final : public Interface {
  public:
@@ -589,6 +590,11 @@ static void testRestart() {
   CHECK(s.tx == hex("0900020c0001007f010020"));
   CHECK(g_seen.calls == 1 && g_seen.tx == s.tx.size() && ep.restarting());
   CHECK(g_seen.at_ms - before >= Endpoint::kRestartSettleMs && g_seen.at_ms - before < reg::kLimitRestartAfterAnswerMs);
+  // the handler's own part - a USB device off the bus kRestartDetachMs, then the reset (kRestartResetMs to start) - still
+  // starts the reset within restart_after_answer_ms of the answer (a reset with the device on the bus left the host
+  // failing its device descriptor request after the restart)
+  CHECK(g_seen.at_ms - before + kRestartDetachMs + kRestartResetMs < reg::kLimitRestartAfterAnswerMs);
+  CHECK(kRestartDetachMs >= 50);   // long enough for the host to see the device gone
   CHECK(!g_seen.locked && !g_seen.planned && !b.subscribed);   // let go of before the handler
   CHECK(a.session_overs == 1 && b.session_overs == 1 && a.probe_restarts == 1 && b.probe_restarts == 1);
   CHECK(b.restart_saw_planned && !a.restart_saw_planned);   // the session's plan went with the session, the settings' after probeRestart

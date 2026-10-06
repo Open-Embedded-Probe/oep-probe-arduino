@@ -230,10 +230,14 @@ class Endpoint {
   // A restart taken: the session's notifications end and the zero-copy data already queued goes out first (at most
   // kRestartDrainMs), then the answer; it is flushed (a UART's flush waits for its last bit), the session ends, every
   // interface lets go of its connections (probeRestart) and every plan goes, the settings' too, so each channel is in
-  // its free state (core §8); kRestartSettleMs after the flush - the host's USB stack takes the last packet meanwhile,
-  // well within restart_after_answer_ms - fn is called. From the answer on nothing is served or sent (restarting()).
+  // its free state (core §8); kRestartSettleMs after the flush - the host's USB stack takes the last packet meanwhile -
+  // fn is called. A probe on USB takes its device off the bus in fn, waits kRestartDetachMs and resets the chip
+  // (kRestartResetMs to start; Oep.h): the reset starts within restart_after_answer_ms of the answer. From the answer on
+  // nothing is served or sent (restarting()).
   using RestartFn = void (*)();
   static constexpr uint32_t kRestartSettleMs = 20, kRestartDrainMs = 200;
+  static_assert(kRestartSettleMs + kRestartDetachMs + kRestartResetMs < reg::kLimitRestartAfterAnswerMs,
+                "the reset after a restart's answer must start within restart_after_answer_ms");
   void setRestart(RestartFn fn, uint32_t max_ms) {
     if (polled_) return;
     restart_ = fn;

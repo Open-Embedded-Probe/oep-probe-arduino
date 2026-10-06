@@ -93,10 +93,10 @@ static constexpr uint64_t kAdc = 0x7ull << 26;
 static oep::AnalogCapture analog(endpoint, kAdc, 0);
 static uint8_t probeTlv[200];
 
-// oep.probe.restart (oep-if-restart): rp2040.reboot() (oep::platformRestart), a watchdog reset that takes the USB device
-// off the bus. restart_max_ms (its describe): the chip is running setup() within about 0.1 s (boot ROM, flash, the
-// settings read), then the host enumerates the device again and its OS gives the CDC port back - 0.3 s to about 1 s
-// (Windows the slowest) - before it can confirm. 2000 ms is about twice the slow end (an estimate from the boot path,
+// oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
+// rp2040.reboot(), a watchdog reset, oep::kRestartDetachMs later. restart_max_ms (its describe): the chip is running
+// setup() within about 0.1 s (boot ROM, flash, the settings read), then the host enumerates the device again and its
+// OS gives the CDC port back - 0.3 s to about 1 s (Windows the slowest) - before it can confirm. 2000 ms is about twice the slow end (an estimate from the boot path,
 // to be measured on the bench).
 static constexpr uint32_t kRestartMaxMs = 2000;
 

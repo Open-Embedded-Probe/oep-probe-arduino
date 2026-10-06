@@ -31,6 +31,16 @@ namespace oep {
 // The wire numbers (generated from oep-spec registry/oep-v1.toml - protocol revision 1 - into OepRegistry.h).
 namespace reg = v1::reg;
 
+// oep.probe.restart's handler (Endpoint::setRestart, oep::platformRestart): a probe on USB first takes its device off the
+// bus (the pull-up off: the host records an unplug, not a device that stopped answering mid-transfer), waits
+// kRestartDetachMs for the host to see it, and only then resets the chip, which takes kRestartResetMs at most to start
+// (an RP2's watchdog reset fires 10 ms on). A reset with the device still on the bus left an RP2350 and an ESP32-P4
+// failing their device descriptor request after they came back, until a replug (bench, 0.0.29-dev+3c0cd99: Windows'
+// "unknown USB device (device descriptor request failed)"). Endpoint::kRestartSettleMs (the answer's last packet taken)
+// before the handler, these after it: the reset starts within restart_after_answer_ms (oep-if-restart §2, checked in
+// OepEndpoint.h).
+constexpr uint32_t kRestartDetachMs = 60, kRestartResetMs = 10;
+
 constexpr uint8_t kRoleRequest = reg::kRoleRequest, kRoleResult = reg::kRoleResult;
 // Probe-initiated frames (core §11), sent only to the lock holder that subscribed to the emitting fn, after results.
 //   role(0x06) fn(u16) seq(u16) payload     data: payload = position(u64) len(u16) data [TLV] (core §11.2)

@@ -1,6 +1,31 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.probe.restart takes a USB device off the bus before the chip resets (bench, 0.0.29-dev+3c0cd99: after a restart
+  the RP2350 came back failing its device descriptor request - Windows: "unknown USB device (device descriptor request
+  failed)" - until a replug; the WeAct ESP32-P4 the same after a DFU update's reboot). The reset came with the device
+  still on the bus, the host mid-transfer: RP2 reset at once (rp2040.reboot), the P4 20 ms after tud_disconnect. Now
+  oep::platformRestart on an RP2 does tud_disconnect (under the core's USB mutex), waits kRestartDetachMs (60 ms, Oep.h)
+  and then rp2040.reboot() (its watchdog fires 10 ms on, kRestartResetMs); the P4's handler does tud_disconnect,
+  kRestartDetachMs, esp_restart; a classic ESP32 (USB through a bridge that stays on the bus) only esp_restart. The
+  endpoint calls the handler kRestartSettleMs (20 ms) after the answer, so the reset starts about 90 ms after it - within
+  restart_after_answer_ms (100), checked by a static_assert and the host test (the wait is 60 ms, not 100, to keep that).
+  The P4's DFU update restarts from loop(): EspUsbDevice's own restart (tud_disconnect, 20 ms, esp_restart) is off
+  (restartWhenComplete false); once the image verified (onComplete), 500 ms for the host's last GETSTATUS, then
+  tud_disconnect, 100 ms, esp_restart. Host test (test_core_conformance): the handler's call plus kRestartDetachMs and
+  kRestartResetMs ends before restart_after_answer_ms. Not on the bench yet.
+- (JA) oep.probe.restart は、chip を reset する前に USB の device を bus から外す（bench、0.0.29-dev+3c0cd99: 再起動の後、RP2350 が
+  device descriptor の要求に失敗して戻り - Windows では「不明な USB デバイス（デバイス記述子要求の失敗）」 - 抜き差しが要った。
+  WeAct の ESP32-P4 も DFU の更新の後の再起動で同じ）。reset は device が bus に居て host が転送の途中のまま来ていた: RP2 はすぐ
+  （rp2040.reboot）、P4 は tud_disconnect の 20 ms 後。いま RP2 の oep::platformRestart は（core の USB の mutex の下で）
+  tud_disconnect、kRestartDetachMs（60 ms、Oep.h）待ってから rp2040.reboot()（watchdog は 10 ms 後、kRestartResetMs）。P4 の
+  handler は tud_disconnect、kRestartDetachMs、esp_restart。classic ESP32（USB は bus に残る bridge 越し）は esp_restart だけ。
+  endpoint は応答の kRestartSettleMs（20 ms）後に handler を呼ぶので、reset は応答のおよそ 90 ms 後に始まる -
+  restart_after_answer_ms（100）のうち。static_assert と host の試験で確かめる（待ちを 100 でなく 60 ms にしたのはそのため）。
+  P4 の DFU の更新は loop() から再起動する: EspUsbDevice 自身の再起動（tud_disconnect、20 ms、esp_restart）は切り
+  （restartWhenComplete false）、image が検証できたら（onComplete）host の最後の GETSTATUS に 500 ms、それから tud_disconnect、
+  100 ms、esp_restart。host の試験（test_core_conformance）: handler を呼ぶまでに kRestartDetachMs と kRestartResetMs を足しても
+  restart_after_answer_ms の前に終わる。bench ではまだ試していない。
 - (EN) riscv-dm's block ops, run, step and the dpc reads stand up to a link that misses a single access and is up
   again at the next one (a glitch: a write lost - the module may take the frame for one with a bad parity and set
   cmderr 6 - or a read answering the value of the read before it), which the look after a held group does not see.

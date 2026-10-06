@@ -17,6 +17,10 @@
 #if defined(ARDUINO_ARCH_RP2040)
 #include <hardware/gpio.h>
 #include <pico/unique_id.h>
+#if !defined(USE_TINYUSB)
+#include <USB.h>
+#include <tusb.h>
+#endif
 #elif defined(ARDUINO_ARCH_ESP32)
 #include <driver/gpio.h>
 #endif
@@ -262,13 +266,25 @@ inline bool describeChip(TlvWriter &w) {
 inline uint32_t platformRandom32() { return bootIdSource(); }
 
 #if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
-// The chip restarted as from power-on, for oep.probe.restart (oep-if-restart, Endpoint::setRestart). Does not return. ESP32:
-// esp_restart (the system reset: on the ESP32-P4 the HS USB device drops off the bus with it). RP2: arduino-pico's
-// rp2040.reboot(), a watchdog reset 10 ms on, which resets the USB controller too (the device re-enumerates).
+// The chip restarted as from power-on, for oep.probe.restart (oep-if-restart, Endpoint::setRestart). Does not return.
+// A device on USB goes off the bus first (the pull-up off), kRestartDetachMs before the reset (Oep.h): a reset with the
+// device still on the bus left the host failing its device descriptor request after the restart, until a replug.
+// RP2 (arduino-pico): tud_disconnect under the core's USB mutex (USB.disconnect() itself waits 500 ms), then
+// rp2040.reboot(), a watchdog reset 10 ms on (kRestartResetMs), which resets the USB controller too. ESP32: esp_restart;
+// a classic ESP32 reaches the host through a USB-UART bridge, which stays on the bus (nothing of the chip's to take
+// off). A sketch whose ESP32 runs its own USB device (the P4's HS port) takes it off the bus in its own handler.
 inline void platformRestart() {
 #if defined(ARDUINO_ARCH_ESP32)
   esp_restart();
 #else
+#if !defined(USE_TINYUSB)
+  mutex_enter_blocking(&USB.mutex);
+  tud_disconnect();
+  mutex_exit(&USB.mutex);
+#else
+  TinyUSBDevice.detach();
+#endif
+  delay(kRestartDetachMs);
   rp2040.reboot();
 #endif
 }
