@@ -336,7 +336,8 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   force_ = trig_type_ == cap::kTriggerImmediate && !follow_;   // a ring left by following: start at once
   filled_ = fill_ = 0;
   trigger_index_ = 0xFFFFFFFFu;
-  reported_trigger_ = follow_;   // a follower's trigger is the group's event
+  // a follower's trigger is the group's event; an immediate start (the ring a group's following left) sends none
+  reported_trigger_ = follow_ || trig_type_ == cap::kTriggerImmediate;
   done_ = false;
   produced_ = queue_overflow_ = overruns_ = 0;
   captured_ = 0;
@@ -920,7 +921,8 @@ size_t LogicCapture::segmentInfo(uint8_t *out) const {
   putU32(out + 12, kept_samples_);
   putU64(out + 16, triggered_ ? start_ns_ + nsOf(seg_first_sample_) : start_ns_);
   putU32(out + 24, kStartUncertaintyNs);
-  putU32(out + 28, triggered_ ? trigger_index_ : 0xFFFFFFFFu);   // immediate: no trigger inside
+  // immediate (also through the ring a group's following left): no trigger inside
+  putU32(out + 28, triggered_ && (trig_type_ != cap::kTriggerImmediate || follow_) ? trigger_index_ : 0xFFFFFFFFu);
   out[32] = static_cast<uint8_t>((triggered_ && trig_overrun_ ? cap::kSegmentFlagGap : 0) |   // bit0: part of it was lost
                                  (kept_short_ ? cap::kSegmentFlagShort : 0));                // bit1: cut short by stop
   putU32(out + 33, generation_);
