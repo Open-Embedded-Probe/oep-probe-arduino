@@ -3,13 +3,16 @@
 
 // Host tests: oep.target.console (OepConsole.cpp) over DmConsole and Ch32Dm on a fake DMI PHY whose debug module keeps
 // DATA0 / DATA1 and DMSTATUS's halted / havereset bits; the test plays the target's side of the mailbox.
-// - core §4.3's order: a stream op's form and values are checked before its stream number (no_connection last).
+// - core §4.3's order: a stream op's form and values are checked before its stream number (no_connection last); read
+//   from 3 with arg over 0xFF is malformed (common §1.2), the fixture UART's read too.
 #include <stdio.h>
 
 #include <vector>
 
 #include "OepConsole.h"
 #include "OepDmConsole.h"
+#include "OepFixture.h"
+#include "OepPinTable.h"
 #include "OepTarget.h"
 
 uint32_t g_millis = 1000;
@@ -117,6 +120,24 @@ int main() {
     CHECK(rejectedWith(r, kRejectMalformed));
     r = call(console, TargetConsoleStream::kOpMark, cat(unknown, {1}), out);       // well formed: no_connection
     CHECK(rejectedWith(r, kRejectNoConnection));
+  }
+
+  // ---- read from 3 (the last mark of kind arg): arg over 0xFF is malformed (common §1.2; it read kind arg & 0xFF) ----
+  {
+    r = call(console, TargetConsoleStream::kOpRead, cat(le16(stream), {3, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}), out);
+    CHECK(rejectedWith(r, kRejectMalformed));
+    r = call(console, TargetConsoleStream::kOpRead, cat(le16(stream), {3, 0xff, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
+    CHECK(ok(r));
+    // the fixture UART's read alike
+    static PinTable uart_pins(0);
+    static HardwareSerial serial;
+    static FixtureUart uart(uart_pins, serial, 0);
+    r = call(uart, FixtureUart::kOpRead, {3, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}, out);
+    CHECK(rejectedWith(r, kRejectMalformed));
+    r = call(uart, FixtureUart::kOpRead, {4, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}, out);   // from 4: unsupported
+    CHECK(rejectedWith(r, kRejectUnsupported));
+    r = call(uart, FixtureUart::kOpRead, {3, 0x07, 0, 0, 0, 0, 0, 0, 0, 16, 0}, out);
+    CHECK(ok(r));
   }
 
   // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6

@@ -52,8 +52,15 @@ class PositionStream {
     mark(reg::common::kMarkKindClear);
   }
 
-  // p: from(u8) arg(u64) max(u16). from > 3 is the caller's to refuse (unknown value). The answer leaves `reserve` bytes
-  // of the capacity for what the caller appends (an ignored TLV).
+  // A read request's values (common §1.2), p: from(u8) arg(u64) max(u16): from 3 with arg over 0xFF is malformed (a mark
+  // kind is u8), from 4 or more unsupported, payload 0x00 (a later revision may define it). Completed: it may be read.
+  static Result checkRead(const uint8_t *p, uint8_t *out, size_t capacity) {
+    if (p[0] == reg::common::kReadFromLastMark && getU64(p + 1) > 0xff) return rejected(kRejectMalformed);
+    if (p[0] > reg::common::kReadFromLastMark) return unsupportedValue(out, capacity);
+    return completed();
+  }
+  // p: from(u8) arg(u64) max(u16), as checkRead passes it. The answer leaves `reserve` bytes of the capacity for what the
+  // caller appends (an ignored TLV).
   Result read(const uint8_t *p, uint8_t *out, size_t capacity, uint16_t max_read, size_t reserve = 0) const {
     if (capacity < kReadHeader + reserve) return failed();
     const uint8_t from = p[0];
@@ -67,7 +74,7 @@ class PositionStream {
       start = total_;   // no such mark kept (never, or pushed out of the ring): from now (common §1.2)
       for (uint32_t k = 0; k < kept_; ++k) {
         const Mark &mk = marks_[slotBack(k + 1)];
-        if ((arg & 0xff) == 0 || mk.kind == (arg & 0xff)) { start = mk.position; break; }
+        if (arg == 0 || mk.kind == arg) { start = mk.position; break; }
       }
     }
     uint8_t flags = 0;

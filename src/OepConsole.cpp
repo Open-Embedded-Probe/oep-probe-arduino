@@ -172,7 +172,8 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
     case kOpRead: {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) len(u16) data [TLV]
       const Result parsed = plainTail(tail, p, n, PositionStream::kReadRequest, out, capacity);
       if (refused(parsed)) return parsed;
-      if (p[0] > reg::common::kReadFromLastMark) return unsupportedValue(out, capacity);   // from 4+ (common §1, core §2.5)
+      const Result values = PositionStream::checkRead(p, out, capacity);   // from 3's arg, from 4+ (common §1.2)
+      if (refused(values)) return values;
       if (checking_) return completed();
       poll();   // take what is waiting first
       const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;

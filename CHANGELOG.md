@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) read from 3 (the last mark of kind arg) with arg over 0xFF is refused malformed (oep-if-common §1.2: a mark kind is u8; it looked up kind arg & 0xFF), in the console and in the fixture UART alike, before from 4+ is refused unsupported (PositionStream::checkRead). Host test.
+- (JA) from 3（種類 arg の最後の mark から）で arg が 0xFF を超える read は malformed で断る（oep-if-common §1.2: mark の種類は u8。arg & 0xFF の種類を探していた）。console でも fixture の UART でも同じで、from 4 以上を unsupported で断るより先（PositionStream::checkRead）。host test。
 - (EN) Console open on a live connection the console does not ride on - an arm-adi (swd) connection - is refused unavailable cause 6 (oep-if-console §1, §3; it answered no_connection); a number no live connection has stays no_connection. On a probe with one console per wire, a connection of the other wire gets the same answer. Host test.
 - (JA) console が乗らない生きている接続 - arm-adi（swd）の接続 - への console の open は unavailable cause 6 で断る（oep-if-console §1、§3。no_connection を答えていた）。どの生きている接続も持たない番号は no_connection のまま。wire ごとに console を持つ probe では、もう一方の wire の接続にも同じ答えになる。host test。
 - (EN) RVSWD's wake / configuration sequence always at T >= 500 ns and >= 1 / (2 x max_speed) (oep-if-debug §3.1): a re-sync of a link tuned faster - Ch32Dm's relink after a change of hart state, the revive after a rest of 300 us and its wakes - sent the configuration pair (and the wake) at the link's own faster period; the sequence now goes out at the slowest period and the link returns to its period after it (probeOnce likewise for its dmactive). Changes timing on hardware (each re-sync is slower). Host test.

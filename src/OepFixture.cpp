@@ -377,7 +377,8 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
     case kOpRead: {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) len(u16) data [TLV]
       const Result parsed = plainTail(tail, payload, length, PositionStream::kReadRequest, out, capacity);
       if (refused(parsed)) return parsed;
-      if (payload[0] > reg::common::kReadFromLastMark) return unsupportedValue(out, capacity);   // from 4+ (common §1, core §2.5)
+      const Result values = PositionStream::checkRead(payload, out, capacity);   // from 3's arg, from 4+ (common §1.2)
+      if (refused(values)) return values;
       poll();
       const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
       return tail.finish(stream_.read(payload, out, capacity, max_read_, reserve), out, capacity);
