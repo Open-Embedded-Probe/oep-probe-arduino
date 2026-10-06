@@ -65,10 +65,12 @@ inline void pinMode(int pin, int mode) {
   if (g_pin_mode[pin] != mode) ++g_pin_changes;
   g_pin_mode[pin] = mode;
 }
+inline void (*g_on_pin)(int pin) = nullptr;   // a test's look at every output level written (a simulated target's reset line)
 inline void digitalWrite(int pin, int level) {
   if (pin < 0 || pin >= 64) return;
   if (g_pin_level[pin] != level) ++g_pin_changes;
   g_pin_level[pin] = level;
+  if (g_on_pin) g_on_pin(pin);
 }
 inline int digitalRead(int pin) { return pin >= 0 && pin < 64 && g_pin_level[pin]; }
 enum : uint32_t {

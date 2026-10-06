@@ -24,11 +24,17 @@ bool moduleAnswers(Ch32Dm &dm, uint32_t &status) {
 // A cold CH32 ignores the first wake now and then (the CH32L103 answered on the fifth, 2026-09-23), and one that
 // sat idle past its link timeout has dropped the link: bring the bus up afresh and try again before saying no - while
 // the attach budget lasts (the PHY's deadline). Each try again counts in search_retries.
-bool attachAndRead(Ch32Dm &dm, uint32_t &status) {
-  for (int attempt = 0; attempt < 3; ++attempt) {
+// after_reset: the reset line was just let go of (attach's reset TLV with method 0): the tries go on until the search's
+// deadline, not three - a target that restarts itself on its way out of reset (a CH32V003 booting through its
+// bootloader, which then hands over with a system reset) answers nothing for a few hundred ms (as the riscv-dm reset op
+// waits it out: Ch32Dm::reset), and three tries took a few ms. (1000 tries, each 1 ms apart at least, stop it should
+// a caller have set no deadline.)
+bool attachAndRead(Ch32Dm &dm, uint32_t &status, bool after_reset = false) {
+  for (int attempt = 0; attempt < (after_reset ? 1000 : 3); ++attempt) {
     if (attempt) {
       if (dm.phy().pastDeadline()) break;
       dm.phy().countSearchRetry();
+      if (after_reset) delay(1);
     }
     if (dm.attach() && dm.readDmi(kDmStatus, status) && status != 0 && status != 0xffffffffu) return true;
     dm.detach();
@@ -132,7 +138,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
       freeWire(port);
       return false;
     };
-    if (!attachAndRead(port.dm, dmstatus)) return fail(true);
+    if (!attachAndRead(port.dm, dmstatus, reset != nullptr)) return fail(true);
     port.dm.ackHaveReset();
     if (!port.dm.readDmi(kDmStatus, dmstatus)) return fail(true);
     const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
@@ -627,7 +633,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
         else have_dpc = true;
       } else {
         port_.dm.pulseReset(holdReset, releaseReset, &reset_line, hold_ms);
-        if (!attachAndRead(port_.dm, status)) failure = kStatusLine;
+        if (!attachAndRead(port_.dm, status, true)) failure = kStatusLine;
         else if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
       }
       if (failure == kStatusOk) { ++port_.resets; port_.reset_detail = reg::common::kMarkDetailResetAttachReset; }
@@ -666,7 +672,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       }
     } else {
       if (with_reset) port_.dm.pulseReset(holdReset, releaseReset, &reset_line, hold_ms);
-      if (!attachAndRead(port_.dm, status)) {
+      if (!attachAndRead(port_.dm, status, with_reset)) {
         failure = kStatusLine;
       } else {
         // A pending havereset freezes a V00x's DMSTATUS halt / run bits at their reset values (ch32rv 0.8.0):

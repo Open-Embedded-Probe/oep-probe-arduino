@@ -212,6 +212,25 @@ bool Ch32Dm::resume() {
   return ok;
 }
 
+// The module again after a reset's release: answering at once (kModuleThere), or silent first and answering by
+// until_ms (kModuleBack: the target restarted itself - havereset acknowledged, the hart's view taken from DMSTATUS), or
+// silent until then (kModuleGone). The reads bring the link back in step between them (relink: a CH32V003's system
+// reset drops its SWIO configuration and dmactive); each poll yields for 1 ms.
+Ch32Dm::ModuleWait Ch32Dm::awaitModule(uint32_t until_ms, uint32_t &status) {
+  bool silent = false;
+  while (!(phy_.read(kDmStatus, status) && dmVersionKnown(status))) {
+    silent = true;
+    if (static_cast<int32_t>(millis() - until_ms) >= 0) return kModuleGone;
+    delay(1);
+    relink();
+  }
+  if (!silent) return kModuleThere;
+  halted_ = false;   // the target started over: no halt of the probe's is held (ackHaveReset keeps haltreq only then)
+  if ((status & (3u << 18)) && ackHaveReset() && !(phy_.read(kDmStatus, status) && dmVersionKnown(status))) status = 0;
+  halted_ = dmHalted(status);
+  return kModuleBack;
+}
+
 Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
   // Stop the hart at its reset vector (resetHalt: haltreq held through ndmreset, at the slowest speed, retuned once
   // stopped), then let it run. The link stays attached the whole way. The old sequence - ndmreset with the hart
@@ -220,20 +239,39 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
   // 20 of 20 on the L103, the X035 and the V003 alike (2026-09-25). Stopping at the vector first also takes care of
   // the X035's parked-at-vector resets (E158).
   // The procedure is redone at most reset_retries (1) times (oep-if-debug §4.3: flags bit2).
+  //
+  // A target may restart itself on its way out of the reset: a CH32V003 that boots through its bootloader (BOOT_MODE
+  // set, as after a power-on) runs it from the vector and then hands over to the application with a system reset; its
+  // module answered nothing for a few hundred ms from just after the resume (P4 bench, 0.0.28+1c940ca: the confirmation
+  // failed at 212 ms with status line, a mode 0 reset answered ok and the next requests got line). So after the resume
+  // the op looks at the module once more (after the same 1 ms the confirmation gives the image) and, when it is silent,
+  // waits for it to answer again - relinking, its havereset acknowledged - before it confirms or answers: a host's next
+  // request finds the module answering. The wait ends kResetSettleMs after the op started, so that with the
+  // confirmation's halt and resume (dm_wait_ms each) the answer still comes within the host's wait for a request with
+  // no time argument (host_wait_add_ms, core §4.4). Still silent then: bit0 cleared, no redo (a redo restarts the
+  // target into the same hand-over), and the caller answers status line.
   ResetReport report = {0, 0, 0};
   cmderr_ = 0;   // a cmderr of this reset's own abstract commands says fault (§4.3)
+  const uint32_t settle_end = millis() + kResetSettleMs;
   for (uint8_t attempt = 1; attempt <= 1 + v1::reg::kLimitResetRetries; ++attempt) {
     report.attempts = attempt;
     if (attempt > 1) report.flags |= 4;                     // redone
     uint32_t dpc = 0;
-    if (!resetHalt(dpc) || !resume()) continue;
+    if (!resetHalt(dpc)) continue;
+    const bool resumed = resume();
+    delay(1);                                               // a moment for the image to start
+    uint32_t status = 0;
+    const ModuleWait module = awaitModule(settle_end, status);
+    if (module == kModuleGone) { report.flags &= static_cast<uint8_t>(~1u); return report; }
+    // A resume whose acknowledgement the silence swallowed: the module back and the hart running is the same thing.
+    if (!resumed && !(module == kModuleBack && (status & (1u << 11)) && !(status & (1u << 9)))) continue;
     report.flags |= 1;                                      // released and running
     if (!confirm) return report;
-    // Confirm execution: a moment for the image to start, then a brief halt for the pc. A pc still at the vector
-    // is not execution yet: resume and sample again. The halt is the probe's own: DATA goes back before the resume
-    // (oep-if-debug §4: as step).
+    // Confirm execution: a brief halt for the pc. A pc still at the vector is not execution yet: resume and sample
+    // again. The halt is the probe's own: DATA goes back before the resume (oep-if-debug §4: as step).
     for (int sample = 0; sample < 3; ++sample) {
-      delay(1);
+      if (sample) delay(1);
+      if (awaitModule(settle_end, status) == kModuleGone) { report.flags &= static_cast<uint8_t>(~1u); return report; }
       uint32_t pc = 0;
       if (!halt()) { report.flags |= 8; break; }            // the confirmation halt failed
       keepMailbox();

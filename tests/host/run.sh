@@ -9,7 +9,8 @@
 # unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the target console on it (core §4.3's order,
 # the send slot, the marks), and of the RVSWD PHY's attach on a
 # simulated target (what is written before the speed is verified, the checks, the budget), of the swio stack on a
-# simulated CH32V003 whose reset goes through its bootloader (the connection kept), of the whole rvswd stack's
+# simulated CH32V003 whose reset goes through its bootloader (the connection kept, a silent bootloader waited out by
+# the reset op and by attach's reset TLV), of the whole rvswd stack's
 # attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries), and of the ESP32-P4 logic capture's configure on a fake PARLIO RX
 # driver and heap (samples rounded down, streaming without internal RAM for stages), of the analog scale from a frontend's

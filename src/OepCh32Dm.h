@@ -42,7 +42,10 @@ class Ch32Dm {
   bool resume();          // one resumereq; ok = the hart left debug mode (allresumeack, or running and not halted)
   // Restart the target from its reset vector and let it run (reset-halt, then resume; the link stays attached).
   // flags: bit0 released and running, bit1 execution confirmed by a nonzero pc sample (confirm = true: a brief
-  // halt, dpc read, resume), bit2 the sequence was redone, bit3 a confirmation halt / resume failed.
+  // halt, dpc read, resume), bit2 the sequence was redone, bit3 a confirmation halt / resume failed. It answers once the
+  // module answers again after the release (a target that restarts itself on the way: awaitModule), at most
+  // kResetSettleMs after it started; still silent then, bit0 is cleared (the caller answers status line).
+  static constexpr uint32_t kResetSettleMs = v1::reg::kHostWaitAddMs - 3 * v1::reg::kLimitDmWaitMs;
   struct ResetReport { uint8_t flags; uint8_t attempts; uint32_t pc; };
   ResetReport reset(bool confirm = true);
   void detach();          // haltreq and the rest lowered, dmactive kept, lines Hi-Z (target keeps running or stays halted)
@@ -110,6 +113,12 @@ class Ch32Dm {
   void autoOff() { if (auto_on_) { phy_.write(0x18, 0); auto_on_ = false; } }
   void autoOn() { phy_.write(0x18, 1); auto_on_ = true; }
   uint32_t restarts_ = 0;
+  // After a reset's release (oep-if-debug §4.3): DMSTATUS read again, relinking while it does not answer, until it
+  // answers or until_ms. A target that restarts itself on its way out of a reset - a bootloader handing over to the
+  // application with a system reset - leaves the module silent for a while and then answers with havereset (here
+  // acknowledged) and the link to bring back in step. status: the last DMSTATUS that answered.
+  enum ModuleWait : uint8_t { kModuleThere, kModuleBack, kModuleGone };
+  ModuleWait awaitModule(uint32_t until_ms, uint32_t &status);
   bool waitAbstract();
   void relink();                          // PHY re-sync + abstract-command block back to a known state
   void retune();                          // PHY speed search + the same
