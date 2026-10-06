@@ -210,8 +210,10 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
   // came through first time in only 9 of 20 resets on the CH32L103 and failed 5, while reset-halt + resume ran
   // 20 of 20 on the L103, the X035 and the V003 alike (2026-09-25). Stopping at the vector first also takes care of
   // the X035's parked-at-vector resets (E158).
+  // The procedure is redone at most reset_retries (1) times (oep-if-debug §4.3: flags bit2).
   ResetReport report = {0, 0, 0};
-  for (uint8_t attempt = 1; attempt <= 3; ++attempt) {
+  cmderr_ = 0;   // a cmderr of this reset's own abstract commands says fault (§4.3)
+  for (uint8_t attempt = 1; attempt <= 1 + v1::reg::kLimitResetRetries; ++attempt) {
     report.attempts = attempt;
     if (attempt > 1) report.flags |= 4;                     // redone
     uint32_t dpc = 0;
@@ -436,6 +438,7 @@ bool Ch32Dm::ackHaveReset() {
 
 bool Ch32Dm::resetHalt(uint32_t &dpc) {
   dpc = 0;
+  cmderr_ = 0;
   if (!attach()) return false;
   if (!halted_) halt();                    // ndmreset on a running hart left it stopped oddly (2026-09-22)
   phy_.write(kAbstractAuto, 0);
@@ -451,15 +454,17 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   // Out of reset the hart may be unavailable for a while; it should then come up halted at the reset vector.
   // The release is written again with haltreq in case the DM ignored it (it ignores DMI writes for a while after
   // ndmreset, 2026-09-22), and ndmreset is checked clear at the end.
+  // The wait for the hart to halt after the release is dm_wait_ms of time per procedure (oep-if-debug §4.3).
   bool halted = false;
-  for (int poll = 0; poll < 400 && !halted; ++poll) {
+  const uint32_t released_at = millis();
+  do {
     uint32_t status = 0;
     if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) { relink(); continue; }
     if (status & (1u << 13)) { delayMicroseconds(250); continue; }   // anyunavail
     if (status & (1u << 9)) { halted = true; break; }
     phy_.write(kDmControl, 0x80000001);
     delayMicroseconds(250);
-  }
+  } while (millis() - released_at < kDmWaitMs);
   uint32_t control = 0;
   const bool released = phy_.read(kDmControl, control) && (control & 0x3) == 0x1;
   if (halted) settleHalted(true);

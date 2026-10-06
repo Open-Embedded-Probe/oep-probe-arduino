@@ -92,6 +92,7 @@ class FakePhy final : public DmiPhy {
   // step_returns: a resumereq runs one instruction and the hart is back in debug mode at once (a step); each read takes
   // read_us of time
   bool ignore_halt = false, ignore_resume = false, step_returns = false;
+  uint32_t abstract_cmderr = 0;   // every abstract command fails with it (0: none)
   uint32_t read_us = 10, dmcontrol = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
     advanceMicros(read_us);
@@ -111,7 +112,7 @@ class FakePhy final : public DmiPhy {
                 (havereset ? (3u << 18) : 0);
         break;
       case 0x12: value = 0x0002'1000u | 0x380; break;   // HARTINFO: DATA0 at 0x380 (memory-mapped), datacount 2
-      case 0x16: value = 2; break;                       // ABSTRACTCS: datacount 2, not busy, no cmderr
+      case 0x16: value = 2 | (abstract_cmderr << 8); break;   // ABSTRACTCS: datacount 2, not busy, cmderr
       default: value = 0; break;
     }
     return true;
@@ -493,6 +494,19 @@ int main() {
     CHECK(!phy.halted && phy.dmcontrol == 1 && !dm.halted());
     CHECK(millis() - before >= 2 * reg::kLimitDmWaitMs && millis() - before <= 2 * reg::kLimitDmWaitMs + 10);
     phy.ignore_halt = false;
+    // reset (oep-if-debug §4.3): the procedure redone at most once (reset_retries; it ran 3 times), and a cmderr of
+    // its own abstract commands is status fault (it was timeout)
+    phy.ignore_resume = true;
+    r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], 0}, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 7 && out[0] == kStatusTimeout && out[2] == 2 &&
+          (out[1] & reg::target_riscv_dm::kResetFlagsRetried));
+    phy.ignore_resume = false;
+    phy.abstract_cmderr = 2;
+    r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], 2}, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 7 && out[0] == kStatusFault);
+    phy.abstract_cmderr = 0;
+    r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], 2}, out);
+    CHECK(ok(r) && out[0] == kStatusOk && out[2] == 1 && (out[1] & reg::target_riscv_dm::kResetFlagsReached));
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     phy.halted = false;

@@ -826,7 +826,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       dm.phy().loss().excuseReset();   // the reset asserted: not counted towards wire loss (oep-if-debug §2)
       ++port_->resets;   // the console marks it (detail 1 ndmreset); last-reset binds follow it
       port_->reset_detail = reg::common::kMarkDetailResetNdmreset;
-      out[0] = ok ? kStatusOk : failure(kStatusTimeout);
+      // not reached: the module answers - timeout, or fault for a cmderr; it does not - line (oep-if-debug §4.3)
+      out[0] = ok ? kStatusOk : dm.lastCmderr() ? kStatusFault : failure(kStatusTimeout);
       return tail.finish(outcome(out[0], 0, 7), out, capacity);
     }
     case kOpStep: {
