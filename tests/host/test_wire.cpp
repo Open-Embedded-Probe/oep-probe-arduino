@@ -20,6 +20,7 @@
 //   on is refused while a plan holds it.
 #include <stdio.h>
 
+#include <map>
 #include <vector>
 
 #include "OepDmConsole.h"
@@ -67,6 +68,41 @@ class FakePhy final : public DmiPhy {
   bool drop_on_change = false, dropped = false;
   int reinits = 0;
   void reinit() override { dropped = false; ++reinits; }
+  // With the link dropped, writes are lost too (drop_loses_writes), and reads give the previous read's value instead of
+  // all ones (drop_stale: the DTM answers with what it last had).
+  bool drop_loses_writes = false, drop_stale = false;
+  uint32_t last_read = 0;
+  int lost_writes = 0;
+  // run_reads: a resumereq lets the hart run for that many DMSTATUS reads before it stops by itself (an ebreak), a
+  // change of state (0: stop at once when step_returns, else run on)
+  int run_reads = 0, running_reads = 0;
+  // model_block: the abstract commands behind the block ops - GPRs, dpc / dcsr, the program buffer (the probe's block
+  // reader / writer), abstractauto on DATA0, cmderr 4 while the hart runs - over a word memory; DATA0 / DATA1 sit at
+  // 0xe0000380 / 0xe0000384 (HARTINFO)
+  bool model_block = false;
+  uint32_t gpr[32] = {}, dpc = 0, progbuf[8] = {}, abstractauto = 0, last_command = 0, cmderr = 0, autoexec_runs = 0;
+  std::map<uint32_t, uint32_t> mem;
+  void execute(uint32_t command) {
+    if (cmderr) return;                                     // sticky: nothing runs until cleared
+    if (!halted) { cmderr = 4; return; }                    // halt / resume: not halted
+    const uint16_t regno = command & 0xffff;
+    if (command & (1u << 17)) {                             // transfer
+      uint32_t *r = regno >= 0x1000 && regno < 0x1020 ? &gpr[regno - 0x1000] : regno == 0x7b1 ? &dpc
+                    : regno == 0x7b0 ? &dcsr : nullptr;
+      if (!r) { cmderr = 2; return; }
+      if (command & (1u << 16)) *r = data0; else data0 = *r;
+    }
+    if (command & (1u << 18)) {                             // postexec: the program buffer
+      if (gpr[10] != 0xe0000380u || gpr[11] != 0xe0000384u) { cmderr = 3; return; }
+      if (progbuf[0] == 0x40044180u) {                      // reader: s0 = DATA1, s1 = mem[s0], DATA0 = s1, DATA1 += 4
+        gpr[8] = data1; gpr[9] = mem[gpr[8]]; gpr[8] += 4; data0 = gpr[9]; data1 = gpr[8];
+      } else if (progbuf[0] == 0x41044180u) {               // writer: mem[DATA1] = DATA0, DATA1 += 4
+        gpr[8] = data1; gpr[9] = data0; mem[gpr[8]] = gpr[9]; gpr[8] += 4; data1 = gpr[8];
+      } else {
+        cmderr = 3;
+      }
+    }
+  }
 
   bool attach() override {
     if (attached_flag) return true;
@@ -108,7 +144,12 @@ class FakePhy final : public DmiPhy {
     advanceMicros(read_us);
     if (!present || !attached_flag) return false;
     if (stuck) { value = stuck_value; return true; }
-    if (stale || dropped) { value = 0xffffffffu; return true; }
+    if (stale) { value = 0xffffffffu; return true; }
+    if (dropped) { value = drop_stale ? last_read : 0xffffffffu; return true; }
+    if (address == 0x11 && running_reads > 0 && --running_reads == 0) {   // the run reaches its ebreak
+      halted = true;
+      if (drop_on_change) { dropped = true; value = drop_stale ? last_read : 0xffffffffu; return true; }
+    }
     if (flaky) {   // the RVSWD PHY's way: retries while the request's allowance lasts, then a failed read
       while (retryLeft()) { g_millis += 1; spentRetrying(1000); ++retry_reads; }
       return false;
@@ -122,14 +163,26 @@ class FakePhy final : public DmiPhy {
                 (havereset ? (3u << 18) : 0);
         break;
       case 0x12: value = 0x0002'1000u | 0x380; break;   // HARTINFO: DATA0 at 0x380 (memory-mapped), datacount 2
-      case 0x16: value = 2 | (abstract_cmderr << 8); break;   // ABSTRACTCS: datacount 2, not busy, cmderr
+      case 0x16: value = 2 | ((model_block ? cmderr : abstract_cmderr) << 8); break;   // ABSTRACTCS: datacount 2, cmderr
+      case 0x18: value = abstractauto; break;
       default: value = 0; break;
     }
+    last_read = value;
+    if (model_block && address == 0x04 && (abstractauto & 1)) { ++autoexec_runs; execute(last_command); }
     return true;
   }
   void write(uint8_t address, uint32_t value) override {
     ++writes;
     if (!present || !attached_flag) return;
+    if (dropped && drop_loses_writes) { ++lost_writes; return; }
+    if (model_block) {
+      if (address == 0x04) { data0 = value; if (abstractauto & 1) { ++autoexec_runs; execute(last_command); } return; }
+      if (address == 0x05) { data1 = value; return; }
+      if (address == 0x16) { if (value & 0x700) cmderr = 0; return; }
+      if (address == 0x17) { last_command = value; execute(value); return; }
+      if (address == 0x18) { abstractauto = value; return; }
+      if (address >= 0x20 && address < 0x28) { progbuf[address - 0x20] = value; return; }
+    }
     if (address == 0x04) data0 = value;
     if (address == 0x05) data1 = value;
     if (address == 0x17 && (value & (1u << 16)) && (value & 0xffff) == 0x7b0) {   // write dcsr
@@ -143,7 +196,11 @@ class FakePhy final : public DmiPhy {
       hartsel = value & 0x07ffffc0u;
       const bool was = halted;
       if ((value & (1u << 31)) && !ignore_halt) { halted = true; resumeack = false; }
-      if ((value & (1u << 30)) && !ignore_resume) { halted = step_returns; resumeack = true; }
+      if ((value & (1u << 30)) && !ignore_resume) {
+        halted = step_returns && !run_reads;
+        resumeack = true;
+        running_reads = run_reads;
+      }
       if (drop_on_change && ((value & (3u << 30)) && (halted != was || (value & (1u << 30))))) dropped = true;
       if (value & (1u << 28)) havereset = false;   // ackhavereset
     }
@@ -614,6 +671,75 @@ int main() {
     CHECK(ok(r) && out[0] == kStatusOk && out[2] == 1 && (out[1] & reg::target_riscv_dm::kResetFlagsReached));
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
+    phy.halted = false;
+  }
+
+  // ---- a link that drops at every change of hart state (a CH32L103), under the block ops, run and resume, with the
+  // abstract commands modelled (program buffer, autoexecdata): the line reads all ones until the link is brought up
+  // again, or the last value read (oep-if-debug §4's table: a read right after the change may give the previous value),
+  // and writes are lost meanwhile. checkHalted looked once: after a host's raw halt the block op answered line (all
+  // ones) or state with 0 words (the stale "running" - "write_block stopped after 0: state" on the L103); the run's wait
+  // relinked only on all ones, so a stale "running" kept it to its timeout with the hart at its ebreak, and a stale
+  // "halted" hid a resume ----
+  for (bool stale_reads : {false, true}) {
+    phy.halted = false;
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = true;
+    phy.drop_stale = stale_reads;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.mem.clear();
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    for (uint32_t k = 0; k < 4; ++k) phy.gpr[8 + k] = 0x11110000u + k;   // the target's s0, s1, a0, a1
+    phy.data0 = 0x0000aa55u;
+    phy.data1 = 0x12345678u;
+    auto writeBlock = [&](uint32_t address, uint32_t first, uint16_t n) {
+      Bytes req = conn;
+      for (int b = 0; b < 4; ++b) req.push_back(uint8_t(address >> (8 * b)));
+      req.insert(req.end(), {uint8_t(n), uint8_t(n >> 8)});
+      for (uint16_t i = 0; i < n; ++i) for (int b = 0; b < 4; ++b) req.push_back(uint8_t((first + i) >> (8 * b)));
+      return call(riscv, TargetRiscvDm::kOpWriteBlock, req, out);
+    };
+    auto landed = [&](uint32_t address, uint32_t first, uint16_t n) {
+      for (uint16_t i = 0; i < n; ++i) if (phy.mem[address + 4u * i] != first + i) return false;
+      return true;
+    };
+    auto keptAsFound = [&]() {
+      for (uint32_t k = 0; k < 4; ++k) if (phy.gpr[8 + k] != 0x11110000u + k) return false;
+      return phy.data0 == 0x0000aa55u && phy.data1 == 0x12345678u;
+    };
+    r = writeBlock(0x20000000u, 0xc0de0000u, 4);
+    CHECK(ok(r) && out.size() == 3 && out[2] == kStatusOk && landed(0x20000000u, 0xc0de0000u, 4));
+    CHECK(keptAsFound() && phy.abstractauto == 0);
+    r = call(riscv, TargetRiscvDm::kOpReadBlock, {conn[0], conn[1], 0, 0, 0, 0x20, 4, 0}, out);
+    CHECK(ok(r) && out.size() == 19 && out[2] == kStatusOk && out[3] == 0x00 && out[5] == 0xde && out[15] == 0x03);
+    CHECK(keptAsFound());
+    // the hart let run, then halted by the host's raw dmi write - a change the probe did not make: the link dropped
+    r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
+    CHECK(ok(r) && !phy.halted);
+    phy.dropped = false;   // the drop at the resume is over (a host's request later finds it back, the PHY's revive)
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x10, 0x01, 0x00, 0x00, 0x80}, out);
+    CHECK(ok(r) && phy.halted && phy.dropped);
+    r = writeBlock(0x20000100u, 0xbeef0000u, 3);
+    CHECK(ok(r) && out.size() == 3 && out[0] == 3 && out[2] == kStatusOk && landed(0x20000100u, 0xbeef0000u, 3));
+    CHECK(keptAsFound());
+    // run: the hart runs a few reads' worth and stops at its ebreak, the link dropping at both changes
+    r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);   // (the link in step: the run on its own)
+    CHECK(ok(r) && phy.halted);
+    phy.run_reads = 5;
+    const uint32_t before_run = millis();
+    r = call(riscv, TargetRiscvDm::kOpRun, {conn[0], conn[1], 0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 0, 0}, out);   // 1000 ms
+    CHECK(ok(r) && out.size() >= 11 && out[0] == kStatusOk && out[1] == reg::target_riscv_dm::kRunStoppedStopped);
+    CHECK(millis() - before_run < 50 && phy.halted);
+    phy.run_reads = 0;
+    // resume: the hart leaves debug mode; a stale "halted" read after it no longer hides that
+    r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
+    CHECK(ok(r) && out[0] == kStatusOk && !phy.halted);
+    r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
+    CHECK(ok(r) && phy.halted);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
     phy.halted = false;
   }
 

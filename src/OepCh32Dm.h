@@ -112,6 +112,10 @@ class Ch32Dm {
   bool auto_on_ = true;     // ABSTRACTAUTO may be set: autoOff() writes 0 only then (a block op's fixed cost is DMI round trips)
   void autoOff() { if (auto_on_) { phy_.write(0x18, 0); auto_on_ = false; } }
   void autoOn() { phy_.write(0x18, 1); auto_on_ = true; }
+  // waitStatus: one DMSTATUS look of a wait for a change of hart state, the link brought up again on a read that is no
+  // module's and every kRelinkUs (a link dropped at the change may read the last value again)
+  static constexpr uint32_t kRelinkUs = 1000;
+  bool waitStatus(uint32_t &status, uint32_t &relinked_us);
   uint32_t restarts_ = 0;
   // After a reset's release (oep-if-debug §4.3): DMSTATUS read again, relinking while it does not answer, until it
   // answers or until_ms. A target that restarts itself on its way out of a reset - a bootloader handing over to the

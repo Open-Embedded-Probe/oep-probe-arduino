@@ -62,6 +62,21 @@ void Ch32Dm::relink() {
 // through the RP2350: run timeout 3 of 6, fault 1 of 6, 1c940ca).
 bool Ch32Dm::moduleStatus(uint32_t &status) { return phy_.read(kDmStatus, status) && dmVersionKnown(status); }
 
+// One look at DMSTATUS inside a wait for a change of hart state (halt, resume, step, run, the reset's halt): a read that
+// is no module's brings the link up again, and so does every kRelinkUs of the wait. A CH32L103 drops its DMI link at the
+// change, and the line then reads all ones - or the last value read before it, which still says the old state (oep-if-
+// debug §4's table: a read right after the change may give the previous value). That stale "running" kept the run's wait
+// going to its timeout with the hart stopped at its ebreak (ch32rv uploads to the L103 through the RP2350, 1 in N runs
+// with 0.0.28+fa87704: "run: timeout"), and a stale "halted" can hide a resume the same way. relinked_us: when the link
+// was last brought up (micros()).
+bool Ch32Dm::waitStatus(uint32_t &status, uint32_t &relinked_us) {
+  if (micros() - relinked_us >= kRelinkUs) { relink(); relinked_us = micros(); }
+  if (moduleStatus(status)) return true;
+  relink();
+  relinked_us = micros();
+  return false;
+}
+
 // Measure the link speed again (the target's clock may have changed), then put the abstract-command block back in
 // a known state: the search re-syncs the bus once per candidate and leaves whatever the probes did behind.
 void Ch32Dm::retune() {
@@ -81,10 +96,22 @@ void Ch32Dm::settleHalted(bool ack_reset) {
 
 // What DMSTATUS says now: allhalted (bit 9) of a version-2 or -3 module, with no reset pending (a V00x freezes the
 // halt / run bits until it is acknowledged, so a pending one is acknowledged first).
+//
+// A DMSTATUS that is no module's (all ones), or that says the hart runs, is read once more from a freshly brought-up link
+// before it counts: a CH32L103 drops its link at every change of hart state - also one the probe did not make (a host's
+// raw halt, a hart stopped at its breakpoint) - and then reads all ones, or the last value read, which says the state
+// before the change (oep-if-debug §4's table). A block op after such a change answered line (all ones) or state with 0
+// words and the module answering (a stale "running": the shape of "write_block stopped after 0: state" that ch32rv's
+// crt0_probe got from the L103 through the RP2350). Nothing is added on the way that finds the hart halted.
 bool Ch32Dm::checkHalted() {
   if (!attach()) return false;
   uint32_t status = 0;
-  if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) return false;
+  bool read = moduleStatus(status);
+  if (!read || !(status & (1u << 9))) {
+    relink();
+    read = moduleStatus(status);
+  }
+  if (!read) return false;
   if (status & (3u << 18)) {   // havereset: acknowledge, then read again
     ackHaveReset();
     if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) return false;
@@ -208,9 +235,10 @@ bool Ch32Dm::resume() {
   // Looked for in DMSTATUS for dm_wait_ms of time (oep-if-debug §4, §4.2: not seen by then, status state).
   bool ok = false;
   const uint32_t started = millis();
+  uint32_t relinked_us = micros();
   do {
     uint32_t status = 0;
-    if (!moduleStatus(status)) { relink(); continue; }   // all ones has allresumeack set too
+    if (!waitStatus(status, relinked_us)) continue;              // all ones has allresumeack set too
     if (status & (1u << 17)) ok = true;                          // allresumeack
     else if ((status & (1u << 11)) && !(status & (1u << 9)))
       ok = true;                                                 // allrunning, not halted
@@ -455,9 +483,10 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   };
   phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
   bool halted = false;
+  uint32_t relinked_us = micros();
   while (!expired()) {
     uint32_t status = 0;
-    if (!moduleStatus(status)) { relink(); continue; }
+    if (!waitStatus(status, relinked_us)) continue;
     if (status & (1u << 9)) { halted = true; break; }
   }
   phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
@@ -521,9 +550,10 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   // The wait for the hart to halt after the release is dm_wait_ms of time per procedure (oep-if-debug §4.3).
   bool halted = false;
   const uint32_t released_at = millis();
+  uint32_t relinked_us = micros();
   do {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) { relink(); continue; }
+    if (!waitStatus(status, relinked_us)) continue;
     if (status & (1u << 13)) { delayMicroseconds(250); continue; }   // anyunavail
     if (status & (1u << 9)) { halted = true; break; }
     phy_.write(kDmControl, 0x80000001);
@@ -556,9 +586,10 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   // Back in debug mode by itself within dm_wait_ms of time (oep-if-debug §4.2)?
   bool halted = false;
   const uint32_t started = millis();
+  uint32_t relinked_us = micros();
   do {
     uint32_t status = 0;
-    if (!moduleStatus(status)) { relink(); continue; }
+    if (!waitStatus(status, relinked_us)) continue;
     if (status & (1u << 9)) { halted = true; break; }
   } while (millis() - started < kDmWaitMs);
   if (halted) {
