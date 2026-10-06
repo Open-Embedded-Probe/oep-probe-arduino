@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "OepResult.h"
@@ -686,9 +687,17 @@ class DirectTransport {
 // the reserved-channel bitmap. The sketch adds its profile and fixed labels after it; the endpoint adds the transports,
 // discoverable and max_op_ms (plan_roles and restart_max_ms are oep.probe.plan's and oep.probe.restart's describes). unit_id is mandatory (core §7.5, 1 to 32 bytes of a-z 0-9 -): without one the
 // writer fails rather than send a describe that leaves it out; a model outside its form (core §7.5) fails it too.
+// firmware_note: put after the version in the firmware text, in parentheses, when not empty (the reference firmware's
+// BootGuard::lastBoot(): what ended the boot before this one).
 inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id, size_t unit_id_length,
-                         uint16_t channels, uint64_t reserved) {
-  w.text(kCoreFirmware, kFirmwareVersion);
+                         uint16_t channels, uint64_t reserved, const char *firmware_note = nullptr) {
+  if (firmware_note && *firmware_note) {
+    char firmware[128];
+    snprintf(firmware, sizeof firmware, "%s (%s)", kFirmwareVersion, firmware_note);
+    w.text(kCoreFirmware, firmware);
+  } else {
+    w.text(kCoreFirmware, kFirmwareVersion);
+  }
   // model: lowercase a-z 0-9 -, 1 to 32 bytes (core §7.5); unit_id: the same characters, 1 to 32 bytes
   if (!lowerToken(reinterpret_cast<const uint8_t *>(model), model ? strlen(model) : 0, reg::kLimitModelMaxBytes)) {
     w.fail();

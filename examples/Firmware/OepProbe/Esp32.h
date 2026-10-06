@@ -123,12 +123,13 @@ static oep::ProbeConfig config(endpoint, binds);
 static constexpr uint64_t kAdc1 = kChannels & (0xffull << 32);
 static oep::AnalogCapture analog(endpoint, kAdc1, 0);
 static oep::CaptureGroup group(endpoint, 0);
-static uint8_t probeTlv[160];
+static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40, kReserved | oep::platformUnusablePins());
+  oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40, kReserved | oep::platformUnusablePins(),
+                    oep::BootGuard::lastBoot());
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }

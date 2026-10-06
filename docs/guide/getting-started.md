@@ -27,7 +27,9 @@ Updating an ESP32-P4 that runs OepProbe needs only its HS port: `dfu-util -D Oep
 image, not the merged one) writes the other app partition, checks it and restarts into it; the settings stay (clear
 them with `oep config erase <port>` when you want a fresh probe). The new firmware is on trial for its first
 30 s: if it crashes or stalls before then, the next reset goes back to the one before (a power cycle in that time does
-too); after 30 s it stays, whether or not a host has enumerated it. A DFU update during the trial is refused. A chip that was never flashed, or one that does not start, is flashed with
+too); after 30 s it stays, whether or not a host has enumerated it. A DFU update during the trial is refused. If it went
+back, the describe's firmware text says why after the version, e.g. `0.0.29 (rolled back from app1: panic at 12 s)`;
+any reset that was not a power-on or a restart the probe made shows there the same way (`brownout at 3 s`). A chip that was never flashed, or one that does not start, is flashed with
 esptool on USB-Serial/JTAG as above.
 
 ## 2. Install the host library

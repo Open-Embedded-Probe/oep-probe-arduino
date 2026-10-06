@@ -2,8 +2,10 @@
 // a row, the count back to 0 after a boot up kStableMs, a restart on purpose, a reset that was no crash or a record a
 // power-on left; the USB gate of the at-boot attach (configured for kUsbSettleMs, or kAttachGraceMs without a host);
 // stable(), where a firmware update on trial is confirmed: kStableMs of loop() rounds, whatever USB or a planned restart
-// do before it.
+// do before it; lastBoot(), what ended the boot before: nothing for a power-on or a restart on purpose, the reset and
+// the seconds up, an update on trial rolled back (the slot it was in), an update the bootloader did not start.
 #include <stdio.h>
+#include <string.h>
 
 #include "OepBootGuard.h"
 
@@ -28,6 +30,59 @@ static void boot(bool crash) {
 // The boot running for `ms` with loop() coming round.
 static void run(uint32_t ms) {
   for (uint32_t t = 0; t < ms; t += 100) { g_millis += 100; BootGuard::poll(); }
+}
+
+// lastBoot(): what the reset before this boot was, the seconds the boot before was up, and the app slots (app0 0x10000,
+// app1 0x150000 in the fake).
+static void testLastBoot() {
+  auto reset = [](uint8_t kind, uint32_t running, bool trial = false) {
+    g_millis = 0;
+    g_boot_reset_crash = false;
+    g_boot_reset_kind = kind;   // 0 power-on, 1 software, 2 panic, 4 task-wdt, 9 the reset pin
+    g_boot_running_slot = running;
+    g_boot_next_slot = running;
+    g_boot_on_trial = trial;
+    BootGuard::begin();
+  };
+  auto is = [](const char *text) { return strcmp(BootGuard::lastBoot(), text) == 0; };
+  g_boot_record = {};
+  reset(0, 0x10000);
+  CHECK(is(""));                              // power-on
+  run(12000);
+  reset(2, 0x10000);
+  CHECK(is("panic at 12 s") && BootGuard::crashes() == 1);
+  run(5000);
+  reset(1, 0x10000);
+  CHECK(is("software at 5 s"));               // a restart the probe did not make
+  run(3000);
+  BootGuard::planned();
+  reset(1, 0x10000);
+  CHECK(is(""));                              // oep.probe.restart
+  // a DFU update into app1 that the bootloader did not start
+  run(40000);
+  g_boot_next_slot = 0x150000;
+  BootGuard::planned();
+  reset(1, 0x10000);
+  CHECK(is("update to app1 did not reach setup: software"));
+  // a DFU update into app1: started on trial, reset by the task watchdog at 12 s, rolled back to app0
+  run(40000);
+  g_boot_next_slot = 0x150000;
+  BootGuard::planned();
+  reset(1, 0x150000, true);
+  CHECK(is(""));
+  run(12000);
+  reset(4, 0x10000);
+  CHECK(is("rolled back from app1: task-wdt at 12 s") && BootGuard::crashes() == 1);
+  // the same update confirmed (stable), then the reset pin at 40 s: no rollback
+  run(40000);
+  g_boot_next_slot = 0x150000;
+  BootGuard::planned();
+  reset(1, 0x150000, true);
+  run(40000);
+  CHECK(BootGuard::stable());
+  g_boot_on_trial = false;   // confirmed
+  reset(9, 0x150000);
+  CHECK(is("reset-pin at 40 s"));
 }
 
 int main() {
@@ -122,6 +177,7 @@ int main() {
   CHECK(BootGuard::stable() && BootGuard::attachReady(false));
   CHECK(BootGuard::kStableMs > BootGuard::kAttachGraceMs + BootGuard::kUsbSettleMs + BootGuard::kStallMs);
 
+  testLastBoot();
   printf("boot_guard: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

@@ -190,7 +190,9 @@ Each source file starts with the spec sections it follows.
   `BootGuard::crashed()` (`Firmware/OepProbe/Rp2.h`): a panic then resets the chip instead of halting it. A firmware
   update on trial (an ESP32 with bootloader rollback) is confirmed once `stable()` (`kStableMs` up with `loop()` coming
   round), not when a host first configures the device: until it is confirmed any reset rolls it back, and a slow host
-  would keep it on trial (`Firmware/OepProbe/Esp32P4.h`).
+  would keep it on trial (`Firmware/OepProbe/Esp32P4.h`). `BootGuard::lastBoot()` says what ended the boot before (the
+  reset, the seconds it was up, an update rolled back or never started); `Firmware/OepProbe` puts it after the version
+  in fn 0's describe firmware text (`describeCore`'s last argument), e.g. `0.0.29 (rolled back from app1: panic at 12 s)`.
 - A fixture UART receives through its UART's interrupt, which the bit-banged wires' frames hold off on their core
   (interrupts off one frame at a time: SWIO up to `SwioPhy::kIrqOffMaxUs`, RVSWD up to about 1.1 ms at the slowest
   max_speed). On an ESP32 the interrupt fires at `kUartRxFifoFull` (32) bytes of the 128-byte RX FIFO, leaving 480 us at

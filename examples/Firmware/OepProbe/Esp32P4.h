@@ -168,7 +168,7 @@ static oep::ProbeConfig config(endpoint, binds);
 static constexpr uint64_t kAdc1 = 0xffull << 16;
 static oep::AnalogCapture analog(endpoint, kAdc1, 0);
 static oep::CaptureGroup group(endpoint, 0);
-static uint8_t probeTlv[160];
+static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 static char serial_[20];
 
 // oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
@@ -211,7 +211,8 @@ static bool autoAttachReady() { return oep::BootGuard::attachReady(usbDevice.rea
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "esp32p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
+  oep::describeCore(w, "esp32p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved,
+                    oep::BootGuard::lastBoot());   // the firmware text: the version (and what ended the boot before)
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }

@@ -92,7 +92,7 @@ static oep::ProbeConfig config(endpoint, binds);
 // the ADC on GP26-28 (a Pico's GP29 reads VSYS), channels in turn, copied by DMA
 static constexpr uint64_t kAdc = 0x7ull << 26;
 static oep::AnalogCapture analog(endpoint, kAdc, 0);
-static uint8_t probeTlv[200];
+static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 
 // oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
 // rp2040.reboot(), a watchdog reset, oep::kRestartDetachMs later. restart_max_ms (its describe): the chip is running
@@ -117,7 +117,8 @@ static bool autoAttachReady() { return oep::BootGuard::attachReady(tud_mounted()
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];   // the flash's unique id: the probe says who it is on any transport
-  oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30, kReserved);
+  oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30, kReserved,
+                    oep::BootGuard::lastBoot());   // the firmware text: the version (and what ended the boot before)
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }

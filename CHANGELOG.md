@@ -1,6 +1,44 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) What ended the boot before is in fn 0's describe firmware text, after the version (bench, the X035 P4: b55bc68
+  -> 462e180 by DFU, the HS port back within seconds, nothing touching the board, describe about 35 s later said
+  b55bc68 - a rollback with no visible cause; the same DFU 30 s later stayed). BootGuard::lastBoot(): the reset
+  (esp_reset_reason: panic, task-wdt, int-wdt, wdt, brownout, usb, jtag, reset-pin, cpu-lockup, software not made by the
+  probe, other; RP2: wdt) and the seconds that boot was up, "<reset> at <n> s"; an update on trial that the next reset
+  rolled back, "rolled back from <slot>: <reset> at <n> s"; an update the bootloader did not start, or that ended
+  before setup(), "update to <slot> did not reach setup: <reset>"; nothing after a power-on or a restart the probe made
+  (oep.probe.restart, a DFU update's). The record a reset leaves (ESP: RTC memory, now with the seconds up, the slot on
+  trial and the slot a planned restart boots; RP2: watchdog scratch 2 for the seconds) is written each second by
+  poll(); planned() keeps its own state. describeCore takes it as an optional note ("<version> (<note>)"); the
+  Firmware/OepProbe sketches pass it, their fn 0 describe buffer 256 bytes. No wire field is added. From the code,
+  the candidates for that reset within the trial (none confirmed): a panic or a watchdog in the first 30 s (the at-boot
+  attach and USB settle under the 15 s loop watchdog; the fixture UART's begin task on core 0, only with a UART planned
+  at boot), a brownout as the HS port and the target come up, a reset over USB-Serial/JTAG before setup() turns its
+  DTR / RTS reset off, a restart the probe did not make; the DFU restart runs once (dfuDone is cleared by the reset)
+  and the otadata writes are IDF's in order (esp_ota_end, esp_ota_set_boot_partition; the mark valid at stable()).
+  esp_restart on the P4 resets the CPUs and some peripherals but not the USB controllers (IDF
+  esp_system_reset_modules_on_exit). Host test test_boot_guard (45 checks: the notes for a power-on, a panic, a restart
+  not by the probe, oep.probe.restart, an update not started, one rolled back by the task watchdog, one confirmed then
+  the reset pin); guides getting-started / writing-a-probe (EN / JA); not run on hardware yet; CHANGELOG (EN / JA)
+- (JA) 前の起動が何で終わったかを、fn 0 の describe の firmware の文字列に版の後ろに付けました（bench、X035 の P4: b55bc68 から
+  462e180 へ DFU、HS の口は数秒で戻り、基板には何も触れず、約 35 秒後の describe は b55bc68 - 見える理由のない rollback。
+  30 秒後の同じ DFU は残った）。BootGuard::lastBoot(): リセットの種類（esp_reset_reason: panic、task-wdt、int-wdt、wdt、
+  brownout、usb、jtag、reset-pin、cpu-lockup、probe がしていない software、other。RP2: wdt）とその起動が上がっていた秒数を
+  "<reset> at <n> s"。試しの期間の更新が次のリセットで戻されたら "rolled back from <slot>: <reset> at <n> s"。bootloader が
+  始めなかった、または setup() の前に終わった更新は "update to <slot> did not reach setup: <reset>"。電源の投入と probe 自身の
+  再起動（oep.probe.restart、DFU の更新の再起動）の後は何も付けない。リセットが残す記録（ESP: RTC のメモリ。上がっていた秒数、
+  試しの期間の slot、計画した再起動が起こす slot を足した。RP2: 秒数は watchdog の scratch 2）は poll() が毎秒書く。planned()
+  は自分の状態を持つ。describeCore は任意の注記として受ける（"<version> (<note>)"）。Firmware/OepProbe のスケッチが渡し、fn 0 の
+  describe のバッファを 256 byte にした。線の上の項目は足していない。コードから見た、試しの期間のそのリセットの候補（どれも
+  確かめていない）: 最初の 30 秒の panic か watchdog（15 秒の loop の watchdog の下の起動時の attach と USB の落ち着き待ち。
+  core 0 の fixture の UART の begin のタスクは、起動時に UART を plan しているときだけ）、HS の口と target が上がるときの
+  brownout、setup() が USB-Serial/JTAG の DTR / RTS のリセットを止める前のそのリセット、probe がしていない再起動。DFU の再起動は
+  一度だけ走る（dfuDone はリセットで消える）。otadata の書き込みは IDF の順（esp_ota_end、esp_ota_set_boot_partition。valid
+  にするのは stable()）。P4 の esp_restart は CPU と一部の周辺を reset するが USB のコントローラは reset しない（IDF の
+  esp_system_reset_modules_on_exit）。host のテスト test_boot_guard（45 checks: 電源の投入、panic、probe がしていない再起動、
+  oep.probe.restart、始まらなかった更新、task watchdog で戻された更新、確かになった後の reset ピン の注記）。guide の
+  getting-started / writing-a-probe（EN / JA）。実機ではまだ動かしていない。CHANGELOG (EN / JA)
 - (EN) Fixture UART: a lost mark is at or before the first byte after the loss, never after it, and where the driver
   tells, exactly at it (bench, b55bc68, the X035 P4 at 2000000: a 256-byte burst came back 251 bytes, the first wrong
   one at offset 4, one mark lost overflow at 132). The spec gives a lost mark's position no meaning of its own (common
