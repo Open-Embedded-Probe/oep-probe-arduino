@@ -488,6 +488,35 @@ static void testImmediateAfterFollowing() {
   CHECK(getU32(out.data() + 3 + 28) == 0xFFFFFFFFu);
 }
 
+// stop (capture §3.2) of an immediate one-shot while capturing: state 1 with the segment cut short (flags bit1) holding
+// the DMA nodes finished before the stop, readable (it went to state 1 with done 0, write_pos 0); the next start is a
+// whole capture again.
+static void testImmediateStop() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.samples = 40000;   // 10000 bytes at w = 2
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  const uint32_t generation = getU32(out.data() + 4);
+  dma.deliver(4096, 0xA5);   // one node finished
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 18);
+  CHECK(out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 1 && getU64(out.data() + 5) == 4096);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 3 + 37 && out[1] == 1);
+  CHECK(getU32(out.data() + 3 + 12) == 4096 * 4 && (out[3 + 32] & cap::kSegmentFlagShort));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4000, 200), out)) && getU32(out.data() + 9) == 96);
+  CHECK(out[13] == 0xA5);
+  // stopped before any node finished: state 1, nothing
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 0);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
+}
+
 // One large immediate one-shot breaks no later triggered configure (0.0.28: 523264 samples on 1 line freed the DMA
 // ring for its segment, the rest of the firmware took a piece of the freed 128 KiB, and every triggered configure after
 // it failed with an empty payload, state 6, until a reboot): the ring is taken with the plan and never freed, the
@@ -539,6 +568,7 @@ static void testRingKept() {
 
 int main() {
   testRingKept();
+  testImmediateStop();
   testImmediateAfterFollowing();
   testPositions();
   testTriggeredStop();

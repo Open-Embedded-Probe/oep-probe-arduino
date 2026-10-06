@@ -408,6 +408,11 @@ bool LogicCapture::receiveDone(parlio_rx_unit_handle_t, const parlio_rx_event_da
   return false;
 }
 
+bool IRAM_ATTR LogicCapture::oneShotProgress(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *e, void *context) {
+  static_cast<LogicCapture *>(context)->produced_ += e->recv_bytes;   // ISR: count only (the driver synced the node)
+  return false;
+}
+
 size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   // role k = channel k (oep-if-capture: roles 0..), each on any of the probe's channels
@@ -762,6 +767,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (!open(rate, width, bytes, num, den)) { close(); state_ = kStateError; return failed(); }
     parlio_rx_event_callbacks_t cb = {};
     cb.on_receive_done = receiveDone;
+    cb.on_partial_receive = oneShotProgress;   // how far it got, for a stop that cuts it short
     parlio_rx_soft_delimiter_config_t d = {};
     d.sample_edge = PARLIO_SAMPLE_EDGE_POS;
     d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
@@ -1096,6 +1102,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (capacity < 8) return failed();
       if (state_ == kStateDone) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
       done_ = false;
+      produced_ = 0;
       kept_samples_ = 0;   // the last generation's segment goes
       kept_short_ = false;
       memset(buffer_, 0, bytes_);
@@ -1139,10 +1146,35 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (subscribed_) endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
         return tail.finish(completed(), out, capacity);
       }
-      if (state_ == kStateCapturing) {
+      if (state_ == kStateCapturing) {   // an immediate one-shot
+        // capturing (state 3) -> 1 with the segment cut short (flags bit1) holding the DMA nodes finished before the
+        // stop (capture §3.2; it went to state 1 with nothing: done 0, write_pos 0); one that filled meanwhile is
+        // complete (state 4). The unfinished transaction is erased (disable, enable with the queue reset), so the
+        // next start mounts its own (it stayed with the driver, which went on filling the old one).
+        poll();
+        if (state_ == kStateDone) return tail.finish(completed(), out, capacity);
         parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
-        state_ = kStateConfigured;
-        if (subscribed_) endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
+        parlio_rx_unit_disable(unit_);
+        if (done_) {   // it completed while it was being stopped
+          parlio_rx_unit_enable(unit_, true);
+          poll();
+          return tail.finish(completed(), out, capacity);
+        }
+        const uint32_t got_bytes = produced_ < bytes_ ? produced_ : bytes_;
+        if (parlio_rx_unit_enable(unit_, true) != ESP_OK) state_ = kStateError;
+        esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+        uint32_t got = static_cast<uint32_t>(static_cast<uint64_t>(got_bytes) * 8 / width_);
+        if (got > samples_) got = samples_;
+        if (state_ != kStateError) state_ = kStateConfigured;
+        kept_samples_ = got;
+        kept_short_ = got != 0;
+        if (subscribed_) {
+          if (got) {
+            uint8_t seg[kInfoBytes];
+            endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
+          }
+          endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
+        }
       }
       return tail.finish(completed(), out, capacity);
     }

@@ -237,6 +237,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   void stopRepeat();
   size_t infoBytes(const Info &info, uint8_t *out) const;
   static bool receiveDone(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *, void *context);
+  // An immediate one-shot's DMA nodes as they finish (produced_: the bytes of the segment written so far, for stop).
+  static bool oneShotProgress(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *e, void *context);
 };
 
 }  // namespace oep
