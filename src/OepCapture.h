@@ -56,6 +56,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint8_t kMaxChannels = 16;
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
   static constexpr uint32_t kSourceHz = 160000000, kMinHz = 627451;   // PLL_F160M / 255 (256 silently fails)
+  // one-shot's rate_limit (describe, applied by configure): up to 8 lines 100 MHz, up to 16 lines 48 MHz
+  static constexpr uint8_t kLimitLines8 = 8;
+  static constexpr uint32_t kLimitHz8 = 100000000, kLimitHz16 = 48000000;
   static constexpr size_t kRingBytes = 128 * 1024;                    // repeat / streaming: the DMA ring (internal)
   // repeat / streaming segments: in PSRAM when there is some (all of the largest free block but a reserve for the
   // rest of the firmware; boards come with 0, 16 or 32 MB), else a small store in internal RAM

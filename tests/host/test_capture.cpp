@@ -255,7 +255,28 @@ static void testConfigureOrder() {
   CHECK(rejectedAs(raw(c, LogicCapture::kOpQuery, p, out), kRejectMalformed));
 }
 
+// rate_limit (capture §3.5, configure §3.3): a one-shot rate above the declared limit for the channel count (8 lines
+// 100 MHz, 16 lines 48 MHz) is set to the limit, not run at the rate asked (160 MHz was taken for any count).
+static void testRateLimit() {
+  for (const uint8_t channels : {8, 16}) {
+    board(512 * 1024, size_t(32) << 20);
+    Rig rig(channels);
+    Bytes out;
+    Config c;
+    c.rate = channels == 8 ? 160000000 : 100000000;
+    for (const bool query : {true, false}) {
+      CHECK(ok(configure(rig.cap, c, out, query)));
+      Bytes rate;
+      for (size_t at = 0; at + 2 <= out.size(); at += 2u + out[at + 1])
+        if (out[at] == cap::kTlvConfigureAnswerActualRate) rate.assign(out.begin() + at + 2, out.begin() + at + 10);
+      // the fake divider is a whole number: 160 / 2 = 80 MHz for 100 MHz, 160 / 3 = 53.3 MHz for 48 MHz
+      CHECK(rate.size() == 8 && getU32(rate.data()) / getU32(rate.data() + 4) == (channels == 8 ? 80000000u : 53333333u));
+    }
+  }
+}
+
 int main() {
+  testRateLimit();
   testSentCritical();
   testConfigureOrder();
   testStreamingWithoutStages();

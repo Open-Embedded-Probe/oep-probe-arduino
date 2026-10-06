@@ -433,11 +433,11 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   uint8_t l[1 + sizeof list] = {8};                // n(u8) n x rate_hz(u32)
   for (size_t i = 0; i < 8; ++i) putU32(l + 1 + 4 * i, list[i]);
   w.put(cap::kTlvDescribeRateList, l, sizeof l);
-  uint8_t lim[6] = {1, 8};                         // wch-protocols E033: 8 lines to 100 MHz, 16 lines to 48 MHz
-  putU32(lim + 2, 100000000);
+  uint8_t lim[6] = {1, kLimitLines8};              // wch-protocols E033: 8 lines to 100 MHz, 16 lines to 48 MHz
+  putU32(lim + 2, kLimitHz8);
   w.put(cap::kTlvDescribeRateLimit, lim, sizeof lim);
-  lim[1] = 16;
-  putU32(lim + 2, 48000000);
+  lim[1] = kMaxChannels;
+  putU32(lim + 2, kLimitHz16);
   w.put(cap::kTlvDescribeRateLimit, lim, sizeof lim);
   uint8_t ch[5] = {kMaxChannels};                  // max(u8) layouts(u32): w in {1, 2, 4, 8, 16}
   putU32(ch + 1, 0b11111);
@@ -583,6 +583,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (const uint8_t *v = rate_tlv.v) {   // outside rate_range (capture §3.3); the driver would silently run at 160 MHz
     if (getU32(v) < kMinHz || getU32(v) > kSourceHz) return Tail::refuseCritical(kTagRate, rate_tlv.critical, out, capacity);
     rate = getU32(v);
+  }
+  // inside the range, the declared rate_limit for the channel count (one-shot): above it, the nearest it allows
+  if (mode == cap::kModeOneShot) {
+    const uint32_t limit = channels_ <= kLimitLines8 ? kLimitHz8 : kLimitHz16;
+    if (rate > limit) rate = limit;
   }
   if (samples_tlv.v) samples = getU32(samples_tlv.v);
   if (segments_tlv.v) segments = getU32(segments_tlv.v);
