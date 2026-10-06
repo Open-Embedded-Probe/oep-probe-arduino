@@ -404,7 +404,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
     case cap::kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u64) flags(u8) generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 18) return failed();
+      if (capacity < 21) return failed();
       poll();
       out[0] = state_;
       const bool finished = state_ == cap::kStateDone;
@@ -412,7 +412,14 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       putU64(out + 5, finished ? samples_ : 0);
       out[13] = slipped_ ? cap::kStatusFlagSlipped : 0;   // bit1 the time base bent (a sample taken late)
       putU32(out + 14, generation_);
-      return tail.finish(completed(18), out, capacity);
+      size_t used = 18;
+      if (state_ == cap::kStateError) {   // why (TLV 0x01 error, capture §3.2): the sampling task would not start
+        out[18] = cap::kTlvStatusAnswerError;
+        out[19] = 1;
+        out[20] = cap::kErrorPeripheral;
+        used = 21;
+      }
+      return tail.finish(completed(used), out, capacity);
     }
     case cap::kOpRead: {   // generation(u32) position(u64) max(u32) -> position(u64) flags(u8) len(u32) data [TLV]
       const Result parsed = plainTail(tail, p, n, 16, out, capacity);
