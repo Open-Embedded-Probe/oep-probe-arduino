@@ -25,6 +25,7 @@
 
 #include <OepAnalog.h>
 #include <OepBind.h>
+#include <OepBootGuard.h>
 #include <OepCh32Dm.h>
 #include <OepConfig.h>
 #include <OepConsole.h>
@@ -100,6 +101,19 @@ static uint8_t probeTlv[200];
 // to be measured on the bench).
 static constexpr uint32_t kRestartMaxMs = 2000;
 
+// Never left halted (OepBootGuard.h): a panic - pico-sdk's panic() ends in _exit, the core's weak one a breakpoint loop - and a
+// HardFault - crt0's weak isr_hardfault, a breakpoint - take the USB device off the bus and reset the chip. Seen on the
+// bench (0.0.29-dev+3c0cd99, Pro Micro RP2350, SWD): TinyUSB 0.18's "Can't continue xfer on inactive ep" panic in the
+// USB interrupt while the host enumerated the probe after a restart; the breakpoint escalated to a HardFault, whose own
+// breakpoint stopped the core with the pull-up on, and the host failed the device descriptor request until a replug.
+extern "C" void _exit(int) { oep::BootGuard::crashed(); }
+extern "C" void isr_hardfault() { oep::BootGuard::crashed(); }
+
+// The at-boot slots' attach waits for the host to have configured the device (or BootGuard::kAttachGraceMs without one):
+// a console from the saved settings polls its target over RVSWD from boot, interrupts off for each frame, and the USB
+// interrupts it delayed and batched while the host enumerated the probe met the panic above.
+static bool autoAttachReady() { return oep::BootGuard::attachReady(tud_mounted()); }
+
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];   // the flash's unique id: the probe says who it is on any transport
@@ -109,6 +123,7 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  oep::BootGuard::begin();   // the watchdog, and the count of fast crash-boots
   USB.disconnect();
   USB.setManufacturer("Open Embedded Probe");
   USB.setVIDPID(oep::reg::kUsbProjectVid, oep::reg::kUsbProjectPid);   // the project's VID:PID (registry usb, PID-USE.md)
@@ -125,6 +140,11 @@ void setup() {
   oep::setLog(&Serial2);
   OEP_LOGF("oep trace on (%s)", kProduct);
 #endif
+  if (oep::BootGuard::safe()) {   // after BootGuard::kSafeAfter fast crash-boots: the saved at-boot slots wait for the host
+    config.skipBootAttach();
+    OEP_LOGF("safe boot after %u fast crash-boots: at-boot slots not attached", unsigned(oep::BootGuard::crashes()));
+  }
+  config.setAttachGate(autoAttachReady);
   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one.
   // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied
   // before any idle / park; applySaved below gives them back if the settings are not applied).
@@ -163,6 +183,7 @@ void setup() {
 }
 
 void loop() {
+  oep::BootGuard::poll();
   endpoint.poll();
   console.poll();
   uart.poll();

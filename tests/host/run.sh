@@ -6,7 +6,7 @@
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, also behind a relaying broker's sequence on a UART bridge,
 # the I2C one with a fake controller), of the pin table's idle
 # states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
-# unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the target console on it (core §4.3's order,
+# unit id, of the boot guard's count of fast crash-boots and its USB gate, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the target console on it (core §4.3's order,
 # the send slot, the marks), and of the RVSWD PHY's attach on a
 # simulated target (what is written before the speed is verified, the checks, the budget), of the swio stack on a
 # simulated CH32V003 whose reset goes through its bootloader (the connection kept, a silent bootloader waited out by
@@ -52,6 +52,9 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 "$out-lines"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-unit-id" "$here/test_unit_id.cpp"
 "$out-unit-id"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_BOOT -I"$here/shim" -I"$src" -o "$out-boot-guard" \
+  "$here/test_boot_guard.cpp" "$src/OepBootGuard.cpp"
+"$out-boot-guard"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-wire" "$here/test_wire.cpp" \
   "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepFrame.cpp" "$src/OepDmConsole.cpp"
 "$out-wire"

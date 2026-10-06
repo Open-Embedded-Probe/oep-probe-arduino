@@ -18,6 +18,7 @@
 #pragma once
 #include <OepAnalog.h>
 #include <OepBind.h>
+#include <OepBootGuard.h>
 #include <OepCaptureGroup.h>
 #include <OepCh32Dm.h>
 #include <OepConfig.h>
@@ -117,6 +118,7 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3): UART0 is the transport
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
@@ -166,10 +168,14 @@ void setup() {
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
   // slots' attach last (on its poll), so a target powered through an output idle is up before it.
+  // No USB device of its own (a bridge carries the UART): no gate on the at-boot attach. After BootGuard::kSafeAfter
+  // fast crash-boots the saved at-boot slots wait for the host.
+  if (oep::BootGuard::safe()) config.skipBootAttach();
   config.applySaved();   // read by config.load() at the top
 }
 
 void loop() {
+  oep::BootGuard::poll();
   endpoint.poll();
   console.poll();
   config.poll();

@@ -9,6 +9,10 @@
 // pin's mask in a register. The ESP32-P4 has the same frames on the CPU's
 // dedicated GPIO, timed in nanoseconds against the cycle counter (any
 // GPIO0-54). Other architectures get a stub.
+//
+// Interrupts are off for one frame at a time (portENTER_CRITICAL on the calling core, loop()'s): a write's 41 slots,
+// at most 41 x 1125 ns = 46 us; a read's 9 slots and 32 read bits, about 50 us, plus at most one wait for the line to
+// come back high per frame (not per bit) - the P4 100 us, the classic 1000 polls of GPIO.in - before the frame gives up.
 #pragma once
 
 #include <Arduino.h>

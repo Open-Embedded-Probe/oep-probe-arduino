@@ -13,6 +13,7 @@
 #include <Arduino.h>
 
 #include "Oep.h"
+#include "OepBootGuard.h"
 
 #if defined(ARDUINO_ARCH_RP2040)
 #include <hardware/gpio.h>
@@ -273,7 +274,9 @@ inline uint32_t platformRandom32() { return bootIdSource(); }
 // rp2040.reboot(), a watchdog reset 10 ms on (kRestartResetMs), which resets the USB controller too. ESP32: esp_restart;
 // a classic ESP32 reaches the host through a USB-UART bridge, which stays on the bus (nothing of the chip's to take
 // off). A sketch whose ESP32 runs its own USB device (the P4's HS port) takes it off the bus in its own handler.
+// BootGuard::planned first: a restart on purpose is no crash-boot.
 inline void platformRestart() {
+  BootGuard::planned();   // not a crash: the next boot does not count it (OepBootGuard.h)
 #if defined(ARDUINO_ARCH_ESP32)
   esp_restart();
 #else

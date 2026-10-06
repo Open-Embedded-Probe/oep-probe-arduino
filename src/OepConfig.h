@@ -88,6 +88,16 @@ class ProbeConfig final : public Interface {
   uint64_t savedDisabled() const { return disabledIn(saved_, saved_length_); }
   void applySaved();
   void poll();   // from loop(): the slots' automatic attach, retries, liveness, the bound consoles
+  // The at-boot slots' automatic attach (and its retries) waits while `ready` answers false (nullptr: never waits). A
+  // probe whose transport is its own USB device holds its wires' bit-banging back until the host has configured the
+  // device (BootGuard::attachReady): a console polling the target from boot delays and batches the USB interrupts
+  // while the host enumerates it. Nothing else waits: idles, plans and uarts are applied at once (probe.config §2).
+  void setAttachGate(bool (*ready)()) { attach_gate_ = ready; }
+  // Before applySaved: the saved at-boot slots are not attached by the probe in this boot (a boot after repeated crashes,
+  // BootGuard::safe). Their state reads 1 (not there) with last_try_at_ns all ones (never tried, §3.3); a set of the slot,
+  // or the host's own attach, connects it as usual.
+  void skipBootAttach() { skip_boot_attach_ = true; }
+  bool bootAttachSkipped() const { return skip_boot_attach_; }
   // A line named by the settings' labels (§1.3: nrst, power_hi, power_lo) for the slot `slot` (a slot number; 0xff:
   // the probe's target, settings without slots): its channel, 0xFFFF when there is none.
   uint16_t lineOf(uint8_t slot, const char *line) const;
@@ -163,6 +173,8 @@ class ProbeConfig final : public Interface {
   size_t uart_count_ = 0;
   Slot slots_[kMaxSlots];          // several per place (each its own pair), at most one at boot per wire
   SlotRun runs_[kMaxSlots];
+  bool (*attach_gate_)() = nullptr;
+  bool skip_boot_attach_ = false, applying_saved_ = false;
   bool onPair(const Slot &s) const {   // the place's link is on this slot's pair now
     const DebugPort &p = *places_[s.place].port;
     return p.swdio == s.swdio && p.swclk == s.swclk;

@@ -180,6 +180,14 @@ Each source file starts with the spec sections it follows.
   disable: `config.load(); pins.setDisabled(config.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());`
   (a disabled channel is never touched, not even at boot). The PinTable keeps the settings' disabled channels apart
   from `forbid` (the firmware's own, permanent): no item gives a forbidden pin back.
+- A probe whose transport is its own USB device holds the at-boot slots' attach back until the host has configured
+  the device: `config.setAttachGate([] { return BootGuard::attachReady(tud_mounted()); })` before `applySaved()` (the
+  P4: `usbDevice.ready()`). A console polling its target from boot keeps interrupts off for each frame, and the USB
+  interrupts it delays while the host enumerates the device can crash the USB stack (RP2: TinyUSB 0.18's "Can't
+  continue xfer on inactive ep" panic). `BootGuard` (`OepBootGuard.h`): `begin()` first in `setup()`, `poll()` in
+  `loop()`; it runs the watchdogs, counts fast crash-boots, and after `kSafeAfter` of them in a row `safe()` says to
+  call `config.skipBootAttach()` for that boot. On the RP2 point the SDK's `_exit` and `isr_hardfault` at
+  `BootGuard::crashed()` (`Firmware/OepProbe/Rp2.h`): a panic then resets the chip instead of halting it.
 
 ## 8. Pushes and events
 

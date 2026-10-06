@@ -41,6 +41,7 @@
 
 #include <OepAnalog.h>
 #include <OepBind.h>
+#include <OepBootGuard.h>
 #include <OepCapture.h>
 #include <OepCaptureGroup.h>
 #include <OepCh32Dm.h>
@@ -158,6 +159,7 @@ static char serial_[20];
 // boot path, to be measured on the bench).
 static constexpr uint32_t kRestartMaxMs = 3000;
 static void restartProbe() {
+  oep::BootGuard::planned();
   tud_disconnect();
   delay(oep::kRestartDetachMs);
   esp_restart();
@@ -172,10 +174,15 @@ static volatile bool dfuDone = false;
 static volatile uint32_t dfuDoneMs = 0;
 static void restartAfterDfu() {
   if (!dfuDone || millis() - dfuDoneMs < kDfuStatusMs) return;
+  oep::BootGuard::planned();
   tud_disconnect();
   delay(kDfuDetachMs);
   esp_restart();
 }
+
+// The at-boot slots' attach waits for the host to have configured the HS device (or BootGuard::kAttachGraceMs without
+// one): their frames run on loop()'s core with its interrupts masked, as the RP2's did while its USB stack crashed.
+static bool autoAttachReady() { return oep::BootGuard::attachReady(usbDevice.ready()); }
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
@@ -186,6 +193,7 @@ static size_t describeProbe() {
 }
 
 void setup() {
+  oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3)
   // USB-Serial/JTAG: opening and closing the port must not reset the probe (probe guide §7)
   REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
@@ -260,10 +268,13 @@ void setup() {
   oep::platformParkMask(kChannels & ~pins.disabledMask());
   // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
   // slots' attach last (on its poll), so a target powered through an output idle is up before it.
+  if (oep::BootGuard::safe()) config.skipBootAttach();   // after BootGuard::kSafeAfter fast crash-boots
+  config.setAttachGate(autoAttachReady);
   config.applySaved();
 }
 
 void loop() {
+  oep::BootGuard::poll();
   static bool confirmed = false;
   if (!confirmed && usbDevice.ready()) {   // the HS port enumerated (configured by a host)
     confirmed = true;

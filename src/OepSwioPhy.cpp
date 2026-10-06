@@ -18,6 +18,7 @@ uint32_t gMask = 0;
 constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
 constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
 portMUX_TYPE gMux = portMUX_INITIALIZER_UNLOCKED;
+constexpr int kRisePolls = 1000;   // a read frame's polls of GPIO.in for the line to come back high, all bits together
 
 inline void IRAM_ATTR waitCycles(int count) {
   asm volatile("1: addi %[n], %[n], -1\n   bbci %[n], 31, 1b\n" : [n] "+r"(count));
@@ -31,7 +32,9 @@ inline void IRAM_ATTR sendZero(uint32_t m) { low(m); waitCycles(kCoefficient * 4
 
 // Read one bit: drive the low start, release, recharge the line high, sample. A slow
 // rise (the target holding a zero) gets a second recharge; 2 = the line never came back.
-inline int IRAM_ATTR readBit(uint32_t m) {
+// rise_polls: the frame's polls left for the line to come back high (kRisePolls a frame, not a bit: interrupts are off
+// for the whole frame, and a line rising slowly at every bit kept them off 32 x 1000 polls).
+inline int IRAM_ATTR readBit(uint32_t m, int &rise_polls) {
   low(m);
   waitCycles(kCoefficient);
   outputOff(m);
@@ -46,13 +49,13 @@ inline int IRAM_ATTR readBit(uint32_t m) {
     outputOn(m);
     outputOff(m);
   }
-  for (int timeout = 0; timeout < 1000; ++timeout) {
+  do {   // one poll always (a frame's polls spent leave a bit whose line is already high to be read)
     if (GPIO.in & m) {
       outputOn(m);
       waitCycles(kCoefficient / 2);
       return sampled;
     }
-  }
+  } while (--rise_polls > 0);
   return 2;   // the line never came back: left released to its pull-up, not driven high against it (§3.2)
 }
 
@@ -114,13 +117,14 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   high(m);
   outputOn(m);
   uint32_t result = 0;
+  int rise_polls = kRisePolls;
   portENTER_CRITICAL(&gMux);
   sendOne(m);
   for (uint8_t mask = 0x40; mask; mask >>= 1) (address & mask) ? sendOne(m) : sendZero(m);
   sendZero(m);
   for (int bit = 0; bit < 32; ++bit) {
     result <<= 1;
-    const int decoded = readBit(m);
+    const int decoded = readBit(m, rise_polls);
     if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
       outputOff(m);
       portEXIT_CRITICAL(&gMux);
@@ -200,7 +204,9 @@ namespace {
 // a short pulse).
 constexpr uint32_t kShortLowNs = 262, kLongLowNs = 862, kHighNs = 262;
 constexpr uint32_t kHalfNs = 131, kRechargeNs = 30, kZeroNs = 524;
-constexpr uint32_t kRiseTimeoutNs = 100000;   // the line never came back (the classic: 1000 polls of GPIO.in)
+// the line never came back: a read frame's whole wait for the line to rise, all bits together (the classic: 1000 polls
+// of GPIO.in) - interrupts are off for the frame, and a line rising slowly at every bit kept them off 32 x 100 us
+constexpr uint32_t kRiseTimeoutNs = 100000;
 struct Times { uint32_t shortLow, longLow, high, half, recharge, zero, riseTimeout; };
 Times gT = {};
 int gPin = -1;
@@ -238,7 +244,8 @@ inline uint32_t IRAM_ATTR sendBits(uint32_t m, const Times &tm, uint64_t bits, i
 
 // Read one bit: drive the low start, release, recharge the line high, sample. A slow
 // rise (the target holding a zero) gets a second recharge; 2 = the line never came back.
-inline int IRAM_ATTR readBit(uint32_t m, uint32_t in, const Times &tm) {
+// rise_left: the frame's cycles left for the line to come back high (tm.riseTimeout a frame).
+inline int IRAM_ATTR readBit(uint32_t m, uint32_t in, const Times &tm, uint32_t &rise_left) {
   uint32_t t = now();
   low(m);
   until(t += tm.shortLow);
@@ -260,10 +267,12 @@ inline int IRAM_ATTR readBit(uint32_t m, uint32_t in, const Times &tm) {
   do {
     if (sample(in)) {
       outputOn(m);
+      const uint32_t waited = now() - t;
+      rise_left = waited < rise_left ? rise_left - waited : 0;
       until(now() + tm.half);
       return sampled;
     }
-  } while (now() - t < tm.riseTimeout);
+  } while (now() - t < rise_left);
   return 2;   // the line never came back: left released to its pull-up, not driven high against it (§3.2)
 }
 
@@ -363,11 +372,12 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   outputOn(m);
   uint32_t result = 0;
   const uint64_t bits = (1u << 8) | ((address & 0x7fu) << 1);   // start 1, address, 0 (read)
+  uint32_t rise_left = tm.riseTimeout;
   portENTER_CRITICAL(&gMux);
   until(sendBits(m, tm, bits, 9, now()));
   for (int bit = 0; bit < 32; ++bit) {
     result <<= 1;
-    const int decoded = readBit(m, in, tm);
+    const int decoded = readBit(m, in, tm, rise_left);
     if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
       outputOff(m);
       portEXIT_CRITICAL(&gMux);

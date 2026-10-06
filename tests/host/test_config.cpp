@@ -586,6 +586,55 @@ int main() {
                           cfg::kTlvItemPlan | kTagCritical));
   }
 
+  {   // the at-boot attach's gate (setAttachGate) and a boot that skips the saved at-boot slots (skipBootAttach): an
+      // at-boot slot saved, then read by firmwares with the same interfaces; the slot's last_try_at_ns (state, §3.3)
+      // tells whether the probe tried its automatic attach (the wire never answers here)
+    static NullStream s4, s5, s6;
+    static uint8_t rx4[512], tx4[512], rx5[512], tx5[512], rx6[512], tx6[512];
+    static Endpoint ep4(s4, rx4, sizeof rx4, tx4, sizeof tx4, {512, 1024, 2}, Endpoint::kUartBridge);
+    static Endpoint ep5(s5, rx5, sizeof rx5, tx5, sizeof tx5, {512, 1024, 2}, Endpoint::kUartBridge);
+    static Endpoint ep6(s6, rx6, sizeof rx6, tx6, sizeof tx6, {512, 1024, 2}, Endpoint::kUartBridge);
+    static Binds binds4, binds5, binds6;
+    static ProbeConfig cfg4(ep4, binds4), cfg5(ep5, binds5), cfg6(ep6, binds6);
+    Endpoint *eps[] = {&ep4, &ep5, &ep6};
+    ProbeConfig *cfgs[] = {&cfg4, &cfg5, &cfg6};
+    for (int k = 0; k < 3; ++k) {
+      eps[k]->add(wire);
+      eps[k]->add(console);
+      eps[k]->add(*cfgs[k]);
+      cfgs[k]->addPlace(wire, console);
+    }
+    auto tried = [&](ProbeConfig &c) {   // slot 0's last_try_at_ns is not all ones
+      const uint8_t first[2] = {0, 0};
+      Bytes st(64, 0);
+      const Result r = c.handle(cfg::kOpState, first, sizeof first, st.data(), st.size());
+      if (!ok(r) || r.length < 28 || st[7] != 1) return false;
+      return !std::all_of(st.begin() + 12, st.begin() + 20, [](uint8_t b) { return b == 0xff; });
+    };
+    CHECK(ok(set(cfg4, slotItem(cfg::kSlotAttachAtBoot, 0), out)));
+    CHECK(tried(cfg4));   // a set at-boot slot: attached at once (no gate)
+    out.assign(64, 0);
+    CHECK(ok(cfg4.handle(cfg::kOpSave, nullptr, 0, out.data(), out.size())));
+    // the gate closed: applySaved and the polls after it do not attach; once open, the next poll does
+    static bool gate = false;
+    cfg5.setAttachGate([]() { return gate; });
+    cfg5.load();
+    cfg5.applySaved();
+    for (int i = 0; i < 3; ++i) cfg5.poll();
+    CHECK(!tried(cfg5));
+    gate = true;
+    cfg5.poll();
+    CHECK(tried(cfg5));
+    // a boot that skips them: never tried by the probe (state 1, last_try_at_ns all ones); a set of the slot attaches
+    cfg6.skipBootAttach();
+    cfg6.load();
+    cfg6.applySaved();
+    for (int i = 0; i < 3; ++i) cfg6.poll();
+    CHECK(cfg6.bootAttachSkipped() && !tried(cfg6));
+    CHECK(ok(set(cfg6, slotItem(cfg::kSlotAttachAtBoot, 0, {}, 0, 100), out)));
+    CHECK(tried(cfg6));
+  }
+
   printf("config: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

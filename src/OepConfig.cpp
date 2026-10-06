@@ -662,7 +662,8 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
     if (was.set) dropSlot(i, reg::common::kMarkDetailClosedSlotChanged);   // replaced or removed: its shares go
     slots_[i] = now;
     runs_[i] = SlotRun{};
-    runs_[i].due = now.set && now.attach == cfg::kSlotAttachAtBoot;   // an at-boot slot set: attach now
+    // an at-boot slot set: attach now - but the saved ones not in a boot told to skip them (skipBootAttach)
+    runs_[i].due = now.set && now.attach == cfg::kSlotAttachAtBoot && !(applying_saved_ && skip_boot_attach_);
   }
   for (uint8_t port = 0; port < Binds::kMaxPorts; ++port) {
     const Binds::Spec &was = binds_.spec(port), &now = d.binds[port];
@@ -877,7 +878,7 @@ void ProbeConfig::runSlot(uint8_t i) {
   const bool at_boot = s.attach == cfg::kSlotAttachAtBoot;
   if (!port.connected && at_boot) {
     const bool retry = s.retry_ms && r.tried && static_cast<uint32_t>(millis() - r.last_try_ms) >= s.retry_ms;
-    if (r.due || retry) {
+    if ((r.due || retry) && (!attach_gate_ || attach_gate_())) {   // held back while the gate is closed (setAttachGate)
       r.due = false;
       r.tried = true;
       r.last_try_ms = millis();
@@ -1125,7 +1126,9 @@ void ProbeConfig::applySavedItems() {
       if (!listed && plan_fn_count < 16) plan_fns[plan_fn_count++] = getU16(cv);
     }
   }
+  applying_saved_ = true;
   const Result r = commit(candidate, clen, plan_fns, plan_fn_count, scratch, sizeof scratch);
+  applying_saved_ = false;
   if (r.resolution != kResolutionCompleted || r.detail != kOutcomeSuccess) {
     storage_state_ = cfg::kStorageStateUnreadable;
     unreadable_ = cfg::kStorageUnreadableRefused;

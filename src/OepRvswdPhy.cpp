@@ -222,6 +222,14 @@ constexpr uint8_t kSlowestRetries = 3;
 // a host's max_speed far below it would stretch them past the attach budget, so a slower period checks fewer.
 constexpr uint32_t kReadCheckUs = 100000, kWriteCheckUs = 60000;
 constexpr int kReadChecks = 1000, kMinReadChecks = 64, kWriteRounds = 32, kMinWriteRounds = 2;
+// Interrupts are off for one frame at a time (readRaw / writeRaw: Critical around one rvswd::readWord / writeWord, the
+// wake burst outside it), never across frames, so the USB stack and the timers wait at most one frame: kFrameHalves
+// half periods (start 2, header 18, aux 10, data 64, parity 2, aux 10, stop 3) plus the loop's overhead - at the
+// slowest period a link may be held to (1 / (2 x kMinClockHz) = 10 us) about 1.1 ms; at attach's slowest period of
+// 500 ns 55 us (RP2350 about 80 us a read, measured with the call around it); at an attached link's 0-100 ns 11-20 us.
+constexpr uint32_t kFrameHalves = 109;
+constexpr uint32_t kSlowestFrameNs = kFrameHalves * (1000000000u / (2u * RvswdPhy::kMinClockHz));
+static_assert(kSlowestFrameNs <= 1100000u, "one RVSWD frame keeps interrupts off for at most about 1.1 ms");
 }  // namespace
 
 bool RvswdPhy::begin(int swdio, int swclk) {

@@ -1,6 +1,68 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) A probe never stays wedged, and the saved settings cannot crash it at every boot (bench, 0.0.29-dev+3c0cd99, SWD
+  on a Pro Micro RP2350, arduino-pico 6.1.1, usbstack=picosdk: after a restart, during the host's first GET_DESCRIPTOR,
+  the USB interrupt ended in TinyUSB 0.18's panic "Can't continue xfer on inactive ep" (dcd_rp2040_irq ->
+  hw_handle_buff_status -> hw_endpoint_xfer_continue); the breakpoint escalated to a HardFault, whose own breakpoint
+  stopped core 0 with the pull-up on - the host failed the device descriptor request until a replug, no watchdog ran.
+  The interrupted thread was a slot's console from the saved settings, polling its target over RVSWD from boot
+  (RvswdPhy::writeRaw, at the end of a frame with interrupts off): the USB interrupts came late and batched while the
+  host enumerated the device). BootGuard (OepBootGuard.h / .cpp): RP2 - the hardware watchdog (3000 ms, paused under a
+  debugger) fed from a 250 ms timer interrupt only while loop() comes round within kStallMs (max_op_ms + 5 s = 15 s);
+  the firmware points arduino-pico's weak _exit (where the SDK's panic() ends) and crt0's weak isr_hardfault at BootGuard::crashed(),
+  which takes the device off the bus (the pull-up off), waits kRestartDetachMs and resets; a stall does the same.
+  ESP32 / ESP32-P4 - a panic and the interrupt watchdog already reset (the core's sdkconfig: PANIC_PRINT_REBOOT,
+  INT_WDT 300 ms); the task watchdog, which watched only CPU0's idle task, now also watches loop() (enableLoopWDT) with
+  its timeout raised from 5 s to 15 s. Fast crash-boots are counted (RP2: watchdog scratch 0 / 1 and a watchdog reset;
+  ESP: RTC memory and esp_reset_reason panic / watchdog): a crash within 30 s of boot counts one more, a boot up 30 s, a
+  restart on purpose (platformRestart, the P4's restart and DFU restart) or any other reset starts at 0; after 3 in a
+  row the boot is a safe one - ProbeConfig::skipBootAttach: the saved at-boot slots are not attached by the probe in
+  that boot (their state reads 1 with last_try_at_ns all ones, "never tried"; a set of the slot or the host's attach
+  connects them); idles, plans, uarts and binds are applied as usual. The at-boot attach of a USB probe waits for the
+  host (ProbeConfig::setAttachGate, BootGuard::attachReady): the RP2 until tud_mounted() has held for 1 s, the P4 until
+  the HS device is configured as long, or 5 s after boot without a host; the classic ESP32 (a UART bridge) does not
+  wait. Interrupts off: one frame at a time on every PHY. RVSWD (RP2, P4): 109 half periods - at the slowest period a
+  link may be held to (max_speed 50 kHz) about 1.1 ms (static_assert), at attach's 500 ns about 55 us (RP2350 ~80 us a
+  read with the call), attached at 0-100 ns 11-20 us. SWIO (P4, classic): a write <= 46 us, a read about 50 us plus at
+  most one wait for the line to rise per frame - 100 us on the P4, 1000 polls of GPIO.in on the classic; that wait was
+  per bit (up to 32 x 100 us = 3.2 ms with interrupts off on a line rising slowly at every bit) and is now the frame's.
+  SWD (RP2): none (no interrupts masked). The classic's sampler keeps its own bounds (164 ms / 250 ms bursts on core 0,
+  under the 300 ms interrupt watchdog). Upstream: TinyUSB 0.21.0 (2026-06-30, the rp2 rework of PR #3561) no longer
+  panics there (an idle endpoint's buffer status is ignored); pico-sdk 2.3.1 and arduino-pico 6.1.1 / 6.2.0 still pin
+  TinyUSB 0.18.0 (86ad6e56c). Host tests: test_boot_guard (the count over resets, the safe boot, planned restarts, the
+  USB gate: 26 checks), test_config (the gate closed holds the saved at-boot attach, open attaches; a skipping boot never
+  tries until the slot is set again); the rest as before. Not run on hardware yet; CHANGELOG (EN / JA)
+- (JA) probe が止まったままにならず、保存した設定が起動のたびに probe を落とし続けることもないようにしました（bench、
+  0.0.29-dev+3c0cd99、Pro Micro RP2350 を SWD で、arduino-pico 6.1.1、usbstack=picosdk: restart の後、host の最初の
+  GET_DESCRIPTOR の最中に USB の割り込みが TinyUSB 0.18 の panic "Can't continue xfer on inactive ep"（dcd_rp2040_irq ->
+  hw_handle_buff_status -> hw_endpoint_xfer_continue）で終わり、breakpoint が HardFault に上がり、その HardFault の
+  breakpoint で core 0 が pull-up を付けたまま止まった。host は抜き差しまで device descriptor の要求に失敗し、watchdog は
+  動いていなかった。割り込まれていたのは保存した設定のスロットのコンソールで、起動時から RVSWD で target を読んでいた
+  （RvswdPhy::writeRaw、割り込みを止めたフレームの終わり）: host がデバイスを列挙している間、USB の割り込みが遅れてまとめて
+  来ていた）。BootGuard（OepBootGuard.h / .cpp）: RP2 は hardware watchdog（3000 ms、debugger が止めている間は止まる）を、
+  loop() が kStallMs（max_op_ms + 5 s = 15 s）以内に回っている間だけ 250 ms の timer 割り込みから送る。firmware は arduino-pico の弱い
+  _exit（panic() の行き着く先）と crt0 の弱い isr_hardfault を BootGuard::crashed() に向け、デバイスをバスから外し（pull-up を
+  切る）、kRestartDetachMs 待って reset する。loop() が止まったときも同じ。ESP32 / ESP32-P4 は panic と割り込みの watchdog で
+  もともと reset する（core の sdkconfig: PANIC_PRINT_REBOOT、INT_WDT 300 ms）。CPU0 の idle task しか見ていなかった task
+  watchdog に loop() も見させ（enableLoopWDT）、期限を 5 s から 15 s にした。すぐに落ちた起動を数える（RP2 は watchdog の
+  scratch 0 / 1 と watchdog の reset、ESP は RTC のメモリと esp_reset_reason の panic / watchdog）: 起動から 30 s 以内に
+  落ちれば 1 つ増え、30 s 動いた起動、意図した restart（platformRestart、P4 の restart と DFU の restart）、ほかの reset では
+  0 に戻る。3 回続いたら安全な起動にする: ProbeConfig::skipBootAttach で、その起動では保存した at boot のスロットに probe から
+  attach しない（state は 1、last_try_at_ns は全ビット 1 =「試していない」。スロットの set か host の attach でつながる）。idle、
+  plan、uart、bind はいつもどおり掛ける。USB の probe の at boot の attach は host を待つ（ProbeConfig::setAttachGate、
+  BootGuard::attachReady）: RP2 は tud_mounted() が 1 s 続くまで、P4 は HS デバイスが同じだけ構成されているまで、host が
+  いなければ起動から 5 s。classic ESP32（UART ブリッジ）は待たない。割り込みを止めるのはどの PHY もフレーム 1 つずつ。RVSWD
+  （RP2、P4）: 109 半周期 - 線を抑えられる最も遅い周期（max_speed 50 kHz）で約 1.1 ms（static_assert）、attach の 500 ns で
+  約 55 us（RP2350 は呼び出し込みで 1 read 約 80 us）、attach 後の 0〜100 ns で 11〜20 us。SWIO（P4、classic）: write は
+  46 us 以下、read は約 50 us に、線が上がるのを待つ時間をフレームで 1 回分まで - P4 は 100 us、classic は GPIO.in を 1000 回。
+  この待ちはビットごとだった（ビットごとにゆっくり上がる線で、割り込みを止めたまま最大 32 x 100 us = 3.2 ms）のを、フレーム
+  全体のものにした。SWD（RP2）: 割り込みを止めない。classic の sampler は自分の上限のまま（core 0 で 164 ms / 250 ms の
+  まとまり、300 ms の割り込み watchdog の内側）。上流: TinyUSB 0.21.0（2026-06-30、PR #3561 の rp2 の作り直し）はそこで
+  panic しない（idle の endpoint の buffer status を無視する）。pico-sdk 2.3.1 と arduino-pico 6.1.1 / 6.2.0 はまだ TinyUSB
+  0.18.0（86ad6e56c）。host テスト: test_boot_guard（reset をまたいだ数え方、安全な起動、意図した restart、USB の待ち: 26
+  checks）、test_config（待ちが閉じていれば保存した at boot の attach をしない、開けばする。飛ばす起動ではスロットを set し
+  直すまで試さない）。ほかは前と同じ。実機ではまだ動かしていない。CHANGELOG (EN / JA)
 - (EN) riscv-dm's checked groups cost fewer DMI accesses (bench, 0.0.29-dev+526a881, the V003 jig - classic ESP32,
   SWIO bit-banged, a UART bridge; ch32rv's upload of a 9168-byte image, traced A/B against 3c0cd99 with no broker
   between: the same 86 riscv-dm requests took 0.77 s longer on the probe - write_block 122 words 21.3 -> 36.9 ms,

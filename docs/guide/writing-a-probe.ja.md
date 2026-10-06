@@ -171,6 +171,13 @@ class Blink final : public oep::Interface {
   した channel を除きます: `config.load(); pins.setDisabled(config.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());`
   （無効にした channel には起動時も触れない）。PinTable は設定の無効（外せる）と `forbid`（firmware のもの、ずっと）を分けて持ち、
   どの項目も forbid したピンを使えるようにはしません。
+- 自分の USB デバイスを transport にする probe は、host がデバイスを構成し終えるまで at boot のスロットの attach を待たせます:
+  `applySaved()` の前に `config.setAttachGate([] { return BootGuard::attachReady(tud_mounted()); })`（P4 は `usbDevice.ready()`）。
+  起動時から target を読むコンソールはフレームごとに割り込みを止め、host がデバイスを列挙している間に遅れた USB の割り込みが
+  USB スタックを落とすことがあります（RP2: TinyUSB 0.18 の "Can't continue xfer on inactive ep" の panic）。`BootGuard`
+  （`OepBootGuard.h`）: `setup()` の最初に `begin()`、`loop()` で `poll()`。watchdog を動かし、すぐに落ちた起動を数え、
+  `kSafeAfter` 回続いたら `safe()` が真になるので、その起動では `config.skipBootAttach()` を呼びます。RP2 では SDK の `_exit` と
+  `isr_hardfault` を `BootGuard::crashed()` に向けます（`Firmware/OepProbe/Rp2.h`）。panic で止まらず、チップを reset します。
 
 ## 8. push と出来事
 
