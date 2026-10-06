@@ -497,10 +497,19 @@ void LogicCapture::forget() {
   kept_short_ = false;
   trig_phase_ = 0;
   trig_overrun_ = false;
-  completed_ = released_ = fill_ = queue_overflow_ = overruns_ = stage_drops_ = produced_ = 0;
-  captured_ = dropped_ = 0;
+  // one assignment each: several of these are volatile (a chained assignment reads a volatile back, -Wvolatile)
+  completed_ = 0;
+  released_ = 0;
+  fill_ = 0;
+  queue_overflow_ = 0;
+  overruns_ = 0;
+  stage_drops_ = 0;
+  produced_ = 0;
+  captured_ = 0;
+  dropped_ = 0;
   sent_seg_ = sent_off_ = reported_ = 0;
-  gap_pending_ = paused_ = false;
+  gap_pending_ = false;
+  paused_ = false;
 }
 
 // The most the segment store can ever take: the PSRAM but a reserve, else the internal store's cap (describe mode).
