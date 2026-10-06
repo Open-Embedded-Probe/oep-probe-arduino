@@ -22,6 +22,7 @@ uint8_t P4SpiTarget::planCheck(const RoleAssignment *roles, size_t count) {
   }
   // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
   for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.allowed(pin[r])) return kRejectUnsupported;
+  if (!pins_.canOutput(pin[kRoleMiso])) return kRejectUnsupported;   // MISO: not in its role_channels
   for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.free(pin[r])) return kRejectUnavailable;
   if (sck_ >= 0) return kRejectUnavailable;
   return 0;
@@ -55,9 +56,10 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
 #else
   constexpr uint32_t kMaxClockHz = 3000000u;
 #endif
-  static const uint8_t kRoles[] = {kRoleSck, kRoleMosi, kRoleMiso, kRoleCs};
+  static const uint8_t kInputs[] = {kRoleSck, kRoleMosi, kRoleCs}, kMiso[] = {kRoleMiso};
   TlvWriter w(out, capacity);
-  w.roleChannels(kRoles, sizeof kRoles, pins_.allowedMask());
+  w.roleChannels(kInputs, sizeof kInputs, pins_.allowedMask());
+  w.roleChannels(kMiso, sizeof kMiso, pins_.outputMask());   // MISO is driven: no input-only pin
   w.u16(kTagMaxLength, kMaxFrame);
   w.u32(kTagMaxClockHz, kMaxClockHz);
   w.u32(kTagFeatures, 1);   // bit0 LSB first

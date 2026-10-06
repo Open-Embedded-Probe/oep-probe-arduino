@@ -71,6 +71,7 @@ static constexpr uint64_t kChannels = (1ull << 4) | (1ull << 5) | (1ull << 13) |
                                       (1ull << 26) | (1ull << 27) | (1ull << 32) | (1ull << 33) | (1ull << 34) | (1ull << 35) |
                                       (1ull << 36) | (1ull << 39);
 static constexpr uint64_t kReserved = ((1ull << 40) - 1) & ~kChannels;
+static constexpr uint64_t kInputOnly = 0xf0ull << 32;   // GPIO34-39: inputs only, no internal pulls
 static constexpr uint64_t kSwioChoice = kChannels & 0xffffffffull;   // SwioPhy drives GPIO0-31
 static constexpr uint16_t kUnset = 0xfffe;                           // no pin chosen yet
 
@@ -115,14 +116,17 @@ void setup() {
   // before any idle / park; applySaved below gives them back if the settings are not applied).
   const uint64_t unusable = oep::platformUnusablePins();
   pins.forbid(unusable);
-  pins.setInputOnly(0xf0ull << 32);   // GPIO34-39: no output idle (probe.config §1, rejected unsupported)
+  // GPIO34-39 are inputs without pulls (ESP32 datasheet, GPIO): no output idle, no pull-up / pull-down idle (probe.config
+  // §1, rejected unsupported), and not offered to a role that drives its line (UART TX, I2C SDA / SCL, SPI MISO, reset)
+  pins.setInputOnly(kInputOnly);
+  pins.setNoPull(kInputOnly);
   config.load();
   pins.setDisabled(config.savedDisabled());
   oep::platformParkMask(kChannels & ~unusable & ~pins.disabledMask());
   endpoint.setRawPorts(&binds);
   swio.pin_choice = kSwioChoice & ~unusable;
   swio.pins = &pins;
-  swio.reset_allowed = kChannels & ~unusable;   // attach's reset TLV: the channel the host names (no default), nobody holding it
+  swio.reset_allowed = kChannels & ~unusable & ~kInputOnly;   // attach's reset TLV: the channel the host names (no default), nobody holding it
   endpoint.setProbeDescription(probeTlv, describeProbe());
 #if OEP_PORT_SPEED
   endpoint.setPortSpeed(portSpeed, kBootBaud);

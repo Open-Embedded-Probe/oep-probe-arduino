@@ -24,7 +24,7 @@ uint8_t P4I2cTarget::planCheck(const RoleAssignment *roles, size_t count) {
   }
   if (sda < 0 || scl < 0 || sda == scl) return kRejectMalformed;
   // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
-  if (!pins_.allowed(sda) || !pins_.allowed(scl)) return kRejectUnsupported;
+  if (!pins_.canOutput(sda) || !pins_.canOutput(scl)) return kRejectUnsupported;
   if (!pins_.free(sda) || !pins_.free(scl) || sda_ >= 0) return kRejectUnavailable;
   return 0;
 }
@@ -55,7 +55,7 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   // truncating the 269-character FRAME command, not the slave.
   static const uint8_t kRoles[] = {kRoleSda, kRoleScl};
   TlvWriter w(out, capacity);
-  w.roleChannels(kRoles, sizeof kRoles, pins_.allowedMask());
+  w.roleChannels(kRoles, sizeof kRoles, pins_.outputMask());   // both lines are pulled low: no input-only pin
   w.u16(kTagMaxLength, kMaxFrame);
   w.u32(kTagMaxClockHz, 1000000u);
   namespace i2c = reg::fixture_i2c_target;

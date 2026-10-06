@@ -52,6 +52,39 @@ static Bytes readOne(uint16_t channel) {
   return p;
 }
 
+// The channel bitmap role_channels declares for `role` in a describe (first channel 0), 0 when absent.
+static uint64_t roleMask(const uint8_t *d, size_t n, uint8_t role) {
+  for (size_t i = 0; i + 1 < n; i += 2u + d[i + 1]) {
+    const size_t len = d[i + 1];
+    if (d[i] != kTagRoleChannels || len < 3 || d[i + 2] != role) continue;
+    uint64_t m = 0;
+    for (size_t k = 0; k < len - 3 && k < 8; ++k) m |= uint64_t{d[i + 5 + k]} << (8 * k);
+    return m;
+  }
+  return 0;
+}
+
+// Input-only channels without pulls (the classic ESP32's GPIO34-39; probe.config §1): no pull-up / pull-down idle, and
+// left out of the role_channels of a role that drives its line (UART TX), which planCheck refuses unsupported.
+static void testInputOnlyNoPull() {
+  PinTable pins((1ull << 4) | (1ull << 5) | (1ull << 34));
+  pins.setInputOnly(1ull << 34);
+  pins.setNoPull(1ull << 34);
+  CHECK(!pins.setIdle(34, PinTable::kIdlePullUp) && !pins.setIdle(34, PinTable::kIdlePullDown));
+  CHECK(pins.idle(34) == PinTable::kIdleUnset && pins.setIdle(34, PinTable::kIdleHiZ));
+  CHECK(pins.setIdle(5, PinTable::kIdlePullDown) && pins.canPull(5) && !pins.canPull(34));
+  CHECK(pins.outputMask() == ((1ull << 4) | (1ull << 5)));
+  HardwareSerial serial;
+  FixtureUart uart(pins, serial, 0, 2);
+  uint8_t d[128];
+  const size_t n = uart.describe(d, sizeof d);
+  CHECK(roleMask(d, n, reg::fixture_uart::kRoleTx) == ((1ull << 4) | (1ull << 5)));
+  CHECK(roleMask(d, n, reg::fixture_uart::kRoleRx) == ((1ull << 4) | (1ull << 5) | (1ull << 34)));
+  const RoleAssignment tx34[] = {{1, reg::fixture_uart::kRoleTx, 34}}, rx34[] = {{1, reg::fixture_uart::kRoleRx, 34}};
+  CHECK(uart.planCheck(tx34, 1) == kRejectUnsupported);
+  CHECK(uart.planCheck(rx34, 1) == 0);
+}
+
 static void testIdleModes() {
   PinTable pins((1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 34));
   pins.setInputOnly(1ull << 34);
@@ -375,6 +408,7 @@ static void testNoDriveLevels() {
 
 int main() {
   testIdleModes();
+  testInputOnlyNoPull();
   testReleaseGoesToIdle();
   testGpioTakeKeepsIdle();
   testWireReleaseAndReset();

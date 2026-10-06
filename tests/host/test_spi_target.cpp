@@ -61,11 +61,36 @@ static Result arm(P4SpiTarget &t, uint16_t length, const Bytes &tx) {
   return call(t, P4SpiTarget::kOpArm, p, out);
 }
 
+// The channel bitmap role_channels declares for `role` in a describe (first channel 0), 0 when absent.
+static uint64_t roleMask(const uint8_t *d, size_t n, uint8_t role) {
+  for (size_t i = 0; i + 1 < n; i += 2u + d[i + 1]) {
+    const size_t len = d[i + 1];
+    if (d[i] != kTagRoleChannels || len < 3 || d[i + 2] != role) continue;
+    uint64_t m = 0;
+    for (size_t k = 0; k < len - 3 && k < 8; ++k) m |= uint64_t{d[i + 5 + k]} << (8 * k);
+    return m;
+  }
+  return 0;
+}
+
 int main() {
   static PinTable pins((1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 7));
   static P4SpiTarget t(pins);
   const RoleAssignment roles[] = {{0, P4SpiTarget::kRoleSck, 4}, {0, P4SpiTarget::kRoleMosi, 5},
                                   {0, P4SpiTarget::kRoleMiso, 6}, {0, P4SpiTarget::kRoleCs, 7}};
+  {   // an input-only channel (the classic ESP32's GPIO34-39): left out of MISO's role_channels only, refused there
+    static PinTable in_pins((1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 34));
+    in_pins.setInputOnly(1ull << 34);
+    static P4SpiTarget t2(in_pins);
+    uint8_t d[128];
+    const size_t n = t2.describe(d, sizeof d);
+    CHECK(roleMask(d, n, P4SpiTarget::kRoleMiso) == 0x70 && roleMask(d, n, P4SpiTarget::kRoleCs) == 0x400000070ull);
+    const RoleAssignment miso34[] = {{0, P4SpiTarget::kRoleSck, 4}, {0, P4SpiTarget::kRoleMosi, 5},
+                                     {0, P4SpiTarget::kRoleMiso, 34}, {0, P4SpiTarget::kRoleCs, 6}};
+    const RoleAssignment cs34[] = {{0, P4SpiTarget::kRoleSck, 4}, {0, P4SpiTarget::kRoleMosi, 5},
+                                   {0, P4SpiTarget::kRoleMiso, 6}, {0, P4SpiTarget::kRoleCs, 34}};
+    CHECK(t2.planCheck(miso34, 4) == kRejectUnsupported && t2.planCheck(cs34, 4) == 0);
+  }
   {   // a channel outside role_channels: unsupported; a declared one something else holds: unavailable (core §8)
     const RoleAssignment undeclared[] = {{0, P4SpiTarget::kRoleSck, 4}, {0, P4SpiTarget::kRoleMosi, 5},
                                          {0, P4SpiTarget::kRoleMiso, 6}, {0, P4SpiTarget::kRoleCs, 8}};

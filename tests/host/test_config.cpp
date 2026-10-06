@@ -224,6 +224,11 @@ int main() {
     CHECK(dn > 0 && !listed && slots_max0);
     CHECK(unsupportedWith(set(pinned, slotItem(0, 0), out), out, slot_raw));
     CHECK(unsupportedWith(set(pinned, Bytes{slot_raw, 1, 0}, out), out, slot_raw));   // its form is not looked at
+    // a channel without pulls (setNoPull): an idle with mode 1 / 2 unsupported with the item's tag, Hi-Z taken
+    pins.setNoPull(1ull << 6);
+    CHECK(unsupportedWith(set(pinned, Bytes{idle_raw, 3, 6, 0, 1}, out), out, idle_raw));
+    CHECK(unsupportedWith(set(pinned, Bytes{idle_raw, 3, 6, 0, 2}, out), out, idle_raw));
+    CHECK(ok(set(pinned, Bytes{idle_raw, 3, 6, 0, 0}, out)) && ok(set(pinned, Bytes{idle_raw, 3, 5, 0, 1}, out)));
     // a probe without a pin table has no channels to name: label is not declared (unsupported, its tag)
     CHECK(unsupportedWith(set(config, label(1, {'x'}), out), out, label_raw));
   }

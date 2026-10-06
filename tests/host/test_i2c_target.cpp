@@ -85,6 +85,18 @@ static Bytes read(P4I2cTarget &t, size_t n, const Bytes &first = {}) {
   return got;
 }
 
+// The channel bitmap role_channels declares for `role` in a describe (first channel 0), 0 when absent.
+static uint64_t roleMask(const uint8_t *d, size_t n, uint8_t role) {
+  for (size_t i = 0; i + 1 < n; i += 2u + d[i + 1]) {
+    const size_t len = d[i + 1];
+    if (d[i] != kTagRoleChannels || len < 3 || d[i + 2] != role) continue;
+    uint64_t m = 0;
+    for (size_t k = 0; k < len - 3 && k < 8; ++k) m |= uint64_t{d[i + 5 + k]} << (8 * k);
+    return m;
+  }
+  return 0;
+}
+
 int main() {
   static PinTable pins((1ull << 4) | (1ull << 5));
   static P4I2cTarget t(pins);
@@ -133,6 +145,17 @@ int main() {
     }
     CHECK(bit2 && ohms);
     CHECK(P4I2cTarget::kQueueDepth >= 2);
+  }
+
+  {   // an input-only channel (the classic ESP32's GPIO34-39): not in SDA / SCL's role_channels, refused unsupported
+    static PinTable in_pins((1ull << 4) | (1ull << 5) | (1ull << 34));
+    in_pins.setInputOnly(1ull << 34);
+    static P4I2cTarget t2(in_pins);
+    uint8_t d[128];
+    const size_t n = t2.describe(d, sizeof d);
+    CHECK(roleMask(d, n, P4I2cTarget::kRoleSda) == 0x30 && roleMask(d, n, P4I2cTarget::kRoleScl) == 0x30);
+    const RoleAssignment on34[] = {{0, P4I2cTarget::kRoleSda, 34}, {0, P4I2cTarget::kRoleScl, 5}};
+    CHECK(t2.planCheck(on34, 2) == kRejectUnsupported);
   }
 
   // state 0: read_rx and reset are unavailable cause 6

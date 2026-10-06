@@ -288,6 +288,9 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       if (getU16(v) >= PinTable::kChannels || !pins_->allowed(getU16(v))) return unsupportedTag(out, capacity, raw);
       // output low / high (probe.config §1): only on a channel this probe can drive
       if (output && !pins_->canOutput(getU16(v))) return unsupportedTag(out, capacity, raw);
+      // pull-up / pull-down (probe.config §1): only on a channel that has that pull
+      if ((v[2] == PinTable::kIdlePullUp || v[2] == PinTable::kIdlePullDown) && !pins_->canPull(getU16(v)))
+        return unsupportedTag(out, capacity, raw);
       uint8_t level = 0;   // a level number this probe does not have (drive_levels declared); without them it is kept
       const DriveLevels levels = driveLevels();
       if (len >= 6 && levels.count && !PinTable::driveLevelOf(levels, v[3], getU16(v + 4), level))

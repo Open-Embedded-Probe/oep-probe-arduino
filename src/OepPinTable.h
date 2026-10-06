@@ -93,7 +93,8 @@ class PinTable {
   // Hi-Z). Applied now to a free channel (apply false: only kept, for a channel about to be disabled), and at every
   // release; an output idle drives its level for as long as the channel is free, at its strength `drive` (a level of
   // platformDriveLevels; kDriveDefault: the default level) - level and strength together. false: not a channel of this
-  // table, a mode it does not know, or an output idle on a channel that cannot drive (setInputOnly).
+  // table, a mode it does not know, an output idle on a channel that cannot drive (setInputOnly), or a pull-up /
+  // pull-down idle on a channel without that pull (setNoPull).
   static constexpr uint8_t kIdleHiZ = 0, kIdlePullUp = 1, kIdlePullDown = 2, kIdleOutputLow = 3, kIdleOutputHigh = 4,
                            kIdleUnset = 0xff;
   static constexpr uint8_t kDriveDefault = 0xff;   // no strength given: the default level
@@ -101,6 +102,7 @@ class PinTable {
   bool setIdle(uint16_t channel, uint8_t mode, bool apply = true, uint8_t drive = kDriveDefault) {
     if (!allowed(channel) || (mode > kIdleOutputHigh && mode != kIdleUnset)) return false;
     if ((mode == kIdleOutputLow || mode == kIdleOutputHigh) && !canOutput(channel)) return false;
+    if ((mode == kIdlePullUp || mode == kIdlePullDown) && !canPull(channel)) return false;
     idle_[channel] = mode;
     idle_drive_[channel] = drive == kDriveDefault ? 0 : static_cast<uint8_t>(drive + 1);
     if (apply && owner_[channel] == 0 && !disabled(channel)) applyIdle(static_cast<uint8_t>(channel));
@@ -162,14 +164,21 @@ class PinTable {
     for (uint8_t i = 0; i < d.count; ++i) if (d.ma[i] <= value) level = i;
     return true;
   }
-  // Channels the probe can only read (the classic ESP32's GPIO34-39): no output idle on them (probe.config §1).
+  // Channels the probe can only read (the classic ESP32's GPIO34-39): no output idle on them (probe.config §1), and left
+  // out of the role_channels of the roles that drive a line (outputMask: UART TX, I2C SDA / SCL, SPI MISO).
   void setInputOnly(uint64_t mask) { input_only_ = mask; }
   bool canOutput(uint16_t channel) const { return allowed(channel) && !((input_only_ >> channel) & 1); }
+  uint64_t outputMask() const { return allowed_ & ~input_only_; }
+  // Channels without internal pull-up / pull-down (the classic ESP32's GPIO34-39): no idle with mode 1 / 2 on them
+  // (probe.config §1, rejected unsupported).
+  void setNoPull(uint64_t mask) { no_pull_ = mask; }
+  bool canPull(uint16_t channel) const { return allowed(channel) && !((no_pull_ >> channel) & 1); }
 
  private:
   uint64_t allowed_ = 0;
   uint64_t disabled_ = 0;   // the settings' disable items
   uint64_t input_only_ = 0;   // setInputOnly
+  uint64_t no_pull_ = 0;      // setNoPull
   uint64_t pending_ = 0;      // released during a replacement, not yet settled (deferIdle)
   uint64_t strong_ = 0;       // pads setPad left at another strength than the default
   uint8_t deferring_ = 0;

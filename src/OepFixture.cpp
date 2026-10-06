@@ -168,7 +168,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
 size_t FixtureUart::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.roleChannels(&kUartRoles[0], 1, pins_.allowedMask() & rx_mask_);   // RX: the pins the peripheral can listen on
-  w.roleChannels(&kUartRoles[1], 1, pins_.allowedMask() & tx_mask_);   // TX
+  w.roleChannels(&kUartRoles[1], 1, pins_.outputMask() & tx_mask_);   // TX: driven, no input-only pin
   w.put(kImplementationPeripheral[0], kImplementationPeripheral + 2, kImplementationPeripheral[1]);
   // formats: data bits 8 / 7 (bits 0-1), parity none / even / odd (bits 2-3), stop 1 / 2 (bit 4) - every combination
   uint8_t formats[12], n = 0;
@@ -194,6 +194,7 @@ uint8_t FixtureUart::planCheck(const RoleAssignment *roles, size_t count) {
     else if (roles[i].role == ua::kRoleTx && tx < 0) tx = c;
     else return kRejectUnsupported;
     if (!pins_.allowed(c) || c > 63 || !((role_mask >> c) & 1)) return kRejectUnsupported;   // not a pin this role can take
+    if (roles[i].role == ua::kRoleTx && !pins_.canOutput(c)) return kRejectUnsupported;     // TX on an input-only pin
   }
   if (rx >= 0 && tx >= 0 && rx == tx) return kRejectUnsupported;
   if ((rx >= 0 && !pins_.free(rx)) || (tx >= 0 && !pins_.free(tx)) || rx_ >= 0 || tx_ >= 0) return kRejectUnavailable;
