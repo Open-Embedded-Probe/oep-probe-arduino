@@ -5,7 +5,8 @@
 // DATA0 / DATA1 and DMSTATUS's halted / havereset bits; the test plays the target's side of the mailbox.
 // - core §4.3's order: a stream op's form and values are checked before its stream number (no_connection last); read
 //   from 3 with arg over 0xFF is malformed (common §1.2), the fixture UART's read too.
-// - write takes only the send slot (console §2); the console reads while DMSTATUS says the hart runs (console §3).
+// - write fills the stream's send queue, declared in describe (console §1, §2); DMDATA by §3.2 (no slot, empty slot,
+//   a bit-7-clear word left alone, open writes nothing); the console reads while DMSTATUS says the hart runs (console §3).
 #include <stdio.h>
 
 #include <vector>
@@ -147,8 +148,8 @@ struct SeqTarget {
   void available() { service(); if (!posted) post(); }
 };
 
-// The time from a host's first write of "PING\n" until the target has all of it (oep-if-console §2: write takes the
-// send slot; the host writes the rest as the slot frees, retrying every 5 ms when it is not free; each request takes
+// The time from a host's first write of "PING\n" until the target has all of it (oep-if-console §2: write fills the
+// send queue; the host writes any rest as it frees, retrying every 5 ms when it is full; each request takes
 // `rtt_ms` there and back). The probe polls the console every 250 us between requests.
 static uint32_t pingDeliveryMs(Interface &wire, DebugPort &port, TargetConsoleStream &console, FakePhy &phy,
                                uint32_t period_ms, uint32_t rtt_ms) {
@@ -238,25 +239,107 @@ int main() {
     CHECK(ok(r));
   }
 
-  // ---- write takes only what the send slot carries in one go (oep-if-console §2: 2 bytes for dmseq, 3 for DMDATA),
-  // nothing while it is not free; a bind's input still queues what the driver's queue takes (write took up to 255) ----
+  // ---- write fills the stream's send queue (oep-if-console §2): accepted = min(count, free space), 0 only when it is
+  // full; describe declares its size (send_queue, at least console_send_queue_min_bytes); SDI takes nothing; the queue
+  // goes with the stream when it closes; a bind's input fills the same queue. (It took only the mechanism's send slot,
+  // 2 / 3 bytes, and 0 while that held a chunk.) ----
   {
+    Bytes d(64);
+    const size_t dn = console.describe(d.data(), d.size());
+    bool declared = false;
+    for (size_t at = 0; at + 2 <= dn; at += 2u + d[at + 1])
+      if (d[at] == con::kTlvDescribeSendQueue && d[at + 1] == 2)
+        declared = uint16_t(d[at + 2] | d[at + 3] << 8) == DmConsole::kSendQueue;
+    CHECK(declared && DmConsole::kSendQueue >= reg::kLimitConsoleSendQueueMinBytes);
+    phy.halted = true;   // nothing taken from the queue meanwhile (the console does not read a halted hart's mailbox)
+    g_millis += 25;
+    console.poll();
     const Bytes five = cat(le16(stream), {5, 0, 'a', 'b', 'c', 'd', 'e'});
     r = call(console, TargetConsoleStream::kOpWrite, five, out);
-    CHECK(r.detail == kOutcomePartial && out == Bytes({2, 0}));
-    r = call(console, TargetConsoleStream::kOpWrite, five, out);   // the slot not free yet: accepted 0, failed
+    CHECK(ok(r) && out == Bytes({5, 0}));
+    Bytes big = cat(le16(stream), le16(300));
+    big.resize(big.size() + 300, 'x');
+    r = call(console, TargetConsoleStream::kOpWrite, big, out);   // what fits: the rest of the queue
+    CHECK(r.detail == kOutcomePartial && out == le16(uint16_t(DmConsole::kSendQueue - 5)));
+    r = call(console, TargetConsoleStream::kOpWrite, five, out);   // full: accepted 0, failed
     CHECK(r.detail == kOutcomeFailed && out == Bytes({0, 0}));
+    const uint8_t typed[10] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    CHECK(console.bindInput(typed, sizeof typed) == 0);            // a bind's input: the same queue
     r = call(console, TargetConsoleStream::kOpClose, le16(stream), out);
     CHECK(ok(r) && !console.isOpen());
+    CHECK(driver.room() == 0);   // closed: nothing taken
+    phy.halted = false;
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
     CHECK(ok(r) && console.isOpen());
+    CHECK(driver.room() == DmConsole::kSendQueue);   // the queue went with the closed stream
     const uint16_t dmdata = uint16_t(out[0] | out[1] << 8);
     r = call(console, TargetConsoleStream::kOpWrite, cat(le16(dmdata), {5, 0, 'a', 'b', 'c', 'd', 'e'}), out);
-    CHECK(r.detail == kOutcomePartial && out == Bytes({3, 0}));
-    const uint8_t typed[10] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    CHECK(ok(r) && out == Bytes({5, 0}));
     CHECK(console.bindInput(typed, sizeof typed) == sizeof typed);
     r = call(console, TargetConsoleStream::kOpClose, le16(dmdata), out);
     CHECK(ok(r));
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismSdi}), out);
+    CHECK(ok(r));
+    const uint16_t sdi = uint16_t(out[0] | out[1] << 8);
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(sdi), {1, 0, 'a'}), out);   // one way: nothing
+    CHECK(r.detail == kOutcomeFailed && out == Bytes({0, 0}));
+    r = call(console, TargetConsoleStream::kOpClose, le16(sdi), out);
+    CHECK(ok(r));
+  }
+
+  // ---- DMDATA (oep-if-console §3.2) against a target that plays by it: every target slot answered once, input three
+  // bytes per answer from the queue's head, a bit-7-clear word never written over; a bit-7 word with L 0-3 or 12-63 is
+  // no slot - it carries no bytes and gets 0 with no input on it (it took 7 bytes of 0xff from L 12-63 and answered L 0-3
+  // with input); open writes nothing to the mailbox and throws away none of the target's output (it zeroed DATA0 over a
+  // bit-7-clear word and dropped four polls of output) ----
+  {
+    // a target slot already waiting when the stream opens: "hi!" (L 7)
+    phy.halted = false;
+    phy.data0 = 0x80u | 7u | uint32_t('h') << 8 | uint32_t('i') << 16 | uint32_t('!') << 24;
+    const size_t writes_before = phy.data0_writes.size();
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    CHECK(ok(r));
+    const uint16_t s1 = uint16_t(out[0] | out[1] << 8);
+    CHECK(phy.data0_writes.size() == writes_before);   // open wrote nothing
+    const PositionStream *ps = console.bindStream();
+    const uint64_t at_open = ps ? ps->end() : 0;
+    auto polls = [&](int n) { for (int i = 0; i < n; ++i) { g_millis += 1; console.poll(); } };
+    polls(1);
+    CHECK(ps && ps->end() == at_open + 3);              // "hi!" kept
+    CHECK(phy.data0 == 0);                              // answered with 0: nothing queued
+    // a bit-7-clear word (our answer, or 0) is never written over
+    phy.data0 = 0x00000005u | uint32_t('z') << 8;       // an answer of ours the target has not taken yet
+    const size_t writes_now = phy.data0_writes.size();
+    polls(3);
+    CHECK(phy.data0_writes.size() == writes_now);
+    // input rides on the answers, three bytes each, from the queue's head
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(s1), {5, 0, 'P', 'I', 'N', 'G', '\n'}), out);
+    CHECK(ok(r) && out == Bytes({5, 0}));
+    phy.data0 = 0x80u | 5u | uint32_t('a') << 8;        // a slot with one byte: answered with "PIN"
+    polls(1);
+    CHECK(phy.data0 == (7u | uint32_t('P') << 8 | uint32_t('I') << 16 | uint32_t('N') << 24));
+    // not slots: L 0-3 and 12-63 with bit 7 (0xffffffff among them) - 0, nothing pushed, the queue kept
+    for (uint32_t word : {0xffffffffu, 0x80u | 12u, 0x80u | 3u, 0x80u | 0u, 0x80u | 0x3fu | 0x41424300u}) {
+      const uint64_t end = ps ? ps->end() : 0;
+      phy.data0 = word;
+      polls(1);
+      CHECK(phy.data0 == 0 && ps && ps->end() == end);
+      CHECK(driver.room() == DmConsole::kSendQueue - 2);   // "G\n" still queued
+    }
+    // a slot of 7 bytes (3 in DATA0, 4 in DATA1): all of them, then the rest of the input
+    phy.data1 = uint32_t('d') | uint32_t('e') << 8 | uint32_t('f') << 16 | uint32_t('g') << 24;
+    phy.data0 = 0x80u | 11u | uint32_t('a') << 8 | uint32_t('b') << 16 | uint32_t('c') << 24;
+    const uint64_t end7 = ps ? ps->end() : 0;
+    polls(1);
+    CHECK(ps && ps->end() == end7 + 7);
+    CHECK(phy.data0 == (6u | uint32_t('G') << 8 | uint32_t('\n') << 16));
+    // the empty slot (L 4) is answered: with nothing queued, 0
+    phy.data0 = 0x84u;
+    polls(3);
+    CHECK(phy.data0 == 0);
+    r = call(console, TargetConsoleStream::kOpClose, le16(s1), out);
+    CHECK(ok(r));
+    phy.data0 = phy.data1 = 0;
   }
 
   // ---- reading goes on while the hart runs, judged from DMSTATUS at least every 20 ms (oep-if-console §3): a hart the
@@ -414,9 +497,8 @@ int main() {
     CHECK(rejectedWith(r, kRejectNoConnection));
   }
 
-  // ---- the console's write latency (oep-if-console §2): a host's line reaches the target one chunk per target poll,
-  // as when write queued it whole (0.0.28: 13-26 ms for a PING / PONG); a slot that freed only at the target's ack missed
-  // that same exchange and took two polls a chunk (50 ms and more) ----
+  // ---- the console's write latency (oep-if-console §2): a host's line goes in one write and reaches the target one
+  // chunk per target poll (0.0.28: 13-26 ms for a PING / PONG); with the send slot a line took a request per chunk ----
   {
     static FakePhy phy2;
     static Ch32Dm dm2(phy2);

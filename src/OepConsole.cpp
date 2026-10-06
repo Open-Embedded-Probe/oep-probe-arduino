@@ -13,15 +13,14 @@ size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   static const uint8_t kMechanisms[] = {con::kMechanismSdi, con::kMechanismDmdata, con::kMechanismDmseq};
   w.put(con::kTlvDescribeMechanisms, kMechanisms, sizeof kMechanisms);   // oep-if-console §1
+  w.u16(con::kTlvDescribeSendQueue, DmConsole::kSendQueue);              // §1: required with DMDATA / dmseq
   return w.ok() ? w.length() : 0;
 }
 
-// A bind's input (probe.config §1.2) is not the write op: it queues what the driver's queue takes, and the driver sends it
-// one slot at a time.
+// A bind's input (probe.config §1.2) goes into the same send queue as the write op, as much as fits.
 size_t TargetConsoleStream::bindInput(const uint8_t *data, size_t length) {
   if (!open_) return 0;
-  const size_t room = driver_.room();
-  const size_t n = driver_.queue(data, length < room ? length : room);
+  const size_t n = driver_.queue(data, length);
   if (n) driver_.poll();
   return n;
 }
@@ -217,7 +216,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       stream_.mark(kMarkHost, p[0]);
       return tail.finish(completed(), out, capacity);
     }
-    case kOpWrite: {   // count(u16) data [TLV]  ->  accepted(u16) [TLV]: what went into the mechanism's send slot
+    case kOpWrite: {   // count(u16) data [TLV]  ->  accepted(u16) [TLV]: what went into the send queue (§2)
       if (n < 2) return rejected(kRejectMalformed);
       const uint16_t count = getU16(p);
       const Result parsed = plainTail(tail, p, n, 2u + count, out, capacity);
@@ -226,10 +225,10 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (checking_) return completed();
       if (!open_) return wrongState(out, capacity);
       if (capacity < 2) return failed();
-      poll();   // a frame waiting takes what the slot holds, so the slot is looked at as it is now
+      poll();   // a frame waiting takes from the queue first, so its free space is as it is now
       if (!open_) return wrongState(out, capacity);
-      const size_t slot = driver_.slot();
-      const size_t queued = driver_.queue(p + 2, count < slot ? count : slot);
+      // min(count, free space); 0 only when the queue is full, or always on SDI (one way, §3.1)
+      const size_t queued = driver_.queue(p + 2, count);
       driver_.poll();   // start it on its way
       putU16(out, static_cast<uint16_t>(queued));
       const Result r = queued == count ? completed(2) : queued ? partial(2) : failed(2);

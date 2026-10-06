@@ -27,23 +27,21 @@ class DmConsole {
   // halted, which DMSTATUS says - a host that halted or resumed it through raw DMI counts too; every kStatusMs it is
   // asked, and a running hart there clears Ch32Dm's halted view).
   void poll();
-  // Start a fresh session in `mechanism` (whatever an earlier one left in the mailbox is thrown away), stop, queue
-  // bytes for the target.
+  // Start a fresh session in `mechanism` (an empty send queue; nothing written to the mailbox), stop (the queue goes
+  // with the stream), queue bytes for the target.
   bool start(uint8_t mechanism);
-  void stop() { enabled_ = false; }
+  void stop() { enabled_ = false; tx_tail_ = tx_count_ = 0; }
   bool enabled() const { return enabled_; }
+  // The send queue (oep-if-console §2, describe send_queue): a write and a bind's input put what fits of their data at
+  // its end; the probe feeds the target from its head at the mechanism's pace - up to 2 bytes on each answer to a dmseq
+  // frame, 3 on each answer to a DMDATA slot. None on SDI (one way): queue() takes nothing there.
+  // A write took at most the mechanism's send slot (2 / 3 bytes, 0 while it held one): a line of input then cost a
+  // request every 2-3 bytes, and the bench saw a classic ESP32's console commands 3x slower, replies lost on a CH32V003
+  // and captures armed before a command miss its burst; the whole queue, as 0.0.28 had it, fixed all three.
+  static constexpr uint16_t kSendQueue = 256;
+  static_assert(kSendQueue >= v1::reg::kLimitConsoleSendQueueMinBytes, "send_queue below the registry's minimum");
   size_t queue(const uint8_t *data, size_t length);
-  size_t room() const { return kTxCapacity - 1 - pending(); }   // what queue() takes now (a bind's input)
-  // The mechanism's send slot (oep-if-console §2, oep-if-common §1.4): what one exchange carries - 3 bytes for DMDATA,
-  // 2 for dmseq - held by the probe until the target's next frame takes it, and free while nothing waits there; nothing
-  // on a one-way mechanism (SDI). A write op takes at most this (it took the whole queue's room). A dmseq payload on its
-  // way (sent, not yet acknowledged) is not in the slot: the next one waits in the slot meanwhile and goes out on the
-  // answer to the frame that acknowledges it. A slot that freed only at that ack missed that same exchange, and every
-  // 2 bytes cost two of the target's polls (a 5-byte PING took 50 ms and more against 13-26 ms in 0.0.28).
-  size_t slot() const {
-    if (!enabled_ || mechanism_ == 0 || pending()) return 0;
-    return mechanism_ == 2 ? 2 : 3;
-  }
+  size_t room() const { return enabled_ && mechanism_ != 0 ? kSendQueue - tx_count_ : 0; }   // what queue() takes now
   // How many times the target's side (re)synchronised (dmseq SYN): after the first, a target restart.
   uint32_t resyncs() const { return seq_resyncs_; }
   // The target restarted (havereset seen while reading): dmseq goes back to unsynced (oep-if-console §2).
@@ -59,26 +57,24 @@ class DmConsole {
  private:
   Ch32Dm &dm_;
   DmiPhy &phy_;
-  static constexpr size_t kTxCapacity = 256;
   bool enabled_ = false;
   uint32_t last_status_ms_ = 0;         // when DMSTATUS was last read (halted? havereset?)
   bool hart_halted_ = false;            // what it said
   bool lost_ = false;
   uint8_t mechanism_ = 0;               // 0 = SerialSDI (one way), 1 = SerialDMDATA, 2 = dmseq (two way)
   bool saw_empty_ = false;              // the target's empty frame was already there last poll
-  bool discarding_ = false;             // start(): what arrives now is an earlier session's
   Sink sink_ = nullptr;
   MarkSink mark_sink_ = nullptr;
   void *sink_ctx_ = nullptr;
-  uint16_t tx_head_ = 0, tx_tail_ = 0;
+  uint16_t tx_tail_ = 0, tx_count_ = 0;   // the send queue: its head, and how many bytes wait
   uint32_t last_attach_ms_ = 0;
-  uint8_t tx_[kTxCapacity];
-  uint16_t pending() const { return static_cast<uint16_t>((tx_head_ - tx_tail_ + kTxCapacity) % kTxCapacity); }
+  uint8_t tx_[kSendQueue];
+  uint8_t take();                       // the queue's head byte, out of the queue
   void push(uint8_t byte);
   bool readData(uint8_t address, uint32_t &value);   // a DMI read that keeps the line-lost clock
   void pollSdi();
   void pollDmdata();
-  void sendOrClear();
+  void answerDmdata();
   // mechanism 2, dmseq (oep-spec docs/target-console-dmseq.ja.md)
   void pollSeq();
   void seqAnswer(uint8_t k, bool with_data);

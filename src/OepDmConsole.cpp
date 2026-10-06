@@ -10,7 +10,15 @@ namespace oep {
 
 // ---- target.console ------------------------------------------------------
 void DmConsole::push(uint8_t byte) {
-  if (!discarding_ && sink_) sink_(sink_ctx_, byte);
+  if (sink_) sink_(sink_ctx_, byte);
+}
+
+// The send queue's head (oep-if-console §2): bytes leave it only on an answer to the target.
+uint8_t DmConsole::take() {
+  const uint8_t byte = tx_[tx_tail_];
+  tx_tail_ = static_cast<uint16_t>((tx_tail_ + 1) % kSendQueue);
+  --tx_count_;
+  return byte;
 }
 
 // A DMI read of the mailbox. Its outcome runs the PHY's wire-loss clock (oep-if-debug §2, shared with the host's
@@ -83,69 +91,64 @@ void DmConsole::pollSdi() {
   phy_.write(0x04, 0);                         // taken: this is what the target waits for
 }
 
-// SerialDMDATA, minichlink's framing. The status byte is the low byte of DATA0: bit 7 says
-// the word is the target's, the low bits are a byte count biased by 4. We answer each of its
-// words exactly once, and the answer is also our outgoing frame when there is one - three
-// bytes at a time, since only DATA0 carries host payload - or zero when there is not.
+// SerialDMDATA (oep-if-console §3.2). The status byte is the low byte of DATA0: bit 7 says the word is the target's
+// (T), bits 0-5 are L = the byte count + 4. Every target slot is answered exactly once, and the answer is also the
+// probe's outgoing frame when the send queue holds bytes - three at a time, since only DATA0 carries host payload - or
+// zero when it is empty. A word with bit 7 clear is the probe's own answer or 0: never written over.
 void DmConsole::pollDmdata() {
   uint32_t data0 = 0;
   if (!readData(0x04, data0)) return;
-  if (data0 & 0x80u) {                         // the target's word
-    uint32_t count = data0 & 0x3fu;
-    if (count > 4u) {
-      count -= 4u;
-      if (count > 7u) count = 7u;
-      uint32_t data1 = 0;
-      if (!readData(0x05, data1)) return;
-      const uint8_t bytes[7] = {
-          static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
-          static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
-          static_cast<uint8_t>(data1 >> 16), static_cast<uint8_t>(data1 >> 24)};
-      for (uint32_t i = 0; i < count; ++i) push(bytes[i]);
-      saw_empty_ = false;
-      sendOrClear();
-      return;
-    }
-    // Count 4 is the target's empty frame: "the mailbox is yours". But its write() leaves
-    // that word and then, a moment later, its own frame on top - so an empty frame may be
-    // the instant before real bytes land, and answering it then wipes them out. Measured on
-    // a CH32X035 at 48 MHz behind the P4's fast PHY: every other frame vanished, "core_ap"
-    // and " READY" gone and "i" and "\r\n" arriving (2026-09-23). A slow target hid it. So
-    // answer an empty frame only once it has stood still for a whole poll.
-    if (!saw_empty_) {
-      saw_empty_ = true;
-      return;
-    }
+  if (!(data0 & 0x80u)) {
+    // Bit 7 clear: our own answer not yet replaced, or 0. Not ours to touch - writing into a clear word races the
+    // target, which may be posting its slot at that moment; on a CH32X035 that ate the host's frames and PING never
+    // came back (2026-09-23).
     saw_empty_ = false;
-    sendOrClear();
     return;
   }
-  // Bit 7 clear: our own frame not yet collected, or the word we just left. Not ours to
-  // touch - the target owns the initiative, and a probe only ever answers the target's
-  // words, as minichlink's terminal does. Writing into a clear word races the target's own
-  // poll, which leaves its empty frame there at the same moment; on the CH32X035 that ate
-  // the host's frames and PING never came back (2026-09-23).
+  const uint32_t length = data0 & 0x3fu;   // bit 6 ignored
+  if (length >= 5 && length <= 11) {       // a target slot with n = L - 4 bytes: 0-2 in DATA0, 3-6 in DATA1 (after)
+    const uint32_t count = length - 4u;
+    uint32_t data1 = 0;
+    if (count >= 4 && !readData(0x05, data1)) return;
+    const uint8_t bytes[7] = {
+        static_cast<uint8_t>(data0 >> 8), static_cast<uint8_t>(data0 >> 16), static_cast<uint8_t>(data0 >> 24),
+        static_cast<uint8_t>(data1), static_cast<uint8_t>(data1 >> 8),
+        static_cast<uint8_t>(data1 >> 16), static_cast<uint8_t>(data1 >> 24)};
+    for (uint32_t i = 0; i < count; ++i) push(bytes[i]);
+    saw_empty_ = false;
+    answerDmdata();
+    return;
+  }
+  if (length != 4) {
+    // L 0-3 or 12-63 with bit 7: not a target slot (a value a probe or another debugger left - 0xffffffff, say). It
+    // carries no bytes and gets 0, no input on it: the queue's bytes stay for a real slot. It took 7 bytes from such
+    // a word (L 12-63: 0xff each) and answered L 0-3 like an empty slot, with input.
+    saw_empty_ = false;
+    phy_.write(0x04, 0);
+    return;
+  }
+  // L = 4, the target's empty slot: "the mailbox is the probe's". The spec leaves when to answer it to the probe; it is
+  // answered once it has stood a whole poll - a target that still replaced its own empty slot with one carrying bytes
+  // (as some once did) loses nothing then (CH32X035 at 48 MHz behind the P4's fast PHY: every other frame vanished,
+  // 2026-09-23). A target that waits for the answer, as §3.2 now says it does, gets it one poll later.
+  if (!saw_empty_) {
+    saw_empty_ = true;
+    return;
+  }
   saw_empty_ = false;
+  answerDmdata();
 }
 
-// Clearing bit 7 is how the target learns its frame was taken - and our own frame clears
-// it too. So when there is something to send, send it here rather than zeroing first: a
-// target that keeps printing leaves its empty frame on every poll, and a probe that only
-// ever answered with zero would never get a turn (2026-09-23).
-void DmConsole::sendOrClear() {
-  const uint16_t waiting = pending();
-  if (!waiting) {
+// The answer to one target slot: up to 3 bytes from the head of the send queue (they leave it), or 0.
+void DmConsole::answerDmdata() {
+  if (!tx_count_) {
     phy_.write(0x04, 0);
     return;
   }
   uint8_t p[3] = {0, 0, 0};
-  const uint8_t chunk = waiting > 3 ? 3 : static_cast<uint8_t>(waiting);
-  for (uint8_t i = 0; i < chunk; ++i) {
-    p[i] = tx_[tx_tail_];
-    tx_tail_ = static_cast<uint16_t>((tx_tail_ + 1) % kTxCapacity);
-  }
-  phy_.write(0x04, uint32_t(chunk + 4u) | (uint32_t(p[0]) << 8) |
-                       (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 24));
+  const uint8_t chunk = tx_count_ > 3 ? 3 : static_cast<uint8_t>(tx_count_);
+  for (uint8_t i = 0; i < chunk; ++i) p[i] = take();
+  phy_.write(0x04, uint32_t(chunk + 4u) | (uint32_t(p[0]) << 8) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 24));
 }
 
 // dmseq (mechanism 2), oep-spec docs/target-console-dmseq.ja.md. SerialDMDATA's carrier with
@@ -230,7 +233,7 @@ void DmConsole::pollSeq() {
     for (uint8_t i = 0; i < n; ++i) push(b[1 + i]);
     // TO: the target gave up waiting on this frame, and what it wrote after it until an answer came was discarded -
     // mark lost 4 (the target's TO) where that output would have been (oep-if-common §1.3, dmseq "Timeout")
-    if ((w0 & 0x40u) && mark_sink_ && !discarding_)
+    if ((w0 & 0x40u) && mark_sink_)
       mark_sink_(sink_ctx_, v1::reg::common::kMarkKindLost, v1::reg::common::kMarkDetailLostTargetTimeout);
     seq_last_s_ = s;
     seq_last_syn_ = syn;
@@ -247,10 +250,7 @@ void DmConsole::pollSeq() {
 
 void DmConsole::seqAnswer(uint8_t k, bool with_data) {
   if (with_data && !seq_chunk_len_) {
-    while (seq_chunk_len_ < 2 && tx_tail_ != tx_head_) {
-      seq_chunk_[seq_chunk_len_++] = tx_[tx_tail_];
-      tx_tail_ = static_cast<uint16_t>((tx_tail_ + 1) % kTxCapacity);
-    }
+    while (seq_chunk_len_ < 2 && tx_count_) seq_chunk_[seq_chunk_len_++] = take();   // the queue's head (dmseq host rule 5)
   }
   const uint8_t m = with_data ? seq_chunk_len_ : 0;
   uint8_t ans[4] = {static_cast<uint8_t>((k << 5) | (seq_h_ << 4) | m), 0, 0, 0};
@@ -263,12 +263,19 @@ void DmConsole::seqAnswer(uint8_t k, bool with_data) {
   ++stats_.answers;
 }
 
-// Every start is a fresh session, even over one that is still open: a runner that moves from one
-// sketch to the next reprograms the target in between, and bytes queued for the last sketch must
-// not be delivered to this one.
+// Every start is a fresh session, even over one that is still open: a runner that moves from one sketch to the next
+// reprograms the target in between, and bytes queued for the last sketch must not be delivered to this one (the queue
+// is the stream's and goes with it when it closes, oep-if-console §2).
+//
+// Nothing is written to the mailbox here and nothing read is thrown away (oep-if-console §3): what is in DATA0 is read by
+// the mechanism's own rules. dmseq writes DATA0 only while bit 7 is set: zeroing it at the start broke the frame the
+// target had out, which then waited out its timeout (up to 1 s per try) before posting again (oep-spec
+// probe-cdc-and-persistence §7.5, ch32rv's review); its framing sorts out an earlier session by itself. SDI / DMDATA
+// zeroed DATA0 and threw away four polls: that wrote over a bit-7-clear word and dropped the target's output; a leftover
+// word that is no slot (all ones) is cleared by DMDATA's own rule, and SDI leaves one alone (§3.1).
 bool DmConsole::start(uint8_t mechanism) {
   if (mechanism > 2 || !dm_.attach()) return false;
-  tx_head_ = tx_tail_ = 0;
+  tx_tail_ = tx_count_ = 0;
   saw_empty_ = false;
   seq_synced_ = false;
   seq_last_syn_ = false;
@@ -281,30 +288,16 @@ bool DmConsole::start(uint8_t mechanism) {
   hart_halted_ = false;
   last_status_ms_ = millis();
   mechanism_ = mechanism;
-  // dmseq writes DATA0 only while bit 7 is set (a target frame is there): zeroing it at the start broke the frame the
-  // target had out, which then waited out its timeout (up to 1 s per try) before posting again - the console took
-  // 1-6 s to come back after a refused automatic attach (oep-spec probe-cdc-and-persistence §7.5, ch32rv's review).
-  // Its framing sorts out an earlier session by itself: a leftover word fails the target's answer check, the target
-  // posts again every 20 ms, and the first frame seen is accepted whatever its sequence bit.
-  if (mechanism == 2) return true;
-  // SDI / DMDATA: whatever an earlier session left in the mailbox would read as a frame - including SerialDMDATA's
-  // latched timeout, which a host clears by taking the word. Claim it, then let a couple of rounds go by and throw
-  // those away, so the first exchange the caller sees is not the tail of somebody else's.
-  phy_.write(0x04, 0);
-  discarding_ = true;
-  for (int i = 0; i < 4; ++i) poll();
-  discarding_ = false;
   return true;
 }
 
+// Into the send queue (oep-if-console §2): as much of `data` as the free space takes, in order. Nothing on SDI (one way).
 size_t DmConsole::queue(const uint8_t *data, size_t length) {
   if (!enabled_ || mechanism_ == 0) return 0;
   size_t queued = 0;
-  while (queued < length) {
-    const uint16_t next = static_cast<uint16_t>((tx_head_ + 1) % kTxCapacity);
-    if (next == tx_tail_) break;           // full: the target is not collecting
-    tx_[tx_head_] = data[queued++];
-    tx_head_ = next;
+  while (queued < length && tx_count_ < kSendQueue) {
+    tx_[(tx_tail_ + tx_count_) % kSendQueue] = data[queued++];
+    ++tx_count_;
   }
   return queued;
 }
