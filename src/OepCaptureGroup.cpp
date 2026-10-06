@@ -34,7 +34,7 @@ int CaptureGroup::indexOf(const GroupTrack &track) const {
 
 size_t CaptureGroup::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  w.u32(kTagFeatures, grp::kFeaturesNotify);   // force is in the ops tag (offers); bits 0 / 1 reserved
+  // no features: revision 1 defines no bit (force, subscribe and unsubscribe are in the ops tag)
   uint8_t fns[1 + 2 * kMaxTracks] = {static_cast<uint8_t>(count_)};   // n(u8) n x fn(u16)
   for (size_t i = 0; i < count_; ++i) putU16(fns + 1 + 2 * i, endpoint_.fnOf(*tracks_[i].interface));
   w.put(grp::kTlvDescribeTracks, fns, 1 + 2 * count_);

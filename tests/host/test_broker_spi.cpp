@@ -3,7 +3,7 @@
 
 // Host test: a relaying broker's sequence (oep-transports §1) on a UART bridge, to the classic ESP32's SPI target on the fake
 // spi_slave driver and the fake ESP-IDF GPIO / IPC (tests/host/shim). The broker (ch32rv) opens one session (its id in
-// the 10-byte header), raises the port (oep.link port_speed try, confirms at the new rate, link source / sink with
+// the 10-byte header), raises the port (oep.probe.link port_speed try, confirms at the new rate, link source / sink with
 // session_id 0, commit in the session), keeps it alive, and relays a client's requests with its own session_id and its
 // lock-free ones with session_id 0, with confirms of its own in between. Every answer is completed: on 0.0.28+ec38b1d
 // the first spi-target configure installed the GPIO ISR service from inside an IPC call, which never returned on the
@@ -112,7 +112,7 @@ int main() {
   static Probe p;
   static Link link(p.ep);
   p.ep.add(spi);
-  p.ep.add(link);   // fn 2: oep.link
+  p.ep.add(link);   // fn 2: oep.probe.link; fn 3: oep.probe.plan (the endpoint's own)
   p.ep.setPins(&pins);
   p.ep.setPortSpeed(speedHook, 115200);
   const uint16_t fn = 1;
@@ -125,17 +125,17 @@ int main() {
   // port_speed: try in the session, confirms at the new rate (0x01), the link measured without a session, commit
   Bytes speed = {0};
   append(speed, u32(921600));
-  speed.push_back(reg::link::kPortSpeedStepTry);
+  speed.push_back(reg::probe_link::kPortSpeedStepTry);
   append(speed, u16(2000));
   append(speed, u32(0));
-  CHECK(completed(p.send(2, reg::link::kOpPortSpeed, speed, true, sid)));
+  CHECK(completed(p.send(2, reg::probe_link::kOpPortSpeed, speed, true, sid)));
   for (int i = 0; i < 3; ++i) CHECK(completed(p.send(0, reg::core::kOpConfirm, confirm(), false, 0)));
-  CHECK(completed(p.send(2, reg::link::kOpSource, u32(64), false, 0)));
+  CHECK(completed(p.send(2, reg::probe_link::kOpSource, u32(64), false, 0)));
   Bytes sink = u16(64);
   append(sink, Bytes(64, 0x55));
-  CHECK(completed(p.send(2, reg::link::kOpSink, sink, false, 0)));
-  speed[5] = reg::link::kPortSpeedStepCommit;
-  CHECK(completed(p.send(2, reg::link::kOpPortSpeed, speed, true, sid)));
+  CHECK(completed(p.send(2, reg::probe_link::kOpSink, sink, false, 0)));
+  speed[5] = reg::probe_link::kPortSpeedStepCommit;
+  CHECK(completed(p.send(2, reg::probe_link::kOpPortSpeed, speed, true, sid)));
   CHECK(completed(p.send(0, reg::core::kOpKeepalive, {}, true, sid)));
   CHECK(completed(p.send(fn, P4SpiTarget::kOpStatus, {}, false, 0)));   // a client's lock-free request, 0x01
 
@@ -152,7 +152,7 @@ int main() {
   }
   g_millis += 14000 - 10000;   // the bench's 14 s in, keepalives every second
   CHECK(completed(p.send(0, reg::core::kOpKeepalive, {}, true, sid)));
-  CHECK(completed(p.send(0, reg::core::kOpPlanApply, plan, true, sid)));
+  CHECK(completed(p.send(p.ep.planFn(), kOpPlanApply, plan, true, sid)));
   CHECK(completed(p.send(0, reg::core::kOpConfirm, confirm(), false, 0)));
   const Bytes configured = p.send(fn, P4SpiTarget::kOpConfigure, {0, 0}, true, sid);
   CHECK(completed(configured));

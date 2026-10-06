@@ -9,7 +9,7 @@
 //   2 HID              the HS port, vendor HID reports (no driver anywhere)   OEP only        addTransport(hid)
 //   3 USB CDC          the HS port, a serial port                             a serial port   addTransport(cdc)
 //
-// What each transport is goes into oep.core's describe (transport: index, kind, USB interface), so a host that found
+// What each transport is goes into fn 0's describe (transport: index, kind, USB interface), so a host that found
 // the probe one way knows the others. The two serial ports carry OEP frames as 0x00 <COBS> 0x00; what else they carry
 // outside the frames is their bind (06.Settings/ProbeConfig). Vendor bulk and HID carry length-prefixed messages.
 //

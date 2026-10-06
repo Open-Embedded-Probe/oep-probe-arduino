@@ -25,12 +25,13 @@
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
 //
-// Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.wire.swio (WCH
+// Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.wire.swio (WCH
 // CH32V00x, one wire: its connections go through the same oep.target.riscv-dm, its console is oep.target.console instance 1,
 // and a slot may name it: the second place); oep.fixture.gpio /
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
-// (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic). Every GPIO but the
+// (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic);
+// oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Every GPIO but the
 // USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the SWIO pin, the reset line, or any fixture's pin - the host chooses.
 #pragma once
 #include <esp_mac.h>
@@ -108,7 +109,7 @@ static uint8_t rxVendor[1024], rxUsj[1100], rxHid[1024], rxCdc[1100];   // seria
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(bulk, rxVendor, sizeof rxVendor, txBuffer, sizeof txBuffer, {1024, 4096, 8},
                               oep::Endpoint::kVendorBulk, 1);
-static oep::Link oepLink(endpoint);   // oep.link (oep-if-link)
+static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 
 // Reserved: GPIO24/25 (USB-Serial/JTAG). Every other GPIO is a channel the host may give to anything.
 static constexpr uint64_t kReserved = (1ull << 24) | (1ull << 25);
@@ -146,8 +147,8 @@ static oep::CaptureGroup group(endpoint, 0);
 static uint8_t probeTlv[160];
 static char serial_[20];
 
-// fn 0 restart (core §6.6): the HS device detaches first so the host records an unplug rather than a device that went
-// silent (as EspUsbDevice's own restarts do), then esp_restart. restart_max_ms (describe, core §7.5): the chip is in
+// oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
+// silent (as EspUsbDevice's own restarts do), then esp_restart. restart_max_ms (its describe): the chip is in
 // setup() after about 0.5 s (the ROM, the bootloader checking the app image of about 0.6 MB with rollback on, the
 // PSRAM); then the host enumerates the HS device again - a composite of HID, vendor bulk, CDC and DFU, for which an OS
 // binds four drivers (Windows about 1 s or more) - and the transport opens again before it confirms (USB-Serial/JTAG,
@@ -226,7 +227,7 @@ void setup() {
   endpoint.add(swioWire);   // after the group: the fns before it keep their numbers
   endpoint.add(swioConsole);
   config.addPlace(swioWire, swioConsole);   // a slot on the one wire (CH32V00x): the second place
-  endpoint.add(oepLink);   // oep.link (the link test), last: the fns before it keep their numbers
+  endpoint.add(oepLink);   // oep.probe.link (the link test), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   config.load();

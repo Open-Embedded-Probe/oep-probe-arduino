@@ -12,7 +12,7 @@
 //
 // Items (TLV), each with a key; a set replaces the keys it carries and leaves the others, unset removes keys:
 //   0x01 plan  fn(u16) role(u8) channel(u16)            key (fn, role, channel); a set replaces the whole plan of the fn
-//   0x02 label channel(u16) text                         key channel (read back with get; oep.core's describe has only
+//   0x02 label channel(u16) text                         key channel (read back with get; fn 0's describe has only
 //                                                        the firmware's fixed labels)
 //   0x03 idle  channel(u16) mode(u8) drive_kind(u8) drive_value(u16)   key channel: 0 Hi-Z, 1 pull-up, 2 pull-down,
 //                                                        3 output low, 4 output high while free; 3 / 4 at the strength

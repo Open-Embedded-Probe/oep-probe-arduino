@@ -56,11 +56,28 @@ size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, 
 }  // namespace
 
 bool Endpoint::add(Interface &interface) {
-  // a name outside core §13 rule 1 is refused: list would show what no host may rely on
-  if (count_ >= kMaxInterfaces || polled_ || !interfaceName(interface.name())) return false;
+  // a name outside core §13 rule 1 is refused: list would show what no host may rely on; so is an interface with no op,
+  // whose ops has no valid encoding (core §7.4: a host does not use such a fn). Two places stay for the endpoint's own.
+  if (count_ + 2 >= kMaxInterfaces + 1 || polled_ || !interfaceName(interface.name())) return false;
+  bool any = interface.notifies();
+  for (int op = 1; op < kExperimentalOps && !any; ++op) any = interface.offers(static_cast<uint8_t>(op));
+  if (!any) return false;
   interfaces_[count_++] = &interface;
   interface.setFrameLimit(limits_.max_frame);
   return true;
+}
+
+// The first poll(): the list is fixed for the boot (core §7.2). The endpoint's own interfaces go after every one the
+// sketch added, always in the same order - oep.probe.plan when an interface has plan roles (oep-if-plan), then
+// oep.probe.restart when the sketch set a handler (oep-if-restart).
+void Endpoint::freeze() {
+  if (polled_) return;
+  const bool plan = anyPlanRoles();
+  polled_ = true;
+  if (plan) interfaces_[count_++] = &plan_iface_;
+  if (restart_) interfaces_[count_++] = &restart_iface_;
+  for (size_t i = 0; i < count_; ++i)
+    if (interfaces_[i] == &plan_iface_ || interfaces_[i] == &restart_iface_) interfaces_[i]->setFrameLimit(limits_.max_frame);
 }
 
 bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
@@ -140,7 +157,7 @@ bool Endpoint::queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, siz
   if (event_head_ - event_tail_ >= kEvents) ++event_tail_;   // full: the oldest goes (its seq never appears)
   Event &e = events_[event_head_ % kEvents];
   e.fn = fn;
-  e.seq = fn == 0 ? core_seq_++ : takeSeq(fn);   // numbered when queued: one dropped from the queue leaves a gap
+  e.seq = takeSeq(fn);   // numbered when queued: one dropped from the queue leaves a gap
   e.kind = kind;
   e.length = static_cast<uint8_t>(length);
   memcpy(e.payload, payload, length);
@@ -171,7 +188,8 @@ bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_byt
   return false;
 }
 
-// Events go before data (they are small and usually what someone waits for). false: no room right now.
+// Events go before data and are never batched (core §11.3): out as soon as the answers ahead of them have gone. false: no
+// room right now.
 bool Endpoint::sendEvents() {
   while (event_tail_ != event_head_) {
     const Event &e = events_[event_tail_ % kEvents];
@@ -192,19 +210,12 @@ bool Endpoint::sendEvents() {
 void Endpoint::push() {
   lapse();
   if (!locked_) return;
-  if (heartbeat_ && static_cast<uint32_t>(millis() - heartbeat_last_) >= heartbeat_ms_) {
-    heartbeat_last_ = millis();
-    uint8_t hb[12];   // boot_id(u32) uptime_ns(u64) (core §11.2)
-    putU32(hb, bootId());
-    putU64(hb + 4, nowNs());
-    queueEvent(0, kEventHeartbeat, hb, sizeof hb);
-  }
   if (!sendEvents()) return;
   size_t room = tx_capacity_ - kPushHeader;
   if (room > static_cast<size_t>(limits_.max_frame) - kPushHeader) room = limits_.max_frame - kPushHeader;
   for (size_t i = 0; i < count_; ++i) {
     if (!subscribed_[i]) continue;
-    // batching: wait for min_bytes, or max_delay_ms after the first byte became pending
+    // batching, of the data only (core §11.3): wait for min_bytes, or max_delay_ms after the first byte became pending
     if (min_bytes_[i] || max_delay_ms_[i]) {
       const size_t ready = interfaces_[i]->pending();
       if (ready == 0) { waiting_[i] = false; continue; }
@@ -242,37 +253,26 @@ void Endpoint::push() {
   }
 }
 
-// subscribe(fn u16, min_bytes u16, max_delay_ms u32) [TLV]; unsubscribe(fn u16) [TLV]. fn 0 = heartbeat events,
-// max_delay_ms = the period (0: 1000 ms). seq starts again at 0 with every subscribe. A fn that emits nothing is
-// rejected unsupported; an unsubscribe of a fn not subscribed does nothing (core §11.3).
-Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  const bool batching = op == kOpSubscribe;
-  const size_t fixed = batching ? 8 : 2;
-  if (length < fixed) return rejected(kRejectMalformed);
+// subscribe (0x30): min_bytes(u16) max_delay_ms(u32) [TLV]; unsubscribe (0x32): [TLV] - ops of the fn that sends the
+// notifications itself, the request's header names it (core §11.3); in the ops of an interface that notifies() only
+// (handleMessage refused any other unknown_operation, and checked the lock holder's session). seq starts again at 0 with
+// every subscribe, which replaces the fn's subscription whole; an unsubscribe of a fn not subscribed does nothing.
+Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, size_t length, uint8_t *out,
+                              size_t capacity) {
+  const bool sub = op == kOpSubscribe;
   Tail tail;
-  const Result parsed = tail.parse(payload + fixed, length - fixed, out, capacity);
-  if (parsed.resolution != kResolutionCompleted) return parsed;
-  const uint16_t fn = getU16(payload);
-  const uint16_t min_bytes = batching ? getU16(payload + 2) : 0;
-  const uint32_t max_delay = batching ? getU32(payload + 4) : 0;
-  if (op == kOpSubscribe) push_ = current_;   // pushes and events go where the subscription came from
-  if (fn == 0) {
-    heartbeat_ = op == kOpSubscribe;
-    if (heartbeat_) {
-      heartbeat_ms_ = max_delay ? max_delay : reg::kHeartbeatDefaultMs;
-      heartbeat_last_ = millis() - heartbeat_ms_;
-      core_seq_ = 0;
-    }
-    return tail.finish(completed(), out, capacity);
-  }
-  if (fn > count_) return rejected(kRejectUnknownFunction);
+  const Result parsed = plainTail(tail, payload, length, sub ? 6 : 0, out, capacity);
+  if (refused(parsed)) return parsed;
   const size_t i = fn - 1;
-  if (op == kOpUnsubscribe) {
+  if (!sub) {
     if (subscribed_[i]) interfaces_[i]->subscribe(false);
     subscribed_[i] = false;
     return tail.finish(completed(), out, capacity);
   }
-  if (!interfaces_[i]->subscribe(true)) return unsupportedValue(out, capacity);   // it emits nothing (core §11.3)
+  const uint16_t min_bytes = getU16(payload);
+  const uint32_t max_delay = getU32(payload + 2);
+  push_ = current_;   // pushes and events go where the subscription came from
+  interfaces_[i]->subscribe(true);
   subscribed_[i] = true;
   push_seq_[i] = 0;
   min_bytes_[i] = min_bytes;
@@ -282,8 +282,8 @@ Result Endpoint::subscription(uint8_t op, const uint8_t *payload, size_t length,
 }
 
 void Endpoint::poll() {
-  if (restarting_) return;   // fn 0 restart answered: nothing more is served or sent (core §6.6)
-  polled_ = true;
+  if (restarting_) return;   // restart answered: nothing more is served or sent (oep-if-restart §2)
+  freeze();
   (void)nowNs();   // the clock counts the wraps of a 32-bit timer as it reads it (core §2.6a): read it every pass
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
@@ -303,7 +303,7 @@ void Endpoint::poll() {
             if (message) { speed_good_ms_ = millis(); speed_heard_ = true; speed_bad_run_ = 0; }   // a good frame: the run ends
           }
           if (message) handleMessage(t.serial.message(), t.serial.length());
-          if (restarting_) return;   // what came after the restart is not served (core §6.6)
+          if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
         }
       }
       t.serial.idle(rawSink, &t);
@@ -317,7 +317,7 @@ void Endpoint::poll() {
         while (n) {
           if (!t.reader.feed(p, n)) continue;
           handleMessage(t.reader.message(), t.reader.length());
-          if (restarting_) return;   // what came after the restart is not served (core §6.6)
+          if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
           t.reader.consume();
         }
       }
@@ -364,7 +364,6 @@ void Endpoint::loseSession() {
 
 // Subscriptions belong to the lock: they end with it (core §11.3).
 void Endpoint::endSubscriptions() {
-  heartbeat_ = false;
   event_tail_ = event_head_;
   for (size_t i = 0; i < count_; ++i) {
     if (subscribed_[i]) interfaces_[i]->subscribe(false);
@@ -387,7 +386,9 @@ Result Endpoint::checkSession(uint32_t session, uint8_t *out, size_t capacity) {
 }
 
 bool Endpoint::lockFreeOp(uint16_t fn, uint8_t op) const {
-  return fn == 0 ? lockFreeIn(reg::core::kLockFreeOps, op) : interfaces_[fn - 1]->lockFree(op);
+  if (fn == 0) return lockFreeIn(reg::core::kLockFreeOps, op);
+  if (op == kOpSubscribe || op == kOpUnsubscribe) return false;   // the lock holder's (core §11.3)
+  return interfaces_[fn - 1]->lockFree(op);
 }
 
 void Endpoint::handleMessage(const uint8_t *message, size_t length) {
@@ -438,6 +439,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   else result = completed();
   if (result.resolution == kResolutionCompleted) {
     if (fn == 0) result = core(op, session, payload, payload_length, out, capacity);
+    else if (op == kOpSubscribe || op == kOpUnsubscribe) result = subscription(fn, op, payload, payload_length, out, capacity);
     else result = interfaces_[fn - 1]->handle(op, payload, payload_length, out, capacity);
   }
   if (result.length > capacity) result = failed(0);
@@ -473,8 +475,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     if (d.kept) memcpy(d.result, tx_, total);
   }
   if (restart_taken_) {
-    // fn 0 restart (core §6.6): no notification after its answer - the session's end, and the zero-copy data already
-    // queued (it would follow the answer) goes out before it
+    // oep.probe.restart (oep-if-restart §2): no notification after its answer - the session's end, and the zero-copy data
+    // already queued (it would follow the answer) goes out before it
     endSubscriptions();
     if (direct_)
       for (const uint32_t start = millis(); direct_->queued() && static_cast<uint32_t>(millis() - start) < kRestartDrainMs;)
@@ -486,7 +488,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   speedApply();   // port_speed: the answer went out at the old speed; now switch (or revert)
 }
 
-// After restart's answer (core §6.6): it leaves the probe, every line is let go of, and the chip restarts as from
+// After restart's answer (oep-if-restart §2): it leaves the probe, every line is let go of, and the chip restarts as from
 // power-on - a new boot_id, the saved settings applied, every serial port at its boot speed, no session, connection, plan
 // or table kept.
 void Endpoint::restartNow() {
@@ -498,7 +500,7 @@ void Endpoint::restartNow() {
   if (t.kind != kUsbSerialJtag) t.stream->flush();
   t.wrote = false;
   const uint32_t out = millis();
-  // The lines let go of (core §6.6, §8): the session ends as at its end (everything it created), every interface closes
+  // The lines let go of (oep-if-restart §2, core §8): the session ends as at its end (everything it created), every interface closes
   // what the settings keep too (a slot's connection, a bind's stream) without touching the target, and every plan goes,
   // the settings' included - each channel to its free state.
   if (locked_) releaseLock();
@@ -528,26 +530,28 @@ uint32_t Endpoint::crc32(const uint8_t *data, size_t length) {   // IEEE, reflec
   return ~c;
 }
 
-// The ops fn 0 offers (core §12): the required ones, plan_apply / plan_release with an interface that has plan roles
-// (core §1.2).
+// The ops fn 0 offers (core §12): every one of them required, none optional - no plan, restart or subscription there.
 bool Endpoint::coreOffers(uint8_t op) const {
   switch (op) {
-    case kOpConfirm: case kOpList: case kOpDescribe: case kOpOpen: case kOpEnd: case kOpKeepalive: case kOpLockState:
-    case kOpSubscribe: case kOpUnsubscribe:
+    case kOpConfirm: case kOpList: case kOpDescribe: case kOpClock: case kOpOpen: case kOpEnd: case kOpKeepalive:
+    case kOpLockState:
       return true;
-    case kOpPlanApply: case kOpPlanRelease: return anyPlanRoles();
-    case kOpRestart: return restart_ != nullptr;   // optional: with a handler (setRestart)
     default: return false;
   }
 }
 
 bool Endpoint::offersOp(uint16_t fn, uint8_t op) const {
-  if (op >= kExperimentalOps) return false;   // never declared (core §1.2)
-  return fn == 0 ? coreOffers(op) : interfaces_[fn - 1]->offers(op);
+  if (op == 0 || op >= kExperimentalOps) return false;   // never declared (core §1.2)
+  if (fn == 0) return coreOffers(op);
+  const Interface *it = interfaces_[fn - 1];
+  // subscribe / unsubscribe both, in every interface that sends notifications and in no other (core §11.3)
+  if (op == kOpSubscribe || op == kOpUnsubscribe) return it->notifies();
+  return it->offers(op);
 }
 
-// The describe's ops tag (core §1.2, §7.4): base = the lowest op offered, then the bitmap as short as it can be (no op:
-// base 0, no bitmap byte). Written first in every fn's describe, fn 0 included.
+// The describe's ops tag (core §1.2, §7.4) in its one encoding: base = the lowest op offered (bit 0 set), then the bitmap
+// up to the highest one (its last byte non-zero) - 2 to 31 bytes, base + 8 x bytes within 256 since no op past 0xEF is
+// offered. Written first in every fn's describe, fn 0 included; every fn offers at least one op (add).
 size_t Endpoint::opsTlv(uint16_t fn, uint8_t *out, size_t capacity) const {
   int lo = -1, hi = -1;
   for (int op = 1; op < kExperimentalOps; ++op)
@@ -597,6 +601,17 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
     }
     case kOpList: return list(payload, length, out, capacity);
     case kOpDescribe: return describe(payload, length, out, capacity);
+    case kOpClock: {
+      // (nothing) [TLV]  ->  boot_id(u32) uptime_ns(u64) [TLV] (core §7.7): lock-free, with session_id 0 it touches no
+      // session, lock or lease. uptime_ns is the clock read here, while this request is handled - after it arrived and
+      // just before its answer is built and sent, never an earlier or estimated value.
+      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (capacity < 12) return failed();
+      putU32(out, bootId());
+      putU64(out + 4, nowNs());
+      return tail.finish(completed(12), out, capacity);
+    }
     case kOpOpen: return open(session, payload, length, out, capacity);
     case kOpLockState: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -607,44 +622,8 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       const size_t owner = locked_ ? appendOwner(out + 5, capacity - 5, reg::core::kTlvLockStateAnswerOwner) : 0;
       return tail.finish(completed(5 + owner), out, capacity);
     }
-    case kOpSubscribe:
-    case kOpUnsubscribe:   // the lock holder only (handleMessage checked the session), and they end with the lock
-      return subscription(op, payload, length, out, capacity);
-    case kOpRestart: {
-      // [TLV] -> nothing (core §6.6): the lock holder's (handleMessage checked the session), in fn 0's ops only with a
-      // handler. completed success, sent first; the restart follows the answer (handleMessage, restartNow).
-      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
-      if (refused(parsed)) return parsed;
-      restart_taken_ = true;
-      return tail.finish(completed(), out, capacity);
-    }
     case kOpEnd:
-    case kOpKeepalive:
-    case kOpPlanApply:
-    case kOpPlanRelease: {
-      // the holder's (handleMessage checked the session); plan_apply / plan_release are in fn 0's ops only when an
-      // interface has plan roles (core §1.2, §12)
-      if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
-      if (op == kOpPlanRelease) {   // n(u8) n x fn(u16) [TLV]; n = 0: every fn
-        if (length < 1) return rejected(kRejectMalformed);
-        const size_t n = payload[0];
-        const Result parsed = plainTail(tail, payload, length, 1 + 2 * n, out, capacity);
-        if (refused(parsed)) return parsed;
-        // the session's plans only: a plan the settings put in stays (core §8), n = 0 included
-        uint16_t fns[kMaxInterfaces];
-        size_t m = 0;
-        for (size_t i = 0; i < count_; ++i) {
-          if (!planned_[i] || persistent_[i]) continue;
-          bool hit = n == 0;
-          for (size_t k = 0; k < n; ++k) hit |= getU16(payload + 1 + 2 * k) == i + 1;
-          if (hit) fns[m++] = static_cast<uint16_t>(i + 1);
-        }
-        for (size_t k = 0; k < m; ++k)   // a track bound into a capture-group: the group's (oep-if-capture §4.1)
-          if (const uint16_t group = interfaces_[fns[k] - 1]->boundTo())
-            return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup, 0xFFFF, group);
-        if (m) planRelease(fns, m);   // m == 0 must not reach it: there an empty list means every fn
-        return tail.finish(completed(), out, capacity);
-      }
+    case kOpKeepalive: {   // the holder's (handleMessage checked the session)
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (op == kOpEnd) releaseLock();   // the lock and everything the session created (core §6.4, §9); no resume
@@ -654,7 +633,64 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
   }
 }
 
-// oep.link port_speed (oep-if-link §3): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
+// oep.probe.plan plan_release (oep-if-plan §2.2): n(u8) n x fn(u16) [TLV]; n = 0: every fn. The lock holder's
+// (handleMessage checked the session). A fn with no plan, or none of this probe's, is left alone.
+Result Endpoint::planReleaseRequest(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (length < 1) return rejected(kRejectMalformed);
+  const size_t n = payload[0];
+  Tail tail;
+  const Result parsed = plainTail(tail, payload, length, 1 + 2 * n, out, capacity);
+  if (refused(parsed)) return parsed;
+  // the session's plans only: a plan the settings put in stays (oep-if-plan §2.3), n = 0 included
+  uint16_t fns[kMaxInterfaces];
+  size_t m = 0;
+  for (size_t i = 0; i < count_; ++i) {
+    if (!planned_[i] || persistent_[i]) continue;
+    bool hit = n == 0;
+    for (size_t k = 0; k < n; ++k) hit |= getU16(payload + 1 + 2 * k) == i + 1;
+    if (hit) fns[m++] = static_cast<uint16_t>(i + 1);
+  }
+  for (size_t k = 0; k < m; ++k)   // a track bound into a capture-group: the group's (oep-if-capture §4.1)
+    if (const uint16_t group = interfaces_[fns[k] - 1]->boundTo())
+      return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup, 0xFFFF, group);
+  if (m) planRelease(fns, m);   // m == 0 must not reach it: there an empty list means every fn
+  return tail.finish(completed(), out, capacity);
+}
+
+// oep.probe.plan (oep-if-plan): plan_apply / plan_release, both needing the lock (handleMessage checked the session).
+Result ProbePlan::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (op == kOpPlanApply) return endpoint_.planApply(payload, length, out, capacity);
+  if (op == kOpPlanRelease) return endpoint_.planReleaseRequest(payload, length, out, capacity);
+  return rejected(kRejectUnknownOperation);
+}
+
+// describe plan_roles (0x40, oep-if-plan §1): the most role assignments the plan holds, every fn together, the
+// settings' plan included.
+size_t ProbePlan::describe(uint8_t *out, size_t capacity) {
+  TlvWriter w(out, capacity);
+  w.u32(reg::probe_plan::kTlvDescribePlanRoles, Endpoint::kMaxRoles);
+  return w.ok() ? w.length() : 0;
+}
+
+// oep.probe.restart restart (oep-if-restart §2): [TLV] -> nothing. The lock holder's (handleMessage checked the session);
+// completed success, sent first; the restart follows the answer (handleMessage, restartNow).
+Result ProbeRestart::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (op != kOpRestart) return rejected(kRejectUnknownOperation);
+  Tail tail;
+  const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+  if (refused(parsed)) return parsed;
+  endpoint_.restart_taken_ = true;
+  return tail.finish(completed(), out, capacity);
+}
+
+// describe restart_max_ms (0x40, oep-if-restart §1, required): at least restart_after_answer_ms (setRestart).
+size_t ProbeRestart::describe(uint8_t *out, size_t capacity) {
+  TlvWriter w(out, capacity);
+  w.u32(reg::probe_restart::kTlvDescribeRestartMaxMs, endpoint_.restart_max_ms_);
+  return w.ok() ? w.length() : 0;
+}
+
+// oep.probe.link port_speed (oep-if-link §3): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
 //   ->  baud(u32: the rate that applies). A step over 2 is unsupported. Only the UART bridge the request came in on
 // (else unavailable cause 6); a baud this UART cannot make is unsupported. The port is in one of three states - boot,
 // trying, committed - and a step that does not fit its state is unavailable cause 6 too (the same refusal as the wrong
@@ -665,7 +701,7 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
 // host that died leaves the port at its boot speed soon) with no good frame, or kSpeedBadRun broken candidates in a row
 // with no good frame between, revert. revert: answered (the boot speed) at the speed now, then back.
 Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (!port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.link's ops (Link::offers)
+  if (!port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.probe.link's ops (Link::offers)
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 12, out, capacity);
   if (refused(parsed)) return parsed;
@@ -675,12 +711,12 @@ Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, 
   const uint16_t verify = getU16(payload + 6);
   // verify_ms 0 in a try is malformed (order 5); a step of 3 or more is a value a later revision may define:
   // unsupported, tag 0x00 (core §2.5, oep-if-link §3, order 6)
-  if (step == reg::link::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
-  if (step > reg::link::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
+  if (step == reg::probe_link::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
+  if (step > reg::probe_link::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
   if (port != current_ || transports_[port].kind != kUartBridge) return wrongState(out, capacity);
   const bool this_port = speed_state_ != kSpeedBase && speed_port_ == port;   // this port is off its boot speed
   uint32_t answer = 0;
-  if (step == reg::link::kPortSpeedStepTry) {
+  if (step == reg::probe_link::kPortSpeedStepTry) {
     if (this_port) return wrongState(out, capacity);   // trying or committed already: revert first
     answer = port_speed_(port, baud, false);
     if (!answer) return unsupportedValue(out, capacity);
@@ -688,7 +724,7 @@ Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, 
     speed_pending_port_ = port;
     speed_pending_baud_ = baud;
     speed_pending_verify_ = verify;
-  } else if (step == reg::link::kPortSpeedStepCommit) {
+  } else if (step == reg::probe_link::kPortSpeedStepCommit) {
     // at the boot speed, or committed already, or another baud than the one trying: not the state for it
     if (!this_port || speed_state_ != kSpeedTry || baud != speed_asked_) return wrongState(out, capacity);
     speed_state_ = kSpeedCommitted;
@@ -795,17 +831,19 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
   return tail.finish(completed(8), out, capacity);
 }
 
-// Role assignments as TLVs 0x10 (sent critical, 0x90) = fn(u16) role(u8) channel(u16) (critical). The plan is per fn (oep-core §8): the fns
+// oep.probe.plan plan_apply (oep-if-plan §2.1): role assignments as TLVs 0x10 (sent critical, 0x90) = fn(u16) role(u8)
+// channel(u16). The plan is per fn: the fns
 // the request names are replaced, every other fn keeps its plan. An unknown critical TLV refuses the plan (unsupported),
 // an unknown non-critical one is ignored and listed. A session's plan goes when its lock ends (end, a lapse, a
 // takeover); a plan set through oep.probe.config (replacePlan, persistent) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // core §4.3's order over the whole request: its form (order 5: every role_assignment 5 bytes, fn 0 malformed as §8's
-  // table says, at least one), then at the end of order 5 the fns named inside it (unknown_function), then an unknown
-  // critical tag (unsupported, order 6), then the count against plan_roles (unavailable cause 2).
+  // core §4.3's order over the whole request (oep-if-plan §2.5): its form (order 5: every role_assignment 5 bytes, fn 0
+  // malformed, at least one), then at the end of order 5 the fns named inside it (unknown_function), then an unknown
+  // critical tag and a fn with no plan role (unsupported, order 6), then the count against plan_roles (unavailable
+  // cause 2).
   static const uint8_t kKnown[] = {kTagRoleAssignment};
   Tail tail;
-  tail.repeats(kKnown);   // role_assignment repeats (core §8)
+  tail.repeats(kKnown);   // role_assignment repeats (oep-if-plan §2.1)
   Result unknown_critical;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
@@ -823,7 +861,11 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical) && getU16(v) > count_)
       return rejected(kRejectUnknownFunction);
   if (refused(unknown_critical)) return unknown_critical;
-  if (total > kMaxRoles) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // over plan_roles (core §8)
+  // a fn whose interface has no plan role (oep.probe.plan itself, a wire, ...): no role of it is a plan role
+  for (at = 0; tail.next(at, raw, v, len);)
+    if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical) && !interfaces_[getU16(v) - 1]->planRoles())
+      return unsupportedTag(out, capacity, kTagRoleAssignment | kTagCritical);
+  if (total > kMaxRoles) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // over plan_roles (oep-if-plan §2.1)
   RoleAssignment roles[kMaxRoles];
   size_t count = 0;
   for (at = 0; tail.next(at, raw, v, len);)
@@ -835,7 +877,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
     for (size_t k = 0; k < nfns; ++k) seen |= fns[k] == roles[r].function;
     if (!seen) fns[nfns++] = roles[r].function;
   }
-  // a fn whose plan the settings put in is the settings' to change (core §8)
+  // a fn whose plan the settings put in is the settings' to change (oep-if-plan §2.3)
   for (size_t k = 0; k < nfns; ++k)
     if (persistent_[fns[k] - 1])
       return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, 0xFFFF, fns[k],
@@ -848,7 +890,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   if (reason > 0xff) return failed();
   // another plan's channel, a wire connection's, the interface's own state: what it met (core §4.3)
   if (reason == kRejectUnavailable) return planUnavailable(out, capacity);
-  // a role, channel or combination the interface does not declare: unsupported, tag 0x90 (core §8's table)
+  // a role, channel or combination the interface does not declare: unsupported, tag 0x90 (oep-if-plan §2.5)
   if (reason == kRejectUnsupported) return unsupportedTag(out, capacity, kTagRoleAssignment | kTagCritical);
   if (reason) return rejected(static_cast<uint8_t>(reason));
   return tail.finish(completed(), out, capacity);
@@ -1000,32 +1042,10 @@ uint8_t Endpoint::replacePlan(const RoleAssignment *roles, size_t count, const u
   return reason > 0xff ? static_cast<uint8_t>(kRejectUnavailable) : static_cast<uint8_t>(reason);
 }
 
-uint32_t Endpoint::listHash() const {
-  uint32_t c = 0xFFFFFFFFu;
-  auto feed = [&c](const uint8_t *p, size_t n) {
-    for (size_t i = 0; i < n; ++i) {
-      c ^= p[i];
-      for (int b = 0; b < 8; ++b) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
-    }
-  };
-  auto entry = [&feed](uint16_t fn, uint16_t instance, uint8_t revision, const char *name) {
-    uint8_t e[5];
-    putU16(e, fn);
-    putU16(e + 2, instance);
-    e[4] = revision;
-    feed(e, 5);
-    feed(reinterpret_cast<const uint8_t *>(name), strlen(name));
-  };
-  entry(0, 0, reg::core::kRevision, reg::core::kName);
-  for (size_t i = 0; i < count_; ++i)
-    entry(static_cast<uint16_t>(i + 1), instanceOf(static_cast<uint16_t>(i + 1)), interfaces_[i]->revision(),
-          interfaces_[i]->name());
-  return ~c;
-}
-
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // flags(u8, bit0 exact) first(u16) prefix_len(u8) prefix [TLV]  ->  total(u16) count(u8) count x entry (core §2.3)
-  // entry: fn(u16) instance(u16) revision(u8) flags(u8) name_len(u8) name; oep.core (fn 0) is the first one
+  // entry: fn(u16) instance(u16) revision(u8) flags(u8) name_len(u8) name; fn 0 (the core) has no name and is never
+  // an entry (core §7.2) - a probe with no interface lists nothing
   if (length < 4 || length < 4u + payload[3] || capacity < 3) return rejected(kRejectMalformed);
   Tail tail;
   const Result parsed = tail.parse(payload + 4 + payload[3], length - 4 - payload[3], out, capacity);
@@ -1057,7 +1077,6 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
     used += 7 + name_len;
     ++count;
   };
-  consider(0, 0, reg::core::kRevision, 0, reg::core::kName);
   for (size_t i = 0; i < count_; ++i) {
     Interface &it = *interfaces_[i];
     consider(static_cast<uint16_t>(i + 1), instanceOf(static_cast<uint16_t>(i + 1)), it.revision(), it.flags(), it.name());
@@ -1078,7 +1097,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   if (fn > count_) return rejected(kRejectUnknownFunction);
   // every fn's describe starts with its ops (core §1.2, §7.4)
   const size_t ops = opsTlv(fn, scratch_, sizeof scratch_);
-  if (fn == 0) {   // the ops, the sketch's part, then the transports, discoverable, plan_roles, max_op_ms, restart_max_ms (core §7.5)
+  if (fn == 0) {   // the ops, the sketch's part, then the transports, discoverable, max_op_ms (core §7.5)
     const size_t sketch = probe_tlv_length_ <= sizeof scratch_ - ops ? probe_tlv_length_ : 0;
     if (sketch) memcpy(scratch_ + ops, probe_tlv_, sketch);
     TlvWriter w(scratch_ + ops + sketch, sizeof scratch_ - ops - sketch);
@@ -1087,9 +1106,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
       w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
     }
     w.u8(reg::core::kTlvDescribeDiscoverable, discoverable_ ? 1 : 0);   // always: 0 without the project's VID:PID
-    if (anyPlanRoles()) w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);   // no plan ops, no plan to count
     w.u32(reg::core::kTlvDescribeMaxOpMs, max_op_ms_);
-    if (restart_) w.u32(reg::core::kTlvDescribeRestartMaxMs, restart_max_ms_);   // with restart only (core §6.6, §7.5)
     tlv = scratch_;
     tlv_length = ops + sketch + w.length();
   } else {
@@ -1102,11 +1119,11 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   return completed(1 + used);
 }
 
-// oep.link source / sink / port_speed (oep-if-link §2, §3).
+// oep.probe.link source / sink / port_speed (oep-if-link §2, §3).
 Result Link::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (op) {
-    case reg::link::kOpSource: {   // length(u32) [TLV]  ->  len(u16) data [TLV]
+    case reg::probe_link::kOpSource: {   // length(u32) [TLV]  ->  len(u16) data [TLV]
       const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
       if (refused(parsed)) return parsed;
       // at most max_frame - 26 (header 5, len 2, the room for ignored 19 - kept even when nothing is ignored, so len
@@ -1119,13 +1136,13 @@ Result Link::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *
       for (size_t k = 0; k < n; ++k) out[2 + k] = static_cast<uint8_t>(k);
       return tail.finish(completed(2 + n), out, capacity);
     }
-    case reg::link::kOpSink: {   // count(u16) data [TLV]  ->  (empty); a count past the bytes that follow is malformed
+    case reg::probe_link::kOpSink: {   // count(u16) data [TLV]  ->  (empty); a count past the bytes that follow is malformed
       if (length < 2) return rejected(kRejectMalformed);
       const Result parsed = plainTail(tail, payload, length, 2u + getU16(payload), out, capacity);
       if (refused(parsed)) return parsed;
       return tail.finish(completed(), out, capacity);
     }
-    case reg::link::kOpPortSpeed: return endpoint_.portSpeed(payload, length, out, capacity);
+    case reg::probe_link::kOpPortSpeed: return endpoint_.portSpeed(payload, length, out, capacity);
     default: return rejected(kRejectUnknownOperation);
   }
 }

@@ -112,7 +112,7 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   }
   w.u32(ana::kTlvDescribeMaxRead, static_cast<uint32_t>(max_read_));
   w.u16(ana::kTlvDescribeSegmentRing, 1);
-  w.u32(kTagFeatures, 0b100);                            // bit2 notifications; query and force: in the ops tag
+  // no features: revision 1 defines no bit (query, force, subscribe and unsubscribe are in the ops tag)
   w.u8(kTagImplementation, 3);                           // ADC + DMA
   return w.ok() ? w.length() : 0;
 }

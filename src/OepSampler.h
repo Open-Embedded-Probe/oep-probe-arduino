@@ -54,6 +54,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   void planRelease() override;
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
+  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   void poll();   // from loop(): a finished window becomes the segment and stopped events
   // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot

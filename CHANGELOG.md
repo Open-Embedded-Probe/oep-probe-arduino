@@ -1,6 +1,64 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The 2026-10-06 structure (breaking; oep-spec 289bde0..498ae95: 2e5dc4c, 0bce222, c475dad, 0304f37, e0d9dc6):
+  registry and vectors synced from 498ae95 (tools/sync_registry.sh; ops_encoding.json new). The core has no name: list
+  never returns fn 0 (a probe with no interface lists nothing) and fn 0's ops are confirm, list, describe, clock, open,
+  end, keepalive and lock_state - no plan, restart or subscription there (op 0x05 / 0x14 / 0x30 / 0x32 on fn 0:
+  unknown_operation). clock (0x04, lock-free, no session needed): boot_id(u32) uptime_ns(u64), the clock read while the
+  request is handled, just before its answer is built. New interfaces the endpoint lists itself, after every interface
+  the sketch added, at the first poll(): oep.probe.plan (ProbePlan: plan_apply 0x01, plan_release 0x02, describe 0x40
+  plan_roles) when an interface has plan roles, then oep.probe.restart (ProbeRestart: restart 0x01, describe 0x40
+  restart_max_ms) when setRestart gave a handler - which now has to be called before the first poll(); planFn() /
+  restartFn() give their fns. The same firmware lists the same fns and instances at every boot; a firmware that adds an
+  interface moves these two, and saved settings (named by name, instance, revision) are renumbered as before.
+  oep.link is oep.probe.link. subscribe / unsubscribe (0x30 / 0x32: min_bytes(u16) max_delay_ms(u32) [TLV] / [TLV], no
+  target fn) are ops of the interface that sends the notifications: Interface::notifies() puts both in its ops and the
+  endpoint answers them (the lock holder's); logic (P4 PARLIO and the classic ESP32 sampler), analog and capture-group
+  notify, every other fn answers them unknown_operation (was: fn 0 subscribe with a target fn, unsupported for a fn
+  that emits nothing). The heartbeat (fn 0 event 1) is gone; features bit2 notify is gone (logic, analog and
+  capture-group send no features tag: revision 1 defines no bit). min_bytes / max_delay_ms batch data only; events go as
+  soon as the answers ahead of them are sent (they already did). The ops tag is canonical (core §7.4: base the lowest
+  op, the last byte non-zero): Endpoint::add refuses an interface that offers no op (no valid encoding). A plan_apply or
+  a settings plan item naming a fn whose interface has no plan role (oep.probe.plan itself, a wire) is refused
+  unsupported (was: unavailable cause 6). Endpoint::kMaxInterfaces 16 -> 24 (the ESP32-P4 firmware lists 17);
+  Endpoint::listHash (unused) removed. Firmware: fns unchanged (oep.probe.link last of the sketch's), then
+  oep.probe.plan and oep.probe.restart (restart_max_ms as before: classic ESP32 1500, RP2 2000, P4 3000). Host tests:
+  test_vectors runs ops_encoding.json (an independent decoder; the endpoint's ops tag for every valid offerable set is
+  the vector's bytes), the new plan / restart / subscribe / clock cases (clock's uptime_ns checked against the fake
+  clock), every fn of the vectors' probe canonical; test_core_conformance (fn 0's ops, list without fn 0, restart as
+  its own fn: listed only with a handler set before the first poll, an event queued is not sent after the answer);
+  test_serial_share (subscribe on the emitting fn, clock, plan_roles in oep.probe.plan's describe, plan_apply's order
+  with a fn without plan roles); test_config (the endpoint's two interfaces in the same place at every boot; a saved
+  plan renumbered on a firmware with an interface added before it, the endpoint's two moving after it); CHANGELOG
+  (EN / JA).
+- (JA) 2026-10-06 の構成（破壊的。oep-spec 289bde0..498ae95: 2e5dc4c、0bce222、c475dad、0304f37、e0d9dc6）: registry とベクタを
+  498ae95 から写した（tools/sync_registry.sh。ops_encoding.json が増えた）。本体は名前を持たない: list は fn 0 を返さず（インター
+  フェースの無い probe は何も載せない）、fn 0 の op は confirm、list、describe、clock、open、end、keepalive、lock_state だけ - plan、
+  restart、購読は無い（fn 0 の op 0x05 / 0x14 / 0x30 / 0x32 は unknown_operation）。clock（0x04、ロック不要、セッション不要）:
+  boot_id(u32) uptime_ns(u64)。時計は要求を処理する中で、応答を作る直前に読む。endpoint が自分で出す新しいインターフェースを、
+  最初の poll() で、スケッチが足したすべてのインターフェースの後に置く: plan の役を持つインターフェースがあれば oep.probe.plan
+  （ProbePlan: plan_apply 0x01、plan_release 0x02、describe 0x40 plan_roles）、次に setRestart で handler があれば
+  oep.probe.restart（ProbeRestart: restart 0x01、describe 0x40 restart_max_ms）- setRestart は最初の poll() の前に呼ぶ。
+  planFn() / restartFn() がその fn を返す。同じ firmware はどの起動でも同じ fn と instance を出す。インターフェースを足した
+  firmware ではこの 2 つが動き、保存した設定（name、instance、revision で指す）はこれまでどおり読み替える。oep.link は
+  oep.probe.link になった。subscribe / unsubscribe（0x30 / 0x32: min_bytes(u16) max_delay_ms(u32) [TLV] / [TLV]、相手の fn は
+  持たない）は通知を送り出すインターフェースの op: Interface::notifies() で両方が ops に入り、endpoint が答える（ロックの持ち主
+  のもの）。logic（P4 の PARLIO と classic ESP32 の sampler）、analog、capture-group が送り出す。ほかの fn は unknown_operation
+  （以前: fn 0 の subscribe が相手の fn を持ち、何も送らない fn は unsupported）。heartbeat（fn 0 の出来事 1）は無くなった。
+  features の bit2 notify も無くなった（logic、analog、capture-group は features の tag を送らない: revision 1 はビットを定めない）。
+  min_bytes / max_delay_ms がまとめるのはデータだけで、出来事は先の応答を送り終えたらすぐ送る（もとからそうだった）。ops の
+  tag は正規形（core §7.4: base は最小の op、最後の byte は 0 でない）: op を 1 つも持たないインターフェースは Endpoint::add が
+  断る（正しい符号が無い）。plan の役を持たないインターフェースの fn（oep.probe.plan 自身、線）を挙げる plan_apply と設定の plan
+  の項目は unsupported で断る（以前: unavailable cause 6）。Endpoint::kMaxInterfaces 16 -> 24（ESP32-P4 の firmware は 17 を出す）。
+  使われていなかった Endpoint::listHash を消した。firmware: fn は変わらない（スケッチのものの最後が oep.probe.link）。その後に
+  oep.probe.plan と oep.probe.restart（restart_max_ms は前と同じ: classic ESP32 1500、RP2 2000、P4 3000）。host test: test_vectors
+  が ops_encoding.json を実行（別に書いた decoder。正しくて出せる集合ごとに、endpoint の ops の tag がベクタの byte と一致）、
+  新しい plan / restart / subscribe / clock の場合（clock の uptime_ns は偽の時計と照合）、ベクタの probe のすべての fn の ops
+  が正規形。test_core_conformance（fn 0 の ops、fn 0 の無い list、別の fn になった restart: 最初の poll の前に handler を置いたとき
+  だけ出る、応答の後に溜まっていた出来事は送らない）。test_serial_share（送り出す fn への subscribe、clock、oep.probe.plan の
+  describe の plan_roles、plan の役の無い fn を含む plan_apply の断りの順）。test_config（endpoint の 2 つはどの起動でも同じ場所。
+  前にインターフェースを足した firmware で保存した plan が読み替わり、endpoint の 2 つはその後ろに動く）。CHANGELOG（EN / JA）。
 - (EN) riscv-dm's dmi checks the link per request (the 2026-10-06 debug-link proposal P4; the spec text is not written
   yet) and oep.wire.rvswd's revive hands a link on only once it stays up. Bench (0.0.29-dev+bd19b00, tests/hw test_wire
   on the CH32L103 through the RP2350, oep-client-python af3789a): 5 of 8 runs read s1 or a0 wrong after a read_block

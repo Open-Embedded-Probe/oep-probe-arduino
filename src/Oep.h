@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// OEP v1 core (oep-spec docs/oep-core.ja.md, 59dd028): interfaces found by name, the probe described by oep.core, a
-// lock held by a host-chosen session id, one clock (ns since boot, u64) and one space of resource numbers. The standard
-// interfaces' shared parts are in OepStream.h (position streams) and OepDebug.h (wire / target status, pin pairs). Every
-// number comes from the registry (OepRegistry.h, generated from oep-spec registry/oep-v1.toml); the names below are the
-// library's aliases.
+// OEP v1 core (oep-spec docs/oep-core.ja.md, 498ae95): interfaces found by name, the probe described by fn 0 (the core,
+// which has no name and is not listed), a lock held by a host-chosen session id, one clock (ns since boot, u64) and one
+// space of resource numbers. The interfaces' shared parts are in OepStream.h (position streams) and OepDebug.h (wire /
+// target status, pin pairs). Every number comes from the registry (OepRegistry.h, generated from oep-spec
+// registry/oep-v1.toml); the names below are the library's aliases.
 #pragma once
 
 #include <stddef.h>
@@ -32,14 +32,13 @@ namespace oep {
 namespace reg = v1::reg;
 
 constexpr uint8_t kRoleRequest = reg::kRoleRequest, kRoleResult = reg::kRoleResult;
-// Probe-initiated frames (core §11), sent only to the lock holder that subscribed, after results.
+// Probe-initiated frames (core §11), sent only to the lock holder that subscribed to the emitting fn, after results.
 //   role(0x06) fn(u16) seq(u16) payload     data: payload = position(u64) len(u16) data [TLV] (core §11.2)
 constexpr uint8_t kRolePush = reg::kRoleData;
 constexpr size_t kPushHeader = 5;
-//   role(0x05) fn(u16) seq(u16) kind(u8) fixed part [TLV]   events; fn 0 kind 1 = heartbeat (boot_id u32, uptime_ns u64)
+//   role(0x05) fn(u16) seq(u16) kind(u8) fixed part [TLV]   events, the kinds the interface's own (fn 0 sends none)
 constexpr uint8_t kRoleEvent = reg::kRoleEvent;
 constexpr size_t kEventHeader = 6;
-constexpr uint8_t kEventHeartbeat = reg::core::kEventHeartbeat;
 // A request: role(0x01) corr(u16) fn(u16) op(u8) session_id(u32) payload - one 10-byte header, session_id 0 = no
 // session (core §4.1). A result: role(0x02) corr(u16) resolution(u8) detail(u8) payload (core §4.2).
 constexpr size_t kRequestHeader = 10, kResultHeader = 5;
@@ -52,24 +51,29 @@ constexpr uint8_t kRejectSessionRequired = reg::kRejectSessionRequired;  // an o
 constexpr uint8_t kRejectNoConnection = reg::kRejectNoConnection;        // the request's connection is not known
 constexpr uint8_t kRejectUnsupported = reg::kRejectUnsupported;          // defined, not handled here: payload tag(u8) [TLV]
 
-// The longest one request may take (core §7.5 max_op_ms, declared in oep.core's describe): the reference firmware's value.
+// The longest one request may take (core §7.5 max_op_ms, declared in fn 0's describe): the reference firmware's value.
 constexpr uint32_t kMaxOpMs = reg::kReferenceMaxOpMs;
 static_assert(kMaxOpMs >= 1 && kMaxOpMs <= reg::kLimitMaxOpMsMax, "max_op_ms is 1 to max_op_ms_max (core §7.5)");
 
-// core (fn 0)
-constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpList, kOpDescribe = reg::core::kOpDescribe;
+// core (fn 0, core §12): every op required, none optional
+constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpList, kOpDescribe = reg::core::kOpDescribe,
+                  kOpClock = reg::core::kOpClock;
 constexpr uint8_t kOpOpen = reg::core::kOpOpen, kOpEnd = reg::core::kOpEnd, kOpKeepalive = reg::core::kOpKeepalive,
-                  kOpLockState = reg::core::kOpLockState, kOpRestart = reg::core::kOpRestart;
-constexpr uint8_t kOpSubscribe = reg::core::kOpSubscribe, kOpUnsubscribe = reg::core::kOpUnsubscribe;
-constexpr uint8_t kOpPlanApply = reg::core::kOpPlanApply, kOpPlanRelease = reg::core::kOpPlanRelease;
-constexpr uint8_t kTagRoleAssignment = reg::core::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), sent critical (0x90)
+                  kOpLockState = reg::core::kOpLockState;
+// subscribe / unsubscribe: ops of the interface that sends notifications, the same numbers in every interface's op space
+// (core §11.3); the endpoint answers them for an interface that notifies()
+constexpr uint8_t kOpSubscribe = reg::kOpSubscribe, kOpUnsubscribe = reg::kOpUnsubscribe;
+// oep.probe.plan (oep-if-plan) and oep.probe.restart (oep-if-restart): their own fns, which the endpoint lists itself
+constexpr uint8_t kOpPlanApply = reg::probe_plan::kOpPlanApply, kOpPlanRelease = reg::probe_plan::kOpPlanRelease;
+constexpr uint8_t kTagRoleAssignment = reg::probe_plan::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), sent critical (0x90)
+constexpr uint8_t kOpRestart = reg::probe_restart::kOpRestart;
 
 // common describe tags (core §7.4)
 constexpr uint8_t kTagRoleChannels = reg::kDescribeRoleChannels, kTagMaxClockHz = reg::kDescribeMaxClockHz,
                   kTagMaxLength = reg::kDescribeMaxLength, kTagMinClockHz = reg::kDescribeMinClockHz,
                   kTagFeatures = reg::kDescribeFeatures, kTagImplementation = reg::kDescribeImplementation,
                   kTagChannelGroup = reg::kDescribeChannelGroup, kTagOps = reg::kDescribeOps;
-// oep.core's own tags: the probe itself
+// fn 0's own describe tags: the probe itself (core §7.5)
 constexpr uint8_t kCoreFirmware = reg::core::kTlvDescribeFirmware, kCoreModel = reg::core::kTlvDescribeModel,
                   kCoreUnitId = reg::core::kTlvDescribeUnitId, kCoreChannels = reg::core::kTlvDescribeChannels,
                   kCoreReserved = reg::core::kTlvDescribeReserved, kCoreProfile = reg::core::kTlvDescribeProfile,
@@ -102,7 +106,7 @@ constexpr size_t tlvSize(size_t length) { return length + kTlvHeader; }
 constexpr size_t kIgnoredRoom = kTlvHeader + reg::kLimitIgnoredMaxEntries;
 
 // The probe's one clock (core §2.6a): ns since boot, u64; it does not decrease and does not wrap while the boot_id is
-// the same. Marks, segments, the heartbeat and the slots' "last tried" all use it; "not yet" is all ones.
+// the same. fn 0's clock op (core §7.7), marks, segments and the slots' "last tried" all use it; "not yet" is all ones.
 constexpr uint64_t kNeverNs = ~uint64_t{0};
 #if !defined(ARDUINO_ARCH_ESP32) && !defined(ARDUINO_ARCH_RP2040)
 // A platform with a 32-bit micros() (it wraps every 71.6 minutes): extended with a count of its wraps. Every read
@@ -193,7 +197,7 @@ inline uint16_t blockMaxLength(size_t max_frame, size_t buffer_bytes) {
 // is malformed, which the caller checks first (core §4.3's order).
 inline bool blockCountFits(uint16_t count, uint16_t max_length) { return 4u * count <= max_length; }
 
-// The firmware string every probe reports (oep.core describe tag 0x40): the library's release version
+// The firmware string every probe reports (fn 0's describe tag 0x40): the library's release version
 // (openembeddedprobe_version.h, written by the release). A build between releases reports the last release.
 constexpr const char *kFirmwareVersion = OPENEMBEDDEDPROBE_VERSION_STR;
 
@@ -467,7 +471,7 @@ class TlvWriter {
     memcpy(b + 1, values, count);
     return put(tag, b, 1 + count);
   }
-  // oep.core's label (0x46): a channel name the firmware (the wiring) fixes; the settings' labels are probe.config's.
+  // fn 0's label (0x46): a channel name the firmware (the wiring) fixes; the settings' labels are probe.config's.
   bool label(uint16_t channel, const char *name) {
     uint8_t b[2 + 32];
     const size_t n = strlen(name) < 32 ? strlen(name) : 32;
@@ -590,16 +594,20 @@ class Interface {
   virtual bool lockFree(uint8_t op) const { (void)op; return false; }
   // Whether this interface offers op (core §1.2): every required op of its document's table, an optional one only when
   // this probe has it. The endpoint declares exactly these in the describe's ops tag (0x09, core §7.4) - it writes
-  // that tag itself, first - and answers any other op unknown_operation before it looks at the session (core §4.3
-  // order 1). Every interface says which ops it has (an interface of the sketch's own too): the default offers none.
+  // that tag itself, first, in its one canonical encoding (base = the lowest op, the last bitmap byte non-zero) - and
+  // answers any other op unknown_operation before it looks at the session (core §4.3 order 1). Every interface says
+  // which ops it has (an interface of the sketch's own too): the default offers none, and an interface that offers no op
+  // at all has no ops encoding and is not added (Endpoint::add). subscribe / unsubscribe (0x30 / 0x32) are not asked
+  // here: notifies() puts both in the ops.
   virtual bool offers(uint8_t op) const { (void)op; return false; }
   virtual Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) = 0;
-  // Whether this interface has plan roles (core §1.2: roles its document assigns through the plan, §8; the pins a
-  // wire's attach selects by argument are not). A probe none of whose interfaces has any answers plan_apply and
-  // plan_release with unknown_operation. An interface that overrides planCheck / planApply says true.
+  // Whether this interface has plan roles (oep-if-plan: roles its document assigns through the plan; the pins a wire's
+  // attach selects by argument are not). The endpoint lists oep.probe.plan when one of its interfaces has some, and not
+  // otherwise; a plan_apply naming a fn without them is refused unsupported. An interface that overrides planCheck /
+  // planApply says true.
   virtual bool planRoles() const { return false; }
-  // Pin plan (core plan_apply / plan_release): check without side effects (0 = acceptable, else a
-  // reject reason), apply, undo. The plan is probe state: it outlives sessions until released.
+  // Pin plan (oep.probe.plan plan_apply / plan_release): check without side effects (0 = acceptable, else a reject
+  // reason), apply, undo. A session's plan goes with its session; one the settings put in stays.
   virtual uint8_t planCheck(const RoleAssignment *roles, size_t count) {
     (void)roles;
     return count ? kRejectUnavailable : 0;
@@ -626,16 +634,22 @@ class Interface {
   // true: this interface's resources sit on another interface's (a console's streams on a wire's connections): at the
   // session's end the endpoint releases its share first (oep-if-console §2: the stream closes with session_ended).
   virtual bool sessionOverFirst() const { return false; }
-  // The probe restarts right after this (fn 0 restart, core §6.6), its session already over (sessionOver ran): let go
+  // The probe restarts right after this (oep.probe.restart, oep-if-restart §2), its session already over (sessionOver ran): let go
   // of what the settings keep as well - a slot's connection, a bind's stream - without touching the target (no reset;
   // a halted hart stays halted), so that no line is driven when the chip resets. sessionOverFirst orders it the same
   // way. The endpoint releases every plan after it, the settings' too.
   virtual void probeRestart() {}
   // The endpoint's frame limit, told when the interface is added: what a describe may promise.
   virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
-  // Push (core §11): while subscribed, the endpoint asks for a data frame's payload. Write up to `capacity` bytes of it
-  // in core §11.2's form - position(u64) len(u16) data [TLV] - and return the length; 0 = nothing now.
-  virtual bool subscribe(bool on) { (void)on; return false; }   // false: this interface does not push or emit events
+  // Notifications (core §11): an interface that sends them says true here, and the endpoint puts subscribe and
+  // unsubscribe (0x30 / 0x32, core §11.3) in its ops and answers them itself (the lock holder's; min_bytes and
+  // max_delay_ms batch the data frames only, an event goes out as soon as the answers ahead of it have). One that sends
+  // none has neither op: a subscribe to it is unknown_operation.
+  virtual bool notifies() const { return false; }
+  // The lock holder subscribed (true) or unsubscribed / its session ended (false); called only when notifies(). While
+  // subscribed, the endpoint asks for a data frame's payload (pull): write up to `capacity` bytes of it in core §11.2's
+  // form - position(u64) len(u16) data [TLV] - and return the length; 0 = nothing now. The return value is not used.
+  virtual bool subscribe(bool on) { (void)on; return false; }
   virtual size_t pull(uint8_t *out, size_t capacity) {
     (void)out; (void)capacity;
     return 0;
@@ -658,9 +672,9 @@ class DirectTransport {
   ~DirectTransport() = default;
 };
 
-// The part of oep.core's describe every probe writes the same way: firmware, model, unit id, channel count and
+// The part of fn 0's describe every probe writes the same way: firmware, model, unit id, channel count and
 // the reserved-channel bitmap. The sketch adds its profile and fixed labels after it; the endpoint adds the transports,
-// discoverable, plan_roles and max_op_ms. unit_id is mandatory (core §7.5, 1 to 32 bytes of a-z 0-9 -): without one the
+// discoverable and max_op_ms (plan_roles and restart_max_ms are oep.probe.plan's and oep.probe.restart's describes). unit_id is mandatory (core §7.5, 1 to 32 bytes of a-z 0-9 -): without one the
 // writer fails rather than send a describe that leaves it out; a model outside its form (core §7.5) fails it too.
 inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id, size_t unit_id_length,
                          uint16_t channels, uint64_t reserved) {

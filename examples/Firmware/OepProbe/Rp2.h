@@ -7,8 +7,9 @@
 // 1209:4F45 (registry usb; PID-USE.md), serial = the unit id, describe discoverable 1; its iProduct "OEP probe (RP2040)" /
 // "(RP2350)" is a name for people.
 //
-// Interfaces (revision 1): oep.core; oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
-// oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all).
+// Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
+// oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
+// oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last).
 // Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
@@ -67,7 +68,7 @@ static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
                               oep::Endpoint::kUsbCdc, 0);
-static oep::Link oepLink(endpoint);   // oep.link (oep-if-link)
+static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 
 static oep::PinTable pins(kChannels);
 
@@ -92,8 +93,8 @@ static constexpr uint64_t kAdc = 0x7ull << 26;
 static oep::AnalogCapture analog(endpoint, kAdc, 0);
 static uint8_t probeTlv[200];
 
-// fn 0 restart (core §6.6): rp2040.reboot() (oep::platformRestart), a watchdog reset that takes the USB device off the
-// bus. restart_max_ms (describe, core §7.5): the chip is running setup() within about 0.1 s (boot ROM, flash, the
+// oep.probe.restart (oep-if-restart): rp2040.reboot() (oep::platformRestart), a watchdog reset that takes the USB device
+// off the bus. restart_max_ms (its describe): the chip is running setup() within about 0.1 s (boot ROM, flash, the
 // settings read), then the host enumerates the device again and its OS gives the CDC port back - 0.3 s to about 1 s
 // (Windows the slowest) - before it can confirm. 2000 ms is about twice the slow end (an estimate from the boot path,
 // to be measured on the bench).
@@ -153,7 +154,7 @@ void setup() {
   config.setPins(&pins);   // the idle item sets these pins' free state
   analog.setPins(&pins, 7);   // PinTable owners: gpio 1, uart 2, the analog 7 (its pads go analog)
   endpoint.add(analog);   // after config: the fns before it keep their numbers
-  endpoint.add(oepLink);   // oep.link (the link test), last: the fns before it keep their numbers
+  endpoint.add(oepLink);   // oep.probe.link (the link test), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot

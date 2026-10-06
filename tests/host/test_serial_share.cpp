@@ -336,6 +336,7 @@ class PlanSink final : public Interface {
  public:
   const char *name() const override { return "io.github.test.plan"; }
   uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
@@ -506,34 +507,67 @@ static void testSessionTable() {
   CHECK(r[0] == 0 && r[1] == kRejectNoSession);
 }
 
-// core §11.3: subscribe(fn, min_bytes u16, max_delay_ms u32); a fn that emits nothing is unsupported (payload 0x00); an
-// unsubscribe of nothing is fine; the heartbeat carries boot_id(u32) uptime_ns(u64).
+// core §11.3: subscribe (0x30) min_bytes(u16) max_delay_ms(u32) [TLV] and unsubscribe (0x32) [TLV] are ops of the
+// interface that sends the notifications, in its ops only when it does (notifies): a fn that sends none, and fn 0, answer
+// them unknown_operation; an unsubscribe of nothing is fine; an event goes out at the next poll whatever the batching
+// (min_bytes / max_delay_ms batch the data only). core §7.7: clock answers boot_id(u32) uptime_ns(u64), without a
+// session too. fn 0's describe has no plan_roles: oep.probe.plan's describe has it (oep-if-plan §1).
+class Talker final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.talker"; }
+  uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }
+  bool notifies() const override { return true; }
+  bool subscribe(bool on) override { subscribed = on; ++calls; return true; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
+  bool subscribed = false;
+  int calls = 0;
+};
 static void testSubscriptions() {
   Bulk b;
   b.ep.setBootId(5);
   PlanSink quiet;
-  b.ep.add(quiet);   // fn 1: emits nothing
+  Talker talker;
+  CHECK(b.ep.add(quiet));    // fn 1: emits nothing
+  CHECK(b.ep.add(talker));   // fn 2: notifies
+  CHECK(b.ep.planFn() == 3 && b.ep.restartFn() == 0);
   CHECK(b.send(request(1, 0, 0x10, openPayload(7, 3000)))[0] == 1);
-  Bytes r = b.send(request(2, 0, 0x30, {1, 0, 0, 0, 0, 0, 0, 0}, true, 7));
-  CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0x00);
-  r = b.send(request(3, 0, 0x32, {1, 0}, true, 7));
-  CHECK(r[0] == 1);
-  r = b.send(request(4, 0, 0x30, {0, 0, 0, 0, 100, 0, 0, 0}, true, 7));   // the heartbeat every 100 ms
-  CHECK(r[0] == 1);
-  r = b.send(request(5, 0, 0x30, {0, 0, 0, 0, 100, 0}, true, 7));         // too short: malformed
-  CHECK(r[0] == 0 && r[1] == kRejectMalformed);
+  Bytes r = b.send(request(2, 1, 0x30, {0, 0, 0, 0, 0, 0}, true, 7));
+  CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectUnknownOperation);
+  CHECK(b.send(request(3, 1, 0x32, {}, true, 7))[1] == kRejectUnknownOperation);
+  CHECK(b.send(request(4, 0, 0x30, {0, 0, 0, 0, 0, 0}, true, 7))[1] == kRejectUnknownOperation);   // fn 0: none
+  CHECK(b.send(request(5, 2, 0x32, {}, true, 7))[0] == 1 && talker.calls == 0);   // nothing subscribed: fine
+  CHECK(b.send(request(6, 2, 0x30, {0, 0, 0, 0, 0, 0}))[1] == kRejectSessionRequired);
+  r = b.send(request(7, 2, 0x30, {0, 0, 0, 0, 100}, true, 7));   // too short: malformed
+  CHECK(r[0] == 0 && r[1] == kRejectMalformed && !talker.subscribed);
+  // min_bytes 1000, max_delay_ms 1000: the event goes at the next poll all the same
+  CHECK(b.send(request(8, 2, 0x30, {0xe8, 0x03, 0xe8, 0x03, 0, 0}, true, 7))[0] == 1 && talker.subscribed);
+  const uint8_t ev[3] = {9, 8, 7};
+  CHECK(b.ep.event(talker, 0x01, ev, sizeof ev));
   b.stream.tx.clear();
-  g_millis += 150;
   b.ep.poll();
   const Bytes &t = b.stream.tx;   // length(u16) role fn(u16) seq(u16) kind payload
-  CHECK(t.size() == 2 + 6 + 12 && t[2] == kRoleEvent && getU16(&t[3]) == 0 && t[7] == kEventHeartbeat && getU32(&t[8]) == 5);
-  CHECK(getU64(&t[12]) == static_cast<uint64_t>(g_millis) * 1000000u);
-  // the describe of fn 0: discoverable is not set, plan_roles(u32) and max_op_ms(u32) are there
-  const Bytes d = b.send(request(6, 0, 0x03, {0, 0, 0, 0}));
-  const Bytes roles = {0x4B, 4, 0, uint8_t(Endpoint::kMaxRoles), 0, 0, 0}, op = {0x4D, 4, 0, 0x10, 0x27, 0, 0};
-  CHECK(std::search(d.begin(), d.end(), roles.begin(), roles.end()) != d.end());
+  CHECK(t.size() == 2 + 6 + 3 && t[2] == kRoleEvent && getU16(&t[3]) == 2 && getU16(&t[5]) == 0 && t[7] == 0x01 && t[8] == 9);
+  CHECK(b.send(request(9, 2, 0x32, {}, true, 7))[0] == 1 && !talker.subscribed);
+  CHECK(!b.ep.event(talker, 0x01, ev, sizeof ev));   // not subscribed: not queued
+  // ops: fn 2 sets 0x30 / 0x32 (base 1: bits 0, 47, 49), fn 1 neither
+  Bytes d = b.send(request(10, 0, 0x03, {2, 0, 0, 0}));
+  CHECK(d.size() == 3 + 3 + 1 + 7 && d[3] == 0x09 && d[6] == 1 && d[7] == 1 && d[12] == 0x80 && d[13] == 0x02);
+  d = b.send(request(11, 0, 0x03, {1, 0, 0, 0}));
+  CHECK(d.size() == 3 + 3 + 2 && d[3] == 0x09 && d[6] == 1 && d[7] == 1);
+  // clock (core §7.7): boot_id, then the clock read for the answer; with session_id 0 the lock is untouched
+  g_millis += 150;
+  r = b.send(request(12, 0, 0x04, {}));
+  CHECK(r.size() == 2 + 12 && r[0] == 1 && getU32(&r[2]) == 5 && getU64(&r[6]) == static_cast<uint64_t>(g_millis) * 1000000u);
+  CHECK(b.send(request(13, 0, 0x04, {1}))[1] == kRejectMalformed);   // not a TLV
+  // the describe of fn 0: max_op_ms(u32), no plan_roles; oep.probe.plan's (fn 3): plan_roles 0x40
+  d = b.send(request(14, 0, 0x03, {0, 0, 0, 0}));
+  const Bytes roles = {0x4B, 4, 0}, op = {0x4D, 4, 0, 0x10, 0x27, 0, 0};
+  CHECK(std::search(d.begin(), d.end(), roles.begin(), roles.end()) == d.end());
   CHECK(std::search(d.begin(), d.end(), op.begin(), op.end()) != d.end());
-  CHECK(std::find(d.begin(), d.end(), 0x4A) == d.end() || true);
+  d = b.send(request(15, 0, 0x03, {3, 0, 0, 0}));
+  const Bytes plan = {0x09, 2, 0, 1, 0x03, 0x40, 4, 0, uint8_t(Endpoint::kMaxRoles), 0, 0, 0};
+  CHECK(Bytes(d.begin() + 3, d.end()) == plan);
 }
 
 // core §9: one space of numbers, 1 upwards, recently closed ones not reused, a live number of another kind refused
@@ -577,10 +611,10 @@ static void testSettingsPlanStays() {
   };
   CHECK(send(request(1, 0, 0x10, openPayload(7, 3000))) == 1);
   const Bytes plan2 = {0x90, 5, 0, 2, 0, 1, 20, 0};
-  CHECK(send(request(2, 0, 0x04, plan2, true, 7)) == 1);            // fn 2 planned by the session
+  CHECK(send(request(2, ep.planFn(), kOpPlanApply, plan2, true, 7)) == 1);            // fn 2 planned by the session
   const Bytes plan1 = {0x90, 5, 0, 1, 0, 1, 13, 0};
-  CHECK(send(request(3, 0, 0x04, plan1, true, 7)) == 0);            // fn 1 is the settings': refused
-  CHECK(send(request(4, 0, 0x05, {0}, true, 7)) == 1);              // release every fn
+  CHECK(send(request(3, ep.planFn(), kOpPlanApply, plan1, true, 7)) == 0);            // fn 1 is the settings': refused
+  CHECK(send(request(4, ep.planFn(), kOpPlanRelease, {0}, true, 7)) == 1);              // release every fn
   RoleAssignment now[4];
   const size_t n = ep.plan(now, 4);
   CHECK(n == 1 && now[0].function == 1 && now[0].channel == 12);    // the settings' plan stays, the session's went
@@ -592,6 +626,7 @@ class PlanUndeclared final : public Interface {
  public:
   const char *name() const override { return "io.github.test.undeclared"; }
   uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return kRejectUnsupported; }
@@ -611,7 +646,7 @@ static void testPlanUnsupportedTag() {
     ep.poll();
   };
   send(request(1, 0, 0x10, openPayload(7, 3000)));
-  send(request(2, 0, 0x04, {0x90, 5, 0, 1, 0, 1, 20, 0}, true, 7));
+  send(request(2, ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 1, 20, 0}, true, 7));
   // length(2) role corr(2) resolution detail payload
   CHECK(bulk.tx.size() == 8 && bulk.tx[5] == kResolutionRejected && bulk.tx[6] == kRejectUnsupported && bulk.tx[7] == 0x90);
   RoleAssignment now[2];
@@ -623,6 +658,7 @@ class PlanAlone final : public Interface {
  public:
   const char *name() const override { return "io.github.test.alone"; }
   uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
@@ -659,6 +695,7 @@ class FakeTrack final : public Interface, public GroupTrack {
   explicit FakeTrack(bool trigger) : trigger_(trigger) {}
   const char *name() const override { return "io.github.test.track"; }
   uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool trackReady() const override { return state != 2 && state != 3; }
   uint8_t trackMode() const override { return 1; }
@@ -744,11 +781,11 @@ static void testPlanCapacity() {
     for (size_t k = 0; k < n; ++k) p.insert(p.end(), {0x90, 5, 0, 1, 0, 1, uint8_t(k), 0});
     return p;
   };
-  const Bytes over = send(request(2, 0, 0x04, plan(Endpoint::kMaxRoles + 1), true, 7));
+  const Bytes over = send(request(2, ep.planFn(), kOpPlanApply, plan(Endpoint::kMaxRoles + 1), true, 7));
   CHECK(over.size() >= 7 && over[5] == 0 && over[6] == kRejectUnavailable);   // more than the plan holds: unavailable
-  CHECK(send(request(3, 0, 0x04, plan(Endpoint::kMaxRoles), true, 7))[5] == 1);
-  const Bytes d = send(request(4, 0, 0x03, {0, 0, 0, 0}));                     // describe fn 0
-  const Bytes want = {0x4B, 4, 0, uint8_t(Endpoint::kMaxRoles), 0, 0, 0};
+  CHECK(send(request(3, ep.planFn(), kOpPlanApply, plan(Endpoint::kMaxRoles), true, 7))[5] == 1);
+  const Bytes d = send(request(4, 0, 0x03, {uint8_t(ep.planFn()), 0, 0, 0}));  // describe oep.probe.plan
+  const Bytes want = {0x40, 4, 0, uint8_t(Endpoint::kMaxRoles), 0, 0, 0};
   CHECK(std::search(d.begin(), d.end(), want.begin(), want.end()) != d.end());   // plan_roles (u32) declared
 }
 
@@ -769,16 +806,16 @@ static void testDisabledChannel() {
   };
   send(request(1, 0, 0x10, openPayload(7, 3000)));
   ep.setDisabled(uint64_t{1} << 12);
-  const Bytes r = send(request(2, 0, 0x04, {0x90, 5, 0, 1, 0, 1, 12, 0}, true, 7));
+  const Bytes r = send(request(2, ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 1, 12, 0}, true, 7));
   const Bytes cause5 = {0x01, 1, 0, 5, 0x02, 2, 0, 12, 0, 0x04, 1, 0, 6};   // cause 5, channel 12, holder_kind 6 disabled
   CHECK(r.size() >= 7 && r[5] == 0 && r[6] == kRejectUnavailable);
   CHECK(std::search(r.begin(), r.end(), cause5.begin(), cause5.end()) != r.end());
-  CHECK(send(request(3, 0, 0x04, {0x90, 5, 0, 1, 0, 1, 13, 0}, true, 7))[5] == 1);   // another channel: as before
+  CHECK(send(request(3, ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 1, 13, 0}, true, 7))[5] == 1);   // another channel: as before
   ep.setDisabled(0);
-  CHECK(send(request(4, 0, 0x04, {0x90, 5, 0, 1, 0, 1, 12, 0}, true, 7))[5] == 1);   // enabled again
+  CHECK(send(request(4, ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 1, 12, 0}, true, 7))[5] == 1);   // enabled again
 }
 
-// ---- oep.link port_speed (oep-if-link §3) ---------------------------------------------------------------------------------------------
+// ---- oep.probe.link port_speed (oep-if-link §3) ---------------------------------------------------------------------------------------------
 
 static uint32_t g_baud = 115200;
 static int g_switches = 0;
@@ -790,7 +827,7 @@ static uint32_t speedHook(uint8_t, uint32_t baud, bool apply) {
   return baud;
 }
 
-// A UART bridge (transport 0) and a vendor bulk (transport 1), oep.link as fn 1; the result's resolution, detail and
+// A UART bridge (transport 0) and a vendor bulk (transport 1), oep.probe.link as fn 1; the result's resolution, detail and
 // payload.
 struct Uart {
   MemStream stream, bulk;
@@ -845,7 +882,7 @@ static Bytes speedReq(uint8_t port, uint32_t baud, uint8_t step, uint16_t verify
   p.insert(p.end(), i.begin(), i.end());
   return p;
 }
-// oep.link (fn 1) declares port_speed (op 0x03) in its ops tag (core §1.2, §7.4)
+// oep.probe.link (fn 1) declares port_speed (op 0x03) in its ops tag (core §1.2, §7.4)
 static bool describesPortSpeed(Uart &u) {
   const Bytes r = u.send(request(90, 0, 0x03, {1, 0, 0, 0}));
   if (r.size() < 3 + 5 || r[0] != 1 || r[3] != kTagOps) return false;   // ops first: 09 len(u16) base bitmap
@@ -854,7 +891,7 @@ static bool describesPortSpeed(Uart &u) {
 }
 
 static void testPortSpeed() {
-  {   // off: not in oep.link's ops, the op unknown
+  {   // off: not in oep.probe.link's ops, the op unknown
     Uart u(false);
     CHECK(!describesPortSpeed(u));
     u.send(request(1, 0, 0x10, openPayload(5, 5000)));
@@ -1110,33 +1147,44 @@ static void testConfirmBoundsAndFixedList() {
   CHECK(Endpoint::kMaxOpMs >= 1 && Endpoint::kMaxOpMs <= reg::kLimitMaxOpMsMax);
 }
 
-// core §4.3 (C-21): plan_apply's form over the whole request comes first (order 5: a role_assignment of another length,
-// fn 0 - §8's table says malformed, it was unknown_function), then at the end of order 5 the fns named inside it
-// (unknown_function), then an unknown critical tag (unsupported, order 6). core §1.2: a probe none of whose interfaces
-// has plan roles answers plan_apply / plan_release with unknown_operation (before the session, order 1) and
-// declares no plan_roles; one with them does.
+// oep-if-plan §2.5 / core §4.3 (C-21): plan_apply's form over the whole request comes first (order 5: a role_assignment
+// of another length, fn 0: malformed), then at the end of order 5 the fns named inside it (unknown_function), then an
+// unknown critical tag and a fn with no plan role - oep.probe.plan itself - (unsupported, order 6). oep-if-plan: a probe
+// none of whose interfaces has plan roles does not list oep.probe.plan (its fn is unknown); one with them lists it after
+// the sketch's interfaces, with plan_roles in its describe and none in fn 0's.
 static void testPlanApplyOrder() {
   Bulk b;
   PlanSink sink;
-  b.ep.add(sink);   // fn 1
+  b.ep.add(sink);   // fn 1; oep.probe.plan fn 2
+  const uint16_t pf = b.ep.planFn();
+  CHECK(pf == 2);
   b.send(request(1, 0, 0x10, openPayload(9, 3000)));
+  CHECK(b.ep.planFn() == 2 && b.ep.interfaceAt(2) && strcmp(b.ep.interfaceAt(2)->name(), "oep.probe.plan") == 0);
   auto reject = [](const Bytes &r) { return r.size() >= 2 && r[0] == kResolutionRejected ? r[1] : 0xff; };
-  CHECK(reject(b.send(request(2, 0, 0x04, {0x90, 5, 0, 0, 0, 0, 3, 0}, true, 9))) == kRejectMalformed);   // fn 0
-  CHECK(reject(b.send(request(3, 0, 0x04, {0x90, 5, 0, 7, 0, 0, 3, 0, 0x90, 4, 0, 1, 0, 0, 3}, true, 9))) == kRejectMalformed);
-  CHECK(reject(b.send(request(4, 0, 0x04, {0xB0, 0, 0, 0x90, 5, 0, 7, 0, 0, 3, 0}, true, 9))) == kRejectUnknownFunction);
-  const Bytes r = b.send(request(5, 0, 0x04, {0xB0, 0, 0, 0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9));
+  CHECK(reject(b.send(request(2, pf, 0x01, {0x90, 5, 0, 0, 0, 0, 3, 0}, true, 9))) == kRejectMalformed);   // fn 0
+  CHECK(reject(b.send(request(3, pf, 0x01, {0x90, 5, 0, 7, 0, 0, 3, 0, 0x90, 4, 0, 1, 0, 0, 3}, true, 9))) == kRejectMalformed);
+  CHECK(reject(b.send(request(4, pf, 0x01, {0xB0, 0, 0, 0x90, 5, 0, 7, 0, 0, 3, 0}, true, 9))) == kRejectUnknownFunction);
+  Bytes r = b.send(request(5, pf, 0x01, {0xB0, 0, 0, 0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9));
   CHECK(r.size() == 3 && reject(r) == kRejectUnsupported && r[2] == 0xB0);
-  CHECK(reject(b.send(request(6, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9))) == 0xff);   // fine
-  Bytes d = b.send(request(7, 0, reg::core::kOpDescribe, {0, 0, 0, 0}));
-  const Bytes roles = {reg::core::kTlvDescribePlanRoles, 4, 0};
+  r = b.send(request(6, pf, 0x01, {0x90, 5, 0, 2, 0, 0, 3, 0}, true, 9));   // oep.probe.plan has no plan role
+  CHECK(r.size() == 3 && reject(r) == kRejectUnsupported && r[2] == 0x90);
+  CHECK(reject(b.send(request(7, pf, 0x01, {0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9))) == 0xff);   // fine
+  CHECK(reject(b.send(request(8, pf, 0x02, {1, 1, 0}, true, 9))) == 0xff);
+  CHECK(reject(b.send(request(9, pf, 0x02, {2, 1, 0}, true, 9))) == kRejectMalformed);   // n = 2 with one fn
+  CHECK(reject(b.send(request(10, pf, 0x01, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectSessionRequired);
+  Bytes d = b.send(request(11, 0, reg::core::kOpDescribe, {0, 0, 0, 0}));
+  const Bytes old_roles = {0x4B, 4, 0};
+  CHECK(!d.empty() && d[0] == kResolutionCompleted && std::search(d.begin(), d.end(), old_roles.begin(), old_roles.end()) == d.end());
+  d = b.send(request(12, 0, reg::core::kOpDescribe, {uint8_t(pf), 0, 0, 0}));
+  const Bytes roles = {reg::probe_plan::kTlvDescribePlanRoles, 4, 0};
   CHECK(std::search(d.begin(), d.end(), roles.begin(), roles.end()) != d.end());
-  Bulk none;   // no interface with plan roles
+  Bulk none;   // no interface with plan roles: no oep.probe.plan
   FailsEarly other;
   none.ep.add(other);
-  CHECK(reject(none.send(request(1, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectUnknownOperation);
-  CHECK(reject(none.send(request(2, 0, 0x05, {0}))) == kRejectUnknownOperation);
-  d = none.send(request(3, 0, reg::core::kOpDescribe, {0, 0, 0, 0}));
-  CHECK(!d.empty() && d[0] == kResolutionCompleted && std::search(d.begin(), d.end(), roles.begin(), roles.end()) == d.end());
+  CHECK(none.ep.planFn() == 0);
+  CHECK(reject(none.send(request(1, 2, 0x01, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectUnknownFunction);
+  r = none.send(request(2, 0, reg::core::kOpList, {0, 0, 0, 0}));
+  CHECK(r.size() >= 5 && r[0] == kResolutionCompleted && getU16(&r[2]) == 1);   // fn 1 only
 }
 
 // core §1.2 / §4.3 order 1: an op the interface does not offer (one it does not define, or an optional one it does not

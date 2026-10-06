@@ -9,10 +9,11 @@
 // (host guide §1). The bridge's USB ID is not the project's VID:PID, so describe discoverable stays 0: a host reaches this
 // probe by the user choosing its port, then asking (confirm).
 //
-// Interfaces (revision 1): oep.core; oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
+// Interfaces (revision 1): fn 0 (the core); oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
 // oep.fixture.gpio / uart / capture (the core-0 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
-// (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler). The host chooses every
+// (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler); oep.probe.link; oep.probe.plan and
+// oep.probe.restart (the endpoint's own, listed last). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below.
 #pragma once
 #include <OepAnalog.h>
@@ -40,7 +41,7 @@ static uint8_t rxBuffer[1024];   // the encoded candidate: cobsFrameMax(512)
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 1024, 2},
                               oep::Endpoint::kUartBridge);
-static oep::Link oepLink(endpoint);   // oep.link (oep-if-link)
+static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 
 // port_speed (oep-if-link §3): the host may raise UART0's baud for its session; every revert goes back to 115200, the
 // boot speed. On unless built with -DOEP_PORT_SPEED=0 (then no describe port_speed, the op unknown_operation).
@@ -65,7 +66,7 @@ static uint32_t portSpeed(uint8_t, uint32_t baud, bool apply) {   // port 0, UAR
 }
 #endif
 
-// fn 0 restart (core §6.6): esp_restart, UART0 back at 115200 as at every boot. restart_max_ms (describe, core §7.5):
+// oep.probe.restart (oep-if-restart): esp_restart, UART0 back at 115200 as at every boot. restart_max_ms (its describe):
 // the UART bridge stays on the bus (no re-enumeration, the host's port stays), and the chip is back in about 0.5 s -
 // the ROM (its banner goes out on UART0 as raw bytes), the bootloader checking the app image (about 0.4 MB), setup()
 // reading the settings; the host's reopen after restart_after_answer_ms and its confirms at 115200 add little. 1500 ms
@@ -160,7 +161,7 @@ void setup() {
   endpoint.add(group);
   group.addTrack(capture, capture);
   group.addTrack(analog, analog);
-  endpoint.add(oepLink);   // oep.link: the link test and port_speed (oep-if-link), last: the fns before it keep their numbers
+  endpoint.add(oepLink);   // oep.probe.link: the link test and port_speed (oep-if-link), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot

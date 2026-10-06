@@ -153,7 +153,7 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   uint8_t roles[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
   w.roleChannels(roles, kMaxChannels, table_.allowedMask());
-  w.u32(kTagFeatures, 0b100);                      // bit2 notifications; query and force: in the ops tag
+  // no features: revision 1 defines no bit (query, force, subscribe and unsubscribe are in the ops tag)
   uint8_t mode[10] = {cap::kModeOneShot, 1};       // one-shot, in the background (core 0 samples, OEP on core 1)
   putU32(mode + 2, kBufferBytes);                  // one byte per sample
   putU32(mode + 6, 1);

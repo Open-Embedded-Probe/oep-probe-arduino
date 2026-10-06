@@ -16,6 +16,7 @@
 #include "OepConsole.h"
 #include "OepDmConsole.h"
 #include "OepEndpoint.h"
+#include "OepFixture.h"
 #include "OepFrame.h"
 #include "OepPinTable.h"
 #include "OepTarget.h"
@@ -513,6 +514,76 @@ int main() {
       const Bytes v = describeTlv(a, kResultHeader + 1, cfg::kTlvDescribeStorage, &storage);
       CHECK(storage && v.size() == 4 && uint32_t(v[0] | v[1] << 8 | v[2] << 16 | uint32_t(v[3]) << 24) == ProbeConfig::kMaxItems);
     }
+  }
+
+  {   // probe.config §2 with the endpoint's own interfaces (oep.probe.plan, oep.probe.restart): listed after the sketch's,
+      // in the same order at every boot of a firmware; saved settings name their interfaces by (name, instance, revision)
+      // and are renumbered on a firmware that added an interface before them, which moves the endpoint's two as well.
+    static NullStream sa, sb, sc;
+    static uint8_t rxa[512], txa[512], rxb[512], txb[512], rxc[512], txc[512];
+    static PinTable pins(uint64_t{0xff});
+    auto restart = []() {};
+    // firmware A: gpio fn 1, config fn 2, then oep.probe.plan fn 3 and oep.probe.restart fn 4
+    static Endpoint epa(sa, rxa, sizeof rxa, txa, sizeof txa, {512, 1024, 2}, Endpoint::kUartBridge);
+    static FixtureGpio gpioa(pins, 0);
+    static Binds bindsa;
+    static ProbeConfig cfga(epa, bindsa);
+    epa.add(gpioa);
+    epa.add(cfga);
+    cfga.setPins(&pins);
+    epa.setRestart(restart, 1500);
+    CHECK(epa.planFn() == 3 && epa.restartFn() == 4);
+    epa.poll();   // the list fixed
+    CHECK(epa.planFn() == 3 && epa.restartFn() == 4 && epa.instanceOf(3) == 0 && epa.instanceOf(4) == 0);
+    CHECK(strcmp(epa.interfaceAt(3)->name(), "oep.probe.plan") == 0 && strcmp(epa.interfaceAt(4)->name(), "oep.probe.restart") == 0);
+    const Bytes plan_item = item(cfg::kTlvItemPlan | kTagCritical, {1, 0, reg::fixture_gpio::kRoleLine, 5, 0});
+    CHECK(ok(set(cfga, plan_item, out)));
+    out.assign(64, 0);
+    CHECK(ok(cfga.handle(cfg::kOpSave, nullptr, 0, out.data(), out.size())));
+    cfga.handle(cfg::kOpUnset, nullptr, 0, out.data(), out.size());
+    // the same firmware booted again: the same fns and instances, the saved plan on fn 1
+    static Endpoint epc(sc, rxc, sizeof rxc, txc, sizeof txc, {512, 1024, 2}, Endpoint::kUartBridge);
+    static PinTable pinsc(uint64_t{0xff});
+    static FixtureGpio gpioc(pinsc, 0);
+    static Binds bindsc;
+    static ProbeConfig cfgc(epc, bindsc);
+    epc.add(gpioc);
+    epc.add(cfgc);
+    cfgc.setPins(&pinsc);
+    epc.setRestart(restart, 1500);
+    cfgc.load();
+    cfgc.applySaved();
+    epc.poll();
+    RoleAssignment now[4];
+    CHECK(epc.plan(now, 4) == 1 && now[0].function == 1 && now[0].channel == 5);
+    CHECK(epc.planFn() == 3 && epc.restartFn() == 4);
+    for (uint16_t f = 1; f <= 4; ++f)
+      CHECK(strcmp(epc.interfaceAt(f)->name(), epa.interfaceAt(f)->name()) == 0 && epc.instanceOf(f) == epa.instanceOf(f));
+    // firmware B adds oep.probe.link first: gpio fn 2, config fn 3, oep.probe.plan fn 4, oep.probe.restart fn 5; the saved
+    // plan item (fn 1 = oep.fixture.gpio#0 rev 1) lands on fn 2
+    static Endpoint epb(sb, rxb, sizeof rxb, txb, sizeof txb, {512, 1024, 2}, Endpoint::kUartBridge);
+    static PinTable pinsb(uint64_t{0xff});
+    static Link linkb(epb);
+    static FixtureGpio gpiob(pinsb, 0);
+    static Binds bindsb;
+    static ProbeConfig cfgb(epb, bindsb);
+    epb.add(linkb);
+    epb.add(gpiob);
+    epb.add(cfgb);
+    cfgb.setPins(&pinsb);
+    epb.setRestart(restart, 1500);
+    cfgb.load();
+    cfgb.applySaved();
+    epb.poll();
+    CHECK(epb.plan(now, 4) == 1 && now[0].function == 2 && now[0].channel == 5);
+    CHECK(epb.planFn() == 4 && epb.restartFn() == 5);
+    const uint8_t first[2] = {0, 0};
+    out.assign(64, 0);
+    const Result st = cfgb.handle(cfg::kOpState, first, sizeof first, out.data(), out.size());
+    CHECK(ok(st) && out[1] == cfg::kStorageStateApplied);
+    // a plan item naming oep.probe.plan's fn (no plan role): refused unsupported, nothing saved changes
+    CHECK(unsupportedWith(set(cfgb, item(cfg::kTlvItemPlan | kTagCritical, {4, 0, 1, 6, 0}), out), out,
+                          cfg::kTlvItemPlan | kTagCritical));
   }
 
   printf("config: %d checks, %d failures\n", checks, failures);

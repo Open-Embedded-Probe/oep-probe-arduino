@@ -77,7 +77,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t revision() const override { return reg::fixture_logic::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
-  // every op of capture §3.2 (query and force declared by features bits 0 / 1; calibration is analog's)
+  // every op of capture §3.2 (query and force optional, in the ops tag; calibration is analog's)
   bool offers(uint8_t op) const override { return opIn(op, kOpConfigure, kOpQuery); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
@@ -88,6 +88,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   void planRelease() override;
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
+  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   size_t pending() override;
   size_t pull(uint8_t *out, size_t capacity) override;

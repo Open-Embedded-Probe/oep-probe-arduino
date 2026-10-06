@@ -3,17 +3,21 @@
 
 // Host test: every byte vector of oep-spec tests/vectors (copied into tests/vectors by tools/sync_registry.sh, the commit
 // in tests/vectors/SPEC_COMMIT) run against this library's endpoint, byte for byte, as oep-client-python runs them
-// against its fake probe: headers, cobs, checks, confirm, discovery, sessions, refusals, ops and probe_config_hash.
+// against its fake probe: headers, cobs, checks, confirm, discovery, sessions, refusals, ops, ops_encoding and
+// probe_config_hash.
 //
 // The probes the vectors assume are built from the library's own interfaces:
-//   - the example probe of confirm.json / discovery.json / sessions.json: fn 0 only, one UART bridge (index 0,
-//     interface 0xFF), unit_id "a1b2c3d4", discoverable 0, max_op_ms 1000, max_frame 1024, window 4096, max_inflight 4,
-//     boot_id 0x12345678;
-//   - the probe of refusals.json / ops.json: fn 1 oep.link, 2 oep.fixture.gpio, 3 oep.fixture.i2c-target, 4
+//   - the example probe of confirm.json / discovery.json / sessions.json: fn 0 only (no interface: list is empty), one
+//     UART bridge (index 0, interface 0xFF), unit_id "a1b2c3d4", discoverable 0, max_op_ms 1000, max_frame 1024, window
+//     4096, max_inflight 4, boot_id 0x12345678;
+//   - the probe of refusals.json / ops.json: fn 1 oep.probe.link, 2 oep.fixture.gpio, 3 oep.fixture.i2c-target, 4
 //     oep.wire.rvswd, 5 oep.fixture.uart, 6 oep.target.riscv-dm, 7 oep.target.console, 8 oep.probe.config, 9
-//     oep.fixture.logic, on a UART bridge (transport 0, the port a bind names) and a vendor bulk (transport 1, where the
-//     requests go), max_frame 1024; each case starts from boot (resource numbers from 1) in the state its `state` says,
-//     with the session 0x11223344 open when the request carries it.
+//     oep.fixture.logic, and the endpoint's own after them: 10 oep.probe.plan, 11 oep.probe.restart (in the cases that
+//     name it: the restart handler set), on a UART bridge (transport 0, the port a bind names) and a vendor bulk
+//     (transport 1, where the requests go), max_frame 1024; each case starts from boot (resource numbers from 1) in the
+//     state its `state` says, with the session 0x11223344 open when the request carries it.
+// clock's uptime_ns (sessions.json) is the example probe's in the vector: here it is checked to be this probe's clock as
+// it reads it for the answer (the fake clock, which the test moves on before each clock), the rest byte for byte.
 // Two fields are the probe's own and not the vector's, both in the logic segment record: start_uncertainty_ns is this
 // capture's declared value (LogicCapture::kStartUncertaintyNs, 5000) where the vector's example probe has 50, and
 // samples is the actual_samples this capture's configure answered for the 1000 asked (a one-shot segment is whole
@@ -423,9 +427,65 @@ static void testSessions() {
     ++cases;
     boot();
     Example p;
-    for (const Json &st : sc["steps"].items)
-      CHECK(same("session step", sc["name"].string + ": " + st["note"].string, p.send(hex(st["request_hex"].string)),
-                 hex(st["answer_hex"].string)));
+    for (const Json &st : sc["steps"].items) {
+      const Bytes req = hex(st["request_hex"].string);
+      Bytes want = hex(st["answer_hex"].string);
+      const bool clock = req.size() >= kRequestHeader && getU16(&req[3]) == 0 && req[5] == kOpClock;
+      if (clock) advanceMicros(123);   // the clock moves on (less than a ms: the lease's times stay as the vector's)
+      const Bytes got = p.send(req);
+      if (clock && want.size() == 5 + 12 && got.size() == want.size()) {
+        CHECK(getU64(&got[5 + 4]) == nowNs());   // read for this answer
+        putU64(&want[5 + 4], getU64(&got[5 + 4]));
+      }
+      CHECK(same("session step", sc["name"].string + ": " + st["note"].string, got, want));
+    }
+  }
+}
+
+// core §7.4: the ops value - 2 to 33 bytes, base + 8 x bitmap bytes <= 256, bit 0 set, the last byte non-zero - decoded
+// here on its own; a valid one is the set the vector gives, and the endpoint's ops tag for an interface offering that set
+// (ops 0x01 - 0xEF only: 0x00 and the experimental ones are never offered) is the same bytes.
+static bool opsDecode(const Bytes &v, std::vector<int> &ops) {
+  ops.clear();
+  if (v.size() < 2 || v.size() > 33 || v[0] + 8 * (v.size() - 1) > 256 || !(v[1] & 1) || v.back() == 0) return false;
+  for (size_t i = 0; i < 8 * (v.size() - 1); ++i)
+    if (v[1 + i / 8] >> (i % 8) & 1) ops.push_back(v[0] + static_cast<int>(i));
+  return true;
+}
+class OpSet final : public Interface {
+ public:
+  explicit OpSet(const std::vector<int> &ops) : ops_(ops) {}
+  const char *name() const override { return "io.github.test.ops"; }
+  uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override {
+    for (int o : ops_) if (o == op) return true;
+    return false;
+  }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
+ private:
+  std::vector<int> ops_;
+};
+static void testOpsEncoding() {
+  const Json v = load("ops_encoding.json");
+  for (const Json &c : v["cases"].items) {
+    ++cases;
+    const Bytes value = hex(c["value_hex"].string);
+    std::vector<int> ops, want;
+    const bool valid = opsDecode(value, ops);
+    for (const Json &o : c["ops"].items) want.push_back(static_cast<int>(o.number));
+    if (valid != c["valid"].boolean || (valid && ops != want)) printf("  ops_encoding \"%s\": decoded wrong\n", c["name"].string.c_str());
+    CHECK(valid == c["valid"].boolean && (!valid || ops == want));
+    bool offerable = valid;
+    for (int o : ops) offerable &= o >= 1 && o < 0xF0 && o != kOpSubscribe && o != kOpUnsubscribe;
+    if (!offerable) continue;
+    boot();
+    Example p;
+    OpSet it(ops);
+    CHECK(p.ep.add(it));
+    const Bytes d = p.send({kRoleRequest, 1, 0, 0, 0, kOpDescribe, 0, 0, 0, 0, 1, 0, 0, 0});
+    Bytes tag = {kTagOps, uint8_t(value.size()), 0};
+    tag.insert(tag.end(), value.begin(), value.end());
+    CHECK(same("ops encoding", c["name"].string, d.size() >= 6 + tag.size() ? Bytes(d.begin() + 6, d.begin() + 6 + tag.size()) : d, tag));
   }
 }
 
@@ -509,7 +569,7 @@ struct OpsProbe {
   uint16_t corr = 1;
   uint32_t actual_samples = 0;   // the logic configure's answer
   bool no_open = false;          // the case's state has the lock free: the vector's session is not opened
-  static inline int restarts = 0;   // fn 0 restart's handler (a chip would restart there)
+  static inline int restarts = 0;   // oep.probe.restart's handler (a chip would restart there)
   static void restartHook() { ++restarts; }
   OpsProbe() {
     ep.addTransport(bulk, rx2, sizeof rx2, Endpoint::kVendorBulk, 0);
@@ -543,7 +603,8 @@ struct OpsProbe {
   bool ok(const Bytes &a) const { return a.size() >= 5 && a[3] == kResolutionCompleted && a[4] == kOutcomeSuccess; }
   bool open() { return ok(request(0, kOpOpen, {0xd0, 0x07, 0, 0, 0})); }   // session S, lease 2000 ms
   bool plan(uint16_t fn, uint8_t role, uint16_t channel) {
-    return ok(request(0, kOpPlanApply, {0x90, 5, 0, uint8_t(fn), uint8_t(fn >> 8), role, uint8_t(channel), uint8_t(channel >> 8)}));
+    return ok(request(ep.planFn(), kOpPlanApply,
+                      {0x90, 5, 0, uint8_t(fn), uint8_t(fn >> 8), role, uint8_t(channel), uint8_t(channel >> 8)}));
   }
   // attach (rvswd, fn 4) on channels 1 / 2 at 1 MHz, the hart left as it is: connection 1 from boot
   bool attach() {
@@ -571,12 +632,27 @@ struct OpsProbe {
 
 static uint32_t sessionOf(const Bytes &m) { return m.size() >= kRequestHeader ? getU32(&m[6]) : 0; }
 
-// The state a case of ops.json / refusals.json assumes (its name and `state`), from boot; false: not set up.
-static bool setUp(OpsProbe &p, const std::string &name, const std::string &state) {
+// Whether a case's `fns` names the interface (`fns` maps fn numbers to names).
+static bool names(const Json &fns, const char *name) {
+  for (const auto &m : fns.members) if (m.second.string == name) return true;
+  return false;
+}
+
+// The state a case of ops.json / refusals.json assumes (its name, `state` and `fns`), from boot; false: not set up.
+static bool setUp(OpsProbe &p, const std::string &name, const std::string &state, const Json &fns = Json{}) {
   auto has = [&](const char *s) { return name.find(s) != std::string::npos || state.find(s) != std::string::npos; };
-  if (has("core restart")) {   // fn 0 restart (core §6.6): in the ops with a handler, which here only counts
-    if (has("restart set in fn 0's ops")) p.ep.setRestart(OpsProbe::restartHook, 2000);
+  if (names(fns, "oep.probe.restart")) {   // listed with a handler (fn 11), which here only counts
+    p.ep.setRestart(OpsProbe::restartHook, 2000);
     p.no_open = has("lock free");
+    return p.ep.restartFn() == 11;
+  }
+  if (names(fns, "oep.probe.plan")) {   // fn 10: gpio (fn 2) has plan roles
+    if (p.ep.planFn() != 10) return false;
+    if (has("fn 2 has the plan above")) return p.open() && p.plan(2, reg::fixture_gpio::kRoleLine, 3);
+    return true;
+  }
+  if (has("fn 9 subscribed") || has("fn 9 not subscribed") || has("subscribe set in fn 9's ops")) {
+    if (has("fn 9 subscribed")) return p.open() && p.ok(p.request(9, kOpSubscribe, {0, 0, 0, 0, 0, 0}));
     return true;
   }
   if (has("ignored TLV") || has("ignored and listed") || (has("gpio") && (has("channel 3") || has("not in the plan")))) {
@@ -654,7 +730,7 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     }
     return true;
   }
-  return true;   // the refusals that come before any state (core §4.3 orders 1, 5, 6), oep.link
+  return true;   // the refusals that come before any state (core §4.3 orders 1, 5, 6), oep.probe.link
 }
 
 static void testOps(const char *file, const char *list) {
@@ -667,7 +743,7 @@ static void testOps(const char *file, const char *list) {
     const Bytes req = hex(c["request_hex"].string);
     p.corr = static_cast<uint16_t>(getU16(&req[1]) - 40);
     if (p.corr == 0 || p.corr > 0xffd0) p.corr = static_cast<uint16_t>(p.corr - 48);   // never 0 on the way (core §4.1)
-    if (!setUp(p, name, c["state"].string)) {
+    if (!setUp(p, name, c["state"].string, c["fns"])) {
       printf("  ops \"%s\": the state could not be set up\n", name.c_str());
       CHECK(false);
       continue;
@@ -676,7 +752,7 @@ static void testOps(const char *file, const char *list) {
     Bytes want = hex(c["answer_hex"].string);
     OpsProbe::restarts = 0;
     Bytes got = p.send(req);
-    if (name.find("core restart") != std::string::npos)   // the restart follows its success answer only (core §6.6)
+    if (names(c["fns"], "oep.probe.restart"))   // the restart follows its success answer only (oep-if-restart §2)
       CHECK(OpsProbe::restarts == (name.find("completed success") != std::string::npos ? 1 : 0));
     if (name.find("logic segments") != std::string::npos && want.size() == 5 + 2 + 37 && got.size() == want.size()) {
       putU32(&want[5 + 2 + 12], p.actual_samples);                   // the probe's own values (see the top)
@@ -686,7 +762,7 @@ static void testOps(const char *file, const char *list) {
   }
 }
 
-// fn 0 restart on the whole probe (core §6.6): a slot's connection on the rvswd wire with its console bound (the
+// oep.probe.restart on the whole probe (oep-if-restart §2): a slot's connection on the rvswd wire with its console bound (the
 // settings'), the session's gpio plan, a settings plan - all let go of before the handler runs: the connection closed
 // without a reset of the target (the hart left halted), the stream closed, every channel free; the answer out first.
 static void testRestartLetsGo() {
@@ -694,6 +770,18 @@ static void testRestartLetsGo() {
   boot();
   OpsProbe p;
   p.corr = 100;
+  static OpsProbe *seen;
+  static bool connected, open, held, halted;
+  seen = &p;
+  OpsProbe::restarts = 0;
+  p.ep.setRestart([]() {   // before the first poll: listed as fn 11
+    ++OpsProbe::restarts;
+    connected = seen->port.connected;
+    open = seen->console.isOpen();
+    held = seen->pins.owner(1) || seen->pins.owner(2) || seen->pins.owner(3) || seen->pins.owner(6);
+    halted = seen->phy.halted;
+  }, 2000);
+  CHECK(p.ep.restartFn() == 11);
   CHECK(setUp(p, "probe.config state", ""));   // the slot at boot attached, its console bound (session S open)
   CHECK(p.port.connected && p.console.isOpen() && p.phy.halted);
   CHECK(p.plan(2, reg::fixture_gpio::kRoleLine, 3));
@@ -701,21 +789,30 @@ static void testRestartLetsGo() {
   const uint16_t fn_uart = 5;
   CHECK(p.ep.replacePlan(settings, 1, &fn_uart, 1) == 0);
   CHECK(p.pins.owner(3) != 0 && p.pins.owner(6) != 0);
-  static OpsProbe *seen;
-  static bool connected, open, held, halted;
-  seen = &p;
-  OpsProbe::restarts = 0;
-  p.ep.setRestart([]() {
-    ++OpsProbe::restarts;
-    connected = seen->port.connected;
-    open = seen->console.isOpen();
-    held = seen->pins.owner(1) || seen->pins.owner(2) || seen->pins.owner(3) || seen->pins.owner(6);
-    halted = seen->phy.halted;
-  }, 2000);
-  const Bytes a = p.request(0, kOpRestart, {});
+  const Bytes a = p.request(11, kOpRestart, {});
   CHECK(a.size() == 5 && a[3] == kResolutionCompleted && a[4] == kOutcomeSuccess);
   CHECK(OpsProbe::restarts == 1 && !connected && !open && !held && halted && !p.ep.locked());
   CHECK(p.request(0, kOpLockState, {}, 0).empty());   // nothing served after it
+}
+
+// core §7.4: every fn's ops (fn 0, the nine interfaces, oep.probe.plan and oep.probe.restart) is a valid, canonical
+// value, the first TLV of its describe; list has fn 1 to 11 and never fn 0.
+static void testEveryOpsCanonical() {
+  ++cases;
+  boot();
+  OpsProbe p;
+  p.ep.setRestart(OpsProbe::restartHook, 2000);
+  for (uint16_t fn = 0; fn <= 11; ++fn) {
+    const Bytes d = p.request(0, kOpDescribe, {uint8_t(fn), 0, 0, 0}, 0);
+    std::vector<int> ops;
+    const bool tagged = d.size() >= 6 + 3 && d[6] == kTagOps && d.size() >= 9u + getU16(&d[7]);
+    CHECK(tagged && opsDecode(Bytes(d.begin() + 9, d.begin() + 9 + getU16(&d[7])), ops) && !ops.empty());
+  }
+  const Bytes l = p.request(0, kOpList, {0, 0, 0, 0}, 0);
+  CHECK(l.size() >= 8 && getU16(&l[5]) == 11 && getU16(&l[8]) == 1);
+  CHECK(p.ep.interfaceAt(10) && strcmp(p.ep.interfaceAt(10)->name(), "oep.probe.plan") == 0);
+  CHECK(p.ep.interfaceAt(11) && strcmp(p.ep.interfaceAt(11)->name(), "oep.probe.restart") == 0);
+  CHECK(!p.ep.interfaceAt(12));
 }
 
 static void testProbeConfigHash() {
@@ -744,9 +841,11 @@ int main() {
   testConfirm();
   testDiscovery();
   testSessions();
+  testOpsEncoding();
   testOps("refusals.json", "cases");
   testOps("ops.json", "cases");
   testRestartLetsGo();
+  testEveryOpsCanonical();
   testProbeConfigHash();
   printf("vectors: %d cases, %d checks, %d failures\n", cases, checks, failures);
   return failures ? 1 : 0;

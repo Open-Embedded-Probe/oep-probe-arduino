@@ -419,7 +419,7 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   uint8_t roles[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
   w.roleChannels(roles, kMaxChannels, table_.allowedMask());
-  w.u32(kTagFeatures, cap::kFeaturesNotify);   // query and force: in the ops tag (offers); bits 0 / 1 reserved
+  // no features: revision 1 defines no bit (query, force, subscribe and unsubscribe are in the ops tag, capture §3.6)
   uint8_t mode[10] = {1, 1};                       // one-shot, runs in the background (DMA)
   putU32(mode + 2, kSegmentBytes * 8);             // max samples at w = 1
   putU32(mode + 6, 1);                             // one segment

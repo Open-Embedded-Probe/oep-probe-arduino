@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// The smallest OEP probe: oep.core alone. It answers confirm, list and describe (oep-spec docs/oep-core.ja.md §7), holds
-// the session lock (§6) and nothing else - the frame every probe starts from. Flash it, then on the PC:
+// The smallest OEP probe: fn 0 (the core) alone, no interface - list is empty. It answers confirm, list, describe and
+// clock (oep-spec docs/oep-core.ja.md §7), holds the session lock (§6) and nothing else - the frame every probe starts from. Flash it, then on the PC:
 //
 //   pip install oep-client-python
 //   oep dump --port <the board's serial port>
@@ -31,7 +31,7 @@ static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8}, kTransport,
                               kInterface);
 
-// oep.core's describe (core §7.5): the model, a unit id that is the same on every transport, the number of channels
+// fn 0's describe (core §7.5): the model, a unit id that is the same on every transport, the number of channels
 // (pins) and the ones the probe keeps for itself. Written once, then handed to the endpoint.
 static uint8_t probeTlv[64];
 

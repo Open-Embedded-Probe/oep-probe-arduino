@@ -130,7 +130,7 @@ class WireRvswd final : public Interface {
   DebugPort &port() const { return port_; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void sessionOver() override { releaseConnection(port_, DebugPort::kUserHost, false); }
-  // fn 0 restart (core §6.6): the connection closes whoever uses it (a slot too); the target is left as it is
+  // oep.probe.restart (oep-if-restart §2): the connection closes whoever uses it (a slot too); the target is left as it is
   void probeRestart() override { releaseConnection(port_, 0xff, true); }
 
  private:

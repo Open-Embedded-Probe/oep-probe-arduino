@@ -70,6 +70,7 @@ class Track final : public Interface, public GroupTrack {
   explicit Track(bool trigger = false) : trigger_(trigger) {}
   const char *name() const override { return "io.github.test.track"; }
   uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
@@ -111,7 +112,7 @@ struct Rig {
   Rig(bool trigger_a = false) : a(trigger_a) {
     ep.add(a);       // fn 1
     ep.add(b);       // fn 2
-    ep.add(group);   // fn 3
+    ep.add(group);   // fn 3; oep.probe.plan fn 4
     group.addTrack(a, a);
     group.addTrack(b, b);
   }
@@ -135,20 +136,20 @@ static bool ok(const Result &r) { return r.resolution == kResolutionCompleted &&
 static void testBoundPlan() {
   Rig rig;
   CHECK(rig.send(request(1, 0, 0x10, openPayload(7, 3000)))[5] == 1);
-  CHECK(rig.send(request(2, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 12, 0, 0x90, 5, 0, 2, 0, 0, 13, 0}, true, 7))[5] == 1);
+  CHECK(rig.send(request(2, rig.ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 12, 0, 0x90, 5, 0, 2, 0, 0, 13, 0}, true, 7))[5] == 1);
   CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
   const Bytes cause4 = {0x01, 1, 0, 4, 0x03, 2, 0, 3, 0};   // cause 4, holder_fn 3
-  Bytes r = rig.send(request(3, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 14, 0}, true, 7));
+  Bytes r = rig.send(request(3, rig.ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 14, 0}, true, 7));
   CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4));
-  r = rig.send(request(4, 0, 0x05, {1, 2, 0}, true, 7));
+  r = rig.send(request(4, rig.ep.planFn(), kOpPlanRelease, {1, 2, 0}, true, 7));
   CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4));
-  r = rig.send(request(5, 0, 0x05, {0}, true, 7));   // every fn: refused whole
+  r = rig.send(request(5, rig.ep.planFn(), kOpPlanRelease, {0}, true, 7));   // every fn: refused whole
   CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4));
   RoleAssignment now[4];
   CHECK(rig.ep.plan(now, 4) == 2 && now[0].channel == 12 && now[1].channel == 13);   // nothing changed
   CHECK(ok(rig.op(grp::kOpBind, {0})));
-  CHECK(rig.send(request(6, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 14, 0}, true, 7))[5] == 1);
-  CHECK(rig.send(request(7, 0, 0x05, {0}, true, 7))[5] == 1);
+  CHECK(rig.send(request(6, rig.ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 14, 0}, true, 7))[5] == 1);
+  CHECK(rig.send(request(7, rig.ep.planFn(), kOpPlanRelease, {0}, true, 7))[5] == 1);
   CHECK(rig.ep.plan(now, 4) == 0);
 }
 

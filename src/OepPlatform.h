@@ -225,7 +225,7 @@ inline size_t platformUnitId(uint8_t *out, size_t capacity) {
   return at;
 }
 
-// The MCU's part and revision for oep.core's describe chip (core §7.5): "esp32p4 v1.0", "rp2350 v2" (the SDK's chip
+// The MCU's part and revision for fn 0's describe chip (core §7.5): "esp32p4 v1.0", "rp2350 v2" (the SDK's chip
 // version number, not a stepping letter). -> bytes written, 0 when unknown.
 inline size_t platformChip(char *out, size_t room) {
   int n = 0;
@@ -249,7 +249,7 @@ inline size_t platformChip(char *out, size_t room) {
   return n < 0 ? 0 : (static_cast<size_t>(n) < room ? static_cast<size_t>(n) : room);
 }
 
-// oep.core's describe chip (core §7.5, optional): a sketch's describe calls it after describeCore.
+// fn 0's describe chip (core §7.5, optional): a sketch's describe calls it after describeCore.
 inline bool describeChip(TlvWriter &w) {
   char chip[32];
   const size_t n = platformChip(chip, sizeof chip);
@@ -262,7 +262,7 @@ inline bool describeChip(TlvWriter &w) {
 inline uint32_t platformRandom32() { return bootIdSource(); }
 
 #if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
-// The chip restarted as from power-on, for fn 0 restart (core §6.6, Endpoint::setRestart). Does not return. ESP32:
+// The chip restarted as from power-on, for oep.probe.restart (oep-if-restart, Endpoint::setRestart). Does not return. ESP32:
 // esp_restart (the system reset: on the ESP32-P4 the HS USB device drops off the bus with it). RP2: arduino-pico's
 // rp2040.reboot(), a watchdog reset 10 ms on, which resets the USB controller too (the device re-enumerates).
 inline void platformRestart() {

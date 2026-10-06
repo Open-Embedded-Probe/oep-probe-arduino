@@ -312,6 +312,8 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       const uint16_t fn = getU16(v);
       if (fn == 0) return rejected(kRejectMalformed);
       if (!endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
+      // a fn with no plan role (oep.probe.plan itself, a wire): as plan_apply, unsupported (oep-if-plan §2.5)
+      if (!endpoint_.interfaceAt(fn)->planRoles()) return unsupportedTag(out, capacity, raw);
       return completed();
     }
     case cfg::kTlvItemLabel:

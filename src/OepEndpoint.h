@@ -7,7 +7,9 @@
 // extended by every request of its holder and counted from when that request completed (a long request never lapses
 // its own lock). An end, a lapse and a takeover by force all release everything the session created (core §9); no
 // resume - a request with any id while the lock is free is no_session, and a resent end is answered from the resend
-// table. Every fn's describe starts with its ops (core §1.2, §7.4), written here from Interface::offers.
+// table. Every fn's describe starts with its ops (core §1.2, §7.4), written here from Interface::offers. fn 0 is the core
+// itself (no name, not in list); oep.probe.plan and oep.probe.restart are interfaces the endpoint lists itself, after
+// the sketch's (ProbePlan, ProbeRestart below).
 #pragma once
 
 #include <Arduino.h>
@@ -22,6 +24,43 @@ namespace oep {
 // The raw side of the serial ports (transports §4): what a serial port carries outside the frames. The binds implement it
 // (oep.probe.config §1.2); the endpoint calls it from poll(), the one writer of every port.
 class PinTable;
+
+class Endpoint;
+
+// oep.probe.plan (oep-if-plan): plan_apply (0x01) and plan_release (0x02), describe plan_roles (0x40). The endpoint lists
+// it itself, after every interface the sketch added, when one of them has plan roles (Interface::planRoles), and not
+// otherwise (oep-if-plan: listed by a probe whose interfaces have plan roles, at most one). A sketch never adds it.
+class ProbePlan final : public Interface {
+ public:
+  explicit ProbePlan(Endpoint &endpoint) : endpoint_(endpoint) {}
+  const char *name() const override { return reg::probe_plan::kName; }
+  uint16_t instance() const override { return 0; }
+  uint8_t revision() const override { return reg::probe_plan::kRevision; }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_plan::kLockFreeOps, op); }
+  bool offers(uint8_t op) const override { return op == kOpPlanApply || op == kOpPlanRelease; }   // both required
+  size_t describe(uint8_t *out, size_t capacity) override;
+  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+
+ private:
+  Endpoint &endpoint_;
+};
+
+// oep.probe.restart (oep-if-restart): restart (0x01), describe restart_max_ms (0x40). An optional interface the endpoint
+// lists itself, after oep.probe.plan, when the sketch gave it a handler (Endpoint::setRestart). A sketch never adds it.
+class ProbeRestart final : public Interface {
+ public:
+  explicit ProbeRestart(Endpoint &endpoint) : endpoint_(endpoint) {}
+  const char *name() const override { return reg::probe_restart::kName; }
+  uint16_t instance() const override { return 0; }
+  uint8_t revision() const override { return reg::probe_restart::kRevision; }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_restart::kLockFreeOps, op); }
+  bool offers(uint8_t op) const override { return op == kOpRestart; }
+  size_t describe(uint8_t *out, size_t capacity) override;
+  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+
+ private:
+  Endpoint &endpoint_;
+};
 
 class RawPorts {
  public:
@@ -42,12 +81,14 @@ class RawPorts {
 
 class Endpoint {
  public:
-  static constexpr size_t kMaxInterfaces = 16;
+  // The fns a probe lists: the sketch's interfaces (at most kMaxInterfaces - 2) and the endpoint's own two (oep.probe.plan,
+  // oep.probe.restart) after them.
+  static constexpr size_t kMaxInterfaces = 24;
   static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMinMs = reg::kLimitLeaseMinMs, kLeaseMaxMs = reg::kLimitLeaseMaxMs;
 
   // A transport's kind (core §7.5, registry transport_kind): the serial ports (UART bridge, USB CDC, USB-Serial/JTAG)
   // frame as 0x00 <COBS> 0x00 and share the line with raw bytes (transports §4); vendor bulk, HID and TCP are
-  // length(u16) message. The endpoint lists the transports in oep.core's describe, in the order they were added.
+  // length(u16) message. The endpoint lists the transports in fn 0's describe, in the order they were added.
   enum : uint8_t {
     kUartBridge = reg::core::kTransportKindUartBridge, kUsbCdc = reg::core::kTransportKindUsbCdc,
     kUsbSerialJtag = reg::core::kTransportKindUsbSerialJtag, kVendorBulk = reg::core::kTransportKindVendorBulk,
@@ -121,13 +162,27 @@ class Endpoint {
   }
 
   // An interface, numbered fn 1, 2, ... in the order added. The list stays the same for a boot (core §7.2): every add
-  // comes before the first poll(), and one after it is refused (false), as is a name outside core §13 rule 1.
+  // comes before the first poll(), and one after it is refused (false), as is a name outside core §13 rule 1 and an
+  // interface that offers no op (its ops tag would have no valid encoding, core §7.4). At the first poll() the endpoint
+  // lists its own interfaces after the sketch's, in this order: oep.probe.plan when an interface has plan roles,
+  // oep.probe.restart when setRestart gave a handler - so the same firmware gives every interface the same fn and
+  // instance at every boot, and a firmware that adds an interface moves only these two (the saved settings name their
+  // interfaces by name, instance and revision and are renumbered, oep-if-probe-config §2; they never name these two).
   bool add(Interface &interface);
   bool anyPlanRoles() const {
     for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->planRoles()) return true;
     return false;
   }
-  // The plan (oep-core §8, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
+  // The fns of oep.probe.plan and oep.probe.restart (0: not listed) - before the first poll(), the fns they will have.
+  uint16_t planFn() const {
+    if (polled_) return fnOf(plan_iface_);
+    return anyPlanRoles() ? static_cast<uint16_t>(count_ + 1) : 0;
+  }
+  uint16_t restartFn() const {
+    if (polled_) return fnOf(restart_iface_);
+    return restart_ ? static_cast<uint16_t>(count_ + 1 + (anyPlanRoles() ? 1 : 0)) : 0;
+  }
+  // The plan (oep-if-plan, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
   // a replacement of the fns listed that is all or nothing and outlives sessions (0: applied; else the reject reason,
   // with the plans before it applied again). A listed fn with no role is released.
   static constexpr size_t kMaxRoles = 64;   // the plan's role assignments, every fn together (describe plan_roles)
@@ -146,13 +201,10 @@ class Endpoint {
   // (PinTable::deferIdle; oep-core §8). ProbeConfig::setPins sets it too.
   void setPins(PinTable *pins) { pins_ = pins; }
   bool disabled(uint16_t channel) const { return channel < 64 && (disabled_ >> channel) & 1; }
-  // The identity of the interface list (oep-if-probe-config §2): CRC-32 of every entry (fn u16, instance u16,
-  // revision u8, name) in fn order, oep.core first.
-  uint32_t listHash() const;
-  // oep.core's describe: the probe itself, as TLV bytes (kept by the caller). Declarations only (core §7.3).
+  // fn 0's describe: the probe itself, as TLV bytes (kept by the caller). Declarations only (core §7.3).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
   const uint8_t *probeDescription(size_t &length) const { length = probe_tlv_length_; return probe_tlv_; }
-  // The boot_id returned by confirm, open and the heartbeat (core §6.5): a value that changes every boot. Without a
+  // The boot_id returned by confirm, clock and open (core §6.5): a value that changes every boot. Without a
   // call the endpoint picks it itself when the first message arrives (bootIdSource: a hardware random source, or on a
   // platform without one the timer's count at that external event). A sketch with a better source of its own (a
   // counter it keeps in non-volatile storage) sets it in setup(); 0 is as good as any other value.
@@ -161,15 +213,17 @@ class Endpoint {
     if (!boot_id_set_) setBootId(bootIdSource());
     return boot_id_;
   }
-  // The optional port_speed (oep-if-link §3, oep.link op 0x03): a host raises a UART bridge's baud for its session. Setting
-  // a handler turns the op on in the probe's oep.link (Link below: in its ops; without one it is unknown_operation).
+  // The optional port_speed (oep-if-link §3, oep.probe.link op 0x03): a host raises a UART bridge's baud for its session.
+  // Setting a handler turns the op on in the probe's oep.probe.link (Link below: in its ops; without one it is
+  // unknown_operation).
   // fn(port, baud, apply): apply false = the rate the port would run at for `baud` (0: this UART cannot make it, the
   // request is unsupported); apply true = switch the port to `baud` (its output already flushed) and return the rate it
   // runs at. `base` is the boot speed every revert goes back to.
   using PortSpeedFn = uint32_t (*)(uint8_t port, uint32_t baud, bool apply);
   void setPortSpeed(PortSpeedFn fn, uint32_t base) { port_speed_ = fn; speed_base_ = base; }
-  // The optional restart (fn 0 op 0x14, core §6.6). Setting a handler puts restart in fn 0's ops and restart_max_ms
-  // (describe 0x4F, core §7.5) in its describe; without one the op is unknown_operation and the tag is not sent.
+  // The optional oep.probe.restart (oep-if-restart). Setting a handler before the first poll() lists the interface (after
+  // the sketch's and oep.probe.plan; restartFn) with restart (0x01) and restart_max_ms (describe 0x40); without one
+  // the probe does not list it. A call after the first poll() changes nothing (the list is fixed for the boot, core §7.2).
   // fn restarts the chip as from power-on and does not return (oep::platformRestart: esp_restart on an ESP32, the
   // watchdog on an RP2). max_ms: the longest from the answer leaving the transport until the probe answers confirm on
   // that transport again - boot, USB re-enumeration included; at least restart_after_answer_ms (raised to it).
@@ -181,6 +235,7 @@ class Endpoint {
   using RestartFn = void (*)();
   static constexpr uint32_t kRestartSettleMs = 20, kRestartDrainMs = 200;
   void setRestart(RestartFn fn, uint32_t max_ms) {
+    if (polled_) return;
     restart_ = fn;
     restart_max_ms_ = max_ms < reg::kLimitRestartAfterAnswerMs ? reg::kLimitRestartAfterAnswerMs : max_ms;
   }
@@ -188,8 +243,9 @@ class Endpoint {
   // The rate a sped-up port runs at now (0: every port at its boot speed), and whether it is committed (else trying).
   uint32_t portSpeedNow() const { return speed_state_ == kSpeedBase ? 0 : speed_rate_; }
   bool portSpeedCommitted() const { return speed_state_ == kSpeedCommitted; }
-  // Experimental event from an interface (sent to the lock holder if it subscribed to that interface), after
-  // results; kept in a small queue until then (oldest dropped when full - the seq gap shows it).
+  // An event from an interface that notifies() (sent to the lock holder if it subscribed to that fn): not batched, it
+  // goes out as soon as the answers to what has arrived have (core §11.3, §11.4); kept in a small queue until then
+  // (oldest dropped when full - the seq gap shows it).
   bool event(Interface &from, uint8_t kind, const uint8_t *payload, size_t length);
   // Events the interface lost before handing them over (its own queue overflowed): the seq skips them, so the
   // host sees the gap. Every event generated must take a seq number, sent or not.
@@ -204,7 +260,7 @@ class Endpoint {
   // Flush the stream after each poll that wrote something: a buffered USB vendor interface sends a short frame only
   // when flushed (E160). Off for streams that send by themselves (USB-Serial/JTAG, UART).
   void setFlushAfterBurst(bool on) { transports_[0].flush_after_burst = on; }
-  // Experimental: a zero-copy path for an interface's data pushes (length-prefixed framing only). The interface builds
+  // A zero-copy path for an interface's data pushes (length-prefixed framing only). The interface builds
   // whole push frames itself, from its own task: directPush says whether it may send now (the lock holder subscribed
   // its fn) with the fn and the subscriber's batching; takeSeq numbers a frame (shared with that fn's events).
   void setDirect(DirectTransport *direct) { direct_ = direct; }
@@ -247,6 +303,11 @@ class Endpoint {
   Interface *interfaces_[kMaxInterfaces] = {};
   size_t count_ = 0;
   bool polled_ = false;   // poll() ran: the interface list is fixed (core §7.2)
+  ProbePlan plan_iface_{*this};         // oep.probe.plan, listed by freeze() when an interface has plan roles
+  ProbeRestart restart_iface_{*this};   // oep.probe.restart, listed by freeze() with a restart handler
+  friend class ProbePlan;
+  friend class ProbeRestart;
+  void freeze();   // the first poll(): the endpoint's own interfaces after the sketch's, the list fixed
   const uint8_t *probe_tlv_ = nullptr;
   size_t probe_tlv_length_ = 0;
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
@@ -280,7 +341,7 @@ class Endpoint {
   void speedRevert();            // back to the boot speed (nothing when there already)
   void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
   void speedBad();               // a broken candidate on the sped-up port
-  RestartFn restart_ = nullptr;  // setRestart: restart in fn 0's ops
+  RestartFn restart_ = nullptr;  // setRestart: oep.probe.restart listed
   uint32_t restart_max_ms_ = 0;
   bool restart_taken_ = false;   // this request is a restart answered success: the probe restarts after the answer
   volatile bool restarting_ = false;
@@ -304,11 +365,12 @@ class Endpoint {
   Result describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result open(uint32_t session, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  Result planReleaseRequest(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   uint16_t replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns, bool persistent);
   void planRelease(const uint16_t *fns, size_t nfns);
   bool planned_[kMaxInterfaces] = {};
   bool persistent_[kMaxInterfaces] = {};   // planned through replacePlan (oep.probe.config): a lapse does not release it
-  // Experimental push subscriptions, per fn.
+  // Subscriptions, per fn (core §11.3: one per fn, the lock holder's).
   volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;
   uint16_t push_seq_[kMaxInterfaces] = {};
@@ -316,19 +378,15 @@ class Endpoint {
   uint32_t max_delay_ms_[kMaxInterfaces] = {};
   uint32_t waiting_since_[kMaxInterfaces] = {};
   bool waiting_[kMaxInterfaces] = {};
-  // events: fn (0 = core), seq per fn shared with data frames
+  // events: fn (1 and up: fn 0 sends none, core §11.2), seq per fn shared with data frames
   struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[40]; };
   static constexpr size_t kEvents = 32;
   Event events_[kEvents];
   uint32_t event_head_ = 0, event_tail_ = 0;
-  uint16_t core_seq_ = 0;
-  bool heartbeat_ = false;
-  uint32_t heartbeat_ms_ = reg::kHeartbeatDefaultMs;
-  uint32_t heartbeat_last_ = 0;
   bool queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length);
   bool sendEvents();
   size_t push_queue_ = 1024;
-  Result subscription(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  Result subscription(uint16_t fn, uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   void push();
   void endSubscriptions();
   void send(size_t length);
@@ -359,20 +417,20 @@ class Endpoint {
   uint32_t remaining() const;
 };
 
-// oep.link (oep-if-link): the link test - source (length(u32) -> len(u16) data, byte k = k & 0xFF, at most max_frame
-// - 26: link_source_overhead_bytes, the room for an ignored TLV kept whatever the request carries) and sink (count(u16)
-// data -> nothing) - and, when the endpoint has a port_speed handler (setPortSpeed), port_speed on a UART bridge. An
-// optional interface: a probe lists at most one; add it like any other (endpoint.add(link)).
+// oep.probe.link (oep-if-link): the link test - source (length(u32) -> len(u16) data, byte k = k & 0xFF, at most
+// max_frame - 26: link_source_overhead_bytes, the room for an ignored TLV kept whatever the request carries) and sink
+// (count(u16) data -> nothing) - and, when the endpoint has a port_speed handler (setPortSpeed), port_speed on a UART
+// bridge. An optional interface: a probe lists at most one; add it like any other (endpoint.add(link)).
 class Link final : public Interface {
  public:
   explicit Link(Endpoint &endpoint) : endpoint_(endpoint) {}
-  const char *name() const override { return reg::link::kName; }
+  const char *name() const override { return reg::probe_link::kName; }
   uint16_t instance() const override { return 0; }
-  uint8_t revision() const override { return reg::link::kRevision; }
-  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::link::kLockFreeOps, op); }
+  uint8_t revision() const override { return reg::probe_link::kRevision; }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_link::kLockFreeOps, op); }
   bool offers(uint8_t op) const override {
-    return op == reg::link::kOpSource || op == reg::link::kOpSink ||
-           (op == reg::link::kOpPortSpeed && endpoint_.port_speed_ != nullptr);
+    return op == reg::probe_link::kOpSource || op == reg::probe_link::kOpSink ||
+           (op == reg::probe_link::kOpPortSpeed && endpoint_.port_speed_ != nullptr);
   }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 
