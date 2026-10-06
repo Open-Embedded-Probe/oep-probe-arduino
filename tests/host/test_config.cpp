@@ -183,6 +183,13 @@ int main() {
     CHECK(malformed(set(pinned, label(1, {0xC0, 0x80}), out)));       // over-long form
     CHECK(unsupportedWith(set(pinned, label(8, {'x'}), out), out, label_raw));   // beyond the channels
     CHECK(malformed(set(pinned, label(8, {0x01}), out)));             // malformed before unsupported
+    // idle (probe.config §1, core §4.3 "Contradictions and undefined values"): mode 5 with a drive is unsupported for the
+    // mode, not malformed for a drive on a mode other than 3 / 4; mode 2 with a drive stays malformed
+    const uint8_t idle_raw = cfg::kTlvItemIdle | kTagCritical;
+    CHECK(unsupportedWith(set(pinned, Bytes{idle_raw, 6, 1, 0, 5, 0, 0, 0}, out), out, idle_raw));
+    CHECK(unsupportedWith(set(pinned, Bytes{idle_raw, 3, 1, 0, 5}, out), out, idle_raw));
+    CHECK(malformed(set(pinned, Bytes{idle_raw, 6, 1, 0, 2, 0, 0, 0}, out)));
+    CHECK(malformed(set(pinned, Bytes{idle_raw, 4, 1, 0, 5, 0}, out)));   // the length still first
     // a probe without a pin table has no channels to name: label is not declared (unsupported, its tag)
     CHECK(unsupportedWith(set(config, label(1, {'x'}), out), out, label_raw));
   }

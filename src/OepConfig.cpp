@@ -276,9 +276,11 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       // the strength (probe.config §1, fixture §1.1): drive_kind(u8) drive_value(u16) after mode, mode 3 / 4 only
       const bool output = v[2] == PinTable::kIdleOutputLow || v[2] == PinTable::kIdleOutputHigh;
       if (len == 4 || len == 5) return rejected(kRejectMalformed);
-      if (len >= 6 && !output) return rejected(kRejectMalformed);
-      // an idle mode of 5 or more, an undefined drive_kind (2+): unsupported with the item's tag (probe.config §2's table)
+      // an idle mode of 5 or more: unsupported with the item's tag (probe.config §2's table), and a drive with it is not
+      // the contradiction "a drive on mode 0 to 2" (core §4.3 "Contradictions and undefined values")
       if (v[2] > PinTable::kIdleOutputHigh) return unsupportedTag(out, capacity, raw);
+      if (len >= 6 && !output) return rejected(kRejectMalformed);
+      // an undefined drive_kind (2+): unsupported with the item's tag (probe.config §2's table)
       if (len >= 6 && v[3] > reg::fixture_gpio::kDriveKindMaxMa) return unsupportedTag(out, capacity, raw);
       if (!pins_) return unsupportedTag(out, capacity, raw);
       if (getU16(v) >= PinTable::kChannels || !pins_->allowed(getU16(v))) return unsupportedTag(out, capacity, raw);
