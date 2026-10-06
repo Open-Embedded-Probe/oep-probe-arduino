@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 #include "OepEndpoint.h"
+#include "OepLog.h"
 #include "OepPinTable.h"
 
 #include <string.h>
@@ -400,6 +401,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   if (capacity > static_cast<size_t>(limits_.max_frame) - kResultHeader) capacity = limits_.max_frame - kResultHeader;
 
   lapse();
+  OEP_LOGF("req corr %u fn %u op 0x%02x sid %08lx len %u", corr, fn, op, static_cast<unsigned long>(session),
+           static_cast<unsigned>(payload_length));
   // core §4.3 order 1, the header: a fn this probe does not have, an op that fn does not offer (its ops, core §1.2), an
   // op that needs the lock with session_id 0 (open's own id 0 is malformed: open checks it) - before the resend table,
   // so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
@@ -465,6 +468,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     d.length = d.kept ? static_cast<uint16_t>(total) : 0;
     if (d.kept) memcpy(d.result, tx_, total);
   }
+  OEP_LOGF("ans corr %u res %u detail %u len %u", corr, result.resolution, result.detail, static_cast<unsigned>(result.length));
   send(total);
   speedApply();   // port_speed: the answer went out at the old speed; now switch (or revert)
 }

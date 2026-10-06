@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 #include "OepCh32Dm.h"
+#include "OepLog.h"
 
 namespace oep {
 namespace {
@@ -112,8 +113,41 @@ void Ch32Dm::retune() {
 // freshly brought-up bus (the first transaction after a change of state can be lost on this part).
 void Ch32Dm::settleHalted(bool ack_reset) {
   if (ack_reset) { phy_.write(kDmControl, 0x90000001); ++restarts_; }   // haltreq | ackhavereset | dmactive
-  relink();
+  steady();
   halted_ = true;
+}
+
+// After a change of hart state - one the probe made (halt, a run's or a step's stop, resume) or found (a hart stopped
+// at its breakpoint): the link brought up again and looked at until it stays up. A target that drops its link at the
+// change (a CH32L103) does not always drop it at once: some transactions after the change still answer, then the line
+// reads all ones, or the last value read (oep-if-debug §4's table), and writes are lost until the link is brought up
+// again - which may take a while to hold. One relink right after the change found the link still up, and the register
+// reads and writes that followed met the drop: a run that stopped at its ebreak answered line or fault (dpc unread),
+// a halt followed by write_block answered fault or state ("run: timeout" / "run: fault" on ch32rv's uploads to the
+// L103 through the RP2350, about 1 in 15 back to back, 3 in 12 with other sessions between them). One look: DMSTATUS a
+// module's (a found version) and DMCONTROL with dmactive set and hart 0 selected (hartsel and hasel 0: a stale read,
+// the DMSTATUS before it, has authenticated - bit 7 - set there; all ones has everything). kSteadyLooks good looks in
+// a row; a bad one relinks and starts the count again; kSteadyMs at most. false: it did not stay up.
+bool Ch32Dm::steady() {
+  relink();
+  const uint32_t started = millis();
+  int good = 0, bad = 0;
+  while (good < kSteadyLooks) {
+    uint32_t status = 0, control = 0;
+    if (moduleStatus(status) && phy_.read(kDmControl, control) && (control & 1u) && !(control & 0x07ffffc0u)) {
+      ++good;
+      continue;
+    }
+    OEP_LOGF("dm steady: bad look %d status %08lx control %08lx", bad, static_cast<unsigned long>(status),
+             static_cast<unsigned long>(control));
+    ++bad;
+    good = 0;
+    if (millis() - started >= kSteadyMs) { OEP_LOGF("dm steady: not up after %d bad looks", bad); return false; }
+    delayMicroseconds(50);
+    relink();
+  }
+  if (bad) OEP_LOGF("dm steady: up after %d bad looks, %lu ms", bad, static_cast<unsigned long>(millis() - started));
+  return true;
 }
 
 // What DMSTATUS says now: allhalted (bit 9) of a version-2 or -3 module, with no reset pending (a V00x freezes the
@@ -267,6 +301,7 @@ bool Ch32Dm::resume() {
       ok = true;                                                 // allrunning, not halted
   } while (!ok && millis() - started < kDmWaitMs);
   phy_.write(kDmControl, 0x00000001);
+  if (ok) steady();                                              // the change: the link up again, and staying up
   halted_ = !ok;
   return ok;
 }
@@ -493,11 +528,16 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   // ("run: timeout"), where 0.0.28, which left them set, passed. Restoring them keeps the target as §4.4 says.
   constexpr uint32_t kEbreakSU = 0x3000u;   // ebreaks (13), ebreaku (12)
   uint32_t dcsr = 0;
-  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0x8003u | kEbreakSU)) return false;
+  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0x8003u | kEbreakSU)) {
+    OEP_LOGF("dm run: dcsr read / write failed (cmderr %u)", cmderr_);
+    return false;
+  }
   const uint32_t ebreak_su = dcsr & kEbreakSU;
   for (size_t i = 0; i < count; ++i)
-    if (!writeRegister(regnos[i], values[i])) return false;
-  if (!writeRegister(0x07b1, pc)) return false;
+    if (!writeRegister(regnos[i], values[i])) { OEP_LOGF("dm run: reg 0x%04x write failed (cmderr %u)", regnos[i], cmderr_); return false; }
+  if (!writeRegister(0x07b1, pc)) { OEP_LOGF("dm run: dpc write failed (cmderr %u)", cmderr_); return false; }
+  OEP_LOGF("dm run: pc %08lx dcsr %08lx, %u regs in, resumereq", static_cast<unsigned long>(pc),
+           static_cast<unsigned long>(dcsr), static_cast<unsigned>(count));
   phy_.write(kAbstractAuto, 0);
   // A change of hart state drops the CH32L103's DMI link, so a failed read is followed by a bus bring-up. One
   // resumereq, never re-issued (oep-if-debug §4.4): a stop with dpc still at `pc` may be a run that never started
@@ -510,18 +550,26 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   };
   phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
   bool halted = false;
-  uint32_t relinked_us = micros();
+  uint32_t relinked_us = micros(), looks = 0, unanswered = 0, last_status = 0;
   while (!expired()) {
     uint32_t status = 0;
-    if (!waitStatus(status, relinked_us)) continue;
+    ++looks;
+    if (!waitStatus(status, relinked_us)) { ++unanswered; continue; }
+    last_status = status;
     if (status & (1u << 9)) { halted = true; break; }
   }
+  OEP_LOGF("dm run: %s after %lu us, %lu looks (%lu no module), DMSTATUS %08lx", halted ? "stopped" : "timeout",
+           static_cast<unsigned long>(micros() - started), static_cast<unsigned long>(looks),
+           static_cast<unsigned long>(unanswered), static_cast<unsigned long>(last_status));
+  (void)looks;   // the trace's (OEP_DEBUG_LOG) only
+  (void)unanswered;
+  (void)last_status;
   phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
   phy_.write(kAbstractCs, 0x700);
   report.elapsed_us = micros() - started;
   report.stopped = halted;
   if (halted) {
-    relink();                           // the stop changed the hart's state
+    steady();                           // the stop changed the hart's state: the link up again, and staying up
     halted_ = true;
   } else {
     halted_ = false;
@@ -539,6 +587,8 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   uint32_t now = 0;   // ebreaks / ebreaku back as they were (cause, prv: where it stopped)
   if (!readRegister(0x07b0, now) || ((now & kEbreakSU) != ebreak_su && !writeRegister(0x07b0, (now & ~kEbreakSU) | ebreak_su)))
     ok = false;
+  OEP_LOGF("dm run: dpc %08lx dcsr %08lx, %u regs out, %s (cmderr %u)", static_cast<unsigned long>(report.dpc),
+           static_cast<unsigned long>(now), static_cast<unsigned>(out_count), ok ? "ok" : "a read failed", cmderr_);
   autoOff();
   giveMailbox();
   return ok;   // auto_back: abstractauto as it was, after DATA0
@@ -624,7 +674,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   if (halted) {
     phy_.write(kDmControl, 0x80000001);
     phy_.write(kAbstractCs, 0x700);
-    relink();
+    steady();                              // the stop changed the hart's state
   } else {
     // Not back: haltreq, and dm_wait_ms more (halt()). Halted by the probe, dcsr.step is cleared and DATA put back as
     // below and the answer is status state with dpc_after; still running, halt() has cleared haltreq and the answer is

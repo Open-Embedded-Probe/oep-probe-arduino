@@ -135,6 +135,10 @@ class Ch32Dm {
   ModuleWait awaitModule(uint32_t until_ms, uint32_t &status);
   bool waitAbstract();
   void relink();                          // PHY re-sync + abstract-command block back to a known state
+  // After a change of hart state: relink, then looks until the link stays up (kSteadyLooks good ones in a row)
+  static constexpr int kSteadyLooks = 3;
+  static constexpr uint32_t kSteadyMs = 20;
+  bool steady();
   bool moduleStatus(uint32_t &status);    // DMSTATUS read and a module's (a found version); false: relink
   void retune();                          // PHY speed search + the same
   void settleHalted(bool ack_reset);      // after the hart stopped: ack a pending reset, relink, halted_

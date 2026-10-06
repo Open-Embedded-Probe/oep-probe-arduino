@@ -69,7 +69,20 @@ class FakePhy final : public DmiPhy {
   // relink) brings it back in step
   bool drop_on_change = false, dropped = false;
   int reinits = 0;
-  void reinit() override { dropped = false; ++reinits; }
+  // The drop's timing (the upload loop below draws them at random): the link drops only after drop_delay_reads more
+  // reads at the change (those still answer, with what the module has - halted or not as it now is), and a reinit()
+  // within drop_hold_us of the drop leaves it dropped (the target's debug unit not back yet).
+  int drop_delay_reads = 0, pending_drop = -1;
+  uint32_t drop_hold_us = 0, dropped_at_us = 0;
+  void startDrop() {
+    if (drop_delay_reads > 0) { pending_drop = drop_delay_reads; return; }
+    dropped = true;
+    dropped_at_us = micros();
+  }
+  void reinit() override {
+    ++reinits;
+    if (micros() - dropped_at_us >= drop_hold_us) dropped = false;
+  }
   // With the link dropped, writes are lost too (drop_loses_writes), and reads give the previous read's value instead of
   // all ones (drop_stale: the DTM answers with what it last had).
   bool drop_loses_writes = false, drop_stale = false;
@@ -147,10 +160,12 @@ class FakePhy final : public DmiPhy {
     if (!present || !attached_flag) return false;
     if (stuck) { value = stuck_value; return true; }
     if (stale) { value = 0xffffffffu; return true; }
+    if (pending_drop >= 0 && pending_drop-- == 0) { dropped = true; dropped_at_us = micros(); }
     if (dropped) { value = drop_stale ? last_read : 0xffffffffu; return true; }
     if (address == 0x11 && running_reads > 0 && --running_reads == 0) {   // the run reaches its ebreak
       halted = true;
-      if (drop_on_change) { dropped = true; value = drop_stale ? last_read : 0xffffffffu; return true; }
+      if (drop_on_change) startDrop();
+      if (dropped) { value = drop_stale ? last_read : 0xffffffffu; return true; }
     }
     if (flaky) {   // the RVSWD PHY's way: retries while the request's allowance lasts, then a failed read
       while (retryLeft()) { g_millis += 1; spentRetrying(1000); ++retry_reads; }
@@ -203,7 +218,7 @@ class FakePhy final : public DmiPhy {
         resumeack = true;
         running_reads = run_reads;
       }
-      if (drop_on_change && ((value & (3u << 30)) && (halted != was || (value & (1u << 30))))) dropped = true;
+      if (drop_on_change && ((value & (3u << 30)) && (halted != was || (value & (1u << 30))))) startDrop();
       if (value & (1u << 28)) havereset = false;   // ackhavereset
     }
   }
@@ -223,6 +238,10 @@ class FakePhy final : public DmiPhy {
   uint32_t retries() const override { return 0; }
   uint32_t transactions() const override { return 0; }
 };
+
+#ifndef OEP_UPLOAD_SEED
+#define OEP_UPLOAD_SEED 0x2463534u   // the upload loop's draws (another seed: -DOEP_UPLOAD_SEED=...)
+#endif
 
 static bool drives(int pin, int level) { return g_pin_mode[pin] == OUTPUT && g_pin_level[pin] == level; }
 static Result call(Interface &i, uint8_t op, const Bytes &payload, Bytes &out) {
@@ -1169,6 +1188,99 @@ int main() {
     CHECK(clock.lost());
     clock.answered();
     CHECK(!clock.lost());
+  }
+
+  // ---- ch32rv's upload, 100 times, over a link that drops at every change of hart state with random timing (a
+  // CH32L103 on the RP2350; the bench saw 1 in 15 fail back to back, 3 in 12 with other sessions between, run: timeout):
+  // a slot's at-boot connection resting idle_clock low; each upload a session that attaches (joining it, idle_clock low
+  // carried), halts, writes the loader, runs it to its ebreak with arguments, reads the results and resumes; then the
+  // session ends (its share goes, the slot keeps the connection) and, half the time, another session uses the probe
+  // (a raw DMSTATUS read, a scan, an attach / detach, a halt / resume). Every answer must be ok ----
+  {
+    phy.halted = false;
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.mem.clear();
+    uint32_t status = 0;
+    CHECK(attachRunning(fixed, DebugPort::kUserSlot, status, 1000000, true) && fixed.connected && phy.idle_low);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    uint32_t seed = OEP_UPLOAD_SEED;
+    auto rnd = [&](uint32_t n) { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return seed % n; };
+    int bad = 0;
+    const char *last_failed = "";
+    for (int i = 0; i < 100; ++i) {
+      phy.drop_delay_reads = static_cast<int>(rnd(4));
+      phy.drop_hold_us = rnd(4) * 700;   // 0 .. 2.1 ms
+      phy.drop_stale = rnd(2);
+      phy.run_reads = 1 + static_cast<int>(rnd(30));
+      const char *failed = nullptr;
+      Bytes failed_answer;
+      auto expect = [&](bool good, const char *what) { if (!good && !failed) { failed = what; failed_answer = out; } };
+      Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1, -1, -1, 1), out);
+      expect(ok(r) && (out[6] & wire::kAttachFlagsExisting) && phy.halted && phy.idle_low, "attach");
+      r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
+      expect(ok(r) && phy.halted, "halt");
+      Bytes wb = conn;
+      wb.insert(wb.end(), {0, 0, 0, 0x20, 64, 0});   // the loader: 64 words at 0x20000000
+      for (uint32_t k = 0; k < 64; ++k) for (int b = 0; b < 4; ++b) wb.push_back(uint8_t((0x1000u * i + k) >> (8 * b)));
+      r = call(riscv, TargetRiscvDm::kOpWriteBlock, wb, out);
+      expect(ok(r) && out.size() == 3 && out[2] == kStatusOk && phy.mem[0x20000000u + 4 * 63] == 0x1000u * i + 63, "write_block");
+      // run: pc 0x20000000, 1000 ms, a0 = 0x20000400 and a1 = 16 in, a0 out
+      Bytes run = conn;
+      run.insert(run.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 2, 0x0a, 0x10, 0, 0x04, 0, 0x20, 0x0b, 0x10, 16, 0, 0, 0,
+                             1, 0x0a, 0x10});
+      const uint32_t t0 = millis();
+      r = call(riscv, TargetRiscvDm::kOpRun, run, out);
+      expect(ok(r) && out.size() >= 11 + 4 && out[0] == kStatusOk && out[1] == reg::target_riscv_dm::kRunStoppedStopped,
+             "run");
+      expect(millis() - t0 < 200, "run's time");
+      r = call(riscv, TargetRiscvDm::kOpReadBlock, {conn[0], conn[1], 0, 0x04, 0, 0x20, 16, 0}, out);
+      expect(ok(r) && out.size() == 3 + 64 && out[2] == kStatusOk, "read_block");
+      phy.run_reads = 0;   // the application runs on (no ebreak ahead)
+      r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
+      expect(ok(r) && out[0] == kStatusOk && !phy.halted, "resume");
+      wire_fixed.sessionOver();   // the upload's session ends: its share goes, the slot's connection stays
+      expect(fixed.connected && fixed.users == DebugPort::kUserSlot && phy.idle_low, "session end");
+      switch (rnd(8)) {   // another session between uploads, half the time
+        case 0: r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out); expect(ok(r), "other: dmi"); break;
+        case 1: r = call(wire_fixed, WireRvswd::kOpScan, {0}, out); expect(ok(r) && out[1] == 1, "other: scan"); break;
+        case 2:
+          r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+          expect(ok(r) && phy.idle_low, "other: attach");
+          r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+          expect(ok(r) && fixed.connected, "other: detach");
+          break;
+        case 3:
+          r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1, -1, -1, 1), out);
+          expect(ok(r), "other: attach (halt)");
+          r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
+          expect(ok(r) && !phy.halted, "other: resume");
+          wire_fixed.sessionOver();
+          break;
+        default: break;
+      }
+      g_millis += rnd(50);   // the CLI's next process
+      if (failed) {
+        ++bad;
+        last_failed = failed;
+        printf("  upload %d failed at %s (delay %d reads, hold %u us, stale %d, run %d reads): answer",
+               i, failed, phy.drop_delay_reads, phy.drop_hold_us, phy.drop_stale, phy.run_reads);
+        for (uint8_t b : failed_answer) printf(" %02x", b);
+        printf("\n");
+        phy.dropped = false;
+        phy.pending_drop = -1;
+      }
+    }
+    CHECK(bad == 0);
+    if (bad) printf("  uploads: %d of 100 failed (last at %s)\n", bad, last_failed);
+    releaseConnection(fixed, DebugPort::kUserSlot, true);
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
+    phy.pending_drop = -1;
+    phy.drop_delay_reads = 0;
+    phy.drop_hold_us = 0;
+    phy.run_reads = 0;
+    phy.idle_low = false;
+    phy.halted = false;
   }
 
   printf("wire: %d checks, %d failures\n", checks, failures);

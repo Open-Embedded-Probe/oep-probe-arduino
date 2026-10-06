@@ -14,6 +14,11 @@
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
 // max_speed) comes from the host (oep-if-debug §3). oep.probe.config keeps a jig's settings in flash (slots on any pair,
 // a bind of the CDC port - the target's console on the same line as OEP -, labels, idle states).
+//
+// The bench's trace (off by default; never in a release): build with -DOEP_DEBUG_LOG=1 -DOEP_DEBUG_LOG_TX=<GP> (e.g.
+// arduino-cli compile --profile rp2350 --build-property "compiler.cpp.extra_flags=-DOEP_DEBUG_LOG=1 -DOEP_DEBUG_LOG_TX=4")
+// and a line per request and riscv-dm run's steps go out of Serial2 (UART1: TX on GP4, GP8, GP20 or GP24) at 921600
+// 8N1. That pin is then the probe's own (reserved, never offered).
 #pragma once
 #include <USB.h>
 
@@ -25,6 +30,7 @@
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
 #include <OepFixture.h>
+#include <OepLog.h>
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
 #include <OepSwd.h>
@@ -39,12 +45,20 @@ static constexpr const char *kProduct = "OEP probe (RP2040)", *kModel = "rp2040"
 #if defined(ARDUINO_SPARKFUN_PROMICRO_RP2350)
 // SparkFun Pro Micro RP2350 (profile promicrorp2350): GP0-GP29 are pins, but GP19, its PSRAM's chip select. The L103
 // bench's RVSWD is GP24 / GP23 - the Pico 2 build kept those as the Pico's own (0.0.18).
-static constexpr uint64_t kChannels = ((1ull << 30) - 1) & ~(1ull << 19);
+static constexpr uint64_t kBoardChannels = ((1ull << 30) - 1) & ~(1ull << 19);
 #else
 // The pins a Pico / Pico 2 brings out: GP0-GP22, GP26-GP28 (GP23-GP25 and GP29 are the board's own there). Other boards
 // with the same chip run this too; their own parts on these pins (an LED, a PSRAM chip select) are for the host to
 // leave alone.
-static constexpr uint64_t kChannels = ((1ull << 23) - 1) | (0x7ull << 26);
+static constexpr uint64_t kBoardChannels = ((1ull << 23) - 1) | (0x7ull << 26);
+#endif
+#if OEP_DEBUG_LOG
+#ifndef OEP_DEBUG_LOG_TX
+#error "OEP_DEBUG_LOG: name the trace's TX pin with OEP_DEBUG_LOG_TX (Serial2 = UART1: GP4, GP8, GP20 or GP24)"
+#endif
+static constexpr uint64_t kChannels = kBoardChannels & ~(1ull << OEP_DEBUG_LOG_TX);   // the trace's pin is the probe's
+#else
+static constexpr uint64_t kChannels = kBoardChannels;
 #endif
 static constexpr uint64_t kReserved = ((1ull << 30) - 1) & ~kChannels;
 static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
@@ -97,6 +111,12 @@ void setup() {
   USB.connect();
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
+#if OEP_DEBUG_LOG
+  Serial2.setTX(OEP_DEBUG_LOG_TX);
+  Serial2.begin(921600);
+  oep::setLog(&Serial2);
+  OEP_LOGF("oep trace on (%s)", kProduct);
+#endif
   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one.
   // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied
   // before any idle / park; applySaved below gives them back if the settings are not applied).
