@@ -829,19 +829,25 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       out[0] = ok ? kStatusOk : failure(kStatusTimeout);
       return tail.finish(outcome(out[0], 0, 7), out, capacity);
     }
-    case kOpStep: {   // [TLV] -> status(u8) moved(u8) dpc_before(u32) dpc_after(u32); one resume only, prv kept
+    case kOpStep: {
+      // [TLV] -> status(u8) moved(u8) dpc_before(u32) dpc_after(u32) [TLV 0x01 step_left]; one resume only, prv kept.
+      // Not back in debug mode within dm_wait_ms: status state - with dpc_after when the probe's haltreq stopped it,
+      // with step_left (length 0) when it still runs (oep-if-debug §4.2).
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (!target) return completed();
       Ch32Dm &dm = *target;
-      if (capacity < 10) return failed();
+      if (capacity < 12) return failed();
       uint32_t before = 0, after = 0;
-      bool moved = false;
+      bool moved = false, left = false;
       uint8_t status = kStatusState;   // not halted: nothing to step
       if (dm.checkHalted() && dm.halted()) {
-        const bool ok = dm.step(before, after, moved);
+        Ch32Dm::StepEnd end = Ch32Dm::kStepped;
+        const bool ok = dm.step(before, after, moved, end);
         // an unmoved dpc is not a failure: a self jump (j .) truly steps to itself; the host reads the instruction
-        status = !ok ? (dm.lastCmderr() ? kStatusFault : failure(kStatusTimeout)) : kStatusOk;
+        if (!ok) status = dm.lastCmderr() ? kStatusFault : failure(kStatusTimeout);
+        else status = end == Ch32Dm::kStepped ? kStatusOk : kStatusState;
+        left = ok && end == Ch32Dm::kLeftRunning;
       } else {
         status = failure(kStatusState);   // not halted (the module answers), or no answer at all: line
       }
@@ -849,7 +855,13 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       out[1] = moved;
       putU32(out + 2, before);
       putU32(out + 6, after);
-      return tail.finish(outcome(status, 0, 10), out, capacity);
+      size_t length = 10;
+      if (left) {
+        out[10] = reg::target_riscv_dm::kTlvStepAnswerStepLeft;
+        out[11] = 0;
+        length = 12;
+      }
+      return tail.finish(outcome(status, 0, length), out, capacity);
     }
     case kOpReadBlock: {   // address(u32) count(u16) [TLV]  ->  done(u16) status(u8) words (done of them) [TLV]
       const Result parsed = plainTail(tail, p, n, 6, out, capacity);

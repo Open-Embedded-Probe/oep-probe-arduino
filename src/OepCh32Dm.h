@@ -71,8 +71,11 @@ class Ch32Dm {
   // (semihosting, gdb "monitor reset halt", flashing over a running watchdog). dpc = where it stopped.
   bool resetHalt(uint32_t &dpc);
   // step: one instruction with dcsr.step, resumed exactly once (a re-issued resume would step twice), the
-  // privilege level left as it is; moved = dpc changed (the CH32L103 raises no allresumeack to go by).
-  bool step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved);
+  // privilege level left as it is; moved = dpc changed (the CH32L103 raises no allresumeack to go by). end (oep-if-debug
+  // §4.2): back in debug mode by itself within dm_wait_ms; halted by the probe's haltreq after that (dpc_after valid);
+  // or still running after dm_wait_ms more (haltreq cleared, dcsr.step maybe still set: step_left; returns true).
+  enum StepEnd : uint8_t { kStepped, kHaltedByProbe, kLeftRunning };
+  bool step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEnd &end);
   // Acknowledge a pending havereset: until then a V00x DM keeps DMSTATUS's halt / run bits frozen at their
   // reset values. true = one was pending (restarts() counts them: the console marks a restart).
   bool ackHaveReset();

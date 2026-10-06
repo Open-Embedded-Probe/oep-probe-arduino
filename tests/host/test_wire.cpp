@@ -88,8 +88,10 @@ class FakePhy final : public DmiPhy {
   }
   void free() override { state = kFree; attached_flag = false; }
   bool attached() const override { return attached_flag; }
-  // stubborn: haltreq / resumereq do not change the hart (a halt or resume that never lands); each read takes read_us
-  bool stubborn = false;
+  // ignore_halt / ignore_resume: haltreq / resumereq do not change the hart (a halt or resume that never lands);
+  // step_returns: a resumereq runs one instruction and the hart is back in debug mode at once (a step); each read takes
+  // read_us of time
+  bool ignore_halt = false, ignore_resume = false, step_returns = false;
   uint32_t read_us = 10, dmcontrol = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
     advanceMicros(read_us);
@@ -121,8 +123,8 @@ class FakePhy final : public DmiPhy {
     if (address == 0x05) data1 = value;
     if (address == 0x10) {
       dmcontrol = value;
-      if ((value & (1u << 31)) && !stubborn) { halted = true; resumeack = false; }
-      if ((value & (1u << 30)) && !stubborn) { halted = false; resumeack = true; }
+      if ((value & (1u << 31)) && !ignore_halt) { halted = true; resumeack = false; }
+      if ((value & (1u << 30)) && !ignore_resume) { halted = step_returns; resumeack = true; }
       if (value & (1u << 28)) havereset = false;   // ackhavereset
     }
   }
@@ -456,23 +458,41 @@ int main() {
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(ok(r) && fixed.connected);
     const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
-    phy.stubborn = true;
+    phy.ignore_halt = phy.ignore_resume = true;
     uint32_t before = millis();
     r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
     const uint32_t halt_ms = millis() - before;
     CHECK(r.detail == kOutcomeFailed && out.size() == 1 && out[0] == kStatusTimeout);
     CHECK(halt_ms >= reg::kLimitDmWaitMs && halt_ms <= reg::kLimitDmWaitMs + 5);
     CHECK(phy.dmcontrol == 1 && !dm.halted());   // haltreq cleared, dmactive kept
-    phy.stubborn = false;
+    phy.ignore_halt = phy.ignore_resume = false;
     r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
     CHECK(ok(r) && phy.halted);
-    phy.stubborn = true;
+    phy.ignore_halt = phy.ignore_resume = true;
     before = millis();
     r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
     const uint32_t resume_ms = millis() - before;
     CHECK(r.detail == kOutcomeFailed && out.size() == 1 && out[0] == kStatusState);
     CHECK(resume_ms >= reg::kLimitDmWaitMs && resume_ms <= reg::kLimitDmWaitMs + 5);
-    phy.stubborn = false;
+    phy.ignore_halt = phy.ignore_resume = false;
+    // step (oep-if-debug §4.2): back by itself - ok; not back in dm_wait_ms but stopped by the probe's haltreq - state,
+    // dpc_after valid, haltreq lowered; still running dm_wait_ms after that - state with TLV 0x01 step_left (length 0),
+    // haltreq cleared (it stepped twice the old 50 ms, then halted, and answered ok)
+    phy.step_returns = true;
+    r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
+    CHECK(ok(r) && out.size() == 10 && out[0] == kStatusOk && phy.halted);
+    phy.step_returns = false;
+    before = millis();
+    r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 10 && out[0] == kStatusState && phy.halted && phy.dmcontrol == 1);
+    CHECK(millis() - before >= reg::kLimitDmWaitMs && millis() - before <= reg::kLimitDmWaitMs + 10);
+    phy.ignore_halt = true;
+    before = millis();
+    r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 12 && out[0] == kStatusState && out[10] == 0x01 && out[11] == 0);
+    CHECK(!phy.halted && phy.dmcontrol == 1 && !dm.halted());
+    CHECK(millis() - before >= 2 * reg::kLimitDmWaitMs && millis() - before <= 2 * reg::kLimitDmWaitMs + 10);
+    phy.ignore_halt = false;
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     phy.halted = false;

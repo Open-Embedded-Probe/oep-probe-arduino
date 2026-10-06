@@ -472,30 +472,37 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   return ok;
 }
 
-bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved) {
+bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEnd &end) {
   dpc_before = dpc_after = 0;
   moved = false;
+  end = kStepped;
   if (!halted_) return false;
   keepMailbox();                           // the reads below go through DATA0
   uint32_t dcsr = 0;
-  if (!readRegister(0x07b1, dpc_before) || !readRegister(0x07b0, dcsr)) { giveMailbox(); return false; }
-  if (!writeRegister(0x07b0, dcsr | 0x4u)) { giveMailbox(); return false; }   // dcsr.step, the privilege level as it is
+  if (!readRegister(0x7b1, dpc_before) || !readRegister(0x7b0, dcsr)) { giveMailbox(); return false; }
+  if (!writeRegister(0x7b0, dcsr | 0x4u)) { giveMailbox(); return false; }   // dcsr.step, the privilege level as it is
   phy_.write(kAbstractAuto, 0);
   giveMailbox();                           // the instruction runs on the target's own mailbox
   phy_.write(kDmControl, 0x40000001);      // resumereq, once
+  // Back in debug mode by itself within dm_wait_ms of time (oep-if-debug §4.2)?
   bool halted = false;
-  const uint32_t started = micros();
-  while (micros() - started < 50000u) {
+  const uint32_t started = millis();
+  do {
     uint32_t status = 0;
     if (!phy_.read(kDmStatus, status)) { relink(); continue; }
     if (dmHalted(status)) { halted = true; break; }
-  }
-  phy_.write(kDmControl, 0x80000001);
-  phy_.write(kAbstractCs, 0x700);
-  relink();
-  if (!halted) {
+  } while (millis() - started < kDmWaitMs);
+  if (halted) {
+    phy_.write(kDmControl, 0x80000001);
+    phy_.write(kAbstractCs, 0x700);
+    relink();
+  } else {
+    // Not back: haltreq, and dm_wait_ms more (halt()). Halted by the probe, dcsr.step is cleared and DATA put back as
+    // below and the answer is status state with dpc_after; still running, halt() has cleared haltreq and the answer is
+    // status state with step_left - dcsr.step may still be set, the host halts the hart and clears it (§4.2).
     halted_ = false;
-    if (!halt()) return false;
+    if (!halt()) { end = kLeftRunning; return true; }
+    end = kHaltedByProbe;
   }
   keepMailbox();                           // before the dpc / dcsr reads below overwrite them again
   const bool ok = readRegister(0x07b1, dpc_after) && writeRegister(0x07b0, dcsr & ~0x4u);
