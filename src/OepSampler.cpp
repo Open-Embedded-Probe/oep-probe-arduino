@@ -153,7 +153,7 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   uint8_t roles[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
   w.roleChannels(roles, kMaxChannels, table_.allowedMask());
-  w.u32(kTagFeatures, 0b111);                      // bit0 query, bit1 force, bit2 notifications
+  w.u32(kTagFeatures, 0b100);                      // bit2 notifications; query and force: in the ops tag
   uint8_t mode[10] = {cap::kModeOneShot, 1};       // one-shot, in the background (core 0 samples, OEP on core 1)
   putU32(mode + 2, kBufferBytes);                  // one byte per sample
   putU32(mode + 6, 1);
@@ -414,10 +414,9 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       putU32(out + 14, generation_);
       size_t used = 18;
       if (state_ == cap::kStateError) {   // why (TLV 0x01 error, capture §3.2): the sampling task would not start
-        out[18] = cap::kTlvStatusAnswerError;
-        out[19] = 1;
-        out[20] = cap::kErrorPeripheral;
-        used = 21;
+        putTlvHeader(out + 18, cap::kTlvStatusAnswerError, 1);
+        out[21] = cap::kErrorPeripheral;
+        used = 22;
       }
       return tail.finish(completed(used), out, capacity);
     }
@@ -432,7 +431,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       uint32_t max = getU32(p + 12);
       if (position > have) position = have;
       uint32_t count = static_cast<uint32_t>(have - position);
-      const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
+      const size_t reserve = tail.room();
       size_t room = capacity - 13 - reserve;
       if (room > max_read_) room = max_read_;
       if (max > room) max = static_cast<uint32_t>(room);
@@ -444,7 +443,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (count) memcpy(out + 13, buffer_ + position, count);
       return tail.finish(completed(13 + count), out, capacity);
     }
-    case cap::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x (len(u8) segment) [TLV]
+    case cap::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x segment [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
       if (capacity < 3 + 37) return failed();
@@ -452,8 +451,8 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       const bool one = state_ == cap::kStateDone && getU32(p) == 0;
       out[0] = 0;
       out[1] = one ? 1 : 0;
-      if (one) out[2] = static_cast<uint8_t>(segmentInfo(out + 3));   // len(u8) then the info (core §2.3)
-      return tail.finish(completed(one ? 3u + out[2] : 2u), out, capacity);
+      const size_t info = one ? segmentInfo(out + 2) : 0;   // no element length (core §2.3)
+      return tail.finish(completed(2u + info), out, capacity);
     }
     case cap::kOpRelease: {   // generation(u32) serial(u32): nothing to release in one-shot (success)
       const Result parsed = plainTail(tail, p, n, 8, out, capacity);

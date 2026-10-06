@@ -40,6 +40,9 @@ class Endpoint;
 
 class LogicCapture final : public Interface, public GroupTrack {
  public:
+  // A segment's start_uncertainty_ns (capture §2.2): PARLIO's first sample against the start's clock read - an edge
+  // landed within 5 us of the GPIO write that made it (logic-capture §7.4), so +-5 us
+  static constexpr uint32_t kStartUncertaintyNs = 5000;
   enum : uint8_t {
     kOpConfigure = reg::fixture_logic::kOpConfigure, kOpStart = reg::fixture_logic::kOpStart,
     kOpStop = reg::fixture_logic::kOpStop, kOpForce = reg::fixture_logic::kOpForce,
@@ -139,9 +142,6 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t *buffer_ = nullptr;
   volatile bool done_ = false;
   uint64_t start_ns_ = 0;   // the probe's clock: ns since boot (esp_timer x 1000), u64 like the positions
-  // PARLIO's first sample against the start's clock read: an edge landed within 5 us of the GPIO write that made it
-  // (logic-capture §7.4), so +-5 us
-  static constexpr uint32_t kStartUncertaintyNs = 5000;
   uint64_t nsOf(uint64_t samples) const;   // samples at the actual rate, in ns (no 128-bit arithmetic on the P4)
 
   Result configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query);
@@ -155,8 +155,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   size_t storeBudget(uint32_t &caps) const;   // bytes the segments may take now (counting the store already held)
   // streaming through the endpoint's zero-copy transport: the harvest copies straight from the DMA ring into stages
   // (internal RAM, one whole push frame each: length prefix, push header, data) and hands full ones to the transport
-  // length, core push header, position(u64), len(u16); after the data the generation TLV (kPushTail, oep-if-capture §3.4)
-  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + kPushHeader + 8 + 2, kPushTail = 6;
+  // length, core push header, position(u64), len(u16); after the data the generation TLV (kPushTail: tag len(u16) u32, oep-if-capture §3.4)
+  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + kPushHeader + 8 + 2, kPushTail = 7;
   bool direct_ = false;
   uint8_t *stage_[kStagesMax] = {};
   uint8_t stage_count_ = 0;

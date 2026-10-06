@@ -2,10 +2,11 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host tests of fn 0 (oep.core) against core §1.2, §7.1, §7.5 and §12: confirm's transport TLV on every transport kind
-// (the index of the describe entry it came on), the confirm vectors of oep-spec tests/vectors/confirm.json, describe's
-// discoverable always sent, list's reserved flags and prefix text, open's force and owner, a repeated non-repeating TLV,
-// the header refusals (§4.3 order 1) neither kept nor restarting the lease, and the length-prefixed reader's over-long
-// length and TCP pause rules (§3.1, §3.2).
+// (the index of the describe entry it came on), describe's discoverable always sent and the ops tag first in every fn's
+// describe, list's reserved flags and prefix text, open's force and owner, a repeated non-repeating TLV, the header
+// refusals (§4.3 order 1) neither kept nor restarting the lease, the ignored list's 16 entries, no resume (§6.2, §9),
+// and the length-prefixed reader's over-long length and TCP pause rules (transports §1, §2). The byte vectors of
+// oep-spec tests/vectors are test_vectors.cpp's.
 #include <stdio.h>
 #include <string.h>
 #include <vector>
@@ -39,10 +40,20 @@ class MemStream final : public Stream {
 };
 
 static Bytes u32(uint32_t v) { return {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)}; }
+// One request: role 0x01 corr fn op session_id (0 = none) payload, the 10-byte header (core §4.1). An open written
+// without a session carries its id at the front of its payload here (openPayload): it goes into the header.
 static Bytes request(uint16_t corr, uint16_t fn, uint8_t op, const Bytes &payload, bool session = false, uint32_t id = 0) {
-  Bytes m = {uint8_t(session ? 0x81 : 0x01), uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op};
-  if (session) { const Bytes s = u32(id); m.insert(m.end(), s.begin(), s.end()); }
-  m.insert(m.end(), payload.begin(), payload.end());
+  Bytes p = payload;
+  if (fn == 0 && op == 0x10 && !session && p.size() >= 4) {
+    id = uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+    p.erase(p.begin(), p.begin() + 4);
+  } else if (!session) {
+    id = 0;
+  }
+  Bytes m = {0x01, uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op};
+  const Bytes s = u32(id);
+  m.insert(m.end(), s.begin(), s.end());
+  m.insert(m.end(), p.begin(), p.end());
   return m;
 }
 static Bytes confirmReq(uint8_t lo = 1, uint8_t hi = 1) { return {'O', 'E', 'P', '?', lo, hi}; }
@@ -53,9 +64,10 @@ static Bytes openReq(uint32_t id, uint32_t lease, uint8_t force = 0) {
   p.push_back(force);
   return p;
 }
-static Bytes withTlv(Bytes p, uint8_t tag, const Bytes &value) {
+static Bytes withTlv(Bytes p, uint8_t tag, const Bytes &value) {   // tag len(u16) value (core §2.2)
   p.push_back(tag);
   p.push_back(static_cast<uint8_t>(value.size()));
+  p.push_back(static_cast<uint8_t>(value.size() >> 8));
   p.insert(p.end(), value.begin(), value.end());
   return p;
 }
@@ -103,18 +115,32 @@ static Bytes exchange(Endpoint &ep, MemStream &s, bool serial, const Bytes &m) {
 }
 
 // The transport entries of fn 0's describe (index -> kind), from the answer of describe fn 0 first 0.
+// A describe answer's TLV of `tag` (its value), empty when absent; found: whether it was there.
+static Bytes describeTlv(const Bytes &answer, uint8_t tag, bool *found = nullptr) {
+  if (found) *found = false;
+  for (size_t i = 6; i + 3 <= answer.size();) {
+    const size_t len = answer[i + 1] | answer[i + 2] << 8;
+    if (answer[i] == tag) {
+      if (found) *found = true;
+      return Bytes(answer.begin() + i + 3, answer.begin() + i + 3 + len);
+    }
+    i += 3 + len;
+  }
+  return {};
+}
 static bool describedAs(const Bytes &answer, uint8_t index, uint8_t kind) {
-  for (size_t i = 6; i + 5 <= answer.size(); ++i)
-    if (answer[i] == reg::core::kTlvDescribeTransport && answer[i + 1] == 3 && answer[i + 2] == index && answer[i + 3] == kind)
+  for (size_t i = 6; i + 3 <= answer.size();) {
+    const size_t len = answer[i + 1] | answer[i + 2] << 8;
+    if (answer[i] == reg::core::kTlvDescribeTransport && len == 3 && answer[i + 3] == index && answer[i + 4] == kind)
       return true;
+    i += 3 + len;
+  }
   return false;
 }
 static int discoverableIn(const Bytes &answer) {   // -1: absent
-  for (size_t i = 6; i + 3 <= answer.size();) {
-    if (answer[i] == reg::core::kTlvDescribeDiscoverable && answer[i + 1] == 1) return answer[i + 2];
-    i += 2 + answer[i + 1];
-  }
-  return -1;
+  bool found = false;
+  const Bytes v = describeTlv(answer, reg::core::kTlvDescribeDiscoverable, &found);
+  return found && v.size() == 1 ? v[0] : -1;
 }
 
 // core §7.1: the probe always attaches TLV 0x01 transport (u8), the index of the transport the confirm came on, the
@@ -136,24 +162,96 @@ static void testConfirmTransportEveryKind() {
   uint16_t corr = 1;
   for (const Case &c : cases) {
     const Bytes r = exchange(*c.ep, c.port->s, c.port->serial, request(corr++, 0, 0x01, confirmReq()));
-    CHECK(r.size() == 5 + 20 && r[3] == kResolutionCompleted);
-    if (r.size() == 5 + 20) CHECK(r[5 + 17] == reg::core::kTlvConfirmAnswerTransport && r[5 + 18] == 1 && r[5 + 19] == c.index);
+    CHECK(r.size() == 5 + 21 && r[3] == kResolutionCompleted);
+    if (r.size() == 5 + 21)
+      CHECK(r[5 + 17] == reg::core::kTlvConfirmAnswerTransport && r[5 + 18] == 1 && r[5 + 19] == 0 && r[5 + 20] == c.index);
     // that index names this transport's entry in the describe returned on the same connection
     const Bytes d = exchange(*c.ep, c.port->s, c.port->serial, request(corr++, 0, 0x03, {0, 0, 0, 0}));
     CHECK(d.size() > 6 && d[3] == kResolutionCompleted && describedAs(d, c.index, c.port->kind));
   }
 }
 
-// oep-spec tests/vectors/confirm.json, byte for byte (max_frame 1024, window 4096, max_inflight 4, boot_id 0x12345678,
-// transport index 0), and a range with min_rev > max_rev (refusals.json): malformed.
-static void testConfirmVectors() {
+static uint8_t reason(const Bytes &r) { return r.size() >= 5 && r[3] == kResolutionRejected ? r[4] : 0xff; }
+
+// core §1.2, §7.4: every fn's describe starts with ops (base + bitmap) - fn 0's the required ops (plan_apply /
+// plan_release only with plan roles), an interface's what offers() says; an op not set is unknown_operation.
+class Toy final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.toy"; }
+  uint16_t instance() const override { return 0; }
+  uint8_t revision() const override { return 1; }
+  bool offers(uint8_t op) const override { return op == 0x02 || op == 0x05 || op == 0x11; }
+  bool lockFree(uint8_t) const override { return true; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
+};
+static void testOps() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
-  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kUartBridge);
-  ep.setBootId(0x12345678);
-  CHECK(exchange(ep, s, true, hex("0101000000014f45503f0101")) == hex("02010001004f45502101000004001000000478563412010100"));
-  CHECK(exchange(ep, s, true, hex("0102000000014f45503f0203")) == hex("020200000b0001020101"));
-  CHECK(exchange(ep, s, true, hex("011a000000014f45503f0201")) == hex("021a000003"));
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  Toy toy;
+  Link link(ep);
+  ep.add(toy);
+  ep.add(link);
+  Bytes r = exchange(ep, s, false, request(1, 0, 0x03, {0, 0, 0, 0}));
+  CHECK(r.size() > 6 && r[6] == kTagOps && Bytes(r.begin() + 6, r.begin() + 6 + 11) == hex("0908000107800700008002"));
+  r = exchange(ep, s, false, request(2, 0, 0x03, {1, 0, 0, 0}));   // base 2: ops 2, 5, 0x11 (bits 0, 3, 15)
+  CHECK(r.size() == 6 + 3 + 3 && Bytes(r.begin() + 6, r.end()) == hex("090300020980"));
+  r = exchange(ep, s, false, request(3, 0, 0x03, {2, 0, 0, 0}));   // oep.link without port_speed: source and sink
+  CHECK(r.size() == 6 + 3 + 2 && Bytes(r.begin() + 6, r.end()) == hex("0902000103"));
+  CHECK(reason(exchange(ep, s, false, request(4, 1, 0x03, {}))) == kRejectUnknownOperation);
+  CHECK(exchange(ep, s, false, request(5, 1, 0x05, {}))[3] == kResolutionCompleted);
+  CHECK(reason(exchange(ep, s, false, request(6, 2, 0x03, {}))) == kRejectUnknownOperation);   // port_speed: not in ops
+  ep.setPortSpeed([](uint8_t, uint32_t b, bool) { return b; }, 115200);
+  r = exchange(ep, s, false, request(7, 0, 0x03, {2, 0, 0, 0}));
+  CHECK(r.size() == 6 + 3 + 2 && Bytes(r.begin() + 6, r.end()) == hex("0902000107"));
+}
+
+// core §2.3: ignored lists one entry per ignored TLV in request order, at most 16 - more: the first 15 and 0x00.
+static void testIgnoredList() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  Bytes p;
+  for (uint8_t t = 0x20; t < 0x22; ++t) p = withTlv(p, t, {});
+  Bytes r = exchange(ep, s, false, request(1, 0, 0x13, p));   // lock_state with two unknown non-critical TLVs
+  CHECK(r.size() == 5 + 5 + 5 && Bytes(r.begin() + 10, r.end()) == hex("7f02002021"));
+  p.clear();
+  for (uint8_t t = 0x20; t < 0x31; ++t) p = withTlv(p, t, {});   // 17
+  r = exchange(ep, s, false, request(2, 0, 0x13, p));
+  Bytes want = {0x7f, 16, 0};
+  for (uint8_t t = 0x20; t < 0x2f; ++t) want.push_back(t);
+  want.push_back(0x00);
+  CHECK(r.size() == 5 + 5 + want.size() && Bytes(r.begin() + 10, r.end()) == want);
+}
+
+// core §6.2, §6.4, §9: no resume - after end the id is no_session; a lapse and force release alike; a resent open of
+// the holder restarts the lease; the owner comes from the open that takes the lock.
+static void testNoResume() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  CHECK(exchange(ep, s, false, request(1, 0, 0x10, withTlv(openReq(7, 1000), 0x01, {'a'})))[3] == kResolutionCompleted);
+  CHECK(exchange(ep, s, false, request(2, 0, 0x11, {}, true, 7))[3] == kResolutionCompleted);   // end
+  CHECK(!ep.locked());
+  CHECK(reason(exchange(ep, s, false, request(3, 0, 0x12, {}, true, 7))) == kRejectNoSession);
+  CHECK(reason(exchange(ep, s, false, request(4, 0, 0x12, {}, true, 9))) == kRejectNoSession);   // any id
+  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x13, {}, true, 9))) == kRejectNoSession);   // lock-free with an id
+  CHECK(exchange(ep, s, false, request(6, 0, 0x13, {}))[3] == kResolutionCompleted);              // with 0: no check
+  // a lapse: the same
+  CHECK(exchange(ep, s, false, request(7, 0, 0x10, openReq(7, 1000)))[3] == kResolutionCompleted);
+  g_millis += 1001;
+  CHECK(reason(exchange(ep, s, false, request(8, 0, 0x12, {}, true, 7))) == kRejectNoSession);
+  // an open of the holder again: the lease restarts, the owner stays the first open's
+  CHECK(exchange(ep, s, false, request(9, 0, 0x10, withTlv(openReq(7, 1000), 0x01, {'x'})))[3] == kResolutionCompleted);
+  g_millis += 800;
+  CHECK(exchange(ep, s, false, request(10, 0, 0x10, withTlv(openReq(7, 1000), 0x01, {'y'})))[3] == kResolutionCompleted);
+  g_millis += 800;
+  Bytes r = exchange(ep, s, false, request(11, 0, 0x13, {}));
+  CHECK(r.size() == 5 + 5 + 4 && r[5] == 1 && Bytes(r.begin() + 10, r.end()) == hex("01010078"));   // owner "x"
+  // force: the old holder's next request is locked, and the new owner shows
+  CHECK(exchange(ep, s, false, request(12, 0, 0x10, withTlv(openReq(8, 1000, 1), 0x01, {'z'})))[3] == kResolutionCompleted);
+  r = exchange(ep, s, false, request(13, 0, 0x12, {}, true, 7));
+  CHECK(reason(r) == kRejectLocked && r.size() == 5 + 4 + 4 && Bytes(r.begin() + 9, r.end()) == hex("0101007a"));
 }
 
 // core §7.5: discoverable is always sent - 0 by a probe that does not enumerate with the project's VID:PID.
@@ -166,7 +264,6 @@ static void testDiscoverableAlways() {
   CHECK(discoverableIn(exchange(ep, s, false, request(2, 0, 0x03, {0, 0, 0, 0}))) == 1);
 }
 
-static uint8_t reason(const Bytes &r) { return r.size() >= 5 && r[3] == kResolutionRejected ? r[4] : 0xff; }
 
 // core §7.2: list's flags bits 1 to 7 are reserved (unsupported, tag 0x00); the prefix is text (core §2.1, malformed).
 // core §6.4 / §2.1: open's force is a boolean; owner is text of 1 to 32 bytes; core §2.3: a repeated non-repeating TLV.
@@ -190,9 +287,9 @@ static void testRequestValues() {
   CHECK(reason(exchange(ep, s, false, request(10, 0, 0x10, twice))) == kRejectMalformed);
   CHECK(!ep.locked());
   r = exchange(ep, s, false, request(11, 0, 0x10, withTlv(openReq(9, 3000, 1), 0x01, {'t', 0xC3, 0xA9, 's', 't'})));
-  CHECK(r.size() >= 5 + 9 && r[3] == kResolutionCompleted && ep.locked());
+  CHECK(r.size() == 5 + 8 && r[3] == kResolutionCompleted && ep.locked());   // lease_ms boot_id (core §6.4)
   r = exchange(ep, s, false, request(12, 0, 0x13, {}));   // lock_state shows the owner as sent
-  const Bytes owner = {0x01, 5, 't', 0xC3, 0xA9, 's', 't'};
+  const Bytes owner = {0x01, 5, 0, 't', 0xC3, 0xA9, 's', 't'};
   CHECK(r.size() == 5 + 5 + owner.size() && Bytes(r.begin() + 10, r.end()) == owner);
 }
 
@@ -207,16 +304,17 @@ static void testHeaderRefusalsNotKept() {
   CHECK(reason(exchange(ep, s, false, request(2, 5, 0x01, {}, true, 7))) == kRejectUnknownFunction);
   CHECK(reason(exchange(ep, s, false, request(3, 0, 0x50, {}, true, 7))) == kRejectUnknownOperation);
   CHECK(reason(exchange(ep, s, false, request(4, 0, 0x04, {}, true, 7))) == kRejectUnknownOperation);   // no plan roles
-  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x14, {}, true, 7))) == kRejectUnknownOperation);   // port_speed off
+  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x14, {}, true, 7))) == kRejectUnknownOperation);   // not fn 0's (oep.link)
+  CHECK(reason(exchange(ep, s, false, request(6, 0, 0x12, {}))) == kRejectSessionRequired);              // session_id 0
   g_millis += 200;   // 1100 ms after the open: the refusals did not extend it
   ep.poll();
   CHECK(!ep.locked());
-  // the expired session's next request: expired, and corr 2 was not taken by the refusal (no corr_reused)
-  CHECK(reason(exchange(ep, s, false, request(2, 0, 0x12, {}, true, 7))) == kRejectExpired);
+  // the lapsed session's next request: no_session (no resume), and corr 2 was not taken by the refusal (no corr_reused)
+  CHECK(reason(exchange(ep, s, false, request(2, 0, 0x12, {}, true, 7))) == kRejectNoSession);
 }
 
-// core §3.1: a length over max_frame - that frame and the input up to the next pause of probe_frame_gap_ms are
-// discarded, unanswered; the next frame after the pause is read. core §3.2: a pause inside a frame restarts the read
+// transports §1: a length over max_frame - that frame and the input up to the next pause of probe_frame_gap_ms are
+// discarded, unanswered; the next frame after the pause is read. transports §2: a pause inside a frame restarts the read
 // on vendor bulk, not on TCP.
 static void testLengthPrefixedReader() {
   for (const uint8_t kind : {Endpoint::kVendorBulk, Endpoint::kTcp}) {
@@ -230,7 +328,7 @@ static void testLengthPrefixedReader() {
     ep.poll();
     CHECK(s.tx.empty());
     g_millis += 250;        // the pause
-    CHECK(exchange(ep, s, false, confirm).size() == 5 + 20);
+    CHECK(exchange(ep, s, false, confirm).size() == 5 + 21);
     // half a frame, a pause of 300 ms, the rest
     s.tx.clear();
     s.send({uint8_t(confirm.size()), 0});
@@ -239,7 +337,7 @@ static void testLengthPrefixedReader() {
     g_millis += 300;
     s.send(Bytes(confirm.begin() + 5, confirm.end()));
     ep.poll();
-    if (kind == Endpoint::kTcp) CHECK(s.tx.size() == 2 + 5 + 20);   // TCP keeps reading that frame
+    if (kind == Endpoint::kTcp) CHECK(s.tx.size() == 2 + 5 + 21);   // TCP keeps reading that frame
     else CHECK(s.tx.empty());                                        // vendor bulk restarted: the rest is not a frame
     g_millis += 250;
   }
@@ -260,7 +358,7 @@ static void testInflightWithinTable() {
   static uint8_t rx[1200], tx[1100];
   Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 64}, Endpoint::kVendorBulk, 0);
   const Bytes r = exchange(ep, s, false, request(1, 0, 0x01, confirmReq()));
-  CHECK(r.size() == 5 + 20 && r[5 + 12] >= 1 && r[5 + 12] <= 8);
+  CHECK(r.size() == 5 + 21 && r[5 + 12] >= 1 && r[5 + 12] <= 8);
 }
 
 // core §9: a closed resource number is not given out again while it is among the last 1024 closed
@@ -293,6 +391,7 @@ class Named final : public Interface {
   const char *name() const override { return name_; }
   uint16_t instance() const override { return 7; }   // wrong on purpose: the endpoint counts
   uint8_t revision() const override { return revision_; }
+  bool offers(uint8_t op) const override { return op == 1; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
  private:
   const char *name_;
@@ -308,9 +407,9 @@ static void testInstanceNumbering() {
   ep.add(c);
   ep.add(d);
   const Bytes r = exchange(ep, s, false, request(1, 0, 0x02, {0, 0, 0, 0}));
-  // total(u16) count(u8), then len(u8) fn(u16) instance(u16) ...: oep.core, then fn 1 to 4
+  // total(u16) count(u8), then fn(u16) instance(u16) revision flags name_len name (no element length): oep.core, fn 1 to 4
   std::vector<uint16_t> instances;
-  for (size_t at = 5 + 3; at < r.size() && instances.size() < 5; at += 1 + r[at]) instances.push_back(getU16(&r[at + 3]));
+  for (size_t at = 5 + 3; at + 7 <= r.size() && instances.size() < 5; at += 7 + r[at + 6]) instances.push_back(getU16(&r[at + 2]));
   CHECK(instances == std::vector<uint16_t>({0, 0, 0, 1, 0}));
   CHECK(ep.instanceOf(3) == 1 && ep.instanceOf(4) == 0);
 }
@@ -336,7 +435,9 @@ static void testNamesAndTokens() {
 
 int main() {
   testConfirmTransportEveryKind();
-  testConfirmVectors();
+  testOps();
+  testIgnoredList();
+  testNoResume();
   testDiscoverableAlways();
   testRequestValues();
   testHeaderRefusalsNotKept();

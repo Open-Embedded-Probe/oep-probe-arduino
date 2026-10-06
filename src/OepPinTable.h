@@ -154,7 +154,11 @@ class PinTable {
   // A drive specification (fixture §1.1: kind 0 a level number, kind 1 the strongest level of at most `value` mA, level 0
   // when none is) as a level of `d`. false: kind 0 with a level the probe does not have (the caller checks kind first).
   static bool driveLevelOf(const DriveLevels &d, uint8_t kind, uint16_t value, uint8_t &level) {
-    if (kind > reg::fixture_gpio::kDriveKindMaxMa) return false;   // undefined (2+): a value this probe cannot handle
+    if (kind > reg::fixture_gpio::kDriveKindDefault) return false;   // undefined (3+): a value this probe cannot handle
+    if (kind == reg::fixture_gpio::kDriveKindDefault) {   // the default level of drive_levels (value 0, fixture §1.1)
+      level = d.default_level;
+      return true;
+    }
     if (kind == reg::fixture_gpio::kDriveKindLevel) {
       if (value >= d.count) return false;
       level = static_cast<uint8_t>(value);

@@ -14,11 +14,10 @@ Result lockedFor(uint32_t remaining_ms, const uint8_t *owner, size_t owner_lengt
   if (capacity < 4) return rejected(kRejectLocked);
   putU32(out, remaining_ms);
   size_t n = 4;
-  if (owner_length && capacity >= 6 + owner_length) {
-    out[4] = reg::core::kTlvLockedPayloadOwner;
-    out[5] = static_cast<uint8_t>(owner_length);
-    memcpy(out + 6, owner, owner_length);
-    n += 2 + owner_length;
+  if (owner_length && capacity >= 4 + kTlvHeader + owner_length) {
+    putTlvHeader(out + 4, reg::core::kTlvLockedPayloadOwner, static_cast<uint16_t>(owner_length));
+    memcpy(out + 4 + kTlvHeader, owner, owner_length);
+    n += kTlvHeader + owner_length;
   }
   return {kResolutionRejected, kRejectLocked, n};
 }
@@ -32,7 +31,7 @@ bool nameMatches(const char *name, const uint8_t *prefix, size_t n, bool exact) 
   return len >= n && memcmp(name, prefix, n) == 0 && (len == n || name[n] == '.');
 }
 
-// Page a TLV stream by whole TLVs (short or long form): skip `first`, then copy while they fit. Returns bytes, sets more.
+// Page a TLV stream by whole TLVs: skip `first`, then copy while they fit. Returns bytes, sets more.
 size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, size_t capacity, bool &more) {
   size_t at = 0, used = 0;
   uint16_t index = 0;
@@ -75,7 +74,7 @@ bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capaci
   t.owner = this;
   if (serialKind(kind)) t.serial.reset(rx_buffer, rx_capacity, decode_, sizeof decode_);
   else t.reader.reset(rx_buffer, rx_capacity, limits_.max_frame);
-  t.reader.setTcp(kind == kTcp);   // no restart on a pause inside a frame (core §3.2)
+  t.reader.setTcp(kind == kTcp);   // no restart on a pause inside a frame (transports §2)
   t.flush_after_burst = flush_after_burst;
   ++transport_count_;
   return true;
@@ -88,7 +87,7 @@ void Endpoint::send(size_t length) {
   else writeFrame(*t.stream, tx_, length);
 }
 
-// A serial port's raw bytes (core §3.4): to the binds, unless a session holds the port (then dropped).
+// A serial port's raw bytes (transports §4): to the binds, unless a session holds the port (then dropped).
 void Endpoint::rawSink(void *context, const uint8_t *data, size_t length) {
   Transport &t = *static_cast<Transport *>(context);
   Endpoint &e = *t.owner;
@@ -120,17 +119,16 @@ void Endpoint::rawOut() {
 
 // The session ended (end, lapse, force): the ports it held take up the raw transfer again (from its last host reset).
 void Endpoint::sessionEnded() {
-  if (speed_state_ != kSpeedBase) speed_pending_ = kSpeedRevert;   // core §3.5: after the answer that ended it, if any
+  if (speed_state_ != kSpeedBase) speed_pending_ = kSpeedRevert;   // oep-if-link §3: after the answer that ended it, if any
   if (raw_) raw_->sessionOver(held_);
   held_ = 0;
 }
 
 size_t Endpoint::appendOwner(uint8_t *out, size_t room, uint8_t tag) const {
-  if (!owner_length_ || room < 2u + owner_length_) return 0;
-  out[0] = tag;
-  out[1] = owner_length_;
-  memcpy(out + 2, owner_, owner_length_);
-  return 2u + owner_length_;
+  if (!owner_length_ || room < kTlvHeader + owner_length_) return 0;
+  putTlvHeader(out, tag, owner_length_);
+  memcpy(out + kTlvHeader, owner_, owner_length_);
+  return kTlvHeader + owner_length_;
 }
 
 // Pushes go at a lower priority than results: poll() answers what has arrived first, and a push is only written
@@ -298,7 +296,7 @@ void Endpoint::poll() {
         while (n) {
           const uint32_t bad = t.serial.badCandidates();
           const bool message = t.serial.feed(p, n, rawSink, &t);
-          if (i == speed_port_ && speed_state_ != kSpeedBase) {   // the sped-up port's line (core §3.5)
+          if (i == speed_port_ && speed_state_ != kSpeedBase) {   // the sped-up port's line (oep-if-link §3)
             if (t.serial.badCandidates() != bad) speedBad();
             if (message) { speed_good_ms_ = millis(); speed_heard_ = true; speed_bad_run_ = 0; }   // a good frame: the run ends
           }
@@ -334,28 +332,33 @@ void Endpoint::poll() {
 }
 
 void Endpoint::lapse() {
-  if (locked_ && static_cast<int32_t>(millis() - expires_ms_) >= 0) {
-    locked_ = false;   // the last id stays, but its resources go: its next request is rejected expired
-    swept_ = true;
-    loseSession();
-    sessionEnded();
-  }
+  if (locked_ && static_cast<int32_t>(millis() - expires_ms_) >= 0) releaseLock();   // as an end (core §6.4, §9)
 }
 
-// The lock holder is gone (its lease lapsed, or another host took the lock by force): what its session made goes -
-// subscriptions, its use of connections, and a plan it applied (the pins back to safe: released). A plan set through
-// oep.probe.config stays (probe settings, not a session's). An explicit end keeps all of it for the next session.
-// core §9 (decided 2026-09-26).
+// The session's lock ends - end, lease expiry or force, all alike (core §6.4, §9): everything the session created is
+// released - its subscriptions, its shares of the interfaces' resources (a console's stream before the wire's
+// connection, so a stream it was the last user of closes with detail session_ended, oep-if-console §2), its plans (the
+// pins to their idle state). A plan set through oep.probe.config stays (probe settings, not a session's), as do a
+// slot's connection and a bind's stream. The owner is forgotten; the last id and the resend table stay (a resent end
+// is answered from it, core §5.2). Nothing passes to the next session: no resume.
+void Endpoint::releaseLock() {
+  locked_ = false;
+  owner_length_ = 0;
+  loseSession();
+  sessionEnded();
+}
+
 void Endpoint::loseSession() {
   endSubscriptions();
-  for (size_t i = 0; i < count_; ++i) interfaces_[i]->sessionLapsed();
+  for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->sessionOverFirst()) interfaces_[i]->sessionOver();
+  for (size_t i = 0; i < count_; ++i) if (!interfaces_[i]->sessionOverFirst()) interfaces_[i]->sessionOver();
   uint16_t lapsed[kMaxInterfaces];
   size_t n = 0;
   for (size_t i = 0; i < count_; ++i) if (planned_[i] && !persistent_[i]) lapsed[n++] = static_cast<uint16_t>(i + 1);
   if (n) planRelease(lapsed, n);   // n == 0 would mean every fn: only the session's plans go
 }
 
-// Subscriptions belong to the lock: a host that vanished stops being pushed to when its lease lapses.
+// Subscriptions belong to the lock: they end with it (core §11.3).
 void Endpoint::endSubscriptions() {
   heartbeat_ = false;
   event_tail_ = event_head_;
@@ -371,51 +374,44 @@ uint32_t Endpoint::remaining() const {
   return left > 0 ? static_cast<uint32_t>(left) : 0;
 }
 
-// core §6.2: the lock free and the last session's id - ended by end: resume (the lease as its open set it); ended by
-// a lapse: rejected expired (its resources went; the host opens again).
-Result Endpoint::checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity) {
-  if (!has_session) return rejected(kRejectSessionRequired);
-  if (!locked_) {
-    if (have_last_ && session == last_) {
-      if (swept_) return rejected(kRejectExpired);
-      locked_ = true;   // resume: nobody else came in between
-      holder_ = session;
-      return completed();
-    }
-    return rejected(kRejectNoSession);
-  }
+// core §6.2 for a request (not open) with a session_id: no session holds the lock -> no_session (whatever the id: no
+// resume); another holds it -> locked with the time left and the owner (never the holder's id); the holder's -> go on.
+Result Endpoint::checkSession(uint32_t session, uint8_t *out, size_t capacity) {
+  if (!locked_) return rejected(kRejectNoSession);
   if (session == holder_) return completed();
-  return lockedFor(remaining(), owner_, owner_length_, out, capacity);   // never the holder's id
+  return lockedFor(remaining(), owner_, owner_length_, out, capacity);
+}
+
+bool Endpoint::lockFreeOp(uint16_t fn, uint8_t op) const {
+  return fn == 0 ? lockFreeIn(reg::core::kLockFreeOps, op) : interfaces_[fn - 1]->lockFree(op);
 }
 
 void Endpoint::handleMessage(const uint8_t *message, size_t length) {
-  if (length < kRequestHeader || (message[0] & ~kRoleSession) != kRoleRequest) return;   // other roles: drop
+  // other roles, and a request shorter than its header: dropped unanswered (core §2.4)
+  if (length < kRequestHeader || message[0] != kRoleRequest) return;
   bootId();   // picked now if the sketch set none: the first message is the external event (core §6.5)
-  const bool has_session = message[0] & kRoleSession;
   const uint16_t corr = getU16(message + 1), fn = getU16(message + 3);
   const uint8_t op = message[5];
-  size_t header = kRequestHeader;
-  uint32_t session = 0;
-  if (has_session) {
-    if (length < kRequestHeader + kSessionBytes) return;
-    session = getU32(message + kRequestHeader);
-    header += kSessionBytes;
-  }
-  const uint8_t *payload = message + header;
-  const size_t payload_length = length - header;
+  const uint32_t session = getU32(message + 6);   // 0 = no session (core §4.1)
+  const uint8_t *payload = message + kRequestHeader;
+  const size_t payload_length = length - kRequestHeader;
   uint8_t *out = tx_ + kResultHeader;
   size_t capacity = tx_capacity_ - kResultHeader;
   if (capacity > static_cast<size_t>(limits_.max_frame) - kResultHeader) capacity = limits_.max_frame - kResultHeader;
 
   lapse();
-  // core §4.3 order 1, the header: a fn this probe does not have, an op that fn does not offer (core §1.2) - before the
-  // resend table, so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
+  // core §4.3 order 1, the header: a fn this probe does not have, an op that fn does not offer (its ops, core §1.2), an
+  // op that needs the lock with session_id 0 (open's own id 0 is malformed: open checks it) - before the resend table,
+  // so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
+  const bool is_open = fn == 0 && op == kOpOpen;
   if (fn != 0 && fn > count_) { sendReject(corr, kRejectUnknownFunction); return; }
-  if (fn == 0 ? !coreOffers(op) : !interfaces_[fn - 1]->offers(op)) { sendReject(corr, kRejectUnknownOperation); return; }
+  if (!offersOp(fn, op)) { sendReject(corr, kRejectUnknownOperation); return; }
+  if (session == 0 && !is_open && !lockFreeOp(fn, op)) { sendReject(corr, kRejectSessionRequired); return; }
   // The last session's request sent again (the host lost the result): answer from what was kept, never run it twice,
-  // and before the session is judged (core §5.2) - an end sent again must not take the lock back. The host numbers
-  // its requests in order (core §4.1): a corr no newer than the newest seen and not in the table was dropped from it.
-  const bool mine = has_session && have_last_ && session == last_ && !(fn == 0 && op == kOpOpen);
+  // and before the session is judged (core §5.2) - a resent end is answered from here and does not take the lock back.
+  // The host numbers its requests in order (core §4.1): a corr no newer than the newest seen and not in the table was
+  // dropped from it. An open is never looked up (a resent open is decided by §6.2).
+  const bool mine = session != 0 && have_last_ && session == last_ && !is_open;
   const uint32_t crc = mine ? crc32(payload, payload_length) : 0;
   if (mine) {
     for (Dedup &d : dedup_) {
@@ -430,31 +426,32 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   }
   Result result;
   g_request_ignored.reset();   // this request's ignored tags (core §2.3), from its tail's parse
-  if (fn == 0) {
-    result = core(op, has_session, session, payload, payload_length, out, capacity);
-  } else {
-    Interface &it = *interfaces_[fn - 1];
-    result = it.lockFree(op) ? completed() : checkSession(has_session, session, out, capacity);
-    if (result.resolution == kResolutionCompleted) result = it.handle(op, payload, payload_length, out, capacity);
+  // core §6.2 (order 3): every request with a session_id but open - lock-free ones too (core §4.1) - goes through it
+  if (session != 0 && !is_open) result = checkSession(session, out, capacity);
+  else result = completed();
+  if (result.resolution == kResolutionCompleted) {
+    if (fn == 0) result = core(op, session, payload, payload_length, out, capacity);
+    else result = interfaces_[fn - 1]->handle(op, payload, payload_length, out, capacity);
   }
   if (result.length > capacity) result = failed(0);
   // core §2.3: every completed answer carries ignored, a failed status too - for a handler that returned without finish
   result = g_request_ignored.append(result, out, capacity);
-  // core §3.4: a serial port the lock holder's requests come in on (its open too) stops its raw transfer
-  if (serialKind(transports_[current_].kind) && locked_ &&
-      ((fn == 0 && op == kOpOpen && result.resolution == kResolutionCompleted) || (has_session && session == holder_)))
+  // transports §4: a serial port the lock holder's requests come in on (its open too) stops its raw transfer
+  if (serialKind(transports_[current_].kind) && locked_ && session == holder_ &&
+      (!is_open || result.resolution == kResolutionCompleted))
     held_ |= uint32_t{1} << current_;
-  // The lease runs from when the holder's request completed (a long verify must not lapse its own lock).
-  if (has_session && locked_ && session == holder_) expires_ms_ = millis() + lease_ms_;
-  // core §3.5 condition 3: idle_ms is not counted while a request runs (the same rule as the lease) - it runs from
-  // the answer.
+  // The lease runs from when the holder's request completed (a long verify must not lapse its own lock); every answer
+  // to the holder that passed order 3, rejected ones too (core §6.1).
+  if (session != 0 && locked_ && session == holder_) expires_ms_ = millis() + lease_ms_;
+  // oep-if-link §3 condition 3: idle_ms is not counted while a request runs (the same rule as the lease) - it runs
+  // from the answer.
   if (speed_state_ == kSpeedCommitted) speed_good_ms_ = millis();
   tx_[0] = kRoleResult;
   putU16(tx_ + 1, corr);
   tx_[3] = result.resolution;
   tx_[4] = result.detail;
   const size_t total = kResultHeader + result.length;
-  if (mine) {   // keep it for a request sent again (an open drops the table)
+  if (mine) {   // kept for a request sent again, rejected answers too (core §5.2; a successful open drops the table)
     newest_corr_ = corr;
     have_newest_ = true;
     Dedup &d = dedup_[dedup_next_];
@@ -489,24 +486,41 @@ uint32_t Endpoint::crc32(const uint8_t *data, size_t length) {   // IEEE, reflec
   return ~c;
 }
 
-namespace {
-}  // namespace
-
-// The ops fn 0 offers (core §12): the required ones, plan_apply / plan_release with an interface that has plan roles,
-// port_speed while it is on (core §1.2).
+// The ops fn 0 offers (core §12): the required ones, plan_apply / plan_release with an interface that has plan roles
+// (core §1.2).
 bool Endpoint::coreOffers(uint8_t op) const {
   switch (op) {
     case kOpConfirm: case kOpList: case kOpDescribe: case kOpOpen: case kOpEnd: case kOpKeepalive: case kOpLockState:
-    case kOpSubscribe: case kOpUnsubscribe: case kOpLinkSource: case kOpLinkSink:
+    case kOpSubscribe: case kOpUnsubscribe:
       return true;
     case kOpPlanApply: case kOpPlanRelease: return anyPlanRoles();
-    case reg::core::kOpPortSpeed: return port_speed_ != nullptr;
     default: return false;
   }
 }
 
-Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,
-                      uint8_t *out, size_t capacity) {
+bool Endpoint::offersOp(uint16_t fn, uint8_t op) const {
+  if (op >= kExperimentalOps) return false;   // never declared (core §1.2)
+  return fn == 0 ? coreOffers(op) : interfaces_[fn - 1]->offers(op);
+}
+
+// The describe's ops tag (core §1.2, §7.4): base = the lowest op offered, then the bitmap as short as it can be (no op:
+// base 0, no bitmap byte). Written first in every fn's describe, fn 0 included.
+size_t Endpoint::opsTlv(uint16_t fn, uint8_t *out, size_t capacity) const {
+  int lo = -1, hi = -1;
+  for (int op = 1; op < kExperimentalOps; ++op)
+    if (offersOp(fn, static_cast<uint8_t>(op))) { if (lo < 0) lo = op; hi = op; }
+  const size_t bytes = lo < 0 ? 0 : static_cast<size_t>((hi - lo) / 8 + 1);
+  if (capacity < kTlvHeader + 1 + bytes) return 0;
+  putTlvHeader(out, kTagOps, static_cast<uint16_t>(1 + bytes));
+  out[kTlvHeader] = lo < 0 ? 0 : static_cast<uint8_t>(lo);
+  memset(out + kTlvHeader + 1, 0, bytes);
+  for (int op = lo; lo >= 0 && op <= hi; ++op)
+    if (offersOp(fn, static_cast<uint8_t>(op))) out[kTlvHeader + 1 + (op - lo) / 8] |= static_cast<uint8_t>(1u << ((op - lo) % 8));
+  return kTlvHeader + 1 + bytes;
+}
+
+Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out,
+                      size_t capacity) {
   Tail tail;
   switch (op) {
     case kOpConfirm: {
@@ -519,15 +533,14 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       if (refused(parsed)) return parsed;
       if (payload[4] > payload[5]) return rejected(kRejectMalformed);
       if (reg::kProtocolRevision < payload[4] || reg::kProtocolRevision > payload[5]) {
-        if (capacity < 5) return unsupportedValue(out, capacity);
+        if (capacity < 6) return unsupportedValue(out, capacity);
         out[0] = kTagValue;
-        out[1] = reg::core::kTlvUnsupportedPayloadSupported;
-        out[2] = 2;
-        out[3] = reg::kProtocolRevision;   // min
-        out[4] = reg::kProtocolRevision;   // max
-        return {kResolutionRejected, kRejectUnsupported, 5};
+        putTlvHeader(out + 1, reg::core::kTlvUnsupportedPayloadSupported, 2);
+        out[4] = reg::kProtocolRevision;   // min
+        out[5] = reg::kProtocolRevision;   // max
+        return {kResolutionRejected, kRejectUnsupported, 6};
       }
-      if (capacity < 20) return failed();
+      if (capacity < 21) return failed();
       memcpy(out, reg::kConfirmResultMagic, 4);
       out[4] = reg::kProtocolRevision;
       out[5] = 0;                                     // flags: reserved
@@ -535,30 +548,13 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       putU32(out + 8, limits_.window_bytes);
       out[12] = limits_.max_inflight;
       putU32(out + 13, bootId());                     // a host without the lock learns of a restart here (core §6.5)
-      out[17] = reg::core::kTlvConfirmAnswerTransport;
-      out[18] = 1;
-      out[19] = transports_[current_].index;          // the entry of describe's transport list it came on
-      return tail.finish(completed(20), out, capacity);
+      putTlvHeader(out + 17, reg::core::kTlvConfirmAnswerTransport, 1);
+      out[20] = transports_[current_].index;          // the entry of describe's transport list it came on
+      return tail.finish(completed(21), out, capacity);
     }
     case kOpList: return list(payload, length, out, capacity);
-    case kOpLinkSource: {   // length(u32) [TLV] -> that many bytes (as many as fit one frame), byte k = k & 0xff
-      const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
-      if (refused(parsed)) return parsed;
-      size_t n = getU32(payload);
-      if (n > capacity) n = capacity;
-      static uint8_t pattern[256];
-      if (pattern[255] != 255) for (size_t k = 0; k < 256; ++k) pattern[k] = static_cast<uint8_t>(k);
-      for (size_t at = 0; at < n; at += 256) memcpy(out + at, pattern, n - at < 256 ? n - at : 256);
-      return completed(n);   // the one shape with no tail: nothing can follow the bytes (core §2.3)
-    }
-    case kOpLinkSink:       // any bytes (no tail) -> how many arrived (u32)
-      if (capacity < 4) return failed();
-      putU32(out, static_cast<uint32_t>(length));
-      return completed(4);
     case kOpDescribe: return describe(payload, length, out, capacity);
-    case kOpOpen:   // sent with role 0x01: an open with role 0x81 is malformed (core §6.3)
-      if (has_session) return rejected(kRejectMalformed);
-      return open(payload, length, out, capacity);
+    case kOpOpen: return open(session, payload, length, out, capacity);
     case kOpLockState: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
@@ -569,20 +565,14 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       return tail.finish(completed(5 + owner), out, capacity);
     }
     case kOpSubscribe:
-    case kOpUnsubscribe: {   // the lock holder only, and they end with the lock
-      const Result check = checkSession(has_session, session, out, capacity);
-      if (refused(check)) return check;
+    case kOpUnsubscribe:   // the lock holder only (handleMessage checked the session), and they end with the lock
       return subscription(op, payload, length, out, capacity);
-    }
     case kOpEnd:
     case kOpKeepalive:
     case kOpPlanApply:
     case kOpPlanRelease: {
-      // plan_apply / plan_release are ops of a probe one of whose interfaces has plan roles (core §1.2, §12):
-      // unknown_operation otherwise, before the session is looked at (order 1)
-      if ((op == kOpPlanApply || op == kOpPlanRelease) && !anyPlanRoles()) return rejected(kRejectUnknownOperation);
-      const Result check = checkSession(has_session, session, out, capacity);
-      if (refused(check)) return check;
+      // the holder's (handleMessage checked the session); plan_apply / plan_release are in fn 0's ops only when an
+      // interface has plan roles (core §1.2, §12)
       if (op == kOpPlanApply) return planApply(payload, length, out, capacity);
       if (op == kOpPlanRelease) {   // n(u8) n x fn(u16) [TLV]; n = 0: every fn
         if (length < 1) return rejected(kRejectMalformed);
@@ -606,15 +596,14 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
       }
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (op == kOpEnd) { locked_ = false; swept_ = false; endSubscriptions(); sessionEnded(); }   // the last id stays: it may resume
+      if (op == kOpEnd) releaseLock();   // the lock and everything the session created (core §6.4, §9); no resume
       return tail.finish(completed(), out, capacity);
     }
-    case reg::core::kOpPortSpeed: return portSpeed(has_session, session, payload, length, out, capacity);
     default: return rejected(kRejectUnknownOperation);
   }
 }
 
-// port_speed (core §3.5): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
+// oep.link port_speed (oep-if-link §3): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
 //   ->  baud(u32: the rate that applies). A step over 2 is unsupported. Only the UART bridge the request came in on
 // (else unavailable cause 6); a baud this UART cannot make is unsupported. The port is in one of three states - boot,
 // trying, committed - and a step that does not fit its state is unavailable cause 6 too (the same refusal as the wrong
@@ -624,11 +613,8 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
 // commit: then idle_ms (this request's, at most kPortSpeedIdleMaxMs: 0 and anything longer count as that maximum, so a
 // host that died leaves the port at its boot speed soon) with no good frame, or kSpeedBadRun broken candidates in a row
 // with no good frame between, revert. revert: answered (the boot speed) at the speed now, then back.
-Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out,
-                           size_t capacity) {
-  if (!port_speed_) return rejected(kRejectUnknownOperation);   // the feature off (no describe port_speed)
-  const Result check = checkSession(has_session, session, out, capacity);
-  if (refused(check)) return check;
+Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (!port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.link's ops (Link::offers)
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 12, out, capacity);
   if (refused(parsed)) return parsed;
@@ -637,13 +623,13 @@ Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *pa
   const uint32_t baud = getU32(payload + 1), idle = getU32(payload + 8);
   const uint16_t verify = getU16(payload + 6);
   // verify_ms 0 in a try is malformed (order 5); a step of 3 or more is a value a later revision may define:
-  // unsupported, tag 0x00 (core §2.5, §3.5, order 6)
-  if (step == reg::core::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
-  if (step > reg::core::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
+  // unsupported, tag 0x00 (core §2.5, oep-if-link §3, order 6)
+  if (step == reg::link::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
+  if (step > reg::link::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
   if (port != current_ || transports_[port].kind != kUartBridge) return wrongState(out, capacity);
   const bool this_port = speed_state_ != kSpeedBase && speed_port_ == port;   // this port is off its boot speed
   uint32_t answer = 0;
-  if (step == reg::core::kPortSpeedStepTry) {
+  if (step == reg::link::kPortSpeedStepTry) {
     if (this_port) return wrongState(out, capacity);   // trying or committed already: revert first
     answer = port_speed_(port, baud, false);
     if (!answer) return unsupportedValue(out, capacity);
@@ -651,7 +637,7 @@ Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *pa
     speed_pending_port_ = port;
     speed_pending_baud_ = baud;
     speed_pending_verify_ = verify;
-  } else if (step == reg::core::kPortSpeedStepCommit) {
+  } else if (step == reg::link::kPortSpeedStepCommit) {
     // at the boot speed, or committed already, or another baud than the one trying: not the state for it
     if (!this_port || speed_state_ != kSpeedTry || baud != speed_asked_) return wrongState(out, capacity);
     speed_state_ = kSpeedCommitted;
@@ -715,41 +701,37 @@ void Endpoint::speedBad() {
   if (++speed_bad_run_ >= kSpeedBadRun) speedRevert();
 }
 
-// session_id(u32) lease_ms(u32) force(u8) [TLV 0x01 owner]  ->  lease_ms(u32) boot_id(u32) resumed(u8: 0 new, 1 the same
-// id with its resources, 2 the same id after a lapse or a takeover swept them). lease_ms 0 = the default; 1000..60000 are
-// taken as asked (core §6.4), the rest rounded into that range.
-Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+// open (core §6.4): lease_ms(u32) force(u8) [TLV 0x01 owner], the session's id in the header  ->  lease_ms(u32)
+// boot_id(u32). lease_ms 0 = the default; 1000..60000 are taken as asked, the rest rounded into that range. core §6.2's
+// table: the lock free -> taken; held by this id -> a resent open: the lease starts again, nothing released, the
+// subscriptions follow this transport; held by another -> locked, or with force that session is released first (as at
+// its end, §9). The owner comes from the open that takes the lock and stays while it is held. Every successful open
+// drops the resend table (§5.2).
+Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   static const uint8_t kKnown[] = {reg::core::kTlvOpenOwner};
-  if (length < 9) return rejected(kRejectMalformed);
-  const uint32_t session = getU32(payload), lease = getU32(payload + 4);
-  // The open's own form first (it decides nothing about the lock until it is whole): its TLVs, session_id 0 (core §6.1),
+  if (length < 5) return rejected(kRejectMalformed);
+  const uint32_t lease = getU32(payload);
+  const uint8_t force = payload[4];
+  // The open's own form first (it decides nothing about the lock until it is whole): its TLVs, session_id 0 (core §4.1),
   // force a boolean (core §2.1), owner text of 1 to 32 bytes (core §6.4: another length, or text that is not valid,
   // is a value the definition excludes - malformed, critical or not, core §2.1, §2.3).
   Tail tail;
-  const Result parsed = tail.parse(payload + 9, length - 9, kKnown, out, capacity);
+  const Result parsed = tail.parse(payload + 5, length - 5, kKnown, out, capacity);
   if (refused(parsed)) return parsed;
-  if (session == 0 || payload[8] > 1) return rejected(kRejectMalformed);
+  if (session == 0 || force > 1) return rejected(kRejectMalformed);
   size_t owner_len = 0;
   const uint8_t *owner = tail.find(reg::core::kTlvOpenOwner, owner_len);
   if (owner && (owner_len == 0 || owner_len > sizeof owner_ || !requestText(owner, owner_len)))
     return rejected(kRejectMalformed);
-  if (capacity < 9) return failed();
-  if (locked_ && holder_ != session && !payload[8]) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
-  // Taken over by force: the previous holder loses what its session made, as at a lapse (core §6.4). Its id is forgotten
-  // with this open (the probe keeps the last id only): its next request meets locked, later no_session (core §9).
-  if (locked_ && holder_ != session) { loseSession(); sessionEnded(); }
-  if (!(have_last_ && last_ == session)) owner_length_ = 0;   // another session: the old owner goes
-  if (owner) { memcpy(owner_, owner, owner_len); owner_length_ = static_cast<uint8_t>(owner_len); }
-  uint8_t resumed = reg::core::kResumedNew;
-  if (locked_ && holder_ == session) {
-    resumed = reg::core::kResumedResumed;   // held: the lease starts again, the subscriptions stay and follow this transport
-    push_ = current_;
-  } else if (have_last_ && last_ == session) {
-    resumed = swept_ ? reg::core::kResumedSwept : reg::core::kResumedResumed;
+  if (capacity < 8) return failed();
+  if (locked_ && holder_ != session && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
+  if (locked_ && holder_ != session) releaseLock();   // force: the old session is released first (core §6.4, §9)
+  if (locked_) {
+    push_ = current_;   // a resent open: the notifications go to this transport (core §6.2)
+  } else {
+    if (owner) memcpy(owner_, owner, owner_len);
+    owner_length_ = owner ? static_cast<uint8_t>(owner_len) : 0;
   }
-  swept_ = false;
-  // Every open (a resume too) drops the kept results: a one-shot CLI resumes the session with corr from 1 again, and
-  // must not get a previous process's result (core §5.2).
   for (Dedup &d : dedup_) d.used = false;
   have_newest_ = false;
   locked_ = true;
@@ -759,14 +741,13 @@ Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_
   expires_ms_ = millis() + lease_ms_;
   putU32(out, lease_ms_);
   putU32(out + 4, bootId());
-  out[8] = resumed;
-  return tail.finish(completed(9), out, capacity);
+  return tail.finish(completed(8), out, capacity);
 }
 
 // Role assignments as TLVs 0x10 (sent critical, 0x90) = fn(u16) role(u8) channel(u16) (critical). The plan is per fn (oep-core §8): the fns
 // the request names are replaced, every other fn keeps its plan. An unknown critical TLV refuses the plan (unsupported),
-// an unknown non-critical one is ignored and listed. A session's plan: an explicit end keeps it, a lapse or a takeover
-// releases it; a plan set through oep.probe.config (replacePlan, persistent) stays.
+// an unknown non-critical one is ignored and listed. A session's plan goes when its lock ends (end, a lapse, a
+// takeover); a plan set through oep.probe.config (replacePlan, persistent) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // core §4.3's order over the whole request: its form (order 5: every role_assignment 5 bytes, fn 0 malformed as §8's
   // table says, at least one), then at the end of order 5 the fns named inside it (unknown_function), then an unknown
@@ -992,7 +973,7 @@ uint32_t Endpoint::listHash() const {
 }
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // flags(u8, bit0 exact) first(u16) prefix_len(u8) prefix [TLV]  ->  total(u16) count(u8) count x (len(u8) entry)
+  // flags(u8, bit0 exact) first(u16) prefix_len(u8) prefix [TLV]  ->  total(u16) count(u8) count x entry (core §2.3)
   // entry: fn(u16) instance(u16) revision(u8) flags(u8) name_len(u8) name; oep.core (fn 0) is the first one
   if (length < 4 || length < 4u + payload[3] || capacity < 3) return rejected(kRejectMalformed);
   Tail tail;
@@ -1009,21 +990,20 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
   size_t used = 3;
   bool full = false;
   // room for the ignored TLV after the entries, if there is one to report
-  const size_t room = tail.anyIgnored() && capacity > 2 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
+  const size_t room = capacity > tail.room() ? capacity - tail.room() : 0;
   auto consider = [&](uint16_t fn, uint16_t instance, uint8_t revision, uint8_t flags, const char *name) {
     if (!nameMatches(name, prefix, n, exact)) return;
     if (total++ < first || full) return;
     const size_t name_len = strlen(name);
-    if (used + 8 + name_len > room || count == 255) { full = true; return; }
-    out[used] = static_cast<uint8_t>(7 + name_len);   // the element's length (core §2.3)
-    uint8_t *e = out + used + 1;
+    if (used + 7 + name_len > room || count == 255) { full = true; return; }
+    uint8_t *e = out + used;
     putU16(e, fn);
     putU16(e + 2, instance);
     e[4] = revision;
     e[5] = flags;
     e[6] = static_cast<uint8_t>(name_len);
     memcpy(e + 7, name, name_len);
-    used += 8 + name_len;
+    used += 7 + name_len;
     ++count;
   };
   consider(0, 0, reg::core::kRevision, 0, reg::core::kName);
@@ -1044,30 +1024,58 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   const uint16_t first = getU16(payload + 2);
   const uint8_t *tlv = nullptr;
   size_t tlv_length = 0;
-  if (fn == 0) {   // the sketch's part, then the transports, discoverable, plan_roles and max_op_ms (core §7.5)
-    const size_t sketch = probe_tlv_length_ <= sizeof scratch_ ? probe_tlv_length_ : 0;
-    if (sketch) memcpy(scratch_, probe_tlv_, sketch);
-    TlvWriter w(scratch_ + sketch, sizeof scratch_ - sketch);
+  if (fn > count_) return rejected(kRejectUnknownFunction);
+  // every fn's describe starts with its ops (core §1.2, §7.4)
+  const size_t ops = opsTlv(fn, scratch_, sizeof scratch_);
+  if (fn == 0) {   // the ops, the sketch's part, then the transports, discoverable, plan_roles and max_op_ms (core §7.5)
+    const size_t sketch = probe_tlv_length_ <= sizeof scratch_ - ops ? probe_tlv_length_ : 0;
+    if (sketch) memcpy(scratch_ + ops, probe_tlv_, sketch);
+    TlvWriter w(scratch_ + ops + sketch, sizeof scratch_ - ops - sketch);
     for (size_t i = 0; i < transport_count_; ++i) {
       const uint8_t v[3] = {static_cast<uint8_t>(i), transports_[i].kind, transports_[i].usb_interface};
       w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
     }
     w.u8(reg::core::kTlvDescribeDiscoverable, discoverable_ ? 1 : 0);   // always: 0 without the project's VID:PID
     if (anyPlanRoles()) w.u32(reg::core::kTlvDescribePlanRoles, kMaxRoles);   // no plan ops, no plan to count
-    w.u32(reg::core::kTlvDescribeMaxOpMs, kMaxOpMs);
-    if (port_speed_) w.u8(reg::core::kTlvDescribePortSpeed, 1);   // the optional port_speed is on (core §3.5)
+    w.u32(reg::core::kTlvDescribeMaxOpMs, max_op_ms_);
     tlv = scratch_;
-    tlv_length = sketch + w.length();
-  } else if (fn <= count_) {
-    tlv_length = interfaces_[fn - 1]->describe(scratch_, sizeof scratch_);
-    tlv = scratch_;
+    tlv_length = ops + sketch + w.length();
   } else {
-    return rejected(kRejectUnknownFunction);
+    tlv_length = ops + interfaces_[fn - 1]->describe(scratch_ + ops, sizeof scratch_ - ops);
+    tlv = scratch_;
   }
   bool more = false;
   const size_t used = tlv ? pageTlv(tlv, tlv_length, first, out + 1, capacity - 1, more) : 0;
   out[0] = more;
   return completed(1 + used);
+}
+
+// oep.link source / sink / port_speed (oep-if-link §2, §3).
+Result Link::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  Tail tail;
+  switch (op) {
+    case reg::link::kOpSource: {   // length(u32) [TLV]  ->  len(u16) data [TLV]
+      const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
+      if (refused(parsed)) return parsed;
+      // at most max_frame - 26 (header 5, len 2, the room for ignored 19 - kept even when nothing is ignored, so len
+      // does not depend on the request's TLVs)
+      const size_t most = endpoint_.maxFrameIn() - reg::kLimitLinkSourceOverheadBytes;
+      size_t n = getU32(payload);
+      if (n > most) n = most;
+      if (capacity < 2 + n) return failed();
+      putU16(out, static_cast<uint16_t>(n));
+      for (size_t k = 0; k < n; ++k) out[2 + k] = static_cast<uint8_t>(k);
+      return tail.finish(completed(2 + n), out, capacity);
+    }
+    case reg::link::kOpSink: {   // count(u16) data [TLV]  ->  (empty); a count past the bytes that follow is malformed
+      if (length < 2) return rejected(kRejectMalformed);
+      const Result parsed = plainTail(tail, payload, length, 2u + getU16(payload), out, capacity);
+      if (refused(parsed)) return parsed;
+      return tail.finish(completed(), out, capacity);
+    }
+    case reg::link::kOpPortSpeed: return endpoint_.portSpeed(payload, length, out, capacity);
+    default: return rejected(kRejectUnknownOperation);
+  }
 }
 
 }  // namespace oep

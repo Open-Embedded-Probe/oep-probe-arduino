@@ -175,7 +175,7 @@ void DmConsole::answerDmdata() {
 #define OEP_CONSOLE_FAULT_SYN 0
 #endif
 
-static uint8_t seqCrc8(const uint8_t *p, size_t n) {   // poly 0x07, init 0xFF
+uint8_t DmConsole::crc8(const uint8_t *p, size_t n) {   // poly 0x07, init 0xFF
   uint8_t crc = 0xff;
   for (size_t i = 0; i < n; ++i) {
     crc ^= p[i];
@@ -210,7 +210,7 @@ void DmConsole::pollSeq() {
                         static_cast<uint8_t>(w1 >> 16), static_cast<uint8_t>(w1 >> 24)};
   // N before the CRC: at N = 7 there is no byte 1+N, and 0xffffffff - what an attach leaves
   // in DATA0 - decodes to exactly that.
-  if (n > 6 || seqCrc8(b, static_cast<size_t>(1 + n)) != b[1 + n]) {
+  if (n > 6 || crc8(b, static_cast<size_t>(1 + n)) != b[1 + n]) {
     ++stats_.invalid;
     // Usually a bad read, and the next poll reads it right. If it stays bad the word may be
     // our own answer, corrupted into a shape with bit 7 set, and then both sides wait.
@@ -264,7 +264,7 @@ void DmConsole::seqAnswer(uint8_t k, bool with_data) {
   const uint8_t m = with_data ? seq_chunk_len_ : 0;
   uint8_t ans[4] = {static_cast<uint8_t>((k << 5) | (seq_h_ << 4) | m), 0, 0, 0};
   for (uint8_t i = 0; i < m; ++i) ans[1 + i] = seq_chunk_[i];
-  ans[1 + m] = seqCrc8(ans, static_cast<size_t>(1 + m));   // right after the payload
+  ans[1 + m] = crc8(ans, static_cast<size_t>(1 + m));   // right after the payload
   uint32_t answer = uint32_t(ans[0]) | (uint32_t(ans[1]) << 8) | (uint32_t(ans[2]) << 16) | (uint32_t(ans[3]) << 24);
   if (seqFault()) return;                                   // test hook: the answer does not land
   if (seqFault()) answer ^= 1u << (answer % 24);            // test hook: it lands corrupted

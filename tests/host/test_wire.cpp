@@ -18,6 +18,8 @@
 //   it closes after wire_lost_ms, through the liveness check, riscv-dm's ops and the console alike).
 // - Held pins (core §4.3, §8.1): a refusal says cause 1, the channel and its holder_kind; the pair the link was last
 //   on is refused while a plan holds it.
+// - How a live connection's line rests (oep-if-debug §1, §3): only an attach that carries idle_clock changes it; one
+//   joining without it keeps it, a new connection without it rests high, a scan never changes it.
 #include <stdio.h>
 
 #include <map>
@@ -230,20 +232,23 @@ static Result call(Interface &i, uint8_t op, const Bytes &payload, Bytes &out) {
   return r;
 }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
-// attach: method, max_speed (critical), [pins (critical)], [idle_clock (critical)]
-static Bytes attachRequest(uint8_t method, int swdio = -1, int swclk = -1, bool idle_low = false) {
-  Bytes p = {method, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00};
+// attach: method, max_speed (critical), [pins (critical)], [idle_clock (critical): 0 high, 1 low; -1 not carried]
+// (every TLV tag(u8) len(u16) value, core §2.2)
+static Bytes attachRequest(uint8_t method, int swdio = -1, int swclk = -1, int idle_clock = -1) {
+  Bytes p = {method, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
   if (swdio >= 0) {
-    p.insert(p.end(), {uint8_t(wire::kTlvAttachPins | kTagCritical), 4, uint8_t(swdio), 0, uint8_t(swclk), 0});
+    p.insert(p.end(), {uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
   }
-  if (idle_low) p.insert(p.end(), {uint8_t(wire::kTlvAttachIdleClock | kTagCritical), 1, 1});
+  if (idle_clock >= 0) p.insert(p.end(), {uint8_t(wire::kTlvAttachIdleClock | kTagCritical), 1, 0, uint8_t(idle_clock)});
   return p;
 }
 static Bytes detachRequest(uint16_t number) { return {uint8_t(number), uint8_t(number >> 8)}; }
-// The value of answer TLV `tag` after `from` (core §2.3), or nullptr.
+// The value of answer TLV `tag` after `from` (core §2.2: tag(u8) len(u16) value), or nullptr.
 static const uint8_t *answerTlv(const Bytes &out, size_t from, uint8_t tag, size_t &len) {
-  for (size_t at = from; at + 2 <= out.size(); at += 2u + out[at + 1])
-    if (out[at] == tag && at + 2u + out[at + 1] <= out.size()) { len = out[at + 1]; return out.data() + at + 2; }
+  for (size_t at = from; at + 3 <= out.size(); at += 3u + (out[at + 1] | out[at + 2] << 8)) {
+    const size_t n = out[at + 1] | out[at + 2] << 8;
+    if (out[at] == tag && at + 3u + n <= out.size()) { len = n; return out.data() + at + 3; }
+  }
   return nullptr;
 }
 
@@ -298,11 +303,77 @@ int main() {
   // ---- idle_clock low rests SWCLK driven; closing the connection lets it go (core §8) ----
   {
     phy.halted = false;
-    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, true), out);
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, 1), out);
     CHECK(ok(r) && fixed.connected);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     CHECK(phy.state == FakePhy::kFree);   // 0.0.28: park() left SWCLK driven low
+    phy.idle_low = false;
+  }
+
+  // ---- how a live connection's line rests (oep-if-debug §1, §3; oep-spec 59dd028): an attach joining it keeps the
+  // settings it does not carry - only a carried idle_clock changes the rest; a new connection without the TLV rests
+  // high; a scan never changes a live connection's settings (it switched to high on every attach without the TLV:
+  // a tool joining a slot's idle_clock-low connection changed how the line rests) ----
+  {
+    phy.halted = false;
+    const Bytes conn_scan = {0};
+    const Bytes scan_high = {0, uint8_t(wire::kTlvScanIdleClock | kTagCritical), 1, 0, 0};
+    const Bytes scan_low = {0, uint8_t(wire::kTlvScanIdleClock | kTagCritical), 1, 0, 1};
+    // a slot's connection (attachRunning with the slot's idle_clock low)
+    uint32_t dmstatus = 0;
+    CHECK(attachRunning(fixed, DebugPort::kUserSlot, dmstatus, 0, true) && fixed.connected && phy.idle_low);
+    const uint16_t number = fixed.number;
+    auto joined = [&](const Result &r) {   // the existing connection returned, flags bit1
+      return ok(r) && fixed.connected && fixed.number == number && out.size() >= 11 &&
+             (out[0] | out[1] << 8) == number && (out[6] & wire::kAttachFlagsExisting);
+    };
+    // a host attach carrying no idle_clock joins it and leaves it low
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(joined(r) && phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);   // method halt alike
+    CHECK(joined(r) && phy.idle_low);
+    phy.halted = false;
+    // a scan through it, with idle_clock 0 or none: the live connection's rest unchanged
+    r = call(wire_fixed, WireRvswd::kOpScan, scan_high, out);
+    CHECK(ok(r) && out.size() == 11 && out[1] == 1 && fixed.connected && phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpScan, conn_scan, out);
+    CHECK(ok(r) && out[1] == 1 && phy.idle_low);
+    // a host attach carrying idle_clock 0 switches it to high
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, 0), out);
+    CHECK(joined(r) && !phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpScan, scan_low, out);   // a scan with idle_clock 1: still high
+    CHECK(ok(r) && out[1] == 1 && !phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);   // no TLV: stays high
+    CHECK(joined(r) && !phy.idle_low);
+    // an attach that carried idle_clock 1 sets it low; a later one without the TLV keeps it low
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, 1), out);
+    CHECK(joined(r) && phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(joined(r) && phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpScan, scan_high, out);
+    CHECK(ok(r) && out[1] == 1 && phy.idle_low);
+    // the host's detach leaves the slot's use; the slot's release closes it
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(number), out);
+    CHECK(ok(r) && fixed.connected && fixed.users == DebugPort::kUserSlot);
+    releaseConnection(fixed, DebugPort::kUserSlot, false);
+    CHECK(!fixed.connected && phy.state == FakePhy::kFree);
+    // a new connection without the TLV rests high, whatever the last one rested at (the PHY still set low)
+    CHECK(phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && fixed.connected && !(out[6] & wire::kAttachFlagsExisting) && !phy.idle_low);
+    // ... and a host attach's own idle_clock-low connection: joined without the TLV, it stays low
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, 1), out);
+    CHECK(ok(r) && fixed.connected && !(out[6] & wire::kAttachFlagsExisting) && phy.idle_low);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting) && phy.idle_low);
+    // a slot joining it (attachRunning with its own idle_clock high) keeps it as well
+    CHECK(attachRunning(fixed, DebugPort::kUserSlot, dmstatus, 0, false) && phy.idle_low);
+    releaseConnection(fixed, DebugPort::kUserSlot, false);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
     phy.idle_low = false;
   }
 
@@ -316,7 +387,7 @@ int main() {
     static WireRvswd wire_swio(one, 7, reg::wire_swio::kName);
     Result r = call(wire_swio, WireRvswd::kOpScan, {1, 8, 0, 9, 0}, out);
     // tag 0x00, then TLV 0x40 index: the combination's position in the request (oep-if-debug §1; it had no index)
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 0}));
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 0, 0}));
     r = call(wire_swio, WireRvswd::kOpScan, {1, 8, 0, 9}, out);   // cut short: still malformed
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0, 8, 9), out);   // attach alike (pins TLV, critical)
@@ -356,7 +427,7 @@ int main() {
     CHECK(pins.setIdle(4, PinTable::kIdlePullUp));
     CHECK(pins.setIdle(5, PinTable::kIdleOutputLow));
     // a channel whose idle is an output, named: unavailable cause 5, the channel, holder_kind 7 settings_idle (debug §1)
-    Result r = call(wire_chosen, WireRvswd::kOpAttach, attachRequest(0, 4, 5, true), out);
+    Result r = call(wire_chosen, WireRvswd::kOpAttach, attachRequest(0, 4, 5, 1), out);
     CHECK(isSettingsIdle(r, out, 5) && !chosen.connected);
     const Bytes scan_out_idle = {1, 4, 0, 5, 0};
     r = call(wire_chosen, WireRvswd::kOpScan, scan_out_idle, out);
@@ -364,10 +435,10 @@ int main() {
     // a combination the declaration does not allow comes first, wherever it is listed: unsupported with its index
     // (core §4.3 order 6 before 7; it answered unavailable for the output idle of the first)
     r = call(wire_chosen, WireRvswd::kOpScan, {2, 4, 0, 5, 0, 9, 0, 5, 0}, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 1}));
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 0, 1}));
     CHECK(pins.setIdle(5, PinTable::kIdlePullDown));   // an input idle, named: accepted
     // attach on 4 / 5, then detach: 4 pulled up, 5 pulled down by its idle, the PHY's own drive gone
-    r = call(wire_chosen, WireRvswd::kOpAttach, attachRequest(0, 4, 5, true), out);
+    r = call(wire_chosen, WireRvswd::kOpAttach, attachRequest(0, 4, 5, 1), out);
     CHECK(ok(r) && chosen.connected && pins.owner(4) == chosen.pin_owner);
     g_pin_mode[4] = g_pin_mode[5] = -1;
     r = call(wire_chosen, WireRvswd::kOpDetach, detachRequest(chosen.number), out);
@@ -399,12 +470,12 @@ int main() {
     // a pair this wire does not declare: unsupported with the pins tag as received; sent without the critical bit it is
     // ignored and listed (core §2.3)
     phy2.present = true;
-    Bytes bad = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00,
-                 uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 9, 0, 5, 0};
+    Bytes bad = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00,
+                 uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 0, 9, 0, 5, 0};
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 &&
           out[0] == (wire::kTlvAttachPins | kTagCritical));
-    bad[7] = wire::kTlvAttachPins;   // not critical: ignored; no live connection and the host must name a pair
+    bad[8] = wire::kTlvAttachPins;   // not critical: ignored; no live connection and the host must name a pair
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable);
     // count = 0 leaves out every channel with an idle item, input ones too (4, 5, 6 here): only 7 is left, no pair
@@ -415,7 +486,9 @@ int main() {
     phy2.bring_ups = 0;
     r = call(wire_chosen, WireRvswd::kOpScan, scan_all, out);   // 5, 6, 7: six ordered pairs, none with 4
     CHECK(ok(r) && out.size() >= 2 && out[0] == 6 && phy2.bring_ups == 6);
-    for (size_t at = 2; at + 10 <= out.size(); at += 10) CHECK(out[at + 2] != 4 && out[at + 4] != 4);
+    // count x (kind swdio(u16) swclk(u16) DMSTATUS(u32)), 9 bytes each, no element length
+    CHECK(out.size() == 2u + 9u * 6u);
+    for (size_t at = 2; at + 9 <= out.size(); at += 9) CHECK(out[at + 1] != 4 && out[at + 3] != 4);
     CHECK(pins.setIdle(4, PinTable::kIdleUnset));
   }
 
@@ -458,7 +531,7 @@ int main() {
     static WireRvswd wire7(fixed7, 6);
     CHECK(pins7.setIdle(8, PinTable::kIdleOutputHigh));
     Bytes with_reset = attachRequest(1);
-    with_reset.insert(with_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 4, 8, 0, 10, 0});
+    with_reset.insert(with_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 4, 0, 8, 0, 10, 0});
     const uint32_t before = millis();
     Result r = call(wire7, WireRvswd::kOpAttach, with_reset, out);
     CHECK(isSettingsIdle(r, out, 8) && !fixed7.connected);
@@ -525,7 +598,7 @@ int main() {
     phy.writes = phy.attaches = phy.bring_ups = 0;
     const Bytes scan_fixed = {0};
     Result r = call(wire_fixed, WireRvswd::kOpScan, scan_fixed, out);
-    CHECK(ok(r) && out.size() >= 12 && out[0] == 1 && out[1] == 1);
+    CHECK(ok(r) && out.size() == 11 && out[0] == 1 && out[1] == 1 && out[2] == wire::kScanKindRiscvDm);
     CHECK(phy.bring_ups == 1 && phy.attaches == 0 && phy.writes == 0);   // 0.0.28: a full attach, its write check, DMCONTROL
     CHECK(phy.state == FakePhy::kFree && !fixed.connected);
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
@@ -580,7 +653,7 @@ int main() {
     CHECK(resume_ms >= reg::kLimitDmWaitMs && resume_ms <= reg::kLimitDmWaitMs + 5);
     phy.ignore_halt = phy.ignore_resume = false;
     // step (oep-if-debug §4.2): back by itself - ok; not back in dm_wait_ms but stopped by the probe's haltreq - state,
-    // dpc_after valid, haltreq lowered; still running dm_wait_ms after that - state with TLV 0x01 step_left (length 0),
+    // dpc_after valid, haltreq lowered; still running dm_wait_ms after that - state with TLV 0x01 step_left (01 00 00),
     // haltreq cleared (it stepped twice the old 50 ms, then halted, and answered ok)
     phy.step_returns = true;
     r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
@@ -593,7 +666,8 @@ int main() {
     phy.ignore_halt = true;
     before = millis();
     r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
-    CHECK(r.detail == kOutcomeFailed && out.size() == 12 && out[0] == kStatusState && out[10] == 0x01 && out[11] == 0);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 13 && out[0] == kStatusState && out[10] == 0x01 && out[11] == 0 &&
+          out[12] == 0);
     CHECK(!phy.halted && phy.dmcontrol == 1 && !dm.halted());
     CHECK(millis() - before >= 2 * reg::kLimitDmWaitMs && millis() - before <= 2 * reg::kLimitDmWaitMs + 10);
     phy.ignore_halt = false;
@@ -767,21 +841,26 @@ int main() {
     r = call(wire_fixed, WireRvswd::kOpAttach, {2}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     Bytes bad_reset = attachRequest(2);
-    bad_reset.insert(bad_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 2, 8, 0});
+    bad_reset.insert(bad_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 2, 0, 8, 0});
     r = call(wire_fixed, WireRvswd::kOpAttach, bad_reset, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
-    r = call(wire_fixed, WireRvswd::kOpAttach, {0, 0xbf, 0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 2, 1, 0}, out);
+    r = call(wire_fixed, WireRvswd::kOpAttach, {0, 0xbf, 0, 0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 2, 0, 1, 0}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
-    r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0, uint8_t(wire::kTlvScanMaxSpeed), 2, 1, 0}, out);
+    r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0, 0, uint8_t(wire::kTlvScanMaxSpeed), 2, 0, 1, 0}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
-    r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0}, out);   // the unknown critical tag alone: unsupported
+    r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0, 0}, out);   // the unknown critical tag alone: unsupported
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0xbf}));
-    // riscv-dm reset: a method TLV of the wrong length is malformed before a mode of 3 is unsupported
+    // riscv-dm reset: a method TLV shorter than its form is malformed before a mode of 3 is unsupported; one longer
+    // than its form (a request TLV never grows, core §2.3), critical: unsupported with the tag as received
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(ok(r) && fixed.connected);
     r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3,
-                                              uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical), 2, 0, 0}, out);
+                                              uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical), 0, 0}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+    r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 2,
+                                              uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical), 2, 0, 0, 0}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported &&
+          out == Bytes({uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical)}));
     r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0}));
     // a connection it does not know is the last refusal (core §4.3 order 8; it answered no_connection first)

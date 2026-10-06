@@ -87,12 +87,12 @@ class CaptureGroup final : public Interface {
   uint8_t revision() const override { return reg::fixture_capture_group::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_capture_group::kLockFreeOps, op); }
-  // bind .. status (force declared by features bit1)
+  // bind .. status, force (optional) included: the ops tag declares them (core §1.2)
   bool offers(uint8_t op) const override { return opIn(op, reg::fixture_capture_group::kOpBind, reg::fixture_capture_group::kOpStatus); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool subscribe(bool on) override { subscribed_ = on; return true; }
-  // The bind is the session's (core §9): a lapse or a takeover unbinds; an end keeps it for the next session.
-  void sessionLapsed() override { unbind(); }
+  // The bind is the session's (core §9): its end (end, a lapse, a takeover) unbinds.
+  void sessionOver() override { unbind(); }
   void poll();   // from loop(): the stopped event once every bound track is done
 
  private:

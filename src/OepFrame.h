@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// The two framings of oep-core §3.1:
+// The two framings of oep-transports §1:
 //   FrameReader / writeFrame        len lo | len hi | message, on the message transports (vendor bulk, HID, TCP)
 //   SerialReader / writeCobsFrame   0x00 <COBS(message + CRC-16)> 0x00 on every serial port (USB CDC, USB-Serial/JTAG,
-//                                   a UART bridge), which also carries raw bytes outside the frames (core §3.4)
+//                                   a UART bridge), which also carries raw bytes outside the frames (transports §4)
 #pragma once
 
 #include <Arduino.h>
@@ -38,8 +38,8 @@ class FrameReader {
   // A frame's bytes arrive back to back (1 KiB is 89 ms at 115200); a longer gap mid-frame means
   // the prefix was a stray byte from another program and the reader starts over on the next byte.
   static constexpr uint32_t kIdleResyncMs = 200;
-  // TCP (core §3.2): a pause inside a frame is normal there and does not restart the read. A length over max_frame is
-  // still discarded up to the next pause (core §3.1 asks a TCP probe to close the connection; a Stream cannot).
+  // TCP (transports §2): a pause inside a frame is normal there and does not restart the read. A length over max_frame is
+  // still discarded up to the next pause (transports §1 asks a TCP probe to close the connection; a Stream cannot).
   void setTcp(bool on) { tcp_ = on; }
 
  private:
@@ -60,7 +60,7 @@ class FrameReader {
 // Write one message with its length prefix. Returns bytes of message written (0 on failure).
 size_t writeFrame(Stream &stream, const uint8_t *message, size_t length);
 
-// Serial-port framing (oep-core §3.1, §3.4): message + CRC-16 (little endian), COBS-encoded, sent as 0x00 <COBS> 0x00.
+// Serial-port framing (oep-transports §1, §4): message + CRC-16 (little endian), COBS-encoded, sent as 0x00 <COBS> 0x00.
 // A serial port carries raw bytes (a target's console) on the same line: a candidate runs from a 0x00 to the next
 // 0x00; one that decodes with a matching CRC is a message, any other (with its leading 0x00) is raw, and the closing
 // 0x00 starts the next candidate. Bytes outside a candidate are raw at once, and a candidate that stops for 200 ms is
@@ -89,7 +89,7 @@ class SerialReader {
   size_t length() const { return length_; }
   uint32_t crcErrors() const { return crc_errors_; }
   // Candidates closed by a 0x00 that were not a frame (no valid COBS, or the CRC did not match): the line's noise. The
-  // endpoint's port_speed watches it on a port it sped up (core §3.5).
+  // endpoint's port_speed watches it on a port it sped up (oep-if-link §3).
   uint32_t badCandidates() const { return bad_; }
   static constexpr uint32_t kGapMs = 200;
 
@@ -105,9 +105,13 @@ class SerialReader {
 };
 
 // One message as 0x00 <COBS(message + CRC)> 0x00, in one piece where the stream takes it. No empty block after a full
-// one (oep-core §3.1).
+// one (transports §1).
 size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length);
 // The most bytes writeCobsFrame writes for a message of `length`.
 constexpr size_t cobsFrameMax(size_t length) { return length + 2 + (length + 2) / 254 + 3; }
+// COBS alone, no delimiters (transports §1): the encoding of `data` into `out` (its length; 0 when it does not fit),
+// and a decoding (false: a code byte 0, a block past the end, or no room) - what writeCobsFrame and SerialReader use.
+size_t cobsEncode(const uint8_t *data, size_t length, uint8_t *out, size_t capacity);
+bool cobsDecode(const uint8_t *encoded, size_t n, uint8_t *out, size_t capacity, size_t &length);
 
 }  // namespace oep

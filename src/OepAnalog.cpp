@@ -112,7 +112,7 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   }
   w.u32(ana::kTlvDescribeMaxRead, static_cast<uint32_t>(max_read_));
   w.u16(ana::kTlvDescribeSegmentRing, 1);
-  w.u32(kTagFeatures, 0b111);                            // bit0 query, bit1 force, bit2 notifications
+  w.u32(kTagFeatures, 0b100);                            // bit2 notifications; query and force: in the ops tag
   w.u8(kTagImplementation, 3);                           // ADC + DMA
   return w.ok() ? w.length() : 0;
 }
@@ -892,10 +892,9 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       putU32(out + 14, generation_);
       size_t used = 18;
       if (state_ == ana::kStateError) {   // why (TLV 0x01 error): the driver would not start
-        out[18] = ana::kTlvStatusAnswerError;
-        out[19] = 1;
-        out[20] = ana::kErrorPeripheral;
-        used = 21;
+        putTlvHeader(out + 18, ana::kTlvStatusAnswerError, 1);
+        out[21] = ana::kErrorPeripheral;
+        used = 22;
       }
       return tail.finish(completed(used), out, capacity);
     }
@@ -907,7 +906,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       const uint32_t most = getU32(p + 12);
       // no plan or configuration (released: the data went with it): nothing to read
       const uint64_t end = state_ == ana::kStateUnconfigured || !buffer_ ? 0 : static_cast<uint64_t>(frames_) * channels_ * 2u;
-      const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
+      const size_t reserve = tail.room();
       if (capacity < 13 + reserve) return failed();
       size_t take = position < end ? static_cast<size_t>(end - position) : 0;
       if (take > most) take = most;
@@ -919,7 +918,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (take) memcpy(out + 13, reinterpret_cast<const uint8_t *>(buffer_) + position, take);   // little endian
       return tail.finish(completed(13 + take), out, capacity);
     }
-    case ana::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x (len(u8) segment) [TLV]
+    case ana::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x segment [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
       if (capacity < 3 + 37) return failed();
@@ -927,8 +926,8 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       const bool one = segment_ && getU32(p) == 0;
       out[0] = 0;
       out[1] = one ? 1 : 0;
-      if (one) out[2] = static_cast<uint8_t>(segmentInfo(out + 3));   // len(u8) then the info (core §2.3)
-      return tail.finish(completed(one ? 3u + out[2] : 2u), out, capacity);
+      const size_t info = one ? segmentInfo(out + 2) : 0;   // no element length (core §2.3)
+      return tail.finish(completed(2u + info), out, capacity);
     }
     case ana::kOpRelease: {   // generation(u32) serial(u32): nothing to release in one-shot (success)
       const Result parsed = plainTail(tail, p, n, 8, out, capacity);

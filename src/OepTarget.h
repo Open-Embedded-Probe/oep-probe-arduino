@@ -106,7 +106,7 @@ bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk);
 uint16_t pairHeld(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 Result pairHeldRefusal(const DebugPort &port, uint16_t swdio, uint16_t swclk, uint8_t *out, size_t capacity);
 void holdPins(DebugPort &port);
-// The connections answer (oep-if-debug §2.1: first(u8) -> more(u8) count(u8) count x (len, entry)) for a wire with
+// The connections answer (oep-if-debug §2.1: first(u8) -> more(u8) count(u8) count x entry) for a wire with
 // this one place.
 Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity);
 
@@ -129,7 +129,7 @@ class WireRvswd final : public Interface {
   size_t describe(uint8_t *out, size_t capacity) override;
   DebugPort &port() const { return port_; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  void sessionLapsed() override { releaseConnection(port_, DebugPort::kUserHost, false); }
+  void sessionOver() override { releaseConnection(port_, DebugPort::kUserHost, false); }
 
  private:
   DebugPort &port_;
@@ -167,8 +167,14 @@ class TargetRiscvDm final : public Interface {
   const char *name() const override { return reg::target_riscv_dm::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::target_riscv_dm::kRevision; }
-  // dmi .. step: read_block / write_block, run, reset, step are optional and all declared (features)
-  bool offers(uint8_t op) const override { return opIn(op, reg::target_riscv_dm::kOpDmi, reg::target_riscv_dm::kOpStep); }
+  // dmi, halt, resume always; reset, read_block / write_block (a pair), run and step are optional (oep-if-debug §4) -
+  // all offered unless offerOptional(false) leaves them out: the ops tag declares what offers says (core §1.2)
+  bool offers(uint8_t op) const override {
+    return opIn(op, reg::target_riscv_dm::kOpDmi, reg::target_riscv_dm::kOpResume) ||
+           (optional_ && opIn(op, reg::target_riscv_dm::kOpReset, reg::target_riscv_dm::kOpStep));
+  }
+  // A probe without the optional ops (a smaller build): they answer unknown_operation and are not in the ops tag.
+  void offerOptional(bool on) { optional_ = on; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void setFrameLimit(size_t max_frame) override { max_frame_ = max_frame; }
@@ -176,6 +182,7 @@ class TargetRiscvDm final : public Interface {
  private:
   static constexpr size_t kMaxRegs = 16;
   size_t max_frame_ = 0;
+  bool optional_ = true;
   // describe's max_length (oep-if-debug §4.5): bytes of one block op that fit the frame and the word buffer
   uint16_t maxLength() const { return blockMaxLength(max_frame_, sizeof words_); }
   Result dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);

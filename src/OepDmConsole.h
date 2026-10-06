@@ -50,6 +50,8 @@ class DmConsole {
   // oep-if-debug §2: the PHY's wire-loss clock): the stream marks link-lost and the connection closes. Cleared by start().
   bool lineLost() const { return lost_; }
   static constexpr uint32_t kStatusMs = v1::reg::kLimitConsoleDmstatusPollMs;   // 20 ms (oep-if-console §3)
+  // dmseq's CRC-8 (target-console-dmseq: poly 0x07, init 0xFF, no reflection, no final XOR)
+  static uint8_t crc8(const uint8_t *p, size_t n);
   // dmseq diagnostics: polls that read a word with bit 7 set, of those the invalid ones, answers written
   struct SeqStats { uint32_t polls, frames, invalid, answers; };
   SeqStats seqStats() const { return stats_; }

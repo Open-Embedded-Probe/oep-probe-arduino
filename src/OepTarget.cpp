@@ -42,29 +42,30 @@ bool attachAndRead(Ch32Dm &dm, uint32_t &status, bool after_reset = false) {
   return false;
 }
 
-// The max_speed TLV (0x01, u32 Hz) of attach / scan: 0 when absent. false = malformed (not 4 bytes, or 0).
-bool maxSpeed(const Tail &tail, uint8_t tag, uint32_t &hz, bool &critical) {
+// The max_speed TLV (0x01, u32 Hz) of attach / scan: 0 when absent (or a longer value ignored, core §2.3). A refusal:
+// shorter than 4 bytes or 0 (malformed), longer and critical (unsupported).
+Result maxSpeed(Tail &tail, uint8_t tag, uint32_t &hz, bool &critical, uint8_t *out, size_t capacity) {
   hz = 0;
-  critical = false;
-  size_t len = 0;
-  const uint8_t *v = tail.find(tag, len, &critical);
-  if (!v) return true;
-  if (len != 4 || getU32(v) == 0) return false;
-  hz = getU32(v);
-  return true;
+  const uint8_t *v = nullptr;
+  const Result r = tail.fixed(tag, 4, v, out, capacity, &critical);
+  if (refused(r)) return r;
+  if (v && getU32(v) == 0) return rejected(kRejectMalformed);
+  if (v) hz = getU32(v);
+  return completed();
 }
 
-// The idle_clock TLV (0x04, u8 0 high / 1 low; rvswd only) of attach / scan: absent = high (oep-if-debug §3).
-// false = malformed.
-bool idleClock(const Tail &tail, uint8_t tag, bool &low, bool &critical) {
-  low = false;
-  critical = false;
-  size_t len = 0;
-  const uint8_t *v = tail.find(tag, len, &critical);
-  if (!v) return true;
-  if (len != 1 || v[0] > wire::kIdleClockLow) return false;
+// The idle_clock TLV (0x04, u8 0 high / 1 low; rvswd only) of attach / scan. given: it was carried - absent, a new
+// connection rests high, and an existing one keeps its own (oep-if-debug §1, §3). A refusal as maxSpeed's.
+Result idleClock(Tail &tail, uint8_t tag, bool &low, bool &given, bool &critical, uint8_t *out, size_t capacity) {
+  low = given = false;
+  const uint8_t *v = nullptr;
+  const Result r = tail.fixed(tag, 1, v, out, capacity, &critical);
+  if (refused(r)) return r;
+  if (!v) return completed();
+  if (v[0] > wire::kIdleClockLow) return rejected(kRejectMalformed);
   low = v[0] == wire::kIdleClockLow;
-  return true;
+  given = true;
+  return completed();
 }
 
 // The reset line, open drain: pulled low, then released - never driven high (oep-if-debug §3) - and back to its idle
@@ -104,12 +105,11 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   uint32_t id = 0;
   port.has_tid = port.dm.readDmi(0x7f, id) && id != 0 && id != 0xffffffffu;   // kept for connections / the slots
   port.tid = port.has_tid ? id : 0;
-  if (room < 7 || !port.has_tid) return 0;
-  out[0] = wire::kTlvAttachAnswerTargetId;
-  out[1] = 5;
-  out[2] = reg::common::kTargetIdSchemeWchDmi7f;
-  putU32(out + 3, id);
-  return 7;
+  if (room < kTlvHeader + 5 || !port.has_tid) return 0;
+  putTlvHeader(out, wire::kTlvAttachAnswerTargetId, 5);   // scheme(u8) id(u32)
+  out[3] = reg::common::kTargetIdSchemeWchDmi7f;
+  putU32(out + 4, id);
+  return kTlvHeader + 5;
 }
 
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz, bool idle_low, AttachReset *reset,
@@ -271,15 +271,16 @@ void holdPins(DebugPort &port) {
   if (port.swclk != 0xffff) port.pins->claim(port.swclk, port.pin_owner, reg::core::kHolderKindConnection);
 }
 
-// connections (oep-if-debug §2.1): first(u8) -> more(u8) count(u8), per entry len(u8) then connection(u16) swdio(u16)
-// swclk(u16) speed_hz(u32) users(u8) slot(u8) tid_scheme(u8) tid_len(u8) tid. One place per wire here: at most one entry.
+// connections (oep-if-debug §2.1): first(u8) -> more(u8) count(u8), count x entry: connection(u16) swdio(u16) swclk(u16)
+// speed_hz(u32) users(u8) slot(u8) tid_scheme(u8) tid_len(u8) tid (no element length, core §2.3). One place per wire
+// here: at most one entry.
 Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity) {
-  if (capacity < 3 + 20) return failed();
+  if (capacity < 2 + 18) return failed();
   out[0] = 0;   // more: never (one entry at most)
   out[1] = 0;
   if (!port.connected || first > 0) return completed(2);
   out[1] = 1;
-  uint8_t *e = out + 3;   // after the entry's len(u8) (core §2.3)
+  uint8_t *e = out + 2;
   putU16(e, port.number);
   putU16(e + 2, port.swdio);
   putU16(e + 4, port.swclk);
@@ -289,8 +290,7 @@ Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t 
   e[12] = port.has_tid ? reg::common::kTargetIdSchemeWchDmi7f : 0;
   e[13] = port.has_tid ? reg::common::kTargetIdLenWchDmi7f : 0;
   if (port.has_tid) putU32(e + 14, port.tid);
-  out[2] = port.has_tid ? 18 : 14;
-  return completed(3u + out[2]);
+  return completed(2u + (port.has_tid ? 18 : 14));
 }
 
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
@@ -337,8 +337,9 @@ uint8_t WireRvswd::choosePair(const uint8_t *pins, size_t len, PinRefusal &why) 
 }
 
 // count(u8) pairs [TLV 0x01 max_speed, 0x02 skip (count 0), 0x04 idle_clock (rvswd)]
-//   ->  tried(u8) count(u8), then kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32) per answer, each after its len(u8)
-// (oep-if-debug §1, §3). Only dmactive is written; a pair without a module goes back to Hi-Z.
+//   ->  tried(u8) count(u8), count x (kind(u8) swdio(u16) swclk(u16) raw DMSTATUS(u32)) (oep-if-debug §1, §3; 9 bytes
+// each, no element length). Only dmactive is written; a pair without a module goes back to Hi-Z. A live connection's
+// settings (its speed, its idle_clock) are never changed by a scan (debug §1).
 Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
   const uint8_t count = payload[0];
@@ -353,15 +354,23 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   uint16_t skip = 0;
   {
     size_t len = 0;
-    if (const uint8_t *v = tail.find(wire::kTlvScanSkip, len)) {
-      if (count || len != 2) return rejected(kRejectMalformed);   // skip goes with count 0 only
-      skip = getU16(v);
-    }
+    bool skip_critical = false;
+    if (tail.find(wire::kTlvScanSkip, len) && count) return rejected(kRejectMalformed);   // skip goes with count 0 only
+    const uint8_t *v = nullptr;
+    const Result r = tail.fixed(wire::kTlvScanSkip, 2, v, out, capacity, &skip_critical);
+    if (refused(r)) return r;
+    if (v) skip = getU16(v);
   }
   uint32_t max_hz = 0;
-  bool critical = false, idle_low = false, idle_critical = false;
-  if (!maxSpeed(tail, wire::kTlvScanMaxSpeed, max_hz, critical)) return rejected(kRejectMalformed);
-  if (isRvswd() && !idleClock(tail, wire::kTlvScanIdleClock, idle_low, idle_critical)) return rejected(kRejectMalformed);
+  bool critical = false, idle_low = false, idle_given = false, idle_critical = false;
+  {
+    const Result r = maxSpeed(tail, wire::kTlvScanMaxSpeed, max_hz, critical, out, capacity);
+    if (refused(r)) return r;
+  }
+  if (isRvswd()) {
+    const Result r = idleClock(tail, wire::kTlvScanIdleClock, idle_low, idle_given, idle_critical, out, capacity);
+    if (refused(r)) return r;
+  }
   if (refused(unknown)) return unknown;
   if (max_hz && phy.minClockHz() && max_hz < phy.minClockHz()) return unsupportedTag(out, capacity, wire::kTlvScanMaxSpeed | (critical ? kTagCritical : 0));
   // every pair listed is one this wire allows (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index), all of
@@ -395,7 +404,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   // the attach budget.
   const uint32_t began = millis();
   auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full, or its time is up
-    if (at + 10 > capacity || (tried && millis() - began >= reg::kLimitScanBudgetMs)) return false;
+    if (at + 9 + tail.room() > capacity || (tried && millis() - began >= reg::kLimitScanBudgetMs)) return false;
     uint32_t status = 0;
     bool ok = false;
     if (port_.connected) {
@@ -413,12 +422,11 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
       freeWire(port_);                                   // found or not, the pair to its free state (debug §1)
     }
     if (ok) {
-      out[at] = 9;   // the element's length (core §2.3)
-      out[at + 1] = wire::kScanKindRiscvDm;
-      putU16(out + at + 2, d);
-      putU16(out + at + 4, c);
-      putU32(out + at + 6, status);
-      at += 10;
+      out[at] = wire::kScanKindRiscvDm;
+      putU16(out + at + 1, d);
+      putU16(out + at + 3, c);
+      putU32(out + at + 5, status);
+      at += 9;
       ++found;
     }
     ++tried;
@@ -467,16 +475,27 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   if (refused(parsed)) return parsed;
   DmiPhy &phy = port_.dm.phy();
   uint32_t max_hz = 0;
-  bool critical = false, idle_low = false, idle_critical = false;
-  if (!maxSpeed(tail, wire::kTlvAttachMaxSpeed, max_hz, critical) ||
-      (isRvswd() && !idleClock(tail, wire::kTlvAttachIdleClock, idle_low, idle_critical)))
-    return rejected(kRejectMalformed);
-  if (!max_hz) return rejected(kRejectMalformed);   // max_speed is required (oep-if-debug §1)
-  size_t plen = 0, rlen = 0;
+  bool critical = false, idle_low = false, idle_given = false, idle_critical = false;
+  // Every TLV's form (core §2.3: shorter malformed; longer - a request TLV never grows - unsupported when critical, else
+  // ignored); max_speed is required (oep-if-debug §1): absent, or a longer one ignored, is malformed.
+  {
+    const Result r = maxSpeed(tail, wire::kTlvAttachMaxSpeed, max_hz, critical, out, capacity);
+    if (refused(r)) return r;
+  }
+  if (isRvswd()) {
+    const Result r = idleClock(tail, wire::kTlvAttachIdleClock, idle_low, idle_given, idle_critical, out, capacity);
+    if (refused(r)) return r;
+  }
+  if (!max_hz) return rejected(kRejectMalformed);
+  size_t plen = 4;
   bool pins_critical = false, reset_critical = false;
-  const uint8_t *pins = tail.find(wire::kTlvAttachPins, plen, &pins_critical);
-  const uint8_t *reset_value = tail.find(wire::kTlvAttachReset, rlen, &reset_critical);
-  if ((pins && plen != 4) || (reset_value && rlen != 4)) return rejected(kRejectMalformed);
+  const uint8_t *pins = nullptr, *reset_value = nullptr;
+  {
+    const Result r = tail.fixed(wire::kTlvAttachPins, 4, pins, out, capacity, &pins_critical);
+    if (refused(r)) return r;
+    const Result q = tail.fixed(wire::kTlvAttachReset, 4, reset_value, out, capacity, &reset_critical);
+    if (refused(q)) return q;
+  }
   if (refused(unknown)) return unknown;
   // not a method of the table: unsupported, payload 0x00 (oep-if-debug §3; a later revision may define it, core §2.5)
   if (payload[0] > wire::kAttachMethodHalt) return unsupportedValue(out, capacity);
@@ -581,10 +600,13 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   if (with_reset && port_.pins && port_.pins->owner(static_cast<uint16_t>(reset_channel)))
     return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, static_cast<uint16_t>(reset_channel), 0xFFFF,
                        port_.pins->holderKind(static_cast<uint16_t>(reset_channel)));
-  if (!phy.setIdleClockLow(idle_low)) {   // an existing connection takes the new rest level too
+  // How the line rests (oep-if-debug §1, §3): an attach that carries idle_clock sets it - an existing connection's too;
+  // one that does not leaves a live connection's as it is (a tool joining a slot's connection must not change how the
+  // line rests), and a new connection rests high.
+  if ((idle_given || !port_.connected) && !phy.setIdleClockLow(idle_low)) {
     const Result r = tail.refuse(wire::kTlvAttachIdleClock, idle_critical, out, capacity);
     if (refused(r)) return r;
-    phy.setIdleClockLow(false);
+    if (!port_.connected) phy.setIdleClockLow(false);
   }
   if (capacity < 11) return failed();
   ResetLine reset_line{reset_channel, port_.pins, nullptr, &phy.loss()};
@@ -712,18 +734,16 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   out[6] = flags;
   putU32(out + 7, phy.clockHz());
   size_t n = 11 + targetId(port_, out + 11, capacity - 11);
-  if (have_dpc && (flags & wire::kAttachFlagsHalted) && n + 6 <= capacity) {
-    out[n] = wire::kTlvAttachAnswerDpc;
-    out[n + 1] = 4;
-    putU32(out + n + 2, dpc);
-    n += 6;
+  if (have_dpc && (flags & wire::kAttachFlagsHalted) && n + kTlvHeader + 4 <= capacity) {
+    putTlvHeader(out + n, wire::kTlvAttachAnswerDpc, 4);
+    putU32(out + n + kTlvHeader, dpc);
+    n += kTlvHeader + 4;
   }
-  if (searched && n + 4 <= capacity) {   // search_retries (oep-if-debug §1): u16, 0xFFFF = that many or more
+  if (searched && n + kTlvHeader + 2 <= capacity) {   // search_retries (oep-if-debug §1): u16, 0xFFFF = that many or more
     const uint32_t retries = phy.searchRetries();
-    out[n] = wire::kTlvAttachAnswerSearchRetries;
-    out[n + 1] = 2;
-    putU16(out + n + 2, static_cast<uint16_t>(retries < 0xffff ? retries : 0xffff));
-    n += 4;
+    putTlvHeader(out + n, wire::kTlvAttachAnswerSearchRetries, 2);
+    putU16(out + n + kTlvHeader, static_cast<uint16_t>(retries < 0xffff ? retries : 0xffff));
+    n += kTlvHeader + 2;
   }
   return tail.finish(completed(n), out, capacity);
 }
@@ -745,10 +765,13 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (length < 2) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 2, length - 2, kDetachTags, out, capacity);
       if (refused(parsed)) return parsed;
+      const uint8_t *force_value = nullptr;
+      bool force_critical = false;   // length 0 (oep-if-debug §3); longer: a longer request TLV (core §2.3)
+      const Result r = tail.fixed(wire::kTlvDetachForce, 0, force_value, out, capacity, &force_critical);
+      if (refused(r)) return r;
+      const bool force = force_value != nullptr;
       if (!port_.connected || getU16(payload) != port_.number)
         return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
-      size_t len = 0;
-      const bool force = tail.find(wire::kTlvDetachForce, len) != nullptr;
       releaseConnection(port_, DebugPort::kUserHost, force, false, force);   // forced: its streams mark detach (§2)
       return tail.finish(completed(), out, capacity);
     }
@@ -760,9 +783,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
 // ---- oep.target.riscv-dm -------------------------------------------------------------------------
 
 size_t TargetRiscvDm::describe(uint8_t *out, size_t capacity) {
-  TlvWriter w(out, capacity);
-  w.u32(kTagFeatures, reg::target_riscv_dm::kFeaturesBlock | reg::target_riscv_dm::kFeaturesRun |
-                          reg::target_riscv_dm::kFeaturesReset | reg::target_riscv_dm::kFeaturesStep);
+  TlvWriter w(out, capacity);   // the optional ops are in the ops tag the endpoint writes (offers); no features
   // block read / write use a0, a1, s0, s1 and put them back before answering (oep-if-debug §4.5)
   w.u8(kTagImplementation, 1);
   // One block operation's data in bytes (oep-if-debug §4.5): what fits the endpoint's frame - write_block's request
@@ -846,11 +867,12 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       Result unknown = completed();   // core §4.3: the method's length (malformed) before the mode and unknown tags
       const Result parsed = tail.parse(p + 1, n - 1, kKnown, out, capacity, &unknown);
       if (refused(parsed)) return parsed;
-      size_t len = 0;
       bool critical = false;
-      const uint8_t *method = tail.find(reg::target_riscv_dm::kTlvResetMethod, len, &critical);
-      if (method && len != 1) return rejected(kRejectMalformed);
+      const uint8_t *method = nullptr;
+      const Result form = tail.fixed(reg::target_riscv_dm::kTlvResetMethod, 1, method, out, capacity, &critical);
+      if (form.resolution == kResolutionRejected && form.detail == kRejectMalformed) return form;
       if (refused(unknown)) return unknown;
+      if (refused(form)) return form;
       if (p[0] > kResetHalt) return unsupportedValue(out, capacity);   // mode 3 or more (oep-if-debug §4.3, core §2.5)
       if (method) {
         // Every reset here is ndmreset with haltreq held; a target system reset (PFIC) is the host's to write.
@@ -894,7 +916,7 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       if (refused(parsed)) return parsed;
       if (!target) return completed();
       Ch32Dm &dm = *target;
-      if (capacity < 12) return failed();
+      if (capacity < 10 + kTlvHeader) return failed();
       uint32_t before = 0, after = 0;
       bool moved = false, left = false;
       uint8_t status = kStatusState;   // not halted: nothing to step
@@ -914,9 +936,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       putU32(out + 6, after);
       size_t length = 10;
       if (left) {
-        out[10] = reg::target_riscv_dm::kTlvStepAnswerStepLeft;
-        out[11] = 0;
-        length = 12;
+        putTlvHeader(out + 10, reg::target_riscv_dm::kTlvStepAnswerStepLeft, 0);
+        length = 10 + kTlvHeader;
       }
       return tail.finish(outcome(status, 0, length), out, capacity);
     }

@@ -40,6 +40,7 @@ static constexpr uint8_t kCrit = 0x80;
 static void tlv(Bytes &p, uint8_t tag, const Bytes &v) {
   p.push_back(tag);
   p.push_back(static_cast<uint8_t>(v.size()));
+  p.push_back(static_cast<uint8_t>(v.size() >> 8));
   p.insert(p.end(), v.begin(), v.end());
 }
 static Bytes u32(uint32_t v) { Bytes b(4); putU32(b.data(), v); return b; }
@@ -120,7 +121,7 @@ static void testSentCritical() {
   Bytes p = configureRequest(10000);
   tlv(p, ana::kTlvConfigureSamples, {1, 0, 0, 0, 0});
   const Result r = rig.op(ana::kOpConfigure, p);
-  const Bytes ignored = {0x7F, 1, ana::kTlvConfigureSamples};
+  const Bytes ignored = {0x7F, 1, 0, ana::kTlvConfigureSamples};
   CHECK(ok(r) && std::search(rig.out.begin(), rig.out.end(), ignored.begin(), ignored.end()) != rig.out.end());
 }
 
@@ -145,8 +146,11 @@ static void testConfigureOrder() {
 }
 
 static bool findTlv(const Bytes &a, uint8_t tag, Bytes &v) {
-  for (size_t at = 0; at + 2 <= a.size(); at += 2u + a[at + 1])
-    if (a[at] == tag) { v.assign(a.begin() + at + 2, a.begin() + at + 2 + a[at + 1]); return true; }
+  for (size_t at = 0; at + kTlvHeader <= a.size(); at += kTlvHeader + getU16(a.data() + at + 1))
+    if (a[at] == tag) {
+      v.assign(a.begin() + at + kTlvHeader, a.begin() + at + kTlvHeader + getU16(a.data() + at + 1));
+      return true;
+    }
   return false;
 }
 
@@ -191,7 +195,7 @@ static void testOutputIdle() {
   CHECK(rig.ep.replacePlan(roles, 2, fns, 1) == kRejectUnavailable);
   uint8_t out[32];
   const Result r = rig.ep.planUnavailable(out, sizeof out);
-  CHECK(rejectedAs(r, kRejectUnavailable) && Bytes(out, out + r.length) == (Bytes{0x01, 1, 5, 0x02, 2, 27, 0, 0x04, 1, 7}));
+  CHECK(rejectedAs(r, kRejectUnavailable) && Bytes(out, out + r.length) == (Bytes{0x01, 1, 0, 5, 0x02, 2, 0, 27, 0, 0x04, 1, 0, 7}));
   RoleAssignment now[2];
   CHECK(rig.ep.plan(now, 2) == 0 && rig.pins.owner(26) == 0);
   CHECK(rig.pins.setIdle(27, PinTable::kIdlePullUp, false));   // an input idle: fine
@@ -245,8 +249,8 @@ static void testStop() {
     CHECK(ok(rig.op(ana::kOpStop)));
     CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateConfigured && getU32(rig.out.data() + 1) == 1 &&
           getU64(rig.out.data() + 5) == 60);
-    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 3 + 37 && rig.out[1] == 1);
-    CHECK(getU32(rig.out.data() + 3 + 12) == 30 && (rig.out[3 + 32] & ana::kSegmentFlagShort));
+    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 + 37 && rig.out[1] == 1);
+    CHECK(getU32(rig.out.data() + 2 + 12) == 30 && (rig.out[2 + 32] & ana::kSegmentFlagShort));
     CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 60 &&
           getU16(rig.out.data() + 13) == 0x321);
     CHECK(ok(rig.op(ana::kOpStart)));   // from state 1: the next generation, the segment gone
@@ -267,9 +271,9 @@ static void testStop() {
     CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateCapturing);
     CHECK(ok(rig.op(ana::kOpStop)));
     CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateConfigured && getU32(rig.out.data() + 1) == 1);
-    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 3 + 37 && rig.out[1] == 1);
-    CHECK(getU32(rig.out.data() + 3 + 12) == 40 && getU32(rig.out.data() + 3 + 28) == 10 &&
-          (rig.out[3 + 32] & ana::kSegmentFlagShort));
+    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 + 37 && rig.out[1] == 1);
+    CHECK(getU32(rig.out.data() + 2 + 12) == 40 && getU32(rig.out.data() + 2 + 28) == 10 &&
+          (rig.out[2 + 32] & ana::kSegmentFlagShort));
     CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 80);
     CHECK(getU16(rig.out.data() + 13 + 2 * 9) == 100 && getU16(rig.out.data() + 13 + 2 * 10) == 4000);
     // waiting, never crossed: state 1, nothing
@@ -288,7 +292,7 @@ static void testStop() {
     convert(100, 1);
     CHECK(ok(rig.op(ana::kOpStop)));
     CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateDone && getU32(rig.out.data() + 1) == 1);
-    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && !(rig.out[3 + 32] & ana::kSegmentFlagShort));
+    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && !(rig.out[2 + 32] & ana::kSegmentFlagShort));
   }
 }
 

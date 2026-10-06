@@ -41,8 +41,8 @@ static Result call(P4SpiTarget &t, uint8_t op, const Bytes &payload, Bytes &out)
 }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
 static bool unavailableCause(const Result &r, const Bytes &out, uint8_t cause) {
-  return r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && out.size() >= 3 && out[0] == 0x01 &&
-         out[1] == 1 && out[2] == cause;
+  return r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && out.size() >= 4 && out[0] == 0x01 &&
+         out[1] == 1 && out[2] == 0 && out[3] == cause;   // cause TLV: 01 len(u16) cause
 }
 static Status status(P4SpiTarget &t) {
   Bytes out;
@@ -61,13 +61,14 @@ static Result arm(P4SpiTarget &t, uint16_t length, const Bytes &tx) {
   return call(t, P4SpiTarget::kOpArm, p, out);
 }
 
-// The channel bitmap role_channels declares for `role` in a describe (first channel 0), 0 when absent.
+// The channel bitmap role_channels (role u8, base u16, bitmap) declares for `role` in a describe (base 0), 0 when absent.
+// TLVs are tag(u8) len(u16 LE) value.
 static uint64_t roleMask(const uint8_t *d, size_t n, uint8_t role) {
-  for (size_t i = 0; i + 1 < n; i += 2u + d[i + 1]) {
-    const size_t len = d[i + 1];
-    if (d[i] != kTagRoleChannels || len < 3 || d[i + 2] != role) continue;
+  for (size_t i = 0; i + kTlvHeader <= n; i += kTlvHeader + getU16(d + i + 1)) {
+    const size_t len = getU16(d + i + 1);
+    if (d[i] != kTagRoleChannels || len < 3 || d[i + 3] != role) continue;
     uint64_t m = 0;
-    for (size_t k = 0; k < len - 3 && k < 8; ++k) m |= uint64_t{d[i + 5 + k]} << (8 * k);
+    for (size_t k = 0; k < len - 3 && k < 8; ++k) m |= uint64_t{d[i + 6 + k]} << (8 * k);
     return m;
   }
   return 0;
@@ -296,9 +297,8 @@ int main() {
     uint8_t d[64];
     const size_t n = t.describe(d, sizeof d);
     bool found = false;
-    for (size_t at = 0; at + 2 <= n; at += 2u + d[at + 1])
-      if (d[at] == 0x43 && d[at + 1] == 4)
-        found = (d[at + 2] | d[at + 3] << 8 | d[at + 4] << 16 | uint32_t(d[at + 5]) << 24) == P4SpiTarget::kCsSetupNs;
+    for (size_t at = 0; at + kTlvHeader <= n; at += kTlvHeader + getU16(d + at + 1))
+      if (d[at] == 0x43 && getU16(d + at + 1) == 4) found = getU32(d + at + 3) == P4SpiTarget::kCsSetupNs;
     CHECK(found && P4SpiTarget::kCsSetupNs == 15000);   // the bench's 11.9 us (CS rising to MISO undriven) with margin
   }
 

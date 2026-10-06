@@ -20,12 +20,11 @@ static int failures = 0, checks = 0;
 // The value of tag `tag` in a TLV run, or nullptr.
 static const uint8_t *find(const uint8_t *p, size_t n, uint8_t tag, size_t &length) {
   size_t at = 0;
-  while (at + 2 <= n) {
+  while (at + kTlvHeader <= n) {   // tag(u8) len(u16 LE) value
     const uint8_t t = p[at];
-    size_t l = p[at + 1], head = 2;
-    if (l == 255) { l = p[at + 2] | (p[at + 3] << 8); head = 4; }
-    if (t == tag) { length = l; return p + at + head; }
-    at += head + l;
+    const size_t l = p[at + 1] | (p[at + 2] << 8);
+    if (t == tag) { length = l; return p + at + kTlvHeader; }
+    at += kTlvHeader + l;
   }
   return nullptr;
 }

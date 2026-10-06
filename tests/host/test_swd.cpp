@@ -40,15 +40,20 @@ static Result call(Interface &i, uint8_t op, const Bytes &payload, Bytes &out) {
   return r;
 }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
+// attach: method 0, max_speed 1 MHz (critical), [pins (critical)]; every TLV tag(u8) len(u16) value (core §2.2)
 static Bytes attachRequest(int swdio = -1, int swclk = -1) {
-  Bytes p = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00};   // 1 MHz
-  if (swdio >= 0) p.insert(p.end(), {uint8_t(sw::kTlvAttachPins | kTagCritical), 4, uint8_t(swdio), 0, uint8_t(swclk), 0});
+  Bytes p = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
+  if (swdio >= 0)
+    p.insert(p.end(), {uint8_t(sw::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
   return p;
 }
 static Bytes u16(uint16_t v) { return {uint8_t(v), uint8_t(v >> 8)}; }
+// The value of answer TLV `tag` after `from` (core §2.2: tag(u8) len(u16) value), or nullptr.
 static const uint8_t *tlv(const Bytes &out, size_t from, uint8_t tag, size_t &len) {
-  for (size_t at = from; at + 2 <= out.size(); at += 2u + out[at + 1])
-    if (out[at] == tag && at + 2u + out[at + 1] <= out.size()) { len = out[at + 1]; return out.data() + at + 2; }
+  for (size_t at = from; at + 3 <= out.size(); at += 3u + (out[at + 1] | out[at + 2] << 8)) {
+    const size_t n = out[at + 1] | out[at + 2] << 8;
+    if (out[at] == tag && at + 3u + n <= out.size()) { len = n; return out.data() + at + 3; }
+  }
   return nullptr;
 }
 static bool isSettingsIdle(const Result &r, const Bytes &out, uint16_t channel) {
@@ -106,16 +111,16 @@ int main() {
   {
     r = call(wire, WireSwd::kOpAttach, {1}, out);   // method 1 (unsupported) without max_speed (malformed)
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
-    // the reset TLV (not offered: an unknown critical tag) with a pins TLV of the wrong length
+    // the reset TLV (not offered: an unknown critical tag) with a pins TLV shorter than its form
     Bytes a = attachRequest();
-    a.insert(a.end(), {uint8_t(sw::kTlvAttachReset | kTagCritical), 4, 8, 0, 10, 0,
-                       uint8_t(sw::kTlvAttachPins | kTagCritical), 2, 2, 0});
+    a.insert(a.end(), {uint8_t(sw::kTlvAttachReset | kTagCritical), 4, 0, 8, 0, 10, 0,
+                       uint8_t(sw::kTlvAttachPins | kTagCritical), 2, 0, 2, 0});
     r = call(wire, WireSwd::kOpAttach, a, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
-    a.resize(a.size() - 4);   // the reset TLV alone: unsupported, the tag as received
+    a.resize(a.size() - 5);   // the reset TLV alone: unsupported, the tag as received
     r = call(wire, WireSwd::kOpAttach, a, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0x85}));
-    r = call(wire, WireSwd::kOpScan, {0, 0xbf, 0, uint8_t(sw::kTlvScanSkip), 1, 0}, out);   // skip of the wrong length
+    r = call(wire, WireSwd::kOpScan, {0, 0xbf, 0, 0, uint8_t(sw::kTlvScanSkip), 1, 0, 0}, out);   // skip too short
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
   }
 
@@ -154,7 +159,9 @@ int main() {
     const Bytes scan_all = {0};
     r = call(wire2, WireSwd::kOpScan, scan_all, out);
     CHECK(ok(r) && out.size() >= 2 && out[0] == 6 && out[1] == 6);   // 5, 6, 7 in order: no pair with 4
-    for (size_t at = 2; at + 10 <= out.size(); at += 10) CHECK(out[at + 2] != 4 && out[at + 4] != 4);
+    // count x (kind swdio(u16) swclk(u16) id(u32)), 9 bytes each, no element length
+    CHECK(out.size() == 2u + 9u * 6u);
+    for (size_t at = 2; at + 9 <= out.size(); at += 9) CHECK(out[at + 1] != 4 && out[at + 3] != 4);
     CHECK(pins.setIdle(5, PinTable::kIdleOutputHigh));
     r = call(wire2, WireSwd::kOpAttach, attachRequest(5, 6), out);
     CHECK(isSettingsIdle(r, out, 5) && !chosen.connected);
@@ -177,7 +184,7 @@ int main() {
     // a combination the declaration does not allow, listed after the held one: unsupported, tag 0x00 and TLV 0x40 its
     // index, before any held channel (oep-if-debug §1, core §4.3 order 6 before 7; it answered unavailable)
     r = call(wire2, WireSwd::kOpScan, {2, 6, 0, 7, 0, 7, 0, 7, 0}, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 1}));
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0, 0x40, 1, 0, 1}));
     pins.release(0x01);
   }
 
@@ -286,7 +293,7 @@ int main() {
     CHECK(ok(r) && !tlv(out, 11, sw::kTlvAttachAnswerSearchRetries, len));
     // joining with a lower max_speed (100 kHz): the connection slowed to it and returned (oep-if-debug §1; it refused)
     const uint16_t number = fixed.number;
-    Bytes slower = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0xa0, 0x86, 0x01, 0x00};
+    Bytes slower = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0xa0, 0x86, 0x01, 0x00};
     r = call(wire, WireSwd::kOpAttach, slower, out);
     CHECK(ok(r) && out.size() >= 11 && (out[6] & sw::kAttachFlagsExisting) && fixed.number == number);
     CHECK((out[7] | out[8] << 8 | out[9] << 16 | uint32_t(out[10]) << 24) <= 100000u && fixed.io.half_ns >= 5000);
@@ -305,15 +312,15 @@ int main() {
     CHECK(r.resolution == kResolutionCompleted && out.size() >= 1 && out[0] == kStatusLine && !fixed.connected);
     CHECK(took >= 150000u && took <= reg::kLimitWireRetryMs * 1000u + 2000u);
     // at the slowest clock this wire takes (min_clock_hz 10 kHz): still well inside the attach budget
-    Bytes slow = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0x10, 0x27, 0, 0};   // 10000 Hz
+    Bytes slow = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x10, 0x27, 0, 0};   // 10000 Hz
     const uint32_t before_slow = micros();
     r = call(wire, WireSwd::kOpAttach, slow, out);
     const uint32_t took_slow = micros() - before_slow;
     printf("  an attach with nothing there at 10 kHz: %u ms\n", took_slow / 1000);
     CHECK(r.resolution == kResolutionCompleted && out.size() >= 1 && out[0] == kStatusLine);
     CHECK(took_slow <= reg::kLimitAttachBudgetMs * 1000u);
-    slow[3] = 0x0f;   // 9999 Hz: under min_clock_hz, unsupported
-    slow[4] = 0x27;
+    slow[4] = 0x0f;   // 9999 Hz: under min_clock_hz, unsupported
+    slow[5] = 0x27;
     r = call(wire, WireSwd::kOpAttach, slow, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
     g_swd.absent = false;

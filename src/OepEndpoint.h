@@ -3,11 +3,11 @@
 
 // OEP v1 endpoint: frames in, interfaces by name, the session lock, results out.
 //
-// The lock follows oep-core §6: a host-chosen u32 session id, a lease extended by every request of its holder and
-// counted from when that request completed (a long request never lapses its own lock). An explicit end keeps the
-// session's resources for the next open (the same id resumes them); a lapse sweeps them, and the next request with
-// that id is rejected expired until it opens again (resumed 2); a takeover by force sweeps them too and forgets the id
-// (the taken host meets locked, then no_session).
+// The lock follows oep-core §6: a host-chosen u32 session id in every request's header (0 = no session), a lease
+// extended by every request of its holder and counted from when that request completed (a long request never lapses
+// its own lock). An end, a lapse and a takeover by force all release everything the session created (core §9); no
+// resume - a request with any id while the lock is free is no_session, and a resent end is answered from the resend
+// table. Every fn's describe starts with its ops (core §1.2, §7.4), written here from Interface::offers.
 #pragma once
 
 #include <Arduino.h>
@@ -19,7 +19,7 @@
 
 namespace oep {
 
-// The raw side of the serial ports (core §3.4): what a serial port carries outside the frames. The binds implement it
+// The raw side of the serial ports (transports §4): what a serial port carries outside the frames. The binds implement it
 // (oep.probe.config §1.2); the endpoint calls it from poll(), the one writer of every port.
 class PinTable;
 
@@ -46,7 +46,7 @@ class Endpoint {
   static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMinMs = reg::kLimitLeaseMinMs, kLeaseMaxMs = reg::kLimitLeaseMaxMs;
 
   // A transport's kind (core §7.5, registry transport_kind): the serial ports (UART bridge, USB CDC, USB-Serial/JTAG)
-  // frame as 0x00 <COBS> 0x00 and share the line with raw bytes (core §3.4); vendor bulk, HID and TCP are
+  // frame as 0x00 <COBS> 0x00 and share the line with raw bytes (transports §4); vendor bulk, HID and TCP are
   // length(u16) message. The endpoint lists the transports in oep.core's describe, in the order they were added.
   enum : uint8_t {
     kUartBridge = reg::core::kTransportKindUartBridge, kUsbCdc = reg::core::kTransportKindUsbCdc,
@@ -78,7 +78,7 @@ class Endpoint {
     return l;
   }
 
-  // Another way in to the same probe (core §3.3). Every transport shares the one session and lock; a result goes back
+  // Another way in to the same probe (transports §3). Every transport shares the one session and lock; a result goes back
   // on the transport its request came from, pushes and events go to the transport the subscription came from.
   // rx: one whole frame for this transport (a serial port: its encoded candidate, cobsFrameMax(max_frame)). The
   // transport the constructor took is transport 0 (the one a DirectTransport, if any, belongs to). The index is the
@@ -89,17 +89,20 @@ class Endpoint {
   bool isSerialPort(size_t index) const { return index < transport_count_ && serialKind(transports_[index].kind); }
   // The raw side of the serial ports (the binds); nullptr: raw bytes are dropped.
   void setRawPorts(RawPorts *raw) { raw_ = raw; }
-  // A session holds the lock / holds serial port `port` (its raw transfer is stopped, core §3.4).
+  // A session holds the lock / holds serial port `port` (its raw transfer is stopped, transports §4).
   bool locked() const { return locked_; }
   // A session has taken the lock at least once since boot (oep-if-probe-config §3.1: no retry with reset after that).
   bool lockEverTaken() const { return have_last_; }
   bool held(size_t port) const { return locked_ && ((held_ >> port) & 1); }
   // The probe enumerates with the project's USB VID:PID, registry usb project_vid / project_pid (describe discoverable,
-  // core §3.3 / §7.5). Set it only once it actually does: a probe behind a UART bridge or on a fixed-ID built-in USB
+  // transports §3, core §7.5). Set it only once it actually does: a probe behind a UART bridge or on a fixed-ID built-in USB
   // serial leaves it 0.
   void setDiscoverable(bool on) { discoverable_ = on; }
   // The longest one request takes (describe max_op_ms, core §7.5): what every interface's long op is bounded by.
   static constexpr uint32_t kMaxOpMs = oep::kMaxOpMs;
+  // The max_op_ms the describe declares: kMaxOpMs unless set. A probe whose ops all finish sooner may declare less
+  // (1 to max_op_ms_max); its interfaces' own bounds must then fit within it.
+  void setMaxOpMs(uint32_t ms) { if (ms >= 1 && ms <= reg::kLimitMaxOpMsMax) max_op_ms_ = ms; }
   // fn of an interface added (0: not added), and the interface at a fn (nullptr: none).
   uint16_t fnOf(const Interface &interface) const {
     for (size_t i = 0; i < count_; ++i) if (interfaces_[i] == &interface) return static_cast<uint16_t>(i + 1);
@@ -158,8 +161,8 @@ class Endpoint {
     if (!boot_id_set_) setBootId(bootIdSource());
     return boot_id_;
   }
-  // The optional port_speed (core §3.5, fn 0 op 0x14): a host raises a UART bridge's baud for its session. Setting a
-  // handler turns the feature on (describe port_speed 1, the op taken; without one the op is unknown_operation).
+  // The optional port_speed (oep-if-link §3, oep.link op 0x03): a host raises a UART bridge's baud for its session. Setting
+  // a handler turns the op on in the probe's oep.link (Link below: in its ops; without one it is unknown_operation).
   // fn(port, baud, apply): apply false = the rate the port would run at for `baud` (0: this UART cannot make it, the
   // request is unsupported); apply true = switch the port to `baud` (its output already flushed) and return the rate it
   // runs at. `base` is the boot speed every revert goes back to.
@@ -209,8 +212,9 @@ class Endpoint {
   static void rawSink(void *context, const uint8_t *data, size_t length);
   void rawOut();
   void sessionEnded();
+  void releaseLock();
   RawPorts *raw_ = nullptr;
-  uint32_t held_ = 0;   // serial ports the lock holder's requests came in on (core §3.4)
+  uint32_t held_ = 0;   // serial ports the lock holder's requests came in on (transports §4)
   bool discoverable_ = false;
   uint8_t decode_[kMaxSerialFrame + 2];
   uint8_t owner_[32];   // the lock holder's owner text (core §6.4)
@@ -236,7 +240,7 @@ class Endpoint {
   PlanRefusal plan_refusal_ = {0, 0xffff, 0xffff, 0};
   uint32_t boot_id_ = 0;
   bool boot_id_set_ = false;
-  // port_speed (core §3.5): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed; one
+  // port_speed (oep-if-link §3): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed; one
   // broken candidate after the first good frame at the new speed reverts) or committed (idle_ms, at most
   // kPortSpeedIdleMaxMs, with no good frame - not counted while a request runs, like the lease - or kSpeedBadRun broken
   // candidates in a row with no good frame between them, revert). A step that does not fit the port's state is
@@ -252,7 +256,9 @@ class Endpoint {
   uint8_t speed_bad_run_ = 0;  // broken candidates since the last good frame on the sped-up port (committed)
   uint8_t speed_pending_ = kSpeedNone, speed_pending_port_ = 0xff;
   uint32_t speed_pending_baud_ = 0, speed_pending_verify_ = 0;
-  Result portSpeed(bool has_session, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  friend class Link;
+  Result portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  size_t maxFrameIn() const { return limits_.max_frame; }
   void speedApply();             // the switch or revert a request asked for, after its answer
   void speedRevert();            // back to the boot speed (nothing when there already)
   void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
@@ -260,17 +266,21 @@ class Endpoint {
   volatile bool locked_ = false;
   uint32_t holder_ = 0, last_ = 0;
   bool have_last_ = false;
-  bool swept_ = false;   // the last session's lock lapsed and its resources went (core §6.2: expired until it opens again)
   uint32_t lease_ms_ = kLeaseDefaultMs, expires_ms_ = 0;
-  uint8_t scratch_[512];   // one interface's full describe before paging
+  uint8_t scratch_[768];   // one interface's full describe (after the ops tag) before paging
 
+  uint32_t max_op_ms_ = kMaxOpMs;
+
+  static constexpr int kExperimentalOps = 0xF0;   // 0xF0..0xFF: never in ops (core §1.2, §2.5)
   void handleMessage(const uint8_t *message, size_t length);
   bool coreOffers(uint8_t op) const;
-  Result core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,
-              uint8_t *out, size_t capacity);
+  bool offersOp(uint16_t fn, uint8_t op) const;
+  bool lockFreeOp(uint16_t fn, uint8_t op) const;
+  size_t opsTlv(uint16_t fn, uint8_t *out, size_t capacity) const;
+  Result core(uint8_t op, uint32_t session, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
-  Result open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  Result open(uint32_t session, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   uint16_t replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns, bool persistent);
   void planRelease(const uint16_t *fns, size_t nfns);
@@ -301,7 +311,7 @@ class Endpoint {
   void endSubscriptions();
   void send(size_t length);
   // Dedup of the last session's requests sent again (core §5.2): the last kDedupEntries results, keyed on corr
-  // and checked against fn, op and a CRC of the payload; dropped at every open. Results over kDedupBytes are not kept
+  // and checked against fn, op and a CRC of the payload; dropped at every successful open (kept over end, lapse, force). Results over kDedupBytes are not kept
   // (rejected result_lost): kDedupBytes covers a whole frame of the largest profile, so a 1 KiB read_block whose answer
   // was corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).
   static constexpr size_t kDedupEntries = 8, kDedupBytes = 1024 + 5;
@@ -319,12 +329,33 @@ class Endpoint {
   bool have_newest_ = false;
   RoleAssignment plan_roles_[kMaxRoles] = {};
   size_t plan_count_ = 0;
-  Result checkSession(bool has_session, uint32_t session, uint8_t *out, size_t capacity);
+  Result checkSession(uint32_t session, uint8_t *out, size_t capacity);
   void lapse();
   void loseSession();
   void sendReject(uint16_t corr, uint8_t reason);
   static uint32_t crc32(const uint8_t *data, size_t length);
   uint32_t remaining() const;
+};
+
+// oep.link (oep-if-link): the link test - source (length(u32) -> len(u16) data, byte k = k & 0xFF, at most max_frame
+// - 26: link_source_overhead_bytes, the room for an ignored TLV kept whatever the request carries) and sink (count(u16)
+// data -> nothing) - and, when the endpoint has a port_speed handler (setPortSpeed), port_speed on a UART bridge. An
+// optional interface: a probe lists at most one; add it like any other (endpoint.add(link)).
+class Link final : public Interface {
+ public:
+  explicit Link(Endpoint &endpoint) : endpoint_(endpoint) {}
+  const char *name() const override { return reg::link::kName; }
+  uint16_t instance() const override { return 0; }
+  uint8_t revision() const override { return reg::link::kRevision; }
+  bool lockFree(uint8_t op) const override { return lockFreeIn(reg::link::kLockFreeOps, op); }
+  bool offers(uint8_t op) const override {
+    return op == reg::link::kOpSource || op == reg::link::kOpSink ||
+           (op == reg::link::kOpPortSpeed && endpoint_.port_speed_ != nullptr);
+  }
+  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+
+ private:
+  Endpoint &endpoint_;
 };
 
 }  // namespace oep

@@ -39,10 +39,20 @@ class MemStream final : public Stream {
 };
 
 static Bytes u32(uint32_t v) { return {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)}; }
+// One request: role 0x01 corr fn op session_id (0 = none) payload, the 10-byte header (core §4.1). An open written
+// without a session carries its id at the front of its payload here (openPayload): it goes into the header.
 static Bytes request(uint16_t corr, uint16_t fn, uint8_t op, const Bytes &payload, bool session = false, uint32_t id = 0) {
-  Bytes m = {uint8_t(session ? 0x81 : 0x01), uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op};
-  if (session) { const Bytes s = u32(id); m.insert(m.end(), s.begin(), s.end()); }
-  m.insert(m.end(), payload.begin(), payload.end());
+  Bytes p = payload;
+  if (fn == 0 && op == 0x10 && !session && p.size() >= 4) {
+    id = uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24;
+    p.erase(p.begin(), p.begin() + 4);
+  } else if (!session) {
+    id = 0;
+  }
+  Bytes m = {0x01, uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op};
+  const Bytes s = u32(id);
+  m.insert(m.end(), s.begin(), s.end());
+  m.insert(m.end(), p.begin(), p.end());
   return m;
 }
 static Bytes openPayload(uint32_t id, uint32_t lease) {
@@ -125,10 +135,10 @@ static bool ok(const Result &r) { return r.resolution == kResolutionCompleted &&
 static void testBoundPlan() {
   Rig rig;
   CHECK(rig.send(request(1, 0, 0x10, openPayload(7, 3000)))[5] == 1);
-  CHECK(rig.send(request(2, 0, 0x04, {0x90, 5, 1, 0, 0, 12, 0, 0x90, 5, 2, 0, 0, 13, 0}, true, 7))[5] == 1);
+  CHECK(rig.send(request(2, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 12, 0, 0x90, 5, 0, 2, 0, 0, 13, 0}, true, 7))[5] == 1);
   CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
-  const Bytes cause4 = {0x01, 1, 4, 0x03, 2, 3, 0};   // cause 4, holder_fn 3
-  Bytes r = rig.send(request(3, 0, 0x04, {0x90, 5, 1, 0, 0, 14, 0}, true, 7));
+  const Bytes cause4 = {0x01, 1, 0, 4, 0x03, 2, 0, 3, 0};   // cause 4, holder_fn 3
+  Bytes r = rig.send(request(3, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 14, 0}, true, 7));
   CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4));
   r = rig.send(request(4, 0, 0x05, {1, 2, 0}, true, 7));
   CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4));
@@ -137,7 +147,7 @@ static void testBoundPlan() {
   RoleAssignment now[4];
   CHECK(rig.ep.plan(now, 4) == 2 && now[0].channel == 12 && now[1].channel == 13);   // nothing changed
   CHECK(ok(rig.op(grp::kOpBind, {0})));
-  CHECK(rig.send(request(6, 0, 0x04, {0x90, 5, 1, 0, 0, 14, 0}, true, 7))[5] == 1);
+  CHECK(rig.send(request(6, 0, 0x04, {0x90, 5, 0, 1, 0, 0, 14, 0}, true, 7))[5] == 1);
   CHECK(rig.send(request(7, 0, 0x05, {0}, true, 7))[5] == 1);
   CHECK(rig.ep.plan(now, 4) == 0);
 }
@@ -150,19 +160,19 @@ static void testStartPrerequisites() {
   rig.a.subscribed = true;   // b is not
   CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
   Result r = rig.op(grp::kOpStart);
-  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 6, 0x05, 2, 2, 0}));
+  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 0, 6, 0x05, 2, 0, 2, 0}));
   CHECK(rig.a.starts == 0 && rig.b.starts == 0);
   rig.b.subscribed = true;
   CHECK(ok(rig.op(grp::kOpStart)) && rig.a.starts == 1 && rig.b.starts == 1);
   r = rig.op(grp::kOpStart);   // running: refused before anything starts again
-  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 6, 0x05, 2, 1, 0}) && rig.a.starts == 1);
+  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 0, 6, 0x05, 2, 0, 1, 0}) && rig.a.starts == 1);
 }
 
 // The trigger track failing to start after the group's start (it waits for the followers' pretrigger): the group goes
 // to state 6 and every track is stopped (§4.1).
 static void testTriggerTrackFails() {
   Rig rig(true);   // a holds the trigger, b follows
-  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 1, 0})));
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 0, 1, 0})));
   rig.a.fail_start = true;
   CHECK(ok(rig.op(grp::kOpStart)) && rig.b.state == 2);
   rig.group.poll();   // b armed: the trigger track starts, and fails
@@ -182,7 +192,7 @@ static void testBudgetNamesTrack() {
   CHECK(rig.group.addBudget(100, rig.a, rig.b));
   rig.a.load = rig.b.load = 60;
   const Result r = rig.op(grp::kOpBind, {2, 1, 0, 2, 0});
-  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 2, 0x05, 2, 2, 0}));
+  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 0, 2, 0x05, 2, 0, 2, 0}));
   rig.b.load = 40;
   CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
 }
@@ -193,14 +203,14 @@ static void testStartSkewPerTrack() {
   uint8_t d[256];
   const size_t n = rig.group.describe(d, sizeof d);
   const Bytes all(d, d + n);
-  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 1, 0, 0, 0, 0, 0}));
-  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 2, 0, 0, 0, 0, 0}));
+  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 0, 1, 0, 0, 0, 0, 0}));
+  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 0, 2, 0, 0, 0, 0, 0}));
 }
 
 // status state (§4.1): 2 only while the trigger has not fired and a track is 2 or 3; tracks paused (5) make it 3.
 static void testStatusState() {
   Rig rig(true);
-  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 1, 0})));
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 0, 1, 0})));
   CHECK(ok(rig.op(grp::kOpStart)));
   CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateWaiting);
   rig.a.state = rig.b.state = 5;

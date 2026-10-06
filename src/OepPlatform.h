@@ -166,7 +166,7 @@ inline void platformParkMask(uint64_t mask) {
 }
 
 // The unit id (oep-core §7.5): the chip's own number as lowercase hex text - the RP2's flash unique id (16), the
-// ESP32's base MAC (12) - the same on every transport, and the USB serial number (core §3.3). Needs 17 bytes of out
+// ESP32's base MAC (12) - the same on every transport, and the USB serial number (transports §3). Needs 17 bytes of out
 // with the 0 after it. -> the text's length.
 //
 // unit_id is mandatory and per unit. A platform this library has no unique number for does not build unless the

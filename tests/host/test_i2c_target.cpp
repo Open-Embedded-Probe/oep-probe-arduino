@@ -40,7 +40,9 @@ static Result call(P4I2cTarget &t, uint8_t op, const Bytes &payload, Bytes &out)
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
 static bool rejectedAs(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
 static bool unavailableCause(const Result &r, const Bytes &out, uint8_t cause) {
-  return rejectedAs(r, kRejectUnavailable) && out.size() >= 3 && out[0] == 0x01 && out[1] == 1 && out[2] == cause;
+  // cause TLV: 01 len(u16) cause
+  return rejectedAs(r, kRejectUnavailable) && out.size() >= 4 && out[0] == 0x01 && out[1] == 1 && out[2] == 0 &&
+         out[3] == cause;
 }
 static Status status(P4I2cTarget &t) {
   Bytes out;
@@ -85,13 +87,14 @@ static Bytes read(P4I2cTarget &t, size_t n, const Bytes &first = {}) {
   return got;
 }
 
-// The channel bitmap role_channels declares for `role` in a describe (first channel 0), 0 when absent.
+// The channel bitmap role_channels (role u8, base u16, bitmap) declares for `role` in a describe (base 0), 0 when absent.
+// TLVs are tag(u8) len(u16 LE) value.
 static uint64_t roleMask(const uint8_t *d, size_t n, uint8_t role) {
-  for (size_t i = 0; i + 1 < n; i += 2u + d[i + 1]) {
-    const size_t len = d[i + 1];
-    if (d[i] != kTagRoleChannels || len < 3 || d[i + 2] != role) continue;
+  for (size_t i = 0; i + kTlvHeader <= n; i += kTlvHeader + getU16(d + i + 1)) {
+    const size_t len = getU16(d + i + 1);
+    if (d[i] != kTagRoleChannels || len < 3 || d[i + 3] != role) continue;
     uint64_t m = 0;
-    for (size_t k = 0; k < len - 3 && k < 8; ++k) m |= uint64_t{d[i + 5 + k]} << (8 * k);
+    for (size_t k = 0; k < len - 3 && k < 8; ++k) m |= uint64_t{d[i + 6 + k]} << (8 * k);
     return m;
   }
   return 0;
@@ -127,23 +130,29 @@ int main() {
   CHECK(t.planCheck(roles, 2) == 0);
   CHECK(t.planApply(roles, 2));
 
-  // describe: max_stretch_us (0x41) with features bit1
+  // describe: max_stretch_us (0x41); stretch itself is declared by the endpoint's ops tag (offers), not by features
   {
     uint8_t d[128];
     const size_t n = t.describe(d, sizeof d);
     bool found = false;
-    for (size_t i = 0; i + 1 < n; i += 2 + d[i + 1])
-      if (d[i] == reg::fixture_i2c_target::kTlvDescribeMaxStretchUs && d[i + 1] == 4)
-        found = getU32(d + i + 2) == P4I2cTarget::kMaxStretchUs;
+    for (size_t i = 0; i + kTlvHeader <= n; i += kTlvHeader + getU16(d + i + 1))
+      if (d[i] == reg::fixture_i2c_target::kTlvDescribeMaxStretchUs && getU16(d + i + 1) == 4)
+        found = getU32(d + i + 3) == P4I2cTarget::kMaxStretchUs;
     CHECK(found && P4I2cTarget::kMaxStretchUs >= 30000);
-    // the internal pull-ups start() enables: features bit2 and pullup_ohms (0x42, u32) (fixture §3)
+    CHECK(t.offers(P4I2cTarget::kOpStretch) && t.offers(P4I2cTarget::kOpPreloadTx));
+    // features: bit0 mode 3, bit1 reserved (0), and the internal pull-ups start() enables: bit2 and pullup_ohms (0x42,
+    // u32) (fixture §3)
     bool bit2 = false, ohms = false;
-    for (size_t i = 0; i + 1 < n; i += 2 + d[i + 1]) {
-      if (d[i] == reg::kDescribeFeatures && d[i + 1] == 4)
-        bit2 = (getU32(d + i + 2) & reg::fixture_i2c_target::kFeaturesInternalPullups) != 0;
-      if (d[i] == reg::fixture_i2c_target::kTlvDescribePullupOhms && d[i + 1] == 4) ohms = getU32(d + i + 2) == 45000;
+    uint32_t features = 0xffffffff;
+    for (size_t i = 0; i + kTlvHeader <= n; i += kTlvHeader + getU16(d + i + 1)) {
+      if (d[i] == reg::kDescribeFeatures && getU16(d + i + 1) == 4) {
+        features = getU32(d + i + 3);
+        bit2 = (features & reg::fixture_i2c_target::kFeaturesInternalPullups) != 0;
+      }
+      if (d[i] == reg::fixture_i2c_target::kTlvDescribePullupOhms && getU16(d + i + 1) == 4) ohms = getU32(d + i + 3) == 45000;
     }
     CHECK(bit2 && ohms);
+    CHECK(features == (reg::fixture_i2c_target::kFeaturesPreloadedTx | reg::fixture_i2c_target::kFeaturesInternalPullups));
     CHECK(P4I2cTarget::kQueueDepth >= 2);
   }
 

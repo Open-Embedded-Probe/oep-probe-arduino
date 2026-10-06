@@ -51,6 +51,9 @@ class Blink final : public oep::Interface {
   uint16_t instance() const override { return 0; }
   uint8_t revision() const override { return 1; }
   bool lockFree(uint8_t op) const override { return op == kOpState; }
+  // The ops it has (core §1.2): the endpoint declares them in the describe's ops tag and answers any other op
+  // unknown_operation.
+  bool offers(uint8_t op) const override { return op == kOpSet || op == kOpBlink || op == kOpState; }
 
   // What the host reads before using it: the pins it may plan for role 1 (role_channels, core §7.4).
   size_t describe(uint8_t *out, size_t capacity) override {

@@ -7,12 +7,15 @@
 //   from 3 with arg over 0xFF is malformed (common §1.2), the fixture UART's read too.
 // - write fills the stream's send queue, declared in describe (console §1, §2); DMDATA by §3.2 (no slot, empty slot,
 //   a bit-7-clear word left alone, open writes nothing); the console reads while DMSTATUS says the hart runs (console §3).
+// - a session's end (end or lapse) takes its share of the stream before the connection's: closed 2 when it was the last
+//   user, readable after, and the same place and mechanism opened again gives the same number and marks (console §2).
 #include <stdio.h>
 
 #include <vector>
 
 #include "OepConsole.h"
 #include "OepDmConsole.h"
+#include "OepEndpoint.h"
 #include "OepFixture.h"
 #include "OepPinTable.h"
 #include "OepTarget.h"
@@ -103,20 +106,26 @@ static bool rejectedWith(const Result &r, uint8_t reason) { return r.resolution 
 static Bytes le16(uint16_t v) { return {uint8_t(v), uint8_t(v >> 8)}; }
 static Bytes cat(Bytes a, const Bytes &b) { a.insert(a.end(), b.begin(), b.end()); return a; }
 struct MarkSeen { uint32_t serial; uint64_t position; uint8_t kind, detail; };
-// Every mark the stream keeps (marks from serial 0; the ring holds 16).
-static std::vector<MarkSeen> marksOf(Interface &console, uint16_t stream) {
-  Bytes out;
-  const Bytes req = {uint8_t(stream), uint8_t(stream >> 8), 0, 0, 0, 0};
+// A marks answer: more(u8) count(u8) count x (serial u32, position u64, kind u8, time_ns u64, detail u8) - 22 bytes
+// each, no element length (core §2.3).
+static std::vector<MarkSeen> parseMarks(const Bytes &out) {
   std::vector<MarkSeen> all;
-  if (call(console, TargetConsoleStream::kOpMarks, req, out).resolution != kResolutionCompleted || out.size() < 2) return all;
+  if (out.size() < 2) return all;
   size_t at = 2;
-  for (uint8_t i = 0; i < out[1] && at + 23 <= out.size(); ++i, at += 23) {
-    const uint8_t *m = out.data() + at + 1;
+  for (uint8_t i = 0; i < out[1] && at + PositionStream::kMarkBytes <= out.size(); ++i, at += PositionStream::kMarkBytes) {
+    const uint8_t *m = out.data() + at;
     uint64_t position = 0;
     for (int b = 7; b >= 0; --b) position = position << 8 | m[4 + b];
     all.push_back({uint32_t(m[0] | m[1] << 8 | m[2] << 16 | uint32_t(m[3]) << 24), position, m[12], m[21]});
   }
   return all;
+}
+// Every mark the stream keeps (marks from serial 0; the ring holds 16).
+static std::vector<MarkSeen> marksOf(Interface &console, uint16_t stream) {
+  Bytes out;
+  const Bytes req = {uint8_t(stream), uint8_t(stream >> 8), 0, 0, 0, 0};
+  if (call(console, TargetConsoleStream::kOpMarks, req, out).resolution != kResolutionCompleted) return {};
+  return parseMarks(out);
 }
 static uint8_t crc8(const uint8_t *p, size_t n) {   // dmseq's CRC-8: poly 0x07, init 0xFF
   uint8_t crc = 0xff;
@@ -126,7 +135,8 @@ static uint8_t crc8(const uint8_t *p, size_t n) {   // dmseq's CRC-8: poly 0x07,
   }
   return crc;
 }
-static Bytes attachRequest() { return {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00}; }
+// method 0, max_speed 1 MHz: tag len(u16) value (core §2.2)
+static Bytes attachRequest() { return {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00}; }
 
 // A dmseq target as the reference one (oep-spec experiments/dm-console-seq DmSeq.h): its sketch calls available() every
 // `period` ms, which takes an answer and, idle, posts an empty frame; input rides on the answers.
@@ -196,6 +206,38 @@ static uint32_t pingDeliveryMs(Interface &wire, DebugPort &port, TargetConsoleSt
   return target.rx == std::vector<uint8_t>(msg, msg + sizeof msg) ? ms : 99999;
 }
 
+// A length-prefixed transport (transports §1) in memory: what the host sent, what the probe answered.
+class MemStream final : public Stream {
+ public:
+  Bytes rx, tx;
+  size_t at = 0;
+  int available() override { return static_cast<int>(rx.size() - at); }
+  int read() override { return at < rx.size() ? rx[at++] : -1; }
+  int peek() override { return at < rx.size() ? rx[at] : -1; }
+  size_t write(uint8_t c) override { return write(&c, 1); }
+  size_t write(const uint8_t *b, size_t n) override { tx.insert(tx.end(), b, b + n); return n; }
+  int availableForWrite() override { return 4096; }
+};
+static Bytes u32(uint32_t v) { return {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)}; }
+// One request (core §4.1): role 0x01, corr(u16), fn(u16), op(u8), session_id(u32; 0 = no session), payload; sent as
+// length(u16) message, the answer message (role, corr, resolution, detail, payload) taken back (empty: none).
+static Bytes exchange(Endpoint &ep, MemStream &link, uint16_t corr, uint16_t fn, uint8_t op, const Bytes &payload,
+                      uint32_t session) {
+  Bytes m = {0x01, uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op};
+  m = cat(cat(m, u32(session)), payload);
+  link.tx.clear();
+  link.rx.insert(link.rx.end(), {uint8_t(m.size()), uint8_t(m.size() >> 8)});
+  link.rx.insert(link.rx.end(), m.begin(), m.end());
+  ep.poll();
+  if (link.tx.size() < 2 + kResultHeader) return {};
+  return Bytes(link.tx.begin() + 2, link.tx.end());
+}
+static bool answered(const Bytes &a, uint8_t resolution, uint8_t detail) {
+  return a.size() >= kResultHeader && a[3] == resolution && a[4] == detail;
+}
+static bool answeredOk(const Bytes &a) { return answered(a, kResolutionCompleted, kOutcomeSuccess); }
+static Bytes answerPayload(const Bytes &a) { return a.size() > kResultHeader ? Bytes(a.begin() + kResultHeader, a.end()) : Bytes{}; }
+
 int main() {
   static FakePhy phy;
   static Ch32Dm dm(phy);
@@ -257,9 +299,9 @@ int main() {
     Bytes d(64);
     const size_t dn = console.describe(d.data(), d.size());
     bool declared = false;
-    for (size_t at = 0; at + 2 <= dn; at += 2u + d[at + 1])
-      if (d[at] == con::kTlvDescribeSendQueue && d[at + 1] == 2)
-        declared = uint16_t(d[at + 2] | d[at + 3] << 8) == DmConsole::kSendQueue;
+    for (size_t at = 0; at + kTlvHeader <= dn; at += kTlvHeader + (d[at + 1] | d[at + 2] << 8))
+      if (d[at] == con::kTlvDescribeSendQueue && d[at + 1] == 2 && d[at + 2] == 0)
+        declared = uint16_t(d[at + 3] | d[at + 4] << 8) == DmConsole::kSendQueue;
     CHECK(declared && DmConsole::kSendQueue >= reg::kLimitConsoleSendQueueMinBytes);
     phy.halted = true;   // nothing taken from the queue meanwhile (the console does not read a halted hart's mailbox)
     g_millis += 25;
@@ -406,11 +448,11 @@ int main() {
     PositionStream::Mark ring[8];
     PositionStream ps(buffer, sizeof buffer, ring, 8);
     auto lostMarks = [&]() {
-      Bytes m(2 + 8 * 23);
-      const size_t n = ps.marks(0, m.data(), m.size());
+      Bytes m(2 + 8 * PositionStream::kMarkBytes);
+      m.resize(ps.marks(0, m.data(), m.size()));
       int lost = 0;
-      for (size_t at = 2; at + 23 <= n; at += 23)
-        if (m[at + 13] == reg::common::kMarkKindLost && m[at + 22] == reg::common::kMarkDetailLostOverflow) ++lost;
+      for (const MarkSeen &mk : parseMarks(m))
+        if (mk.kind == reg::common::kMarkKindLost && mk.detail == reg::common::kMarkDetailLostOverflow) ++lost;
       return lost;
     };
     for (int i = 0; i < 16; ++i) ps.put(uint8_t(i));
@@ -482,7 +524,7 @@ int main() {
     CHECK(ok(r) && console.isOpen());
     const uint16_t s = uint16_t(out[0] | out[1] << 8);
     Bytes detach = le16(port.number);
-    if (force) detach.insert(detach.end(), {uint8_t(wire::kTlvDetachForce | kTagCritical), 0});
+    if (force) detach.insert(detach.end(), {uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0});
     r = call(wire_fn, WireRvswd::kOpDetach, detach, out);
     CHECK(ok(r) && !port.connected);
     console.poll();
@@ -500,7 +542,7 @@ int main() {
   {
     const uint16_t swd = ResourceNumbers::take(ResourceNumbers::kConnection);
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);
-    CHECK(rejectedWith(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1,
+    CHECK(rejectedWith(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1, 0,
                                                                 reg::core::kUnavailableCauseWrongState}));
     ResourceNumbers::close(swd);
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);   // closed: unknown
@@ -557,6 +599,98 @@ int main() {
     CHECK(ok(r));
     run(100 * 1000);
     CHECK(target.rx == std::vector<uint8_t>({'o', 'k'}));
+  }
+
+  // ---- a session's end takes the host's share of the console stream (oep-if-console §2, core §6.4, §9): an explicit
+  // end (as a lapse) closes a stream the session was the last user of with mark closed 2 (session_ended), and the stream's
+  // share goes before the connection's - so closed 2, not closed 4, though the connection closes with it. The closed
+  // stream stays readable without a session; a request with the ended session's id is no_session; the next open at the
+  // same place and mechanism returns the same number with its marks (flags bit0). A stream a slot's bind also uses stays
+  // open through the end. ----
+  {
+    static FakePhy phy4;
+    static Ch32Dm dm4(phy4);
+    static DebugPort port4{dm4, 6, 7};
+    static WireRvswd wire4(port4, 3);
+    static DmConsole driver4(dm4, phy4);
+    static TargetConsoleStream console4(port4, driver4, 3);
+    static MemStream link;
+    static uint8_t rx4[1024], tx4[1024];
+    static Endpoint ep(link, rx4, sizeof rx4, tx4, sizeof tx4, {512, 1024, 2}, Endpoint::kVendorBulk, 0);
+    CHECK(ep.add(wire4) && ep.add(console4));   // fn 1, fn 2
+    uint16_t corr = 1;
+    auto send = [&](uint16_t fn, uint8_t op, const Bytes &payload, uint32_t session) {
+      return exchange(ep, link, corr++, fn, op, payload, session);
+    };
+    const Bytes lease = cat(u32(3000), {0});   // lease_ms, force 0
+    auto streamMarks = [&](uint16_t s) {      // marks from serial 0, lock-free with session_id 0
+      const Bytes a = send(2, TargetConsoleStream::kOpMarks, cat(le16(s), {0, 0, 0, 0}), 0);
+      return answeredOk(a) ? parseMarks(answerPayload(a)) : std::vector<MarkSeen>{};
+    };
+    auto closedMarks = [](const std::vector<MarkSeen> &marks, uint8_t detail) {
+      int n = 0;
+      for (const MarkSeen &m : marks) n += m.kind == reg::common::kMarkKindClosed && m.detail == detail;
+      return n;
+    };
+
+    // session 7: attach, open dmseq, a host mark; then end
+    CHECK(answeredOk(send(0, reg::core::kOpOpen, lease, 7)));
+    CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 7)) && port4.connected);
+    Bytes a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {con::kMechanismDmseq}), 7);
+    CHECK(answeredOk(a) && a.size() == kResultHeader + 3 && a[kResultHeader + 2] == 0);
+    const uint16_t s4 = a.size() >= kResultHeader + 2 ? uint16_t(a[kResultHeader] | a[kResultHeader + 1] << 8) : 0;
+    CHECK(answeredOk(send(2, TargetConsoleStream::kOpMark, cat(le16(s4), {0x11}), 7)));
+    CHECK(console4.isOpen() && console4.users() == TargetConsoleStream::kUserHost);
+    CHECK(answeredOk(send(0, reg::core::kOpEnd, {}, 7)));
+    CHECK(!console4.isOpen() && !port4.connected);   // the stream closed, and the connection with it
+    console4.poll();                                 // the connection's close seen: nothing more on a closed stream
+    std::vector<MarkSeen> marks = streamMarks(s4);   // readable without a session
+    CHECK(!marks.empty() && marks.back().kind == reg::common::kMarkKindClosed &&
+          marks.back().detail == reg::common::kMarkDetailClosedSessionEnded);
+    CHECK(closedMarks(marks, reg::common::kMarkDetailClosedConnectionClosed) == 0 && closedMarks(marks, reg::common::kMarkDetailClosedSessionEnded) == 1);
+    a = send(2, TargetConsoleStream::kOpRead, cat(le16(s4), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), 0);
+    CHECK(answeredOk(a));
+    a = send(2, TargetConsoleStream::kOpMarks, cat(le16(s4), {0, 0, 0, 0}), 7);   // the ended session's id: no resume
+    CHECK(answered(a, kResolutionRejected, kRejectNoSession));
+    a = send(2, TargetConsoleStream::kOpStreams, {0}, 0);   // listed closed, nobody using it
+    CHECK(answeredOk(a) && a.size() == kResultHeader + 9 && uint16_t(a[7] | a[8] << 8) == s4 && a[12] == 0 &&
+          a[13] == con::kStreamStateClosed);
+
+    // session 8: a new connection at the same place, the same mechanism: the same number, its marks continued
+    CHECK(answeredOk(send(0, reg::core::kOpOpen, lease, 8)));
+    CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 8)) && port4.connected);
+    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {con::kMechanismDmseq}), 8);
+    CHECK(answeredOk(a) && a.size() == kResultHeader + 3 && uint16_t(a[5] | a[6] << 8) == s4 &&
+          (a[7] & con::kOpenFlagsExisting));
+    const size_t before = marks.size();
+    marks = streamMarks(s4);
+    CHECK(marks.size() == before + 1 && marks.back().kind == reg::common::kMarkKindAttach);
+    bool host_mark = false;
+    for (const MarkSeen &m : marks) host_mark |= m.kind == reg::common::kMarkKindHost && m.detail == 0x11;
+    CHECK(host_mark);
+
+    // a slot's bind uses it too: the end takes only the session's share - the stream stays open, no closed mark
+    uint32_t dmstatus = 0;
+    CHECK(attachRunning(port4, DebugPort::kUserSlot, dmstatus) && console4.bindOpen(con::kMechanismDmseq));
+    CHECK(console4.users() == (TargetConsoleStream::kUserHost | TargetConsoleStream::kUserSlot));
+    CHECK(answeredOk(send(0, reg::core::kOpEnd, {}, 8)));
+    console4.poll();
+    CHECK(console4.isOpen() && console4.users() == TargetConsoleStream::kUserSlot && port4.connected);
+    CHECK(streamMarks(s4).size() == marks.size());
+    console4.bindClose(reg::common::kMarkDetailClosedSlotChanged);
+    CHECK(!console4.isOpen() && streamMarks(s4).back().detail == reg::common::kMarkDetailClosedSlotChanged);
+    releaseConnection(port4, DebugPort::kUserSlot, false);
+    CHECK(!port4.connected);
+
+    // a lapse ends the session the same way: closed 2
+    CHECK(answeredOk(send(0, reg::core::kOpOpen, cat(u32(reg::kLimitLeaseMinMs), {0}), 9)));
+    CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 9)));
+    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {con::kMechanismDmseq}), 9);
+    CHECK(answeredOk(a) && uint16_t(a[5] | a[6] << 8) == s4);
+    g_millis += reg::kLimitLeaseMinMs + 1;
+    marks = streamMarks(s4);   // the lapse is judged as this request arrives
+    CHECK(!console4.isOpen() && !port4.connected && !marks.empty() &&
+          marks.back().kind == reg::common::kMarkKindClosed && marks.back().detail == reg::common::kMarkDetailClosedSessionEnded);
   }
 
   // ---- the console's write latency (oep-if-console §2): a host's line goes in one write and reaches the target one

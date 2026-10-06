@@ -160,7 +160,8 @@ int main() {
   port.reset_allowed = 1ull << kResetPin;
   g_on_pin = onPin;
   Bytes out;
-  const Bytes attach = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00};   // 1 MHz
+  // max_speed 1 MHz, tag(u8) len(u16) value (core §2.2)
+  const Bytes attach = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
 
   // ---- a reset through the bootloader keeps the connection (oep-if-debug §2, §4.3): the bootloader's system reset
   // dropped the SWIO configuration and the module, and every request after it answered line until the connection was
@@ -218,7 +219,7 @@ int main() {
       CHECK(ok(call(riscv, TargetRiscvDm::kOpHalt, conn, out)) && t.halted);
       CHECK(ok(call(riscv, TargetRiscvDm::kOpResume, conn, out)) && !t.halted);
       CHECK(t.system_resets == 1);
-      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0}, out);
+      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
       CHECK(ok(r) && !port.connected);
     }
   }
@@ -244,7 +245,7 @@ int main() {
     g_millis += 5000;   // handed over at last
     r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
     CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && (out[5] & 0x0f) == 2);
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0}, out);
+    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
   }
 
   // ---- attach's reset TLV with method 0 (the line pulled and let go, the target left running) on a target whose
@@ -256,14 +257,14 @@ int main() {
     CHECK(ok(r) && port.connected);
     Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
     if (!live) {
-      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0}, out);
+      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
       CHECK(ok(r) && !port.connected);
     }
     t.boot_mode = true;
     t.boot_us = 400000;
     t.dark_after_us = 0;
     Bytes with_reset = attach;   // reset(channel u16, hold_ms u16): 10 ms
-    with_reset.insert(with_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 4, kResetPin, 0, 10, 0});
+    with_reset.insert(with_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 4, 0, kResetPin, 0, 10, 0});
     const uint32_t began = millis();
     r = call(w, WireRvswd::kOpAttach, with_reset, out);
     const uint32_t took = millis() - began;
@@ -273,7 +274,7 @@ int main() {
     conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
     r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
     CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && (out[5] & 0x0f) == 2);
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0}, out);
+    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
   }
 
   // ---- a link in step pays nothing for a relink: no configuration pair is written while reads answer ----
@@ -290,7 +291,7 @@ int main() {
     }
     CHECK(phy.retries() == before && t.sdi);
     (void)pairs;
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0}, out);
+    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
   }
 
   printf("swio: %d checks, %d failures\n", checks, failures);

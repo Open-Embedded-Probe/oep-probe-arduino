@@ -7,15 +7,15 @@
 //
 //   0x01 open(connection u16, mechanism u8) [TLV]  -> stream u16, flags u8 (bit0 an existing stream) [TLV]
 //   0x02 read(stream, from u8, arg u64, max u16)   -> start u64, flags u8 (bit0 more, bit1 gap), len u16, data   no lock
-//   0x03 marks(stream, from_serial u32)            -> more u8, count u8, count x (len u8, serial u32, position u64,
+//   0x03 marks(stream, from_serial u32)            -> more u8, count u8, count x (serial u32, position u64,
 //                                                     kind u8, time_ns u64, detail u8)                   no lock
 //   0x04 clear(stream)   0x05 mark(stream, value u8)   0x06 write(stream, count u16, data) -> accepted u16
-//   0x07 close(stream)   0x08 streams(first u8) -> more u8, count u8, count x (len u8, stream u16, connection u16,
+//   0x07 close(stream)   0x08 streams(first u8) -> more u8, count u8, count x (stream u16, connection u16,
 //                                                                      mechanism u8, users u8, state u8)   no lock
 //
 // One live stream on the one connection; its number is from the probe's one space (core §9). Opening the same mechanism
 // again hands it back with its positions and marks; another mechanism while one is open is unavailable (cause 6). The
-// stream is used by the host's session (open) and by a slot (its bind): close and a lapse take the host's share, the
+// stream is used by the host's session (open) and by a slot (its bind): close and the session's end take the host's share, the
 // settings take the slot's, and the stream closes (mark closed) when nobody is left. A stream whose connection went
 // away is closed (mark link-lost when the line was lost, then closed 4) and stays readable (read / marks) until the
 // same mechanism is opened again at the same place, which gives the same number back (mark attach, flags bit0); another
@@ -56,8 +56,11 @@ class TargetConsoleStream final : public Interface, public BindSource {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::target_console::kLockFreeOps, op); }
   bool offers(uint8_t op) const override { return opIn(op, reg::target_console::kOpOpen, reg::target_console::kOpStreams); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  // The host's session lapsed or was taken over: its share of the stream goes (mark closed 2 when it was the last).
-  void sessionLapsed() override { release(kUserHost, reg::common::kMarkDetailClosedExpired); }
+  // The host's session ended (end, a lapse, a takeover): its share of the stream goes - before the wire's share of the
+  // connection (sessionOverFirst) - and a stream it was the last user of closes with mark closed 2 (session_ended),
+  // readable until the same place and mechanism is opened again (oep-if-console §2).
+  void sessionOver() override { release(kUserHost, reg::common::kMarkDetailClosedSessionEnded); }
+  bool sessionOverFirst() const override { return true; }
   void poll();   // from loop()
   // What one read may return: declare it within the probe's frame (1000 suits a 1 KiB frame).
   void setMaxRead(uint16_t bytes) { max_read_ = bytes; }

@@ -23,7 +23,8 @@ static int failures = 0, checks = 0;
 
 static void label(Bytes &items, uint16_t channel, const std::string &text) {
   items.push_back(reg::probe_config::kTlvItemLabel);
-  items.push_back(static_cast<uint8_t>(2 + text.size()));
+  items.push_back(static_cast<uint8_t>(2 + text.size()));   // len(u16 LE)
+  items.push_back(0);
   items.push_back(channel & 0xff);
   items.push_back(channel >> 8);
   items.insert(items.end(), text.begin(), text.end());
@@ -31,6 +32,7 @@ static void label(Bytes &items, uint16_t channel, const std::string &text) {
 static void slot(Bytes &items, uint8_t number) {   // only its tag counts here
   items.push_back(reg::probe_config::kTlvItemSlot);
   items.push_back(1);
+  items.push_back(0);
   items.push_back(number);
 }
 static uint16_t find(const Bytes &items, const char *s, const char *n) { return findLine(items.data(), items.size(), s, n); }
@@ -39,7 +41,8 @@ static uint16_t find(const Bytes &items, const Bytes &firmware, const char *s, c
 }
 static void firmwareLabel(Bytes &tlv, uint16_t channel, const std::string &text) {   // fn 0 describe's label 0x46
   tlv.push_back(reg::core::kTlvDescribeLabel);
-  tlv.push_back(static_cast<uint8_t>(2 + text.size()));
+  tlv.push_back(static_cast<uint8_t>(2 + text.size()));   // len(u16 LE)
+  tlv.push_back(0);
   tlv.push_back(channel & 0xff);
   tlv.push_back(channel >> 8);
   tlv.insert(tlv.end(), text.begin(), text.end());

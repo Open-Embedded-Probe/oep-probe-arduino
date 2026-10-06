@@ -142,20 +142,19 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     out[2] = existing ? con::kOpenFlagsExisting : 0;
     return tail.finish(completed(3), out, capacity);
   }
-  if (op == kOpStreams) {   // first(u8) [TLV] -> more(u8) count(u8) count x (len(u8) stream(u16) connection(u16) mechanism(u8) users(u8) state(u8))
+  if (op == kOpStreams) {   // first(u8) [TLV] -> more(u8) count(u8) count x (stream(u16) connection(u16) mechanism(u8) users(u8) state(u8))
     const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
     if (refused(parsed)) return parsed;
-    if (capacity < 10) return failed();
+    if (capacity < 9) return failed();
     out[0] = 0;   // more: never (one stream at most)
     out[1] = exists_ && payload[0] == 0 ? 1 : 0;
     if (!out[1]) return tail.finish(completed(2), out, capacity);
-    out[2] = 7;
-    putU16(out + 3, stream_number_);
-    putU16(out + 5, connection_);
-    out[7] = mechanism_;
-    out[8] = users_;
-    out[9] = open_ ? con::kStreamStateOpen : con::kStreamStateClosed;
-    return tail.finish(completed(10), out, capacity);
+    putU16(out + 2, stream_number_);   // no element length (core §2.3)
+    putU16(out + 4, connection_);
+    out[6] = mechanism_;
+    out[7] = users_;
+    out[8] = open_ ? con::kStreamStateOpen : con::kStreamStateClosed;
+    return tail.finish(completed(9), out, capacity);
   }
   if (length < 2) return rejected(kRejectMalformed);
   // The request's form and values first, nothing done: a number it does not know is the last refusal of core §4.3
@@ -181,8 +180,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (refused(values)) return values;
       if (checking_) return completed();
       poll();   // take what is waiting first
-      const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
-      return tail.finish(stream_.read(p, out, capacity, max_read_, reserve), out, capacity);
+      return tail.finish(stream_.read(p, out, capacity, max_read_, tail.room()), out, capacity);
     }
     case kOpMarks: {   // from_serial(u32) [TLV]  ->  more(u8) count(u8) entries [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
@@ -190,7 +188,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (checking_) return completed();
       if (capacity < 2) return failed();
       poll();
-      const size_t room = tail.anyIgnored() && capacity > 2 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
+      const size_t room = capacity - tail.room();
       return tail.finish(completed(stream_.marks(getU32(p), out, room)), out, capacity);
     }
     case kOpClose: {   // the host's share goes; a closed stream's close does nothing (oep-if-console §1)

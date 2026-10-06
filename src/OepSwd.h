@@ -76,7 +76,7 @@ class WireSwd final : public Interface {
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   // core §9 / oep-if-debug §2: a host that fell away (its lease lapsed) keeps nothing open; the host is this link's only user
-  void sessionLapsed() override {
+  void sessionOver() override {
     if (port_.connected) close();
   }
 

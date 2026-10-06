@@ -8,8 +8,8 @@
 //
 //   read(from u8, arg u64, max u16)  ->  start(u64) flags(u8: bit0 more, bit1 gap) len(u16) data [TLV]
 //        from: 0 position = arg, 1 oldest, 2 now, 3 the last mark of kind arg (0 = any)
-//   marks(from_serial u32)           ->  more(u8) count(u8) count x (len u8, serial u32, position u64, kind u8,
-//                                        time_ns u64, detail u8) [TLV]
+//   marks(from_serial u32)           ->  more(u8) count(u8) count x (serial u32, position u64, kind u8,
+//                                        time_ns u64, detail u8) [TLV]   (22 bytes each, no element length)
 // Positions and mark serials never go back within a boot: a stream closed and made again at the same place goes on
 // from where it was (common §1.1), so the ring and its counters are the interface's for good.
 #pragma once
@@ -119,9 +119,8 @@ class PositionStream {
     size_t used = 2;
     bool more = false;
     for (uint32_t s = from; static_cast<int32_t>(s - serial_) < 0; ++s) {
-      if (used + 1 + kMarkBytes > capacity || count == 255) { more = true; break; }
+      if (used + kMarkBytes > capacity || count == 255) { more = true; break; }
       const Mark &mk = marks_[slotBack(serial_ - s)];
-      out[used++] = kMarkBytes;   // the element's length (core §2.3)
       putU32(out + used, mk.serial);
       putU64(out + used + 4, mk.position);
       out[used + 12] = mk.kind;

@@ -44,6 +44,7 @@ static bool ok(const Result &r) { return r.resolution == kResolutionCompleted &&
 static void tlv(Bytes &p, uint8_t tag, const Bytes &v) {
   p.push_back(tag);
   p.push_back(static_cast<uint8_t>(v.size()));
+  p.push_back(static_cast<uint8_t>(v.size() >> 8));
   p.insert(p.end(), v.begin(), v.end());
 }
 static Bytes u32(uint32_t v) { Bytes b(4); putU32(b.data(), v); return b; }
@@ -75,8 +76,8 @@ static Bytes request(const Config &c) {
 }
 
 static bool findU32(const Bytes &a, uint8_t tag, uint32_t &v) {
-  for (size_t at = 0; at + 2 <= a.size(); at += 2u + a[at + 1])
-    if (a[at] == tag && a[at + 1] == 4) { v = getU32(a.data() + at + 2); return true; }
+  for (size_t at = 0; at + kTlvHeader <= a.size(); at += kTlvHeader + getU16(a.data() + at + 1))
+    if (a[at] == tag && getU16(a.data() + at + 1) == 4) { v = getU32(a.data() + at + kTlvHeader); return true; }
   return false;
 }
 
@@ -230,7 +231,7 @@ static void testSentCritical() {
   // samples goes by its bit: longer and not critical, ignored and listed
   Bytes p;
   tlv(p, cap::kTlvConfigureSamples, {1, 0, 0, 0, 0});
-  const Bytes ignored = {0x7F, 1, cap::kTlvConfigureSamples};
+  const Bytes ignored = {0x7F, 1, 0, cap::kTlvConfigureSamples};
   CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)) &&
         std::search(out.begin(), out.end(), ignored.begin(), ignored.end()) != out.end());
 }
@@ -269,8 +270,9 @@ static void testRateLimit() {
     for (const bool query : {true, false}) {
       CHECK(ok(configure(rig.cap, c, out, query)));
       Bytes rate;
-      for (size_t at = 0; at + 2 <= out.size(); at += 2u + out[at + 1])
-        if (out[at] == cap::kTlvConfigureAnswerActualRate) rate.assign(out.begin() + at + 2, out.begin() + at + 10);
+      for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+        if (out[at] == cap::kTlvConfigureAnswerActualRate)
+          rate.assign(out.begin() + at + kTlvHeader, out.begin() + at + kTlvHeader + getU16(out.data() + at + 1));
       // the fake divider is a whole number: 160 / 2 = 80 MHz for 100 MHz, 160 / 3 = 53.3 MHz for 48 MHz
       CHECK(rate.size() == 8 && getU32(rate.data()) / getU32(rate.data() + 4) == (channels == 8 ? 80000000u : 53333333u));
     }
@@ -294,13 +296,13 @@ static void testBound() {
   uint8_t g[16];
   CHECK(ok(group.handle(grp::kOpBind, bind, sizeof bind, g, sizeof g)));
   CHECK(rig.cap.boundTo() == 2);
-  const Bytes cause4 = {0x01, 1, 4, 0x03, 2, 2, 0};
+  const Bytes cause4 = {0x01, 1, 0, 4, 0x03, 2, 0, 2, 0};
   CHECK(rejectedAs(configure(rig.cap, c, out), kRejectUnavailable) && out == cause4);
   Bytes p;
   tlv(p, kCrit | cap::kTlvConfigureRate, {1});   // short: malformed comes first
   CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, p, out), kRejectMalformed));
   CHECK(ok(configure(rig.cap, c, out, true)));   // query: not the group's
-  const Bytes bad_tail = {0x7F, 0};
+  const Bytes bad_tail = {0x7F, 0, 0};   // the ignored tag in a request (core §2.3)
   for (const uint8_t op : {LogicCapture::kOpStart, LogicCapture::kOpStop, LogicCapture::kOpForce}) {
     CHECK(rejectedAs(raw(rig.cap, op, bad_tail, out), kRejectMalformed));
     CHECK(rejectedAs(raw(rig.cap, op, {}, out), kRejectUnavailable) && out == cause4);
@@ -392,8 +394,8 @@ static void testTriggeredStop() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 1);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 3 + 37 && out[1] == 1);
-  CHECK(getU32(out.data() + 3 + 12) == 2025 * 4 && getU32(out.data() + 3 + 28) == 100 && (out[3 + 32] & cap::kSegmentFlagShort));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
+  CHECK(getU32(out.data() + 2 + 12) == 2025 * 4 && getU32(out.data() + 2 + 28) == 100 && (out[2 + 32] & cap::kSegmentFlagShort));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && getU32(out.data() + 9) == 100);
   CHECK(out[13] == 0xFF && out[13 + 24] == 0xFF && out[13 + 25] == 0x00);   // 25 bytes (100 samples) before the edge
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 2000, 100), out)) && getU32(out.data() + 9) == 25);
@@ -435,7 +437,7 @@ static void testPositions() {
     dma.deliver(4096, 0x44);
     dma.run();
     CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {2, 0, 0, 0}, out)) && out[1] == 1);
-    CHECK(getU64(out.data() + 3 + 4) == 12288 && (out[3 + 32] & cap::kSegmentFlagGap));   // after the discarded bytes
+    CHECK(getU64(out.data() + 2 + 4) == 12288 && (out[2 + 32] & cap::kSegmentFlagGap));   // after the discarded bytes
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU64(out.data()) == 4096 &&
           out[8] == reg::common::kReadFlagsMore && out[13] == 0x22);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 9000, 10), out)) && getU64(out.data()) == 12288 &&
@@ -484,8 +486,8 @@ static void testImmediateAfterFollowing() {
   dma.deliver(4096, 0x5A);
   dma.run();
   rig.cap.poll();
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 3 + 37 && out[1] == 1);
-  CHECK(getU32(out.data() + 3 + 28) == 0xFFFFFFFFu);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
+  CHECK(getU32(out.data() + 2 + 28) == 0xFFFFFFFFu);
 }
 
 // stop (capture §3.2) of an immediate one-shot while capturing: state 1 with the segment cut short (flags bit1) holding
@@ -506,8 +508,8 @@ static void testImmediateStop() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 18);
   CHECK(out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 1 && getU64(out.data() + 5) == 4096);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 3 + 37 && out[1] == 1);
-  CHECK(getU32(out.data() + 3 + 12) == 4096 * 4 && (out[3 + 32] & cap::kSegmentFlagShort));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
+  CHECK(getU32(out.data() + 2 + 12) == 4096 * 4 && (out[2 + 32] & cap::kSegmentFlagShort));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4000, 200), out)) && getU32(out.data() + 9) == 96);
   CHECK(out[13] == 0xA5);
   // stopped before any node finished: state 1, nothing
@@ -624,7 +626,7 @@ static void testRingKept() {
   imm.samples = 40000;
   CHECK(ok(configure(small.cap, imm, out)));
   Result r = configure(small.cap, trig, out);
-  CHECK(rejectedAs(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1,
+  CHECK(rejectedAs(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1, 0,
                                                            reg::core::kUnavailableCauseStorageFull}));
   CHECK(ok(raw(small.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured);
   Config rep;

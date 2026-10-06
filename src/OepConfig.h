@@ -8,30 +8,33 @@
 //   0x02 set(items) -> hash(u32)      0x03 save -> hash(u32)      0x04 erase
 //   0x05 unset(n u8, n x (len u8, tag u8, key)) -> hash(u32)
 //   0x06 state(first_slot u8, first_bind u8) -> more storage_state storage_hash unreadable_reason
-//        n_slots x (len, slot_state) n_binds x (len, bind_state)          (no lock)
+//        n_slots x slot_state n_binds x bind_state                         (no lock)
 //
 // Items (TLV), each with a key; a set replaces the keys it carries and leaves the others, unset removes keys:
 //   0x01 plan  fn(u16) role(u8) channel(u16)            key (fn, role, channel); a set replaces the whole plan of the fn
 //   0x02 label channel(u16) text                         key channel (read back with get; oep.core's describe has only
 //                                                        the firmware's fixed labels)
-//   0x03 idle  channel(u16) mode(u8) [drive_kind(u8) drive_value(u16)]   key channel: 0 Hi-Z, 1 pull-up, 2 pull-down,
+//   0x03 idle  channel(u16) mode(u8) drive_kind(u8) drive_value(u16)   key channel: 0 Hi-Z, 1 pull-up, 2 pull-down,
 //                                                        3 output low, 4 output high while free; 3 / 4 at the strength
-//                                                        given (fixture §1.1) where gpio declares drive_levels
-//   0x04 slot  slot(u8) wire_fn(u16) swdio(u16) swclk(u16) attach(u8) retry_ms(u32) max_speed_hz(u32) idle_clock(u8)
-//              mechanism(u8: 0xFF none) name_len(u8) name lock_len(u8) [lock_scheme(u8) mask(n) value(n)]
-//              [boot_reset(u8)]                                                                       key slot
+//                                                        given (fixture §1.1) where gpio declares drive_levels; 0-2
+//                                                        carry drive_kind 2 (the default) and drive_value 0
+//   0x04 slot  slot(u8) wire_fn(u16) swdio(u16) swclk(u16) attach(u8) boot_reset(u8) retry_ms(u32) max_speed_hz(u32)
+//              idle_clock(u8) mechanism(u8: 0xFF none) name_len(u8) name lock_len(u8) [lock_scheme(u8) mask(n) value(n)]
+//                                                                                                     key slot
 //              boot_reset 1 (at-boot slots): an automatic attach the wire did not answer (status line) is done once
 //              more with the slot's nrst line (§1.3) pulled for slot_retry_reset_hold_ms first - once a boot, and only
 //              while no session has taken the lock since boot (§3.1)
-//   0x05 bind  port(u8) mode(u8) selected(u8) n(u8) n x (len(u8) kind(u8) id(u16))                       key port
+//   0x05 bind  port(u8) mode(u8) selected(u8) n(u8) n x (kind(u8) id(u16))                              key port
 //   0x06 uart  fn(u16) baud(u32) format(u8)              key fn: a fixture UART's settings, in force when its plan has pins
 //   0x07 disable channel(u16)                            key channel: never used, driven or configured (not on this
 //                                                        board): every request naming it is unavailable cause 5, and
 //                                                        the pin is never parked; describe still offers it
-// The probe keeps every item's bytes as the host sent them (the critical bit cleared, unknown tails kept) in the
-// canonical order (tag, then key), which is what get pages and the hash (CRC-32) covers. Saved to NVS on ESP32
-// (Preferences "oepcfg" / "items4") or the flash's last sector on RP2040 / RP2350 (EEPROM, "OEP4"), with the identity of
-// every interface the items name; a saved copy naming an interface that is gone is not applied (state says why).
+// Every item has one fixed form (probe.config §1; a longer one is a longer request TLV, core §2.3: unsupported when
+// critical, else not applied and listed in ignored). The probe keeps every item's bytes as the host sent them (the
+// critical bit cleared) in the canonical order (tag, then key), which is what get pages and the hash (CRC-32) covers.
+// Saved to NVS on ESP32 (Preferences "oepcfg" / "items5") or the flash's last sector on RP2040 / RP2350 (EEPROM, "OEP5"),
+// with the identity of every interface the items name; a saved copy naming an interface that is gone is not applied
+// (state says why), and one of the form before ("items4" / "OEP4") reads as unreadable reason 1.
 //
 // The places a slot may name are the sketch's wires with their consoles (addPlace: one connection each); a slot names
 // a pair its wire allows (the fixed pair, or any pair when the host chooses the pins), and several slots may share a
@@ -93,8 +96,18 @@ class ProbeConfig final : public Interface {
   uint16_t instance() const override { return 0; }
   uint8_t revision() const override { return reg::probe_config::kRevision; }
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_config::kLockFreeOps, op); }
-  // get .. state; save and erase are offered as describe's storage max_bytes is above 0 (always here)
-  bool offers(uint8_t op) const override { return opIn(op, reg::probe_config::kOpGet, reg::probe_config::kOpState); }
+  // get, set, unset, state always; save and erase (a pair) with storage, the describe's storage tag then present
+  // (probe.config §2, core §1.2)
+  bool offers(uint8_t op) const override {
+    return opIn(op, reg::probe_config::kOpGet, reg::probe_config::kOpState) &&
+           (storage_ || (op != reg::probe_config::kOpSave && op != reg::probe_config::kOpErase));
+  }
+  // The canonical bytes of `items` (TLVs as a set carries them) as this probe keeps them (probe.config §2: the critical
+  // bits cleared, ordered by tag, then by key compared as numbers) - what get pages and the hash, CRC-32 of them, covers.
+  // 0 when they do not fit `capacity` (or the items are not whole TLVs).
+  static size_t canonical(const uint8_t *items, size_t length, uint8_t *out, size_t capacity);
+  // A probe that saves nothing (setStorage(false), before the first poll): no save / erase, no storage tag.
+  void setStorage(bool on) { storage_ = on; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 
@@ -170,6 +183,8 @@ class ProbeConfig final : public Interface {
 
   // The item store: one item's key (the bytes after the tag that identify it) and the canonical order.
   static size_t keyLength(uint8_t tag);
+  static size_t itemSize(uint8_t tag, const uint8_t *v, size_t len);
+  bool storage_ = true;
   bool declares(uint8_t tag) const;
   static uint64_t keyValue(uint8_t tag, const uint8_t *value, size_t length);
   static bool itemBefore(uint8_t tag_a, const uint8_t *a, size_t alen, uint8_t tag_b, const uint8_t *b, size_t blen);

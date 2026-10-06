@@ -141,18 +141,21 @@ static Result call(Interface &i, uint8_t op, const Bytes &payload, Bytes &out, s
   return r;
 }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
-// what riscv.Wire.attach_body sends: method, max_speed (critical), pins (critical), idle_clock low (critical)
+// what riscv.Wire.attach_body sends: method, max_speed (critical), pins (critical), idle_clock low (critical); every
+// TLV tag(u8) len(u16) value (core §2.2)
 static Bytes attachRequest(uint8_t method, uint32_t hz, int swdio, int swclk, bool idle_low) {
-  Bytes p = {method, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, uint8_t(hz), uint8_t(hz >> 8),
+  Bytes p = {method, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, uint8_t(hz), uint8_t(hz >> 8),
              uint8_t(hz >> 16), uint8_t(hz >> 24)};
-  p.insert(p.end(), {uint8_t(wire::kTlvAttachPins | kTagCritical), 4, uint8_t(swdio), 0, uint8_t(swclk), 0});
-  if (idle_low) p.insert(p.end(), {uint8_t(wire::kTlvAttachIdleClock | kTagCritical), 1, 1});
+  p.insert(p.end(), {uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
+  if (idle_low) p.insert(p.end(), {uint8_t(wire::kTlvAttachIdleClock | kTagCritical), 1, 0, 1});
   return p;
 }
 static Bytes detachRequest(uint16_t number) { return {uint8_t(number), uint8_t(number >> 8)}; }
 static const uint8_t *answerTlv(const Bytes &out, size_t from, uint8_t tag, size_t &len) {
-  for (size_t at = from; at + 2 <= out.size(); at += 2u + out[at + 1])
-    if (out[at] == tag && at + 2u + out[at + 1] <= out.size()) { len = out[at + 1]; return out.data() + at + 2; }
+  for (size_t at = from; at + 3 <= out.size(); at += 3u + (out[at + 1] | out[at + 2] << 8)) {
+    const size_t n = out[at + 1] | out[at + 2] << 8;
+    if (out[at] == tag && at + 3u + n <= out.size()) { len = n; return out.data() + at + 3; }
+  }
   return nullptr;
 }
 
@@ -210,18 +213,19 @@ int main() {
     CHECK(answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) == nullptr);
     printf("  B slot-shared: second attach flags 0x%02x (existing), no TLV 0x12, %u.%03u ms (sim)\n", out[6],
            took / 1000, took % 1000);
-    r = call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);   // force
+    r = call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);   // force
     CHECK(ok(r) && !port.connected);
   }
 
-  // ---- C: the answer at a small capacity: where TLV 0x12 would be dropped silently ----
+  // ---- C: the answer at a small capacity: where TLV 0x12 would be dropped silently (the fixed part 11 bytes, then
+  // target_id 8, dpc 7 and search_retries 5 with their 3-byte headers) ----
   {
-    for (size_t cap : {11u, 18u, 24u, 25u, 28u}) {
+    for (size_t cap : {11u, 19u, 26u, 30u, 31u}) {
       Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out, cap);
       size_t len = 0;
       printf("  C capacity %2zu: %s, %zu bytes, TLV 0x12 %s\n", cap, ok(r) ? "ok" : "not ok", out.size(),
              answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) ? "present" : "absent");
-      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);
+      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
     }
   }
 
@@ -261,7 +265,7 @@ int main() {
               out[0] == (wire::kTlvAttachMaxSpeed | kTagCritical) && took == 0);
       else
         CHECK(r.resolution == kResolutionCompleted && took <= reg::kLimitAttachBudgetMs * 1000u);
-      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);
+      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
     }
     t.min_read_half = t.min_write_half = 0;
   }
@@ -270,7 +274,7 @@ int main() {
   for (uint32_t hz : {1000000u, 10000000u, 50000u, 20000u}) {
     for (uint8_t method : {uint8_t(1), uint8_t(0)}) {
       Bytes req = attachRequest(method, hz, 0, 1, true);
-      req.insert(req.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 4, 5, 0, 20, 0});
+      req.insert(req.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 4, 0, 5, 0, 20, 0});
       phy.beginRequest();
       const uint32_t t0 = micros();
       Result r = call(w, WireRvswd::kOpAttach, req, out);
@@ -279,7 +283,7 @@ int main() {
              ok(r) && out.size() >= 11 ? "answer" : "status/reject", took / 1000, took % 1000);
       if (hz < RvswdPhy::kMinClockHz) CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
       else CHECK(ok(r) && took <= (reg::kLimitAttachBudgetMs + 20) * 1000u);   // the budget, the hold aside
-      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);
+      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
     }
   }
 
@@ -307,7 +311,7 @@ int main() {
       printf("  F power off %4u ms, attach %s: %s %u.%03u ms (sim)\n", off_ms, method ? "halt" : "run ",
              ok(r) ? "answer" : "status", took / 1000, took % 1000);
     }
-    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0}, out);
+    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
     CHECK(!port.connected);
   }
 

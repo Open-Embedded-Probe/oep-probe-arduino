@@ -188,9 +188,8 @@ void LogicCapture::sendStage() {
   putU16(s + 5, endpoint_.takeSeq(fn));
   putU64(s + 7, stage_pos_);
   putU16(s + 15, static_cast<uint16_t>(fill));
-  s[kPushHead + fill] = cap::kTlvDataGeneration;
-  s[kPushHead + fill + 1] = 4;
-  putU32(s + kPushHead + fill + 2, generation_);
+  putTlvHeader(s + kPushHead + fill, cap::kTlvDataGeneration, 4);
+  putU32(s + kPushHead + fill + kTlvHeader, generation_);
   if (!t->queueData(s, kPushHead + fill + kPushTail, stageDone, this)) __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
 }
 
@@ -420,7 +419,7 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   uint8_t roles[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
   w.roleChannels(roles, kMaxChannels, table_.allowedMask());
-  w.u32(kTagFeatures, cap::kFeaturesQuery | cap::kFeaturesForce | cap::kFeaturesNotify);
+  w.u32(kTagFeatures, cap::kFeaturesNotify);   // query and force: in the ops tag (offers); bits 0 / 1 reserved
   uint8_t mode[10] = {1, 1};                       // one-shot, runs in the background (DMA)
   putU32(mode + 2, kSegmentBytes * 8);             // max samples at w = 1
   putU32(mode + 6, 1);                             // one segment
@@ -1069,7 +1068,7 @@ size_t LogicCapture::pending() {
 // Streaming push: the next bytes in stream order, from the segment being sent; a segment fully sent is released.
 // payload: position(u64) len(u16) data, then TLV 0x01 generation (core §11.2, oep-if-capture §3.4)
 size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
-  constexpr size_t kHead = 10, kTail = 6;
+  constexpr size_t kHead = 10, kTail = kTlvHeader + 4;   // the generation TLV after the data
   if (mode_ != 3 || direct_ || !store_ || capacity <= kHead + kTail) return 0;
   const uint32_t serial = sent_seg_;
   const bool finished = serial < completed_;
@@ -1085,9 +1084,8 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
   putU64(out, infos_[serial % kInfos].position + sent_off_);
   putU16(out + 8, static_cast<uint16_t>(n));
   memcpy(out + kHead, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + sent_off_, n);
-  out[kHead + n] = cap::kTlvDataGeneration;
-  out[kHead + n + 1] = 4;
-  putU32(out + kHead + n + 2, generation_);
+  putTlvHeader(out + kHead + n, cap::kTlvDataGeneration, 4);
+  putU32(out + kHead + n + kTlvHeader, generation_);
   sent_off_ += n;
   if (finished && sent_off_ >= length) { sent_off_ = 0; sent_seg_ = serial + 1; released_ = serial + 1; }
   return kHead + n + kTail;
@@ -1214,17 +1212,16 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       putU32(out + 14, generation_);
       size_t used = 18;
       if (state_ == kStateError) {   // why (TLV 0x01 error): the PARLIO or its DMA would not start / run
-        out[18] = cap::kTlvStatusAnswerError;
-        out[19] = 1;
-        out[20] = cap::kErrorPeripheral;
-        used = 21;
+        putTlvHeader(out + 18, cap::kTlvStatusAnswerError, 1);
+        out[21] = cap::kErrorPeripheral;
+        used = 22;
       }
       return tail.finish(completed(used), out, capacity);
     }
     case kOpRead: {   // generation(u32) position(u64) max(u32) [TLV]  ->  position(u64) flags(u8: bit0 more, bit1 gap) len(u32) data [TLV]
       constexpr size_t kHead = 13;
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
-      const size_t reserve = tail.anyIgnored() ? 2 + Tail::kMaxIgnored : 0;
+      const size_t reserve = tail.room();
       if (capacity < kHead + reserve) return failed();
       poll();
       uint64_t position = getU64(p + 4);
@@ -1275,10 +1272,10 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (count > max) { count = max; flags |= reg::common::kReadFlagsMore; }
       return answer(position, flags, buffer_ + position, count);
     }
-    case kOpSegments: {   // from_serial(u32) [TLV]  ->  more(u8) count(u8) count x (len(u8) segment info) [TLV]
-      if (capacity < 3 + kInfoBytes) return failed();
+    case kOpSegments: {   // from_serial(u32) [TLV]  ->  more(u8) count(u8) count x segment info [TLV] (37 bytes each)
+      if (capacity < 2 + kInfoBytes) return failed();
       poll();
-      const size_t room = tail.anyIgnored() && capacity > 3 + Tail::kMaxIgnored ? capacity - 2 - Tail::kMaxIgnored : capacity;
+      const size_t room = capacity > tail.room() ? capacity - tail.room() : 0;
       if (mode_ == 2 || mode_ == 3) {
         uint32_t from = getU32(p);
         const uint32_t oldest = completed_ > kInfos ? completed_ - kInfos : 0;
@@ -1286,10 +1283,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         uint8_t count = 0;
         size_t used = 2;
         uint32_t k = from;
-        for (; k < completed_ && used + 1 + kInfoBytes <= room && count < 255; ++k, ++count) {
-          out[used] = static_cast<uint8_t>(infoBytes(infos_[k % kInfos], out + used + 1));   // len(u8) first (core §2.3)
-          used += 1u + out[used];
-        }
+        for (; k < completed_ && used + kInfoBytes <= room && count < 255; ++k, ++count)
+          used += infoBytes(infos_[k % kInfos], out + used);   // no element length (core §2.3)
         out[0] = k < completed_ ? 1 : 0;   // more
         out[1] = count;
         return tail.finish(completed(used), out, capacity);
@@ -1297,8 +1292,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       const bool one = kept_samples_ && getU32(p) == 0;
       out[0] = 0;
       out[1] = one ? 1 : 0;
-      if (one) out[2] = static_cast<uint8_t>(segmentInfo(out + 3));   // len(u8) then the info (core §2.3)
-      return tail.finish(completed(one ? 3u + out[2] : 2u), out, capacity);
+      const size_t info = one ? segmentInfo(out + 2) : 0;   // no element length (core §2.3)
+      return tail.finish(completed(2u + info), out, capacity);
     }
     case kOpRelease:   // generation(u32) serial(u32) [TLV]: that segment and the ones before it may be reused (repeat)
       if (getU32(p) != generation_) return wrongState(out, capacity);

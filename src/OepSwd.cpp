@@ -242,8 +242,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
   Tail tail;
   switch (op) {
     case kOpScan: {
-      // count(u8) pairs [TLV 0x01 max_speed, 0x02 skip, 0x06 targetsel]  ->  tried(u8) count(u8), then kind(u8)
-      // swdio(u16) swclk(u16) DPIDR(u32) per answer, each after its len(u8) (oep-if-debug §1, §5)
+      // count(u8) pairs [TLV 0x01 max_speed, 0x02 skip, 0x06 targetsel]  ->  tried(u8) count(u8), count x (kind(u8)
+      // swdio(u16) swclk(u16) DPIDR(u32)) (oep-if-debug §1, §5; 9 bytes each, no element length)
       if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
       const uint8_t count = payload[0];
       const size_t fixed = 1u + 4u * count;
@@ -255,20 +255,20 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       uint32_t max_hz = 0, scan_targetsel = 0;
       bool scan_select = false;
       {
+        // each TLV's one form (core §2.3: shorter malformed; longer unsupported when critical, else ignored)
         size_t len = 0;
-        if (const uint8_t *v = tail.find(sw::kTlvScanSkip, len)) {
-          if (count || len != 2) return rejected(kRejectMalformed);   // skip goes with count 0 only
-          skip = getU16(v);
-        }
-        if (const uint8_t *v = tail.find(sw::kTlvScanMaxSpeed, len)) {
-          if (len != 4 || getU32(v) == 0) return rejected(kRejectMalformed);
-          max_hz = getU32(v);
-        }
-        if (const uint8_t *v = tail.find(sw::kTlvScanTargetsel, len)) {
-          if (len != 4) return rejected(kRejectMalformed);
-          scan_targetsel = getU32(v);
-          scan_select = true;
-        }
+        if (tail.find(sw::kTlvScanSkip, len) && count) return rejected(kRejectMalformed);   // skip goes with count 0 only
+        const uint8_t *v = nullptr;
+        Result r = tail.fixed(sw::kTlvScanSkip, 2, v, out, capacity);
+        if (refused(r)) return r;
+        if (v) skip = getU16(v);
+        r = tail.fixed(sw::kTlvScanMaxSpeed, 4, v, out, capacity);
+        if (refused(r)) return r;
+        if (v && getU32(v) == 0) return rejected(kRejectMalformed);
+        if (v) max_hz = getU32(v);
+        r = tail.fixed(sw::kTlvScanTargetsel, 4, v, out, capacity);
+        if (refused(r)) return r;
+        if (v) { scan_targetsel = getU32(v); scan_select = true; }
       }
       if (refused(unknown)) return unknown;
       // every pair listed allowed (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index), all of them before
@@ -299,7 +299,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       // for seconds (0.0.18). One try is a line reset and a dormant wake at most: well inside the attach budget.
       const uint32_t began = millis();
       auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full, or its time is up
-        if (at + 10 > capacity || (tried && millis() - began >= reg::kLimitScanBudgetMs)) return false;
+        if (at + 9 + tail.room() > capacity || (tried && millis() - began >= reg::kLimitScanBudgetMs)) return false;
         uint32_t dpidr = 0;
         bool ok = false;
         if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state
@@ -312,12 +312,11 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           freePort(port_);   // found or not, the pair to its free state (oep-if-debug §1)
         }
         if (ok) {
-          out[at] = 9;   // the element's length (core §2.3)
-          out[at + 1] = sw::kScanKindArmAdi;
-          putU16(out + at + 2, d);
-          putU16(out + at + 4, c);
-          putU32(out + at + 6, dpidr);
-          at += 10;
+          out[at] = sw::kScanKindArmAdi;
+          putU16(out + at + 1, d);
+          putU16(out + at + 3, c);
+          putU32(out + at + 5, dpidr);
+          at += 9;
           ++found;
         }
         ++tried;
@@ -351,24 +350,25 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       Result unknown = completed();
       const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity, &unknown);
       if (refused(parsed)) return parsed;
-      size_t len = 0;
       bool critical = false;
       uint32_t max_hz = 0, targetsel = 0;
       bool have_targetsel = false;
-      if (const uint8_t *v = tail.find(sw::kTlvAttachMaxSpeed, len, &critical)) {
-        if (len != 4 || getU32(v) == 0) return rejected(kRejectMalformed);
-        max_hz = getU32(v);
-      }
-      if (!max_hz) return rejected(kRejectMalformed);   // required (oep-if-debug §1)
-      if (const uint8_t *v = tail.find(sw::kTlvAttachTargetsel, len)) {
-        if (len != 4) return rejected(kRejectMalformed);
-        targetsel = getU32(v);
-        have_targetsel = true;
-      }
-      size_t plen = 0;
       bool pins_critical = false;
-      const uint8_t *pins = tail.find(sw::kTlvAttachPins, plen, &pins_critical);
-      if (pins && plen != 4) return rejected(kRejectMalformed);
+      const uint8_t *pins = nullptr;
+      {
+        // each TLV's one form (core §2.3: shorter malformed; longer unsupported when critical, else ignored)
+        const uint8_t *v = nullptr;
+        Result r = tail.fixed(sw::kTlvAttachMaxSpeed, 4, v, out, capacity, &critical);
+        if (refused(r)) return r;
+        if (v && getU32(v) == 0) return rejected(kRejectMalformed);
+        if (v) max_hz = getU32(v);
+        if (!max_hz) return rejected(kRejectMalformed);   // required (oep-if-debug §1)
+        r = tail.fixed(sw::kTlvAttachTargetsel, 4, v, out, capacity);
+        if (refused(r)) return r;
+        if (v) { targetsel = getU32(v); have_targetsel = true; }
+        r = tail.fixed(sw::kTlvAttachPins, 4, pins, out, capacity, &pins_critical);
+        if (refused(r)) return r;
+      }
       if (refused(unknown)) return unknown;
       if (payload[0] != 0) return unsupportedValue(out, capacity);   // 0 only: arm-adi has no halt (oep-if-debug §5)
       if (max_hz < hzOf(kSlowHalfNs)) return unsupportedTag(out, capacity, sw::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
@@ -465,38 +465,39 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       out[6] = flags;
       putU32(out + 7, hzOf(port_.active_half_ns));
       size_t n = 11;
-      if (searched && capacity >= n + 4) {   // search_retries (oep-if-debug §1): the wakes that failed, 0xFFFF = more
-        out[n] = sw::kTlvAttachAnswerSearchRetries;
-        out[n + 1] = 2;
-        putU16(out + n + 2, static_cast<uint16_t>(search_retries < 0xffff ? search_retries : 0xffff));
-        n += 4;
+      if (searched && capacity >= n + kTlvHeader + 2) {   // search_retries (oep-if-debug §1): the wakes that failed, 0xFFFF = more
+        putTlvHeader(out + n, sw::kTlvAttachAnswerSearchRetries, 2);
+        putU16(out + n + kTlvHeader, static_cast<uint16_t>(search_retries < 0xffff ? search_retries : 0xffff));
+        n += kTlvHeader + 2;
       }
       return tail.finish(completed(n), out, capacity);
     }
     case kOpConnections: {   // first(u8) [TLV] -> more(u8) count(u8), the live connection (users: the host only; tid scheme 2 = TARGETSEL)
       const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 21) return failed();
+      if (capacity < 20) return failed();
       out[0] = 0;   // more: never (one entry at most)
       out[1] = port_.connected && payload[0] == 0 ? 1 : 0;
       if (!out[1]) return tail.finish(completed(2), out, capacity);
-      out[2] = 18;   // the entry's length (core §2.3)
-      putU16(out + 3, port_.number);
-      putU16(out + 5, port_.swdio);
-      putU16(out + 7, port_.swclk);
-      putU32(out + 9, port_.active_half_ns ? 500000000u / port_.active_half_ns : 0);
-      out[13] = sw::kConnectionUsersHostSession;
-      out[14] = 0xff;   // no slot
-      out[15] = reg::common::kTargetIdSchemeTargetsel;
-      out[16] = reg::common::kTargetIdLenTargetsel;
-      putU32(out + 17, port_.active_targetsel ? port_.targetsel : 0);
-      return tail.finish(completed(21), out, capacity);
+      putU16(out + 2, port_.number);   // count x entry, no element length (core §2.3)
+      putU16(out + 4, port_.swdio);
+      putU16(out + 6, port_.swclk);
+      putU32(out + 8, port_.active_half_ns ? 500000000u / port_.active_half_ns : 0);
+      out[12] = sw::kConnectionUsersHostSession;
+      out[13] = 0xff;   // no slot
+      out[14] = reg::common::kTargetIdSchemeTargetsel;
+      out[15] = reg::common::kTargetIdLenTargetsel;
+      putU32(out + 16, port_.active_targetsel ? port_.targetsel : 0);
+      return tail.finish(completed(20), out, capacity);
     }
     case kOpDetach: {   // connection(u16) [TLV 0x01 force]
       static const uint8_t kDetachTags[] = {sw::kTlvDetachForce};
       if (length < 2) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 2, length - 2, kDetachTags, out, capacity);
       if (refused(parsed)) return parsed;
+      const uint8_t *force = nullptr;   // length 0 (oep-if-debug §3); longer: a longer request TLV (core §2.3)
+      const Result r = tail.fixed(sw::kTlvDetachForce, 0, force, out, capacity);
+      if (refused(r)) return r;
       if (!port_.connected || getU16(payload) != port_.number)
         return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
       close();   // the host is this connection's only user: its detach closes it (oep-if-debug §5)

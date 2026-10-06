@@ -54,7 +54,7 @@ bool FrameReader::push(uint8_t byte) {
         return false;
       }
       if (length_ > max_frame_ || length_ > capacity_) {
-        // core §3.1: a length over max_frame - that frame and the input up to the next pause of probe_frame_gap_ms are
+        // transports §1: a length over max_frame - that frame and the input up to the next pause of probe_frame_gap_ms are
         // discarded, unanswered; the next frame starts after the pause. (Not skipping the announced length: a stray
         // byte taken as a length wedged the probe for up to 64 KiB, 2026-09-22.)
         ++dropped_;
@@ -88,17 +88,55 @@ uint16_t crc16Ccitt(const uint8_t *data, size_t length, uint16_t crc) {
   return crc;
 }
 
-bool SerialReader::close() {   // decodes into dec_; the encoded bytes stay as they were
-  const size_t n = have_;
-  size_t in = 0, out = 0;
-  while (in < n) {
-    const uint8_t code = enc_[in++];
-    if (in + code - 1 > n || out + code > dec_cap_) return false;
-    memcpy(dec_ + out, enc_ + in, code - 1u);
-    out += code - 1u;
-    in += code - 1u;
-    if (code != 0xff && in < n) dec_[out++] = 0;
+namespace {
+// Standard COBS (transports §1): each block is its length + 1 followed by up to 254 non-zero bytes; a block shorter
+// than 254 bytes implies the zero that ended it (none after the last block). A full block (code 0xFF) implies nothing;
+// when the data ends right after one, no empty block follows. at(i): the i-th byte of the data; put(b): one encoded byte.
+template <class At, class Put>
+void cobsBlocks(size_t total, At at, Put put) {
+  size_t i = 0;
+  for (;;) {
+    size_t j = i;
+    while (j < total && at(j) != 0 && j - i < 254) ++j;
+    const uint8_t code = static_cast<uint8_t>(j - i + 1);
+    put(code);
+    for (size_t k = i; k < j; ++k) put(at(k));
+    if (j >= total) break;
+    if (code == 0xff) { i = j; continue; }
+    i = j + 1;   // skip the zero this block stood for
   }
+}
+}  // namespace
+
+size_t cobsEncode(const uint8_t *data, size_t length, uint8_t *out, size_t capacity) {
+  size_t n = 0;
+  bool fits = true;
+  cobsBlocks(length, [&](size_t i) { return data[i]; }, [&](uint8_t b) {
+    if (n < capacity) out[n++] = b; else fits = false;
+  });
+  return fits ? n : 0;
+}
+
+bool cobsDecode(const uint8_t *enc, size_t n, uint8_t *out, size_t capacity, size_t &length) {
+  size_t in = 0, put = 0;
+  while (in < n) {
+    const uint8_t code = enc[in++];
+    if (code == 0 || in + code - 1 > n || put + code - 1u > capacity) return false;
+    memcpy(out + put, enc + in, code - 1u);
+    put += code - 1u;
+    in += code - 1u;
+    if (code != 0xff && in < n) {
+      if (put >= capacity) return false;
+      out[put++] = 0;
+    }
+  }
+  length = put;
+  return true;
+}
+
+bool SerialReader::close() {   // decodes into dec_; the encoded bytes stay as they were
+  size_t out = 0;
+  if (!cobsDecode(enc_, have_, dec_, dec_cap_, out)) return false;
   if (out < 3) return false;
   const uint16_t got = static_cast<uint16_t>(dec_[out - 2] | dec_[out - 1] << 8);
   if (crc16Ccitt(dec_, out - 2) != got) { ++crc_errors_; return false; }
@@ -175,10 +213,7 @@ size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length) {
   const uint8_t tail[2] = {static_cast<uint8_t>(crc), static_cast<uint8_t>(crc >> 8)};
   const size_t total = length + 2;
   auto at = [&](size_t i) -> uint8_t { return i < length ? message[i] : tail[i - length]; };
-  // Standard COBS: each block is its length + 1 followed by up to 254 non-zero bytes; a block shorter than 254 bytes
-  // implies the zero that ended it (none after the last block). A full block (code 0xFF) implies nothing; when the
-  // data ends right after one, no empty block follows. Encoded into a small buffer and written in pieces: one
-  // Stream::write per byte takes the UART driver's lock every time.
+  // Encoded into a small buffer and written in pieces: one Stream::write per byte takes the UART driver's lock every time.
   uint8_t out[64];
   size_t n = 0;
   auto put = [&](uint8_t b) {
@@ -186,17 +221,7 @@ size_t writeCobsFrame(Stream &stream, const uint8_t *message, size_t length) {
     if (n == sizeof out) { stream.write(out, n); n = 0; }
   };
   put(0);
-  size_t i = 0;
-  for (;;) {
-    size_t j = i;
-    while (j < total && at(j) != 0 && j - i < 254) ++j;
-    const uint8_t code = static_cast<uint8_t>(j - i + 1);
-    put(code);
-    for (size_t k = i; k < j; ++k) put(at(k));
-    if (j >= total) break;
-    if (code == 0xff) { i = j; continue; }
-    i = j + 1;   // skip the zero this block stood for
-  }
+  cobsBlocks(total, at, put);
   put(0);
   if (n) stream.write(out, n);
   return length;

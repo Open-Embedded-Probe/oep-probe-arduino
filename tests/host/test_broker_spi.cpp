@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Host test: a relaying broker's sequence (oep-core §3.1) on a UART bridge, to the classic ESP32's SPI target on the fake
-// spi_slave driver and the fake ESP-IDF GPIO / IPC (tests/host/shim). The broker (ch32rv 0.18.0) opens one session
-// without a session_id in the header (role 0x01, the id in open's payload), raises the port (port_speed try, confirms at
-// the new rate, link_source / link_sink without a session, commit in the session), keeps it alive, and relays a client's
-// 0x81 requests with its own session_id and its 0x01 ones without one, with confirms of its own (0x01) in between. Every
-// answer is completed: on 0.0.28+ec38b1d the first spi-target configure installed the GPIO ISR service from inside an
-// IPC call, which never returned on the chip; the bench then saw the probe come back from a restart and the next 0x81
-// answered no_session.
+// Host test: a relaying broker's sequence (oep-transports §1) on a UART bridge, to the classic ESP32's SPI target on the fake
+// spi_slave driver and the fake ESP-IDF GPIO / IPC (tests/host/shim). The broker (ch32rv) opens one session (its id in
+// the 10-byte header), raises the port (oep.link port_speed try, confirms at the new rate, link source / sink with
+// session_id 0, commit in the session), keeps it alive, and relays a client's requests with its own session_id and its
+// lock-free ones with session_id 0, with confirms of its own in between. Every answer is completed: on 0.0.28+ec38b1d
+// the first spi-target configure installed the GPIO ISR service from inside an IPC call, which never returned on the
+// chip; the bench then saw the probe come back from a restart and the next request answered no_session.
 #include <stdio.h>
 
 #include <vector>
@@ -89,11 +88,11 @@ struct Probe {
   // One request; the answer's resolution, detail and payload (empty: no answer).
   Bytes send(uint16_t fn, uint8_t op, const Bytes &payload, bool session, uint32_t id) {
     ++corr;
-    Bytes m = {uint8_t(session ? 0x81 : 0x01)};
+    Bytes m = {0x01};   // the 10-byte header with session_id, 0 = none (core §4.1)
     append(m, u16(corr));
     append(m, u16(fn));
     m.push_back(op);
-    if (session) append(m, u32(id));
+    append(m, u32(session ? id : 0));
     append(m, payload);
     const Bytes f = frame(m);
     stream.rx.insert(stream.rx.end(), f.begin(), f.end());
@@ -111,39 +110,42 @@ int main() {
   static PinTable pins((1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 7));
   static P4SpiTarget spi(pins);
   static Probe p;
+  static Link link(p.ep);
   p.ep.add(spi);
+  p.ep.add(link);   // fn 2: oep.link
   p.ep.setPins(&pins);
   p.ep.setPortSpeed(speedHook, 115200);
   const uint16_t fn = 1;
   const uint32_t sid = 0x5a17c3e1;   // the broker's random non-zero id
 
   CHECK(completed(p.send(0, reg::core::kOpConfirm, confirm(), false, 0)));
-  Bytes open = u32(sid);
-  append(open, u32(10000));
+  Bytes open = u32(10000);   // lease_ms force; the id in the header (core §4.1, §6.4)
   open.push_back(0);
-  CHECK(completed(p.send(0, reg::core::kOpOpen, open, false, 0)));
+  CHECK(completed(p.send(0, reg::core::kOpOpen, open, true, sid)));
   // port_speed: try in the session, confirms at the new rate (0x01), the link measured without a session, commit
   Bytes speed = {0};
   append(speed, u32(921600));
-  speed.push_back(reg::core::kPortSpeedStepTry);
+  speed.push_back(reg::link::kPortSpeedStepTry);
   append(speed, u16(2000));
   append(speed, u32(0));
-  CHECK(completed(p.send(0, reg::core::kOpPortSpeed, speed, true, sid)));
+  CHECK(completed(p.send(2, reg::link::kOpPortSpeed, speed, true, sid)));
   for (int i = 0; i < 3; ++i) CHECK(completed(p.send(0, reg::core::kOpConfirm, confirm(), false, 0)));
-  CHECK(completed(p.send(0, reg::core::kOpLinkSource, u32(64), false, 0)));
-  CHECK(completed(p.send(0, reg::core::kOpLinkSink, Bytes(64, 0x55), false, 0)));
-  speed[5] = reg::core::kPortSpeedStepCommit;
-  CHECK(completed(p.send(0, reg::core::kOpPortSpeed, speed, true, sid)));
+  CHECK(completed(p.send(2, reg::link::kOpSource, u32(64), false, 0)));
+  Bytes sink = u16(64);
+  append(sink, Bytes(64, 0x55));
+  CHECK(completed(p.send(2, reg::link::kOpSink, sink, false, 0)));
+  speed[5] = reg::link::kPortSpeedStepCommit;
+  CHECK(completed(p.send(2, reg::link::kOpPortSpeed, speed, true, sid)));
   CHECK(completed(p.send(0, reg::core::kOpKeepalive, {}, true, sid)));
   CHECK(completed(p.send(fn, P4SpiTarget::kOpStatus, {}, false, 0)));   // a client's lock-free request, 0x01
 
-  // a client's plan and configure, relayed as 0x81 with the broker's id; a broker confirm between them
+  // a client's plan and configure, relayed with the broker's id; a broker confirm between them
   Bytes plan;
   const uint8_t roles[][2] = {{P4SpiTarget::kRoleSck, 4}, {P4SpiTarget::kRoleMosi, 5}, {P4SpiTarget::kRoleMiso, 6},
                               {P4SpiTarget::kRoleCs, 7}};
   for (const auto &r : roles) {
     plan.push_back(kTagRoleAssignment | kTagCritical);
-    plan.push_back(5);
+    append(plan, u16(5));
     append(plan, u16(fn));
     plan.push_back(r[0]);
     append(plan, u16(r[1]));

@@ -60,7 +60,7 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagMaxClockHz, 1000000u);
   namespace i2c = reg::fixture_i2c_target;
   // bit0 preloaded tx, bit1 clock stretching, bit2 the internal pull-ups start() enables (fixture §3)
-  w.u32(kTagFeatures, i2c::kFeaturesPreloadedTx | (kStretch ? i2c::kFeaturesStretch : 0) | i2c::kFeaturesInternalPullups);
+  w.u32(kTagFeatures, i2c::kFeaturesPreloadedTx | i2c::kFeaturesInternalPullups);   // stretch: in the ops tag (offers)
   w.u8(kTagImplementation, 2);   // a dedicated peripheral
   w.u8(i2c::kTlvDescribeQueueDepth, kQueueDepth);
   if (kStretch) w.u32(i2c::kTlvDescribeMaxStretchUs, kMaxStretchUs);
@@ -381,7 +381,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       return tail.finish(completed(13), out, capacity);
     }
     case kOpStretch: {   // stretch_us(u32) [TLV]: in any state, from the next byte on (fixture §3)
-      if (!kStretch) return rejected(kRejectUnknownOperation);   // features bit1 not declared
+      if (!kStretch) return rejected(kRejectUnknownOperation);   // not in the ops tag (offers)
       const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
       if (refused(parsed)) return parsed;
       const uint32_t us = getU32(payload);

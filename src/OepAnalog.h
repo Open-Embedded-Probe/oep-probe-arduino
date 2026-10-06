@@ -65,7 +65,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint8_t revision() const override { return reg::fixture_analog::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_analog::kLockFreeOps, op); }
-  // every op of capture §3.2, calibration included (query and force declared by features bits 0 / 1)
+  // every op of capture §3.2, calibration included (query and force optional, offered: the ops tag declares them)
   bool offers(uint8_t op) const override { return opIn(op, reg::fixture_analog::kOpConfigure, reg::fixture_analog::kOpCalibration); }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }

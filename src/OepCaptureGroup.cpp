@@ -34,7 +34,7 @@ int CaptureGroup::indexOf(const GroupTrack &track) const {
 
 size_t CaptureGroup::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  w.u32(kTagFeatures, grp::kFeaturesForce | grp::kFeaturesNotify);   // bit0 (query) is 0: there is none
+  w.u32(kTagFeatures, grp::kFeaturesNotify);   // force is in the ops tag (offers); bits 0 / 1 reserved
   uint8_t fns[1 + 2 * kMaxTracks] = {static_cast<uint8_t>(count_)};   // n(u8) n x fn(u16)
   for (size_t i = 0; i < count_; ++i) putU16(fns + 1 + 2 * i, endpoint_.fnOf(*tracks_[i].interface));
   w.put(grp::kTlvDescribeTracks, fns, 1 + 2 * count_);
@@ -67,8 +67,8 @@ void CaptureGroup::unbind() {
 
 // unavailable `cause` about one track: TLV fn (0x05) names it (§4.1, core §4.3)
 Result CaptureGroup::refuseTrack(uint8_t cause, uint16_t fn, uint8_t *out, size_t capacity) const {
-  uint8_t extra[4] = {reg::core::kTlvUnavailablePayloadFn, 2, 0, 0};
-  putU16(extra + 2, fn);
+  uint8_t extra[5] = {reg::core::kTlvUnavailablePayloadFn, 2, 0, 0, 0};   // tag len(u16) fn(u16)
+  putU16(extra + 3, fn);
   return unavailable(out, capacity, cause, 0xFFFF, 0xFFFF, 0, extra, sizeof extra);
 }
 
@@ -117,8 +117,11 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
           if (getU16(payload + 1 + 2 * k) == getU16(payload + 1 + 2 * j)) return rejected(kRejectMalformed);
       size_t len = 0;
       int trigger = -1;
-      if (const uint8_t *v = tail.find(grp::kTlvBindTriggerTrack, len)) {
-        if (len != 2) return rejected(kRejectMalformed);
+      bool trigger_critical = false;
+      if (const uint8_t *v = tail.find(grp::kTlvBindTriggerTrack, len, &trigger_critical)) {
+        if (len < 2) return rejected(kRejectMalformed);
+        // always critical (capture §4.1): a value longer than its form is refused, never ignored (core §2.3)
+        if (len > 2) return Tail::refuseCritical(grp::kTlvBindTriggerTrack, trigger_critical, out, capacity);
         trigger = indexOf(getU16(v));
         bool in = false;
         for (uint8_t k = 0; k < n; ++k) in |= getU16(payload + 1 + 2 * k) == getU16(v);
@@ -132,12 +135,11 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       for (uint8_t k = 0; k < n; ++k) {
         const int i = indexOf(getU16(payload + 1 + 2 * k));
         if (i < 0) {   // not a track of this group (describe tracks): unsupported, the fn in TLV 0x05
-          if (capacity < 5) return unsupportedValue(out, capacity);
+          if (capacity < 6) return unsupportedValue(out, capacity);
           out[0] = kTagValue;
-          out[1] = reg::core::kTlvUnsupportedPayloadFn;
-          out[2] = 2;
-          putU16(out + 3, getU16(payload + 1 + 2 * k));
-          return {kResolutionRejected, kRejectUnsupported, 5};
+          putTlvHeader(out + 1, reg::core::kTlvUnsupportedPayloadFn, 2);
+          putU16(out + 4, getU16(payload + 1 + 2 * k));
+          return {kResolutionRejected, kRejectUnsupported, 6};
         }
         chosen[k] = static_cast<uint8_t>(i);
       }
@@ -184,7 +186,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         if (!(t.following_ ? t.trackCanFollow() : t.trackCanStart()))
           return refuseTrack(reg::core::kUnavailableCauseWrongState, endpoint_.fnOf(*tracks_[bound_[k]].interface), out, capacity);
       }
-      if (capacity < 12 + 2 + 6 * bound_count_) return failed();
+      if (capacity < 12 + kTlvHeader + 6 * bound_count_) return failed();
       failed_ = false;
       start_ns_ = nowNs();
       trigger_ns_ = ~uint64_t{0};
@@ -204,14 +206,13 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       running_ = started_ = true;
       putU32(out, 0);   // blocking_ms: every track keeps the probe answering
       putU64(out + 4, start_ns_);
-      out[12] = grp::kTlvStartAnswerGenerations;
-      out[13] = static_cast<uint8_t>(6 * bound_count_);
+      putTlvHeader(out + 12, grp::kTlvStartAnswerGenerations, static_cast<uint16_t>(6 * bound_count_));
       for (size_t k = 0; k < bound_count_; ++k) {   // the trigger track's is the one its start will make: one more
-        putU16(out + 14 + 6 * k, endpoint_.fnOf(*tracks_[bound_[k]].interface));
+        putU16(out + 15 + 6 * k, endpoint_.fnOf(*tracks_[bound_[k]].interface));
         const uint32_t gen = tracks_[bound_[k]].track->trackGeneration();
-        putU32(out + 16 + 6 * k, static_cast<int>(bound_[k]) == trigger_ ? gen + 1 : gen);
+        putU32(out + 17 + 6 * k, static_cast<int>(bound_[k]) == trigger_ ? gen + 1 : gen);
       }
-      return tail.finish(completed(14 + 6 * bound_count_), out, capacity);
+      return tail.finish(completed(15 + 6 * bound_count_), out, capacity);
     }
     case grp::kOpStop: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);

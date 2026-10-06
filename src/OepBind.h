@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// What each serial port carries outside the frames (oep-spec docs/oep-if-probe-config.ja.md §1.2, core §3.4): the
+// What each serial port carries outside the frames (oep-spec docs/oep-if-probe-config.ja.md §1.2, transports §4): the
 // binds. A bind is a list of streams (a slot's console, a fixture UART's receive side) and a mode:
 //
 //   last-reset  the stream of the target the host reset last (riscv-dm reset, attach's reset TLV); the first at first

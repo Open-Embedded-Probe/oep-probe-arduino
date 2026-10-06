@@ -12,6 +12,7 @@ class TestSignal final : public oep::Interface {
   const char *name() const override { return "io.github.open-embedded-probe.test-signal"; }
   uint8_t revision() const override { return 1; }
   uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 0x01 || op == 0x02; }   // the describe's ops tag (core §1.2)
   oep::Result handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *, size_t) override {
     if (op == 0x01 && n == 6) {
       const uint8_t pin = p[0];
