@@ -31,6 +31,7 @@
 #include "OepPinTable.h"
 #include "Oep.h"
 #include "OepStream.h"
+#include "OepUartRx.h"
 
 namespace oep {
 
@@ -137,14 +138,41 @@ class FixtureUart final : public Interface, public BindSource {
   uint32_t item_baud_ = kDefaultBaud;
   uint8_t item_format_ = 0;
   uint16_t max_read_ = 1000;
-  // Receive errors the UART driver reports (ESP32: onReceiveError, from its event task; RP2: SerialUART's overflow and
-  // break and the PL011's overrun (platformUartTakeOverrun), read in poll() - a framing / parity error without a break is
-  // dropped by the core unreported): counted there, marked lost in poll() at the stream's position (fixture §2 / common
-  // §1.3: detail 1 overflow, 2 framing, 3 parity). Before this a byte lost in the hardware FIFO at 2 Mbaud left no mark
-  // (X035, 2026-10-01).
-  volatile uint16_t rx_overflows_ = 0, rx_framing_ = 0, rx_parity_ = 0;
-  uint16_t marked_overflows_ = 0, marked_framing_ = 0, marked_parity_ = 0;
-  void markReceiveErrors();
+  // Where the receive lost bytes or took a bad one (OepUartRx.h), marked lost at or before the first byte after it
+  // (common §1.3: detail 1 overflow, 2 framing, 3 parity), at the byte itself where the driver tells.
+  // ESP32: the ESP-IDF driver's events, taken in queue order by a task of this UART on its interrupt's core
+  // (ledger_): a FIFO overflow at the byte after the gap, a framing / parity error or a break at or before the chunk
+  // that brought the bad byte; poll() takes no byte the events have not counted yet. Before this the error callback's
+  // count was marked where poll() was when it saw it - X035, 2026-10-07: 5 bytes lost at offset 4 of a 256-byte burst at
+  // 2000000, the mark at 132. RP2 (arduino-pico): its receive queue's overflow at the byte after the gap (the queue
+  // stays full and unread from the drop until poll() looks before it reads); the PL011's overrun (platformUartTakeOverrun)
+  // and a break at the bytes counted at the look before the one that saw it; a framing / parity error without a break
+  // is dropped by the core unreported (no mark).
+  uint32_t taken_ = 0;   // bytes taken from the UART since it began (the ledger's count)
+  static constexpr size_t kPending = 2 * 16;
+  UartLoss pending_[kPending];   // places not reached yet, in order
+  size_t pending_n_ = 0;
+  void addPending(const UartLoss &loss);
+  void placeDue();   // marks for the places the stream has reached
+  uint32_t look();   // the places the platform knows of now (into pending_) -> the bytes received that may be taken
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2)
+  uint32_t counted_ = 0;   // the bytes counted at the last look, before its flags: before any overrun seen later
+#else
+  UartRxLedger ledger_;
+  std::atomic<uint32_t> taken_seen_{0};   // taken_ for the event task's check
+#if defined(ARDUINO_ARCH_ESP32)
+  void *events_ = nullptr;      // the driver's event queue (QueueHandle_t)
+  void *task_ = nullptr;        // the task that takes its events (TaskHandle_t)
+  void *stopped_ = nullptr;     // given by the task when it ends (SemaphoreHandle_t)
+  int uart_num_ = 0;
+  std::atomic<bool> stopping_{false};
+  bool ledger_on_ = false;      // the task was made: poll() takes what its events counted (else all, with no places)
+  static void eventTask(void *arg);
+#endif
+  void startEvents();
+  void stopEvents();   // the task ends after the events queued before; the ledger published
+#endif
+  void stopUart();   // what the UART received taken, then end()
   uint8_t buffer_[kCapacity];
   PositionStream::Mark marks_[kMarks];
   PositionStream stream_;

@@ -175,7 +175,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   static void stageDone(void *context, const uint8_t *buffer);
   size_t store_bytes_ = 0;
   // repeat
-  struct Chunk { const uint8_t *data; size_t length; };
+  // end: produced_ after it. A chunk the queue had no room for (queue_overflow_) is seen at the next one: its start is
+  // past captured_ - the bytes between are dropped with the gap flag where they were (not shifted into the positions
+  // after them).
+  struct Chunk { const uint8_t *data; size_t length; uint32_t end; };
+  uint32_t missed(const Chunk &chunk) const { return chunk.end - static_cast<uint32_t>(chunk.length) - static_cast<uint32_t>(captured_); }
   // one-shot with a trigger (or a pretrigger): the ring and the harvest task, searching
   static constexpr size_t kPretriggerBytes = 64 * 1024;   // history the ring can give back (half of it)
   bool triggered_ = false;           // this one-shot goes through the ring

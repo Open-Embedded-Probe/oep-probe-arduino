@@ -410,7 +410,7 @@ inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, ui
 // overrun (or several merged), cleared by the call. RP2: the PL011's receive status OE (set the moment a byte comes to
 // a full RX FIFO, kept until cleared through UARTECR); arduino-pico's interrupt handler reads the data register alone
 // and keeps the byte that carries the flag, so the bytes dropped before it went unreported. ESP32: the driver reports
-// its FIFO overflow as an event (FixtureUart's onReceiveError): false.
+// its FIFO overflow as an event in the order of the data (FixtureUart's event task): false.
 inline bool platformUartTakeOverrun(OepUart &serial) {
 #if defined(ARDUINO_ARCH_RP2040)
   uart_hw_t *hw = uart_get_hw(&serial == &Serial1 ? uart0 : uart1);

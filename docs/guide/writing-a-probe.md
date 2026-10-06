@@ -197,8 +197,12 @@ Each source file starts with the spec sections it follows.
   2000000; a dual-core ESP32 whose `loop()` runs such a wire puts it on the other core with
   `uart.setInterruptCore(0)` before `applySaved()` (`Firmware/OepProbe/Esp32P4.h`), unless that core turns its own
   interrupts off (the classic's sampler: `Esp32.h` keeps it on `loop()`'s core and checks the FIFO against SWIO).
-  Bytes the UART still drops are marked lost (detail 1 overflow), never left out silently; on the RP2 the PL011's
-  overrun is read in `poll()`.
+  Bytes the UART still drops are marked lost (detail 1 overflow), never left out silently, and the mark is at or before
+  the first byte after the gap - never after it: `FixtureUart` places it where the driver tells. ESP32: it takes the
+  ESP-IDF driver's events itself, in order, in a task on the interrupt's core (do not give the UART an
+  `onReceiveError` / `onReceive` of your own: arduino-esp32's event task would take them), and reads no byte the events
+  have not counted - a FIFO overflow lands exactly at the gap. RP2: arduino-pico's receive queue overflow lands exactly
+  at the gap; the PL011's overrun and a break, read in `poll()` as flags, at the bytes counted at the look before.
 
 ## 8. Pushes and events
 

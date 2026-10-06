@@ -80,7 +80,11 @@ enum : uint32_t {
 };
 class HardwareSerial {
  public:
-  void end() { fake_running = false; }
+  void end() {   // the driver (its ring / queue and events) goes with it
+    fake_running = false;
+    fake_head = fake_tail = 0;
+    fake_ev_head = fake_ev_tail = 0;
+  }
   int available() { return static_cast<int>(fake_tail - fake_head); }
   size_t readBytes(uint8_t *b, size_t n) {
     size_t k = 0;
@@ -89,8 +93,12 @@ class HardwareSerial {
   }
   int availableForWrite() { return 0; }
   size_t write(const uint8_t *, size_t n) { return n; }
-  // OEP_HOST_FAKE_UART (OepPlatform.h): a UART that platformUartBegin starts and whose receive a test feeds - bytes
-  // (fakeReceive) and the hardware's overruns (fake_overrun, taken by platformUartTakeOverrun).
+  // OEP_HOST_FAKE_UART (OepPlatform.h): a UART that platformUartBegin starts and whose receive a test feeds.
+  // ESP-IDF style: the driver's ring and its events in order (fakeReceive / fakeChunk queue UART_DATA, fakeEvent any
+  // other; fake_hold_events: the event task has not taken them yet; fake_event_queue: the queue's length, what is
+  // posted to it full is dropped). arduino-pico style (OEP_HOST_FAKE_UART_RP2): the receive queue of fake_cap bytes
+  // that drops what comes while it is full (overflow()), the PL011's overrun (fake_overrun, platformUartTakeOverrun)
+  // and a break (fake_break, getBreakReceived).
   bool fakeBegin(uint32_t baud, int rx, int tx, uint32_t config, int irq_core) {
     (void)rx; (void)tx; (void)config;
     fake_baud = baud;
@@ -104,10 +112,49 @@ class HardwareSerial {
     fake_overrun = false;
     return o;
   }
-  void fakeReceive(uint8_t byte) { fake_rx[fake_tail++ % sizeof fake_rx] = byte; }
+  bool overflow() {
+    const bool o = fake_queue_overflow;
+    fake_queue_overflow = false;
+    return o;
+  }
+  bool getBreakReceived() {
+    const bool o = fake_break;
+    fake_break = false;
+    return o;
+  }
+  bool fakePush(uint8_t byte) {
+    if (fake_tail - fake_head >= fake_cap) { fake_queue_overflow = true; return false; }
+    fake_rx[fake_tail++ % sizeof fake_rx] = byte;
+    return true;
+  }
+  void fakeEvent(uint8_t type, uint32_t size = 0) {
+    if (fake_ev_tail - fake_ev_head >= fake_event_queue) return;   // the driver's queue full: dropped
+    fake_events[fake_ev_tail % kFakeEvents] = {type, size};
+    ++fake_ev_tail;
+  }
+  void fakeReceive(uint8_t byte) { fakeChunk(&byte, 1); }
+  void fakeChunk(const uint8_t *b, size_t n, uint8_t type = 0 /* UartEvent::kData */) {
+    size_t k = 0;
+    while (k < n && fakePush(b[k])) ++k;
+    if (k) fakeEvent(type, static_cast<uint32_t>(k));
+  }
+  bool fakeNextEvent(uint8_t &type, uint32_t &size, uint32_t &left) {
+    if (fake_hold_events || fake_ev_head == fake_ev_tail) return false;
+    type = fake_events[fake_ev_head % kFakeEvents].type;
+    size = fake_events[fake_ev_head % kFakeEvents].size;
+    ++fake_ev_head;
+    left = static_cast<uint32_t>(fake_ev_tail - fake_ev_head);
+    return true;
+  }
+  bool fakeEventsHeld() const { return fake_hold_events && fake_ev_head != fake_ev_tail; }
+  static constexpr size_t kFakeEvents = 16384;
+  struct FakeEvent { uint8_t type; uint32_t size; } fake_events[kFakeEvents];
+  size_t fake_ev_head = 0, fake_ev_tail = 0;
+  bool fake_hold_events = false;
+  uint32_t fake_event_queue = kFakeEvents;   // the driver's event queue length (arduino-esp32: 20)
   uint8_t fake_rx[16384];
-  size_t fake_head = 0, fake_tail = 0;
-  bool fake_overrun = false, fake_running = false;
+  size_t fake_head = 0, fake_tail = 0, fake_cap = 16384;
+  bool fake_overrun = false, fake_running = false, fake_queue_overflow = false, fake_break = false;
   uint32_t fake_baud = 0;
   int fake_irq_core = -2, fake_begins = 0;
 };

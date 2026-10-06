@@ -1,6 +1,62 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixture UART: a lost mark is at or before the first byte after the loss, never after it, and where the driver
+  tells, exactly at it (bench, b55bc68, the X035 P4 at 2000000: a 256-byte burst came back 251 bytes, the first wrong
+  one at offset 4, one mark lost overflow at 132). The spec gives a lost mark's position no meaning of its own (common
+  §1.3); the reading taken: the bytes from the position on came after the loss (for a receive loss: the gap's next byte
+  or before it; a ring's push-out and the console's TO mark already are). Before, the ESP-IDF driver's error callback
+  only counted, from arduino-esp32's event task, and poll() marked the count after taking all the driver held - after
+  every byte that followed the gap. ESP32 / ESP32-P4: FixtureUart takes the driver's event queue itself, in order, in a
+  task of its own on the UART interrupt's core at arduino-esp32's event-task priority (UartRxLedger, OepUartRx.h):
+  UART_DATA / UART_BUFFER_FULL count the bytes into the driver's ring, a FIFO overflow is placed after them (the driver
+  reads the FIFO before it resets it: exact), a framing / parity error or a break at the start of the chunk read with it
+  in the same interrupt (at or before the bad byte); poll() takes no byte past what the events counted, so a late event
+  never puts its mark behind bytes already in the stream. A buffer full is no longer marked (the driver stashes the
+  chunk and loses nothing; what it cannot take comes as a FIFO overflow). The driver's event queue (20) found full: a
+  loss after the events it held (dropped events cannot be read); bytes found in the ring that no event counted put the
+  count right. More losses than the ledger's 16 before a poll: the rest merged into one at the 17th's place. No
+  onReceiveError: arduino-esp32 makes its own event task only for that. RP2 (arduino-pico): its receive queue's overflow
+  exactly at the gap (the queue stays full and unread from the drop until poll() looks before taking; a drop while poll()
+  took: at the end of what it counted); the PL011's overrun and a break, read as flags, at the bytes counted at the look
+  before, which came before them. A configure takes what the UART received, and its losses, before it starts again.
+  Same mechanism elsewhere: the console streams' lost marks (the ring's push-out at the write position, the dmseq TO
+  after the frame's payload) already mean the same - unchanged; oep.fixture.logic (ESP32-P4 PARLIO): a DMA chunk the
+  harvest queue (128) had no room for was counted nowhere, and the chunks after it took its positions with no gap flag
+  (and wrong times) - each chunk now carries produced_ after it, the harvest sees the missing bytes, a repeat / streaming
+  segment or frame starts after them with the gap flag (the segment before cut short, as an overrun), a triggered
+  segment copies them from the ring; oep.fixture.analog's lost conversions only flag the segment, which cannot come
+  after them (unchanged). Host tests: test_fixture_uart in two builds - ESP-IDF style (the bench's case, 400 rounds with
+  late events, errors, a full event queue, 24 losses before a poll, a configure with a loss waiting; 38 checks, 9 fail
+  on 462e180) and arduino-pico style (OEP_HOST_FAKE_UART_RP2; 15 checks, 3 fail on 462e180); test_capture
+  testLostChunk (2 fail on 462e180); guide writing-a-probe (EN / JA); not run on hardware yet; CHANGELOG (EN / JA)
+- (JA) fixture の UART: lost のマークを、抜けた所の直後のバイトの位置かそれより前に、後ろには付けないようにしました。driver が
+  教える所ではちょうどその位置です（bench、b55bc68、X035 の P4 で 2000000: 256 byte のバーストが 251 byte で返り、最初に違う
+  byte が offset 4、lost overflow のマークが一つ 132）。仕様は lost のマークの位置に固有の意味を定めていない（common §1.3）。
+  取った読み: その位置から後のバイトは失われたものより後に来た（受信で抜けたなら、抜けた所の次のバイトかその前。リングの
+  押し出しとコンソールの TO のマークはもうそうなっている）。これまでは ESP-IDF の driver の誤りの callback が arduino-esp32 の
+  event のタスクから数えるだけで、poll() は driver が持つ分をすべて取ってからその数をマークにしていた - 抜けた所の後のバイトを
+  すべて越えて。ESP32 / ESP32-P4: FixtureUart が driver の event の列を自分で順に、UART の割り込みの core にある自分のタスクで
+  arduino-esp32 の event のタスクと同じ優先度で取る（UartRxLedger、OepUartRx.h）。UART_DATA / UART_BUFFER_FULL は driver の
+  リングに入ったバイトを数え、FIFO のあふれはその後ろに置く（driver は FIFO を空にする前に読む: ちょうど）。framing / parity
+  の誤りと break は、同じ割り込みで一緒に読んだ塊の頭に置く（誤ったバイトの位置かその前）。poll() は event が数えた所より先の
+  バイトを取らないので、遅れた event のマークがもうストリームにあるバイトの後ろに付くことはない。buffer full はマークにしない
+  （driver は塊を退避して何も失わない。入りきらない分は FIFO のあふれとして来る）。driver の event の列（20）が満ちていたら、
+  そこにあった event の後ろに lost を置く（落ちた event は読めない）。どの event も数えていないバイトがリングにあれば数を直す。
+  poll までに ledger の 16 を超える lost が来たら、残りは 17 番目の所に一つにまとめる。onReceiveError は使わない
+  （arduino-esp32 はそのためだけに自分の event のタスクを作る）。RP2（arduino-pico）: 受信の列のあふれは抜けた所ちょうど
+  （列は落とした時から poll() が取る前に見るまで満ちたまま読まれない。poll() が取っている間に落ちたら、見たときに数えた分の
+  終わり）。PL011 の overrun と break は印としてしか読めないので、一つ前に見たときに数えたバイト（それより前に来た）の所。
+  configure は UART が受けた分とその lost を取ってから UART を始め直す。同じ仕組みのほかの所: コンソールのストリームの lost
+  （リングの押し出しは書く位置、dmseq の TO はフレームの中身の後ろ）はもう同じ意味 - 変えない。oep.fixture.logic（ESP32-P4 の
+  PARLIO）: 取り込みの列（128）に入らなかった DMA の塊はどこにも数えられず、後の塊がその位置を gap の印なしに（時刻も違えて）
+  取っていた - 塊がその後の produced_ を持つようにし、取り込み側が抜けたバイトに気づく。リピートとストリーミングは区画・
+  フレームをその後ろから gap の印で始め（前の区画は overrun と同じく短く切る）、トリガー付きの区画はリングからその分を写す。
+  oep.fixture.analog の失われた変換は区画に印を立てるだけで、それより後に来ることはない（変えない）。host のテスト:
+  test_fixture_uart を 2 つのビルドで - ESP-IDF の形（bench の場合、遅れた event・誤り・満ちた event の列を交えた 400 回、
+  poll までに 24 の lost、lost が待つ間の configure。38 checks、462e180 では 9 つ落ちる）と arduino-pico の形
+  （OEP_HOST_FAKE_UART_RP2。15 checks、462e180 では 3 つ落ちる）。test_capture の testLostChunk（462e180 では 2 つ落ちる）。
+  guide の writing-a-probe（EN / JA）。実機ではまだ動かしていない。CHANGELOG (EN / JA)
 - (EN) Fixture UART: a DUT's continuous burst at 2000000 8N1 is received without the hardware dropping bytes on the
   ESP32-P4, and an overrun the RP2's UART had is marked lost (bench, the X035 and WeAct P4 jigs: uart_sweep at 2000000,
   DUT to probe only, about 125 bytes of a burst wrong, intermittent - X035 passed on 47e4b05 / c75884b and failed on

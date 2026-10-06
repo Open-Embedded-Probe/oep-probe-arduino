@@ -3,6 +3,15 @@
 
 #include "OepFixture.h"
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include <driver/uart.h>
+#include <freertos/queue.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+
+#include "esp32-hal-uart.h"
+#endif
+
 namespace oep {
 namespace {
 
@@ -228,8 +237,7 @@ bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
 }
 
 void FixtureUart::planRelease() {
-  poll();
-  if (running_) serial_.end();
+  stopUart();
   // Released pins go to their idle state (oep-core §8, default Hi-Z). A jig whose DUT RX must not float (2026-09-22,
   // X035 USART4 stopped answering after 0.5 s of a floating PB1) sets that pin's idle to pull-up.
   pins_.release(owner_);
@@ -270,34 +278,182 @@ void FixtureUart::clearItem() {
   if (!session_configured_) applySettings();
 }
 
-void FixtureUart::markReceiveErrors() {
-  struct { volatile uint16_t &seen; uint16_t &marked; uint8_t detail; } kinds[] = {
-      {rx_overflows_, marked_overflows_, reg::common::kMarkDetailLostOverflow},
-      {rx_framing_, marked_framing_, reg::common::kMarkDetailLostFraming},
-      {rx_parity_, marked_parity_, reg::common::kMarkDetailLostParity}};
-  for (auto &k : kinds) {
-    const uint16_t now = k.seen;
-    if (now != k.marked) { stream_.mark(reg::common::kMarkKindLost, k.detail); k.marked = now; }
+void FixtureUart::addPending(const UartLoss &loss) {
+  if (pending_n_ == kPending) {   // full: merged into the last, moved to the earlier place (at or before both)
+    UartLoss &last = pending_[kPending - 1];
+    if (static_cast<int32_t>(loss.at - last.at) < 0) last.at = loss.at;
+    return;
   }
+  size_t i = pending_n_++;
+  for (; i > 0 && static_cast<int32_t>(loss.at - pending_[i - 1].at) < 0; --i) pending_[i] = pending_[i - 1];
+  pending_[i] = loss;
 }
+
+void FixtureUart::placeDue() {
+  size_t done = 0;
+  while (done < pending_n_ && static_cast<int32_t>(pending_[done].at - taken_) <= 0)
+    stream_.mark(reg::common::kMarkKindLost, pending_[done++].detail);
+  if (!done) return;
+  for (size_t i = done; i < pending_n_; ++i) pending_[i - done] = pending_[i];
+  pending_n_ -= done;
+}
+
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2)
+// arduino-pico: the interrupt moves the PL011's FIFO into the receive queue (and available() / overflow() /
+// getBreakReceived() do too). The queue drops what comes while it is full and says so (overflow()); it is emptied only
+// here, so a drop seen before this poll takes anything left it full and unread: the gap is right after what it holds. A
+// drop seen after taking (the end of poll) came while this poll took the bytes counted at its look, with the queue full:
+// at or after the end of them. The PL011's overrun and a break are seen only as flags: they came after the bytes counted
+// at the last look that saw neither (counted_, read before the flags).
+uint32_t FixtureUart::look() {
+  if (serial_.overflow()) addPending({taken_ + static_cast<uint32_t>(serial_.available()), reg::common::kMarkDetailLostOverflow});
+  const uint32_t counted = taken_ + static_cast<uint32_t>(serial_.available());
+  if (platformUartTakeOverrun(serial_)) addPending({counted_, reg::common::kMarkDetailLostOverflow});
+  // a break is a framing error (as the ESP32's UART_BREAK_ERROR); arduino-pico drops the break byte itself
+  if (serial_.getBreakReceived()) addPending({counted_, reg::common::kMarkDetailLostFraming});
+  counted_ = counted;
+  return counted;
+}
+#else
+// ESP-IDF: the event task (or the fake's events) keeps the ledger; poll takes the losses handed over and no byte past
+// what the events counted.
+uint32_t FixtureUart::look() {
+#if defined(OEP_HOST_FAKE_UART)
+  uint8_t type;
+  uint32_t size, left;
+  while (serial_.fakeNextEvent(type, size, left)) {
+    if (left + 1 >= serial_.fake_event_queue) ledger_.queueFull(left + 1);
+    ledger_.event(static_cast<UartEvent>(type), size);
+  }
+  if (!serial_.fakeEventsHeld()) {
+    ledger_.check(taken_ + static_cast<uint32_t>(serial_.available()));
+    ledger_.publish();
+  }
+#endif
+#if defined(ARDUINO_ARCH_ESP32)
+  if (!ledger_on_) return taken_ + static_cast<uint32_t>(serial_.available());   // no event task could be made: no places
+#endif
+  const uint32_t limit = ledger_.limit();   // first: every loss before it is in the ledger by then
+  UartLoss loss;
+  while (pending_n_ < kPending && ledger_.next(loss)) {
+    addPending(loss);
+    ledger_.pop();
+  }
+  return limit;
+}
+#endif
 
 void FixtureUart::poll() {
   if (!running_) return;
+  const uint32_t limit = look();
   uint8_t chunk[256];   // in chunks: a byte at a time through the UART driver capped a 2 Mbaud bridge near 88 kB/s (P7)
-  for (int n; (n = serial_.available()) > 0;) {
-    const size_t k = serial_.readBytes(chunk, static_cast<size_t>(n) < sizeof chunk ? static_cast<size_t>(n) : sizeof chunk);
+  for (;;) {
+    placeDue();
+    uint32_t want = limit - taken_;
+    if (static_cast<int32_t>(want) <= 0) break;
+    if (pending_n_ && pending_[0].at - taken_ < want) want = pending_[0].at - taken_;   // up to the next place
+    if (want > sizeof chunk) want = sizeof chunk;
+    const int n = serial_.available();
+    if (n <= 0) break;
+    const size_t k = serial_.readBytes(chunk, static_cast<size_t>(n) < want ? static_cast<size_t>(n) : want);
     if (!k) break;
     for (size_t i = 0; i < k; ++i) stream_.put(chunk[i]);
-  }
-#if defined(ARDUINO_ARCH_RP2040)
-  // arduino-pico's SerialUART reports a full receive queue and a break, read here after the bytes kept before them;
-  // it drops a byte with a framing or parity error without telling (SerialUART::_handleIRQ, 6.1.1), so those leave no mark
-  if (serial_.overflow()) ++rx_overflows_;
-  if (serial_.getBreakReceived()) ++rx_framing_;   // a break is a framing error (as the ESP32's UART_BREAK_ERROR)
+    taken_ += static_cast<uint32_t>(k);
+#if !(defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2))
+    taken_seen_.store(taken_, std::memory_order_release);
 #endif
-  if (platformUartTakeOverrun(serial_)) rx_overflows_ = static_cast<uint16_t>(rx_overflows_ + 1);   // the hardware FIFO's, where the core does not report it
-  markReceiveErrors();
+  }
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2)
+  // a drop while this poll took (the queue refilled to full): after every byte counted at the look
+  if (serial_.overflow()) {
+    addPending({limit, reg::common::kMarkDetailLostOverflow});
+    placeDue();
+  }
+#endif
 }
+
+#if !(defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2))
+#if defined(ARDUINO_ARCH_ESP32)
+namespace {
+// arduino-esp32 keeps the driver's handle and number to itself (protected); its own event task, made only for
+// onReceive / onReceiveError (not used here), would take the events this UART needs in order.
+struct SerialPeek : HardwareSerial {
+  static uart_t *driver(HardwareSerial &s) { return s.*(&SerialPeek::_uart); }
+  static uint8_t number(HardwareSerial &s) { return s.*(&SerialPeek::_uart_nr); }
+};
+
+UartEvent eventType(uart_event_type_t type) {
+  switch (type) {
+    case UART_DATA: return UartEvent::kData;
+    case UART_BUFFER_FULL: return UartEvent::kBufferFull;
+    case UART_FIFO_OVF: return UartEvent::kFifoOverflow;
+    case UART_BREAK: return UartEvent::kBreak;
+    case UART_FRAME_ERR: return UartEvent::kFrameError;
+    case UART_PARITY_ERR: return UartEvent::kParityError;
+    default: return UartEvent::kOther;
+  }
+}
+}  // namespace
+
+// On the driver's interrupt core, at arduino-esp32's event-task priority: the interrupt never runs halfway through
+// this task's look, so "no event waiting" means every byte in the ring was counted unless an event was dropped.
+void FixtureUart::eventTask(void *arg) {
+  FixtureUart *self = static_cast<FixtureUart *>(arg);
+  QueueHandle_t events = static_cast<QueueHandle_t>(self->events_);
+  const UBaseType_t length = uxQueueMessagesWaiting(events) + uxQueueSpacesAvailable(events);   // arduino-esp32: 20
+  uart_event_t e;
+  uint32_t unpublished = 0;
+  while (!self->stopping_.load(std::memory_order_acquire)) {
+    if (xQueueReceive(events, &e, pdMS_TO_TICKS(10)) == pdTRUE) {
+      const UBaseType_t left = uxQueueMessagesWaiting(events);
+      if (left + 1 >= length) self->ledger_.queueFull(left + 1);   // full (or one short, the interrupt may refill it)
+      self->ledger_.event(eventType(e.type), static_cast<uint32_t>(e.size));
+      // the rest of the interrupt's batch first (an error comes after the chunk that brought its byte); a queue that
+      // never empties is published every 16 events all the same
+      if (left && ++unpublished < 16) continue;
+    }
+    unpublished = 0;
+    const uint32_t taken = self->taken_seen_.load(std::memory_order_acquire);   // before the driver's count
+    size_t held = 0;
+    if (uart_get_buffered_data_len(static_cast<uart_port_t>(self->uart_num_), &held) == ESP_OK && !uxQueueMessagesWaiting(events))
+      self->ledger_.check(taken + static_cast<uint32_t>(held));
+    self->ledger_.publish();
+  }
+  while (xQueueReceive(events, &e, 0) == pdTRUE) self->ledger_.event(eventType(e.type), static_cast<uint32_t>(e.size));
+  self->ledger_.publish();
+  xSemaphoreGive(static_cast<SemaphoreHandle_t>(self->stopped_));
+  vTaskDelete(nullptr);
+}
+
+void FixtureUart::startEvents() {
+  ledger_.reset();
+  ledger_on_ = false;
+  QueueHandle_t events = nullptr;
+  uartGetEventQueue(SerialPeek::driver(serial_), &events);
+  uart_num_ = SerialPeek::number(serial_);
+  events_ = events;
+  if (!events) return;
+  if (!stopped_) stopped_ = xSemaphoreCreateBinary();
+  stopping_.store(false, std::memory_order_release);
+  const int core = irq_core_ >= 0 ? irq_core_ : static_cast<int>(xPortGetCoreID());   // where begin() put the interrupt
+  TaskHandle_t task = nullptr;
+  if (!stopped_ || xTaskCreatePinnedToCore(eventTask, "oep_uart_events", 3072, this, configMAX_PRIORITIES - 1, &task, core) != pdPASS)
+    task = nullptr;
+  task_ = task;
+  ledger_on_ = task != nullptr;
+}
+
+void FixtureUart::stopEvents() {
+  if (!task_) return;
+  stopping_.store(true, std::memory_order_release);
+  xSemaphoreTake(static_cast<SemaphoreHandle_t>(stopped_), portMAX_DELAY);   // within the task's 10 ms wait
+  task_ = nullptr;
+}
+#else
+void FixtureUart::startEvents() { ledger_.reset(); }
+void FixtureUart::stopEvents() {}
+#endif
+#endif
 
 size_t FixtureUart::bindInput(const uint8_t *data, size_t length) {
   // only what the UART takes without waiting, so the RX side keeps being emptied (a blocking write let the UART's
@@ -308,12 +464,28 @@ size_t FixtureUart::bindInput(const uint8_t *data, size_t length) {
   return serial_.write(data, static_cast<size_t>(room) < length ? static_cast<size_t>(room) : length);
 }
 
+// The UART stopped, what it received taken first (the event task ends after the events queued before).
+void FixtureUart::stopUart() {
+  if (!running_) return;
+#if !(defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2))
+  stopEvents();
+#endif
+  poll();
+  // places not reached (bytes the driver had not counted, or not handed over) go at the end: every byte after them comes
+  // from the next begin
+  for (size_t i = 0; i < pending_n_; ++i) stream_.mark(reg::common::kMarkKindLost, pending_[i].detail);
+  pending_n_ = 0;
+#if defined(ARDUINO_ARCH_ESP32)
+  ledger_on_ = false;
+#endif
+  serial_.end();
+  running_ = false;
+}
+
 // The UART (re)started at baud / format. The stream and its positions stay (fixture §2: configure again keeps what was
 // collected). false: the core refused the pins, or the rate came out more than 5 % off.
 bool FixtureUart::begin(uint32_t baud, uint8_t format) {
-  poll();
-  if (running_) serial_.end();
-  running_ = false;
+  stopUart();
   // A peer may echo while the probe is still writing; hold a full window of it (and loop() away, kDriverRx).
   platformUartBuffers(serial_, kDriverRx, 1024);
   idleHigh();
@@ -321,18 +493,22 @@ bool FixtureUart::begin(uint32_t baud, uint8_t format) {
   const uint8_t parity = (format & ua::kFormatFieldParityMask) >> 2;
   const uint8_t stop_bits = (format & ua::kFormatFieldStopBits2) ? 2 : 1;
   if (!platformUartBegin(serial_, baud, rx_, tx_, platformUartConfig(data_bits, parity, stop_bits), irq_core_)) return false;
-#if defined(ARDUINO_ARCH_ESP32)
-  serial_.onReceiveError([this](hardwareSerial_error_t e) {
-    if (e == UART_FIFO_OVF_ERROR || e == UART_BUFFER_FULL_ERROR) ++rx_overflows_;
-    else if (e == UART_FRAME_ERROR || e == UART_BREAK_ERROR) ++rx_framing_;
-    else if (e == UART_PARITY_ERROR) ++rx_parity_;
-  });
-#endif
   const uint32_t actual = platformUartBaud(serial_, baud);
   const uint64_t diff = actual > baud ? actual - baud : baud - actual;
   if (diff * 100 > static_cast<uint64_t>(baud) * 5) { serial_.end(); idleHigh(); return false; }
   baud_ = actual;
   format_ = format;
+  taken_ = 0;   // the driver's count starts again (what the last one held but had not counted went with it)
+  pending_n_ = 0;
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2)
+  counted_ = 0;
+  serial_.overflow();   // flags of the run before: nothing of this one is lost yet
+  platformUartTakeOverrun(serial_);
+  serial_.getBreakReceived();
+#else
+  taken_seen_.store(0, std::memory_order_release);
+  startEvents();
+#endif
   running_ = true;
   return true;
 }

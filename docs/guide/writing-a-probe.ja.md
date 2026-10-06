@@ -186,8 +186,12 @@ class Blink final : public oep::Interface {
   `kUartRxFifoFull`（32）byte で起き、2000000 で 480 us の余りがあります。`loop()` がそうした線を動かすデュアルコアの ESP32 は、
   `applySaved()` の前に `uart.setInterruptCore(0)` で割り込みをもう一方の core に置きます（`Firmware/OepProbe/Esp32P4.h`）。
   その core が自分で割り込みを止めるなら置きません（classic の sampler: `Esp32.h` は `loop()` の core に置いたまま、FIFO を SWIO と
-  比べて確かめます）。それでも UART が落としたバイトは lost（detail 1 あふれ）のマークになり、黙って抜けることはありません。RP2 は
-  PL011 の overrun を `poll()` で読みます。
+  比べて確かめます）。それでも UART が落としたバイトは lost（detail 1 あふれ）のマークになり、黙って抜けることはありません。マークは
+  抜けた所の直後のバイトの位置か、それより前に付き、後ろには付きません: `FixtureUart` は driver が教える所に置きます。ESP32 は
+  ESP-IDF の driver の出来事を、割り込みの core のタスクで順に自分で取り、出来事が数えていないバイトは読みません（UART に自分の
+  `onReceiveError` / `onReceive` を付けないでください。arduino-esp32 の出来事のタスクが取ってしまいます）。FIFO のあふれは抜けた所
+  ちょうどに付きます。RP2 は arduino-pico の受信の列のあふれが抜けた所ちょうど、PL011 の overrun と break（`poll()` で印として
+  読みます）は一つ前に見たときに数えたバイトの所です。
 
 ## 8. push と出来事
 

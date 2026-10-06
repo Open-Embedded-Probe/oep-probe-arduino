@@ -319,11 +319,11 @@ struct Dma {
   size_t at = 0;
   Dma() { g_fake_tasks_deferred = true; g_fake_task_fn = nullptr; }
   ~Dma() { g_fake_tasks_deferred = false; }
-  void deliver(size_t n, uint8_t value) {
+  void deliver(size_t n, uint8_t value, size_t chunk = 4096) {
     while (n) {
       size_t k = g_fake_parlio_size - at;
       if (k > n) k = n;
-      if (k > 4096) k = 4096;
+      if (k > chunk) k = chunk;
       memset(g_fake_parlio_buffer + at, value, k);
       parlio_rx_event_data_t e = {g_fake_parlio_buffer + at, k};
       g_fake_parlio_callbacks.on_partial_receive(nullptr, &e, g_fake_parlio_context);
@@ -638,6 +638,62 @@ static void testRingKept() {
   CHECK(ok(raw(small.cap, LogicCapture::kOpStop, {}, out)));
 }
 
+// A chunk the harvest queue (128) had no room for: its bytes are a gap where they were - a repeat's next segment starts
+// after them with the gap flag (not at their position with the bytes after shifted into it); a triggered segment
+// copies them from the ring, the bytes after them in place.
+static void testLostChunk() {
+  {
+    board(512 * 1024, size_t(32) << 20);
+    Rig rig(2);
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.mode = 2;
+    c.samples = 16384;   // 4096 bytes at w = 2
+    c.segments = 4;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint32_t generation = getU32(out.data() + 4);
+    dma.deliver(4096, 0x11, 32);   // 128 chunks: the queue full
+    dma.deliver(64, 0x22, 32);     // 2 lost
+    dma.run();
+    for (int k = 0; k < 4; ++k) { dma.deliver(1024, 0x33, 32); dma.run(); }
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 2);
+    CHECK(getU64(out.data() + 2 + 4) == 0 && !(out[2 + 32] & cap::kSegmentFlagGap));
+    CHECK(getU64(out.data() + 2 + 37 + 4) == 4160 && (out[2 + 37 + 32] & cap::kSegmentFlagGap));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4160, 10), out)) && getU64(out.data()) == 4160 &&
+          out[13] == 0x33);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && (out[13] & cap::kStatusFlagDropped));
+  }
+  {
+    board(512 * 1024, size_t(32) << 20);
+    Rig rig(2);
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.samples = 40000;   // 10000 bytes
+    c.trigger = true;    // falling edge on role 0
+    c.pretrigger = 100;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint32_t generation = getU32(out.data() + 4);
+    dma.deliver(1000, 0xFF);   // samples 0..3999 high
+    dma.deliver(2000, 0x00);   // the edge at sample 4000; the segment from byte 975
+    dma.run();
+    dma.deliver(4096, 0x10, 32);   // 128 chunks: the queue full
+    dma.deliver(32, 0x20, 32);     // lost
+    dma.run();
+    dma.deliver(4000, 0x30, 32);
+    dma.run();
+    rig.cap.poll();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone);
+    // segment byte i = stream byte 975 + i: 0x10 up to 3000 + 4096, the lost chunk's 0x20, then 0x30
+    const uint64_t at = 3000 + 4096 - 975;
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at - 1, 40), out)) && getU32(out.data() + 9) == 40);
+    CHECK(out[13] == 0x10 && out[13 + 1] == 0x20 && out[13 + 32] == 0x20 && out[13 + 33] == 0x30);
+  }
+}
+
 int main() {
   testRingKept();
   testImmediateStop();
@@ -645,6 +701,7 @@ int main() {
   testImmediateAfterFollowing();
   testPositions();
   testTriggeredStop();
+  testLostChunk();
   testPlanReleaseForgets();
   testBound();
   testRateLimit();

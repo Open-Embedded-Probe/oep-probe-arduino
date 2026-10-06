@@ -59,8 +59,8 @@ void rateFraction(uint64_t top, uint64_t bottom, uint32_t &num, uint32_t &den) {
 
 bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *e, void *context) {
   auto *self = static_cast<LogicCapture *>(context);
-  const Chunk chunk = {static_cast<const uint8_t *>(e->data), e->recv_bytes};
   self->produced_ += e->recv_bytes;
+  const Chunk chunk = {static_cast<const uint8_t *>(e->data), e->recv_bytes, self->produced_};
   BaseType_t woken = pdFALSE;
   if (xQueueSendFromISR(self->queue_, &chunk, &woken) != pdTRUE) ++self->queue_overflow_;
   return woken == pdTRUE;
@@ -69,6 +69,12 @@ bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parli
 // Copy one finished DMA chunk into the segment being filled; without a free segment the bytes are dropped and the
 // next segment starts with a gap mark. Runs on the harvest task only.
 void LogicCapture::harvest(const Chunk &chunk) {
+  if (const uint32_t skip = missed(chunk)) {   // chunks lost before this one: a gap there, as an overrun
+    dropped_ += skip;
+    captured_ += skip;
+    if (fill_) finishSegment(fill_, infos_[completed_ % kInfos].flags | 2);   // a segment is contiguous inside
+    gap_pending_ = true;
+  }
   size_t at = 0;
   while (at < chunk.length) {
     if (completed_ - released_ >= segment_count_) {   // every segment is waiting for the host
@@ -112,6 +118,12 @@ void LogicCapture::harvest(const Chunk &chunk) {
 // Streaming, zero-copy transport: copy one finished DMA chunk into the current stage; with no stage free the bytes are
 // dropped and the stream position skips them. Harvest task only.
 void LogicCapture::harvestDirect(const Chunk &chunk) {
+  if (const uint32_t skip = missed(chunk)) {   // chunks lost before this one: the next frame's position jumps them
+    if (stage_fill_) sendStage();
+    carry_ = false;   // the held byte goes with the drop (the position jump covers it)
+    dropped_ += skip;
+    captured_ += skip;
+  }
   size_t at = 0;
   while (at < chunk.length) {
     if (stage_cur_ < 0 && !takeStage()) {
@@ -271,6 +283,10 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
 // A one-shot with a trigger: look for it in each chunk; once found, the segment starts pretrigger samples before it
 // (from what the ring still has) and takes the chunks after it until full. Harvest task only.
 void LogicCapture::harvestTriggered(const Chunk &chunk) {
+  if (const uint32_t skip = missed(chunk)) {           // chunks lost before this one: not searched; still in the ring
+    captured_ += skip;
+    have_level_ = false;
+  }
   const uint64_t base = captured_;                     // the stream byte of chunk.data[0]
   const size_t ring_at = static_cast<size_t>(chunk.data - ring_);
   captured_ += chunk.length;
@@ -286,7 +302,8 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
     const int64_t off = static_cast<int64_t>(ring_at) + static_cast<int64_t>(g - base);
     return static_cast<size_t>(((off % static_cast<int64_t>(kRingBytes)) + kRingBytes) % kRingBytes);
   };
-  uint64_t from = base;                                // the stream bytes this chunk adds to the segment
+  // the stream bytes this chunk adds to the segment: from where it is filled to (a lost chunk's bytes from the ring)
+  uint64_t from = seg_first_sample_ * width_ / 8 + filled_;
   if (trig_phase_ == 0) {
     const uint64_t first = base * 8 / width_;
     uint64_t t = first;
