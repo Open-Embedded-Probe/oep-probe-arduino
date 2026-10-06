@@ -28,6 +28,8 @@ class Ch32Dm {
   // resumed the hart through raw DMI writes). false from checkHalted: the link did not answer.
   bool halted() const { return halted_; }
   bool checkHalted();
+  // DMSTATUS, read by someone else (the console's poll), says the hart runs: this view follows.
+  void noteRunning() { halted_ = false; }
   uint8_t lastCmderr() const { return cmderr_; }
   // DMCONTROL's hartsel (and hasel) back to 0 when the host's dmi left another there (oep-if-debug §4): before every
   // high-level op, which then return with it 0.

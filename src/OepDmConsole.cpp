@@ -23,9 +23,11 @@ bool DmConsole::readData(uint8_t address, uint32_t &value) {
 
 void DmConsole::poll() {
   // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless the target is attached and
-  // running its own code. What the hart does is asked of DMSTATUS every kStatusMs (oep-if-console §2: the host may have
-  // halted or resumed it through raw DMI, which halted() does not see); a reset it did by itself (havereset) is
-  // acknowledged there too (oep-if-debug §4.6: the stream marks a restart, dmseq starts over).
+  // running its own code. Whether the hart runs is judged from DMSTATUS, read every kStatusMs (oep-if-console §3: the
+  // host may have halted or resumed it through raw DMI, which Ch32Dm's own view does not see - a raw resume after the
+  // probe's halt left the console silent until the next high-level op); in between, a halt by the probe itself counts
+  // at once. A reset the target did by itself (havereset) is acknowledged there too (oep-if-debug §4.6: the stream marks
+  // a restart, dmseq starts over).
   if (!enabled_ || lost_) return;
   phy_.beginRequest();   // one console read: its own allowance for wire retries (oep-if-debug §2)
   if (!phy_.attached()) {
@@ -41,7 +43,6 @@ void DmConsole::poll() {
       return;
     }
   }
-  if (dm_.halted()) return;
   if (millis() - last_status_ms_ >= kStatusMs) {
     last_status_ms_ = millis();
     uint32_t status = 0;
@@ -53,6 +54,11 @@ void DmConsole::poll() {
       return;
     }
     hart_halted_ = (status & (1u << 9)) != 0;
+    // a running hart is running for the ops too (a halted one is brought in line by their checkHalted, which also
+    // re-syncs the link after the change of state)
+    if (!hart_halted_) dm_.noteRunning();
+  } else if (dm_.halted()) {
+    hart_halted_ = true;   // the probe halted it since the last look
   }
   if (hart_halted_) return;
   if (mechanism_ == 1) pollDmdata();

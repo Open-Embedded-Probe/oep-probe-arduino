@@ -21,8 +21,9 @@ class DmConsole {
   // Where the bytes from the target go (the v1 stream's buffer). Set before start().
   void setSink(Sink sink, void *ctx) { sink_ = sink; sink_ctx_ = ctx; }
   // Call from loop(). Collects at most one frame, and only while the target is attached and running: those two
-  // registers are where abstract commands put their operands (oep-if-console §2: the reading stops while the hart is
-  // halted, which DMSTATUS says - a host that halted it through raw DMI counts too; every kStatusMs it is asked).
+  // registers are where abstract commands put their operands (oep-if-console §3: the reading stops while the hart is
+  // halted, which DMSTATUS says - a host that halted or resumed it through raw DMI counts too; every kStatusMs it is
+  // asked, and a running hart there clears Ch32Dm's halted view).
   void poll();
   // Start a fresh session in `mechanism` (whatever an earlier one left in the mailbox is thrown away), stop, queue
   // bytes for the target.
@@ -45,7 +46,7 @@ class DmConsole {
   // The wire was found lost while reading (reads got nothing back for wire_lost_ms of real time with no answer between,
   // oep-if-debug §2: the PHY's wire-loss clock): the stream marks link-lost and the connection closes. Cleared by start().
   bool lineLost() const { return lost_; }
-  static constexpr uint32_t kStatusMs = 20;
+  static constexpr uint32_t kStatusMs = v1::reg::kLimitConsoleDmstatusPollMs;   // 20 ms (oep-if-console §3)
   // dmseq diagnostics: polls that read a word with bit 7 set, of those the invalid ones, answers written
   struct SeqStats { uint32_t polls, frames, invalid, answers; };
   SeqStats seqStats() const { return stats_; }

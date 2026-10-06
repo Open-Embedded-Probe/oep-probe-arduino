@@ -5,6 +5,7 @@
 // DATA0 / DATA1 and DMSTATUS's halted / havereset bits; the test plays the target's side of the mailbox.
 // - core §4.3's order: a stream op's form and values are checked before its stream number (no_connection last); read
 //   from 3 with arg over 0xFF is malformed (common §1.2), the fixture UART's read too.
+// - write takes only the send slot (console §2); the console reads while DMSTATUS says the hart runs (console §3).
 #include <stdio.h>
 
 #include <vector>
@@ -159,6 +160,33 @@ int main() {
     CHECK(console.bindInput(typed, sizeof typed) == sizeof typed);
     r = call(console, TargetConsoleStream::kOpClose, le16(dmdata), out);
     CHECK(ok(r));
+  }
+
+  // ---- reading goes on while the hart runs, judged from DMSTATUS at least every 20 ms (oep-if-console §3): a hart the
+  // probe halted and the host resumed through raw DMI is read again (it waited for the next high-level op) ----
+  {
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+    CHECK(ok(r) && console.isOpen());
+    CHECK(dm.halt() && dm.halted() && phy.halted);
+    g_millis += 25;
+    console.poll();
+    int data0_reads = phy.data0_reads;
+    g_millis += 5;
+    console.poll();                                        // halted: DATA0 left alone
+    CHECK(phy.data0_reads == data0_reads);
+    CHECK(dm.writeDmi(0x10, 0x40000001) && !phy.halted);   // the host's raw resume
+    phy.data0 = 0x00003298u;                               // the target posts an empty SYN frame (S 0, A 1)
+    for (int i = 0; i < 3; ++i) { g_millis += 10; console.poll(); }
+    CHECK(!dm.halted() && phy.data0_reads > data0_reads);
+    CHECK(!phy.data0_writes.empty() && !(phy.data0_writes.back() & 0x80u));   // answered
+    // the host's raw halt: DATA0 is no longer read once DMSTATUS has been looked at
+    CHECK(dm.writeDmi(0x10, 0x80000001) && phy.halted);
+    g_millis += 20;
+    console.poll();
+    data0_reads = phy.data0_reads;
+    for (int i = 0; i < 3; ++i) { g_millis += 5; console.poll(); }
+    CHECK(phy.data0_reads == data0_reads);
+    CHECK(dm.writeDmi(0x10, 0x40000001) && !phy.halted);
   }
 
   // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6
