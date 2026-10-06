@@ -394,9 +394,10 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
         state_ = cap::kStateConfigured;
         if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
       } else if (state_ == cap::kStateCapturing) {
-        waitIdle();                // the window ends by itself; its data stay readable
-        state_ = cap::kStateDone;
-        if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
+        // the window cannot be cut short (interrupts are off on core 0) and ends by itself: the capture completes
+        // (state 4, its segment and stopped 0 - capture §3.2's "complete -> 4"), not a short segment in state 1
+        waitIdle();
+        poll();
       }
       return tail.finish(completed(), out, capacity);
     }

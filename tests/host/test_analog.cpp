@@ -231,7 +231,69 @@ static void testPlanReleaseForgets() {
   CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 0);
 }
 
+// stop (capture §3.2): capturing (state 3) -> 1 with the segment cut short (flags bit1) holding what came in, readable;
+// waiting for the trigger (state 2) -> 1 with nothing; a capture already complete stays complete (state 4).
+static void testStop() {
+  {   // immediate: 30 of 100 frames came
+    Rig rig;
+    CHECK(rig.plan({26}) == 0);
+    CHECK(ok(rig.op(ana::kOpConfigure, configureRequest(10000, 100))));
+    CHECK(ok(rig.op(ana::kOpStart)));
+    const uint32_t generation = getU32(rig.out.data() + 4);
+    convert(30, 0x321);
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateCapturing);
+    CHECK(ok(rig.op(ana::kOpStop)));
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateConfigured && getU32(rig.out.data() + 1) == 1 &&
+          getU64(rig.out.data() + 5) == 60);
+    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 3 + 37 && rig.out[1] == 1);
+    CHECK(getU32(rig.out.data() + 3 + 12) == 30 && (rig.out[3 + 32] & ana::kSegmentFlagShort));
+    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 60 &&
+          getU16(rig.out.data() + 13) == 0x321);
+    CHECK(ok(rig.op(ana::kOpStart)));   // from state 1: the next generation, the segment gone
+    CHECK(ok(rig.op(ana::kOpStatus)) && getU32(rig.out.data() + 1) == 0);
+  }
+  {   // a threshold crossed up at frame 20 (pretrigger 10), 40 of 100 frames in when stopped
+    Rig rig;
+    CHECK(rig.plan({26}) == 0);
+    Bytes p = configureRequest(10000, 100);
+    tlv(p, kCrit | ana::kTlvConfigureTrigger, {ana::kTriggerCrossUp, 0, 0xD0, 0x07, 0, 0});   // 2000
+    tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(10));
+    CHECK(ok(rig.op(ana::kOpConfigure, p)));
+    CHECK(ok(rig.op(ana::kOpStart)));
+    const uint32_t generation = getU32(rig.out.data() + 4);
+    convert(20, 100);
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateWaiting);
+    convert(30, 4000);
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateCapturing);
+    CHECK(ok(rig.op(ana::kOpStop)));
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateConfigured && getU32(rig.out.data() + 1) == 1);
+    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 3 + 37 && rig.out[1] == 1);
+    CHECK(getU32(rig.out.data() + 3 + 12) == 40 && getU32(rig.out.data() + 3 + 28) == 10 &&
+          (rig.out[3 + 32] & ana::kSegmentFlagShort));
+    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 80);
+    CHECK(getU16(rig.out.data() + 13 + 2 * 9) == 100 && getU16(rig.out.data() + 13 + 2 * 10) == 4000);
+    // waiting, never crossed: state 1, nothing
+    CHECK(ok(rig.op(ana::kOpStart)));
+    convert(20, 100);
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateWaiting);
+    CHECK(ok(rig.op(ana::kOpStop)));
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateConfigured && getU32(rig.out.data() + 1) == 0 &&
+          getU64(rig.out.data() + 5) == 0);
+  }
+  {   // complete before the stop is looked at: complete
+    Rig rig;
+    CHECK(rig.plan({26}) == 0);
+    CHECK(ok(rig.op(ana::kOpConfigure, configureRequest(10000, 100))));
+    CHECK(ok(rig.op(ana::kOpStart)));
+    convert(100, 1);
+    CHECK(ok(rig.op(ana::kOpStop)));
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateDone && getU32(rig.out.data() + 1) == 1);
+    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && !(rig.out[3 + 32] & ana::kSegmentFlagShort));
+  }
+}
+
 int main() {
+  testStop();
   testPlanReleaseForgets();
   testOutputIdle();
   testRateRange();

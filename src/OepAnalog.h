@@ -123,6 +123,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint64_t start_ns_ = 0;                                 // the first frame's time on the probe's clock
   uint32_t uncertainty_ns_ = 0;
   bool short_ = false;                                    // stopped before all the samples came
+  bool segment_ = false;                                  // this generation's segment is kept (complete, or cut by stop)
   // the trigger (configure) and the search (start .. the crossing): frame f's value of frame slot m is at
   // ring[(f x channels + m) % ring_len_]
   uint8_t trig_type_ = 0, trig_slot_ = 0;
@@ -144,7 +145,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void search();
   void hitAt(uint32_t t);
   void pollTriggered();
-  void finishTriggered();
+  void finishTriggered(bool cut);
   Result configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query);
   Result calibration(uint8_t *out, size_t capacity) const;
   bool startNow();

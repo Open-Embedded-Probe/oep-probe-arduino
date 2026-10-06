@@ -126,6 +126,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t state_ = kStateUnconfigured;
   uint8_t width_ = 1;
   uint32_t samples_ = 0, bytes_ = 0, rate_num_ = 0, rate_den_ = 1;
+  // one-shot: the samples of this generation's segment (0: none yet), and whether stop cut it short
+  uint32_t kept_samples_ = 0;
+  bool kept_short_ = false;
   // running
   parlio_rx_unit_handle_t unit_ = nullptr;
   parlio_rx_delimiter_handle_t delimiter_ = nullptr;

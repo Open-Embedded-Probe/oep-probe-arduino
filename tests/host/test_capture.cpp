@@ -370,7 +370,44 @@ static void testPlanReleaseForgets() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 && out[1] == 0);
 }
 
+// stop (capture §3.2) of a one-shot with a trigger: capturing (state 3) -> 1, the segment cut short (flags bit1) with
+// what the harvest copied, readable; waiting (state 2) -> 1 with nothing.
+static void testTriggeredStop() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.samples = 40000;
+  c.trigger = true;   // falling edge on role 0
+  c.pretrigger = 100;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  const uint32_t generation = getU32(out.data() + 4);
+  dma.deliver(1000, 0xFF);   // samples 0..3999 high
+  dma.run();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateWaiting);
+  dma.deliver(2000, 0x00);   // the edge at sample 4000; the segment from 3900 (byte 975)
+  dma.run();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 1);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 3 + 37 && out[1] == 1);
+  CHECK(getU32(out.data() + 3 + 12) == 2025 * 4 && getU32(out.data() + 3 + 28) == 100 && (out[3 + 32] & cap::kSegmentFlagShort));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && getU32(out.data() + 9) == 100);
+  CHECK(out[13] == 0xFF && out[13 + 24] == 0xFF && out[13 + 25] == 0x00);   // 25 bytes (100 samples) before the edge
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 2000, 100), out)) && getU32(out.data() + 9) == 25);
+  // waiting, no edge: state 1, nothing
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  dma.deliver(1000, 0xFF);
+  dma.run();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 0);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
+}
+
 int main() {
+  testTriggeredStop();
   testPlanReleaseForgets();
   testBound();
   testRateLimit();

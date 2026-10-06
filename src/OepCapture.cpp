@@ -329,6 +329,8 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
 
 Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   if (capacity < 8) return failed();
+  kept_samples_ = 0;   // the last generation's segment goes
+  kept_short_ = false;
   trig_phase_ = 0;
   have_level_ = trig_overrun_ = ext_ready_ = false;
   force_ = trig_type_ == cap::kTriggerImmediate && !follow_;   // a ring left by following: start at once
@@ -490,7 +492,8 @@ void LogicCapture::forget() {
   triggered_ = follow_ = false;
   trig_type_ = 0;
   pretrigger_ = 0;
-  samples_ = bytes_ = filled_ = 0;
+  samples_ = bytes_ = filled_ = kept_samples_ = 0;
+  kept_short_ = false;
   trig_phase_ = 0;
   trig_overrun_ = false;
   completed_ = released_ = fill_ = queue_overflow_ = overruns_ = stage_drops_ = produced_ = 0;
@@ -743,6 +746,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     width_ = width;
     samples_ = samples;
     bytes_ = bytes;
+    kept_samples_ = 0;   // the buffers are the new configuration's
+    kept_short_ = false;
     rate_num_ = num;
     rate_den_ = den;
     state_ = kStateConfigured;
@@ -912,11 +917,12 @@ size_t LogicCapture::infoBytes(const Info &info, uint8_t *out) const {
 size_t LogicCapture::segmentInfo(uint8_t *out) const {
   putU32(out, 0);                  // serial
   putU64(out + 4, 0);              // position
-  putU32(out + 12, samples_);
+  putU32(out + 12, kept_samples_);
   putU64(out + 16, triggered_ ? start_ns_ + nsOf(seg_first_sample_) : start_ns_);
   putU32(out + 24, kStartUncertaintyNs);
   putU32(out + 28, triggered_ ? trigger_index_ : 0xFFFFFFFFu);   // immediate: no trigger inside
-  out[32] = triggered_ && trig_overrun_ ? cap::kSegmentFlagGap : 0;   // bit0: part of it was lost
+  out[32] = static_cast<uint8_t>((triggered_ && trig_overrun_ ? cap::kSegmentFlagGap : 0) |   // bit0: part of it was lost
+                                 (kept_short_ ? cap::kSegmentFlagShort : 0));                // bit1: cut short by stop
   putU32(out + 33, generation_);
   return kInfoBytes;
 }
@@ -936,6 +942,7 @@ void LogicCapture::pollTriggered() {
   if (trig_phase_ != 2 || state_ != kStateCapturing) return;
   stopRepeat();
   state_ = kStateDone;
+  kept_samples_ = samples_;
   if (subscribed_) {
     uint8_t seg[kInfoBytes];
     endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
@@ -962,6 +969,7 @@ void LogicCapture::poll() {
   if (state_ != kStateCapturing || !done_) return;
   esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
   state_ = kStateDone;
+  kept_samples_ = samples_;
   if (subscribed_) {
     uint8_t seg[kInfoBytes];
     endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
@@ -1049,6 +1057,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (capacity < 8) return failed();
       if (state_ == kStateDone) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
       done_ = false;
+      kept_samples_ = 0;   // the last generation's segment goes
+      kept_short_ = false;
       memset(buffer_, 0, bytes_);
       esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
       parlio_receive_config_t rc = {};
@@ -1064,10 +1074,23 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
     }
     case kOpStop: {
       const uint8_t stopped[2] = {kStoppedHost, 0};
+      // stop (capture §3.2): waiting (state 2) -> 1 with nothing; capturing (state 3) -> 1 with the segment cut short
+      // (flags bit1) holding what the harvest copied; one that filled meanwhile is complete (state 4)
       if (triggered_ && (state_ == kStateWaiting || state_ == kStateCapturing)) {
-        stopRepeat();
+        stopRepeat();      // the harvest takes what came before the stop
+        pollTriggered();   // a trigger found meanwhile: its event; the segment full: complete
+        if (state_ == kStateDone) return tail.finish(completed(), out, capacity);
+        const uint32_t got = trig_phase_ >= 1 ? static_cast<uint32_t>(static_cast<uint64_t>(filled_) * 8 / width_) : 0;
         state_ = kStateConfigured;
-        if (subscribed_) endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
+        kept_samples_ = got;
+        kept_short_ = got != 0;
+        if (subscribed_) {
+          if (got) {
+            uint8_t seg[kInfoBytes];
+            endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
+          }
+          endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
+        }
         return tail.finish(completed(), out, capacity);
       }
       if ((mode_ == 2 || mode_ == 3) && (state_ == kStateCapturing || state_ == kStatePaused)) {
@@ -1095,12 +1118,12 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         // stage (the PARLIO keeps its clock: bit1 slipped never)
         out[13] = (queue_overflow_ || overruns_ || stage_drops_) ? cap::kStatusFlagDropped : 0;
       } else if (triggered_) {
-        putU32(out + 1, state_ == kStateDone ? 1 : 0);
+        putU32(out + 1, kept_samples_ ? 1 : 0);   // the segment, complete or cut short by stop
         putU64(out + 5, filled_);
         out[13] = (queue_overflow_ || overruns_ || trig_overrun_) ? cap::kStatusFlagDropped : 0;
       } else {
-        putU32(out + 1, state_ == kStateDone ? 1 : 0);                // segments done
-        putU64(out + 5, state_ == kStateDone ? bytes_ : 0);           // write position
+        putU32(out + 1, kept_samples_ ? 1 : 0);                                    // segments done
+        putU64(out + 5, (static_cast<uint64_t>(kept_samples_) * width_ + 7) / 8);   // write position
         out[13] = 0;
       }
       putU32(out + 14, generation_);
@@ -1157,7 +1180,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (left > count) flags |= reg::common::kReadFlagsMore;
         return answer(position, flags, store_ + (serial % segment_count_) * segment_bytes_ + offset, count);
       }
-      const uint64_t have = state_ == kStateDone ? bytes_ : 0;
+      const uint64_t have = (static_cast<uint64_t>(kept_samples_) * width_ + 7) / 8;   // the segment's bytes
       if (position > have) position = have;
       uint32_t count = static_cast<uint32_t>(have - position);
       uint8_t flags = 0;
@@ -1183,7 +1206,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         out[1] = count;
         return tail.finish(completed(used), out, capacity);
       }
-      const bool one = state_ == kStateDone && getU32(p) == 0;
+      const bool one = kept_samples_ && getU32(p) == 0;
       out[0] = 0;
       out[1] = one ? 1 : 0;
       if (one) out[2] = static_cast<uint8_t>(segmentInfo(out + 3));   // len(u8) then the info (core §2.3)

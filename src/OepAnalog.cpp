@@ -172,7 +172,7 @@ void AnalogCapture::planRelease() {
 void AnalogCapture::forget() {
   state_ = ana::kStateUnconfigured;
   frames_ = samples_ = 0;
-  short_ = trig_slipped_ = follow_ = false;
+  short_ = trig_slipped_ = follow_ = segment_ = false;
   trig_type_ = 0;
   pretrigger_ = 0;
   phase_ = 0;
@@ -331,6 +331,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     memcpy(order_, order, sizeof order_);
     for (uint8_t m = 0; m < channels_; ++m) if (order_[m] == trig_role) trig_slot_ = m;
     frames_ = 0;
+    segment_ = false;   // the buffer is the new configuration's
     state_ = ana::kStateConfigured;
   }
   // the answer
@@ -433,6 +434,7 @@ bool AnalogCapture::trackReady() const {
 bool AnalogCapture::startNow() {
   if (!(trackReady() || state_ == ana::kStateError) || !buffer_) return false;
   ++generation_;
+  segment_ = false;   // the last generation's segment goes
   frames_ = got_ = searched_ = 0;
   short_ = have_prev_ = force_ = trig_slipped_ = false;
   reported_ = false;
@@ -566,10 +568,17 @@ void AnalogCapture::finish() {
   adc_set_round_robin(0);
 #endif
   state_ = ana::kStateDone;
+  segment_ = true;
 }
 
+// stop (capture §3.2): waiting for the trigger (state 2) -> 1 with nothing captured; capturing (state 3) -> 1 with the
+// segment cut short (flags bit1) holding what came in; stopped 1 either way. A capture that completed meanwhile is
+// complete (state 4, stopped 0).
 void AnalogCapture::stopNow() {
-  if (ringMode() && (state_ == ana::kStateWaiting || state_ == ana::kStateCapturing)) {   // no segment: none is whole
+  if (state_ != ana::kStateWaiting && state_ != ana::kStateCapturing) return;
+  poll();   // what has come in
+  if (state_ != ana::kStateWaiting && state_ != ana::kStateCapturing) return;
+  if (state_ == ana::kStateWaiting) {   // no trigger yet: no segment
 #if defined(ARDUINO_ARCH_ESP32)
     finish();
 #else
@@ -578,23 +587,27 @@ void AnalogCapture::stopNow() {
     adc_fifo_drain();
     adc_set_round_robin(0);
 #endif
-    state_ = ana::kStateConfigured;
-    if (subscribed_) {
-      const uint8_t stopped[2] = {ana::kStoppedReasonHost, 0};
-      endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
-    }
-    return;
-  }
-  if (state_ != ana::kStateCapturing) return;
+    frames_ = 0;
+    segment_ = false;
+  } else if (ringMode()) {
+    finishTriggered(true);
+  } else {
 #if defined(ARDUINO_ARCH_ESP32)
-  drain();
+    drain();
 #endif
-  finish();
-  short_ = frames_ < samples_;
-  if (subscribed_ && !reported_) {
+    finish();
+    segment_ = frames_ > 0;
+  }
+  short_ = segment_;
+  state_ = ana::kStateConfigured;
+  reported_ = true;
+  if (subscribed_) {
+    if (segment_) {
+      uint8_t seg[37];
+      endpoint_.event(*this, ana::kEventSegment, seg, segmentInfo(seg));
+    }
     const uint8_t stopped[2] = {ana::kStoppedReasonHost, 0};
     endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
-    reported_ = true;
   }
 }
 
@@ -760,13 +773,16 @@ void AnalogCapture::pollTriggered() {
       endpoint_.event(*this, ana::kEventTriggered, e, sizeof e);
     }
   }
-  if (phase_ == 1 && got_ >= end_frame_) finishTriggered();
+  if (phase_ == 1 && got_ >= end_frame_) finishTriggered(false);
 }
 
-// The segment's frames are all in: stop, and put them at the buffer's start in order.
-void AnalogCapture::finishTriggered() {
+// The segment's frames are all in (cut: stopped, those that came in): stop, and put them at the buffer's start in
+// order.
+void AnalogCapture::finishTriggered(bool cut) {
   const uint32_t s0 = seg_first_;
+  uint32_t n = samples_;
 #if defined(ARDUINO_ARCH_ESP32)
+  if (cut) n = got_ > s0 ? std::min(got_ - s0, samples_) : 0;   // drained just before (poll)
   const bool lost = overflow_;
   finish();
   std::rotate(buffer_, buffer_ + static_cast<size_t>(s0 % samples_) * channels_, buffer_ + ring_len_);
@@ -777,13 +793,15 @@ void AnalogCapture::finishTriggered() {
   dma_channel_abort(dma_);
   adc_fifo_drain();
   adc_set_round_robin(0);
-  const size_t first = static_cast<size_t>(s0) * channels_, n = static_cast<size_t>(samples_) * channels_;
+  if (cut) n = written / channels_ > s0 ? std::min(written / channels_ - s0, samples_) : 0;
+  const size_t first = static_cast<size_t>(s0) * channels_, values = static_cast<size_t>(n) * channels_;
   trig_slipped_ |= written > first + ring_len_;   // the DMA came round over the segment's start before it stopped
-  for (size_t i = 0; i < n; ++i) buffer_[i] = ring_[(first + i) % ring_len_];
+  for (size_t i = 0; i < values; ++i) buffer_[i] = ring_[(first + i) % ring_len_];
   state_ = ana::kStateDone;
 #endif
   phase_ = 2;
-  frames_ = samples_;
+  frames_ = n;
+  segment_ = n > 0;
   seg_start_ns_ = start_ns_ + framesNs(s0);
 }
 
@@ -860,7 +878,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (capacity < 21) return failed();
       poll();
       out[0] = state_;
-      putU32(out + 1, state_ == ana::kStateDone ? 1 : 0);
+      putU32(out + 1, segment_ ? 1 : 0);   // the segment, complete or cut short by stop
       putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
 #if defined(ARDUINO_ARCH_ESP32)
       out[13] = (overflow_ || overflow_seen_ || trig_slipped_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions were lost
@@ -902,7 +920,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (refused(parsed)) return parsed;
       if (capacity < 3 + 37) return failed();
       poll();
-      const bool one = state_ == ana::kStateDone && getU32(p) == 0;
+      const bool one = segment_ && getU32(p) == 0;
       out[0] = 0;
       out[1] = one ? 1 : 0;
       if (one) out[2] = static_cast<uint8_t>(segmentInfo(out + 3));   // len(u8) then the info (core §2.3)
