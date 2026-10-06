@@ -184,6 +184,30 @@ inline bool blockCountFits(uint16_t count, uint16_t max_length) { return 4u * co
 // (openembeddedprobe_version.h, written by the release). A build between releases reports the last release.
 constexpr const char *kFirmwareVersion = OPENEMBEDDEDPROBE_VERSION_STR;
 
+// Text in a request (core §2.1): valid UTF-8 (shortest form, no surrogates, at most U+10FFFF) with no C0 control
+// character and no 0x7F. false: the request is malformed.
+inline bool requestText(const uint8_t *p, size_t n) {
+  for (size_t i = 0; i < n;) {
+    const uint8_t c = p[i];
+    if (c < 0x20 || c == 0x7F) return false;
+    if (c < 0x80) { ++i; continue; }
+    size_t more;
+    uint32_t cp, min;
+    if ((c & 0xE0) == 0xC0) { more = 1; cp = c & 0x1F; min = 0x80; }
+    else if ((c & 0xF0) == 0xE0) { more = 2; cp = c & 0x0F; min = 0x800; }
+    else if ((c & 0xF8) == 0xF0) { more = 3; cp = c & 0x07; min = 0x10000; }
+    else return false;
+    if (more > n - 1 - i) return false;   // cut short
+    for (size_t k = 1; k <= more; ++k) {
+      if ((p[i + k] & 0xC0) != 0x80) return false;
+      cp = (cp << 6) | (p[i + k] & 0x3F);
+    }
+    if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
+    i += 1 + more;
+  }
+  return true;
+}
+
 // One TLV's header (core §2.2): tag, len(u8) for 0..254 bytes, or tag, 0xFF, len(u16) for 255 and more. The encoding is
 // unique: a long form carrying 254 or fewer is malformed. false: cut short, or not the unique form.
 inline bool tlvAt(const uint8_t *p, size_t n, size_t at, uint8_t &tag, const uint8_t *&value, size_t &length, size_t &next) {
@@ -256,13 +280,19 @@ class Tail {
     while (at < n) {
       if (!step(at, raw, value, len)) return rejected(kRejectMalformed);
       if (raw == kTagInvalid || raw == kTagIgnored || raw == kTagValue) return rejected(kRejectMalformed);   // results only / never
+      // a known tag whose definition does not say it repeats appears at most once, critical or not (core §2.3)
+      const uint8_t tag = raw & ~kTagCritical;
+      if (!listed(known, known_count, tag) || listed(repeating_, repeating_count_, tag)) continue;
+      size_t later = at, later_len = 0;
+      uint8_t later_raw = 0;
+      const uint8_t *later_value = nullptr;
+      while (later < n && step(later, later_raw, later_value, later_len))
+        if ((later_raw & ~kTagCritical) == tag) return rejected(kRejectMalformed);
     }
     if (deferred) *deferred = completed();
     for (at = 0; at < n && step(at, raw, value, len);) {
       const uint8_t tag = raw & ~kTagCritical;
-      bool is_known = false;
-      for (size_t i = 0; i < known_count && !is_known; ++i) is_known = (known[i] & ~kTagCritical) == tag;
-      if (is_known) continue;
+      if (listed(known, known_count, tag)) continue;
       if (raw & kTagCritical) {
         if (!deferred) return unsupportedTag(out, capacity, raw);
         if (deferred->resolution == kResolutionCompleted) *deferred = unsupportedTag(out, capacity, raw);
@@ -279,6 +309,15 @@ class Tail {
   Result parse(const uint8_t *p, size_t n, const uint8_t (&known)[N], uint8_t *out, size_t capacity,
                Result *deferred = nullptr) {
     return parse(p, n, known, N, out, capacity, deferred);
+  }
+
+  // The known tags whose definition says they repeat (core §2.3): set before parse. Every other known tag that appears
+  // twice is malformed.
+  template <size_t N>
+  Tail &repeats(const uint8_t (&tags)[N]) {
+    repeating_ = tags;
+    repeating_count_ = N;
+    return *this;
   }
 
   // A known tag's value (its last occurrence), nullptr when absent. critical: whether the host marked it.
@@ -319,6 +358,12 @@ class Tail {
  private:
   const uint8_t *p_ = nullptr;
   size_t n_ = 0;
+  const uint8_t *repeating_ = nullptr;
+  size_t repeating_count_ = 0;
+  static bool listed(const uint8_t *tags, size_t count, uint8_t tag) {
+    for (size_t i = 0; i < count; ++i) if ((tags[i] & ~kTagCritical) == tag) return true;
+    return false;
+  }
   bool step(size_t &at, uint8_t &raw, const uint8_t *&value, size_t &length) const {
     size_t next = 0;
     if (!tlvAt(p_, n_, at, raw, value, length, next)) return false;

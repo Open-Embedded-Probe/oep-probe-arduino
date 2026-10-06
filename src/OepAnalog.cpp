@@ -164,7 +164,9 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   static const uint8_t kKnown[] = {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
                                    ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
                                    ana::kTlvConfigureFrontend};
+  static const uint8_t kRepeating[] = {ana::kTlvConfigureFrontend};   // one per channel (capture §3.3)
   Tail tail;
+  tail.repeats(kRepeating);
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity);
   if (refused(parsed)) return parsed;
   if (!channels_) return wrongState(out, capacity);   // plan the channels first (cause 6)

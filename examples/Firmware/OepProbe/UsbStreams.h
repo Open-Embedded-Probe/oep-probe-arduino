@@ -42,7 +42,7 @@ class HidStream final : public Stream {
       if (d && r.reportId == 0 && len == kReport + 1 && d[0] == ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) { ++d; --len; }
       if (len < 2 || !d) return;
       size_t n = d[0] | (d[1] << 8);
-      if (n > len - 2) n = len - 2;
+      if (n > len - 2) return;   // a count over what the report carries: the report is discarded whole (core §3.1)
       for (size_t i = 0; i < n; ++i) { const size_t next = (head_ + 1) % sizeof rx_; if (next == tail_) return; rx_[head_] = d[2 + i]; head_ = next; }
     });
   }

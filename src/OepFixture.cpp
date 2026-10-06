@@ -83,6 +83,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       const size_t fixed = 1u + 3u * n;
       if (length < fixed) return rejected(kRejectMalformed);
       // drive (fixture §1.1) is known only where this chip declares drive_levels; elsewhere it is an unknown tag
+      tail.repeats(kKnown);   // one drive TLV per element (fixture §1.1)
       const Result parsed = tail.parse(payload + fixed, length - fixed, kKnown, levels.count ? 1 : 0, out, capacity);
       if (refused(parsed)) return parsed;
       auto isOutput = [&](uint8_t i) {

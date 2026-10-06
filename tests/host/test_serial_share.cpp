@@ -811,9 +811,10 @@ static void testPortSpeed() {
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[4] == 6);
   r = u.send(request(7, 0, 0x14, speedReq(0, 0, 2, 0, 0), true, 5));   // revert at the boot speed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[4] == 6);
-  r = u.send(request(8, 0, 0x14, speedReq(0, 1500000, 3, 2000, 0), true, 5));   // step 3: outside the value range
-  CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);
-  r = u.send(request(9, 0, 0x14, speedReq(0, 1500000, 0xff, 2000, 0), true, 5));
+  // step 3 and up: a value a later revision may define - unsupported, tag 0x00 (core §2.5, §3.5)
+  r = u.send(request(8, 0, 0x14, speedReq(0, 1500000, 3, 2000, 0), true, 5));
+  CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
+  r = u.send(request(9, 0, 0x14, speedReq(0, 1500000, 0, 0, 0), true, 5));   // try with verify_ms 0: malformed
   CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);
   CHECK(g_switches == 0);
 

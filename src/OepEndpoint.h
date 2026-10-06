@@ -245,6 +245,7 @@ class Endpoint {
   uint8_t scratch_[512];   // one interface's full describe before paging
 
   void handleMessage(const uint8_t *message, size_t length);
+  bool coreOffers(uint8_t op) const;
   Result core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,
               uint8_t *out, size_t capacity);
   Result list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);

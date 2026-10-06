@@ -38,6 +38,9 @@ class FrameReader {
   // A frame's bytes arrive back to back (1 KiB is 89 ms at 115200); a longer gap mid-frame means
   // the prefix was a stray byte from another program and the reader starts over on the next byte.
   static constexpr uint32_t kIdleResyncMs = 200;
+  // TCP (core §3.2): a pause inside a frame is normal there and does not restart the read. A length over max_frame is
+  // still discarded up to the next pause (core §3.1 asks a TCP probe to close the connection; a Stream cannot).
+  void setTcp(bool on) { tcp_ = on; }
 
  private:
   enum class State : uint8_t { LengthLow, LengthHigh, Body, Discard };
@@ -50,6 +53,8 @@ class FrameReader {
   uint32_t dropped_ = 0;
   uint32_t resyncs_ = 0;
   uint32_t last_byte_ms_ = 0;
+  bool tcp_ = false;
+  bool gapRestarts() const { return state_ == State::Discard || (state_ != State::LengthLow && !tcp_); }
 };
 
 // Write one message with its length prefix. Returns bytes of message written (0 on failure).

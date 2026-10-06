@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Host tests of fn 0 (oep.core) against core §7.1 and §7.5: confirm's transport TLV on every transport kind (the index
-// of the describe entry it came on), the confirm vectors of oep-spec tests/vectors/confirm.json, describe's
-// discoverable always sent.
+// Host tests of fn 0 (oep.core) against core §1.2, §7.1, §7.5 and §12: confirm's transport TLV on every transport kind
+// (the index of the describe entry it came on), the confirm vectors of oep-spec tests/vectors/confirm.json, describe's
+// discoverable always sent, list's reserved flags and prefix text, open's force and owner, a repeated non-repeating TLV,
+// the header refusals (§4.3 order 1) neither kept nor restarting the lease, and the length-prefixed reader's over-long
+// length and TCP pause rules (§3.1, §3.2).
 #include <stdio.h>
 #include <string.h>
 #include <vector>
@@ -44,6 +46,19 @@ static Bytes request(uint16_t corr, uint16_t fn, uint8_t op, const Bytes &payloa
   return m;
 }
 static Bytes confirmReq(uint8_t lo = 1, uint8_t hi = 1) { return {'O', 'E', 'P', '?', lo, hi}; }
+static Bytes openReq(uint32_t id, uint32_t lease, uint8_t force = 0) {
+  Bytes p = u32(id);
+  const Bytes l = u32(lease);
+  p.insert(p.end(), l.begin(), l.end());
+  p.push_back(force);
+  return p;
+}
+static Bytes withTlv(Bytes p, uint8_t tag, const Bytes &value) {
+  p.push_back(tag);
+  p.push_back(static_cast<uint8_t>(value.size()));
+  p.insert(p.end(), value.begin(), value.end());
+  return p;
+}
 static Bytes hex(const char *h) {
   Bytes b;
   for (; h[0] && h[1]; h += 2) { unsigned v; sscanf(h, "%2x", &v); b.push_back(static_cast<uint8_t>(v)); }
@@ -151,10 +166,102 @@ static void testDiscoverableAlways() {
   CHECK(discoverableIn(exchange(ep, s, false, request(2, 0, 0x03, {0, 0, 0, 0}))) == 1);
 }
 
+static uint8_t reason(const Bytes &r) { return r.size() >= 5 && r[3] == kResolutionRejected ? r[4] : 0xff; }
+
+// core §7.2: list's flags bits 1 to 7 are reserved (unsupported, tag 0x00); the prefix is text (core §2.1, malformed).
+// core §6.4 / §2.1: open's force is a boolean; owner is text of 1 to 32 bytes; core §2.3: a repeated non-repeating TLV.
+static void testRequestValues() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  Bytes r = exchange(ep, s, false, request(1, 0, 0x02, {0x02, 0, 0, 0}));
+  CHECK(reason(r) == kRejectUnsupported && r.size() == 6 && r[5] == 0);
+  CHECK(reason(exchange(ep, s, false, request(2, 0, 0x02, {0, 0, 0, 3, 'o', 0x01, 'p'}))) == kRejectMalformed);
+  CHECK(reason(exchange(ep, s, false, request(3, 0, 0x02, {0, 0, 0, 2, 0xC3, 0x28}))) == kRejectMalformed);   // bad UTF-8
+  r = exchange(ep, s, false, request(4, 0, 0x02, {1, 0, 0, 3, 'o', 'e', 'p'}));   // exact "oep": none, fine
+  CHECK(r.size() >= 8 && r[3] == kResolutionCompleted && r[5 + 2] == 0);
+
+  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x10, openReq(9, 3000, 2)))) == kRejectMalformed);
+  CHECK(reason(exchange(ep, s, false, request(6, 0, 0x10, withTlv(openReq(9, 3000), 0x01, {})))) == kRejectMalformed);
+  CHECK(reason(exchange(ep, s, false, request(7, 0, 0x10, withTlv(openReq(9, 3000), 0x01, Bytes(33, 'a'))))) == kRejectMalformed);
+  CHECK(reason(exchange(ep, s, false, request(8, 0, 0x10, withTlv(openReq(9, 3000), 0x81, {'a', 0x0a})))) == kRejectMalformed);
+  CHECK(reason(exchange(ep, s, false, request(9, 0, 0x10, withTlv(openReq(9, 3000), 0x01, {0xED, 0xA0, 0x80})))) == kRejectMalformed);
+  const Bytes twice = withTlv(withTlv(openReq(9, 3000), 0x01, {'a'}), 0x01, {'b'});
+  CHECK(reason(exchange(ep, s, false, request(10, 0, 0x10, twice))) == kRejectMalformed);
+  CHECK(!ep.locked());
+  r = exchange(ep, s, false, request(11, 0, 0x10, withTlv(openReq(9, 3000, 1), 0x01, {'t', 0xC3, 0xA9, 's', 't'})));
+  CHECK(r.size() >= 5 + 9 && r[3] == kResolutionCompleted && ep.locked());
+  r = exchange(ep, s, false, request(12, 0, 0x13, {}));   // lock_state shows the owner as sent
+  const Bytes owner = {0x01, 5, 't', 0xC3, 0xA9, 's', 't'};
+  CHECK(r.size() == 5 + 5 + owner.size() && Bytes(r.begin() + 10, r.end()) == owner);
+}
+
+// core §4.3 order 1 comes before the resend table (order 2): a header refusal of the last session's request is not
+// kept (its corr is free for the next request) and restarts no lease (core §6.1: only what passed order 3).
+static void testHeaderRefusalsNotKept() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  CHECK(exchange(ep, s, false, request(1, 0, 0x10, openReq(7, 1000)))[3] == kResolutionCompleted);
+  g_millis += 900;
+  CHECK(reason(exchange(ep, s, false, request(2, 5, 0x01, {}, true, 7))) == kRejectUnknownFunction);
+  CHECK(reason(exchange(ep, s, false, request(3, 0, 0x50, {}, true, 7))) == kRejectUnknownOperation);
+  CHECK(reason(exchange(ep, s, false, request(4, 0, 0x04, {}, true, 7))) == kRejectUnknownOperation);   // no plan roles
+  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x14, {}, true, 7))) == kRejectUnknownOperation);   // port_speed off
+  g_millis += 200;   // 1100 ms after the open: the refusals did not extend it
+  ep.poll();
+  CHECK(!ep.locked());
+  // the expired session's next request: expired, and corr 2 was not taken by the refusal (no corr_reused)
+  CHECK(reason(exchange(ep, s, false, request(2, 0, 0x12, {}, true, 7))) == kRejectExpired);
+}
+
+// core §3.1: a length over max_frame - that frame and the input up to the next pause of probe_frame_gap_ms are
+// discarded, unanswered; the next frame after the pause is read. core §3.2: a pause inside a frame restarts the read
+// on vendor bulk, not on TCP.
+static void testLengthPrefixedReader() {
+  for (const uint8_t kind : {Endpoint::kVendorBulk, Endpoint::kTcp}) {
+    MemStream s;
+    static uint8_t rx[1200], tx[1100];
+    Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {256, 1024, 4}, kind, kind == Endpoint::kTcp ? 0xff : 0);
+    const Bytes confirm = request(1, 0, 0x01, confirmReq());
+    s.send({0x00, 0x10});   // 4096 > max_frame
+    s.send({uint8_t(confirm.size()), 0});
+    s.send(confirm);        // inside the discarded input: no answer
+    ep.poll();
+    CHECK(s.tx.empty());
+    g_millis += 250;        // the pause
+    CHECK(exchange(ep, s, false, confirm).size() == 5 + 20);
+    // half a frame, a pause of 300 ms, the rest
+    s.tx.clear();
+    s.send({uint8_t(confirm.size()), 0});
+    s.send(Bytes(confirm.begin(), confirm.begin() + 5));
+    ep.poll();
+    g_millis += 300;
+    s.send(Bytes(confirm.begin() + 5, confirm.end()));
+    ep.poll();
+    if (kind == Endpoint::kTcp) CHECK(s.tx.size() == 2 + 5 + 20);   // TCP keeps reading that frame
+    else CHECK(s.tx.empty());                                        // vendor bulk restarted: the rest is not a frame
+    g_millis += 250;
+  }
+}
+
+static void testRequestText() {
+  const uint8_t ok[] = {'a', 0xC3, 0xA9, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80};
+  CHECK(requestText(ok, sizeof ok));
+  const uint8_t overlong[] = {0xC0, 0xAF}, surrogate[] = {0xED, 0xA0, 0x80}, cut[] = {'a', 0xE2, 0x82},
+                high[] = {0xF4, 0x90, 0x80, 0x80}, del[] = {0x7F}, tab[] = {0x09};
+  CHECK(!requestText(overlong, 2) && !requestText(surrogate, 3) && !requestText(cut, 3) && !requestText(high, 4));
+  CHECK(!requestText(del, 1) && !requestText(tab, 1) && requestText(nullptr, 0));
+}
+
 int main() {
   testConfirmTransportEveryKind();
   testConfirmVectors();
   testDiscoverableAlways();
+  testRequestValues();
+  testHeaderRefusalsNotKept();
+  testLengthPrefixedReader();
+  testRequestText();
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

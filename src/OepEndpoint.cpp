@@ -74,6 +74,7 @@ bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capaci
   t.owner = this;
   if (serialKind(kind)) t.serial.reset(rx_buffer, rx_capacity, decode_, sizeof decode_);
   else t.reader.reset(rx_buffer, rx_capacity, limits_.max_frame);
+  t.reader.setTcp(kind == kTcp);   // no restart on a pause inside a frame (core §3.2)
   t.flush_after_burst = flush_after_burst;
   ++transport_count_;
   return true;
@@ -406,6 +407,10 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   if (capacity > static_cast<size_t>(limits_.max_frame) - kResultHeader) capacity = limits_.max_frame - kResultHeader;
 
   lapse();
+  // core §4.3 order 1, the header: a fn this probe does not have, an op that fn does not offer (core §1.2) - before the
+  // resend table, so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
+  if (fn != 0 && fn > count_) { sendReject(corr, kRejectUnknownFunction); return; }
+  if (fn == 0 ? !coreOffers(op) : !interfaces_[fn - 1]->offers(op)) { sendReject(corr, kRejectUnknownOperation); return; }
   // The last session's request sent again (the host lost the result): answer from what was kept, never run it twice,
   // and before the session is judged (core §5.2) - an end sent again must not take the lock back. The host numbers
   // its requests in order (core §4.1): a corr no newer than the newest seen and not in the table was dropped from it.
@@ -426,13 +431,9 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   g_request_ignored.reset();   // this request's ignored tags (core §2.3), from its tail's parse
   if (fn == 0) {
     result = core(op, has_session, session, payload, payload_length, out, capacity);
-  } else if (fn > count_) {
-    result = rejected(kRejectUnknownFunction);
   } else {
     Interface &it = *interfaces_[fn - 1];
-    // an op the interface does not offer (core §1.2): unknown_operation before the session (core §4.3 order 1)
-    if (!it.offers(op)) result = rejected(kRejectUnknownOperation);
-    else result = it.lockFree(op) ? completed() : checkSession(has_session, session, out, capacity);
+    result = it.lockFree(op) ? completed() : checkSession(has_session, session, out, capacity);
     if (result.resolution == kResolutionCompleted) result = it.handle(op, payload, payload_length, out, capacity);
   }
   if (result.length > capacity) result = failed(0);
@@ -489,6 +490,19 @@ uint32_t Endpoint::crc32(const uint8_t *data, size_t length) {   // IEEE, reflec
 
 namespace {
 }  // namespace
+
+// The ops fn 0 offers (core §12): the required ones, plan_apply / plan_release with an interface that has plan roles,
+// port_speed while it is on (core §1.2).
+bool Endpoint::coreOffers(uint8_t op) const {
+  switch (op) {
+    case kOpConfirm: case kOpList: case kOpDescribe: case kOpOpen: case kOpEnd: case kOpKeepalive: case kOpLockState:
+    case kOpSubscribe: case kOpUnsubscribe: case kOpLinkSource: case kOpLinkSink:
+      return true;
+    case kOpPlanApply: case kOpPlanRelease: return anyPlanRoles();
+    case reg::core::kOpPortSpeed: return port_speed_ != nullptr;
+    default: return false;
+  }
+}
 
 Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint8_t *payload, size_t length,
                       uint8_t *out, size_t capacity) {
@@ -597,7 +611,7 @@ Result Endpoint::core(uint8_t op, bool has_session, uint32_t session, const uint
 }
 
 // port_speed (core §3.5): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
-//   ->  baud(u32: the rate that applies). A step over 2 is malformed. Only the UART bridge the request came in on
+//   ->  baud(u32: the rate that applies). A step over 2 is unsupported. Only the UART bridge the request came in on
 // (else unavailable cause 6); a baud this UART cannot make is unsupported. The port is in one of three states - boot,
 // trying, committed - and a step that does not fit its state is unavailable cause 6 too (the same refusal as the wrong
 // port): try is taken at the boot speed only, commit while trying (that baud, that port), revert while trying or
@@ -618,7 +632,10 @@ Result Endpoint::portSpeed(bool has_session, uint32_t session, const uint8_t *pa
   const uint8_t port = payload[0], step = payload[5];
   const uint32_t baud = getU32(payload + 1), idle = getU32(payload + 8);
   const uint16_t verify = getU16(payload + 6);
-  if (step > reg::core::kPortSpeedStepRevert) return rejected(kRejectMalformed);   // outside the value range (core §4.3 5)
+  // verify_ms 0 in a try is malformed (order 5); a step of 3 or more is a value a later revision may define:
+  // unsupported, tag 0x00 (core §2.5, §3.5, order 6)
+  if (step == reg::core::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
+  if (step > reg::core::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
   if (port != current_ || transports_[port].kind != kUartBridge) return wrongState(out, capacity);
   const bool this_port = speed_state_ != kSpeedBase && speed_port_ == port;   // this port is off its boot speed
   uint32_t answer = 0;
@@ -700,22 +717,20 @@ void Endpoint::speedBad() {
 Result Endpoint::open(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   static const uint8_t kKnown[] = {reg::core::kTlvOpenOwner};
   if (length < 9) return rejected(kRejectMalformed);
+  const uint32_t session = getU32(payload), lease = getU32(payload + 4);
+  // The open's own form first (it decides nothing about the lock until it is whole): its TLVs, session_id 0 (core §6.1),
+  // force a boolean (core §2.1), owner text of 1 to 32 bytes (core §6.4: another length, or text that is not valid,
+  // is a value the definition excludes - malformed, critical or not, core §2.1, §2.3).
   Tail tail;
   const Result parsed = tail.parse(payload + 9, length - 9, kKnown, out, capacity);
   if (refused(parsed)) return parsed;
-  if (capacity < 9) return failed();
-  const uint32_t session = getU32(payload), lease = getU32(payload + 4);
-  if (session == 0) return rejected(kRejectMalformed);   // a host never uses 0 (core §6.4)
-  const bool force = payload[8];
-  if (locked_ && holder_ != session && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
+  if (session == 0 || payload[8] > 1) return rejected(kRejectMalformed);
   size_t owner_len = 0;
-  bool owner_critical = false;
-  const uint8_t *owner = tail.find(reg::core::kTlvOpenOwner, owner_len, &owner_critical);
-  if (owner && (owner_len == 0 || owner_len > sizeof owner_)) {   // 1..32 bytes: a value this probe cannot keep
-    const Result r = tail.refuse(reg::core::kTlvOpenOwner, owner_critical, out, capacity);
-    if (refused(r)) return r;
-    owner = nullptr;
-  }
+  const uint8_t *owner = tail.find(reg::core::kTlvOpenOwner, owner_len);
+  if (owner && (owner_len == 0 || owner_len > sizeof owner_ || !requestText(owner, owner_len)))
+    return rejected(kRejectMalformed);
+  if (capacity < 9) return failed();
+  if (locked_ && holder_ != session && !payload[8]) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
   // Taken over by force: the previous holder loses what its session made, as at a lapse (core §6.4). Its id is forgotten
   // with this open (the probe keeps the last id only): its next request meets locked, later no_session (core §9).
   if (locked_ && holder_ != session) { loseSession(); sessionEnded(); }
@@ -754,6 +769,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   // critical tag (unsupported, order 6), then the count against plan_roles (unavailable cause 2).
   static const uint8_t kKnown[] = {kTagRoleAssignment};
   Tail tail;
+  tail.repeats(kKnown);   // role_assignment repeats (core §8)
   Result unknown_critical;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
@@ -969,6 +985,8 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
   Tail tail;
   const Result parsed = tail.parse(payload + 4 + payload[3], length - 4 - payload[3], out, capacity);
   if (refused(parsed)) return parsed;
+  if (!requestText(payload + 4, payload[3])) return rejected(kRejectMalformed);   // the prefix is text (core §2.1)
+  if (payload[0] & ~1u) return unsupportedValue(out, capacity);   // flags bits 1 to 7 are reserved (core §7.2)
   const bool exact = payload[0] & 1;
   const uint16_t first = getU16(payload + 1);
   const uint8_t n = payload[3];

@@ -9,7 +9,7 @@ namespace oep {
 bool FrameReader::feed(const uint8_t *&data, size_t &n) {
   if (n == 0) return false;
   const uint32_t now = millis();
-  if (state_ != State::LengthLow && static_cast<uint32_t>(now - last_byte_ms_) > kIdleResyncMs) {
+  if (gapRestarts() && static_cast<uint32_t>(now - last_byte_ms_) > kIdleResyncMs) {
     ++resyncs_;
     state_ = State::LengthLow;
   }
@@ -36,7 +36,7 @@ bool FrameReader::push(uint8_t byte) {
   // Resync (2026-09-22, classic ESP32 UART): a single stray byte was taken as a length and the
   // reader then waited for bytes that never came, or skipped a 64 KiB "frame", until a reset.
   const uint32_t now = millis();
-  if (state_ != State::LengthLow && static_cast<uint32_t>(now - last_byte_ms_) > kIdleResyncMs) {
+  if (gapRestarts() && static_cast<uint32_t>(now - last_byte_ms_) > kIdleResyncMs) {
     ++resyncs_;
     state_ = State::LengthLow;
   }
@@ -54,11 +54,11 @@ bool FrameReader::push(uint8_t byte) {
         return false;
       }
       if (length_ > max_frame_ || length_ > capacity_) {
-        // No legal frame is this long, so the two bytes were not a prefix: treat this byte as a
-        // new low byte instead of skipping up to 64 KiB (which wedged the probe).
+        // core §3.1: a length over max_frame - that frame and the input up to the next pause of probe_frame_gap_ms are
+        // discarded, unanswered; the next frame starts after the pause. (Not skipping the announced length: a stray
+        // byte taken as a length wedged the probe for up to 64 KiB, 2026-09-22.)
         ++dropped_;
-        length_ = byte;
-        state_ = State::LengthHigh;
+        state_ = State::Discard;
         return false;
       }
       state_ = State::Body;
@@ -67,8 +67,7 @@ bool FrameReader::push(uint8_t byte) {
       buffer_[have_++] = byte;
       if (have_ < length_) return false;
       return true;
-    case State::Discard:
-      if (++have_ >= length_) state_ = State::LengthLow;
+    case State::Discard:   // until a pause (the check above)
       return false;
   }
   return false;
