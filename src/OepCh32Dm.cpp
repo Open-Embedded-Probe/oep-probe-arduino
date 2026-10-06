@@ -178,10 +178,15 @@ bool Ch32Dm::linkHeld() {
 // transactions later): with writes lost and reads giving all ones or the last value read, a block op that met the drop
 // kept a wrong s0 / s1 / a0 / a1 or lost a write of one going back - a0 0x000ec8fe came back 0x20000000 in about 1 of
 // 200 read_blocks on the L103 through the RP2350.
+//
+// A revive by the PHY inside the group (RvswdPhy brings a link that rested for a while back in step before its next
+// transaction) would bring a dropped link up again behind the group, and the look after it would pass with a write lost
+// before it: a group that saw one is taken as one that met a drop (DmiPhy::revives).
 template <typename Group> bool Ch32Dm::held(Group group, bool clear_auto) {
   for (int attempt = 1;; ++attempt) {
+    const uint32_t revives = phy_.revives();
     const bool done = group();
-    if (done && linkHeld()) return true;
+    if (done && linkHeld() && phy_.revives() == revives) return true;
     OEP_LOGF("dm held: try %d %s", attempt, done ? "met a drop" : "failed");
     if (attempt >= kHeldTries) return false;
     steady(clear_auto);

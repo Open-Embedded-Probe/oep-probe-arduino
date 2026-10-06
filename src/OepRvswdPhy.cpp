@@ -347,29 +347,46 @@ void RvswdPhy::resyncAt(uint32_t half) {
 // keeps answering DATA0 with whatever was left there and the abstract command never runs.
 // So bring the bus back before the first transaction after any pause.
 //
-// Everything after the first read that did not answer is a retry of the request's (oep-if-debug §2): the re-sync and
+// A link that does not answer is first brought back in step with the configuration pair alone (no wake), again and
+// again for up to kReviveResyncUs: a CH32L103 drops its link for 0.7 - 2.1 ms after a change of hart state - not
+// always at once, so a host's next request can meet it - and a re-sync inside that time leaves it down. Only a link
+// still silent after that gets the wake pattern, which resets a CH32L103 itself, not just its debug interface
+// (configureBus): the revive went to the wakes after one re-sync, inside such a drop, and the target restarted under
+// the host - a hart halted by the host left halt, its next abstract command failed cmderr 6 (bench, 0.0.29-dev+f594f04,
+// tests/hw test_wire on the L103 through the RP2350: 3 of 8 runs, "read_register ... failed (cmderr 6)").
+//
+// Everything after the first read that did not answer is a retry of the request's (oep-if-debug §2): the re-syncs and
 // each wake are charged to its wire_retry_ms, and none starts that would end past it (one wake at a slow max_speed
-// takes tens of ms; at 10 kHz twelve of them and the read's own retries made one request 691 ms).
+// takes tens of ms; at 10 kHz twelve of them and the read's own retries made one request 691 ms). revives() counts the
+// times the link had to be brought back here - behind the layer above, which may have met the drop in a group it
+// takes for held (Ch32Dm::held).
 void RvswdPhy::reviveIfIdle() {
   if (!ready_ || !attached_) return;
   if (micros() - last_activity_us_ < kIdleUs) return;
   uint32_t status = 0;
   auto answers = [&]() { return readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80); };
   if (answers()) return;   // still there
-  uint32_t t0 = micros();
-  configureBus(false);     // re-sync, no reset
-  const bool back = answers();
-  uint32_t cost = micros() - t0;
-  spentRetrying(cost);
-  if (back) return;
-  // Parking the clock low keeps the link, so this is the path for a target that was left
-  // parked high by something else, or that lost the bus for its own reasons. It takes
-  // about a dozen bring-ups to come back, and the debug module resets on the way, so the
-  // hart will be running again: the caller finds out through cmderr, not through a lie.
-  // A wake costs more than the re-sync: the first one is let start only with twice the re-sync's time left.
+  ++revives_;
+  const uint32_t started = micros();
+  uint32_t cost = 0;
+  do {
+    const uint32_t t0 = micros();
+    configureBus(false);   // re-sync, no reset
+    const bool back = answers();
+    cost = micros() - t0;
+    spentRetrying(cost);
+    if (back) return;
+    delayMicroseconds(50);
+    spentRetrying(50);
+  } while (micros() - started < kReviveResyncUs && retryFits(cost + 50));
+  // Still silent past any drop at a change of state: a target that lost its power and came back, or one left parked
+  // high by something else (a CH32L103 resting high for 5 ms resets its debug module and its hart runs again). It
+  // takes about a dozen bring-ups to come back, and the wake may reset the target on the way: the caller finds out
+  // through havereset and cmderr, not through a lie. A wake costs more than the re-sync: the first one is let start
+  // only with twice the re-sync's time left.
   cost *= 2;
   for (int i = 0; i < 12 && retryFits(cost); ++i) {
-    t0 = micros();
+    const uint32_t t0 = micros();
     configureBus(true);
     const bool up = answers();
     cost = micros() - t0;

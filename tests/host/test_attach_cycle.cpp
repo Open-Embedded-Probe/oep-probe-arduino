@@ -53,11 +53,20 @@ struct Target {
   int frames = 0, reads = 0;
   uint32_t dmcontrol = 0, progbuf0 = 0x12345678u, abstractauto = 1, hart_bits = 3u << 10;
   uint32_t min_read_half = 0, min_write_half = 0;
+  // A CH32L103's ways (section G): wake_resets - a wake pattern on a link that is up restarts the target itself (the
+  // hart runs from its reset vector, havereset set; with haltreq held it stops there again); a drop after a change of
+  // hart state - until drop_until_us every read gets nothing back and every write is lost, re-syncs included, and after
+  // it the link needs the configuration pair again (out_of_step) before it answers
+  bool wake_resets = false, out_of_step = false;
+  int target_resets = 0;
+  uint64_t drop_until_us = 0;
+  uint32_t havereset = 0;
+  bool linkUp() const { return awake && !out_of_step && micros() >= drop_until_us; }
   void tick() {
     ps += uint64_t(half_ns) * 1000u + cell_overhead_ps;
     if (ps >= 1000000) { advanceMicros(static_cast<uint32_t>(ps / 1000000)); ps %= 1000000; }
   }
-  uint32_t dmstatus() const { return 0x00400082u | hart_bits; }
+  uint32_t dmstatus() const { return 0x00400082u | hart_bits | havereset; }
   uint32_t readReg(uint8_t a) {
     switch (a) {
       case 0x10: return dmcontrol;
@@ -74,6 +83,7 @@ struct Target {
   void writeReg(uint8_t a, uint32_t v) {
     if (half_ns < min_write_half) v ^= 0x00010000u;
     if (a == 0x10) {
+      if (v & (1u << 28)) havereset = 0;                          // ackhavereset
       dmcontrol = v;
       if (v & (1u << 31)) hart_bits = 3u << 8;                    // haltreq: halted
       else if (v & (1u << 30)) hart_bits = (3u << 10) | (3u << 16);   // resumereq
@@ -85,6 +95,11 @@ struct Target {
   void rise() {
     if (!driven) return;
     if (!in_frame) {
+      if (!dio && wake_cells >= 100 && wake_resets && awake) {   // the wake restarts the target (a CH32L103)
+        ++target_resets;
+        havereset = 3u << 18;
+        hart_bits = (dmcontrol & (1u << 31)) ? 3u << 8 : 3u << 10;
+      }
       wake_cells = dio ? wake_cells + 1 : (wake_cells >= 100 ? (awake = true, ++wakes, 0) : 0);
       return;
     }
@@ -100,7 +115,10 @@ struct Target {
         if (half_ns < min_read_half) out_parity = !out_parity;
       }
     } else if (pos >= 14 && pos <= 45 && write) { data = (data << 1) | bit; data_parity ^= bit; }
-    else if (pos == 46 && write && header_ok && awake && data_parity == dio) writeReg(address, data);
+    else if (pos == 46 && write && header_ok && data_parity == dio) {
+      if (awake && micros() >= drop_until_us && (address == 0x7d || address == 0x7e)) out_of_step = false;   // re-sync
+      if (linkUp()) writeReg(address, data);
+    }
     ++pos;
   }
   void dioChanged(bool from, bool to) {
@@ -109,7 +127,7 @@ struct Target {
     else in_frame = false;
   }
   bool targetBit() const {
-    if (!awake || !header_ok || write || !in_frame) return pulled;
+    if (!linkUp() || !header_ok || write || !in_frame) return pulled;
     if (pos >= 14 && pos <= 45) return (out >> (45 - pos)) & 1;
     if (pos == 46) return out_parity;
     return pulled;
@@ -313,6 +331,61 @@ int main() {
     }
     call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
     CHECK(!port.connected);
+  }
+
+  // ---- G: a host's request meeting a CH32L103's drop after the hart stopped (bench, 0.0.29-dev+f594f04, tests/hw
+  // test_wire on the L103 through the RP2350: 3 of 8 runs failed "read_register ... failed (cmderr 6)" - the hart the
+  // test had halted was no longer halted). The link drops 0.7 - 2.1 ms after a change of hart state, not always at once,
+  // so the next request - after a rest, so the PHY revives the link first - can meet it; a re-sync inside the drop leaves
+  // it down, and the revive then sent the wake pattern, which restarts this part: the hart left halt under the host.
+  // The revive now re-syncs until the drop is over; the target is never restarted, the hart stays halted, the request
+  // answers. A link silent for longer than any such drop (the target's power gone and back) still gets the wakes. ----
+  {
+    static TargetRiscvDm riscv(port, 0);
+    t.wake_resets = true;
+    for (uint32_t hold_us : {700u, 1400u, 2100u, 5000u}) {
+      phy.beginRequest();
+      Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out);   // halt, idle_clock low
+      CHECK(ok(r) && port.connected && t.hart_bits == 3u << 8);
+      const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+      const int resets = t.target_resets, wakes = t.wakes;
+      advanceMicros(400);                    // the host's next request, past the PHY's rest
+      t.drop_until_us = micros() + hold_us;  // and the drop met by it
+      t.out_of_step = true;
+      // dmi: DMSTATUS, DMCONTROL, ABSTRACTCS read (a raw look, as RiscvDm.held starts one)
+      phy.beginRequest();
+      const uint32_t t0 = micros();
+      r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 3, 0, 0x02, 0x11, 0x02, 0x10, 0x02, 0x16}, out);
+      const uint32_t took = micros() - t0;
+      const bool answered = ok(r) && out.size() >= 5 + 12 && out[2] == kStatusOk;
+      const uint32_t status = answered ? getU32(out.data() + 5) : 0;
+      CHECK(answered && (status & (3u << 8)) == (3u << 8) && !(status & (3u << 18)));   // halted, no havereset
+      CHECK(t.target_resets == resets && t.wakes == wakes);   // no wake, the target not restarted
+      CHECK(t.hart_bits == 3u << 8);
+      printf("  G drop %4u us met by a request: %s, DMSTATUS %08x, %d wakes, %d target restarts, %u.%03u ms (sim)\n",
+             hold_us, answered ? "answer" : "status", status, t.wakes - wakes, t.target_resets - resets, took / 1000,
+             took % 1000);
+      call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+      CHECK(!port.connected);
+    }
+    // a link only a wake brings back (the target's power gone and back, its link asleep): after the re-syncs, the
+    // wakes bring it back as before
+    phy.beginRequest();
+    Result r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
+    CHECK(ok(r) && port.connected);
+    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+    const int wakes = t.wakes;
+    advanceMicros(400);
+    t.awake = false;
+    phy.beginRequest();
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
+    CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && t.wakes > wakes);
+    printf("  G link asleep: %s after %d wakes\n", ok(r) ? "answer" : "status", t.wakes - wakes);
+    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+    t.wake_resets = false;
+    t.drop_until_us = 0;
+    t.out_of_step = false;
+    t.havereset = 0;
   }
 
   printf("attach-cycle: %d checks, %d failures\n", checks, failures);

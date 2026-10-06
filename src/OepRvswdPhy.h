@@ -76,6 +76,7 @@ class RvswdPhy final : public DmiPhy {
   uint32_t clockHz() const override { return dmi_ns_ ? uint32_t(53000000000ull / dmi_ns_) : 0; }
   uint32_t retries() const override { return retries_; }
   uint32_t transactions() const override { return transactions_; }
+  uint32_t revives() const override { return revives_; }
 
  protected:
   bool readWire(uint8_t address, uint32_t &value) override;   // with bounded retry (DmiPhy::read)
@@ -89,6 +90,10 @@ class RvswdPhy final : public DmiPhy {
   // Longest quiet spell the target's debug interface tolerates before the link has to be
   // brought up again. It measured out at about 1 ms; this leaves margin.
   static constexpr uint32_t kIdleUs = 300;
+  // How long the revive re-syncs a silent link before it sends the wake pattern (which resets a CH32L103): past the
+  // 0.7 - 2.1 ms a CH32L103's link stays down after a change of hart state, with margin (Ch32Dm::kSteadyMs alike).
+  static constexpr uint32_t kReviveResyncUs = 20000;
+  uint32_t revives_ = 0;
   uint32_t last_activity_us_ = 0;
   bool park_low_ = false;     // idle with SWCLK low instead of both lines high (setIdleClockLow)
   // oep-if-debug §2, the lines while the wire does not answer: rest_free_ from an exchange with no answer until one

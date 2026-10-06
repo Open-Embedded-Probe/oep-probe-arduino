@@ -1,6 +1,36 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.wire.rvswd no longer restarts a CH32L103 under a live connection. The PHY's revive (the first transaction
+  after 300 us of rest reads DMSTATUS; a link that does not answer is brought back in step) re-synced once and then sent
+  the wake pattern - and the wake restarts the L103 itself, not just its debug interface. Its link drops for 0.7 - 2.1 ms
+  after a change of hart state, not always at once, and a re-sync inside that time leaves it down: a host's request that
+  came during such a drop (or the console's DMSTATUS look) went to the wakes, the target restarted, and a hart the host
+  had halted left halt - tests/hw test_wire on the L103 through the RP2350 (0.0.29-dev+f594f04) failed 3 runs of 8 with
+  "read_register 0x100a / 0x1009 / 0x100b failed (cmderr 6)" a few requests after its halt, the hart halted again
+  afterwards (haltreq held). The revive now re-syncs, looking again after each, for up to 20 ms (kReviveResyncUs, past
+  the drop with margin, as steady's bound) and sends the wakes only to a link still silent then (a target whose power
+  went and came back); every re-sync and wake stays inside the request's wire_retry_ms. A revive inside a held group
+  could also bring a dropped link up behind it, so the look after the group passed with a write lost before it: the PHY
+  counts its revives (DmiPhy::revives) and Ch32Dm::held takes a group whose span saw one for a group that met a drop.
+  Host test (test_attach_cycle, the RVSWD PHY on the simulated target, now with an L103's wake restart and its drop held
+  against re-syncs): a riscv-dm dmi request after a rest meeting a drop of 0.7 / 1.4 / 2.1 / 5 ms right after attach's
+  halt answers the hart halted, no havereset, no wake, no restart (before: 1 / 2 / 3 / 8 wakes, each a restart,
+  havereset set); a link only a wake brings back still comes back.
+- (JA) oep.wire.rvswd は、生きている connection の下で CH32L103 を再起動しなくなった。PHY の revive（300 us 以上休んだ後の最初の
+  やり取りの前に DMSTATUS を読み、答えないリンクを同期し直す）は、1 回同期し直した後に wake のパターンを送っていた - そして wake は
+  L103 のデバッグの口だけでなく L103 そのものを再起動する。L103 のリンクは hart の状態が変わった後 0.7 - 2.1 ms 落ち（すぐとは
+  限らない）、その間の同期し直しでは戻らない: その落ちの間に来た host の要求（やコンソールの DMSTATUS の見張り）が wake に進み、
+  target が再起動し、host が止めた hart が止まった状態を出た - RP2350 越しの L103 での tests/hw test_wire（0.0.29-dev+f594f04）は
+  8 回中 3 回、halt の数要求後に「read_register 0x100a / 0x1009 / 0x100b failed (cmderr 6)」で失敗し、その後 hart はまた止まって
+  いた（haltreq を保っているため）。revive は、同期し直してはもう一度見ることを 20 ms まで（kReviveResyncUs、落ちより余裕を持って
+  長く、steady の上限と同じ）繰り返し、wake はそれでも答えないリンク（電源が落ちて戻った target）にだけ送る。同期し直しと wake は
+  すべて要求の wire_retry_ms の中。held の組の中の revive は、落ちたリンクを組の裏で戻し、組の後の見張りが、その前に失われた書き
+  込みがあっても通ってしまう: PHY は revive を数え（DmiPhy::revives）、Ch32Dm::held はその間に revive があった組を落ちに会った組と
+  する。host test（test_attach_cycle: RVSWD の PHY と模擬 target。L103 の wake での再起動と、同期し直しに対して保たれる落ちを
+  足した）: attach の halt の直後、休みの後の riscv-dm dmi の要求が 0.7 / 1.4 / 2.1 / 5 ms の落ちに会っても、hart は止まったまま、
+  havereset 無し、wake 無し、再起動無しで答える（前: wake 1 / 2 / 3 / 8 回、そのたびに再起動、havereset が立つ）。wake でしか戻ら
+  ないリンクは、これまでどおり戻る。
 - (EN) The L103's "run: timeout" (bench, 0.0.29-dev+9942787 with steady(): 2 of about 12 ch32rv uploads through the
   RP2350, print_format and wire_selftest, as before steady) shares the a0 clobber's cause: a drop that comes later than
   steady's looks, met by the run's set-up. With the link down a write is lost and a read gives the last value read; a

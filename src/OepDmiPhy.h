@@ -99,6 +99,10 @@ class DmiPhy {
   virtual uint32_t clockHz() const = 0;
   virtual uint32_t retries() const = 0;
   virtual uint32_t transactions() const = 0;
+  // The times the PHY found the link silent and brought it back on its own, inside a read or write the layer above
+  // asked for (RvswdPhy's revive after a rest). A drop met before such a revive is no longer seen by a look after it:
+  // Ch32Dm::held takes a group whose span saw one for a group that met a drop. 0: a backend that never does.
+  virtual uint32_t revives() const { return 0; }
 
   // A scan's look at a combination (oep-if-debug §1, what scan writes): the wire's wake / configuration sequence and
   // dmactive (only when DMCONTROL does not read it set), then DMSTATUS read - no write check, no scratch register, the
