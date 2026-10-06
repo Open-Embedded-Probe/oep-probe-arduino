@@ -119,6 +119,18 @@ int main() {
     CHECK(rejectedWith(r, kRejectNoConnection));
   }
 
+  // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6
+  // (oep-if-console §1; it answered no_connection) ----
+  {
+    const uint16_t swd = ResourceNumbers::take(ResourceNumbers::kConnection);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);
+    CHECK(rejectedWith(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1,
+                                                                reg::core::kUnavailableCauseWrongState}));
+    ResourceNumbers::close(swd);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);   // closed: unknown
+    CHECK(rejectedWith(r, kRejectNoConnection));
+  }
+
   printf("console: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

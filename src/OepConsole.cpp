@@ -123,8 +123,12 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     if (refused(parsed)) return parsed;
     const uint8_t mechanism = payload[2];
     if (mechanism > con::kMechanismDmseq) return unsupportedValue(out, capacity);   // not a mechanism this probe opens
-    if (!port_.connected || getU16(payload) != port_.number)
+    if (!port_.connected || getU16(payload) != port_.number) {
+      // a live connection of another wire this console does not ride on - an arm-adi (swd) one: unavailable cause 6
+      // (oep-if-console §1, §3); a number no live connection has: no_connection
+      if (ResourceNumbers::kindOf(getU16(payload)) == ResourceNumbers::kConnection) return wrongState(out, capacity);
       return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
+    }
     if (open_ && mechanism_ != mechanism) return wrongState(out, capacity);   // one live stream on a connection (§2)
     if (capacity < 3) return failed();
     bool existing = false;
