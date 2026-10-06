@@ -139,11 +139,11 @@ ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につない�
 Open Embedded Probe（OEP）の probe を Arduino で書くためのライブラリと、各 probe のファームウェア（`examples/`）。
 v1（oep-spec の `docs/oep-core.ja.md` と標準インターフェースの `docs/oep-if-*.ja.md`）を話す。凍結の前の v1 で、凍結までは仕様が壊れることがある。破壊的変更を前提とする実験段階で、互換は約束しない。
 
-**実装している仕様: oep-spec の commit `59dd028`**（`v0.x` の tag はまだ無い。versioning §6）。2026-10-06 の単純化: session_id を
+**実装している仕様: oep-spec の commit `3c96daf`**（`v0.x` の tag はまだ無い。versioning §6）。2026-10-06 の単純化: session_id を
 持つ 10 byte の要求の見出し一つ、TLV は tag(u8) len(u16)、要素の長さの無い並び、閉じた固定の形、すべての fn の describe の
-`ops`、再開なし（end はセッションが作ったものをすべて解放する）、線の試験と port_speed は `oep.link`、そして 59dd028 の、生きている
-connection に加わる attach は運ばない設定を変えないという規則。凍結までは日本語の文（`docs/*.ja.md`）が作業の文。その後のもの:
-a193272（失敗した attach は users に加えない）は attach がすでにそうしている。fn 0 の `restart`（ecd1ab9）はまだ実装していない。
+`ops`、再開なし（end はセッションが作ったものをすべて解放する）、線の試験と port_speed は `oep.link`、59dd028 の、生きている
+connection に加わる attach は運ばない設定を変えないという規則、a193272（失敗した attach は users に加えない）、そして fn 0 の
+`restart` と `restart_max_ms`（ecd1ab9、3c96daf。どのファームウェアも持つ）。凍結までは日本語の文（`docs/*.ja.md`）が作業の文。
 
 wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で、その生成物を `src/OepRegistry.h` に写している。仕様の共通の
 byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` がそのすべてをこの endpoint に当てる。

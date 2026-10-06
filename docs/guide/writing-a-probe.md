@@ -98,6 +98,12 @@ class Blink final : public oep::Interface {
 - **oep.link** (the link test, and port_speed on a UART bridge) is an optional interface: `oep::Link link(endpoint);
   endpoint.add(link);` - add it last so the fns before it keep their numbers. `endpoint.setPortSpeed(...)` puts
   port_speed in its ops.
+- **restart** (fn 0, optional, core §6.6): `endpoint.setRestart(oep::platformRestart, max_ms)` puts it in fn 0's ops
+  and `restart_max_ms` in its describe. `max_ms` is the longest from the answer until the probe answers confirm again
+  on the same transport - the boot and a USB re-enumeration included: estimate it for your board with a margin. The
+  endpoint answers first, flushes, ends the session, calls every interface's `probeRestart()` (let go of what the
+  settings keep - a slot's connection - without touching the target), releases every plan, then calls the handler,
+  which does not return (`esp_restart`, `rp2040.reboot()`). Wrap it to detach a USB device of your own first.
 
 ## 4. Pins: the table and the plan
 

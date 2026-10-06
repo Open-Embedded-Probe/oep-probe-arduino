@@ -94,6 +94,11 @@ class Blink final : public oep::Interface {
   `u32(kTagFeatures, ...)`）と、自分の tag（0x40 から）。`ops` の tag は書きません（endpoint が書きます）。
 - **oep.link**（線の試験と、UART bridge の port_speed）は任意のインターフェースです: `oep::Link link(endpoint);
   endpoint.add(link);`。前の fn の番号が変わらないよう最後に足します。`endpoint.setPortSpeed(...)` で port_speed が ops に入ります。
+- **restart**（fn 0、任意、core §6.6）: `endpoint.setRestart(oep::platformRestart, max_ms)` で fn 0 の ops に入り、describe に
+  `restart_max_ms` が出ます。`max_ms` は、応答から同じ経路で confirm にまた答えるまでの最長の時間で、起動と USB の列挙し直しを
+  含みます。ボードごとに見積もり、余裕を持たせます。endpoint は先に答えて flush し、セッションを終え、どのインターフェースにも
+  `probeRestart()` を呼び（設定が持つもの - スロットの接続 - も、target には触れずに放す）、すべての plan を解いてから handler を
+  呼びます。handler は戻りません（`esp_restart`、`rp2040.reboot()`）。自分の USB device を先に外すなら包んで渡します。
 
 ## 4. ピン: 表と plan
 

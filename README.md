@@ -147,12 +147,12 @@ the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (
 interfaces `docs/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
 no compatibility is promised.
 
-**The spec this implements: oep-spec commit `59dd028`** (no `v0.x` tag yet, versioning §6) - the 2026-10-06
+**The spec this implements: oep-spec commit `3c96daf`** (no `v0.x` tag yet, versioning §6) - the 2026-10-06
 simplification: one 10-byte request header with session_id, TLV tag(u8) len(u16), sequences without element lengths,
 closed fixed forms, the `ops` describe tag on every fn, no resume (end releases everything the session created), the
-link test and port_speed in `oep.link`, and the 59dd028 rule that an attach joining a live connection keeps the settings
-it does not carry. Until the freeze the Japanese text (`docs/*.ja.md`) is the working text. Since then: a193272 (a failed
-attach adds no user) is what attach already does; fn 0 `restart` (ecd1ab9) is not implemented yet.
+link test and port_speed in `oep.link`, the 59dd028 rule that an attach joining a live connection keeps the settings
+it does not carry, a193272 (a failed attach adds no user), and fn 0 `restart` with `restart_max_ms` (ecd1ab9, 3c96daf:
+every firmware offers it). Until the freeze the Japanese text (`docs/*.ja.md`) is the working text.
 
 The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its generated header is copied to
 `src/OepRegistry.h`, and the spec's shared byte vectors to `tests/vectors/` (`tests/host/test_vectors.cpp` runs every

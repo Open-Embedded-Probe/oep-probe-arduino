@@ -1,6 +1,53 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) fn 0 `restart` (op 0x14) and `restart_max_ms` (describe 0x4F) - oep-spec ecd1ab9 and 3c96daf (core §6.6, §7.5,
+  §12; transports §1): `Endpoint::setRestart(fn, max_ms)` puts restart in fn 0's ops and restart_max_ms in its
+  describe (raised to `restart_after_answer_ms`, 100, at least); without it the op stays unknown_operation and the tag
+  is not sent. It needs the lock (session_required / no_session / locked); request [TLV], answer completed success with
+  no payload, sent first. The session's notifications end and zero-copy data already queued goes out before the answer
+  (200 ms at most); after it the transport is flushed (not USB-Serial/JTAG's: HWCDC's flush with no TX timeout drops what
+  waits), the session ends, every interface's new `Interface::probeRestart()` lets go of what the settings keep (a
+  wire closes its connection, a slot's included, without resetting the target - a halted hart stays halted; a console
+  closes its bound stream), every plan goes, the settings' too (each channel to its free state, core §8), and 20 ms
+  after the flush (the host's USB stack takes the last packet) the handler restarts the chip: nothing more is served
+  or sent, on any transport (the request read behind the restart is dropped). `oep::platformRestart()`: esp_restart on
+  an ESP32, `rp2040.reboot()` (a watchdog reset 10 ms on, the USB controller with it) on an RP2. A serial port is back
+  at its boot speed because the chip boots (oep.link §3). Firmware/OepProbe offers it on every board, restart_max_ms
+  estimated from the boot path with a margin (not yet measured on the bench): classic ESP32 1500 ms (the UART bridge
+  stays on the bus; about 0.5 s of ROM, app image check and setup), RP2040 / RP2350 2000 ms (setup within about 0.1 s,
+  then USB re-enumeration and the OS's CDC port, up to about 1 s), ESP32-P4 3000 ms (about 0.5 s to setup, then the
+  HS composite device - HID, vendor bulk, CDC, DFU - enumerated and its drivers bound, about 1 s or more on Windows;
+  the HS device detaches first, as EspUsbDevice's own restarts do). Registry and test vectors synced from oep-spec
+  3c96daf: the four ops.json restart cases run against the endpoint (86 cases). Host tests: the ops bit and
+  restart_max_ms only with a handler, the refusals (no handler: unknown_operation; session_required, no_session,
+  locked, a critical TLV unsupported - no restart), the answer out before the handler with a non-critical TLV listed
+  as ignored, the handler kRestartSettleMs (20 ms) after it, the session's and the settings' plans released and the
+  lock free when it runs, nothing answered after it (the request behind it, a request on the other transport) and no
+  heartbeat; on the whole probe a slot's connection and its bound console closed, the hart left halted, every channel
+  free.
+- (JA) fn 0 の `restart`（op 0x14）と `restart_max_ms`（describe 0x4F）- oep-spec ecd1ab9 と 3c96daf（core §6.6、§7.5、§12、
+  transports §1）: `Endpoint::setRestart(fn, max_ms)` で restart が fn 0 の ops に入り、describe に restart_max_ms が出る
+  （`restart_after_answer_ms` の 100 より小さければそこまで上げる）。設定しなければ op は unknown_operation のままで、tag も
+  出さない。ロックが要る（session_required / no_session / locked）。要求は [TLV]、応答は payload の無い completed success で、
+  先に送る。セッションの通知を止め、すでに列に入っていた zero-copy のデータは応答の前に送り出す（多くても 200 ms）。応答の後:
+  経路を flush し（USB-Serial/JTAG は除く: TX の待ち時間 0 の HWCDC の flush は待っているものを捨てる）、セッションを終え、
+  新しい `Interface::probeRestart()` でどのインターフェースも設定が持つものを放し（線は接続を閉じる - スロットのものも - が、
+  target は reset しない: 止まっていた hart は止まったまま。コンソールは bind のストリームを閉じる）、すべての plan を、設定の
+  ものも解き（どの channel も空きの状態、core §8）、flush から 20 ms 後に（host の USB の側が最後のパケットを取る）handler が
+  チップを再起動する。その後はどの経路でも何も処理せず何も送らない（restart の後ろに読んでいた要求は捨てる）。
+  `oep::platformRestart()`: ESP32 は esp_restart、RP2 は `rp2040.reboot()`（10 ms 後の watchdog リセット。USB のコントローラも
+  リセットされる）。シリアルの口は起動するので起動時の速さに戻る（oep.link §3）。Firmware/OepProbe はどのボードでも持ち、
+  restart_max_ms は起動の道筋から余裕を持たせて見積もった（bench ではまだ測っていない）: classic ESP32 1500 ms（UART bridge は
+  bus に残る。ROM、アプリのイメージの確かめ、setup で約 0.5 s）、RP2040 / RP2350 2000 ms（約 0.1 s で setup、その後 USB の
+  列挙し直しと OS の CDC の口で約 1 s まで）、ESP32-P4 3000 ms（setup まで約 0.5 s、その後 HS の複合 device - HID、vendor bulk、
+  CDC、DFU - の列挙とドライバの結び付けで Windows では約 1 s 以上。EspUsbDevice 自身の再起動と同じく先に HS の device を外す）。
+  registry と test vector を oep-spec 3c96daf から写した: ops.json の restart の 4 件を endpoint に当てる（86 件）。host test:
+  handler のあるときだけの ops の bit と restart_max_ms、断り（handler 無し: unknown_operation。session_required、no_session、
+  locked、critical の TLV は unsupported - どれも再起動しない）、critical でない TLV を ignored に載せた応答が handler より先に
+  出ること、handler は応答から kRestartSettleMs（20 ms）後、そのときセッションの plan と設定の plan が解かれロックが空いて
+  いること、その後は何にも答えないこと（後ろの要求、もう一つの経路の要求）とハートビートが出ないこと。probe 全体では、スロットの
+  接続と bind のコンソールが閉じ、hart は止まったまま、どの channel も空き。
 - (EN) riscv-dm on a link that drops at every change of hart state (CH32L103): after each change (halt, a run's or a
   step's stop, resume, a hart found halted) the probe brings the link up and looks until it stays up (DMSTATUS a
   module's, DMCONTROL dmactive with hart 0 - a stale read shows - 3 good looks in a row, 20 ms at most). The drop can
@@ -56,7 +103,7 @@
     endpoint byte for byte. `cobsEncode` / `cobsDecode` and `DmConsole::crc8` public; `Endpoint::setMaxOpMs`;
     `ResourceNumbers::reset` for host tests.
   - after 59dd028: oep-spec a193272 (a failed attach does not add the session to the connection's users) is what attach
-    already does; ecd1ab9 (fn 0 restart) is not implemented yet.
+    already does; ecd1ab9 / 3c96daf (fn 0 restart): the restart entry above.
 - (JA) **破壊的: 2026-10-06 の wire（oep-spec 59dd028、v1 の単純化）。** これより前の wire の host、fake、ブローカーはこの
   probe と話せず、保存した設定は入れ直す。oep-spec b69ec26..59dd028 を実装する（`v0.x` の tag はまだ無い）:
   - session_id を持つ 10 byte の要求の見出し一つ（0 = セッションなし。role 0x81 は無くなった）: ロックなしの op は 0 なら
@@ -92,7 +139,7 @@
     confirm、discovery、sessions、refusals、ops、probe_config_hash）を endpoint に byte ごとに当てる。`cobsEncode` / `cobsDecode` と
     `DmConsole::crc8` を公開し、`Endpoint::setMaxOpMs` と host の試験のための `ResourceNumbers::reset` を足した。
   - 59dd028 の後: oep-spec a193272（失敗した attach はセッションを接続の users に加えない）は attach がすでにそうしている。
-    ecd1ab9（fn 0 の restart）はまだ実装していない。
+    ecd1ab9 / 3c96daf（fn 0 の restart）: 上の restart の項目。
 - (EN) Console (DMDATA / dmseq / SDI reading): a havereset in the console's DMSTATUS look counts only once ackHaveReset's own read confirms it. One bad read with bit 18 set unsynced dmseq, which dropped the input chunk on its way - up to 2 bytes of a command, which the target then never answered (a READ command left unanswered for 3 s on the X035 behind the P4 among many answered ones, gpio_matrix: a likely way) - and took the next repeat of a frame for a new one (its bytes twice, a restart marked). A DMSTATUS of all ones brings the bus back in step (the wire's configuration sequence, no debug-module register written): a link that dropped (a CH32L103 at its own restarts) read all ones under back-to-back polls with no idle time for the PHY's revive, until wire_lost_ms closed the stream. Host test: the answer carrying "RE" of "READ 13" lost, then one bad havereset read: the target gets the whole line, no restart; all ones, then the console goes on.
 - (JA) console（DMDATA / dmseq / SDI の読み）: console が DMSTATUS を見たときの havereset は、ackHaveReset 自身の読みがそれを確かめたときだけ数える。bit 18 の立った悪い読み 1 回で dmseq を未同期に戻し、送っている途中の入力のかたまり（コマンドの 2 byte まで）を捨てていて、target はそのコマンドに答えなかった（P4 の後ろの X035 の gpio_matrix で、多くの答えの中で READ が 1 回 3 s 答えなかった: ありうる道筋）。また次に出し直されたフレームを新しいものと取っていた（そのバイトが 2 回、restart の mark）。DMSTATUS が全 1 なら線の設定の手順で bus を合わせ直す（debug module のレジスタは書かない）: 落ちた link（自分で再起動した CH32L103）は、間を空けない poll では PHY の revive が働かず、wire_lost_ms でストリームが閉じるまで全 1 を読んでいた。host test: 「READ 13」の「RE」を運ぶ答えが失われ、havereset の悪い読みが 1 回: target は行をすべて受け、restart は無い。全 1 の後も console は続く。
 - (EN) riscv-dm read_block, write_block, run and step put abstractauto back as they found it (oep-if-debug §4's table: the value read in the op before touching it): read at the op's start and cleared before DATA0 is first touched, written back last, after DATA0 (a read that does not answer counts as 0). They forced it to 0 at the end, and the probe's own view of it (auto_on_) followed only its own writes: after a host's raw ABSTRACTAUTO = 1 the op's first DATA0 access - keeping the target's mailbox, moving a register through DATA0 - ran the last abstract command again. Host test: a host's raw ABSTRACTAUTO = 1, then write_block: the words land, nothing past them is written, the mailbox and GPRs as found, abstractauto 1 again.
