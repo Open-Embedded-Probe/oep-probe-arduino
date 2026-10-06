@@ -140,6 +140,8 @@ void BootGuard::poll() {
   }
 }
 
+bool BootGuard::stable() { return gSettled; }
+
 void BootGuard::planned() { recordWrite(kSettled, 0); }
 
 #if defined(ARDUINO_ARCH_RP2040)

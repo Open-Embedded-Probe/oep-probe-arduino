@@ -11,9 +11,11 @@
 //   (and a DFU interface on the HS port: the probe's own firmware update, outside OEP, part of the same USB device)
 //
 // Updating the firmware over the HS port alone: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the release's app image)
-// writes the other app partition, checks it and restarts into it; settings (NVS) stay. The new firmware counts as good
-// once the HS port has enumerated; until then the bootloader goes back to the one before at the next reset. The DFU
-// interface takes no endpoint (EP0 only). A first flash of an empty chip, or a recovery, is esptool on USB-Serial/JTAG
+// writes the other app partition, checks it and restarts into it; settings (NVS) stay. The new firmware is on trial
+// until its boot is stable (oep::BootGuard::kStableMs, 30 s, with loop() coming round under the task watchdog), whatever
+// a host does with the HS port meanwhile: a crash or a stall before then boots the one before at the next reset, and a
+// DFU update during the trial is refused (errTARGET; the firmware running stays). The DFU interface takes no endpoint
+// (EP0 only). A first flash of an empty chip, or a recovery, is esptool on USB-Serial/JTAG
 // with the merged image.
 //
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
@@ -101,10 +103,20 @@ static EspUsbDeviceCdcSerial cdc(usbDevice, "OEP");   // a name to show; every C
 static CdcStream cdcStream(cdc);
 static EspUsbDeviceDfu dfu(usbDevice, EspUsbDeviceDfuMode::Download, "OEP probe firmware");
 
-// The new image after a DFU update is on trial (the bootloader's rollback, CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE):
-// Arduino would confirm it at boot; this confirms it in loop() once the HS port has enumerated - a firmware that got
-// that far can take the next DFU update, so it is never left without a way back.
+// The new image after a DFU update is on trial (the bootloader's rollback, CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE): the
+// bootloader marks it aborted at the next boot of any kind - a crash, a power cycle, a restart - until the image is
+// confirmed. Arduino would confirm it at boot; this confirms it once the boot is stable (BootGuard::stable(): kStableMs
+// up, every loop() round within the task watchdog's kStallMs), so a crash, a panic or a stall in setup(), the at-boot
+// attach or the first rounds rolls back. It does not wait for a host: an HS port that a slow or absent host has not
+// configured yet does not hold it (confirmed at the host's configuration, as before, the trial lasted as long as the
+// host took). A restart the host asks for (oep.probe.restart) confirms first: the firmware answered it.
 extern "C" bool verifyRollbackLater() { return true; }
+static bool imageConfirmed = false;
+static void confirmImage() {
+  if (imageConfirmed) return;
+  imageConfirmed = true;
+  EspUsbDeviceFirmwareUpdate::markValid();   // nothing to do on a firmware not on trial
+}
 
 static uint8_t rxVendor[1024], rxUsj[1100], rxHid[1024], rxCdc[1100];   // serial ports: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
@@ -159,6 +171,7 @@ static char serial_[20];
 // boot path, to be measured on the bench).
 static constexpr uint32_t kRestartMaxMs = 3000;
 static void restartProbe() {
+  confirmImage();
   oep::BootGuard::planned();
   tud_disconnect();
   delay(oep::kRestartDetachMs);
@@ -275,11 +288,11 @@ void setup() {
 
 void loop() {
   oep::BootGuard::poll();
-  static bool confirmed = false;
-  if (!confirmed && usbDevice.ready()) {   // the HS port enumerated (configured by a host)
-    confirmed = true;
-    EspUsbDeviceFirmwareUpdate::markValid();   // this firmware is good (see verifyRollbackLater)
-    endpoint.setDiscoverable(true);            // the probe enumerates with the project's VID:PID (core §7.5)
+  if (!imageConfirmed && oep::BootGuard::stable()) confirmImage();   // see verifyRollbackLater
+  static bool discoverable = false;
+  if (!discoverable && usbDevice.ready()) {   // the HS port enumerated (configured by a host)
+    discoverable = true;
+    endpoint.setDiscoverable(true);           // the probe enumerates with the project's VID:PID (core §7.5)
   }
   restartAfterDfu();
   endpoint.poll();

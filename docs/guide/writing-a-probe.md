@@ -187,7 +187,10 @@ Each source file starts with the spec sections it follows.
   continue xfer on inactive ep" panic). `BootGuard` (`OepBootGuard.h`): `begin()` first in `setup()`, `poll()` in
   `loop()`; it runs the watchdogs, counts fast crash-boots, and after `kSafeAfter` of them in a row `safe()` says to
   call `config.skipBootAttach()` for that boot. On the RP2 point the SDK's `_exit` and `isr_hardfault` at
-  `BootGuard::crashed()` (`Firmware/OepProbe/Rp2.h`): a panic then resets the chip instead of halting it.
+  `BootGuard::crashed()` (`Firmware/OepProbe/Rp2.h`): a panic then resets the chip instead of halting it. A firmware
+  update on trial (an ESP32 with bootloader rollback) is confirmed once `stable()` (`kStableMs` up with `loop()` coming
+  round), not when a host first configures the device: until it is confirmed any reset rolls it back, and a slow host
+  would keep it on trial (`Firmware/OepProbe/Esp32P4.h`).
 
 ## 8. Pushes and events
 

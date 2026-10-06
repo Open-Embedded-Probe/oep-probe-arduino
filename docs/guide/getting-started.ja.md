@@ -25,7 +25,7 @@ firmware には配線を焼き込んでいません。どのピンを使うか�
 
 OepProbe が動いている ESP32-P4 は、HS の口だけで更新できます: `dfu-util -D OepProbe-esp32p4-<version>.bin`（merged ではなく
 app の image）が、もう一方の app の領域に書き、確かめてから再起動します。設定は残ります（まっさらにしたいときは
-`oep config erase <port>`）。新しい firmware が USB の列挙まで進まなければ、次のリセットで前の firmware に戻ります。一度も焼いていない
+`oep config erase <port>`）。新しい firmware は最初の 30 秒が試しの期間です: その間に落ちるか止まると、次のリセットで前の firmware に戻ります（その間の電源の入れ直しでも戻ります）。30 秒を過ぎると、host が列挙したかどうかによらず残ります。試しの期間の DFU 更新は断ります。一度も焼いていない
 チップや、起動しないチップは、上のとおり USB-Serial/JTAG で esptool を使って焼きます。
 
 ## 2. host のライブラリを入れる

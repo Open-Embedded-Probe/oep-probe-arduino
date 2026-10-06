@@ -42,6 +42,8 @@ class BootGuard {
   static constexpr uint32_t kAttachGraceMs = 5000;  // ... or this long after boot without a host
   static_assert(kWatchdogMs <= 8388 && kFeedMs * 4 <= kWatchdogMs, "the RP2040 watchdog counts at most 8388 ms");
   static_assert(kStableMs > kStallMs + kWatchdogMs, "a stall's reset still counts as a fast crash-boot");
+  static_assert(kStableMs > kAttachGraceMs + kUsbSettleMs + kStallMs,
+                "a stall in the at-boot attach resets before the boot is stable (a firmware on trial rolls back)");
 
   // First thing in setup(): reads and updates the count, starts the watchdogs.
   static void begin();
@@ -51,6 +53,9 @@ class BootGuard {
   static uint8_t crashes();
   // From loop(): loop() is alive (the stall watch); kStableMs up, the count goes back to 0.
   static void poll();
+  // This boot is stable: up kStableMs with loop() coming round (poll), no crash so far. A firmware update on trial
+  // (the ESP32-P4's DFU with bootloader rollback) is confirmed here: a crash or a stall before it rolls back.
+  static bool stable();
   // Before a restart the firmware makes on purpose (oep.probe.restart, a firmware update): not a crash.
   static void planned();
   // RP2: the panic / HardFault handlers' end - the USB device off the bus for kRestartDetachMs, then a reset (not on

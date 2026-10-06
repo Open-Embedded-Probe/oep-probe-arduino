@@ -1,6 +1,8 @@
 // Host tests: BootGuard (OepBootGuard.h) - fast crash-boots counted over resets, a safe boot after kSafeAfter of them in
 // a row, the count back to 0 after a boot up kStableMs, a restart on purpose, a reset that was no crash or a record a
-// power-on left; the USB gate of the at-boot attach (configured for kUsbSettleMs, or kAttachGraceMs without a host).
+// power-on left; the USB gate of the at-boot attach (configured for kUsbSettleMs, or kAttachGraceMs without a host);
+// stable(), where a firmware update on trial is confirmed: kStableMs of loop() rounds, whatever USB or a planned restart
+// do before it.
 #include <stdio.h>
 
 #include "OepBootGuard.h"
@@ -98,6 +100,27 @@ int main() {
   CHECK(!BootGuard::attachReady(false));
   g_millis = BootGuard::kAttachGraceMs;
   CHECK(BootGuard::attachReady(false));
+
+  // ---- stable(): the point a firmware update on trial is confirmed ----
+  boot(false);
+  CHECK(!BootGuard::stable());
+  CHECK(!BootGuard::attachReady(true));   // a host configuring the USB device does not make the boot stable
+  run(BootGuard::kAttachGraceMs + BootGuard::kUsbSettleMs);
+  CHECK(BootGuard::attachReady(true) && !BootGuard::stable());   // nor does the at-boot attach's gate opening
+  BootGuard::planned();   // a restart on purpose being made: not stable either (the sketch confirms before it itself)
+  CHECK(!BootGuard::stable());
+  run(BootGuard::kStableMs - BootGuard::kAttachGraceMs - BootGuard::kUsbSettleMs - 100);
+  CHECK(!BootGuard::stable());   // kStableMs - 100 ms up
+  run(100);
+  CHECK(BootGuard::stable());
+  boot(true);   // the next boot after a crash starts again
+  CHECK(!BootGuard::stable());
+  run(BootGuard::kStableMs);
+  CHECK(BootGuard::stable());
+  boot(false);   // without a host at all, the same point
+  run(BootGuard::kStableMs);
+  CHECK(BootGuard::stable() && BootGuard::attachReady(false));
+  CHECK(BootGuard::kStableMs > BootGuard::kAttachGraceMs + BootGuard::kUsbSettleMs + BootGuard::kStallMs);
 
   printf("boot_guard: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

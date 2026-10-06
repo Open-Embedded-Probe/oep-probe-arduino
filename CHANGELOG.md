@@ -1,6 +1,37 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4: a DFU update is confirmed once its boot is stable, not when a host first configures the HS port
+  (bench, the WeAct P4 on a WSL host: 9942787 over 3d83ffa and c75884b over 47e4b05 twice - "628848 bytes in 154
+  blocks", the reboot, then describe over HS said the image before; no replug, restart or USB-Serial/JTAG use; usbipd
+  attached the HS port only after many tries (about 60 s once); the X035 jig, attached at once, kept the same images).
+  The core's P4 sdkconfig has BOOTLOADER_APP_ROLLBACK_ENABLE; the sketch confirmed the image (markValid) in loop() at
+  usbDevice.ready(), and IDF's bootloader marks every image still pending verification aborted at the next boot of any
+  kind, so the trial lasted as long as the host took and some reset inside it rolled the image back (which reset is not
+  known yet: esp_restart and a panic reset on the P4 reset only the CPUs, the USB controllers keep their state; the
+  image itself checks: header and hash valid, chip revision 0 - max, its RAM segments end at 0x4ff149a0, the
+  bootloader's start at 0x4ff29ed0). Now: confirmed at BootGuard::stable() (kStableMs = 30 s up with loop() coming
+  round under the task watchdog), whatever the host does with USB; a crash, a panic or a stall before then still rolls
+  back (static_assert: kStableMs > kAttachGraceMs + kUsbSettleMs + kStallMs, so a stall in the at-boot attach resets
+  inside the trial); oep.probe.restart confirms first (the firmware answered it). Declared: a DFU update during the
+  30 s trial is refused (errTARGET; esp_ota_begin on an image pending verification), and a power cycle within it goes
+  back to the image before. BootGuard::stable(); host tests (test_boot_guard, 36 checks); guides getting-started /
+  writing-a-probe (EN / JA); not run on hardware yet; CHANGELOG (EN / JA)
+- (JA) ESP32-P4: DFU の更新を、host が HS の口を最初に configure したときではなく、起動が安定したときに確かなものにしました
+  （bench、WSL の host の WeAct P4: 3d83ffa の上の 9942787、47e4b05 の上の c75884b を 2 回 - "628848 bytes in 154 blocks"、
+  再起動、そのあと HS の describe は前の image だった。抜き差しも restart も USB-Serial/JTAG の使用も無い。usbipd が HS の口を
+  attach できたのは何度も試したあと（1 回は約 60 秒）。すぐ attach された X035 の治具は同じ image を保った）。core の P4 の
+  sdkconfig は BOOTLOADER_APP_ROLLBACK_ENABLE。sketch は loop() で usbDevice.ready() のときに image を確かにしていた
+  （markValid）。IDF の bootloader は、確かめ待ちのままの image を、次のどんな起動でも aborted にする。だから試しの期間は host が
+  かかっただけ続き、その間のなにかのリセットで前に戻った（どのリセットかはまだ分からない: P4 の esp_restart と panic の
+  リセットは CPU だけをリセットし、USB のコントローラは状態を保つ。image 自体は確かめた: header と hash は正しく、chip
+  revision 0 - max、RAM の segment の終わりは 0x4ff149a0、bootloader の始まりは 0x4ff29ed0）。これから: BootGuard::stable()
+  （task watchdog の下で loop() が回りながら kStableMs = 30 秒たった）で確かにする。host が USB で何をしても同じ。それより
+  前に落ちる、panic、止まるなら、これまでどおり前に戻る（static_assert: kStableMs > kAttachGraceMs + kUsbSettleMs +
+  kStallMs。起動時の attach で止まっても試しの期間の中でリセットされる）。oep.probe.restart は先に確かにする（firmware が
+  それに答えた）。宣言: 30 秒の試しの期間の DFU 更新は断る（errTARGET。確かめ待ちの image での esp_ota_begin）。その間の電源の
+  入れ直しでも前に戻る。BootGuard::stable()。host のテスト（test_boot_guard、36 checks）。guide の getting-started /
+  writing-a-probe（EN / JA）。実機ではまだ動かしていない。CHANGELOG (EN / JA)
 - (EN) Classic ESP32: UART0's RX interrupt at 32 bytes in the 128-byte FIFO, not arduino-esp32's 120 (bench, the V003 jig,
   47e4b05, a CH340 bridge: frames broke at 500000 and the probe reverted to the boot speed mid-upload; 500000 was
   clean there on 2026-10-02). The UART's interrupt runs on loop()'s core, which each SWIO frame keeps from it

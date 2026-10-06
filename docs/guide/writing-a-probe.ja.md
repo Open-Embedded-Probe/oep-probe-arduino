@@ -178,6 +178,9 @@ class Blink final : public oep::Interface {
   （`OepBootGuard.h`）: `setup()` の最初に `begin()`、`loop()` で `poll()`。watchdog を動かし、すぐに落ちた起動を数え、
   `kSafeAfter` 回続いたら `safe()` が真になるので、その起動では `config.skipBootAttach()` を呼びます。RP2 では SDK の `_exit` と
   `isr_hardfault` を `BootGuard::crashed()` に向けます（`Firmware/OepProbe/Rp2.h`）。panic で止まらず、チップを reset します。
+  試しの期間の firmware 更新（bootloader の rollback がある ESP32）は、host が最初に device を configure したときではなく、
+  `stable()`（`loop()` が回りながら `kStableMs` たった）で確かなものにします。それまではどのリセットでも前に戻り、遅い host が
+  試しの期間を延ばしてしまうためです（`Firmware/OepProbe/Esp32P4.h`）。
 
 ## 8. push と出来事
 
