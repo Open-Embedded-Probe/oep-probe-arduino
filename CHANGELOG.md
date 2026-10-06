@@ -1,6 +1,29 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32 GPIO34 / 35 were still offered to the driving roles: Firmware/OepProbe's input-only mask was
+  `0xf0 << 32` - GPIO36-39 - so 5b7ffc5 left 34 / 35 in the role_channels of I2C SDA / SCL, UART TX, SPI MISO and
+  attach's reset, and their plan checks (which follow the same mask) took them: tests/hw test_i2c_target (V003 jig)
+  picked SDA 34 / SCL 35 from role_channels, plan_apply completed, configure answered completed failed. The plan checks
+  and the declarations agreed; the mask was wrong. The mask is the library's now, `oep::kEsp32InputOnlyPins` (GPIO34-39)
+  and `oep::platformInputOnlyPins()` (it on a classic ESP32, 0 elsewhere): the firmware uses it, and the FixtureProbe
+  example marks those pins too (it offered them to UART TX). Checked every interface's plan check against its
+  role_channels - gpio line, UART RX / TX, I2C SDA / SCL, SPI SCK / MOSI / MISO / CS, logic / sampler roles, analog
+  inputs, the wires' pins and reset - on the classic ESP32, the ESP32-P4 and the RP2: each refuses unsupported exactly
+  the channels its describe leaves out (the P4 and the RP2 have no input-only pins). Host tests: on the classic ESP32
+  firmware's channel table with the library mask, planCheck agrees with role_channels channel by channel for I2C, SPI,
+  UART and gpio; SDA 34 / SCL 35 is refused unsupported.
+- (JA) classic ESP32 の GPIO34 / 35 が、まだ駆動する role に出ていた: Firmware/OepProbe の入力専用のマスクが `0xf0 << 32`
+  - GPIO36-39 - で、5b7ffc5 のあとも 34 / 35 が I2C SDA / SCL、UART TX、SPI MISO、attach の reset の role_channels に残り、
+  同じマスクに従う plan の確かめもそれを受けていた: tests/hw test_i2c_target（V003 の治具）が role_channels から SDA 34 /
+  SCL 35 を選び、plan_apply は completed、configure は completed failed だった。plan の確かめと宣言は一致しており、マスクが
+  誤っていた。マスクはライブラリのものにした: `oep::kEsp32InputOnlyPins`（GPIO34-39）と `oep::platformInputOnlyPins()`
+  （classic ESP32 でそれ、ほかは 0）。ファームはこれを使い、FixtureProbe の例もこのピンに印を付ける（UART TX に出していた）。
+  すべての interface の plan の確かめを role_channels と突き合わせた - gpio の線、UART RX / TX、I2C SDA / SCL、SPI SCK /
+  MOSI / MISO / CS、logic / sampler の role、analog の入力、wire のピンと reset - classic ESP32、ESP32-P4、RP2 で: どれも
+  describe が外したチャンネルをちょうど unsupported で断る（P4 と RP2 に入力専用のピンは無い）。host test: classic ESP32 の
+  ファームのチャンネル表とライブラリのマスクで、I2C、SPI、UART、gpio の planCheck がチャンネルごとに role_channels と
+  一致する。SDA 34 / SCL 35 は unsupported。
 - (EN) riscv-dm on a link that drops late after a change of hart state (CH32L103): what a block op keeps and gives
   back, and the register accesses run / step / the resets act on, are done in held groups - each followed by a look at
   the link (DMSTATUS a module's with authenticated set, then DMCONTROL with dmactive and hart 0 selected: a dropped link

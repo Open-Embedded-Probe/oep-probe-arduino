@@ -84,6 +84,29 @@ static void testInputOnlyNoPull() {
   const RoleAssignment tx34[] = {{1, reg::fixture_uart::kRoleTx, 34}}, rx34[] = {{1, reg::fixture_uart::kRoleRx, 34}};
   CHECK(uart.planCheck(tx34, 1) == kRejectUnsupported);
   CHECK(uart.planCheck(rx34, 1) == 0);
+  // the classic ESP32 firmware's channels with the library's input-only mask (GPIO34-39; the firmware had 36-39 only):
+  // per role, planCheck takes exactly the channels role_channels declares - UART RX / TX and the gpio line
+  PinTable esp_pins((1ull << 4) | (1ull << 5) | (1ull << 13) | (1ull << 14) | (1ull << 16) | (1ull << 17) | (1ull << 18) |
+      (1ull << 19) | (1ull << 21) | (1ull << 22) | (1ull << 23) | (1ull << 25) | (1ull << 26) | (1ull << 27) | (1ull << 32) |
+      (1ull << 33) | (1ull << 34) | (1ull << 35) | (1ull << 36) | (1ull << 39));
+  esp_pins.setInputOnly(kEsp32InputOnlyPins);
+  FixtureUart esp_uart(esp_pins, serial, 0, 2);
+  FixtureGpio esp_gpio(esp_pins, 0, 1);
+  const size_t un = esp_uart.describe(d, sizeof d);
+  const uint64_t rx = roleMask(d, un, reg::fixture_uart::kRoleRx), tx = roleMask(d, un, reg::fixture_uart::kRoleTx);
+  uint8_t g[128];
+  const size_t gn = esp_gpio.describe(g, sizeof g);
+  const uint64_t line = roleMask(g, gn, reg::fixture_gpio::kRoleLine);
+  CHECK(!(tx & kEsp32InputOnlyPins) && (rx & (1ull << 34)) && (rx & (1ull << 35)) && line == esp_pins.allowedMask());
+  int disagree = 0;
+  for (uint16_t c = 0; c < 64; ++c) {
+    const RoleAssignment as_rx[] = {{1, reg::fixture_uart::kRoleRx, c}}, as_tx[] = {{1, reg::fixture_uart::kRoleTx, c}};
+    const RoleAssignment as_line[] = {{1, reg::fixture_gpio::kRoleLine, c}};
+    if ((esp_uart.planCheck(as_rx, 1) != kRejectUnsupported) != (((rx >> c) & 1) != 0)) ++disagree;
+    if ((esp_uart.planCheck(as_tx, 1) != kRejectUnsupported) != (((tx >> c) & 1) != 0)) ++disagree;
+    if ((esp_gpio.planCheck(as_line, 1) != kRejectUnsupported) != (((line >> c) & 1) != 0)) ++disagree;
+  }
+  CHECK(disagree == 0);
 }
 
 static void testIdleModes() {

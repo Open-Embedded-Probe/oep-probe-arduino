@@ -161,6 +161,20 @@ inline uint64_t platformUnusablePins() {
   return 0;
 }
 
+// Pins of this chip that are inputs only, with no internal pulls (PinTable::setInputOnly / setNoPull: no output or pull
+// idle, out of the role_channels of a role that drives its line). Classic ESP32: GPIO34-39 (the datasheet's GPIO
+// table). The mask was 0xf0 << 32 in the firmware - GPIO36-39 only - and 34 / 35 went on being offered to I2C SDA / SCL;
+// it is the library's now, where the host tests read it. Other chips: none.
+constexpr uint64_t kEsp32InputOnlyPins = (uint64_t{1} << 34) | (uint64_t{1} << 35) | (uint64_t{1} << 36) |
+                                         (uint64_t{1} << 37) | (uint64_t{1} << 38) | (uint64_t{1} << 39);
+inline uint64_t platformInputOnlyPins() {
+#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+  return kEsp32InputOnlyPins;
+#else
+  return 0;
+#endif
+}
+
 inline void platformParkMask(uint64_t mask) {
   for (int pin = 0; pin < 64; ++pin) if ((mask >> pin) & 1) platformGpio(pin, kGpioInputFloating);
 }

@@ -167,6 +167,33 @@ int main() {
     CHECK(t2.planCheck(on34, 2) == kRejectUnsupported);
   }
 
+  {   // the classic ESP32 firmware's channels with the library's input-only mask (GPIO34-39; the firmware had 36-39
+      // only and offered 34 / 35): every channel role_channels declares for SDA / SCL passes planCheck, every other one
+      // is refused unsupported - the plan check and the declaration agree channel by channel
+    CHECK(kEsp32InputOnlyPins == (0x3full << 34));
+    static PinTable esp_pins((1ull << 4) | (1ull << 5) | (1ull << 13) | (1ull << 14) | (1ull << 16) | (1ull << 17) | (1ull << 18) |
+      (1ull << 19) | (1ull << 21) | (1ull << 22) | (1ull << 23) | (1ull << 25) | (1ull << 26) | (1ull << 27) | (1ull << 32) |
+      (1ull << 33) | (1ull << 34) | (1ull << 35) | (1ull << 36) | (1ull << 39));
+    esp_pins.setInputOnly(kEsp32InputOnlyPins);
+    static P4I2cTarget t3(esp_pins);
+    uint8_t d[128];
+    const size_t n = t3.describe(d, sizeof d);
+    const uint64_t sda = roleMask(d, n, P4I2cTarget::kRoleSda), scl = roleMask(d, n, P4I2cTarget::kRoleScl);
+    CHECK(sda == scl && !(sda & kEsp32InputOnlyPins) && (sda & (1ull << 33)) && (sda & (1ull << 4)));
+    int disagree = 0;
+    for (uint16_t c = 0; c < 64; ++c) {
+      const uint16_t other = c == 4 ? 5 : 4;
+      const RoleAssignment as_sda[] = {{0, P4I2cTarget::kRoleSda, c}, {0, P4I2cTarget::kRoleScl, other}};
+      const RoleAssignment as_scl[] = {{0, P4I2cTarget::kRoleSda, other}, {0, P4I2cTarget::kRoleScl, c}};
+      const bool declared = (sda >> c) & 1;
+      if ((t3.planCheck(as_sda, 2) != kRejectUnsupported) != declared) ++disagree;
+      if ((t3.planCheck(as_scl, 2) != kRejectUnsupported) != declared) ++disagree;
+    }
+    CHECK(disagree == 0);
+    const RoleAssignment on3435[] = {{0, P4I2cTarget::kRoleSda, 34}, {0, P4I2cTarget::kRoleScl, 35}};   // the harness's pick
+    CHECK(t3.planCheck(on3435, 2) == kRejectUnsupported);
+  }
+
   // state 0: read_rx and reset are unavailable cause 6
   CHECK(unavailableCause(call(t, P4I2cTarget::kOpReadRx, {}, out), out, 6));
   CHECK(unavailableCause(call(t, P4I2cTarget::kOpReset, {}, out), out, 6));

@@ -79,7 +79,9 @@ static constexpr uint64_t kChannels = (1ull << 4) | (1ull << 5) | (1ull << 13) |
                                       (1ull << 26) | (1ull << 27) | (1ull << 32) | (1ull << 33) | (1ull << 34) | (1ull << 35) |
                                       (1ull << 36) | (1ull << 39);
 static constexpr uint64_t kReserved = ((1ull << 40) - 1) & ~kChannels;
-static constexpr uint64_t kInputOnly = 0xf0ull << 32;   // GPIO34-39: inputs only, no internal pulls
+// GPIO34-39: inputs only, no internal pulls (0xf0 << 32 here was GPIO36-39 only: 34 / 35 were offered to I2C SDA / SCL,
+// UART TX, SPI MISO and attach's reset, and a plan putting SDA / SCL on them was taken, then configure failed)
+static constexpr uint64_t kInputOnly = oep::kEsp32InputOnlyPins;
 static constexpr uint64_t kSwioChoice = kChannels & 0xffffffffull;   // SwioPhy drives GPIO0-31
 static constexpr uint16_t kUnset = 0xfffe;                           // no pin chosen yet
 

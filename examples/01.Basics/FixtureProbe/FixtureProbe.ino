@@ -67,6 +67,9 @@ void setup() {
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
 #elif defined(ARDUINO_ARCH_ESP32)
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3): UART0 is the transport
+  // GPIO34-39 are inputs without pulls: not offered to UART TX (its role_channels), no output or pull idle
+  pins.setInputOnly(oep::platformInputOnlyPins());
+  pins.setNoPull(oep::platformInputOnlyPins());
 #endif
   Serial.begin(115200);
   oep::platformParkMask(kChannels);   // every channel Hi-Z until the host plans it

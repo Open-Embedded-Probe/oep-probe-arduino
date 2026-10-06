@@ -79,6 +79,34 @@ int main() {
   static P4SpiTarget t(pins);
   const RoleAssignment roles[] = {{0, P4SpiTarget::kRoleSck, 4}, {0, P4SpiTarget::kRoleMosi, 5},
                                   {0, P4SpiTarget::kRoleMiso, 6}, {0, P4SpiTarget::kRoleCs, 7}};
+  {   // the classic ESP32 firmware's channels with the library's input-only mask: per role, planCheck takes exactly the
+      // channels role_channels declares (MISO none of GPIO34-39, the inputs all of them)
+    static PinTable esp_pins((1ull << 4) | (1ull << 5) | (1ull << 13) | (1ull << 14) | (1ull << 16) | (1ull << 17) | (1ull << 18) |
+      (1ull << 19) | (1ull << 21) | (1ull << 22) | (1ull << 23) | (1ull << 25) | (1ull << 26) | (1ull << 27) | (1ull << 32) |
+      (1ull << 33) | (1ull << 34) | (1ull << 35) | (1ull << 36) | (1ull << 39));
+    esp_pins.setInputOnly(kEsp32InputOnlyPins);
+    static P4SpiTarget t3(esp_pins);
+    uint8_t d[160];
+    const size_t n = t3.describe(d, sizeof d);
+    CHECK(!(roleMask(d, n, P4SpiTarget::kRoleMiso) & kEsp32InputOnlyPins));
+    CHECK((roleMask(d, n, P4SpiTarget::kRoleCs) & kEsp32InputOnlyPins) == (kEsp32InputOnlyPins & esp_pins.allowedMask()));
+    const uint16_t spare[4] = {4, 5, 13, 14};
+    int disagree = 0;
+    for (uint8_t role = P4SpiTarget::kRoleSck; role <= P4SpiTarget::kRoleCs; ++role) {
+      const uint64_t declared = roleMask(d, n, role);
+      for (uint16_t c = 0; c < 64; ++c) {
+        RoleAssignment plan[4];
+        size_t k = 0, s = 0;
+        for (uint8_t r = P4SpiTarget::kRoleSck; r <= P4SpiTarget::kRoleCs; ++r) {
+          uint16_t ch = c;
+          if (r != role) { do ch = spare[s++]; while (ch == c); }
+          plan[k++] = {0, r, ch};
+        }
+        if ((t3.planCheck(plan, 4) != kRejectUnsupported) != (((declared >> c) & 1) != 0)) ++disagree;
+      }
+    }
+    CHECK(disagree == 0);
+  }
   {   // an input-only channel (the classic ESP32's GPIO34-39): left out of MISO's role_channels only, refused there
     static PinTable in_pins((1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 34));
     in_pins.setInputOnly(1ull << 34);
