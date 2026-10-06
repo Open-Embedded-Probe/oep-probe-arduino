@@ -385,9 +385,10 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   // Without ebreakm the final ebreak traps through mtvec and the application restarts
   // (the V003 loader finding, 2026-09-22). prv = M: the hart may have been stopped in U mode
   // (ArduinoCore-CH32 sketches on V3B/V4 run there), where interrupts cannot be masked; the
-  // caller masks them with mstatus in the register list.
+  // caller masks them with mstatus in the register list. Only those two (oep-if-debug §4.4): ebreaks / ebreaku as
+  // they were (it set them too).
   uint32_t dcsr = 0;
-  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0xb003u)) return false;
+  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0x8003u)) return false;
   for (size_t i = 0; i < count; ++i)
     if (!writeRegister(regnos[i], values[i])) return false;
   if (!writeRegister(0x07b1, pc)) return false;

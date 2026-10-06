@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm run sets only ebreakm and prv = M in dcsr (oep-if-debug §4.4): (dcsr | 0x8003); it also set ebreaks and ebreaku (0xb003), which the hart kept after the run. Changes what the target is left with. Host test.
+- (JA) riscv-dm の run は dcsr の ebreakm と prv = M だけを立てる（oep-if-debug §4.4）: (dcsr | 0x8003)。ebreaks と ebreaku も立てていて（0xb003）、run の後も hart に残っていた。target に残すものが変わる。host test。
 - (EN) riscv-dm dmi within max_op_ms at run time (oep-if-debug §4.1): the probe tracks the request's elapsed time, and a request that reaches max_op_ms ends at the step running then (or the next to start) with status timeout and done = that step's index - a poll that read adds its last value, a wait is cut where the limit falls (a poll of max_reads, or waits plus the time of the reads between them, ran past it). Host test.
 - (JA) riscv-dm の dmi を実行中も max_op_ms に収める（oep-if-debug §4.1）: probe は request の経過時間を数え、max_op_ms に達した request は、そのとき走っている step（または次に始める step）で status timeout、done = その step の index で終える - 読んだ poll は最後の値を足し、wait は上限のところで切る（max_reads の poll や、wait とその間の読みの時間で上限を越えて走っていた）。host test。
 - (EN) riscv-dm's high-level ops on hart 0 (oep-if-debug §4): before every op other than dmi (halt with its already-halted path, resume, reset, step, read_block, write_block, run) and before an attach joins a live connection, DMCONTROL is read and, when the host's dmi left a hartsel (or hasel) other than 0, written back with hartsel 0 - every op then returns with it 0 (block reads / writes, run and step ran their abstract commands on whatever hart the host had selected). One more DMI read per op. Host test.
