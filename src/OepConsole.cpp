@@ -97,6 +97,9 @@ bool TargetConsoleStream::openStream(uint8_t mechanism, uint8_t user, bool &exis
     if (!number) return false;
   }
   if (!driver_.start(mechanism)) { ResourceNumbers::close(number); return false; }
+  // Another mechanism or another place: a new stream, and the old one is erased (oep-if-console §2) - its bytes and marks
+  // went with it (the new stream showed the old one's marks). This probe keeps one stream per console.
+  if (!same_place) stream_.erase();
   stream_number_ = number;
   connection_ = port_.number;
   place_swdio_ = port_.swdio;

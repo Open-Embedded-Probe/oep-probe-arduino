@@ -265,6 +265,51 @@ int main() {
     CHECK(lostMarks() == 2);   // a new episode after the clear
   }
 
+  // ---- an open with another mechanism makes a new stream and erases the old one (oep-if-console §2; the new stream
+  // showed the old one's marks): its only mark is attach, its positions go on; the same mechanism again reopens it with
+  // its marks; a fixture UART's stream disappears with its plan (oep-if-fixture §2) ----
+  {
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+    CHECK(ok(r));
+    const uint16_t old_stream = uint16_t(out[0] | out[1] << 8);
+    r = call(console, TargetConsoleStream::kOpMark, cat(le16(old_stream), {0x5a}), out);
+    CHECK(ok(r));
+    const std::vector<MarkSeen> before = marksOf(console, old_stream);
+    CHECK(before.size() >= 2);
+    r = call(console, TargetConsoleStream::kOpClose, le16(old_stream), out);
+    CHECK(ok(r));
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    CHECK(ok(r) && out[2] == 0);
+    const uint16_t fresh = uint16_t(out[0] | out[1] << 8);
+    CHECK(fresh != old_stream);
+    std::vector<MarkSeen> marks = marksOf(console, fresh);
+    CHECK(marks.size() == 1 && marks[0].kind == reg::common::kMarkKindAttach);
+    if (!before.empty() && marks.size() == 1) CHECK(marks[0].serial > before.back().serial);   // serials go on
+    r = call(console, TargetConsoleStream::kOpRead, cat(le16(fresh), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
+    CHECK(ok(r) && out.size() == 11 && out[8] == 0 && out[9] == 0);   // nothing of the old stream, no gap
+    r = call(console, TargetConsoleStream::kOpRead, cat(le16(old_stream), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
+    CHECK(rejectedWith(r, kRejectNoConnection));   // the old number is gone (no_connection, core §4.3)
+    r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
+    CHECK(ok(r));
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    CHECK(ok(r) && out[2] == con::kOpenFlagsExisting && uint16_t(out[0] | out[1] << 8) == fresh);
+    marks = marksOf(console, fresh);
+    CHECK(marks.size() == 3);   // attach, closed, attach: reopened at the same place, the marks continue
+    r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
+    CHECK(ok(r));
+
+    static PinTable uart_pins(0);
+    static HardwareSerial serial;
+    static FixtureUart uart(uart_pins, serial, 1);
+    r = call(uart, FixtureUart::kOpMark, {0x33}, out);
+    CHECK(ok(r));
+    r = call(uart, FixtureUart::kOpMarks, {0, 0, 0, 0}, out);
+    CHECK(ok(r) && out.size() >= 2 && out[1] == 1);
+    uart.planRelease();
+    r = call(uart, FixtureUart::kOpMarks, {0, 0, 0, 0}, out);
+    CHECK(ok(r) && out.size() == 2 && out[1] == 0);
+  }
+
   // ---- detach with force closes the connection: its stream marks detach, then closed 4 (oep-if-debug §2's table; it
   // marked closed 4 alone); a plain detach that closes it marks closed 4 alone ----
   for (bool force : {true, false}) {

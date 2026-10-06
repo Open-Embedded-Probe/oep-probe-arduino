@@ -56,6 +56,14 @@ class PositionStream {
     if (kept_ < mark_capacity_) ++kept_;
     ++serial_;   // wraps at 2^32 (common §1.3); the slots and the count kept do not depend on it (core §2.6)
   }
+  // The stream is made anew (a console opened with another mechanism or at another place, a fixture UART's plan
+  // released; oep-if-console §2, oep-if-fixture §2): no byte and no mark of the old one is kept. The position and the
+  // serial go on (common §1.1: they never go back within a boot), and no mark says so - the stream is a new one.
+  void erase() {
+    base_ = total_;
+    kept_ = 0;
+    overflowing_ = false;
+  }
   void clear() {   // nothing before now is kept
     base_ = total_;
     overflowing_ = false;

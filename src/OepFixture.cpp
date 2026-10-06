@@ -234,6 +234,9 @@ void FixtureUart::planRelease() {
   pins_.release(owner_);
   rx_ = tx_ = -1;
   running_ = false;
+  // The stream disappears with the plan (oep-if-fixture §2): the next plan's stream does not show this one's bytes and
+  // marks. Its positions and mark serials go on (common §1.1).
+  stream_.erase();
   session_configured_ = false;   // the next plan starts from the item (or the default) again
   configured_ = ua::kUartConfiguredDefault;
 }
