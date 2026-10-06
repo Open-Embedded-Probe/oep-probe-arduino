@@ -8,7 +8,8 @@
 # states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
 # unit id, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the target console on it (core §4.3's order,
 # the send slot, the marks), and of the RVSWD PHY's attach on a
-# simulated target (what is written before the speed is verified, the checks, the budget), of the whole rvswd stack's
+# simulated target (what is written before the speed is verified, the checks, the budget), of the swio stack on a
+# simulated CH32V003 whose reset goes through its bootloader (the connection kept), of the whole rvswd stack's
 # attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries), and of the ESP32-P4 logic capture's configure on a fake PARLIO RX
 # driver and heap (samples rounded down, streaming without internal RAM for stages), of the analog scale from a frontend's
@@ -63,6 +64,10 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RVSWD -I"$h
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RVSWD -I"$here/shim" -I"$src" -o "$out-attach-cycle" \
   "$here/test_attach_cycle.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepRvswdPhy.cpp" "$src/OepFrame.cpp"
 "$out-attach-cycle"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWIO -I"$here/shim" -I"$src" -o "$out-swio" \
+  "$here/test_swio.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepSwioPhy.cpp" "$src/OepFrame.cpp" \
+  "$src/OepDmConsole.cpp"
+"$out-swio"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWD -I"$here/shim" -I"$src" -o "$out-swd" \
   "$here/test_swd.cpp" "$src/OepSwd.cpp" "$src/OepFrame.cpp"
 "$out-swd"

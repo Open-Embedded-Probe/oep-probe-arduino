@@ -28,6 +28,9 @@ class SwioPhy final : public DmiPhy {
   void release() override;
   void free() override;   // released, without the pull-up the line has while a link waits
   bool attached() const override { return attached_; }
+  // Ch32Dm's relink: the link brought back in step (resync) when the last read got nothing back - a target that reset
+  // itself through a system reset dropped the SWIO configuration and the debug module's dmactive.
+  void reinit() override;
   void write(uint8_t address, uint32_t value) override;
   uint32_t dmiNs() const override { return dmi_ns_; }
   // 1 start + 7 address + 1 direction + 32 data bits per transaction
@@ -51,6 +54,7 @@ class SwioPhy final : public DmiPhy {
   uint32_t retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   bool readRaw(uint8_t address, uint32_t &value);   // IRAM_ATTR on the definition: the attribute is ESP32-only
   bool readRetried(uint8_t address, uint32_t &value);   // up to 4 tries, within the request's wire_retry_ms
+  void resync();            // the configuration pair twice, dmactive when it reads clear (no line or write check)
   bool lineUp();            // the pull-up look (2 ms), then the line driven high
   bool configureModule();   // the configuration pair twice, dmactive when not set, the configuration read back
   bool writesLand();        // PROGBUF0 round trips, its value put back

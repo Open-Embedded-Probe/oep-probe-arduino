@@ -422,9 +422,54 @@ void SwioPhy::free() {
 
 }  // namespace oep
 
+#elif defined(OEP_HOST_FAKE_SWIO)
+// Host tests (tests/host): whole frames against a simulated target (fake_swio_io.h). A read that the target leaves
+// unanswered reads all ones (the line stays at its pull-up); one that never comes back high fails.
+#include <fake_swio_io.h>
+
+namespace oep {
+namespace {
+int gPin = -1;
+constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
+constexpr uint32_t kCfgr = 0x5aa50400;
+void writeRaw(uint8_t address, uint32_t value, bool free_after = false) { fakeSwioWrite(address, value, free_after); }
+}  // namespace
+
+bool SwioPhy::begin(int swio) {
+  gPin = swio;
+  ready_ = swio >= 0;
+  return ready_;
+}
+bool SwioPhy::usePins(int swdio, int) { return begin(swdio); }
+bool SwioPhy::readRaw(uint8_t address, uint32_t &value) {
+  uint32_t result = 0;
+  if (!fakeSwioRead(address, result)) { rest_free_ = true; return false; }
+  const DmiPhy::Outcome outcome = DmiPhy::outcomeOf(address, true, result);
+  if (outcome == DmiPhy::kAnswered) rest_free_ = false;
+  else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;
+  value = result;
+  return true;
+}
+bool SwioPhy::readWire(uint8_t address, uint32_t &value) {
+  if (!ready_) return false;
+  ++transactions_;
+  return readRetried(address, value);
+}
+void SwioPhy::write(uint8_t address, uint32_t value) {
+  if (!ready_) return;
+  ++transactions_;
+  writeRaw(address, value, rest_free_);
+}
+bool SwioPhy::lineUp() { return fakeSwioLineHigh(); }
+void SwioPhy::release() { attached_ = rest_free_ = false; }
+void SwioPhy::free() { release(); }
+
+}  // namespace oep
+
 #endif
 
-#if defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4))
+#if (defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4))) || \
+    defined(OEP_HOST_FAKE_SWIO)
 // ---- shared by the classic ESP32 and the ESP32-P4 -------------------------------------------------------------
 namespace oep {
 namespace {
@@ -436,19 +481,48 @@ constexpr uint8_t kCheckRetries = 3;
 constexpr int kCheckRounds = 2;   // x 8 patterns: about 2 ms of frames
 }  // namespace
 
+// A read that got nothing back - it failed, or DMSTATUS read all ones / all zeros (no module) - is retried with the
+// link brought back in step first (resync): a target that reset itself through a system reset - a CH32V003 whose
+// bootloader hands over to the application - drops its SWIO configuration and its debug module with it, and nothing
+// answers until the configuration pair is written again (a fresh attach worked; the connection was lost: oep-if-debug
+// §2 says a target reset does not close it). A retry starts only when it still ends within wire_retry_ms (§2).
 bool SwioPhy::readRetried(uint8_t address, uint32_t &value) {
+  auto answered = [&](bool ok, uint32_t v) { return ok && DmiPhy::outcomeOf(address, true, v) != DmiPhy::kNoAnswer; };
   uint32_t t0 = micros();
-  if (readRaw(address, value)) return true;
-  uint32_t cost = micros() - t0;   // a retry starts only when it still ends within wire_retry_ms (oep-if-debug §2)
+  bool ok = readRaw(address, value);
+  if (answered(ok, value)) return true;
+  uint32_t cost = micros() - t0;
   for (int attempt = 1; attempt < 4 && retryFits(cost); ++attempt) {
     ++retries_;
     t0 = micros();
-    const bool ok = readRaw(address, value);
+    resync();
+    uint32_t v = 0;
+    const bool got = readRaw(address, v);
     cost = micros() - t0;
     spentRetrying(cost);
-    if (ok) return true;
+    if (got) { value = v; ok = true; }
+    if (answered(got, v)) return true;
   }
-  return false;
+  return ok;   // DMSTATUS of no module: read, its value says so
+}
+
+// Back in step (oep-if-debug §3: the wake / configuration sequence of swio - the configuration pair twice - and
+// dmactive when DMCONTROL reads it clear, §1 item 2): what a target that reset itself through a system reset
+// dropped. Only while the wire does not answer (rest_free_: from a read with no answer until one answers) - a link in
+// step pays nothing for Ch32Dm's relink after a change of hart state.
+void SwioPhy::resync() {
+  for (int i = 0; i < 2; ++i) {
+    writeRaw(kDmShadowCfgr, kCfgr, rest_free_);
+    writeRaw(kDmCfgr, kCfgr, rest_free_);
+  }
+  // dmactive only when DMCONTROL plainly reads it clear (a module reset with the target): a read that did not come
+  // through is no reason for a write that would clear the haltreq a reset holds (Ch32Dm::resetHalt)
+  uint32_t control = 0;
+  if (readRaw(kDmControl, control) && control != 0xffffffffu && !(control & 1)) writeRaw(kDmControl, 1, rest_free_);
+}
+
+void SwioPhy::reinit() {
+  if (attached_ && rest_free_) resync();
 }
 
 // The wake / configuration sequence and dmactive (oep-if-debug §1 items 1 and 2, §3): the configuration pair twice -
@@ -534,6 +608,7 @@ bool SwioPhy::readWire(uint8_t, uint32_t &) { return false; }
 void SwioPhy::write(uint8_t, uint32_t) {}
 bool SwioPhy::attach() { return false; }
 void SwioPhy::release() { attached_ = false; }
+void SwioPhy::reinit() {}
 void SwioPhy::free() { attached_ = false; }
 bool SwioPhy::bringUp(uint32_t &) { return false; }
 }  // namespace oep
