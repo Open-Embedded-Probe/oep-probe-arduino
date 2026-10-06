@@ -1030,12 +1030,18 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
   size_t written = 5;
   uint16_t done = 0, nvals = 0;
   uint8_t status = kStatusOk;
+  // The whole request within max_op_ms of time (oep-if-debug §4.1): a request that reaches it ends at the step running
+  // then (or the next to start) with status timeout, done = that step's index - a poll that read adds its last value.
+  const uint32_t began_us = micros();
+  constexpr uint32_t kMaxOpUs = kMaxOpMs * 1000u;
+  auto over = [&]() { return micros() - began_us >= kMaxOpUs; };
   at = 2;
   for (uint16_t i = 0; i < count && status == kStatusOk; ++i) {
     const uint8_t kind = p[at];
     const uint8_t *s = p + at + 1;
     const size_t step_written = written;
     const uint16_t step_nvals = nvals;
+    if (over()) { status = kStatusTimeout; break; }
     switch (kind) {
       case kStepWrite:
         if (!dm.writeDmi(s[0], getU32(s + 1))) status = kStatusLine;
@@ -1053,7 +1059,7 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
         const uint16_t max = getU16(s + 9);
         bool met = false;
         uint32_t last = 0;
-        for (uint16_t k = 0; k < (max ? max : 1) && !met && status == kStatusOk; ++k) {   // max 0: one read
+        for (uint16_t k = 0; k < (max ? max : 1) && !met && status == kStatusOk && !(k && over()); ++k) {   // max 0: one read
           uint32_t v = 0;
           if (!readStep(s[0], v)) status = kStatusLine;
           else { last = v; met = (v & mask) == want; }
@@ -1063,10 +1069,14 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
         at += 12;
         break;
       }
-      case kStepDelay:
-        delayMicroseconds(getU32(s));
+      case kStepDelay: {
+        const uint32_t left = kMaxOpUs - (micros() - began_us);   // over() was false: some is left
+        const uint32_t us = getU32(s);
+        delayMicroseconds(us < left ? us : left);
+        if (us >= left) status = kStatusTimeout;
         at += 5;
         break;
+      }
       case kStepPollTime: {
         const uint32_t mask = getU32(s + 1), want = getU32(s + 5), max_us = getU32(s + 9);
         bool met = false;
@@ -1076,7 +1086,7 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
           uint32_t v = 0;
           if (!readStep(s[0], v)) status = kStatusLine;
           else { last = v; met = (v & mask) == want; }
-        } while (!met && status == kStatusOk && micros() - started < max_us);
+        } while (!met && status == kStatusOk && micros() - started < max_us && !over());
         if (status == kStatusOk && !met) status = kStatusTimeout;
         if (status != kStatusLine) { putU32(out + written, last); written += 4; ++nvals; }
         at += 14;

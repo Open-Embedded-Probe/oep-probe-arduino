@@ -496,6 +496,26 @@ int main() {
     CHECK(!phy.halted && phy.dmcontrol == 1 && !dm.halted());
     CHECK(millis() - before >= 2 * reg::kLimitDmWaitMs && millis() - before <= 2 * reg::kLimitDmWaitMs + 10);
     phy.ignore_halt = false;
+    // a dmi request within max_op_ms of time (oep-if-debug §4.1): one that reaches it ends at that step with status
+    // timeout, done = the step's index (it ran on: a poll of 65535 reads at 200 us each took 13 s)
+    phy.read_us = 200;
+    phy.data0 = 0;
+    uint32_t t0 = millis();
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x03, 0x04, 0xff, 0xff, 0xff, 0xff, 1, 0, 0, 0,
+                                            0xff, 0xff}, out);
+    CHECK(out.size() == 9 && out[0] == 0 && out[2] == kStatusTimeout && out[3] == 1);
+    CHECK(millis() - t0 >= kMaxOpMs && millis() - t0 <= kMaxOpMs + 5);
+    // waits adding up to max_op_ms (allowed) with a read between: the last wait is cut where the request reaches it
+    const uint32_t half_us = kMaxOpMs * 500u;
+    Bytes waits = {conn[0], conn[1], 3, 0, 0x04};
+    for (int b = 0; b < 4; ++b) waits.push_back(uint8_t(half_us >> (8 * b)));
+    waits.insert(waits.end(), {0x02, 0x04, 0x04});
+    for (int b = 0; b < 4; ++b) waits.push_back(uint8_t(half_us >> (8 * b)));
+    t0 = millis();
+    r = call(riscv, TargetRiscvDm::kOpDmi, waits, out);
+    CHECK(r.detail == kOutcomePartial && out.size() == 9 && out[0] == 2 && out[2] == kStatusTimeout && out[3] == 1);
+    CHECK(millis() - t0 >= kMaxOpMs && millis() - t0 <= kMaxOpMs + 1);
+    phy.read_us = 10;
     // the high-level ops on hart 0 (oep-if-debug §4): a hartsel the host's dmi left goes back to 0 (it was left)
     for (uint8_t op : {TargetRiscvDm::kOpHalt, TargetRiscvDm::kOpResume, TargetRiscvDm::kOpHalt}) {
       r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x10, 0x01, 0x00, 0x05, 0x00}, out);
