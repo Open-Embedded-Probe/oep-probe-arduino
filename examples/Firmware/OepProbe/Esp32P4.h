@@ -21,7 +21,7 @@
 // the unit id (the MAC, lowercase hex); its iProduct "OEP probe (ESP32-P4)" is a name for people. USB-Serial/JTAG keeps the
 // chip's fixed ID: a host reaches it by the user choosing its port. describe discoverable is 1 once the HS port has
 // enumerated (a board with only USB-Serial/JTAG wired never gets there and says 0).
-// How a host tells the ports apart inside a device known to be OEP (core §3.3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
+// How a host tells the ports apart inside a device known to be OEP (transports §3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
 //
@@ -58,7 +58,7 @@
 
 static constexpr uint16_t kUnset = 0xfffe;                        // no pair chosen yet
 
-// The vendor bulk function with OEP's subclass / protocol in its interface descriptor (core §3.3).
+// The vendor bulk function with OEP's subclass / protocol in its interface descriptor (transports §3).
 class OepVendor final : public EspUsbDeviceVendor {
  public:
   using EspUsbDeviceVendor::EspUsbDeviceVendor;
@@ -68,7 +68,7 @@ class OepVendor final : public EspUsbDeviceVendor {
     return n;
   }
 };
-// The vendor HID with OEP's usage page / usage at the top of its report descriptor (core §3.3).
+// The vendor HID with OEP's usage page / usage at the top of its report descriptor (transports §3).
 class OepHid final : public EspUsbDeviceHidVendor {
  public:
   using EspUsbDeviceHidVendor::EspUsbDeviceHidVendor;
@@ -107,6 +107,7 @@ static uint8_t rxVendor[1024], rxUsj[1100], rxHid[1024], rxCdc[1100];   // seria
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(bulk, rxVendor, sizeof rxVendor, txBuffer, sizeof txBuffer, {1024, 4096, 8},
                               oep::Endpoint::kVendorBulk, 1);
+static oep::Link oepLink(endpoint);   // oep.link (oep-if-link)
 
 // Reserved: GPIO24/25 (USB-Serial/JTAG). Every other GPIO is a channel the host may give to anything.
 static constexpr uint64_t kReserved = (1ull << 24) | (1ull << 25);
@@ -161,7 +162,7 @@ void setup() {
   Serial.setTxTimeoutMs(0);   // a port nobody reads never stops loop()
   Serial.begin(115200);
 
-  oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (core §3.3)
+  oep::platformUnitId(reinterpret_cast<uint8_t *>(serial_), sizeof serial_);   // the USB serial is the unit id (transports §3)
   EspUsbDeviceConfig usb;
   usb.vid = oep::reg::kUsbProjectVid;   // the project's VID:PID (registry usb, PID-USE.md)
   usb.pid = oep::reg::kUsbProjectPid;
@@ -176,7 +177,7 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
-  // describe discoverable: set in loop() once the HS port has enumerated with the project's VID:PID (core §3.3 / §7.5)
+  // describe discoverable: set in loop() once the HS port has enumerated with the project's VID:PID (transports §3, core §7.5)
 
   rvswd.pin_choice = kChannels;
   rvswd.pins = &pins;
@@ -209,6 +210,7 @@ void setup() {
   endpoint.add(swioWire);   // after the group: the fns before it keep their numbers
   endpoint.add(swioConsole);
   config.addPlace(swioWire, swioConsole);   // a slot on the one wire (CH32V00x): the second place
+  endpoint.add(oepLink);   // oep.link (the link test), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   config.load();

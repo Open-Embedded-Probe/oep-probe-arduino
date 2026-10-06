@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Streams over the P4 HS port's EspUsbDevice functions: the vendor HID (count(u16) report framing, report ID first on
-// output) and a CDC port that never waits long (a serial port: frames and raw bytes, oep-core §3.4).
+// output) and a CDC port that never waits long (a serial port: frames and raw bytes, oep-transports §4).
 #pragma once
 #include <EspUsbDevice.h>
 #include <class/cdc/cdc_device.h>   // EspUsbDevice's TinyUSB: the CDC FIFO's free room
@@ -42,7 +42,7 @@ class HidStream final : public Stream {
       if (d && r.reportId == 0 && len == kReport + 1 && d[0] == ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) { ++d; --len; }
       if (len < 2 || !d) return;
       size_t n = d[0] | (d[1] << 8);
-      if (n > len - 2) return;   // a count over what the report carries: the report is discarded whole (core §3.1)
+      if (n > len - 2) return;   // a count over what the report carries: the report is discarded whole (transports §1)
       for (size_t i = 0; i < n; ++i) { const size_t next = (head_ + 1) % sizeof rx_; if (next == tail_) return; rx_[head_] = d[2 + i]; head_ = next; }
     });
   }

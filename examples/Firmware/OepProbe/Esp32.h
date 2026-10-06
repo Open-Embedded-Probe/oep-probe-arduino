@@ -4,7 +4,7 @@
 // Classic ESP32 (profile esp32), on a board with a USB-UART bridge (DevKitC and the like).
 //
 // Transport: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
-// below) - the probe's one transport, serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-core §3.4). The bridge's auto-reset
+// below) - the probe's one transport, serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-transports §4). The bridge's auto-reset
 // circuit resets the ESP32 when the port is opened with DTR / RTS in the wrong order: a host opens it with both on
 // (host guide §1). The bridge's USB ID is not the project's VID:PID, so describe discoverable stays 0: a host reaches this
 // probe by the user choosing its port, then asking (confirm).
@@ -40,8 +40,9 @@ static uint8_t rxBuffer[1024];   // the encoded candidate: cobsFrameMax(512)
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 1024, 2},
                               oep::Endpoint::kUartBridge);
+static oep::Link oepLink(endpoint);   // oep.link (oep-if-link)
 
-// port_speed (oep-core §3.5): the host may raise UART0's baud for its session; every revert goes back to 115200, the
+// port_speed (oep-if-link §3): the host may raise UART0's baud for its session; every revert goes back to 115200, the
 // boot speed. On unless built with -DOEP_PORT_SPEED=0 (then no describe port_speed, the op unknown_operation).
 #ifndef OEP_PORT_SPEED
 #define OEP_PORT_SPEED 1
@@ -149,6 +150,7 @@ void setup() {
   endpoint.add(group);
   group.addTrack(capture, capture);
   group.addTrack(analog, analog);
+  endpoint.add(oepLink);   // oep.link: the link test and port_speed (oep-if-link), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot

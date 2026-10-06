@@ -24,7 +24,7 @@
 //   oep config show  <port>
 //
 // Then the probe's USB serial port shows the target's console from boot, and a flash tool still talks OEP on the same
-// port: during its session the console is held and resumes, afterwards, from the target's last reset (core §3.4).
+// port: during its session the console is held and resumes, afterwards, from the target's last reset (transports §4).
 // Saved settings belong to this firmware's interface list: another firmware leaves them unapplied.
 #include <OepBind.h>
 #include <OepCh32Dm.h>

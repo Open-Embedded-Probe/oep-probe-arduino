@@ -13,7 +13,7 @@
 #include <OepPlatform.h>
 
 // The transport: the board's Serial. On an RP2040 / RP2350 that is USB CDC; on a classic ESP32 it is UART0 through the
-// board's USB-UART bridge. Both are serial ports: OEP frames go as 0x00 <COBS> 0x00 (core §3.1), and the kind is what
+// board's USB-UART bridge. Both are serial ports: OEP frames go as 0x00 <COBS> 0x00 (transports §1), and the kind is what
 // the describe tells the host (core §7.5).
 #if defined(ARDUINO_ARCH_RP2040)
 static constexpr uint8_t kTransport = oep::Endpoint::kUsbCdc;

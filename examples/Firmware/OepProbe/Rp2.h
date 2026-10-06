@@ -3,7 +3,7 @@
 
 // RP2040 / RP2350 (built for the Raspberry Pi Pico / Pico 2; profiles rp2040 / rp2350).
 //
-// Transport: USB CDC (Serial), a serial port: COBS frames (oep-core §3.1). The USB device is the project's VID:PID
+// Transport: USB CDC (Serial), a serial port: COBS frames (oep-transports §1). The USB device is the project's VID:PID
 // 1209:4F45 (registry usb; PID-USE.md), serial = the unit id, describe discoverable 1; its iProduct "OEP probe (RP2040)" /
 // "(RP2350)" is a name for people.
 //
@@ -53,6 +53,7 @@ static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
                               oep::Endpoint::kUsbCdc, 0);
+static oep::Link oepLink(endpoint);   // oep.link (oep-if-link)
 
 static oep::PinTable pins(kChannels);
 
@@ -92,7 +93,7 @@ void setup() {
   USB.setProduct(kProduct);   // a name for people; no host identifies the probe by it
   static uint8_t serial[17];
   oep::platformUnitId(serial, sizeof serial);
-  USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (core §3.3)
+  USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (transports §3)
   USB.connect();
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
@@ -108,7 +109,7 @@ void setup() {
   swd.pin_choice = kChannels;
   swd.pins = &pins;
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setDiscoverable(true);   // its one transport is USB with the project's VID:PID (core §3.3 / §7.5)
+  endpoint.setDiscoverable(true);   // its one transport is USB with the project's VID:PID (transports §3, core §7.5)
   endpoint.add(wireRvswd);
   endpoint.add(riscvDm);
   endpoint.add(console);
@@ -124,6 +125,7 @@ void setup() {
   config.setPins(&pins);   // the idle item sets these pins' free state
   analog.setPins(&pins, 7);   // PinTable owners: gpio 1, uart 2, the analog 7 (its pads go analog)
   endpoint.add(analog);   // after config: the fns before it keep their numbers
+  endpoint.add(oepLink);   // oep.link (the link test), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
