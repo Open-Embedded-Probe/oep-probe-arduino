@@ -62,6 +62,11 @@ class FakePhy final : public DmiPhy {
   // stale: the target lost its power and came back - the link the probe holds is out of step and reads all ones
   // until it is brought up afresh (attach() from not attached); the module then answers with havereset set
   bool stale = false, havereset = false;
+  // drop_on_change: the link drops when the hart changes state (a CH32L103): reads all ones until reinit() (Ch32Dm's
+  // relink) brings it back in step
+  bool drop_on_change = false, dropped = false;
+  int reinits = 0;
+  void reinit() override { dropped = false; ++reinits; }
 
   bool attach() override {
     if (attached_flag) return true;
@@ -103,7 +108,7 @@ class FakePhy final : public DmiPhy {
     advanceMicros(read_us);
     if (!present || !attached_flag) return false;
     if (stuck) { value = stuck_value; return true; }
-    if (stale) { value = 0xffffffffu; return true; }
+    if (stale || dropped) { value = 0xffffffffu; return true; }
     if (flaky) {   // the RVSWD PHY's way: retries while the request's allowance lasts, then a failed read
       while (retryLeft()) { g_millis += 1; spentRetrying(1000); ++retry_reads; }
       return false;
@@ -136,8 +141,10 @@ class FakePhy final : public DmiPhy {
     if (address == 0x10) {
       dmcontrol = value;
       hartsel = value & 0x07ffffc0u;
+      const bool was = halted;
       if ((value & (1u << 31)) && !ignore_halt) { halted = true; resumeack = false; }
       if ((value & (1u << 30)) && !ignore_resume) { halted = step_returns; resumeack = true; }
+      if (drop_on_change && ((value & (3u << 30)) && (halted != was || (value & (1u << 30))))) dropped = true;
       if (value & (1u << 28)) havereset = false;   // ackhavereset
     }
   }
@@ -566,6 +573,25 @@ int main() {
     CHECK(r.resolution == kResolutionCompleted && phy.dcsr_written == 0x8043u);
     CHECK(phy.dcsr_writes.size() == 2 && phy.dcsr_writes[0] == 0xb043u);   // for the run: ebreaks / ebreaku too
     phy.model_dcsr = false;
+    // a target whose DMI link drops at every change of hart state (a CH32L103: DMSTATUS reads all ones until the link
+    // is brought up again): run, step and resume relink on such a DMSTATUS as on a failed read. They relinked only on a
+    // failed read, and run timed out with the hart stopped at its ebreak (ch32rv uploads through the RP2350, 1c940ca)
+    phy.drop_on_change = true;
+    r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
+    CHECK(ok(r) && phy.halted);
+    phy.step_returns = true;   // the run reaches its ebreak at once
+    uint32_t before_run = millis();
+    r = call(riscv, TargetRiscvDm::kOpRun, {conn[0], conn[1], 0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 0, 0}, out);   // 1000 ms
+    CHECK(ok(r) && out.size() >= 11 && out[0] == kStatusOk && out[1] == reg::target_riscv_dm::kRunStoppedStopped);
+    CHECK(millis() - before_run < 50);
+    r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
+    CHECK(ok(r) && out.size() == 10 && out[0] == kStatusOk);
+    phy.step_returns = false;
+    r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
+    CHECK(ok(r) && !phy.halted);
+    r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
+    CHECK(ok(r) && phy.halted);
+    phy.drop_on_change = phy.dropped = false;
     // the high-level ops on hart 0 (oep-if-debug §4): a hartsel the host's dmi left goes back to 0 (it was left)
     for (uint8_t op : {TargetRiscvDm::kOpHalt, TargetRiscvDm::kOpResume, TargetRiscvDm::kOpHalt}) {
       r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x10, 0x01, 0x00, 0x05, 0x00}, out);

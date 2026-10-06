@@ -54,6 +54,14 @@ void Ch32Dm::relink() {
   phy_.write(kAbstractCs, 0x700);
 }
 
+// DMSTATUS of a module (oep-if-debug §1: a found version). false: the read failed, or it came back all zeros / all
+// ones - no module behind it. A CH32L103 drops its DMI link when the hart changes state and the line then reads all
+// ones: the waits for a state (run, step, resume) bring the link up again (relink) on either, as a failed read. They
+// relinked only on a failed read, so an all-ones DMSTATUS left the link down for the whole wait - 0.0.28 took all ones
+// as halted (bit 9) and relinked; since the version check (92c13a3) the run timed out (ch32rv uploads to the L103
+// through the RP2350: run timeout 3 of 6, fault 1 of 6, 1c940ca).
+bool Ch32Dm::moduleStatus(uint32_t &status) { return phy_.read(kDmStatus, status) && dmVersionKnown(status); }
+
 // Measure the link speed again (the target's clock may have changed), then put the abstract-command block back in
 // a known state: the search re-syncs the bus once per candidate and leaves whatever the probes did behind.
 void Ch32Dm::retune() {
@@ -202,7 +210,7 @@ bool Ch32Dm::resume() {
   const uint32_t started = millis();
   do {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status) || !dmVersionKnown(status)) continue;   // all ones has allresumeack set too
+    if (!moduleStatus(status)) { relink(); continue; }   // all ones has allresumeack set too
     if (status & (1u << 17)) ok = true;                          // allresumeack
     else if ((status & (1u << 11)) && !(status & (1u << 9)))
       ok = true;                                                 // allrunning, not halted
@@ -449,8 +457,8 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   bool halted = false;
   while (!expired()) {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status)) { relink(); continue; }
-    if (dmHalted(status)) { halted = true; break; }
+    if (!moduleStatus(status)) { relink(); continue; }
+    if (status & (1u << 9)) { halted = true; break; }
   }
   phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
   phy_.write(kAbstractCs, 0x700);
@@ -550,8 +558,8 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   const uint32_t started = millis();
   do {
     uint32_t status = 0;
-    if (!phy_.read(kDmStatus, status)) { relink(); continue; }
-    if (dmHalted(status)) { halted = true; break; }
+    if (!moduleStatus(status)) { relink(); continue; }
+    if (status & (1u << 9)) { halted = true; break; }
   } while (millis() - started < kDmWaitMs);
   if (halted) {
     phy_.write(kDmControl, 0x80000001);
