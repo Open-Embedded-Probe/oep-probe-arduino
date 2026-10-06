@@ -303,6 +303,12 @@ void RvswdPhy::exchangeEnds(DmiPhy::Outcome outcome) {
 // neither the 100-clock burst nor 100-236 clocks with SWDIO held high or low set havereset there (wch-protocols
 // E170, 2026-09-26) - the reset is the L103's, so keep the wake off re-syncs for the parts that do it.
 void RvswdPhy::configureBus(bool with_wake) {
+  // The wake / configuration sequence goes out at T >= 500 ns and >= 1 / (2 x max_speed) - the slowest period - whatever
+  // period the link runs at (oep-if-debug §3.1); the link goes back to its own period after it. A re-sync of a link
+  // tuned faster (Ch32Dm's relink, the revive below) sent the pair at that faster period.
+  const uint32_t was = half_ns_;
+  const bool slower = half_ns_ < slowestNs();
+  if (slower) setHalf(slowestNs());
   gIo.bothHigh();
   ioDrive(swdio_, swclk_);
   delayMicroseconds(20);
@@ -322,6 +328,7 @@ void RvswdPhy::configureBus(bool with_wake) {
   }
   // The abstract-command block (ABSTRACTAUTO, cmderr) is the debug module's business, not the bus's: Ch32Dm
   // clears it when it attaches and whenever it brings the link up again (Ch32Dm::relink).
+  if (slower) setHalf(was);
 }
 
 // Back in step at `half` before its speed is verified (oep-if-debug §1): the configuration pair goes out at the slowest
@@ -467,9 +474,10 @@ bool RvswdPhy::bringUp(uint32_t &dmstatus) {
 bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
   ioReclaim(swdio_, swclk_);
-  setHalf(half_ns);
+  setHalf(slowestNs());   // the wake / configuration and dmactive at the slowest period (oep-if-debug §1, §3.1)
   configureBus(true);
   activate();
+  setHalf(half_ns);       // the look at this period
   dmstatus = 0;
   const bool ok = readRaw(kDmStatus, dmstatus);
   if (!keep_driven) { ioRelease(swdio_, swclk_); attached_ = false; }

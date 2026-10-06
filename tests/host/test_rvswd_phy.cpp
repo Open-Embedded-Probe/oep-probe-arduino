@@ -269,6 +269,34 @@ int main() {
     phy.free();
   }
 
+  // ---- a link tuned faster re-syncs with the configuration pair at the slowest period (oep-if-debug §3.1: T >= 500 ns
+  //      and >= 1 / (2 x max_speed)): Ch32Dm's relink (reinit) and the revive after a rest (they went at the link's) ----
+  {
+    t.reset(); t.begun = true;
+    phy.setMaxHz(0);
+    CHECK(phy.attach());
+    CHECK(phy.halfNs() < 500);
+    const uint32_t fast = phy.halfNs();
+    t.writes.clear();
+    phy.reinit();
+    advanceMicros(1000);         // past the rest: the next transaction revives the link
+    t.min_read_half = 500;       // and its first look fails at the fast period: the re-sync, then wakes
+    phy.beginRequest();
+    uint32_t v = 0;
+    phy.read(0x11, v);
+    int pairs = 0;
+    bool slow = true;
+    for (const Write &w : t.writes) {
+      if (w.address != 0x7d && w.address != 0x7e) continue;
+      ++pairs;
+      slow &= w.half_ns >= 500;
+    }
+    CHECK(pairs >= 8 && slow);
+    CHECK(phy.halfNs() == fast);   // the link back at its own period
+    phy.free();
+    phy.setMaxHz(1000000);
+  }
+
   // ---- a slow ceiling: the checks shorten so the attach stays inside the budget ----
   {
     t.reset(); t.begun = true;
