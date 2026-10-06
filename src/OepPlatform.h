@@ -17,6 +17,7 @@
 
 #if defined(ARDUINO_ARCH_RP2040)
 #include <hardware/gpio.h>
+#include <hardware/uart.h>
 #include <pico/unique_id.h>
 #if !defined(USE_TINYUSB)
 #include <USB.h>
@@ -24,6 +25,7 @@
 #endif
 #elif defined(ARDUINO_ARCH_ESP32)
 #include <driver/gpio.h>
+#include <freertos/semphr.h>
 #endif
 
 namespace oep {
@@ -337,8 +339,39 @@ inline uint64_t platformUartTxMask(int uart_index) {
 }
 #endif
 
-inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, uint32_t config = SERIAL_8N1) {
+#if defined(ARDUINO_ARCH_ESP32)
+// The UART's receive interrupt fires at kUartRxFifoFull bytes in its kUartRxFifo-byte RX FIFO (and at the RX timeout).
+// arduino-esp32 sets 120 above 57600 baud: 8 bytes left, 40 us at 2000000, before the hardware drops what comes next
+// (FIFO overflow) - shorter than an interrupt-off SWIO frame (up to SwioPhy::kIrqOffMaxUs) or an RVSWD frame at attach's
+// period (about 55 us) on the core that runs the interrupt. At 32 the rest is 96 bytes: 480 us at 2000000.
+constexpr uint8_t kUartRxFifoFull = 32;
+constexpr uint32_t kUartRxFifo = 128;
+#if !CONFIG_FREERTOS_UNICORE
+namespace detail {
+struct UartBeginJob {
+  OepUart *serial;
+  uint32_t baud, config;
+  int rx, tx;
+  SemaphoreHandle_t done;
+};
+inline void uartBeginTask(void *arg) {
+  UartBeginJob *job = static_cast<UartBeginJob *>(arg);
+  job->serial->begin(job->baud, job->config, job->rx, job->tx);
+  xSemaphoreGive(job->done);
+  vTaskDelete(nullptr);
+}
+}  // namespace detail
+#endif
+#endif
+
+// The UART started at baud / config on pins rx / tx. irq_core (ESP32, dual core): the core its interrupt runs on - the
+// ESP-IDF driver allocates it on the core that installs the driver, so begin() runs there, in a task pinned to it, when
+// that is not the caller's (a core that turns its interrupts off for bit-banged frames would hold the receive
+// interrupt off). -1: the caller's core. The end() later frees it from any core (esp_intr_free goes through esp_ipc).
+inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, uint32_t config = SERIAL_8N1,
+                              int irq_core = -1) {
 #if defined(ARDUINO_ARCH_RP2040)
+  (void)irq_core;
   // Only pins the UART reaches (setRX / setTX panic otherwise; the fixture's role masks keep them out upstream).
   const int index = &serial == &Serial1 ? 0 : 1;   // Serial1 = uart0, Serial2 = uart1 in arduino-pico
   if (rx < 0 || tx < 0 || rx > 63 || tx > 63) return false;
@@ -347,10 +380,47 @@ inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, ui
   serial.begin(baud, static_cast<uint16_t>(config));
   return true;
 #elif defined(ARDUINO_ARCH_ESP32)
-  serial.begin(baud, config, rx, tx);
+#if !CONFIG_FREERTOS_UNICORE
+  if (irq_core >= 0 && irq_core != static_cast<int>(xPortGetCoreID())) {
+    static StaticSemaphore_t buffer;
+    static SemaphoreHandle_t done = xSemaphoreCreateBinaryStatic(&buffer);
+    detail::UartBeginJob job = {&serial, baud, config, rx, tx, done};
+    // 4096: the driver's install (esp_intr_alloc, the ring buffers) and a log (P4SpiTarget's install task alike)
+    if (xTaskCreatePinnedToCore(detail::uartBeginTask, "oep_uart_begin", 4096, &job, uxTaskPriorityGet(nullptr), nullptr,
+                                irq_core) != pdPASS)
+      return false;
+    xSemaphoreTake(done, portMAX_DELAY);
+  } else
+#endif
+  {
+    (void)irq_core;
+    serial.begin(baud, config, rx, tx);
+  }
+  serial.setRxFIFOFull(kUartRxFifoFull);   // after begin(): begin() sets its own (120 above 57600 baud)
   return true;
+#elif defined(OEP_HOST_FAKE_UART)
+  return serial.fakeBegin(baud, rx, tx, config, irq_core);
 #else
-  (void)serial; (void)baud; (void)rx; (void)tx; (void)config;
+  (void)serial; (void)baud; (void)rx; (void)tx; (void)config; (void)irq_core;
+  return false;
+#endif
+}
+
+// Bytes the UART's hardware dropped since the last call that the core does not report itself: true once per such
+// overrun (or several merged), cleared by the call. RP2: the PL011's receive status OE (set the moment a byte comes to
+// a full RX FIFO, kept until cleared through UARTECR); arduino-pico's interrupt handler reads the data register alone
+// and keeps the byte that carries the flag, so the bytes dropped before it went unreported. ESP32: the driver reports
+// its FIFO overflow as an event (FixtureUart's onReceiveError): false.
+inline bool platformUartTakeOverrun(OepUart &serial) {
+#if defined(ARDUINO_ARCH_RP2040)
+  uart_hw_t *hw = uart_get_hw(&serial == &Serial1 ? uart0 : uart1);
+  if (!(hw->rsr & UART_UARTRSR_OE_BITS)) return false;
+  hw->rsr = UART_UARTRSR_OE_BITS;   // any write to UARTECR clears the errors (an overrun since the look is merged here)
+  return true;
+#elif defined(OEP_HOST_FAKE_UART)
+  return serial.fakeTakeOverrun();
+#else
+  (void)serial;
   return false;
 #endif
 }

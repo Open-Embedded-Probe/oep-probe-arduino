@@ -102,6 +102,10 @@ class FixtureUart final : public Interface, public BindSource {
   // describe declares role_channels from these, planCheck refuses others as unsupported - before the core's pin
   // setters are reached (arduino-pico's SerialUART::setRX / setTX panic on a pin the UART cannot use).
   void setRoleChannels(uint64_t rx_mask, uint64_t tx_mask) { rx_mask_ = rx_mask; tx_mask_ = tx_mask; }
+  // ESP32 (dual core): the core the UART's interrupt runs on (platformUartBegin), set before the first plan. A sketch
+  // whose loop() turns its core's interrupts off for bit-banged frames puts it on the other core; -1 (the default):
+  // loop()'s.
+  void setInterruptCore(int core) { irq_core_ = core; }
   // BindSource (oep.probe.config §1.2): the receive stream while the UART is planned; a port's raw bytes go out on TX,
   // as much as the UART takes without waiting.
   const PositionStream *bindStream() const override { return rx_ >= 0 || tx_ >= 0 ? &stream_ : nullptr; }
@@ -113,9 +117,14 @@ class FixtureUart final : public Interface, public BindSource {
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   // a port forwarded over USB may not be drained for 90 ms and more (usbip): 8 KiB overflowed at 921600 (P7)
   static constexpr size_t kCapacity = 32768, kMarks = 16;
+  // The UART driver's receive buffer: what loop() may be away for before the driver drops bytes (marked lost overflow)
+  // - 16 KiB is 82 ms at 2000000 (4 KiB was 20 ms). Above 4 KiB malloc takes it from PSRAM where there is one.
+  static constexpr size_t kDriverRx = 16384;
 #else
   static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
+  static constexpr size_t kDriverRx = 4096;                // 20 ms at 2000000 (see above)
 #endif
+  int irq_core_ = -1;   // setInterruptCore
   PinTable &pins_;
   OepUart &serial_;
   uint16_t instance_;
@@ -129,9 +138,10 @@ class FixtureUart final : public Interface, public BindSource {
   uint8_t item_format_ = 0;
   uint16_t max_read_ = 1000;
   // Receive errors the UART driver reports (ESP32: onReceiveError, from its event task; RP2: SerialUART's overflow and
-  // break, read in poll() - a framing / parity error without a break is dropped by the core unreported): counted there, marked lost in
-  // poll() at the stream's position (fixture §2 / common §1.3: detail 1 overflow, 2 framing, 3 parity). Before this a
-  // byte lost in the hardware FIFO at 2 Mbaud left no mark (X035, 2026-10-01).
+  // break and the PL011's overrun (platformUartTakeOverrun), read in poll() - a framing / parity error without a break is
+  // dropped by the core unreported): counted there, marked lost in poll() at the stream's position (fixture §2 / common
+  // §1.3: detail 1 overflow, 2 framing, 3 parity). Before this a byte lost in the hardware FIFO at 2 Mbaud left no mark
+  // (X035, 2026-10-01).
   volatile uint16_t rx_overflows_ = 0, rx_framing_ = 0, rx_parity_ = 0;
   uint16_t marked_overflows_ = 0, marked_framing_ = 0, marked_parity_ = 0;
   void markReceiveErrors();

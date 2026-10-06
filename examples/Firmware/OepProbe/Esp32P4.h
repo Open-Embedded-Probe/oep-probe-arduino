@@ -148,6 +148,17 @@ static oep::FixtureGpio gpio(pins, 0, 1);
 // PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the SWIO wire
 // 0xf2, the analog 7)
 static oep::FixtureUart uart1(pins, Serial1, 0, 2), uart2(pins, Serial2, 1, 5);
+// The fixture UARTs' interrupts run on core 0 (FixtureUart::setInterruptCore): loop() runs on core 1, and its SWIO /
+// RVSWD frames turn that core's interrupts off one frame at a time - SWIO up to SwioPhy::kIrqOffMaxUs, RVSWD about 55 us
+// at attach's period and up to about 1.1 ms at the slowest max_speed. With the interrupt on core 1 and arduino-esp32's
+// threshold of 120 bytes the RX FIFO had 8 bytes (40 us at 2000000) left before it overflowed (bench, both P4 jigs: a
+// DUT's burst at 2000000 came back with about 125 bytes wrong, intermittent; 1500000 passed - the overflow is the
+// reading from the code, not yet seen on the jigs). Core 0 has no interrupt-off section of the probe's
+// (the capture's harvest and the SPI target's CS gate run there), and the threshold is oep::kUartRxFifoFull (96 bytes
+// left, 480 us at 2000000). A flash write (settings, a DFU update) holds every non-IRAM interrupt off on both cores:
+// what the FIFO cannot hold then is marked lost.
+static constexpr int kUartCore = 0;
+static_assert(kUartCore != CONFIG_ARDUINO_RUNNING_CORE, "the fixture UARTs' interrupts must not share loop()'s core");
 static oep::LogicCapture capture(endpoint, pins, 0);   // PARLIO RX; its lines are never driven
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);
@@ -252,6 +263,8 @@ void setup() {
   endpoint.add(riscvDm);
   endpoint.add(console);
   endpoint.add(gpio);
+  uart1.setInterruptCore(kUartCore);   // before any plan begins them (applySaved below)
+  uart2.setInterruptCore(kUartCore);
   endpoint.add(uart1);
   endpoint.add(uart2);
   endpoint.add(capture);

@@ -5,7 +5,8 @@
 # the header refusals, the length-prefixed reader's over-long length and TCP pause; serial-port framing, the endpoint's serial-port rules, the binds) and of the
 # I2C / SPI targets (the SPI one on a fake spi_slave driver, also behind a relaying broker's sequence on a UART bridge,
 # the I2C one with a fake controller), of the pin table's idle
-# states and the gpio fixture's take (with its output drive strength), of the label convention's line names, of the
+# states and the gpio fixture's take (with its output drive strength), of the fixture UART's receive on a fake UART
+# (the interrupt's core, the fastest rate, a lost mark for every overrun), of the label convention's line names, of the
 # unit id, of the boot guard's count of fast crash-boots and its USB gate, of the RVSWD wire on a fake DMI PHY (pins freed, a version-3 module) and of the target console on it (core §4.3's order,
 # the send slot, the marks), and of the RVSWD PHY's attach on a
 # simulated target (what is written before the speed is verified, the checks, the budget), of the swio stack on a
@@ -47,6 +48,10 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_DRIVE -I"$h
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-idle-nodrive" "$here/test_idle.cpp" \
   "$src/OepFixture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out-idle-nodrive"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_UART -I"$here/shim" -I"$src" -o "$out-fixture-uart" \
+  "$here/test_fixture_uart.cpp" "$src/OepFixture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
+  "$src/OepCaptureGroup.cpp"
+"$out-fixture-uart"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-lines" "$here/test_lines.cpp" \
   "$src/OepConfig.cpp"
 "$out-lines"

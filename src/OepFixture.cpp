@@ -295,6 +295,7 @@ void FixtureUart::poll() {
   if (serial_.overflow()) ++rx_overflows_;
   if (serial_.getBreakReceived()) ++rx_framing_;   // a break is a framing error (as the ESP32's UART_BREAK_ERROR)
 #endif
+  if (platformUartTakeOverrun(serial_)) rx_overflows_ = static_cast<uint16_t>(rx_overflows_ + 1);   // the hardware FIFO's, where the core does not report it
   markReceiveErrors();
 }
 
@@ -313,13 +314,13 @@ bool FixtureUart::begin(uint32_t baud, uint8_t format) {
   poll();
   if (running_) serial_.end();
   running_ = false;
-  // A peer may echo while the probe is still writing; hold a full window of it.
-  platformUartBuffers(serial_, 4096, 1024);
+  // A peer may echo while the probe is still writing; hold a full window of it (and loop() away, kDriverRx).
+  platformUartBuffers(serial_, kDriverRx, 1024);
   idleHigh();
   const uint8_t data_bits = (format & ua::kFormatFieldDataBitsMask) ? 7 : 8;
   const uint8_t parity = (format & ua::kFormatFieldParityMask) >> 2;
   const uint8_t stop_bits = (format & ua::kFormatFieldStopBits2) ? 2 : 1;
-  if (!platformUartBegin(serial_, baud, rx_, tx_, platformUartConfig(data_bits, parity, stop_bits))) return false;
+  if (!platformUartBegin(serial_, baud, rx_, tx_, platformUartConfig(data_bits, parity, stop_bits), irq_core_)) return false;
 #if defined(ARDUINO_ARCH_ESP32)
   serial_.onReceiveError([this](hardwareSerial_error_t e) {
     if (e == UART_FIFO_OVF_ERROR || e == UART_BUFFER_FULL_ERROR) ++rx_overflows_;

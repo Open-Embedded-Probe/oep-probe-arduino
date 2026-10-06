@@ -107,6 +107,13 @@ static oep::PinTable pins(kChannels);
 // PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0, the analog 7)
 static oep::FixtureGpio gpio(pins, 0, 1);
 static oep::FixtureUart uart(pins, Serial2, 0, 2);
+// The fixture UART's interrupt stays on loop()'s core (core 1): core 0 is the sampler's, with interrupts off for up to
+// SamplerCapture's 250 ms bursts. On core 1 the SWIO frames hold it off; its RX FIFO threshold (oep::kUartRxFifoFull,
+// set by platformUartBegin; arduino-esp32's 120 left 8 bytes, 40 us at 2000000) leaves room for one twice over at the
+// fastest rate configure takes.
+static_assert((oep::kUartRxFifo - oep::kUartRxFifoFull) * 10ull * 1000000ull / oep::FixtureUart::kMaxBaud >=
+                  2 * oep::SwioPhy::kIrqOffMaxUs,
+              "the fixture UART's RX FIFO must outlast an interrupt-off SWIO frame twice over");
 static oep::SamplerCapture capture(endpoint, pins);
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);

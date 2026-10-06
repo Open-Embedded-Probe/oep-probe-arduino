@@ -181,6 +181,13 @@ class Blink final : public oep::Interface {
   試しの期間の firmware 更新（bootloader の rollback がある ESP32）は、host が最初に device を configure したときではなく、
   `stable()`（`loop()` が回りながら `kStableMs` たった）で確かなものにします。それまではどのリセットでも前に戻り、遅い host が
   試しの期間を延ばしてしまうためです（`Firmware/OepProbe/Esp32P4.h`）。
+- fixture の UART は UART の割り込みで受けます。ビットを自分で刻む線のフレームは、その core の割り込みを止めます（フレームごと:
+  SWIO は `SwioPhy::kIrqOffMaxUs` まで、RVSWD は最も遅い max_speed で約 1.1 ms まで）。ESP32 では割り込みが 128 byte の RX FIFO の
+  `kUartRxFifoFull`（32）byte で起き、2000000 で 480 us の余りがあります。`loop()` がそうした線を動かすデュアルコアの ESP32 は、
+  `applySaved()` の前に `uart.setInterruptCore(0)` で割り込みをもう一方の core に置きます（`Firmware/OepProbe/Esp32P4.h`）。
+  その core が自分で割り込みを止めるなら置きません（classic の sampler: `Esp32.h` は `loop()` の core に置いたまま、FIFO を SWIO と
+  比べて確かめます）。それでも UART が落としたバイトは lost（detail 1 あふれ）のマークになり、黙って抜けることはありません。RP2 は
+  PL011 の overrun を `poll()` で読みます。
 
 ## 8. push と出来事
 

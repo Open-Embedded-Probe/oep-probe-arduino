@@ -80,9 +80,34 @@ enum : uint32_t {
 };
 class HardwareSerial {
  public:
-  void end() {}
-  int available() { return 0; }
-  size_t readBytes(uint8_t *, size_t) { return 0; }
+  void end() { fake_running = false; }
+  int available() { return static_cast<int>(fake_tail - fake_head); }
+  size_t readBytes(uint8_t *b, size_t n) {
+    size_t k = 0;
+    for (; k < n && fake_head < fake_tail; ++k) b[k] = fake_rx[fake_head++ % sizeof fake_rx];
+    return k;
+  }
   int availableForWrite() { return 0; }
   size_t write(const uint8_t *, size_t n) { return n; }
+  // OEP_HOST_FAKE_UART (OepPlatform.h): a UART that platformUartBegin starts and whose receive a test feeds - bytes
+  // (fakeReceive) and the hardware's overruns (fake_overrun, taken by platformUartTakeOverrun).
+  bool fakeBegin(uint32_t baud, int rx, int tx, uint32_t config, int irq_core) {
+    (void)rx; (void)tx; (void)config;
+    fake_baud = baud;
+    fake_irq_core = irq_core;
+    fake_running = true;
+    ++fake_begins;
+    return true;
+  }
+  bool fakeTakeOverrun() {
+    const bool o = fake_overrun;
+    fake_overrun = false;
+    return o;
+  }
+  void fakeReceive(uint8_t byte) { fake_rx[fake_tail++ % sizeof fake_rx] = byte; }
+  uint8_t fake_rx[16384];
+  size_t fake_head = 0, fake_tail = 0;
+  bool fake_overrun = false, fake_running = false;
+  uint32_t fake_baud = 0;
+  int fake_irq_core = -2, fake_begins = 0;
 };

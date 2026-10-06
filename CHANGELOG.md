@@ -1,6 +1,58 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixture UART: a DUT's continuous burst at 2000000 8N1 is received without the hardware dropping bytes on the
+  ESP32-P4, and an overrun the RP2's UART had is marked lost (bench, the X035 and WeAct P4 jigs: uart_sweep at 2000000,
+  DUT to probe only, about 125 bytes of a burst wrong, intermittent - X035 passed on 47e4b05 / c75884b and failed on
+  b55bc68, WeAct failed on 47e4b05 and passed on b55bc68; 1500000 and 1959983 passed; the echo was right). From the
+  code (not yet seen on the jigs): the fixture UARTs' driver was installed from loop(), so their receive interrupt ran
+  on core 1, where the SWIO / RVSWD frames turn interrupts off one frame at a time (SWIO about 50 us plus up to 100 us
+  for the line to rise, RVSWD about 55 us at attach's period, up to about 1.1 ms at the slowest max_speed); and
+  arduino-esp32 sets the RX FIFO interrupt at 120 of 128 bytes above 57600, so 8 bytes - 40 us at 2000000, 53 us at
+  1500000 - were left before the FIFO overflowed and the hardware dropped what came next (ESP-IDF resets the FIFO on
+  the overflow). ESP32-P4: the fixture UARTs' interrupt runs on core 0 (FixtureUart::setInterruptCore,
+  platformUartBegin's irq_core: begin() in a task pinned there, as the driver allocates its interrupt on the core that
+  installs it; static_assert that it is not loop()'s core), where the probe turns no interrupts off. Every ESP32: the
+  RX FIFO interrupt at oep::kUartRxFifoFull = 32 bytes (96 left: 480 us at 2000000); the driver's receive buffer on the
+  P4 16 KiB (82 ms at 2000000 of loop() away; was 4 KiB, 20 ms). Classic ESP32: the fixture UART stays on loop()'s
+  core (core 0 is the sampler's, interrupts off for up to 250 ms) with the same threshold, and a static_assert that the
+  FIFO's rest at kMaxBaud outlasts SwioPhy::kIrqOffMaxUs twice (480 us against 400). Lost bytes are marked: the ESP-IDF
+  driver reports its FIFO overflow and a full receive buffer as events, marked lost overflow as before (66345b7), and a
+  flash write (settings, a DFU update), which holds every non-IRAM interrupt off on both cores, still drops what the
+  FIFO cannot hold - marked so. Whether the bench's wrong bytes came with a lost mark is not known from the report.
+  RP2 (arduino-pico 6.1.1): SerialUART's interrupt at 4 of 32 bytes leaves 28 (140 us at 2000000) against an RVSWD
+  frame on loop()'s core (55-80 us at attach's period, 11-20 us attached, longer at a slow max_speed); its handler
+  keeps the byte that carries the PL011's overrun flag and says nothing of those dropped before it - now poll() reads
+  the receive status's OE and clears it (platformUartTakeOverrun), marked lost overflow. 2000000 stays the fastest rate
+  configure takes on every probe. Host test test_fixture_uart (fake UART, OEP_HOST_FAKE_UART: the core every begin
+  runs on, 2000001 refused, 60 rounds of bytes and overruns - every byte in order, one lost mark per overrun within its
+  window, none without; 15 checks; without the change 3 fail); guide writing-a-probe (EN / JA); not run on hardware
+  yet; CHANGELOG (EN / JA)
+- (JA) fixture の UART: ESP32-P4 で、DUT が 2000000 8N1 で続けて送るバイトを、ハードウェアが落とさずに受けるようにしました。
+  RP2 の UART の overrun を lost のマークにしました（bench、X035 と WeAct の P4 の治具: 2000000 の uart_sweep、DUT から probe
+  の向きだけ、バーストの約 125 byte が違う、ときどき - X035 は 47e4b05 / c75884b で通り b55bc68 で落ち、WeAct は 47e4b05 で
+  落ち b55bc68 で通った。1500000 と 1959983 は通った。echo は正しかった）。コードから（治具ではまだ見ていない）: fixture の
+  UART のドライバは loop() から入れていたので、受けの割り込みは core 1 で動いていた。そこでは SWIO / RVSWD のフレームが
+  フレームごとに割り込みを止める（SWIO は約 50 us と線が上がるのを待つ 100 us まで、RVSWD は attach の周期で約 55 us、最も遅い
+  max_speed で約 1.1 ms まで）。arduino-esp32 は 57600 より上で RX FIFO の割り込みを 128 byte 中 120 byte に置くので、FIFO が
+  あふれてハードウェアが次を落とすまでの余りは 8 byte - 2000000 で 40 us、1500000 で 53 us - だった（ESP-IDF はあふれで FIFO
+  を空にする）。ESP32-P4: fixture の UART の割り込みを core 0 で動かす（FixtureUart::setInterruptCore、platformUartBegin の
+  irq_core: ドライバは入れた core に割り込みを置くので、その core に固定した task で begin() する。loop() の core でないことの
+  static_assert）。core 0 では probe は割り込みを止めない。すべての ESP32: RX FIFO の割り込みを oep::kUartRxFifoFull = 32 byte
+  に（余り 96 byte: 2000000 で 480 us）。P4 のドライバの受けのバッファを 16 KiB に（loop() が離れていられるのは 2000000 で
+  82 ms。これまで 4 KiB、20 ms）。classic ESP32: fixture の UART は loop() の core のまま（core 0 は sampler のもので、最大
+  250 ms 割り込みを止める）で、同じ閾値。kMaxBaud での FIFO の余りが SwioPhy::kIrqOffMaxUs の 2 倍より長いことの
+  static_assert（480 us 対 400）。落ちたバイトはマークになる: ESP-IDF のドライバは FIFO のあふれと受けのバッファが満ちたことを
+  event で知らせ、これまでどおり lost overflow にする（66345b7）。flash の書き込み（設定、DFU の更新）は両方の core の IRAM に
+  無い割り込みをすべて止めるので、その間 FIFO に入りきらない分はなお落ちる - そのとおりマークになる。bench の違うバイトに
+  lost のマークが付いていたかは、報告からは分からない。RP2（arduino-pico 6.1.1）: SerialUART の割り込みは 32 byte 中 4 byte で
+  起き、余りは 28 byte（2000000 で 140 us）。loop() の core の RVSWD のフレーム（attach の周期で 55〜80 us、attach した後
+  11〜20 us、遅い max_speed ではもっと長い）と比べる。その handler は PL011 の overrun の印を持つ byte を残し、その前に落ちた分を
+  何も言わなかった - これから poll() が受けの状態の OE を読んで消し（platformUartTakeOverrun）、lost overflow にする。
+  configure が受ける最も速い値はどの probe も 2000000 のまま。host のテスト test_fixture_uart（偽の UART、OEP_HOST_FAKE_UART:
+  begin がどの core で動くか、2000001 を断る、バイトと overrun を 60 回 - バイトはすべて順に、overrun ごとに lost のマークが
+  一つその範囲に、無ければ無い。15 checks。変更が無いと 3 つ落ちる）。guide の writing-a-probe（EN / JA）。実機ではまだ
+  動かしていない。CHANGELOG (EN / JA)
 - (EN) ESP32-P4: a DFU update is confirmed once its boot is stable, not when a host first configures the HS port
   (bench, the WeAct P4 on a WSL host: 9942787 over 3d83ffa and c75884b over 47e4b05 twice - "628848 bytes in 154
   blocks", the reboot, then describe over HS said the image before; no replug, restart or USB-Serial/JTAG use; usbipd
