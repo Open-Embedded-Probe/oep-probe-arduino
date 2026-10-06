@@ -406,7 +406,67 @@ static void testTriggeredStop() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
 }
 
+// One position space (capture §2.2, §3.2): a repeat's segments, read and write_pos count the bytes discarded while it
+// was paused (state 5); a position in them or released moves on to the next segment with the gap flag. Streaming's new
+// data discarded with every segment unsent shows as status flags bit0 (§2.1 rule 1).
+static void testPositions() {
+  {
+    board(512 * 1024, size_t(32) << 20);
+    Rig rig(2);
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.mode = 2;
+    c.samples = 16384;   // 4096 bytes at w = 2
+    c.segments = 2;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint32_t generation = getU32(out.data() + 4);
+    dma.deliver(4096, 0x11);
+    dma.deliver(4096, 0x22);
+    dma.deliver(4096, 0x33);   // no free segment: discarded (paused)
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStatePaused && getU32(out.data() + 1) == 2);
+    CHECK(getU64(out.data() + 5) == 12288 && (out[13] & cap::kStatusFlagDropped) == 0);   // a pause is not a drop
+    Bytes rel(8);
+    putU32(rel.data(), generation);
+    putU32(rel.data() + 4, 0);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRelease, rel, out)));
+    dma.deliver(4096, 0x44);
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {2, 0, 0, 0}, out)) && out[1] == 1);
+    CHECK(getU64(out.data() + 3 + 4) == 12288 && (out[3 + 32] & cap::kSegmentFlagGap));   // after the discarded bytes
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU64(out.data()) == 4096 &&
+          out[8] == reg::common::kReadFlagsMore && out[13] == 0x22);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 9000, 10), out)) && getU64(out.data()) == 12288 &&
+          (out[8] & reg::common::kReadFlagsGap) && getU32(out.data() + 9) == 10 && out[13] == 0x44);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 10), out)) && getU64(out.data()) == 4096 &&
+          (out[8] & reg::common::kReadFlagsGap));   // released
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 16384, 10), out)) && getU64(out.data()) == 16384 &&
+          getU32(out.data() + 9) == 0);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && getU64(out.data() + 5) == 16384);
+  }
+  {
+    board(512 * 1024, 0);   // a store of 4 x 64 KiB
+    Rig rig(2);
+    Dma dma;
+    rig.cap.subscribe(true);
+    Bytes out;
+    Config c;
+    c.mode = 3;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    for (int k = 0; k < 4; ++k) { dma.deliver(64 * 1024, 0x55); dma.run(); }
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && (out[13] & cap::kStatusFlagDropped) == 0);
+    dma.deliver(4096, 0x66);   // nobody took any: new data discarded
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && (out[13] & cap::kStatusFlagDropped) &&
+          getU64(out.data() + 5) == 4 * 65536 + 4096);
+  }
+}
+
 int main() {
+  testPositions();
   testTriggeredStop();
   testPlanReleaseForgets();
   testBound();

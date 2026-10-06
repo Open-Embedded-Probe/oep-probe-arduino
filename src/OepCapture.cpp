@@ -85,7 +85,7 @@ void LogicCapture::harvest(const Chunk &chunk) {
     if (fill_ == 0) {   // a new segment: remember where in time it starts
       Info &info = infos_[completed_ % kInfos];
       info.serial = completed_;
-      info.position = mode_ == 3 ? captured_ : static_cast<uint64_t>(completed_) * segment_bytes_;
+      info.position = captured_;   // one position space with the discarded bytes (capture §2.2, write_pos §3.2)
       const uint64_t first_sample = captured_ * 8 / width_;
       info.start_ns = start_ns_ + nsOf(first_sample);
       info.flags = gap_pending_ ? 1 : 0;
@@ -1115,8 +1115,9 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(out + 1, completed_);
         putU64(out + 5, captured_);   // the next byte to write, the dropped ones counted (oep-if-capture §3.2)
         // flags (oep-if-capture §3.2): bit0 the probe dropped data - the chunk queue full, the DMA ring overrun, no free
-        // stage (the PARLIO keeps its clock: bit1 slipped never)
-        out[13] = (queue_overflow_ || overruns_ || stage_drops_) ? cap::kStatusFlagDropped : 0;
+        // stage, streaming's new data discarded with every segment unsent (§2.1 rule 1; a repeat with no free segment
+        // pauses instead, state 5). The PARLIO keeps its clock: bit1 slipped never.
+        out[13] = (queue_overflow_ || overruns_ || stage_drops_ || (mode_ == 3 && dropped_)) ? cap::kStatusFlagDropped : 0;
       } else if (triggered_) {
         putU32(out + 1, kept_samples_ ? 1 : 0);   // the segment, complete or cut short by stop
         putU64(out + 5, filled_);
@@ -1165,20 +1166,23 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (count > max) { count = max; flags |= reg::common::kReadFlagsMore; }
         return answer(position, flags, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + offset, count);
       }
-      if (mode_ == 2) {   // completed segments the host has not released (positions are u64: no wrap to handle)
-        const uint64_t first = static_cast<uint64_t>(released_) * segment_bytes_;
-        const uint64_t end = static_cast<uint64_t>(completed_) * segment_bytes_;
+      if (mode_ == 2) {   // completed segments the host has not released, by position (u64: no wrap to handle)
+        // The positions count the bytes discarded while paused (capture §2.2): a position released, or in such a gap,
+        // moves on to the next segment's start with the gap flag; one past the last segment answers empty there.
+        const uint32_t done = completed_;
+        auto length = [&](uint32_t serial) { return infos_[serial % kInfos].samples * width_ / 8; };
+        const uint64_t end = done ? infos_[(done - 1) % kInfos].position + length(done - 1) : 0;
+        uint32_t serial = released_;
+        while (serial < done && infos_[serial % kInfos].position + length(serial) <= position) ++serial;
+        if (serial == done) return answer(end, position < end ? reg::common::kReadFlagsGap : 0, nullptr, 0);
         uint8_t flags = 0;
-        if (position < first) { position = first; flags |= reg::common::kReadFlagsGap; }   // already released: gap
-        if (position > end) position = end;
-        const uint64_t ahead = position - first;                   // bytes past the first unreleased segment
-        const uint32_t serial = released_ + static_cast<uint32_t>(ahead / segment_bytes_);
-        const uint32_t offset = static_cast<uint32_t>(ahead % segment_bytes_);
-        uint64_t left = end - position;
-        uint32_t count = left < segment_bytes_ - offset ? static_cast<uint32_t>(left) : segment_bytes_ - offset;   // one segment per answer
-        if (count > max) { count = max; flags |= reg::common::kReadFlagsMore; }
-        if (left > count) flags |= reg::common::kReadFlagsMore;
-        return answer(position, flags, store_ + (serial % segment_count_) * segment_bytes_ + offset, count);
+        const uint64_t begin = infos_[serial % kInfos].position;
+        if (position < begin) { position = begin; flags |= reg::common::kReadFlagsGap; }   // released, or discarded
+        const uint32_t offset = static_cast<uint32_t>(position - begin);
+        uint32_t count = length(serial) - offset;   // one segment per answer
+        if (count > max) count = max;
+        if (count < length(serial) - offset || serial + 1 < done) flags |= reg::common::kReadFlagsMore;
+        return answer(position, flags, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + offset, count);
       }
       const uint64_t have = (static_cast<uint64_t>(kept_samples_) * width_ + 7) / 8;   // the segment's bytes
       if (position > have) position = have;
