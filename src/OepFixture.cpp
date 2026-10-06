@@ -90,6 +90,9 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
         const uint8_t m = payload[3 + 3 * i];
         return m == gp::kModeOutputLow || m == gp::kModeOutputHigh;
       };
+      // a drive on an element whose mode is undefined (8+) is not the contradiction "not mode 3 / 4": that mode is
+      // refused unsupported below (core §4.3 "Contradictions and undefined values")
+      auto undefinedMode = [&](uint8_t i) { return payload[3 + 3 * i] > gp::kModeInputPullupPulldown; };
       // drive TLVs, one per element: index n or more, an index twice, or an element not mode 3 / 4 is malformed (the
       // whole request); an undefined kind (2+) or a level this probe does not have ignores that TLV (listed in ignored;
       // unsupported when critical, fixture §1.1). Every form is checked first (pass 0), so a malformed one anywhere wins
@@ -109,12 +112,14 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
           if (pass == 0) {
             if (len != 4) return rejected(kRejectMalformed);
             const uint8_t index = v[0], kind = v[1];
-            if (index >= n || ((seen[index / 8] >> (index % 8)) & 1) || !isOutput(index)) return rejected(kRejectMalformed);
+            if (index >= n || ((seen[index / 8] >> (index % 8)) & 1) || (!isOutput(index) && !undefinedMode(index)))
+              return rejected(kRejectMalformed);
             (void)kind;
             seen[index / 8] |= static_cast<uint8_t>(1u << (index % 8));
             continue;
           }
           uint8_t level = 0;
+          if (undefinedMode(v[0])) continue;   // the request is refused for the mode
           if (PinTable::driveLevelOf(levels, v[1], getU16(v + 2), level)) drive[v[0]] = level;
           else if (raw & kTagCritical) return unsupportedTag(out, capacity, raw);   // critical: not ignored (core §2.3)
           else tail.ignore(gp::kTlvSetDrive);   // listed once per TLV ignored

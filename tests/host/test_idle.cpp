@@ -326,6 +326,14 @@ static void testDriveSet() {
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, 8}}, {}), out).detail == kRejectUnsupported && out.size() >= 1 &&
         out[0] == kTagValue);
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}, {21, 0}}, {{1, 0, 0, 0}}), out).detail == kRejectMalformed);
+  // a drive on an element whose mode is undefined (8+): unsupported for the mode with its channel and index, not malformed
+  // for a drive on a mode other than 3 / 4 (core §4.3 "Contradictions and undefined values"); critical too
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}, {21, 8}}, {{1, 0, 0, 0}}), out).detail == kRejectUnsupported &&
+        out.size() >= 1 && out[0] == kTagValue);
+  Bytes undefined_crit = setWithDrive({{21, 9}}, {{0, 0, 9, 0}});
+  undefined_crit[4] |= kTagCritical;
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, undefined_crit, out).detail == kRejectUnsupported && out.size() >= 1 &&
+        out[0] == kTagValue);
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0, 0}}), out).detail == kRejectMalformed);
   // malformed wins wherever it is: after an ignored one, and after a critical one that would be unsupported
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0, 9, 0}, {5, 0, 0, 0}}), out).detail == kRejectMalformed);
