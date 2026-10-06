@@ -1,6 +1,41 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm's dmi checks the link per request (the 2026-10-06 debug-link proposal P4; the spec text is not written
+  yet) and oep.wire.rvswd's revive hands a link on only once it stays up. Bench (0.0.29-dev+bd19b00, tests/hw test_wire
+  on the CH32L103 through the RP2350, oep-client-python af3789a): 5 of 8 runs read s1 or a0 wrong after a read_block
+  (s1 0x00002da8 -> 0x00000002, a0 0x200000d4 -> 0x00002da8 = s1's value), with the host's looks around each read
+  passing - the access-register command lost and DATA0 still the read before, in the requests where f594f04's revive
+  had sent the wake and restarted the target (cmderr 6, 3 of 8). The revive handed the link on at the first DMSTATUS that
+  answered; it now asks for 3 good looks in a row (kReviveLooks; a look: DMSTATUS a module's with authenticated, then
+  DMCONTROL with bit 7 clear - dmLinkLook), re-syncing again after a bad one, as Ch32Dm::steady does, and its first
+  look (is the link still there) is a look too, not one DMSTATUS read. dmi: a look before the steps and one after them,
+  and no PHY revive between them (DmiPhy::revives - a wait step longer than the PHY's rest can have one); a request not
+  seen held answers status line with no values and done = the steps completed before the check that failed (0 when the
+  look before fails; all of them, or up to a timeout's step, when the look after or the count does - their writes may
+  have been done). A step that fails on the line answers line with no values too (was: the values read before it). Host
+  tests (test_attach_cycle H, the simulated target's drop now coming back through a flicker - one access in 2 - 8
+  missed, a write lost or a read giving the value read before it, for 0.5 - 2 ms - and abstract register reads):
+  oep-client-python's read_register meeting a 0.7 / 1.4 / 2.1 ms drop: 0 wrong values of 54 (before: 6); a revive
+  between a request's looks with the command lost before it answers line, done 10, no values (before: ok with the
+  stale DATA0); test_wire's dmi cases follow (a haltreq whose drop the look after meets: line, done 1; a request on a
+  line that reads all zeros / ones: line with nothing run, the wire-loss clock as before).
+- (JA) riscv-dm の dmi は要求ごとにリンクを確かめる（2026-10-06 の debug-link 提案 P4。仕様の文はまだ）。oep.wire.rvswd の
+  立て直しは、リンクが保たれると確かめてから渡す。bench（0.0.29-dev+bd19b00、RP2350 越しの CH32L103 で tests/hw test_wire、
+  oep-client-python af3789a）: 8 回中 5 回、read_block の後に s1 か a0 を誤って読んだ（s1 0x00002da8 -> 0x00000002、
+  a0 0x200000d4 -> 0x00002da8 = s1 の値）。host の読みの前後の見張りは通っていた - access-register の command が消え、DATA0 は
+  前に読んだ値のまま。f594f04 の立て直しが wake を送って target を起動し直していた（cmderr 6、8 回中 3 回）要求で起きた。
+  立て直しは最初に答えた DMSTATUS でリンクを渡していた。今は見張り 3 回連続の成功を求め（kReviveLooks。見張り: DMSTATUS が
+  module のもので authenticated、続けて DMCONTROL の bit 7 が 0 - dmLinkLook）、失敗したら同期を取り直す（Ch32Dm::steady と
+  同じ）。最初の確かめ（リンクがまだあるか）も DMSTATUS 1 回の読みではなく見張り 1 回。dmi: 手順の前と後に見張り、その間に PHY の
+  立て直しが無いこと（DmiPhy::revives - PHY の休みより長い待ちの手順があると起こりうる）。保たれたと確かめられない要求は status
+  line で答え、値は返さず、done は失敗した確かめの前に終えた手順の数（前の見張りが失敗したら 0、後の見張りか回数が失敗したら
+  全部、または timeout の手順まで - その書き込みは行われたかもしれない）。線で失敗した手順も値を返さず line（以前はその前に
+  読んだ値を返した）。host test（test_attach_cycle H。模擬 target の落ちはちらつきながら戻る - 0.5 - 2 ms の間、2 - 8 回に
+  1 回のアクセスが抜ける（書き込みが消えるか、読みが前に読んだ値を返す）- と、abstract のレジスタ読み）: oep-client-python の
+  read_register が 0.7 / 1.4 / 2.1 ms の落ちに当たる: 54 通り中 誤った値 0（前: 6）。要求の見張りの間の立て直し（その前に command
+  が消えた）は line、done 10、値なし（前: 古い DATA0 で ok）。test_wire の dmi の場合も合わせた（後の見張りが落ちに当たる haltreq:
+  line、done 1。全 0 / 全 1 を読む線への要求: 何も実行せず line、wire-loss の時計は前と同じ）。
 - (EN) write_block stores each word exactly once and answers success only with every word stored. ch32rv writes the
   CH32L103's flash keys (KEYR KEY1 / KEY2, MODEKEYR KEY1 / KEY2) as four 1-word write_blocks; in 1 of 60 uploads through
   the RP2350 (f594f04) CTLR stayed locked (0x00008080) after every write_block answered success. The writer was redone

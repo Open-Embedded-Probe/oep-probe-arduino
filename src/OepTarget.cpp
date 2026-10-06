@@ -13,7 +13,7 @@ namespace {
 
 namespace wire = reg::wire_rvswd;
 
-constexpr uint8_t kDmStatus = 0x11;
+constexpr uint8_t kDmStatus = 0x11, kDmControl = 0x10;
 
 // A DMSTATUS read that came back with a module behind it: all zeros / all ones is a line held low or floating up
 // through its pull-up (DmiPhy::outcomeOf), no answer.
@@ -1066,6 +1066,18 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
 // values are those of the reads and polls among them, plus the failed step's last value when it was a poll that timed
 // out (a poll cut off by the line adds nothing). The waits (delays and the polls' time limits) may not add up to more
 // than max_op_ms (rejected unsupported).
+//
+// The link held over the request (the 2026-10-06 debug-link proposal, P4): a look before the steps and one after them
+// (dmLinkLook: DMSTATUS a module's with authenticated, DMCONTROL with bit 7 clear), and no revive of the PHY's between
+// them (DmiPhy::revives). A link that drops (a CH32L103's, after a change of hart state) loses writes and reads the last
+// value read or all ones with nothing in the answer to say so; a drop stays until the link is brought up again, so a
+// look that passes after the steps says every step met the link up - unless the PHY brought it up again behind them
+// (its revive after a rest: a wait step, or a gap), which only the count tells. A request that is not seen held answers
+// status line with no values (none of them is known to be the register's) and done = the steps completed before the
+// check that failed: 0 when the look before them fails, all of them (or up to a timeout's step) when the look after
+// them or the count does - their writes may have been done. A step that fails on the line answers line with no values
+// too. Before this the request's values were returned as read, and a revive between the host's own looks (RiscvDm.held
+// in oep-client-python) hid the drop from them.
 Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t capacity) {
   if (length < 2) return rejected(kRejectMalformed);
   const uint16_t count = getU16(p);
@@ -1108,6 +1120,13 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
   const uint32_t began_us = micros();
   constexpr uint32_t kMaxOpUs = kMaxOpMs * 1000u;
   auto over = [&]() { return micros() - began_us >= kMaxOpUs; };
+  // the look before and after the steps (P4, above): its first read may be where the PHY revives a rested link
+  auto look = [&]() {
+    uint32_t status_value = 0, control = 0;
+    return readStep(kDmStatus, status_value) && dm.readDmi(kDmControl, control) && dmLinkLook(status_value, control);
+  };
+  if (!look()) status = kStatusLine;
+  const uint32_t revives = dm.phy().revives();
   at = 2;
   for (uint16_t i = 0; i < count && status == kStatusOk; ++i) {
     const uint8_t kind = p[at];
@@ -1175,6 +1194,12 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
       line_lost_ = true;
     }
     if (status == kStatusOk) ++done;
+  }
+  // after the steps: the look, and no revive since the look before them (a timeout's request too: its values stand)
+  if (status != kStatusLine && !line_lost_ && !(look() && dm.phy().revives() == revives)) status = kStatusLine;
+  if (status == kStatusLine) {   // no values: none is known to be the register's
+    written = 5;
+    nvals = 0;
   }
   if (status == kStatusLine && !line_lost_) failure(kStatusLine);   // the connection closes after this answer once lost
   putU16(out, done);

@@ -62,6 +62,21 @@ struct Target {
   uint64_t drop_until_us = 0;
   uint32_t havereset = 0;
   bool linkUp() const { return awake && !out_of_step && micros() >= drop_until_us; }
+  // Section H: the abstract registers a host's read of a register uses - DATA0, COMMAND (access register, 32 bits, on
+  // the GPRs), ABSTRACTCS - and a link that comes back from a drop flickering: for flicker_us after the re-sync that
+  // brought it back, one transaction in flicker_every misses (a write lost, a read answering the value of the read
+  // before it), the looks around it passing
+  uint32_t data0 = 0, gpr[32] = {};
+  uint32_t flicker_us = 0;
+  int flicker_every = 0, flicker_n = 0, flickers = 0;
+  uint64_t back_at_us = 0;
+  uint32_t last_out = 0;
+  bool flicker() {
+    if (!flicker_every || !back_at_us || micros() >= back_at_us + flicker_us) return false;
+    if (++flicker_n % flicker_every) return false;
+    ++flickers;
+    return true;
+  }
   void tick() {
     ps += uint64_t(half_ns) * 1000u + cell_overhead_ps;
     if (ps >= 1000000) { advanceMicros(static_cast<uint32_t>(ps / 1000000)); ps %= 1000000; }
@@ -71,6 +86,7 @@ struct Target {
     switch (a) {
       case 0x10: return dmcontrol;
       case 0x11: return dmstatus();
+      case 0x04: return data0;
       case 0x12: return 0x0002'1000u | 0x380;
       case 0x16: return 2;
       case 0x18: return abstractauto;
@@ -90,6 +106,11 @@ struct Target {
     }
     if (a == 0x18) abstractauto = v;
     if (a == 0x20) progbuf0 = v;
+    if (a == 0x04) data0 = v;
+    if (a == 0x17 && (v & (1u << 17)) && (v & 0xffe0u) == 0x1000u && (hart_bits & (1u << 8))) {   // access a GPR
+      if (v & (1u << 16)) gpr[v & 0x1f] = data0;
+      else data0 = gpr[v & 0x1f];
+    }
   }
   bool parityOf(uint32_t v) { bool p = false; while (v) { p ^= v & 1; v >>= 1; } return p; }
   void rise() {
@@ -110,14 +131,18 @@ struct Target {
       header_ok = header_parity == dio;
       if (!write) {
         ++reads;
-        out = readReg(address);
+        out = linkUp() && flicker() ? last_out : readReg(address);
+        last_out = out;
         out_parity = parityOf(out);
         if (half_ns < min_read_half) out_parity = !out_parity;
       }
     } else if (pos >= 14 && pos <= 45 && write) { data = (data << 1) | bit; data_parity ^= bit; }
     else if (pos == 46 && write && header_ok && data_parity == dio) {
-      if (awake && micros() >= drop_until_us && (address == 0x7d || address == 0x7e)) out_of_step = false;   // re-sync
-      if (linkUp()) writeReg(address, data);
+      if (awake && micros() >= drop_until_us && (address == 0x7d || address == 0x7e) && out_of_step) {   // re-sync
+        out_of_step = false;
+        if (drop_until_us) back_at_us = micros();
+      }
+      if (linkUp() && !flicker()) writeReg(address, data);
     }
     ++pos;
   }
@@ -386,6 +411,125 @@ int main() {
     t.drop_until_us = 0;
     t.out_of_step = false;
     t.havereset = 0;
+  }
+
+  // ---- H: a host's read of a register (oep-client-python RiscvDm.read_register: look, clear cmderr, the access-
+  // register command, wait for it, DATA0, look - one dmi request, tried again 5 ms later when it is not seen held, 4 tries)
+  // meeting a CH32L103's drop after a change of hart state that comes back flickering: for a while after the re-sync that
+  // brings it back, one transaction in a few misses (a write lost, a read answering the value of the read before it).
+  // Bench (0.0.29-dev+bd19b00, tests/hw test_wire on the L103 through the RP2350): 5 of 8 runs read s1 / a0 wrong after
+  // a read_block with the request's looks passing (a0 read as s1's value: the command lost, DATA0 still the read before).
+  // The revive handed the link on at the first DMSTATUS that answered and the request ran in the flicker; now the revive
+  // hands it on after kReviveLooks good looks in a row, and the dmi request answers line when the look after its steps
+  // fails or the PHY revived the link between its looks (P4). Counted: values the host would take (status ok, its looks
+  // passing) that are not the register's - the host's group as it is, and as a group that reads the register twice
+  // over sentinels written to DATA0 (0, then all ones) and takes it only when both agree. ----
+  {
+    static TargetRiscvDm riscv(port, 0);
+    phy.beginRequest();
+    Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out);   // halt, idle_clock low
+    CHECK(ok(r) && port.connected && t.hart_bits == 3u << 8);
+    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+    auto rd = [](Bytes &b, uint8_t a) { b.insert(b.end(), {0x02, a}); };
+    auto wr = [](Bytes &b, uint8_t a, uint32_t v) {
+      b.insert(b.end(), {0x01, a, uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)});
+    };
+    auto poll = [](Bytes &b) { b.insert(b.end(), {0x03, 0x16, 0, 0x10, 0, 0, 0, 0, 0, 0, 100, 0}); };   // busy clear
+    auto linkHeldLook = [](uint32_t status, uint32_t control) {   // oep_client.riscv.link_held
+      const uint32_t v = status & 0xf;
+      return v >= 2 && v != 15 && (status & 0x80) && (control & 1) && !(control & 0x07ffffc0u);
+    };
+    const uint32_t kCmd = 0x00221009u;   // read s1
+    for (int verified = 0; verified < 2; ++verified) {
+      int cases = 0, taken = 0, wrong = 0, not_held = 0, flickers = 0;
+      for (int every : {2, 3, 4, 5, 6, 8})
+        for (uint32_t flicker_us : {500u, 1000u, 2000u})
+          for (uint32_t hold_us : {700u, 1400u, 2100u}) {
+            ++cases;
+            const uint32_t value = 0x00002da8u + static_cast<uint32_t>(cases);
+            t.gpr[9] = value;
+            t.data0 = 0x00001000u;   // the read before (s0's)
+            t.flicker_every = every;
+            t.flicker_us = flicker_us;
+            t.flicker_n = 0;
+            t.back_at_us = 0;
+            const int flickers_before = t.flickers;
+            advanceMicros(400);                     // the host's next request, past the PHY's rest
+            t.drop_until_us = micros() + hold_us;   // the drop it meets
+            t.out_of_step = true;
+            bool done = false;
+            for (int attempt = 0; attempt < 4 && !done; ++attempt) {
+              if (attempt) advanceMicros(5000);     // HELD_RETRY_S
+              Bytes q = conn;
+              const uint8_t n = verified ? 13 : 8;
+              q.insert(q.end(), {n, 0});
+              rd(q, 0x11); rd(q, 0x10);
+              wr(q, 0x16, 0x700);
+              if (verified) wr(q, 0x04, 0);
+              wr(q, 0x17, kCmd); poll(q); rd(q, 0x04);
+              if (verified) { wr(q, 0x04, 0xffffffffu); wr(q, 0x17, kCmd); poll(q); rd(q, 0x04); }
+              rd(q, 0x11); rd(q, 0x10);
+              phy.beginRequest();
+              r = call(riscv, TargetRiscvDm::kOpDmi, q, out);
+              const size_t nv = verified ? 8 : 6;
+              if (!ok(r) || out.size() < 5 + 4 * nv || out[2] != kStatusOk) continue;
+              auto v = [&](size_t i) { return getU32(out.data() + 5 + 4 * i); };
+              if (!linkHeldLook(v(0), v(1)) || !linkHeldLook(v(nv - 2), v(nv - 1))) continue;
+              if (verified && v(3) != v(5)) continue;
+              done = true;
+              ++taken;
+              if (v(3) != value) ++wrong;
+            }
+            if (!done) ++not_held;
+            flickers += t.flickers - flickers_before;
+          }
+      CHECK(wrong == 0);
+      printf("  H a register read meeting a drop that comes back flickering (%s): %d cases, %d taken, %d wrong, "
+             "%d not held after 4 tries, %d flickers\n", verified ? "read twice over sentinels" : "read once",
+             cases, taken, wrong, not_held, flickers);
+    }
+    t.flicker_every = 0;
+    // A revive between a request's own looks: a wait step longer than the PHY's rest, the link dropping before it (the
+    // command written then is lost) and brought back by the revive at the next step - the look after the steps passes
+    // and DATA0 is the read before. bd19b00 answered it ok with that value; now status line, done = all the steps, no
+    // values (P4).
+    {
+      static bool armed = false;
+      armed = false;
+      g_on_wait = [] {
+        if (!armed) return;
+        armed = false;
+        t.drop_until_us = micros() + 300;
+        t.out_of_step = true;
+      };
+      t.gpr[9] = 0x0000eab0u;
+      t.data0 = 0x00001000u;
+      phy.beginRequest();
+      r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);   // the link in use
+      CHECK(ok(r));
+      const uint32_t revives = phy.revives();
+      Bytes q = conn;
+      q.insert(q.end(), {10, 0});
+      rd(q, 0x11); rd(q, 0x10);
+      wr(q, 0x16, 0x700);
+      q.insert(q.end(), {0x04, 100, 0, 0, 0});      // 100 us: the drop starts at its end
+      wr(q, 0x17, kCmd);                            // lost
+      q.insert(q.end(), {0x04, 0x90, 0x01, 0, 0});  // 400 us: past the PHY's rest
+      poll(q); rd(q, 0x04);                         // the revive before the poll brings the link back
+      rd(q, 0x11); rd(q, 0x10);
+      armed = true;
+      phy.beginRequest();
+      r = call(riscv, TargetRiscvDm::kOpDmi, q, out);
+      g_on_wait = nullptr;
+      const bool line = out.size() == 5 && getU16(out.data()) == 10 && out[2] == kStatusLine && getU16(out.data() + 3) == 0;
+      CHECK(phy.revives() == revives + 1 && t.gpr[9] == 0x0000eab0u);
+      CHECK(line);
+      printf("  H a revive between a request's looks (the command lost before it): %s, %u revive\n",
+             line ? "status line, done 10, no values" : ok(r) ? "answered ok" : "other", phy.revives() - revives);
+    }
+    t.drop_until_us = 0;
+    t.out_of_step = false;
+    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
   }
 
   printf("attach-cycle: %d checks, %d failures\n", checks, failures);

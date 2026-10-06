@@ -355,24 +355,42 @@ void RvswdPhy::resyncAt(uint32_t half) {
 // the host - a hart halted by the host left halt, its next abstract command failed cmderr 6 (bench, 0.0.29-dev+f594f04,
 // tests/hw test_wire on the L103 through the RP2350: 3 of 8 runs, "read_register ... failed (cmderr 6)").
 //
-// Everything after the first read that did not answer is a retry of the request's (oep-if-debug §2): the re-syncs and
+// A link brought back is handed on only once it stays up: kReviveLooks good looks in a row (dmLinkLook: DMSTATUS a
+// module's with authenticated, then DMCONTROL with bit 7 clear), a re-sync again after a bad one - as Ch32Dm::steady
+// does after a change of hart state, whose single relink was not enough either (d690cf8). The revive handed the link on
+// at the first DMSTATUS that answered: with 0.0.29-dev+bd19b00, tests/hw test_wire on the L103 through the RP2350 read
+// s1 / a0 wrong after a read_block in 5 of 8 runs, the host's looks around its read passing (a0 read as s1's value: the
+// access-register command lost, DATA0 still the read before) - in the requests where f594f04's revive had sent the wake
+// and restarted the target (cmderr 6, 3 of 8). Taken to be the link coming back from its drop through a flicker (an
+// access missed between good ones), which one good read does not tell from a link that stays up; a host test models it
+// (test_attach_cycle H). The first look - is the link still there - is one look, not a single DMSTATUS read: a drop
+// that gives the last value read passes a DMSTATUS read when that value was a DMSTATUS.
+//
+// Everything after the first look that did not pass is a retry of the request's (oep-if-debug §2): the re-syncs and
 // each wake are charged to its wire_retry_ms, and none starts that would end past it (one wake at a slow max_speed
 // takes tens of ms; at 10 kHz twelve of them and the read's own retries made one request 691 ms). revives() counts the
 // times the link had to be brought back here - behind the layer above, which may have met the drop in a group it
-// takes for held (Ch32Dm::held).
+// takes for held (Ch32Dm::held) or in a raw dmi request (TargetRiscvDm::dmi answers it line).
 void RvswdPhy::reviveIfIdle() {
   if (!ready_ || !attached_) return;
   if (micros() - last_activity_us_ < kIdleUs) return;
-  uint32_t status = 0;
-  auto answers = [&]() { return readRaw(kDmStatus, status) && dmVersionKnown(status) && (status & 0x80); };
-  if (answers()) return;   // still there
+  auto look = [&]() {
+    uint32_t status = 0, control = 0;
+    return readRaw(kDmStatus, status) && readRaw(kDmControl, control) && dmLinkLook(status, control);
+  };
+  auto stays = [&]() {   // kReviveLooks good looks in a row
+    for (int i = 0; i < kReviveLooks; ++i)
+      if (!look()) return false;
+    return true;
+  };
+  if (look()) return;   // still there
   ++revives_;
   const uint32_t started = micros();
   uint32_t cost = 0;
   do {
     const uint32_t t0 = micros();
     configureBus(false);   // re-sync, no reset
-    const bool back = answers();
+    const bool back = stays();
     cost = micros() - t0;
     spentRetrying(cost);
     if (back) return;
@@ -388,7 +406,7 @@ void RvswdPhy::reviveIfIdle() {
   for (int i = 0; i < 12 && retryFits(cost); ++i) {
     const uint32_t t0 = micros();
     configureBus(true);
-    const bool up = answers();
+    const bool up = stays();
     cost = micros() - t0;
     spentRetrying(cost);
     if (up) break;

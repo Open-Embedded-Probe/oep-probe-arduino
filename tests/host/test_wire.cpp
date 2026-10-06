@@ -842,8 +842,11 @@ int main() {
     r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
     CHECK(ok(r) && !phy.halted);
     phy.dropped = false;   // the drop at the resume is over (a host's request later finds it back, the PHY's revive)
+    // the haltreq lands and the link drops at the change: the look after the step (P4) meets the drop - line, done 1
+    // (the write may have been done), no values
     r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x10, 0x01, 0x00, 0x00, 0x80}, out);
-    CHECK(ok(r) && phy.halted && phy.dropped);
+    CHECK(out.size() == 5 && out[0] == 1 && out[1] == 0 && out[2] == kStatusLine && out[3] == 0 && phy.halted &&
+          phy.dropped);
     r = writeBlock(0x20000100u, 0xbeef0000u, 3);
     CHECK(ok(r) && out.size() == 3 && out[0] == 3 && out[2] == kStatusOk && landed(0x20000100u, 0xbeef0000u, 3));
     CHECK(keptAsFound());
@@ -1015,10 +1018,11 @@ int main() {
     CHECK(checkConnection(fixed) && fixed.connected);
     g_millis += 500;
     CHECK(checkConnection(fixed) && fixed.connected);
-    // a host's dmi read of DATA0 in between (the same value: it may be the register's own) does not stop the clock
+    // a host's dmi read of DATA0 in between (the same value: it may be the register's own) does not stop the clock -
+    // the request's look at the link before its steps (P4) gets no answer: line, nothing run, no values
     const Bytes data0 = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x02, 0x04};
     r = call(riscv, TargetRiscvDm::kOpDmi, data0, out);
-    CHECK(ok(r));
+    CHECK(out.size() == 5 && out[0] == 0 && out[2] == kStatusLine && out[3] == 0 && fixed.connected);
     g_millis += 500;
     CHECK(!checkConnection(fixed) && !fixed.connected && fixed.lost);
     // riscv-dm's ops see it the same way: halt answers line, and the connection closes after wire_lost_ms
@@ -1069,8 +1073,9 @@ int main() {
     r = call(riscv, TargetRiscvDm::kOpDmi, read, out);
     CHECK(out.size() == 5 && out[2] == kStatusLine && !fixed.connected && fixed.lost);
 
-    // reads of another register (all ones may be its own value: no answer either way) once the clock runs: ok until
-    // wire_lost_ms, then the step that sees it fails with line, its value left out, and the connection closes
+    // reads of another register (all ones may be its own value: no answer either way) once the clock runs: the
+    // request's look at the link before its steps (P4: DMSTATUS, DMCONTROL) gets no answer, so it answers line with
+    // nothing run and no values, the clock running on; after wire_lost_ms the connection closes
     phy.stuck = false;
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(ok(r) && fixed.connected);
@@ -1082,7 +1087,7 @@ int main() {
     const Bytes data0 = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 2, 0, 0x02, 0x04, 0x02, 0x04};
     g_millis += 500;
     r = call(riscv, TargetRiscvDm::kOpDmi, data0, out);
-    CHECK(ok(r) && out.size() == 13 && fixed.connected);
+    CHECK(out.size() == 5 && out[0] == 0 && out[2] == kStatusLine && out[3] == 0 && fixed.connected);
     g_millis += 500;
     r = call(riscv, TargetRiscvDm::kOpDmi, data0, out);
     CHECK(r.detail == kOutcomeFailed && out.size() == 5 && out[0] == 0 && out[2] == kStatusLine && out[3] == 0);

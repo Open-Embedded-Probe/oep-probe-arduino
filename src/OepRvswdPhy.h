@@ -93,6 +93,8 @@ class RvswdPhy final : public DmiPhy {
   // How long the revive re-syncs a silent link before it sends the wake pattern (which resets a CH32L103): past the
   // 0.7 - 2.1 ms a CH32L103's link stays down after a change of hart state, with margin (Ch32Dm::kSteadyMs alike).
   static constexpr uint32_t kReviveResyncUs = 20000;
+  // Good looks in a row (dmLinkLook) before a link the revive brought back is handed on (Ch32Dm::kSteadyLooks alike).
+  static constexpr int kReviveLooks = 3;
   uint32_t revives_ = 0;
   uint32_t last_activity_us_ = 0;
   bool park_low_ = false;     // idle with SWCLK low instead of both lines high (setIdleClockLow)

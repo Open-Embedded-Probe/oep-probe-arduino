@@ -26,6 +26,15 @@ inline bool dmVersionKnown(uint32_t dmstatus) {
 // DMSTATUS.allhalted (bit 9) of a module: a line reading all ones has it set too, with no module behind it.
 inline bool dmHalted(uint32_t dmstatus) { return dmVersionKnown(dmstatus) && (dmstatus & (1u << 9)); }
 
+// One look at the link: DMSTATUS then DMCONTROL, read one after the other. It passes when DMSTATUS is a module's (a
+// found version) with authenticated (bit 7) set and DMCONTROL has bit 7 clear (hartselhi bit 1: a hart index of 2048
+// or more). A dropped link reads all ones, or the last value read, for both - one value cannot have bit 7 set and
+// clear - so a look that passes says both reads met the link up. Nothing else of DMCONTROL is asked: the host's raw
+// dmi may select another hart or leave dmactive clear (Ch32Dm::linkHeld asks more of its own ops: dmactive, hart 0).
+inline bool dmLinkLook(uint32_t dmstatus, uint32_t dmcontrol) {
+  return dmVersionKnown(dmstatus) && (dmstatus & (1u << 7)) && !(dmcontrol & (1u << 7));
+}
+
 class DmiPhy {
  public:
   virtual ~DmiPhy() = default;
@@ -101,7 +110,8 @@ class DmiPhy {
   virtual uint32_t transactions() const = 0;
   // The times the PHY found the link silent and brought it back on its own, inside a read or write the layer above
   // asked for (RvswdPhy's revive after a rest). A drop met before such a revive is no longer seen by a look after it:
-  // Ch32Dm::held takes a group whose span saw one for a group that met a drop. 0: a backend that never does.
+  // Ch32Dm::held takes a group whose span saw one for a group that met a drop, and a raw dmi request whose steps saw
+  // one answers line (TargetRiscvDm::dmi). 0: a backend that never does.
   virtual uint32_t revives() const { return 0; }
 
   // A scan's look at a combination (oep-if-debug §1, what scan writes): the wire's wake / configuration sequence and
