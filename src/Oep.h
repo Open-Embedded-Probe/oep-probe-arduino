@@ -574,6 +574,9 @@ class Interface {
   // The cause (core §4.3 unavailable payload) of the last planCheck that answered unavailable when none of its channels
   // is held by something else (the endpoint reports a held channel itself: cause 1, the channel, its holder_kind).
   virtual uint8_t planRefusalCause() const { return reg::core::kUnavailableCauseWrongState; }
+  // ... and the channel it met and its holder_kind, when the cause has them (0xFFFF / 0: left out) - an analog channel
+  // whose idle is an output: cause 5, the channel, holder_kind 7 (core §8, oep-if-capture §1.2).
+  virtual void planRefusalDetail(uint16_t &channel, uint8_t &holder_kind) const { (void)channel; (void)holder_kind; }
   virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
   virtual void planRelease() {}
   // false: this interface's planned channels are shared with no other fn's plan (core §8.1) - an analog input that

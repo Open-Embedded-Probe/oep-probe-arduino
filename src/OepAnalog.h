@@ -70,7 +70,11 @@ class AnalogCapture final : public Interface, public GroupTrack {
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
-  uint8_t planRefusalCause() const override { return refusal_cause_; }   // capturing: 6; the roles' count: 2
+  uint8_t planRefusalCause() const override { return refusal_cause_; }   // capturing: 6; the roles' count: 2; idle: 5
+  void planRefusalDetail(uint16_t &channel, uint8_t &holder_kind) const override {
+    channel = refusal_channel_;
+    holder_kind = refusal_kind_;
+  }
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
@@ -111,6 +115,8 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool subscribed_ = false, reported_ = true;
   uint8_t state_ = reg::fixture_analog::kStateUnconfigured;
   uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;   // planRefusalCause
+  uint16_t refusal_channel_ = 0xFFFF;                                  // planRefusalDetail
+  uint8_t refusal_kind_ = 0;
   uint32_t total_hz_ = 0, rate_num_ = 0, rate_den_ = 1;   // the conversions a second; the rate a channel = num / den
   uint32_t samples_ = 0, frames_ = 0;                     // asked; complete frames captured
   uint16_t *buffer_ = nullptr;                            // samples_ x channels_ values, frame after frame

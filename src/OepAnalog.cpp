@@ -121,6 +121,8 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
 
 uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
   refusal_cause_ = reg::core::kUnavailableCauseWrongState;
+  refusal_channel_ = 0xFFFF;
+  refusal_kind_ = 0;
   if (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting) return kRejectUnavailable;
   refusal_cause_ = reg::core::kUnavailableCauseLimit;   // the roles: more than its channels, one twice, one skipped
   if (count > kMaxChannels) return kRejectUnavailable;
@@ -133,6 +135,15 @@ uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
     if (role >= count || ((seen >> role) & 1)) return kRejectUnavailable;
     if (table_ && table_->owner(ch) != 0 && table_->owner(ch) != owner_) return kRejectUnavailable;   // a wire, a slot
     seen |= 1u << role;
+  }
+  // a channel whose idle is an output (mode 3 / 4): the ADC would take the pad off its drive (core §8, capture §1.2)
+  for (size_t i = 0; i < count && table_; ++i) {
+    const uint8_t idle = table_->idle(roles[i].channel);
+    if (idle != PinTable::kIdleOutputLow && idle != PinTable::kIdleOutputHigh) continue;
+    refusal_cause_ = reg::core::kUnavailableCauseHeldBySettings;
+    refusal_channel_ = roles[i].channel;
+    refusal_kind_ = reg::core::kHolderKindSettingsIdle;
+    return kRejectUnavailable;
   }
   return 0;
 }

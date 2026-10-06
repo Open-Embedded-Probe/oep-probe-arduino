@@ -51,7 +51,7 @@ struct Rig {
   NullStream stream;
   uint8_t rx[600], tx[600];
   Endpoint ep{stream, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kVendorBulk, 0};
-  PinTable pins{0xF0000000ull | 0xFFull};
+  PinTable pins{(0xFull << 26) | 0xFFull};
   AnalogCapture cap{ep, 0xFull << 26};
   Bytes out;
   Rig() {
@@ -181,7 +181,25 @@ static void testQueryAsConfigure() {
   CHECK(findTlv(rig.out, ana::kTlvConfigureAnswerLayout, layout) && layout == (Bytes{16, 0, 12, 3, 1, 2, 0}));
 }
 
+// An analog plan on a channel whose idle is an output (core §8, capture §1.2): unavailable cause 5, the channel,
+// holder_kind 7 (settings idle); nothing changes.
+static void testOutputIdle() {
+  Rig rig;
+  CHECK(rig.pins.setIdle(27, PinTable::kIdleOutputHigh, false));
+  const RoleAssignment roles[] = {{1, 0, 26}, {1, 1, 27}};
+  const uint16_t fns[] = {1};
+  CHECK(rig.ep.replacePlan(roles, 2, fns, 1) == kRejectUnavailable);
+  uint8_t out[32];
+  const Result r = rig.ep.planUnavailable(out, sizeof out);
+  CHECK(rejectedAs(r, kRejectUnavailable) && Bytes(out, out + r.length) == (Bytes{0x01, 1, 5, 0x02, 2, 27, 0, 0x04, 1, 7}));
+  RoleAssignment now[2];
+  CHECK(rig.ep.plan(now, 2) == 0 && rig.pins.owner(26) == 0);
+  CHECK(rig.pins.setIdle(27, PinTable::kIdlePullUp, false));   // an input idle: fine
+  CHECK(rig.ep.replacePlan(roles, 2, fns, 1) == 0);
+}
+
 int main() {
+  testOutputIdle();
   testRateRange();
   testQueryAsConfigure();
   testSentCritical();

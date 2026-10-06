@@ -872,6 +872,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
         if (const uint8_t reason = interfaces_[i]->planCheck(mine, m)) {
           if (reason == kRejectUnavailable) {   // a channel held now (a wire's connection, a resource), else its state
             plan_refusal_ = {interfaces_[i]->planRefusalCause(), 0xffff, 0xffff, 0};
+            interfaces_[i]->planRefusalDetail(plan_refusal_.channel, plan_refusal_.holder_kind);
             for (size_t r = 0; r < m && pins_; ++r) {
               const uint16_t ch = mine[r].channel;
               if (!pins_->owner(ch) || pins_->owner(ch) == 0xff) continue;
