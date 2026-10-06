@@ -144,7 +144,46 @@ static void testConfigureOrder() {
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnsupported) && rig.out[0] == (kCrit | ana::kTlvConfigureTrigger));
 }
 
+static bool findTlv(const Bytes &a, uint8_t tag, Bytes &v) {
+  for (size_t at = 0; at + 2 <= a.size(); at += 2u + a[at + 1])
+    if (a[at] == tag) { v.assign(a.begin() + at + 2, a.begin() + at + 2 + a[at + 1]); return true; }
+  return false;
+}
+
+// rate (capture §3.3): outside the declared rate_range unsupported, tag 0x42 as received; inside it, the nearest the
+// channel count's rate_limit allows (500 kS/s in all on the RP2).
+static void testRateRange() {
+  Rig rig;
+  CHECK(rig.plan({26, 27}) == 0);
+  for (const uint32_t rate : {uint32_t(1), uint32_t(48000000 / 65536), uint32_t(500001), uint32_t(10000000)}) {
+    for (const uint8_t bit : {uint8_t(0), kCrit}) {
+      Bytes p;
+      tlv(p, bit | ana::kTlvConfigureRate, u32(rate));
+      CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnsupported) && rig.out == Bytes{uint8_t(bit | ana::kTlvConfigureRate)});
+    }
+  }
+  CHECK(ok(rig.op(ana::kOpConfigure, configureRequest(400000))));   // in range, over two channels' limit (250 kHz)
+  Bytes rate;
+  CHECK(findTlv(rig.out, ana::kTlvConfigureAnswerActualRate, rate) && rate.size() == 8);
+  CHECK(getU32(rate.data()) == 48000000 && getU32(rate.data() + 4) == 96 * 2);   // 250 kHz a channel
+}
+
+// query answers what configure would (capture §3.2): the frame's order on the RP2 follows the inputs, not the roles.
+static void testQueryAsConfigure() {
+  Rig rig;
+  CHECK(rig.plan({29, 26, 28}) == 0);   // roles 0, 1, 2 on GPIO29, 26, 28: slots are roles 1, 2, 0
+  Bytes p = configureRequest(10000, 100);
+  CHECK(ok(rig.op(ana::kOpQuery, p)));
+  const Bytes queried = rig.out;
+  CHECK(ok(rig.op(ana::kOpConfigure, p)));
+  CHECK(queried == rig.out);
+  Bytes layout;
+  CHECK(findTlv(rig.out, ana::kTlvConfigureAnswerLayout, layout) && layout == (Bytes{16, 0, 12, 3, 1, 2, 0}));
+}
+
 int main() {
+  testRateRange();
+  testQueryAsConfigure();
   testSentCritical();
   testConfigureOrder();
   printf("analog: %d checks, %d failures\n", checks, failures);

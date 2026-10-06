@@ -214,8 +214,12 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   const uint8_t planned = channels_ ? channels_ : kMaxChannels;
   if (mode_tlv.v && mode_tlv.v[0] != ana::kModeOneShot)
     return Tail::refuseCritical(ana::kTlvConfigureMode, mode_tlv.critical, out, capacity);
-  uint64_t total = static_cast<uint64_t>(getU32(rate_tlv.v)) * count;
-  if (total < kMinTotalHz) total = kMinTotalHz;
+  // a rate outside rate_range is refused (capture §3.3); inside it, more channels share the ADC: the nearest the
+  // channel count's rate_limit allows
+  const uint32_t asked = getU32(rate_tlv.v);
+  if (asked < kMinTotalHz || asked > kMaxTotalHz)
+    return Tail::refuseCritical(ana::kTlvConfigureRate, rate_tlv.critical, out, capacity);
+  uint64_t total = static_cast<uint64_t>(asked) * count;
   if (total > kMaxTotalHz) total = kMaxTotalHz;
   uint32_t samples = samples_tlv.v ? getU32(samples_tlv.v) : 1024;
   // type(u8) role(u8) value(u32): the ADC value crossed up (from below to at or above) or down (above to at or below)
@@ -270,6 +274,14 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   num = total_hz;
   den = channels_;
 #endif
+  // the frame's order (layout order[m]: the role in slot m), the same for query as configure would answer
+  uint8_t order[kMaxChannels] = {0, 1, 2, 3};   // the ESP32's pattern is in role order
+#if defined(OEP_ANALOG_RP2)
+  // the round robin goes through the inputs in ascending order: frame slot m is the role on the m-th lowest input
+  for (uint8_t a = 0; a < channels_; ++a)
+    for (uint8_t b = a + 1; b < channels_; ++b)
+      if (pins_[order[b]] < pins_[order[a]]) { const uint8_t t = order[a]; order[a] = order[b]; order[b] = t; }
+#endif
   if (!query) {
     const size_t bytes = static_cast<size_t>(samples) * channels_ * 2u;
     uint16_t *buffer = static_cast<uint16_t *>(realloc(buffer_, bytes));
@@ -290,16 +302,8 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     memcpy(frontend_, chosen, sizeof frontend_);
 #if defined(OEP_ANALOG_RP2)
     cycles_ = cycles;
-    // the round robin goes through the inputs in ascending order: frame slot m is the role on the m-th lowest input
-    uint8_t sorted[kMaxChannels];
-    for (uint8_t k = 0; k < channels_; ++k) sorted[k] = k;
-    for (uint8_t a = 0; a < channels_; ++a)
-      for (uint8_t b = a + 1; b < channels_; ++b)
-        if (pins_[sorted[b]] < pins_[sorted[a]]) { const uint8_t t = sorted[a]; sorted[a] = sorted[b]; sorted[b] = t; }
-    memcpy(order_, sorted, sizeof order_);
-#else
-    for (uint8_t k = 0; k < kMaxChannels; ++k) order_[k] = k;   // the pattern is in role order
 #endif
+    memcpy(order_, order, sizeof order_);
     for (uint8_t m = 0; m < channels_; ++m) if (order_[m] == trig_role) trig_slot_ = m;
     frames_ = 0;
     state_ = ana::kStateConfigured;
@@ -311,7 +315,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   putU32(rate + 4, den);
   w.put(ana::kTlvConfigureAnswerActualRate, rate, sizeof rate);
   uint8_t layout[4 + kMaxChannels] = {16, 0, 12, channels_};
-  for (uint8_t m = 0; m < channels_; ++m) layout[4 + m] = query ? m : order_[m];
+  for (uint8_t m = 0; m < channels_; ++m) layout[4 + m] = order[m];
   w.put(ana::kTlvConfigureAnswerLayout, layout, 4u + channels_);
   w.u32(ana::kTlvConfigureAnswerActualSamples, samples);
   w.u32(ana::kTlvConfigureAnswerActualSegments, 1);
@@ -331,7 +335,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     w.put(ana::kTlvConfigureAnswerScale, scale, sizeof scale);
     uint8_t skew[5] = {k};
     uint8_t slot = 0;
-    for (uint8_t m = 0; m < channels_; ++m) if ((query ? m : order_[m]) == k) slot = m;
+    for (uint8_t m = 0; m < channels_; ++m) if (order[m] == k) slot = m;
     putU32(skew + 1, static_cast<uint32_t>(static_cast<uint64_t>(slot) * 1000000000u / total_hz));   // in turn
     w.put(ana::kTlvConfigureAnswerSkew, skew, sizeof skew);
     const uint8_t used[2] = {k, chosen[k]};
