@@ -1,6 +1,27 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The L103's "run: timeout" (bench, 0.0.29-dev+9942787 with steady(): 2 of about 12 ch32rv uploads through the
+  RP2350, print_format and wire_selftest, as before steady) shares the a0 clobber's cause: a drop that comes later than
+  steady's looks, met by the run's set-up. With the link down a write is lost and a read gives the last value read; a
+  stale ABSTRACTCS read that showed neither busy nor cmderr made a lost write of dcsr (ebreakm) or dpc look done, the
+  hart resumed into the application instead of the loader, and the run waited out its timeout. The held groups above
+  (the set-up's writes, then a look, redone after a drop) cure it; and checkHalted, which every op runs first, now
+  looks from a link that stays up (steady) instead of after one relink - a drop held against that relink answered line,
+  or state on a stale "running", without running the op. Host test (test_wire): the fake's loader is reached only from
+  dpc = pc with ebreakm set (else the hart runs on); the link dropped at every read of a run in turn (stale or all ones,
+  held 0 / 0.7 / 2.1 ms): all 1600 runs stop at their ebreak with the arguments in place (before: a timeout, wrong
+  arguments, 77 other failures in 1735); the block-op sweep's 558 cases all answer ok.
+- (JA) L103 の「run: timeout」（ベンチ、steady() 入りの 0.0.29-dev+9942787: RP2350 越しの ch32rv の upload 約 12 回に 2 回、
+  print_format と wire_selftest、steady の前と同じ率）は、a0 の書き換わりと原因が同じ: steady の見張りより遅れて来る落ちに、
+  run の準備が会う。リンクが落ちている間は書き込みが失われ、読み出しは最後に読んだ値を返す。busy も cmderr も示さない古い
+  ABSTRACTCS の読み出しが、失われた dcsr（ebreakm）や dpc の書き込みを済んだように見せ、hart は loader でなくアプリケーションに
+  戻り、run は timeout まで待っていた。上の held の組（準備の書き込みの後に 1 回見て、落ちに会えばやり直す）で直る。また、
+  どの op も最初に行う checkHalted は、relink 1 回の後でなく、立ち続けるリンク（steady）から見る - relink に対して保たれた落ちは
+  line を、古い「走っている」は state を返し、op は走らなかった。host test（test_wire）: fake の loader は dpc = pc かつ
+  ebreakm のときだけ届く（ほかは hart が走り続ける）。run の読み出しの 1 つずつで順にリンクを落とす（stale か全 1、
+  0 / 0.7 / 2.1 ms 保つ）: 1600 回の run がすべて ebreak で止まり、引数も正しい（前: 1735 回中 timeout 1、引数の誤り、ほかの
+  失敗 77）。block の op の 558 通りもすべて ok。
 - (EN) oep.wire.swio's speed: describe declared min_clock_hz 888888 (a zero's slot, 862.5 + 262.5 ns, oep-if-debug
   §3.2) while a connection's speed_hz was the rate one read's wall time implies over its 41 slots - the read slots'
   waits for the line and the frame's set-up counted in: 732142 Hz on the ESP32-P4 bench (no max_speed, 2 MHz, 1 MHz),

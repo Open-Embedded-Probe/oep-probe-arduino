@@ -92,6 +92,9 @@ class FakePhy final : public DmiPhy {
   // run_reads: a resumereq lets the hart run for that many DMSTATUS reads before it stops by itself (an ebreak), a
   // change of state (0: stop at once when step_returns, else run on)
   int run_reads = 0, running_reads = 0;
+  // loader_pc: a resumereq reaches the ebreak (run_reads later, dpc then loader_pc + 0x40) only from dpc == loader_pc
+  // with dcsr.ebreakm set - else the hart runs the application on (a lost dpc or dcsr write: the run's timeout)
+  uint32_t loader_pc = 0;
   // model_block: the abstract commands behind the block ops - GPRs, dpc / dcsr, the program buffer (the probe's block
   // reader / writer), abstractauto on DATA0, cmderr 4 while the hart runs - over a word memory; DATA0 / DATA1 sit at
   // 0xe0000380 / 0xe0000384 (HARTINFO)
@@ -175,6 +178,7 @@ class FakePhy final : public DmiPhy {
     if (dropped) { value = drop_stale ? last_read : 0xffffffffu; return true; }
     if (address == 0x11 && running_reads > 0 && --running_reads == 0) {   // the run reaches its ebreak
       halted = true;
+      if (loader_pc) dpc = loader_pc + 0x40;
       if (drop_on_change) startDrop();
       if (dropped) { value = drop_stale ? last_read : 0xffffffffu; return true; }
     }
@@ -228,6 +232,7 @@ class FakePhy final : public DmiPhy {
         halted = step_returns && !run_reads;
         resumeack = true;
         running_reads = run_reads;
+        if (loader_pc && run_reads && (dpc != loader_pc || !(dcsr & 0x8000u))) { halted = false; running_reads = 0; }
       }
       if (drop_on_change && ((value & (3u << 30)) && (halted != was || (value & (1u << 30))))) startDrop();
       if (value & (1u << 28)) havereset = false;   // ackhavereset
@@ -1394,7 +1399,7 @@ int main() {
     CHECK(stray == 0);
     CHECK(wrong_words == 0);
     CHECK(dropped_at_all == cases - 12);     // every drop met an op (12: the counting runs, no drop)
-    CHECK(answered_ok > cases * 9 / 10);     // and the ops came through them, nearly all
+    CHECK(answered_ok == cases);             // and the ops came through them, all (checkHalted waits out a drop too)
     printf("  block ops with a drop inside (%d / %d reads): %d cases, %d ok, %d with state changed, %d stray stores, "
            "%d wrong words\n", op_reads[0], op_reads[1], cases, answered_ok, clobbered, stray, wrong_words);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
@@ -1402,6 +1407,77 @@ int main() {
     phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
     phy.drop_hold_us = 0;
     phy.abstractauto = phy.cmderr = 0;
+    phy.halted = false;
+  }
+
+  // ---- a drop anywhere inside a run (bench, 0.0.29-dev+9942787: 2 of about 12 ch32rv uploads to the L103 through the
+  // RP2350 answered "run: timeout" with steady() in): the link dropped at every read of the run in turn - stale or all
+  // ones, held 0 / 0.7 / 2.1 ms, writes lost. The loader is reached only from dpc = pc with ebreakm set: a dcsr or dpc
+  // write lost to the drop and taken as done (a stale ABSTRACTCS read: not busy, no cmderr) sent the hart on through
+  // the application to the run's timeout. Every run now stops at its ebreak with the arguments in place, or (a drop
+  // that swallowed the resumereq itself) stops where it started for the host to judge - never a timeout ----
+  {
+    phy.halted = false;
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.loader_pc = 0x20000000u;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8)};
+    // pc 0x20000000, 1000 ms, a0 = 0x20000400 and a1 = 16 in, a0 out
+    Bytes run = conn;
+    run.insert(run.end(), {0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 2, 0x0a, 0x10, 0, 0x04, 0, 0x20, 0x0b, 0x10, 16, 0, 0, 0,
+                           1, 0x0a, 0x10});
+    int cases = 0, stopped = 0, timeouts = 0, not_started = 0, other = 0, bad_args = 0, run_reads_seen = 0;
+    for (int stale = 0; stale < 2; ++stale)
+      for (uint32_t hold : {0u, 700u, 2100u})
+        for (int at = -1; at < run_reads_seen; ++at) {
+          ++cases;
+          phy.halted = true;
+          phy.dpc = 0x00000a3cu;           // where the application was stopped
+          phy.dcsr = 0x40000003u;          // ebreakm clear: the application's ebreak traps
+          phy.gpr[10] = 0x5a5a0010u;
+          phy.gpr[11] = 0x5a5a0011u;
+          phy.cmderr = 0;
+          phy.abstractauto = 0;
+          phy.run_reads = 6;
+          phy.dropped = false;
+          phy.drop_stale = stale;
+          phy.drop_hold_us = hold;
+          phy.drop_delay_reads = 0;
+          phy.pending_drop = at;
+          const int reads_before = phy.reads;
+          r = call(riscv, TargetRiscvDm::kOpRun, run, out);
+          if (at < 0) run_reads_seen = phy.reads - reads_before;
+          phy.pending_drop = -1;
+          const bool answered_ok = ok(r) && out.size() >= 15 && out[0] == kStatusOk;
+          if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped && getU32(out.data() + 2) == 0x20000040u) {
+            ++stopped;
+            if (getU32(out.data() + 11) != 0x20000400u) ++bad_args;   // a0 as the run left it: the argument
+          } else if (answered_ok && out[1] == reg::target_riscv_dm::kRunStoppedStopped && getU32(out.data() + 2) == 0x00000a3cu) {
+            ++not_started;   // the resumereq lost: stopped where it was, dpc unmoved (the host judges, oep-if-debug §4.4)
+          } else if (out.size() >= 1 && out[0] == kStatusTimeout) {
+            ++timeouts;
+            if (timeouts <= 3) printf("  run with a drop at read %d (hold %u us, stale %d): timeout\n", at, hold, stale);
+          } else {
+            ++other;
+          }
+          if (!phy.halted) { phy.halted = true; }   // (a timed-out run was halted by the probe)
+          phy.dropped = false;
+          phy.run_reads = 0;
+          g_millis += 2;
+        }
+    CHECK(run_reads_seen > 20);
+    CHECK(timeouts == 0);
+    CHECK(bad_args == 0);
+    CHECK(stopped + not_started == cases && other == 0);
+    printf("  runs with a drop inside (%d reads): %d cases, %d stopped at the ebreak, %d not started, %d timeouts, %d other\n",
+           run_reads_seen, cases, stopped, not_started, timeouts, other);
+    r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
+    CHECK(ok(r) && !fixed.connected);
+    phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
+    phy.loader_pc = 0;
+    phy.drop_hold_us = 0;
     phy.halted = false;
   }
 

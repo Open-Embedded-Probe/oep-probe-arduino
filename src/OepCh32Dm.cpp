@@ -202,7 +202,9 @@ bool Ch32Dm::checkHalted() {
   uint32_t status = 0;
   bool read = moduleStatus(status);
   if (!read || !(status & (1u << 9))) {
-    relink();
+    // from a link that stays up (steady: a drop held against a relink - the L103's - read all ones or the stale
+    // "running" again after one relink, and the op answered line or state without running)
+    steady();
     read = moduleStatus(status);
   }
   if (!read) return false;
