@@ -77,6 +77,28 @@ bool Ch32Dm::waitStatus(uint32_t &status, uint32_t &relinked_us) {
   return false;
 }
 
+// abstractauto as the op found it (oep-if-debug §4's table: read_block / write_block / run put back the value they read
+// before touching it), and off for the op: with autoexecdata set, every DATA0 access below - the mailbox kept, a register
+// moved through it - would run the last command again. A read that does not answer (all ones) is not taken for a value:
+// 0 goes back then. auto_on_ followed only the probe's own writes, so a host's raw ABSTRACTAUTO = 1 went unseen and the
+// op's register writes ran the previous command on their DATA0.
+void Ch32Dm::keepAuto() {
+  if (auto_kept_) return;
+  uint32_t value = 0;
+  kept_auto_ = phy_.read(kAbstractAuto, value) && value != 0xffffffffu ? value : 0;
+  auto_kept_ = true;
+  auto_on_ = true;   // so that autoOff() writes 0 whatever the read said
+  autoOff();
+}
+
+void Ch32Dm::giveAuto() {   // last: after DATA0 is back (writing ABSTRACTAUTO runs nothing)
+  if (!auto_kept_) return;
+  auto_kept_ = false;
+  if (!kept_auto_) return;   // autoOff() left it 0
+  phy_.write(kAbstractAuto, kept_auto_);
+  auto_on_ = true;
+}
+
 // Measure the link speed again (the target's clock may have changed), then put the abstract-command block back in
 // a known state: the search re-syncs the bus once per candidate and leaves whatever the probes did behind.
 void Ch32Dm::retune() {
@@ -177,6 +199,7 @@ void Ch32Dm::restoreBlock() {
   autoOff();
   if (cmderr_) phy_.write(kAbstractCs, 0x700);
   giveMailbox();
+  giveAuto();
 }
 
 bool Ch32Dm::halt() {
@@ -325,7 +348,7 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
 }
 
 void Ch32Dm::detach() {
-  gprs_kept_ = kept_ = false;   // an op that failed midway left nothing to give back here (it restored its own)
+  gprs_kept_ = kept_ = auto_kept_ = false;   // an op that failed midway left nothing to give back here (it restored its own)
   // dmactive stays set (haltreq / resumereq / ndmreset go): writing 0 reset the debug module, which wiped a dmseq
   // frame the target had out in DATA0, and the target, reading 0 as silence, then waited out its timeout - counted in
   // its own reads of DATA0, which the probe's polling slows, so 1-10 s - before posting again (the console came back
@@ -350,7 +373,8 @@ bool Ch32Dm::loadRegisters(uint32_t &data0_address) {
 
 bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr) {
   if (!halted_ || !words) return false;
-  keepMailbox();   // first: everything below goes through DATA0 / DATA1
+  keepAuto();      // first: with autoexec on, reading DATA0 would run a command
+  keepMailbox();   // then: everything below goes through DATA0 / DATA1
   // Long runs of these hiccup now and then - roughly one chunk in a couple of hundred on
   // the CH32L103 jig, which is a whole-flash verify failing every few tries. The words
   // already read are then meaningless, so redo the chunk from its own bring-up rather
@@ -421,6 +445,7 @@ bool Ch32Dm::writeRegister(uint16_t regno, uint32_t value) {
 
 bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t count) {
   if (!halted_ || !count || (address & 3)) return false;
+  keepAuto();
   keepMailbox();
   // Plain memory, so a failed attempt is simply redone from the start. As with readWords, the
   // address the writer leaves in DATA1 counts the runs and catches a missed or doubled trigger.
@@ -456,6 +481,8 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
                           RunReport &report) {
   report = {false, false, 0, 0};
   if (!halted_) return false;
+  keepAuto();                 // abstractauto as found goes back before the answer (§4's table), whatever the way out
+  AutoBack auto_back(*this);
   // Without ebreakm the final ebreak traps through mtvec and the application restarts
   // (the V003 loader finding, 2026-09-22). prv = M: the hart may have been stopped in U mode
   // (ArduinoCore-CH32 sketches on V3B/V4 run there), where interrupts cannot be masked; the
@@ -512,9 +539,9 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   uint32_t now = 0;   // ebreaks / ebreaku back as they were (cause, prv: where it stopped)
   if (!readRegister(0x07b0, now) || ((now & kEbreakSU) != ebreak_su && !writeRegister(0x07b0, (now & ~kEbreakSU) | ebreak_su)))
     ok = false;
-  phy_.write(kAbstractAuto, 0);
+  autoOff();
   giveMailbox();
-  return ok;
+  return ok;   // auto_back: abstractauto as it was, after DATA0
 }
 
 bool Ch32Dm::ackHaveReset() {
@@ -576,6 +603,8 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   moved = false;
   end = kStepped;
   if (!halted_) return false;
+  keepAuto();                              // before DATA0 is touched; back at every way out (auto_back)
+  AutoBack auto_back(*this);
   keepMailbox();                           // the reads below go through DATA0
   uint32_t dcsr = 0;
   if (!readRegister(0x7b1, dpc_before) || !readRegister(0x7b0, dcsr)) { giveMailbox(); return false; }

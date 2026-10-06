@@ -680,7 +680,8 @@ int main() {
   // and writes are lost meanwhile. checkHalted looked once: after a host's raw halt the block op answered line (all
   // ones) or state with 0 words (the stale "running" - "write_block stopped after 0: state" on the L103); the run's wait
   // relinked only on all ones, so a stale "running" kept it to its timeout with the hart at its ebreak, and a stale
-  // "halted" hid a resume ----
+  // "halted" hid a resume. A block op and a run put abstractauto back as they found it (oep-if-debug §4's table); they
+  // forced 0, and a host's raw ABSTRACTAUTO = 1 made the op's first DATA0 access run the last command again ----
   for (bool stale_reads : {false, true}) {
     phy.halted = false;
     phy.model_block = phy.drop_on_change = phy.drop_loses_writes = true;
@@ -737,6 +738,20 @@ int main() {
     CHECK(ok(r) && out[0] == kStatusOk && !phy.halted);
     r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
     CHECK(ok(r) && phy.halted);
+    // abstractauto as the op found it: a host's raw ABSTRACTAUTO = 1 (autoexecdata 0) is put back, and the op's own
+    // accesses to DATA0 run no command of it (the sentinel past the block stays)
+    phy.mem[0x20000210u] = 0x5e5e5e5eu;
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x18, 0x01, 0x00, 0x00, 0x00}, out);
+    CHECK(ok(r) && phy.abstractauto == 1);
+    phy.data0 = 0x0000aa55u;
+    phy.data1 = 0x12345678u;
+    const uint32_t runs = phy.autoexec_runs;
+    r = writeBlock(0x20000200u, 0x0d0d0000u, 4);
+    CHECK(ok(r) && out[2] == kStatusOk && landed(0x20000200u, 0x0d0d0000u, 4) && phy.mem[0x20000210u] == 0x5e5e5e5eu);
+    CHECK(keptAsFound() && phy.abstractauto == 1);
+    CHECK(phy.autoexec_runs - runs == 3);   // the block's own words 1-3, nothing else
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x18, 0x00, 0x00, 0x00, 0x00}, out);
+    CHECK(ok(r) && phy.abstractauto == 0);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     phy.model_block = phy.drop_on_change = phy.drop_loses_writes = phy.drop_stale = phy.dropped = false;
