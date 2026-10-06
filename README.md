@@ -55,7 +55,7 @@ bridge or the ESP32-P4's USB-Serial/JTAG keeps its fixed ID and is chosen by the
 
 A UART's 115200 baud is the one speed every board and bridge manages; a faster rate is not something a probe can assume
 (some bridges and boards do not run 921600 reliably), so a host stays at 115200 unless the probe and the host agree on more.
-The classic ESP32 firmware offers the optional `port_speed` (in `oep.link`, oep-if-link §3): a host that asks tries a rate, checks it with
+The classic ESP32 firmware offers the optional `port_speed` (in `oep.probe.link`, oep-if-link §3): a host that asks tries a rate, checks it with
 a sized transfer both ways, and commits it for its session; the probe goes back to 115200 by itself when the check never
 comes, frames break, the line goes quiet or the session ends (build with `-DOEP_PORT_SPEED=0` to leave it out).
 
@@ -143,16 +143,21 @@ This library does not deal with voltage levels: the probe's pins are the MCU's o
 ## This library
 
 A library for writing Open Embedded Probe (OEP) probes with Arduino, and the firmware of each probe (`examples/`). It speaks
-the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.md` and the standard
-interfaces `docs/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
+the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.md`, `docs/oep-transports.md`
+and the interfaces `interfaces/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
 no compatibility is promised.
 
-**The spec this implements: oep-spec commit `3c96daf`** (no `v0.x` tag yet, versioning §6) - the 2026-10-06
+**The spec this implements: oep-spec commit `498ae95`** (no `v0.x` tag yet, versioning §6) - the 2026-10-06
 simplification: one 10-byte request header with session_id, TLV tag(u8) len(u16), sequences without element lengths,
-closed fixed forms, the `ops` describe tag on every fn, no resume (end releases everything the session created), the
-link test and port_speed in `oep.link`, the 59dd028 rule that an attach joining a live connection keeps the settings
-it does not carry, a193272 (a failed attach adds no user), and fn 0 `restart` with `restart_max_ms` (ecd1ab9, 3c96daf:
-every firmware offers it). Until the freeze the Japanese text (`docs/*.ja.md`) is the working text.
+closed fixed forms, the `ops` describe tag on every fn (in its one canonical encoding), no resume (end releases
+everything the session created), the 59dd028 rule that an attach joining a live connection keeps the settings it does
+not carry, a193272 (a failed attach adds no user); and the 2026-10-06 structure (2e5dc4c - 498ae95): the core (fn 0)
+has no name and is not listed, its ops are confirm, list, describe, clock, open, end, keepalive and lock_state (clock
+0x04: boot_id and uptime_ns, no session needed); the plan is `oep.probe.plan` (plan_apply 0x01, plan_release 0x02,
+plan_roles), the restart `oep.probe.restart` (restart 0x01, restart_max_ms; every firmware offers it), the link test
+and port_speed `oep.probe.link`; subscribe / unsubscribe (0x30 / 0x32) are ops of the interface that sends the
+notifications (logic, analog, capture-group), there is no heartbeat, and only data is batched. Until the freeze the
+Japanese text (`*.ja.md`) is the working text.
 
 The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its generated header is copied to
 `src/OepRegistry.h`, and the spec's shared byte vectors to `tests/vectors/` (`tests/host/test_vectors.cpp` runs every
@@ -162,7 +167,7 @@ one of them against this endpoint).
 
 | Path | Contents |
 |---|---|
-| `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core, oep-transports): frames, interfaces by name and their ops, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (transports §4), the plan, notifications; `oep::Link` is `oep.link` (the link test, port_speed) |
+| `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core, oep-transports): frames, interfaces by name and their ops, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (transports §4), notifications (subscribe on the emitting fn), fn 0's clock; `oep::ProbePlan` / `oep::ProbeRestart` are `oep.probe.plan` / `oep.probe.restart`, which the endpoint lists itself after the sketch's interfaces; `oep::Link` is `oep.probe.link` (the link test, port_speed) |
 | `src/OepBind.*` | what each serial port carries (binds: last-reset / manual / mixed, held during a session and resumed from its last reset) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
@@ -184,7 +189,7 @@ uses it.
 | Example | Boards (profiles) | What it shows |
 |---|---|---|
 | `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4), classic ESP32 (esp32) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host, a jig = its settings |
-| `01.Basics/MinimalProbe` | RP2040 / RP2350, classic ESP32 | the smallest probe: oep.core alone - the endpoint, a transport, the describe |
+| `01.Basics/MinimalProbe` | RP2040 / RP2350, classic ESP32 | the smallest probe: fn 0 (the core) alone, no interface - the endpoint, a transport, the describe |
 | `01.Basics/FixtureProbe` | RP2040 / RP2350, classic ESP32 | a test fixture: GPIO and a UART on pins the host plans (the pin table, owners, the plan) |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350, classic ESP32 | **extending OEP**: your own interface under your own name - describe, the plan, ops, TLV tails |
 | `03.Transports/MultipleTransports` | ESP32-P4 | one endpoint on four USB transports at once (HS vendor bulk, HID, CDC, USB-Serial/JTAG), USB identity |

@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) README / guides / PID-USE (EN / JA): the spec this implements is oep-spec 498ae95 (the 2026-10-06 structure: the
+  nameless core with clock, oep.probe.plan, oep.probe.restart, oep.probe.link, subscribe on the emitting interface, no
+  heartbeat), the interface documents under interfaces/; writing a probe: the endpoint's own interfaces listed after the
+  sketch's, setRestart before the first poll, an interface offers at least one op, notifies() and the data-only batching.
+- (JA) README / ガイド / PID-USE（EN / JA）: 実装している仕様は oep-spec 498ae95（2026-10-06 の構成: clock を持つ名前の無い本体、
+  oep.probe.plan、oep.probe.restart、oep.probe.link、送り出すインターフェースへの subscribe、heartbeat なし）、インターフェースの
+  文書は interfaces/ にある。probe の書き方: endpoint 自身のインターフェースはスケッチのものの後に出る、setRestart は最初の poll
+  の前、インターフェースは op を 1 つ以上持つ、notifies() と、まとめて送るのはデータだけ。
 - (EN) The 2026-10-06 structure (breaking; oep-spec 289bde0..498ae95: 2e5dc4c, 0bce222, c475dad, 0304f37, e0d9dc6):
   registry and vectors synced from 498ae95 (tools/sync_registry.sh; ops_encoding.json new). The core has no name: list
   never returns fn 0 (a probe with no interface lists nothing) and fn 0's ops are confirm, list, describe, clock, open,

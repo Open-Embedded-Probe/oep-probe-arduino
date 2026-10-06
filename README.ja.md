@@ -53,7 +53,7 @@ USB-Serial/JTAG の口は決まった ID のままで、利用者が選びます
 
 UART の 115200 baud は、どのボードと変換チップでも通る速さです。それより速い速さを probe は前提にできません（921600 を安定して
 通せない変換チップやボードがある）。host は、probe と host が合意しない限り 115200 のままにします。
-classic ESP32 の firmware は任意の `port_speed`（`oep.link` の中、oep-if-link §3）を持ちます: 頼んだ host は速さを試し、両方向の大きめの転送で
+classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中、oep-if-link §3）を持ちます: 頼んだ host は速さを試し、両方向の大きめの転送で
 確かめてから、そのセッションの間その速さに決めます。確かめが来ない、フレームが壊れる、線が黙る、セッションが終わる、の
 どれでも probe は自分で 115200 に戻ります（`-DOEP_PORT_SPEED=0` でビルドすると外れる）。
 
@@ -137,13 +137,17 @@ ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につない�
 ## このライブラリ
 
 Open Embedded Probe（OEP）の probe を Arduino で書くためのライブラリと、各 probe のファームウェア（`examples/`）。
-v1（oep-spec の `docs/oep-core.ja.md` と標準インターフェースの `docs/oep-if-*.ja.md`）を話す。凍結の前の v1 で、凍結までは仕様が壊れることがある。破壊的変更を前提とする実験段階で、互換は約束しない。
+v1（oep-spec の `docs/oep-core.ja.md`、`docs/oep-transports.ja.md` とインターフェースの `interfaces/oep-if-*.ja.md`）を話す。凍結の前の v1 で、凍結までは仕様が壊れることがある。破壊的変更を前提とする実験段階で、互換は約束しない。
 
-**実装している仕様: oep-spec の commit `3c96daf`**（`v0.x` の tag はまだ無い。versioning §6）。2026-10-06 の単純化: session_id を
+**実装している仕様: oep-spec の commit `498ae95`**（`v0.x` の tag はまだ無い。versioning §6）。2026-10-06 の単純化: session_id を
 持つ 10 byte の要求の見出し一つ、TLV は tag(u8) len(u16)、要素の長さの無い並び、閉じた固定の形、すべての fn の describe の
-`ops`、再開なし（end はセッションが作ったものをすべて解放する）、線の試験と port_speed は `oep.link`、59dd028 の、生きている
-connection に加わる attach は運ばない設定を変えないという規則、a193272（失敗した attach は users に加えない）、そして fn 0 の
-`restart` と `restart_max_ms`（ecd1ab9、3c96daf。どのファームウェアも持つ）。凍結までは日本語の文（`docs/*.ja.md`）が作業の文。
+`ops`（符号は 1 つだけの正規形）、再開なし（end はセッションが作ったものをすべて解放する）、59dd028 の、生きている connection に
+加わる attach は運ばない設定を変えないという規則、a193272（失敗した attach は users に加えない）。そして 2026-10-06 の構成
+（2e5dc4c - 498ae95）: 本体（fn 0）は名前を持たず list に載らない。その op は confirm、list、describe、clock、open、end、keepalive、
+lock_state（clock 0x04: boot_id と uptime_ns、セッション不要）。plan は `oep.probe.plan`（plan_apply 0x01、plan_release 0x02、
+plan_roles）、再起動は `oep.probe.restart`（restart 0x01、restart_max_ms。どのファームウェアも持つ）、線の試験と port_speed は
+`oep.probe.link`。subscribe / unsubscribe（0x30 / 0x32）は通知を送り出すインターフェース（logic、analog、capture-group）の op で、
+heartbeat は無く、まとめて送るのはデータだけ。凍結までは日本語の文（`*.ja.md`）が作業の文。
 
 wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で、その生成物を `src/OepRegistry.h` に写している。仕様の共通の
 byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` がそのすべてをこの endpoint に当てる。
@@ -152,7 +156,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 
 | PATH | 中身 |
 |---|---|
-| `src/Oep.h`、`src/OepEndpoint.*`、`src/OepRegistry.h` | v1 の本体（oep-core、oep-transports）: フレーム、名前で探すインターフェースとその ops、ロック、複数の経路（describe の transport）、シリアルの口の共用（transports §4）、plan、通知。`oep::Link` が `oep.link`（線の試験、port_speed） |
+| `src/Oep.h`、`src/OepEndpoint.*`、`src/OepRegistry.h` | v1 の本体（oep-core、oep-transports）: フレーム、名前で探すインターフェースとその ops、ロック、複数の経路（describe の transport）、シリアルの口の共用（transports §4）、通知（送り出す fn への subscribe）、fn 0 の clock。`oep::ProbePlan` / `oep::ProbeRestart` が `oep.probe.plan` / `oep.probe.restart` で、endpoint がスケッチのインターフェースの後に自分で出す。`oep::Link` が `oep.probe.link`（線の試験、port_speed） |
 | `src/OepBind.*` | シリアルの口に流すもの（bind: last-reset / manual / mixed、セッション中の停止と最後の reset からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind。ESP32 は NVS、RP2040 / RP2350 は flash に保存）。各ファイルの冒頭に対応する仕様の節がある |
@@ -173,7 +177,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | Example | ボード（profile） | 示すこと |
 |---|---|---|
 | `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）、classic ESP32（esp32） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
-| `01.Basics/MinimalProbe` | RP2040 / RP2350、classic ESP32 | 最小の probe: oep.core だけ。endpoint、経路、describe |
+| `01.Basics/MinimalProbe` | RP2040 / RP2350、classic ESP32 | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
 | `01.Basics/FixtureProbe` | RP2040 / RP2350、classic ESP32 | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350、classic ESP32 | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
 | `03.Transports/MultipleTransports` | ESP32-P4 | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |

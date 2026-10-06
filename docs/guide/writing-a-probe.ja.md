@@ -12,13 +12,16 @@
  host  ==フレーム==>  経路（Stream） --> Endpoint --> インターフェース（fn 1）   oep.wire.rvswd
                       経路 2 .......        |     --> インターフェース（fn 2）   oep.target.riscv-dm
                                              |     --> インターフェース（fn 3）   io.github.you.thing
-                                     oep.core（fn 0）: confirm、list、describe、ロック、plan、購読
+                                             |     --> oep.probe.plan、oep.probe.restart（endpoint 自身のもの、最後）
+                                     fn 0（本体、名前なし）: confirm、list、describe、clock、ロック
 ```
 
 - **Endpoint** がプロトコルを持ちます。各経路からフレームを読み、セッションとロックを確かめ、fn でインターフェースを探し、
-  要求が来た経路に結果を返します。oep.core（fn 0）は組み込みです。
+  要求が来た経路に結果を返します。fn 0（本体。名前を持たず list に載りません）は組み込みです。`oep.probe.plan`（plan の役を
+  持つインターフェースがあれば出す）と `oep.probe.restart`（`setRestart` で出す）も組み込みで、endpoint は最初の `poll()` で、
+  足したすべてのインターフェースの後にこの順で番号を振ります。同じ firmware ならどの起動でも同じ fn です。
 - **インターフェース**は、名前と操作を持つクラスです。endpoint は `add()` した順に番号を振ります（fn 1、2、...）。host は番号
-  ではなく名前で探します。
+  ではなく名前で探します。インターフェースは少なくとも 1 つの op を持ちます。
 - スケッチはこれらの配線です。オブジェクトを置き、`setup()` で足し、`loop()` で `poll()` を呼びます。
 
 ## 2. endpoint
@@ -34,9 +37,9 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   `endpoint.addTransport(stream, rx, sizeof rx, kind, usb_interface)`（`03.Transports/MultipleTransports`）。
 - **上限** `{max_frame, window, max_inflight}` は、confirm で host に約束する値です。シリアルの口の rx は、符号化したフレームを
   入れるので max_frame より少し大きくします（`cobsFrameMax`）。
-- oep.core の **describe** は自分で書きます。`describeCore(w, model, unit_id, ...)` が、firmware の版、model、どの経路でも同じ
+- fn 0 の **describe** は自分で書きます。`describeCore(w, model, unit_id, ...)` が、firmware の版、model、どの経路でも同じ
   unit id（`platformUnitId`）、channel の数、予約の channel を書きます。`setProbeDescription` で渡します。経路の一覧と
-  transport、`discoverable`、`plan_roles`、`max_op_ms` は endpoint が足します。describe は宣言だけです（core §7.3）:
+  transport、`discoverable`、`max_op_ms` は endpoint が足します。describe は宣言だけです（core §7.3）:
   動いている間に変わるものは入れません。
   unit_id は必須です（core §7.5）。ライブラリが固有の番号を知らないチップでは、`-DOEP_UNIT_ID='"..."'`
   （`a-z 0-9 -` で 1〜16 文字、個体ごとに違う値）を与えるまでビルドが止まります。
@@ -92,10 +95,10 @@ class Blink final : public oep::Interface {
   そう言い、先に外されます。
 - **describe** は `TlvWriter` で書きます。共通の tag（`roleChannels`、`u32(kTagMaxClockHz, ...)`、op でない任意の機能には
   `u32(kTagFeatures, ...)`）と、自分の tag（0x40 から）。`ops` の tag は書きません（endpoint が書きます）。
-- **oep.link**（線の試験と、UART bridge の port_speed）は任意のインターフェースです: `oep::Link link(endpoint);
+- **oep.probe.link**（線の試験と、UART bridge の port_speed）は任意のインターフェースです: `oep::Link link(endpoint);
   endpoint.add(link);`。前の fn の番号が変わらないよう最後に足します。`endpoint.setPortSpeed(...)` で port_speed が ops に入ります。
-- **restart**（fn 0、任意、core §6.6）: `endpoint.setRestart(oep::platformRestart, max_ms)` で fn 0 の ops に入り、describe に
-  `restart_max_ms` が出ます。`max_ms` は、応答から同じ経路で confirm にまた答えるまでの最長の時間で、起動と USB の列挙し直しを
+- **oep.probe.restart**（任意、oep-if-restart）: `setup()` で最初の `poll()` の前に `endpoint.setRestart(oep::platformRestart, max_ms)`
+  を呼ぶと出ます（restart 0x01、describe に `restart_max_ms`）。`max_ms` は、応答から同じ経路で confirm にまた答えるまでの最長の時間で、起動と USB の列挙し直しを
   含みます。ボードごとに見積もり、余裕を持たせます。endpoint は先に答えて flush し、セッションを終え、どのインターフェースにも
   `probeRestart()` を呼び（設定が持つもの - スロットの接続 - も、target には触れずに放す）、すべての plan を解いてから handler を
   呼びます。handler は戻りません（`esp_restart`、`rp2040.reboot()`）。自分の USB device を先に外すなら包んで渡します。
@@ -106,7 +109,8 @@ class Blink final : public oep::Interface {
   ものを自分の持ち主の番号で `claim()` し、`release()` で返します。持たれている channel はほかには断られるので、2 つの
   インターフェースが同じピンを駆動することはありません（core §8.1）。返した channel は空きのときの状態（Hi-Z、または設定の
   とおり）になります。
-- **plan** は、host が実行中にピンを割り当てる方法です（core §8）。`plan_apply` が (fn, role, channel) を挙げると、endpoint は
+- **plan** は、host が実行中にピンを割り当てる方法です（`oep.probe.plan`、oep-if-plan）。plan の役を持たない（`planRoles()` が
+  false の）インターフェースの fn は unsupported で断ります。`plan_apply` が (fn, role, channel) を挙げると、endpoint は
   各インターフェースに `planCheck()`（副作用なし: 0 か断る理由）、次に `planApply()` を聞き、`planRelease()` で返させます。
   役とその候補のピンは describe で宣言します（`roleChannels`）。宣言していない役や channel は planCheck が
   `kRejectUnsupported` で断り（endpoint が tag 0x90 を付けます）、宣言した channel を他が持っているときは
@@ -170,9 +174,12 @@ class Blink final : public oep::Interface {
 
 ## 8. push と出来事
 
-流すインターフェースは `subscribe()`、`pull()`、`pending()` を持ちます。endpoint は、購読した host がロックを持つ間、データの
-フレームを送ります。`endpoint.event(*this, kind, payload, length)` で出来事を送ります。コンソール、fixture の UART、capture が
-これを使っています。
+通知を送り出すインターフェースは `notifies()` で true を返します。endpoint はその ops に subscribe と unsubscribe（0x30 / 0x32、
+core §11.3）を立て、自分で答えて `subscribe(true / false)` を呼びます。流すものは `pull()` と `pending()` も持ちます。endpoint は、
+購読した host がロックを持つ間、購読の min_bytes / max_delay_ms でまとめてデータのフレームを送ります。
+`endpoint.event(*this, kind, payload, length)` で出来事を送ります。出来事はまとめず、先に送る応答を送り終えたらすぐ送ります。
+logic と analog の capture、capture-group がこれを使っています。何も送らないインターフェースはどちらの op も持ちません（fn 0 は
+何も送りません。heartbeat は無く、host は probe の時刻を fn 0 の clock で読みます）。
 
 ## 9. USB の名乗り
 

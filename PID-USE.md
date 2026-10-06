@@ -27,7 +27,7 @@ You may ship firmware with that VID:PID - your own board, your own jig, a change
    under an `oep.` name follows that interface's specification. Your own interfaces use your own reverse-DNS names
    (`io.github.<you>.<name>`), never `oep.`.
 3. **It identifies itself honestly**: the USB serial number is the probe's `unit_id` - unique per unit and unchanged across
-   firmware versions (oep-spec core §3.3 / §7.5) - and oep.core's describe carries `unit_id`, the transport list and
+   firmware versions (oep-spec core §3.3 / §7.5) - and fn 0's describe carries `unit_id`, the transport list and
    `discoverable = 1`.
 4. **It does not change the protocol incompatibly.** A firmware that changes the wire format, or answers OEP requests in a way
    the specification does not allow, is not an OEP probe and must use a USB ID of its own.

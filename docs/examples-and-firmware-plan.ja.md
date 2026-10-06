@@ -55,7 +55,7 @@ profile を足す方法、ボードの予約ピン（§6 f）の足し方、焼�
 ```
 examples/
   01.Basics/
-    MinimalProbe        oep.core だけ。host の `oep dump` に見える最小の probe。各行に説明
+    MinimalProbe        fn 0（本体）だけ。host の `oep dump` に見える最小の probe。各行に説明
     FixtureProbe        gpio と uart: pytest から動かす治具
   02.Interfaces/
     CustomInterface     独自のインターフェース（io.github.<you>.<name>、revision、describe、plan のピン）

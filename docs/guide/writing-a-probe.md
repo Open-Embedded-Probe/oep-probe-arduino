@@ -12,13 +12,17 @@ examples open: `01.Basics/MinimalProbe` is the frame, `02.Interfaces/CustomInter
  host  ==frames==>  transport (Stream) --> Endpoint --> Interface (fn 1)   oep.wire.rvswd
                     transport 2 .......        |    --> Interface (fn 2)   oep.target.riscv-dm
                                                 |    --> Interface (fn 3)   io.github.you.thing
-                                        oep.core (fn 0): confirm, list, describe, the lock, the plan, subscriptions
+                                                |    --> oep.probe.plan, oep.probe.restart (the endpoint's own, listed last)
+                                        fn 0 (the core, no name): confirm, list, describe, clock, the lock
 ```
 
 - The **Endpoint** owns the protocol: it reads frames from each transport, checks the session and the lock, finds the
-  interface by fn, and writes the result back on the transport the request came from. oep.core (fn 0) is built in.
+  interface by fn, and writes the result back on the transport the request came from. fn 0 (the core, which has no name
+  and is not listed) is built in, and so are `oep.probe.plan` (listed when an interface has plan roles) and
+  `oep.probe.restart` (listed with `setRestart`): the endpoint numbers them after every interface you add, at the first
+  `poll()`, so the same firmware gives the same fns at every boot.
 - An **interface** is a class with a name and operations. The endpoint numbers them in the order you `add()` them
-  (fn 1, 2, ...); hosts find them by name, never by number.
+  (fn 1, 2, ...); hosts find them by name, never by number. An interface must offer at least one op.
 - A sketch is the wiring of these: the objects, `setup()` adding them, `loop()` calling `poll()`.
 
 ## 2. The endpoint
@@ -34,9 +38,9 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   `endpoint.addTransport(stream, rx, sizeof rx, kind, usb_interface)` (`03.Transports/MultipleTransports`).
 - **Limits** `{max_frame, window, max_inflight}` are what confirm promises the host. A serial port's rx buffer holds an
   encoded frame: a little more than max_frame (`cobsFrameMax`).
-- oep.core's **describe** is yours to fill: `describeCore(w, model, unit_id, ...)` writes the firmware version, the model,
+- fn 0's **describe** is yours to fill: `describeCore(w, model, unit_id, ...)` writes the firmware version, the model,
   a unit id that is the same on every transport (`platformUnitId`), the channel count and the reserved channels. Hand it
-  over with `setProbeDescription`. The transports, `discoverable`, `plan_roles` and `max_op_ms` are added by the endpoint.
+  over with `setProbeDescription`. The transports, `discoverable` and `max_op_ms` are added by the endpoint.
   describe is declarations only (core §7.3): nothing that changes while the probe runs goes in it.
   unit_id is mandatory (core §7.5): on a chip the library has no unique number for, the build stops until you give
   `-DOEP_UNIT_ID='"..."'` (1 to 16 of `a-z 0-9 -`, a different value per unit).
@@ -95,11 +99,11 @@ class Blink final : public oep::Interface {
   interface's (a console stream on a wire's connection) says `sessionOverFirst()`, so its share goes first.
 - **describe** uses `TlvWriter`: common tags (`roleChannels`, `u32(kTagMaxClockHz, ...)`, `u32(kTagFeatures, ...)` for
   optional functions that are not ops) and your own (0x40 and up). Do not write the `ops` tag: the endpoint does.
-- **oep.link** (the link test, and port_speed on a UART bridge) is an optional interface: `oep::Link link(endpoint);
+- **oep.probe.link** (the link test, and port_speed on a UART bridge) is an optional interface: `oep::Link link(endpoint);
   endpoint.add(link);` - add it last so the fns before it keep their numbers. `endpoint.setPortSpeed(...)` puts
   port_speed in its ops.
-- **restart** (fn 0, optional, core §6.6): `endpoint.setRestart(oep::platformRestart, max_ms)` puts it in fn 0's ops
-  and `restart_max_ms` in its describe. `max_ms` is the longest from the answer until the probe answers confirm again
+- **oep.probe.restart** (optional, oep-if-restart): `endpoint.setRestart(oep::platformRestart, max_ms)` in `setup()`,
+  before the first `poll()`, lists it (restart 0x01, `restart_max_ms` in its describe). `max_ms` is the longest from the answer until the probe answers confirm again
   on the same transport - the boot and a USB re-enumeration included: estimate it for your board with a margin. The
   endpoint answers first, flushes, ends the session, calls every interface's `probeRestart()` (let go of what the
   settings keep - a slot's connection - without touching the target), releases every plan, then calls the handler,
@@ -110,7 +114,8 @@ class Blink final : public oep::Interface {
 - `oep::PinTable pins(mask)` is the set of channels (GPIO numbers) the sketch hands to interfaces. Each interface
   `claim()`s what it uses under its own owner id and `release()`s it; a claimed channel is refused to anyone else, so two
   interfaces never drive one pin (core §8.1). A released channel goes to its idle state (Hi-Z, or what the settings say).
-- The **plan** is how a host assigns pins at run time (core §8): `plan_apply` names (fn, role, channel); the endpoint asks
+- The **plan** is how a host assigns pins at run time (`oep.probe.plan`, oep-if-plan): `plan_apply` names (fn, role,
+  channel); a fn whose interface has no plan role (`planRoles()` false) is refused unsupported; the endpoint asks
   each interface `planCheck()` (no side effects: 0 or a reject reason), then `planApply()`, and `planRelease()` gives them
   back. Declare the roles and their candidate pins in describe (`roleChannels`). planCheck refuses a role or a channel
   it does not declare with `kRejectUnsupported` (the endpoint adds the tag 0x90) and a declared channel something else
@@ -178,9 +183,13 @@ Each source file starts with the spec sections it follows.
 
 ## 8. Pushes and events
 
-An interface that streams implements `subscribe()`, `pull()` and `pending()`; the endpoint sends data frames to the
-subscriber while it holds the lock. `endpoint.event(*this, kind, payload, length)` sends an event. The console, the
-fixture UART and the capture do this.
+An interface that sends notifications says `notifies()`: the endpoint then puts subscribe and unsubscribe (0x30 / 0x32,
+core §11.3) in its ops and answers them itself, calling `subscribe(true / false)`. A streaming one implements `pull()`
+and `pending()` too; the endpoint sends data frames to the subscriber while it holds the lock, batched by the
+subscription's min_bytes / max_delay_ms. `endpoint.event(*this, kind, payload, length)` sends an event, never batched:
+it goes as soon as the answers ahead of it have. The logic and analog captures and the capture-group do this; an
+interface that sends nothing has neither op (fn 0 sends nothing: there is no heartbeat - a host reads the probe's time
+with fn 0's clock).
 
 ## 9. USB identity
 
