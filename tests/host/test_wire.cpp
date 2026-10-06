@@ -249,6 +249,28 @@ int main() {
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0, 8, 9), out);   // attach alike (pins TLV, critical)
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && !one.connected);
+    // attach without pins, no live connection: two candidates (8, 9) - the host names one; one candidate left (a plan
+    // holds 9) - it is used (oep-if-debug §1; it was refused unavailable)
+    static PinTable pins_swio((1ull << 8) | (1ull << 9));
+    one.pins = &pins_swio;
+    r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && !one.connected);
+    CHECK(pins_swio.claim(9, 0x01));
+    r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(ok(r) && one.connected && one.swdio == 8 && pins_swio.owner(8) == one.pin_owner);
+    r = call(wire_swio, WireRvswd::kOpDetach, detachRequest(one.number), out);
+    CHECK(ok(r) && !one.connected);
+    // the only allowed combination with an idle item: no candidate, unavailable cause 5 holder_kind 7 (debug §1)
+    one.pin_choice = 1ull << 8;
+    CHECK(pins_swio.setIdle(8, PinTable::kIdlePullUp));
+    r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0), out);
+    CHECK(isSettingsIdle(r, out, 8) && !one.connected);
+    CHECK(pins_swio.setIdle(8, PinTable::kIdleUnset));
+    r = call(wire_swio, WireRvswd::kOpAttach, attachRequest(0), out);   // the only one, free: used
+    CHECK(ok(r) && one.connected && one.swdio == 8);
+    r = call(wire_swio, WireRvswd::kOpDetach, detachRequest(one.number), out);
+    CHECK(ok(r) && !one.connected);
+    pins_swio.release(0x01);
   }
 
   // ---- host-chosen pins: a closed connection, a scan's try and a failed attach leave each channel at its idle ----

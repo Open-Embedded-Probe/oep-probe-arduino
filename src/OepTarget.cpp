@@ -499,6 +499,45 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     tail.ignore(wire::kTlvAttachPins);
     pins = nullptr;
   }
+  // No pins and no live connection on a wire whose pins the host chooses: the one candidate there is - allowed, nothing
+  // else holding it, no channel disabled or with an idle item - is used as if named (oep-if-debug §1). Only one
+  // combination allowed, and it is not a candidate: refused for what keeps it out. Otherwise the host names one
+  // (choosePair: unavailable). With one channel set for both roles only a one-wire link can have a single candidate.
+  uint8_t only[4];
+  if (!pins && port_.pin_choice && !port_.connected) {
+    const bool one_wire = port_.swclk == 0xffff;
+    uint16_t cd = 0xffff, cc = 0xffff, ad = 0xffff, ac = 0xffff;
+    unsigned candidates = 0, allowed = 0;
+    auto consider = [&](uint16_t d, uint16_t c) {
+      if (!pairAllowed(port_, d, c)) return;
+      ++allowed;
+      ad = d;
+      ac = c;
+      if (pairFree(port_, d, c) && pairHeld(port_, d, c) == 0xffff && pairIdle(port_, d, c, false) == 0xffff) {
+        ++candidates;
+        cd = d;
+        cc = c;
+      }
+    };
+    for (uint16_t d = 0; d < 64; ++d) {
+      if (one_wire) consider(d, 0xffff);
+      else for (uint16_t c = 0; c < 64; ++c) consider(d, c);
+    }
+    if (candidates == 1) {
+      putU16(only, cd);
+      putU16(only + 2, cc);
+      pins = only;
+      plen = 4;
+    } else if (candidates == 0 && allowed == 1) {
+      const uint16_t off = pairDisabled(port_, ad, ac);
+      if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
+                                             reg::core::kHolderKindDisabled);
+      const uint16_t idle = pairIdle(port_, ad, ac, false);   // any idle item: no candidate left (debug §1)
+      if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
+                                              reg::core::kHolderKindSettingsIdle);
+      return pairHeldRefusal(port_, ad, ac, out, capacity);
+    }
+  }
   {
     // a channel the settings disable - the pins asked for, the fixed pair, the reset line: cause 5 with the channel
     // (probe.config §1), before choosePair moves anything
