@@ -385,10 +385,15 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   // Without ebreakm the final ebreak traps through mtvec and the application restarts
   // (the V003 loader finding, 2026-09-22). prv = M: the hart may have been stopped in U mode
   // (ArduinoCore-CH32 sketches on V3B/V4 run there), where interrupts cannot be masked; the
-  // caller masks them with mstatus in the register list. Only those two (oep-if-debug §4.4): ebreaks / ebreaku as
-  // they were (it set them too).
+  // caller masks them with mstatus in the register list. ebreaks / ebreaku are set for the run as well and put back
+  // as they were once the hart has stopped (oep-if-debug §4.4: what the run leaves changed is ebreakm and prv only).
+  // Without ebreaku the loader's ebreak trapped through mtvec whenever the hart still ran it in U mode - a CH32L103
+  // stopped in its sketch (U mode) - and the run timed out: uploads by ch32rv through the RP2350 failed now and then
+  // ("run: timeout"), where 0.0.28, which left them set, passed. Restoring them keeps the target as §4.4 says.
+  constexpr uint32_t kEbreakSU = 0x3000u;   // ebreaks (13), ebreaku (12)
   uint32_t dcsr = 0;
-  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0x8003u)) return false;
+  if (!readRegister(0x07b0, dcsr) || !writeRegister(0x07b0, dcsr | 0x8003u | kEbreakSU)) return false;
+  const uint32_t ebreak_su = dcsr & kEbreakSU;
   for (size_t i = 0; i < count; ++i)
     if (!writeRegister(regnos[i], values[i])) return false;
   if (!writeRegister(0x07b1, pc)) return false;
@@ -429,6 +434,9 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     out_values[i] = 0;
     if (!readRegister(outs[i], out_values[i])) ok = false;
   }
+  uint32_t now = 0;   // ebreaks / ebreaku back as they were (cause, prv: where it stopped)
+  if (!readRegister(0x07b0, now) || ((now & kEbreakSU) != ebreak_su && !writeRegister(0x07b0, (now & ~kEbreakSU) | ebreak_su)))
+    ok = false;
   phy_.write(kAbstractAuto, 0);
   giveMailbox();
   return ok;

@@ -95,6 +95,9 @@ class FakePhy final : public DmiPhy {
   uint32_t abstract_cmderr = 0;   // every abstract command fails with it (0: none)
   uint32_t hartsel = 0;           // DMCONTROL's hasel / hartsello / hartselhi as last written
   uint32_t dcsr_written = 0;      // the value of the last abstract command that wrote dcsr
+  std::vector<uint32_t> dcsr_writes;   // every one
+  bool model_dcsr = false;        // dcsr as a register of its own (abstract reads of it give it back); else DATA0 as is
+  uint32_t dcsr = 0;
   uint32_t read_us = 10, dmcontrol = 0;
   bool readWire(uint8_t address, uint32_t &value) override {
     advanceMicros(read_us);
@@ -124,7 +127,12 @@ class FakePhy final : public DmiPhy {
     if (!present || !attached_flag) return;
     if (address == 0x04) data0 = value;
     if (address == 0x05) data1 = value;
-    if (address == 0x17 && (value & (1u << 16)) && (value & 0xffff) == 0x7b0) dcsr_written = data0;   // write dcsr
+    if (address == 0x17 && (value & (1u << 16)) && (value & 0xffff) == 0x7b0) {   // write dcsr
+      dcsr_written = data0;
+      dcsr_writes.push_back(data0);
+      dcsr = data0;
+    }
+    if (model_dcsr && address == 0x17 && !(value & (1u << 16)) && (value & 0xffff) == 0x7b0) data0 = dcsr;   // read it
     if (address == 0x10) {
       dmcontrol = value;
       hartsel = value & 0x07ffffc0u;
@@ -545,13 +553,19 @@ int main() {
     CHECK(r.detail == kOutcomePartial && out.size() == 9 && out[0] == 2 && out[2] == kStatusTimeout && out[3] == 1);
     CHECK(millis() - t0 >= kMaxOpMs && millis() - t0 <= kMaxOpMs + 1);
     phy.read_us = 10;
-    // run sets ebreakm and prv = M only (oep-if-debug §4.4; it set ebreaks and ebreaku too)
+    // run leaves ebreakm and prv = M changed only (oep-if-debug §4.4; it left ebreaks and ebreaku set). They are set
+    // for the run itself and put back once the hart has stopped: a loader the hart still runs in U mode stops at its
+    // ebreak (without ebreaku it trapped, and the run timed out - ch32rv uploads to a CH32L103 through the RP2350)
     r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
     CHECK(ok(r) && phy.halted);
-    phy.data0 = 0x00000040u;   // dcsr as read: prv 0 (U), bit 6 kept
+    phy.model_dcsr = true;
+    phy.dcsr = 0x00000040u;   // dcsr as read: prv 0 (U), bit 6 kept
     phy.dcsr_written = 0;
+    phy.dcsr_writes.clear();
     r = call(riscv, TargetRiscvDm::kOpRun, {conn[0], conn[1], 0, 0, 0, 0x20, 1, 0, 0, 0, 0, 0}, out);   // timeout 1 ms
     CHECK(r.resolution == kResolutionCompleted && phy.dcsr_written == 0x8043u);
+    CHECK(phy.dcsr_writes.size() == 2 && phy.dcsr_writes[0] == 0xb043u);   // for the run: ebreaks / ebreaku too
+    phy.model_dcsr = false;
     // the high-level ops on hart 0 (oep-if-debug §4): a hartsel the host's dmi left goes back to 0 (it was left)
     for (uint8_t op : {TargetRiscvDm::kOpHalt, TargetRiscvDm::kOpResume, TargetRiscvDm::kOpHalt}) {
       r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x01, 0x10, 0x01, 0x00, 0x05, 0x00}, out);
