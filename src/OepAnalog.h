@@ -86,6 +86,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
 
   // GroupTrack (oep.fixture.capture-group)
   bool trackReady() const override;
+  bool trackCanStart() const override { return (trackReady() || state_ == reg::fixture_analog::kStateError) && buffer_; }
   uint8_t trackMode() const override { return reg::fixture_analog::kModeOneShot; }
   bool trackTriggered() const override { return trig_type_ != 0; }
   bool trackCanFollow() const override;

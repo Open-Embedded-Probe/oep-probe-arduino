@@ -47,8 +47,7 @@ size_t CaptureGroup::describe(uint8_t *out, size_t capacity) {
     putU16(v + 7, endpoint_.fnOf(*tracks_[budgets_[k].b].interface));
     w.put(grp::kTlvDescribeBudget, v, sizeof v);
   }
-  for (size_t i = 0; i < count_; ++i) {
-    if (!tracks_[i].skew_ns) continue;
+  for (size_t i = 0; i < count_; ++i) {   // one per track, a typical 0 too (§4.3)
     uint8_t v[6];
     putU16(v, endpoint_.fnOf(*tracks_[i].interface));
     putU32(v + 2, tracks_[i].skew_ns);
@@ -63,20 +62,31 @@ void CaptureGroup::unbind() {
   running_ = started_ = false;
   start_ns_ = trigger_ns_ = ~uint64_t{0};
   trigger_ = -1;
-  trigger_pending_ = forced_ = false;
+  trigger_pending_ = forced_ = failed_ = false;
+}
+
+// unavailable `cause` about one track: TLV fn (0x05) names it (§4.1, core §4.3)
+Result CaptureGroup::refuseTrack(uint8_t cause, uint16_t fn, uint8_t *out, size_t capacity) const {
+  uint8_t extra[4] = {reg::core::kTlvUnavailablePayloadFn, 2, 0, 0};
+  putU16(extra + 2, fn);
+  return unavailable(out, capacity, cause, 0xFFFF, 0xFFFF, 0, extra, sizeof extra);
 }
 
 uint8_t CaptureGroup::state() const {
   if (!bound_count_) return cap::kStateUnconfigured;
-  bool all_done = true, any_running = false;
+  if (failed_) return cap::kStateError;
+  // §4.1: 6 if a track is 6; else 4 if started and every track is 4; else 2 if the trigger track has not fired and a
+  // track is 2 or 3; else 3 if a track is 2, 3 or 5; else 1
+  bool all_done = true, any_active = false, any_running = false;
   for (size_t k = 0; k < bound_count_; ++k) {
     const uint8_t s = tracks_[bound_[k]].track->trackState();
     all_done &= s == cap::kStateDone;
+    any_active |= s == cap::kStateCapturing || s == cap::kStateWaiting;
     any_running |= s == cap::kStateCapturing || s == cap::kStateWaiting || s == cap::kStatePaused;
     if (s == cap::kStateError) return cap::kStateError;
   }
   if (started_ && all_done) return cap::kStateDone;
-  if (running_ && trigger_ >= 0 && trigger_ns_ == ~uint64_t{0} && any_running) return cap::kStateWaiting;
+  if (running_ && trigger_ >= 0 && trigger_ns_ == ~uint64_t{0} && any_active) return cap::kStateWaiting;
   return any_running ? cap::kStateCapturing : cap::kStateConfigured;
 }
 
@@ -132,29 +142,26 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         chosen[k] = static_cast<uint8_t>(i);
       }
       if (n > kMaxTracks) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
-      const uint8_t extra_fn_tag = reg::core::kTlvUnavailablePayloadFn;
-      auto refuseTrack = [&](uint8_t cause, uint8_t k) {   // cause with the fn it is about (TLV 0x05)
-        uint8_t extra[4] = {extra_fn_tag, 2, 0, 0};
-        putU16(extra + 2, getU16(payload + 1 + 2 * k));
-        return unavailable(out, capacity, cause, 0xFFFF, 0xFFFF, 0, extra, sizeof extra);
-      };
+      auto refuseAt = [&](uint8_t cause, uint8_t k) { return refuseTrack(cause, getU16(payload + 1 + 2 * k), out, capacity); };
       for (uint8_t k = 0; k < n; ++k) {
         const GroupTrack &t = *tracks_[chosen[k]].track;
         if (!t.trackReady() || (k && t.trackMode() != tracks_[chosen[0]].track->trackMode()))
-          return refuseTrack(reg::core::kUnavailableCauseWrongState, k);   // not configured, modes differ
+          return refuseAt(reg::core::kUnavailableCauseWrongState, k);   // not configured, modes differ
       }
       // only the trigger track may have a trigger; with one, the others must be able to follow it
       const bool triggered = trigger >= 0 && tracks_[trigger].track->trackTriggered();
       for (uint8_t k = 0; k < n; ++k) {
         const GroupTrack &t = *tracks_[chosen[k]].track;
         if (chosen[k] != trigger && (t.trackTriggered() || (triggered && !t.trackCanFollow())))
-          return refuseTrack(reg::core::kUnavailableCauseWrongState, k);
+          return refuseAt(reg::core::kUnavailableCauseWrongState, k);
       }
-      for (size_t b = 0; b < budget_count_; ++b) {
+      for (size_t b = 0; b < budget_count_; ++b) {   // over a budget: cause 2, the track whose load goes over it
         uint64_t load = 0;
-        for (uint8_t k = 0; k < n; ++k)
-          if (chosen[k] == budgets_[b].a || chosen[k] == budgets_[b].b) load += tracks_[chosen[k]].track->trackLoad();
-        if (load > budgets_[b].max_rate) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+        for (uint8_t k = 0; k < n; ++k) {
+          if (chosen[k] != budgets_[b].a && chosen[k] != budgets_[b].b) continue;
+          load += tracks_[chosen[k]].track->trackLoad();
+          if (load > budgets_[b].max_rate) return refuseAt(reg::core::kUnavailableCauseLimit, k);
+        }
       }
       unbind();
       const uint16_t me = endpoint_.fnOf(*this);
@@ -171,7 +178,14 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (!bound_count_) return wrongState(out, capacity);
+      // every track's prerequisites before any starts (§4.1): its state, a streaming track's subscription
+      for (size_t k = 0; k < bound_count_; ++k) {
+        const GroupTrack &t = *tracks_[bound_[k]].track;
+        if (!(t.following_ ? t.trackCanFollow() : t.trackCanStart()))
+          return refuseTrack(reg::core::kUnavailableCauseWrongState, endpoint_.fnOf(*tracks_[bound_[k]].interface), out, capacity);
+      }
       if (capacity < 12 + 2 + 6 * bound_count_) return failed();
+      failed_ = false;
       start_ns_ = nowNs();
       trigger_ns_ = ~uint64_t{0};
       forced_ = false;
@@ -182,6 +196,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         if (static_cast<int>(bound_[k]) == trigger_) continue;
         if (!(t.following_ ? t.trackStartFollowing() : t.trackStart())) {   // the rest must not run alone
           for (size_t j = 0; j < bound_count_; ++j) tracks_[bound_[j]].track->trackStop();
+          failed_ = true;   // state 6 (§4.1)
           return failed();
         }
       }
@@ -230,11 +245,13 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
   }
 }
 
+// The trigger track starts once the followers hold their pretrigger. Failing after the group's start: the group goes to
+// state 6, every track stops, stopped reason 3 (§4.1).
 bool CaptureGroup::startTrigger() {
   trigger_pending_ = false;
   if (tracks_[trigger_].track->trackStart()) return true;
-  for (size_t k = 0; k < bound_count_; ++k) tracks_[bound_[k]].track->trackStop();
-  running_ = false;
+  failed_ = true;
+  stopAll(cap::kStoppedReasonError, cap::kErrorPeripheral);
   return false;
 }
 
@@ -262,7 +279,11 @@ void CaptureGroup::poll() {
   }
   if (!running_) return;
   for (size_t k = 0; k < bound_count_; ++k)   // a track failed after the start: the group fails, the rest stop
-    if (tracks_[bound_[k]].track->trackState() == cap::kStateError) { stopAll(cap::kStoppedReasonError, cap::kErrorPeripheral); return; }
+    if (tracks_[bound_[k]].track->trackState() == cap::kStateError) {
+      failed_ = true;
+      stopAll(cap::kStoppedReasonError, cap::kErrorPeripheral);
+      return;
+    }
   if (state() != cap::kStateDone) return;
   running_ = false;
   if (subscribed_) {

@@ -29,6 +29,9 @@ class GroupTrack {
  public:
   virtual ~GroupTrack() = default;
   virtual bool trackReady() const = 0;        // configured and not running
+  // a start would be taken now (capture §3.2: configured, complete or error; streaming: subscribed) - the group checks
+  // every track before it starts any (§4.1)
+  virtual bool trackCanStart() const { return trackReady(); }
   virtual uint8_t trackMode() const = 0;      // the configured mode (one-shot, repeat, streaming)
   virtual bool trackTriggered() const = 0;    // a trigger other than immediate is configured
   virtual uint32_t trackLoad() const = 0;     // channels x rate, sample/s (for budgets)
@@ -115,6 +118,8 @@ class CaptureGroup final : public Interface {
   int indexOf(uint16_t fn) const;
   int indexOf(const GroupTrack &track) const;
   uint8_t state() const;
+  bool failed_ = false;    // a track failed after the start: the group is in state 6 until the next start or bind
+  Result refuseTrack(uint8_t cause, uint16_t fn, uint8_t *out, size_t capacity) const;
   void unbind();
   void stopAll(uint8_t reason, uint8_t error);
 };

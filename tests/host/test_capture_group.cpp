@@ -66,12 +66,13 @@ class Track final : public Interface, public GroupTrack {
   bool planApply(const RoleAssignment *, size_t) override { return true; }
   uint16_t boundTo() const override { return groupFn(); }
   bool trackReady() const override { return state == 1 || state == 4; }
+  bool trackCanStart() const override { return (state == 1 || state == 4 || state == 6) && (mode != 3 || subscribed); }
   uint8_t trackMode() const override { return mode; }
   bool trackTriggered() const override { return trigger_; }
   uint32_t trackLoad() const override { return load; }
   bool trackStart() override {
     ++starts;
-    if (fail_start) { state = 6; return false; }
+    if (fail_start) return false;   // its state as it was (a driver that would not start)
     state = trigger_ ? 2 : 3;
     ++generation;
     return true;
@@ -116,6 +117,7 @@ struct Rig {
   Bytes payload(const Result &r) const { return Bytes(out, out + r.length); }
 };
 
+static bool rejectedAs(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
 
 // A bound track's plan is the group's (§4.1): plan_apply and plan_release of its fn are refused unavailable cause 4,
@@ -140,7 +142,79 @@ static void testBoundPlan() {
   CHECK(rig.ep.plan(now, 4) == 0);
 }
 
+// start checks every track's prerequisites before it starts any (§4.1): a streaming track without a subscription is
+// refused unavailable cause 6 with TLV fn (0x05) naming it, and no track has started.
+static void testStartPrerequisites() {
+  Rig rig;
+  rig.a.mode = rig.b.mode = 3;
+  rig.a.subscribed = true;   // b is not
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
+  Result r = rig.op(grp::kOpStart);
+  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 6, 0x05, 2, 2, 0}));
+  CHECK(rig.a.starts == 0 && rig.b.starts == 0);
+  rig.b.subscribed = true;
+  CHECK(ok(rig.op(grp::kOpStart)) && rig.a.starts == 1 && rig.b.starts == 1);
+  r = rig.op(grp::kOpStart);   // running: refused before anything starts again
+  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 6, 0x05, 2, 1, 0}) && rig.a.starts == 1);
+}
+
+// The trigger track failing to start after the group's start (it waits for the followers' pretrigger): the group goes
+// to state 6 and every track is stopped (§4.1).
+static void testTriggerTrackFails() {
+  Rig rig(true);   // a holds the trigger, b follows
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 1, 0})));
+  rig.a.fail_start = true;
+  CHECK(ok(rig.op(grp::kOpStart)) && rig.b.state == 2);
+  rig.group.poll();   // b armed: the trigger track starts, and fails
+  CHECK(rig.a.starts == 1 && rig.b.stops >= 1 && rig.b.state == 1);
+  Result r = rig.op(grp::kOpStatus);
+  CHECK(ok(r) && rig.out[0] == cap::kStateError);
+  rig.a.fail_start = false;
+  rig.a.state = 1;   // the track configured again: the group starts again
+  CHECK(ok(rig.op(grp::kOpStart)));
+  r = rig.op(grp::kOpStatus);
+  CHECK(ok(r) && rig.out[0] == cap::kStateWaiting);
+}
+
+// bind over a budget (§4.1): unavailable cause 2 with TLV fn naming the track whose load goes over it.
+static void testBudgetNamesTrack() {
+  Rig rig;
+  CHECK(rig.group.addBudget(100, rig.a, rig.b));
+  rig.a.load = rig.b.load = 60;
+  const Result r = rig.op(grp::kOpBind, {2, 1, 0, 2, 0});
+  CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 2, 0x05, 2, 2, 0}));
+  rig.b.load = 40;
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
+}
+
+// describe start_skew (§4.3): one per track, a typical 0 included.
+static void testStartSkewPerTrack() {
+  Rig rig;
+  uint8_t d[256];
+  const size_t n = rig.group.describe(d, sizeof d);
+  const Bytes all(d, d + n);
+  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 1, 0, 0, 0, 0, 0}));
+  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 2, 0, 0, 0, 0, 0}));
+}
+
+// status state (§4.1): 2 only while the trigger has not fired and a track is 2 or 3; tracks paused (5) make it 3.
+static void testStatusState() {
+  Rig rig(true);
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 1, 0})));
+  CHECK(ok(rig.op(grp::kOpStart)));
+  CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateWaiting);
+  rig.a.state = rig.b.state = 5;
+  CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateCapturing);
+  rig.a.state = rig.b.state = 1;
+  CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateConfigured);
+}
+
 int main() {
+  testStartPrerequisites();
+  testTriggerTrackFails();
+  testBudgetNamesTrack();
+  testStartSkewPerTrack();
+  testStatusState();
   testBoundPlan();
   printf("capture-group: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

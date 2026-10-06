@@ -91,6 +91,10 @@ class LogicCapture final : public Interface, public GroupTrack {
   void poll();   // from loop(): turns a finished capture into events
   // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot
   bool trackReady() const override { return state_ == kStateConfigured || state_ == kStateDone; }
+  bool trackCanStart() const override {   // start's own conditions (capture §3.2): streaming needs the subscription
+    return (state_ == kStateConfigured || state_ == kStateDone || state_ == kStateError) &&
+           (mode_ != reg::fixture_logic::kModeStreaming || subscribed_);
+  }
   uint8_t trackMode() const override { return mode_; }
   bool trackTriggered() const override { return trig_type_ != 0; }
   bool trackCanFollow() const override { return mode_ == reg::fixture_logic::kModeOneShot && trackReady(); }
