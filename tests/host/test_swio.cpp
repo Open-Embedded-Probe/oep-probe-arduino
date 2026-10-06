@@ -163,6 +163,42 @@ int main() {
   // max_speed 1 MHz, tag(u8) len(u16) value (core §2.2)
   const Bytes attach = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
 
+  // ---- a fixed-speed wire: describe declares min_clock_hz = max_clock_hz = the speed of a zero's slot (oep-if-debug
+  // §3.2), and the connections say that speed; a max_speed at or above it is taken, one under it refused unsupported.
+  // speed_hz was a read's wall time over its 41 slots - 732142 / 745454 Hz on the ESP32-P4 against the 888888 declared ----
+  {
+    uint8_t d[128];
+    const size_t n = w.describe(d, sizeof d);
+    auto tagU32 = [&](uint8_t tag) -> uint32_t {
+      for (size_t i = 0; i + 3 <= n;) {
+        const size_t len = d[i + 1] | (d[i + 2] << 8);
+        if (d[i] == tag && len == 4) return getU32(d + i + 3);
+        i += 3 + len;
+      }
+      return 0;
+    };
+    CHECK(tagU32(kTagMinClockHz) == SwioPhy::kNominalHz && tagU32(kTagMaxClockHz) == SwioPhy::kNominalHz);
+    for (const uint32_t hz : {0u, 1000000u, 2000000u, 900000u, SwioPhy::kNominalHz, 800000u, SwioPhy::kNominalHz - 1}) {
+      t = V003{};
+      Bytes a = {0};
+      if (hz) {
+        a.insert(a.end(), {uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0});
+        for (int b = 0; b < 4; ++b) a.push_back(uint8_t(hz >> (8 * b)));
+      }
+      Result r = call(w, WireRvswd::kOpAttach, a, out);
+      if (!hz) {   // attach needs max_speed (oep-if-debug §1)
+        CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+      } else if (hz < SwioPhy::kNominalHz) {
+        CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && !port.connected);
+      } else {
+        CHECK(ok(r) && out.size() >= 11 && getU32(out.data() + 7) == SwioPhy::kNominalHz);
+        const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+        r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
+        CHECK(ok(r) && !port.connected);
+      }
+    }
+  }
+
   // ---- a reset through the bootloader keeps the connection (oep-if-debug §2, §4.3): the bootloader's system reset
   // dropped the SWIO configuration and the module, and every request after it answered line until the connection was
   // lost (0.0.28+ffe4eb1 on the bench); the reads now bring the link back in step. And when the bootloader is silent

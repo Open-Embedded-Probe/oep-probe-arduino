@@ -1,6 +1,24 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.wire.swio's speed: describe declared min_clock_hz 888888 (a zero's slot, 862.5 + 262.5 ns, oep-if-debug
+  §3.2) while a connection's speed_hz was the rate one read's wall time implies over its 41 slots - the read slots'
+  waits for the line and the frame's set-up counted in: 732142 Hz on the ESP32-P4 bench (no max_speed, 2 MHz, 1 MHz),
+  745454 Hz (900 kHz), so a max_speed of 800 kHz was refused while the connections said they ran slower. The link has
+  one speed: speed_hz (attach's answer, connections) is that speed, and describe declares it as min_clock_hz and
+  max_clock_hz (new `DmiPhy::maxClockHz()`, 0 = not declared; a fixed-speed link: min = max). A max_speed at or above it
+  is taken, one under it refused unsupported, as before. RVSWD (a speed chosen by reading) reports the measured rate,
+  at most the bit clock max_speed caps: unchanged. Host test (test_swio): describe min = max = 888888, the attach answer
+  888888 with max_speed 2 MHz / 1 MHz / 900 kHz / 888888, 800 kHz and 888887 refused unsupported, an attach without max_speed malformed.
+- (JA) oep.wire.swio の速さ: describe は min_clock_hz 888888（0 の区切り、862.5 + 262.5 ns、oep-if-debug §3.2）を宣言し、
+  connection の speed_hz は読み出し 1 回の実時間を区切り 41 個で割った速さだった - 読み出しの区切りの線の待ちとフレームの
+  準備を含む: ESP32-P4 のベンチで 732142 Hz（max_speed 無し、2 MHz、1 MHz）、745454 Hz（900 kHz）。そのため max_speed
+  800 kHz は、connection がそれより遅いと言っているのに断られた。リンクの速さは 1 つ: speed_hz（attach の答え、
+  connections）はその速さで、describe はそれを min_clock_hz と max_clock_hz で宣言する（新しい `DmiPhy::maxClockHz()`、
+  0 = 宣言しない。速さが決まったリンクは min = max）。それ以上の max_speed は受け、下は unsupported で断る（変わらず）。
+  RVSWD（読んで速さを選ぶ）は測った速さを返し、max_speed が抑えるビットのクロック以下: 変えない。host test（test_swio）:
+  describe の min = max = 888888、max_speed 2 MHz / 1 MHz / 900 kHz / 888888 で attach の答えは 888888、800 kHz と 888887 は
+  unsupported、max_speed 無しは malformed。
 - (EN) Classic ESP32 GPIO34 / 35 were still offered to the driving roles: Firmware/OepProbe's input-only mask was
   `0xf0 << 32` - GPIO36-39 - so 5b7ffc5 left 34 / 35 in the role_channels of I2C SDA / SCL, UART TX, SPI MISO and
   attach's reset, and their plan checks (which follow the same mask) took them: tests/hw test_i2c_target (V003 jig)

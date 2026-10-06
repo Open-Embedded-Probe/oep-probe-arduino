@@ -85,6 +85,8 @@ class DmiPhy {
   // The slowest this link goes (describe min_clock_hz, oep-if-debug §1): a max_speed under it is rejected unsupported.
   // 0 = no floor to declare.
   virtual uint32_t minClockHz() const { return 0; }
+  // The fastest it goes (describe max_clock_hz), 0 = not declared. A fixed-speed link declares min = max = its speed.
+  virtual uint32_t maxClockHz() const { return 0; }
   // How the bus rests between transactions: SWCLK low instead of both lines high. The target's (oep-if-debug §3): the
   // host says so at attach (idle_clock) or through a slot. false: this backend cannot rest that way.
   virtual bool setIdleClockLow(bool low) { return !low; }

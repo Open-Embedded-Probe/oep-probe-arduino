@@ -33,14 +33,19 @@ class SwioPhy final : public DmiPhy {
   void reinit() override;
   void write(uint8_t address, uint32_t value) override;
   uint32_t dmiNs() const override { return dmi_ns_; }
-  // 1 start + 7 address + 1 direction + 32 data bits per transaction
-  uint32_t clockHz() const override { return dmi_ns_ ? uint32_t(41000000000ull / dmi_ns_) : 0; }
-  uint32_t retries() const override { return retries_; }
-  // The bit timing is fixed (about 1.1 us a bit): a ceiling at or above it holds, a lower one cannot be kept.
+  // The bit timing is fixed: a zero's slot, 862.5 ns low + 262.5 ns high = 1125 ns (oep-if-debug §3.2: the wire's speed
+  // is 1 / (a zero's low + its high)). The link runs at it and at nothing else: describe declares it as min_clock_hz and
+  // max_clock_hz, a connection's speed_hz is it, a ceiling at or above it holds and a lower one cannot be kept. speed_hz
+  // was the rate one read's wall time implies over its 41 slots (41 s / dmi_ns: the read slots' waits for the line and
+  // the frame's set-up counted in) - 732142 or 745454 Hz on the ESP32-P4, under the 888888 declared, so a max_speed
+  // of 800 kHz was refused while the connections said they ran slower than that.
   static constexpr uint32_t kNominalHz = 888888;
+  uint32_t clockHz() const override { return dmi_ns_ ? kNominalHz : 0; }   // once an attach has run
+  uint32_t retries() const override { return retries_; }
   bool setMaxHz(uint32_t hz) override { return keepsMaxHz(hz); }
   bool keepsMaxHz(uint32_t hz) const override { return hz == 0 || hz >= kNominalHz; }
   uint32_t minClockHz() const override { return kNominalHz; }
+  uint32_t maxClockHz() const override { return kNominalHz; }
   uint32_t transactions() const override { return transactions_; }
 
  protected:

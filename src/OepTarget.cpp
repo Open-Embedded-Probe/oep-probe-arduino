@@ -300,6 +300,7 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   if (port_.reset_allowed) w.roleChannels(kReset, 1, port_.reset_allowed);   // attach's reset TLV: its channels, no default
   DmiPhy &phy = port_.dm.phy();
   if (phy.minClockHz()) w.u32(kTagMinClockHz, phy.minClockHz());   // a max_speed under it is unsupported
+  if (phy.maxClockHz()) w.u32(kTagMaxClockHz, phy.maxClockHz());   // a fixed-speed link: min = max = its speed
   w.u8(kTagImplementation, 1);                // bit-bang
   return w.ok() ? w.length() : 0;
 }
