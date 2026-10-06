@@ -31,8 +31,17 @@ class PositionStream {
   PositionStream(uint8_t *buffer, size_t capacity, Mark *marks, size_t mark_capacity)
       : buffer_(buffer), capacity_(capacity), marks_(marks), mark_capacity_(mark_capacity) {}
 
-  // The oldest byte goes when the ring is full (a read then reports a gap).
-  void put(uint8_t byte) { buffer_[total_ & (capacity_ - 1)] = byte; ++total_; }
+  // The oldest byte goes when the ring is full (a read then reports a gap). The first byte that pushes one out marks lost
+  // with detail 1, overflow (oep-if-common §1.3), once per overflow episode: the ring stays full and every later byte
+  // pushes one out until a clear empties it, which ends the episode.
+  void put(uint8_t byte) {
+    if (total_ - base_ >= capacity_ && !overflowing_) {
+      overflowing_ = true;
+      mark(reg::common::kMarkKindLost, reg::common::kMarkDetailLostOverflow);
+    }
+    buffer_[total_ & (capacity_ - 1)] = byte;
+    ++total_;
+  }
   uint64_t end() const { return total_; }   // the position of the next byte
   // The bytes kept from `from` on that lie in one piece of the ring (from must be within oldest()..end()).
   size_t contiguous(uint64_t from, const uint8_t *&data) const {
@@ -49,6 +58,7 @@ class PositionStream {
   }
   void clear() {   // nothing before now is kept
     base_ = total_;
+    overflowing_ = false;
     mark(reg::common::kMarkKindClear);
   }
 
@@ -127,6 +137,7 @@ class PositionStream {
   uint32_t serial_ = 0;   // the serial of the next mark (u32, wraps)
   size_t slot_ = 0;       // where the next mark goes
   uint32_t kept_ = 0;     // marks kept (at most mark_capacity_)
+  bool overflowing_ = false;   // an overflow episode is on: its lost mark is attached
   size_t slotBack(uint32_t back) const {   // the slot of the mark `back` before the next one (1: the newest)
     return (slot_ + mark_capacity_ - back % mark_capacity_) % mark_capacity_;
   }

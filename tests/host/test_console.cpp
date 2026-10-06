@@ -238,6 +238,33 @@ int main() {
     CHECK(marksOf(console, console.bindStreamNumber()).size() == count);
   }
 
+  // ---- the ring pushing bytes out: mark lost 1 (overflow) once per episode - at the first byte pushed out, again only
+  // after a clear has emptied the ring (common §1.1, §1.3; nothing was marked) ----
+  {
+    uint8_t buffer[16];
+    PositionStream::Mark ring[8];
+    PositionStream ps(buffer, sizeof buffer, ring, 8);
+    auto lostMarks = [&]() {
+      Bytes m(2 + 8 * 23);
+      const size_t n = ps.marks(0, m.data(), m.size());
+      int lost = 0;
+      for (size_t at = 2; at + 23 <= n; at += 23)
+        if (m[at + 13] == reg::common::kMarkKindLost && m[at + 22] == reg::common::kMarkDetailLostOverflow) ++lost;
+      return lost;
+    };
+    for (int i = 0; i < 16; ++i) ps.put(uint8_t(i));
+    CHECK(lostMarks() == 0);   // full, nothing pushed out yet
+    ps.put(16);
+    CHECK(lostMarks() == 1);
+    for (int i = 0; i < 40; ++i) ps.put(uint8_t(i));
+    CHECK(lostMarks() == 1);   // the same episode
+    ps.clear();
+    for (int i = 0; i < 16; ++i) ps.put(uint8_t(i));
+    CHECK(lostMarks() == 1);
+    ps.put(0);
+    CHECK(lostMarks() == 2);   // a new episode after the clear
+  }
+
   // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6
   // (oep-if-console §1; it answered no_connection) ----
   {

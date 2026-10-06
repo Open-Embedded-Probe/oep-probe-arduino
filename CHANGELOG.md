@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Positioned streams mark the ring's overflow (oep-if-common §1.1, §1.3): the first byte that pushes an older one out attaches mark lost with detail 1, once per overflow episode - the ring then stays full and every later byte pushes one out, so the next mark comes only after a clear has emptied it (nothing was marked; a read still reports the gap). Console and fixture UART alike. Host test.
+- (JA) 位置付きストリームは ring のあふれに mark を付ける（oep-if-common §1.1、§1.3）: 古い byte を押し出す最初の byte で detail 1 の lost の mark を、あふれの一続きにつき一度付ける - その後 ring は満ちたままで、後の byte はどれも一つ押し出すので、次の mark は clear が ring を空にした後にだけ付く（何も付けていなかった。read はこれまでどおり gap を報せる）。console でも fixture の UART でも同じ。host test。
 - (EN) dmseq console: a frame accepted with TO set (the target gave up waiting and discarded what it wrote until an answer) attaches mark lost with detail 4, the target's TO, right after its payload (oep-if-common §1.3; nothing was marked). A duplicate of it adds nothing. DmConsole::setSink takes a mark sink. Host test.
 - (JA) dmseq の console: TO の立ったフレームを受け入れたら（target が待つのを諦め、答えが来るまでに書いたものを捨てた）、その payload の直後に detail 4（target の TO）の lost の mark を付ける（oep-if-common §1.3。何も付けていなかった）。その重複には何も足さない。DmConsole::setSink が mark の受け口を取る。host test。
 - (EN) The console's mark attach carries detail 0 (oep-if-common §1.3: attach has no detail; it carried the mechanism number). Host test.
