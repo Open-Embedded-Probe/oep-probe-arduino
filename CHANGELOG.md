@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) dmseq console: a frame accepted with TO set (the target gave up waiting and discarded what it wrote until an answer) attaches mark lost with detail 4, the target's TO, right after its payload (oep-if-common §1.3; nothing was marked). A duplicate of it adds nothing. DmConsole::setSink takes a mark sink. Host test.
+- (JA) dmseq の console: TO の立ったフレームを受け入れたら（target が待つのを諦め、答えが来るまでに書いたものを捨てた）、その payload の直後に detail 4（target の TO）の lost の mark を付ける（oep-if-common §1.3。何も付けていなかった）。その重複には何も足さない。DmConsole::setSink が mark の受け口を取る。host test。
 - (EN) The console's mark attach carries detail 0 (oep-if-common §1.3: attach has no detail; it carried the mechanism number). Host test.
 - (JA) console の attach の mark の detail は 0（oep-if-common §1.3: attach に detail は無い。mechanism の番号を入れていた）。host test。
 - (EN) The console keeps reading while the hart runs, judged from DMSTATUS read at least every 20 ms (oep-if-console §3, registry console_dmstatus_poll_ms): it stopped whenever the probe's own view said halted, so a hart the probe halted and the host then resumed through raw DMI went unread until the next high-level op. A DMSTATUS that says running also clears Ch32Dm's halted view; a halt by the probe still stops the reading at once. Host test.

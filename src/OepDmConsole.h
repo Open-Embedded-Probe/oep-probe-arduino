@@ -17,9 +17,11 @@ namespace oep {
 class DmConsole {
  public:
   using Sink = void (*)(void *ctx, uint8_t byte);
+  using MarkSink = void (*)(void *ctx, uint8_t kind, uint8_t detail);
   DmConsole(Ch32Dm &dm, DmiPhy &phy) : dm_(dm), phy_(phy) {}
-  // Where the bytes from the target go (the v1 stream's buffer). Set before start().
-  void setSink(Sink sink, void *ctx) { sink_ = sink; sink_ctx_ = ctx; }
+  // Where the bytes from the target go (the v1 stream's buffer), and the marks the framing finds among them (a dmseq
+  // frame with TO: mark lost 4 after its payload, oep-if-common §1.3). Set before start().
+  void setSink(Sink sink, void *ctx, MarkSink mark_sink = nullptr) { sink_ = sink; sink_ctx_ = ctx; mark_sink_ = mark_sink; }
   // Call from loop(). Collects at most one frame, and only while the target is attached and running: those two
   // registers are where abstract commands put their operands (oep-if-console §3: the reading stops while the hart is
   // halted, which DMSTATUS says - a host that halted or resumed it through raw DMI counts too; every kStatusMs it is
@@ -63,6 +65,7 @@ class DmConsole {
   bool saw_empty_ = false;              // the target's empty frame was already there last poll
   bool discarding_ = false;             // start(): what arrives now is an earlier session's
   Sink sink_ = nullptr;
+  MarkSink mark_sink_ = nullptr;
   void *sink_ctx_ = nullptr;
   uint16_t tx_head_ = 0, tx_tail_ = 0;
   uint32_t last_attach_ms_ = 0;

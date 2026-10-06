@@ -47,7 +47,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   enum : uint8_t { kUserHost = reg::target_console::kStreamUsersHostSession, kUserSlot = reg::target_console::kStreamUsersSlot };
   TargetConsoleStream(DebugPort &port, DmConsole &driver, uint16_t instance)
       : port_(port), driver_(driver), instance_(instance), stream_(buffer_, kCapacity, marks_, kMarks) {
-    driver_.setSink(&TargetConsoleStream::take, this);   // the driver writes straight into this buffer
+    driver_.setSink(&TargetConsoleStream::take, this, &TargetConsoleStream::takeMark);   // straight into this buffer
   }
   const char *name() const override { return reg::target_console::kName; }
   uint16_t instance() const override { return instance_; }
@@ -106,6 +106,9 @@ class TargetConsoleStream final : public Interface, public BindSource {
   void closeStream(uint8_t detail, bool link_lost = false);
   void release(uint8_t user, uint8_t detail);
   static void take(void *self, uint8_t byte) { static_cast<TargetConsoleStream *>(self)->stream_.put(byte); }
+  static void takeMark(void *self, uint8_t kind, uint8_t detail) {
+    static_cast<TargetConsoleStream *>(self)->stream_.mark(kind, detail);
+  }
 };
 
 }  // namespace oep

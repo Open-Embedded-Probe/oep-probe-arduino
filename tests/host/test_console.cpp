@@ -107,6 +107,14 @@ static std::vector<MarkSeen> marksOf(Interface &console, uint16_t stream) {
   }
   return all;
 }
+static uint8_t crc8(const uint8_t *p, size_t n) {   // dmseq's CRC-8: poly 0x07, init 0xFF
+  uint8_t crc = 0xff;
+  for (size_t i = 0; i < n; ++i) {
+    crc ^= p[i];
+    for (int b = 0; b < 8; ++b) crc = uint8_t((crc & 0x80) ? (crc << 1) ^ 0x07 : crc << 1);
+  }
+  return crc;
+}
 static Bytes attachRequest() { return {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0x40, 0x42, 0x0f, 0x00}; }
 
 int main() {
@@ -208,6 +216,26 @@ int main() {
     for (int i = 0; i < 3; ++i) { g_millis += 5; console.poll(); }
     CHECK(phy.data0_reads == data0_reads);
     CHECK(dm.writeDmi(0x10, 0x40000001) && !phy.halted);
+  }
+
+  // ---- a dmseq frame accepted with TO set: mark lost 4 (the target's TO) right after its payload (common §1.3; none
+  // was attached) ----
+  {
+    // the stream is synced on the SYN frame above (S 0): the next frame, S 1, A 0, TO, one byte 'x'
+    uint8_t f[3] = {uint8_t(0x80 | 0x40 | 0x20 | 1), 'x', 0};
+    f[2] = crc8(f, 2);
+    phy.data0 = f[0] | f[1] << 8 | uint32_t(f[2]) << 16;
+    for (int i = 0; i < 3; ++i) { g_millis += 10; console.poll(); }
+    const std::vector<MarkSeen> marks = marksOf(console, console.bindStreamNumber());
+    CHECK(!marks.empty() && marks.back().kind == reg::common::kMarkKindLost &&
+          marks.back().detail == reg::common::kMarkDetailLostTargetTimeout);
+    const PositionStream *ps = console.bindStream();
+    CHECK(ps && !marks.empty() && marks.back().position == ps->end());   // after the 'x'
+    // the same frame read again (a duplicate) adds nothing
+    const size_t count = marks.size();
+    phy.data0 = f[0] | f[1] << 8 | uint32_t(f[2]) << 16;
+    for (int i = 0; i < 3; ++i) { g_millis += 10; console.poll(); }
+    CHECK(marksOf(console, console.bindStreamNumber()).size() == count);
   }
 
   // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6
