@@ -183,7 +183,7 @@ class Blink final : public oep::Interface {
   firmware 更新（bootloader の rollback がある ESP32）は動くものとして扱い、起動したときに確かなものにします: `verifyRollbackLater`
   を定義しなければ ESP32 の core が `setup()` の前に image を確定するので、その後のどのリセットでも前には戻りません
   （`Firmware/OepProbe/Esp32P4.h`）。保存した設定が起こす crash の繰り返しは safe boot が受け持ちます。前の起動が何で終わったか
-  （リセットの種類、上がっていた秒数、bootloader が更新を起動しなかったか）は `BootGuard::lastBoot()` が文字列で言います。
+  （firmware が意図しなかったリセット: 落ちた・止まったときの種類と上がっていた秒数、brownout、bootloader が更新を起動しなかったか。外からのリセットと自分でした再起動は何も言いません。RP2 は `crashed()` が付ける印で自分の crash を外からの watchdog の再起動と分けます）は `BootGuard::lastBoot()` が文字列で言います。
   `Firmware/OepProbe` はそれを fn 0 の describe の firmware の文字列で版の後ろに付けます（`describeCore` の最後の引数。
   例 `0.0.29 (panic at 12 s)`）。
 - fixture の UART は UART の割り込みで受けます。ビットを自分で刻む線のフレームは、その core の割り込みを止めます（フレームごと:
@@ -198,10 +198,13 @@ class Blink final : public oep::Interface {
   ちょうどに付きます。RP2 は arduino-pico の受信の列のあふれが抜けた所ちょうど、PL011 の overrun と break（`poll()` で印として
   読みます）は一つ前に見たときに数えたバイトの所です。
 - classic ESP32 の sampler と SWIO の線は GPIO のレジスタのバスを分け合います: sampler が続けて読む GPIO.in は、もう一方の
-  core の SWIO のパルスをフレームが乱れるほど動かし、SWIO にはパリティがありません。`OepWireGate.h` が両者を分けます: 要求の
-  フレームは sampler の窓が終わるのを待ち、その後 `loop()` が一回りするまで線を持ちます。窓は持ち主を待ちます。
-  `SamplerCapture::poll()` が線を手放すので、両方を持つスケッチは毎回の `loop()` でそれを呼びます（呼ばないと窓が開きません）。
-  コンソールの poll は、窓が開いている間は止まります（番を断られ、次の poll で読む）。oep-if-console §3 は読む間隔を決めず、
+  core の SWIO のパルスをフレームが乱れるほど動かし、SWIO にはパリティがありません。`OepWireGate.h` が両者を分けます: フレームは
+  どれも sampler が読むのを止めるのを待ち（1 サンプルまで）、sampler はフレームの後で読み直します。線はフレームで取り、`loop()` が
+  一回りするまで持ちます。窓が排他の間（即時の窓、トリガの後の区画の残り、番の外のトリガの探索）は取れません: 要求は待ち、探索は
+  区切りの中ですぐ番を譲ります（コンソールには区切りごとに 1 回。送るものを渡し終えたら `backgroundSent()` で早く終える）。即時の窓は
+  持ち主を待ちます。`SamplerCapture::poll()` が線を手放すので、両方を持つスケッチは毎回の `loop()` でそれを呼びます（呼ばないと即時の
+  窓が開きません）。sampler のループは `OepSamplerRun.h` で、host の試験も同じコードを動かします。コンソールの poll は、線を
+  もらえないときは読みません（次の poll で読む）。oep-if-console §3 は読む間隔を決めず、
   その connection の要求の後は DATA0 の前に DMSTATUS を読むことと、hart が止まっている間 DATA0 / DATA1 に触れないことだけを
   求めます（docs/implementation-limits.ja.md §4.1）。
 

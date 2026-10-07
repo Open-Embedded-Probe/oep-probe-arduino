@@ -151,13 +151,15 @@ data = lc.read_segment(segment)              # the trigger is sample segment.tri
 ```
 
 The classic ESP32's sampler takes triggers too (8 channels, up to 2 MHz). It samples with interrupts off, so it
-searches in bursts of up to 250 ms: an edge that falls in the gap between two bursts (about 1 ms; 5 ms after a burst
-that kept a request on the SWIO wire waiting) is missed. A sampling window and the SWIO wire never run together: while
-it samples, no SWIO frame goes out - a request (riscv-dm, the wire's ops) waits for the window to end, the console reads
-nothing - and a window waits for a request in progress to end. An immediate capture's window lasts samples / rate (a
+searches in bursts of up to 250 ms: an edge that falls in the gap between two bursts (about 1 ms) is missed. An
+immediate capture's window and the SWIO wire never run together: while it samples, no SWIO frame goes out - a request
+(riscv-dm, the wire's ops) waits for the window to end, the console reads nothing - and a window waits for a request in
+progress to end. A trigger search gives the wire turns inside its bursts and samples on through them (a waiting request
+at once, the console up to 5 ms a burst), so what a command or a reset sent during the search makes the target do is
+sampled; a trigger before the pretrigger has filled gives a shorter segment (a smaller trigger_index). An immediate capture's window lasts samples / rate (a
 full 65408 samples: 33 ms at 2 MHz, 164 ms at 400 kHz), so a console command or a debug reset sent after its start
 reaches the target only after it and is not in it. To capture what the target does after something you send, use a
-trigger: arm, then send the command or the reset - it goes out between the search's bursts, and the event it causes
+trigger: arm, then send the command or the reset - it goes out in a turn of the search, and the event it causes
 fires the trigger (docs/implementation-limits.ja.md §4.1).
 
 Logic and analog together, on the logic's trigger (the capture-group): the analog follows it, and each track's segment

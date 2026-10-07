@@ -147,6 +147,8 @@ class DmiPhy {
   // backend whose wire never pauses leaves both alone (SwioPhy on the classic ESP32: the sampler's windows, OepWireGate.h).
   virtual bool backgroundTurn() { return true; }
   virtual void backgroundDone() {}
+  // The background reader handed the target the last byte it had to send (a sampler's turn for the wire may end).
+  virtual void backgroundSent() {}
   // Retries inside one request (oep-if-debug §2; this implementation's limits::kWireRetryMs): a request starts with the
   // whole allowance, and read() retries no more once it is spent (the request then ends with status line).
   void beginRequest() { retry_us_ = 0; }

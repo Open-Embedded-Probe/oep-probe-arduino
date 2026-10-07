@@ -2,26 +2,33 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host tests: the gate between the classic ESP32's core-0 sampler and the SWIO frames of loop()'s core (OepWireGate.h),
-// with two threads standing for the two cores, and SwioPhy's frames through it (OEP_HOST_FAKE_SWIO). A sampler window
-// and the SWIO wire are mutually exclusive (docs/implementation-limits §4.1):
-// - the gate's rules: a take holds until release, a window waits for the holder, a take is refused while a window is
-//   open or waiting (and noted for the sampler's turn unless asked not to);
-// - no frame and no window at once, under a stress of both sides;
-// - a request's frames (DmiPhy::read / write) wait out a window and never run inside one;
+// with two threads standing for the two cores, SwioPhy's frames through it (OEP_HOST_FAKE_SWIO), and the sampler's own
+// loop (OepSamplerRun.h) on a host Io that samples a simulated target's marker line in real time:
+// - the gate's rules: a take holds until release, an exclusive window waits for the holder and refuses takes (noted:
+//   a request's as needed, the console's as wanted), a search's turn lets them take, a frame waits for the sampler to
+//   stop reading;
+// - no frame and no GPIO read at once, under a stress of both sides (exclusive windows and turns);
+// - a request's frames (DmiPhy::read / write) wait out an exclusive window and never run inside one;
 // - the console (DmConsole, dmseq, on Ch32Dm and SwioPhy against a simulated target): an immediate capture's window
-//   delivers no console traffic at all - no frame while it is open, the line goes after it has closed; a trigger
-//   search's bursts leave the wire a turn between them (kWireTurnMs), so a line written after arm reaches the target
-//   while the search goes on, and no frame runs inside a burst. (0.0.29-dev 589acd5 let frames into a window one at a
-//   time: on the bench fast signals slipped and broke, and the suite took twice as long.)
+//   delivers no console traffic at all - no frame while it is open, the line goes after it has closed;
+// - a trigger search (sampler::run): a line sent after arm reaches the target inside a burst's turn, the target acts on
+//   it and the edge trigger fires on what it did - a 570 us low (a software reset's marker), 20 toggles a few us apart;
+//   no frame meets a read, and the segment's rest after the trigger has no new frame (0.0.29-dev 51360ea gave the turn
+//   between two bursts, when nothing sampled: the target acted then and the trigger never fired - the bench's
+//   reset_probe "no capture for the software reset"); a request waiting for the wire gets a turn inside the burst; a
+//   trigger before `pre` samples of a burst gives a shorter segment with the trigger index smaller (capture §3.3).
 #include <stdio.h>
+#include <string.h>
 
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "OepCh32Dm.h"
 #include "OepDmConsole.h"
+#include "OepSamplerRun.h"
 #include "OepSwioPhy.h"
 #include "OepWireGate.h"
 #include "fake_swio_io.h"
@@ -39,7 +46,7 @@ static std::atomic<int> failures{0}, checks{0};
   } while (0)
 
 // The sampler thread is inside a window (interrupts off on the core it stands for); frames counted, and those met inside.
-static std::atomic<int> g_inside{0}, g_frames{0}, g_overlaps{0};
+static std::atomic<int> g_inside{0}, g_frames{0}, g_overlaps{0}, g_in_frame{0}, g_read_overlaps{0};
 static void frameSeen() {
   ++g_frames;
   if (g_inside.load()) ++g_overlaps;
@@ -78,13 +85,22 @@ struct Target {
   }
 } g_target;
 
+static void spinFor(std::chrono::microseconds us);
+// a frame takes a few microseconds of real time, so that a sample read during it would be seen (g_read_overlaps)
 bool fakeSwioRead(uint8_t address, uint32_t &value) {
+  g_in_frame = 1;
   frameSeen();
-  return g_target.read(address, value);
+  const bool ok = g_target.read(address, value);
+  spinFor(std::chrono::microseconds(20));
+  g_in_frame = 0;
+  return ok;
 }
 void fakeSwioWrite(uint8_t address, uint32_t value, bool) {
+  g_in_frame = 1;
   frameSeen();
   g_target.write(address, value);
+  spinFor(std::chrono::microseconds(20));
+  g_in_frame = 0;
 }
 bool fakeSwioLineHigh() { advanceMicros(2000); return true; }
 
@@ -118,6 +134,26 @@ struct SeqTarget {
   void available() { service(); if (!posted) post(); }
 };
 
+// The sampler's Io on the host: cycles are steady-clock nanoseconds; a sample reads the target's marker line (bit 0).
+static std::atomic<uint8_t> g_marker{1};
+static std::atomic<int> g_post_frames{0};
+static std::atomic<bool> g_post{false};
+static uint32_t nowCycles() {
+  return static_cast<uint32_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+struct HostIo {
+  uint32_t cycles() const { return nowCycles(); }
+  uint8_t read() const {
+    if (g_in_frame.load()) ++g_read_overlaps;
+    return g_marker.load();
+  }
+  void interruptsOff() const {}
+  void interruptsOn() const {}
+  uint64_t nowNs() const { return nowCycles(); }
+  void yield() const { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+};
+
 static void spinFor(std::chrono::microseconds us) {
   const auto end = std::chrono::steady_clock::now() + us;
   while (std::chrono::steady_clock::now() < end) {}
@@ -133,49 +169,73 @@ int main() {
     CHECK(!g.held() && !g.windowOpen());
     CHECK(g.tryHold());
     int waited = 0;
-    g.beginWindow([&] { ++waited; g.release(); });   // the holder lets go while the window waits
-    CHECK(waited == 1 && g.windowOpen() && !g.held());
-    CHECK(!g.tryHold() && !g.held());            // refused inside the window
-    CHECK(g.takeWanted() && !g.takeWanted());    // noted once
-    CHECK(!g.tryHold(false) && !g.takeWanted()); // a reader that goes on anyway asks for no turn
+    g.beginWindow([&] { ++waited; g.release(); });   // the holder lets go while the exclusive window waits
+    CHECK(waited == 1 && g.window() == WireGate::kExclusive && !g.held());
+    CHECK(!g.tryHold() && !g.held());            // refused inside it
+    CHECK(g.turnWanted() == 1);                  // noted for a search's turn: wanted (the console's poll)
+    CHECK(!g.tryHold(true) && g.turnWanted() == 2);   // a request waiting: needed
     g.endWindow();
     CHECK(g.tryHold() && g.held());
     g.release();
+    // a search's burst: starts with a turn when the wire was asked for (the notes above), and the turn lets takes in
+    CHECK(g.beginBurst() && g.window() == WireGate::kShared && g.turnWanted() == 0);
+    CHECK(g.tryHold());
+    g.endTurn();
+    CHECK(g.turnDone());                         // the console has sent what it had
+    g.closeTurn();
+    CHECK(g.tryHold());                          // a holder from the turn goes on
+    g.release();
+    CHECK(!g.tryHold() && g.turnWanted() == 1);  // a new take does not
+    g.endWindow();
+    CHECK(!g.beginBurst() || g.window() == WireGate::kShared);
+    g.endWindow();
+    CHECK(!g.beginBurst() && g.window() == WireGate::kExclusive);   // nothing asked: exclusive from the start
+    g.endWindow();
   }
 
-  // ---- no frame and no window at once: both sides as fast as they go ----
+  // ---- no frame meets a read: the sampler reading through exclusive windows and turns, frames as fast as they go ----
   {
-    WireGate g;
-    std::atomic<int> in_frame{0}, in_window{0}, bad{0}, windows{0}, frames{0};
+    WireGate &g = gWireGate;
+    std::atomic<int> in_frame{0}, reading{0}, bad{0}, windows{0}, frames{0}, inside_exclusive{0};
     std::atomic<bool> core1_done{false};
     std::thread core0([&] {
       while (!core1_done.load() || windows.load() < 2000) {
-        g.beginWindow([] { std::this_thread::yield(); });
-        in_window = 1;
-        if (in_frame.load()) ++bad;
-        for (volatile int i = 0; i < 50; ++i) {}
-        if (in_frame.load()) ++bad;
-        in_window = 0;
+        const bool exclusive = windows.load() % 2 == 0;
+        if (exclusive) g.beginWindow([] { std::this_thread::yield(); });
+        else { g.beginBurst(); g.openTurn(); }
+        g.beginReading();
+        for (int i = 0; i < 40; ++i) {
+          g.yieldFrame();
+          reading = 1;
+          if (in_frame.load()) ++bad;
+          for (volatile int k = 0; k < 5; ++k) {}
+          if (in_frame.load()) ++bad;
+          reading = 0;
+        }
+        g.endReading();
         g.endWindow();
         ++windows;
-        if (core1_done.load()) continue;
         std::this_thread::yield();
       }
     });
     for (int i = 0; i < 20000; ++i) {
       g.hold([] { std::this_thread::yield(); });
+      g.frameBegin();
       in_frame = 1;
-      if (in_window.load()) ++bad;
+      if (reading.load()) ++bad;
+      if (g.window() == WireGate::kExclusive && g.held()) {}   // a holder from a turn may go on
       for (volatile int k = 0; k < 20; ++k) {}
-      if (in_window.load()) ++bad;
+      if (reading.load()) ++bad;
       in_frame = 0;
+      g.frameEnd();
       ++frames;
       if (i % 3 == 2) g.release();               // loop() came round
     }
     g.release();
     core1_done = true;
     core0.join();
-    printf("  stress: %d frames, %d windows, %d at once\n", frames.load(), windows.load(), bad.load());
+    (void)inside_exclusive;
+    printf("  stress: %d frames, %d windows, %d at once with a read\n", frames.load(), windows.load(), bad.load());
     CHECK(bad.load() == 0 && frames.load() == 20000 && windows.load() >= 2000);
   }
 
@@ -215,7 +275,7 @@ int main() {
     CHECK(g_frames.load() - before >= 3000 && windows.load() > 10 && g_overlaps.load() == 0);
   }
 
-  // ---- the console's turn: refused while a window is open, noted for the sampler, given once it has closed ----
+  // ---- the console's turn: refused while a window is exclusive, noted for a search, given once it has closed ----
   {
     std::atomic<bool> open_now{false}, close{false};
     std::thread sampler([&] {
@@ -227,14 +287,15 @@ int main() {
       gWireGate.endWindow();
     });
     while (!open_now.load()) std::this_thread::yield();
-    gWireGate.takeWanted();                      // the notes the requests above left
     CHECK(!phy.backgroundTurn());                // paused: nothing read inside the window
-    CHECK(gWireGate.takeWanted());               // and a turn asked for between bursts
+    CHECK(gWireGate.turnWanted() != 0);          // and a turn asked for
     close = true;
     sampler.join();
     CHECK(phy.backgroundTurn());                 // the window closed: the turn is the console's
     phy.backgroundDone();
     gWireGate.release();
+    gWireGate.openTurn();                        // the notes cleared
+    gWireGate.endWindow();
     g_target = Target{};
   }
 
@@ -276,37 +337,128 @@ int main() {
     target.rx.clear();
   }
 
-  // ---- a trigger search: bursts with the wire's turn between them; the line arrives while the search goes on ----
+  // ---- a trigger search (sampler::run): the line goes in a turn inside a burst, the target acts, the trigger fires ----
+  // 100 kHz (10 us a sample), a 4000-sample segment with 1000 before the trigger, bursts of 20000 samples (200 ms), a
+  // turn of 5 ms. The target: once the line is complete it acts at once (`act`).
+  auto search = [&](const char *what, const uint8_t *line, size_t length, uint8_t value, uint32_t pre,
+                    void (*act)()) {
+    static uint8_t buffer[4000];
+    memset(buffer, 0xEE, sizeof buffer);
+    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, value, pre, 20000, 500};
+    volatile uint8_t control = 0;
+    std::atomic<bool> triggered{false};
+    std::atomic<uint32_t> kept_at{0};
+    sampler::Outcome outcome;
+    const int read_overlaps = g_read_overlaps.load();
+    g_post_frames = 0;
+    std::thread core0([&] {
+      HostIo io;
+      outcome = sampler::run(io, plan, control, [&](uint32_t, uint32_t kept, uint64_t) {
+        kept_at = kept;
+        g_post = true;
+        triggered = true;
+      });
+      g_post = false;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));   // the search under way (the arm, then the command)
+    CHECK(console.queue(line, length) == length);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    size_t had = target.rx.size();
+    bool acted = false;
+    while (!triggered.load() && std::chrono::steady_clock::now() < deadline) {
+      const int before = g_frames.load();
+      loopOnce();
+      if (g_post.load()) g_post_frames += g_frames.load() - before;
+      if (!acted && target.rx.size() >= had + length) { acted = true; act(); }   // the target acts on its line
+      spinFor(std::chrono::microseconds(100));   // the rest of loop()
+    }
+    if (!triggered.load()) control = sampler::kControlAbort;
+    while (g_post.load() || !triggered.load()) {   // the segment's rest: loop() goes on (its takes are refused)
+      if (!triggered.load() && control) break;
+      const int before = g_frames.load();
+      loopOnce();
+      if (g_post.load()) g_post_frames += g_frames.load() - before;
+      spinFor(std::chrono::microseconds(100));
+    }
+    core0.join();
+    uint32_t low = 0, edges = 0;
+    for (uint32_t i = 0; i < outcome.samples; ++i) {
+      low += !(buffer[i] & 1);
+      if (i && (buffer[i] & 1) != (buffer[i - 1] & 1)) ++edges;
+    }
+    printf("  %s: delivered %s, triggered %s, segment %u samples (trigger at %u), %u low, %u edges, slipped %d, "
+           "%d frames after the trigger, %d reads met a frame\n",
+           what, acted ? "yes" : "no", triggered.load() ? "yes" : "no", outcome.samples, outcome.trigger_index, low,
+           edges, outcome.slipped, g_post_frames.load(), g_read_overlaps.load() - read_overlaps);
+    CHECK(acted && triggered.load() && !outcome.aborted);
+    CHECK(g_read_overlaps.load() == read_overlaps);   // no frame met a read
+    CHECK(g_post_frames.load() == 0);                  // nothing new on the wire in the segment's rest
+    CHECK(outcome.trigger_index == kept_at.load() && outcome.trigger_index <= pre);
+    CHECK(outcome.samples == outcome.trigger_index + 1 + (sizeof buffer - pre - 1));
+    return std::make_pair(low, edges);
+  };
   {
-    std::atomic<bool> stop{false};
-    std::atomic<int> bursts{0}, turns{0};
-    std::thread sampler([&] {                    // as SamplerCapture::run's search: burst, then the wire's turn if asked
-      while (!stop.load()) {
-        gWireGate.beginWindow([] { std::this_thread::yield(); });
-        g_inside = 1;
-        spinFor(std::chrono::microseconds(2000));
-        g_inside = 0;
-        gWireGate.endWindow();
-        ++bursts;
-        if (gWireGate.takeWanted()) { ++turns; std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
-        else std::this_thread::yield();
+    static const uint8_t reboot[] = {'R', 'E', 'B', 'O', 'O', 'T', '\n'};
+    const auto r = search("software reset (a 570 us low)", reboot, sizeof reboot, 1, 1000, [] {
+      g_marker = 0;
+      spinFor(std::chrono::microseconds(570));
+      g_marker = 1;
+    });
+    CHECK(r.first >= 50 && r.first <= 70 && r.second == 2);   // the whole low run, 57 samples give or take a few
+    target.rx.clear();
+    static const uint8_t toggle[] = {'T', 'O', 'G', 'G', 'L', 'E', ' ', '0', ' ', '2', '0', '\n'};
+    const auto t = search("20 toggles 2 us apart", toggle, sizeof toggle, 2, 1000, [] {
+      for (int i = 0; i < 20; ++i) {
+        g_marker = g_marker.load() ^ 1;
+        spinFor(std::chrono::microseconds(25));   // 2.5 samples a level (the bench's are faster against its rate too)
       }
     });
-    while (bursts.load() < 1) std::this_thread::yield();
-    const int overlaps = g_overlaps.load();
-    const uint8_t line[] = {'A', 'R', 'M', 'E', 'D', '\n'};
-    CHECK(console.queue(line, sizeof line) == sizeof line);
-    for (int i = 0; i < 20000 && target.rx.size() < sizeof line; ++i) {
-      loopOnce();
-      std::this_thread::sleep_for(std::chrono::microseconds(100));   // the rest of loop()
-    }
-    const bool searching = !stop.load();
-    stop = true;
-    sampler.join();
-    printf("  trigger search: the line delivered between bursts (%d bursts, %d turns), %d frames inside a burst\n",
-           bursts.load(), turns.load(), g_overlaps.load() - overlaps);
-    CHECK(searching && target.rx == std::vector<uint8_t>(line, line + sizeof line));
-    CHECK(turns.load() > 0 && g_overlaps.load() == overlaps);
+    CHECK(t.second >= 15);   // the toggles in the segment
+    target.rx.clear();
+  }
+
+  // ---- a request waiting for the wire gets a turn inside a burst, not only between bursts ----
+  {
+    static uint8_t buffer[4000];
+    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 100, 100000, 500};
+    volatile uint8_t control = 0;
+    sampler::Outcome outcome;
+    std::thread core0([&] {
+      HostIo io;
+      outcome = sampler::run(io, plan, control, [](uint32_t, uint32_t, uint64_t) {});
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));   // a burst of 1 s is sampling
+    gWireGate.release();
+    const auto t0 = std::chrono::steady_clock::now();
+    uint32_t v = 0;
+    CHECK(phy.read(0x11, v));
+    const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    gWireGate.release();
+    control = sampler::kControlAbort;
+    core0.join();
+    printf("  a request during a search: answered after %lld ms (bursts of 1000 ms)\n", static_cast<long long>(waited));
+    CHECK(waited < 50 && outcome.aborted);
+  }
+
+  // ---- an edge in the first samples of a burst: a shorter segment, the trigger index what came before it ----
+  {
+    static uint8_t buffer[4000];
+    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 1000, 20000, 500};
+    volatile uint8_t control = 0;
+    sampler::Outcome outcome;
+    g_marker = 1;
+    std::thread toggler([] {
+      std::this_thread::sleep_for(std::chrono::microseconds(1500));   // 150 samples into the first burst
+      g_marker = 0;
+    });
+    HostIo io;
+    outcome = sampler::run(io, plan, control, [](uint32_t, uint32_t, uint64_t) {});
+    toggler.join();
+    g_marker = 1;
+    printf("  an early edge: trigger index %u (pretrigger 1000), segment %u samples\n", outcome.trigger_index,
+           outcome.samples);
+    CHECK(outcome.trigger_index > 50 && outcome.trigger_index < 1000 && outcome.samples == outcome.trigger_index + 3000);
+    CHECK((buffer[outcome.trigger_index] & 1) == 0 && (buffer[outcome.trigger_index - 1] & 1) == 1);
   }
 
   printf("wire-gate: %d checks, %d failures\n", checks.load(), failures.load());

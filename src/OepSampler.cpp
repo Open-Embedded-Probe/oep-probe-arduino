@@ -15,6 +15,7 @@
 #include <algorithm>
 
 #include "OepEndpoint.h"
+#include "OepSamplerRun.h"
 
 namespace oep {
 namespace {
@@ -34,114 +35,66 @@ uint32_t gcd(uint32_t a, uint32_t b) {
 
 namespace {
 
-// The sampling loop's state, local to the task so that it stays in registers.
-struct Pace {
-  uint8_t *out;
-  uint32_t size, at, step, next, lines;
-  int32_t late;
+// The chip's side of the sampling loop (OepSamplerRun.h). GPIO0..31 only (kHigh false): one register read per sample.
+// Reading GPIO.in1 as well cost enough that 2 MHz fell behind (1.92 MHz actually sampled, periods spread +-5 %,
+// 2026-09-29); 1 MHz and below kept pace either way. A sample is channel l on bit l.
+template <bool kHigh>
+struct EspIo {
+  uint32_t lines;
   uint32_t m0[SamplerCapture::kMaxChannels], m1[SamplerCapture::kMaxChannels];
+  inline __attribute__((always_inline)) uint32_t cycles() const { return esp_cpu_get_cycle_count(); }
+  inline __attribute__((always_inline)) uint8_t read() const {
+    const uint32_t in0 = GPIO.in, in1 = kHigh ? GPIO.in1.val : 0;
+    uint8_t byte = 0;
+    for (uint32_t l = 0; l < lines; ++l)
+      byte |= static_cast<uint8_t>(((in0 & m0[l]) | (kHigh ? in1 & m1[l] : 0)) != 0) << l;
+    return byte;
+  }
+  inline __attribute__((always_inline)) void interruptsOff() const { portDISABLE_INTERRUPTS(); }
+  inline __attribute__((always_inline)) void interruptsOn() const { portENABLE_INTERRUPTS(); }
+  inline __attribute__((always_inline)) uint64_t nowNs() const { return static_cast<uint64_t>(esp_timer_get_time()) * 1000u; }
+  inline __attribute__((always_inline)) void yield() const { vTaskDelay(1); }
 };
 
-// One sample, due at p.next: channel l on bit l, into the buffer used as a ring of p.size.
-// A sample due one period or more ago when the loop comes round was taken late: the core was held up (the other core
-// stalls this one now and then even with interrupts off, 2026-09-29), and the samples after it catch up faster than
-// the rate. The segment says so (flags bit2, status flags bit1: a sample taken one sample period or more late, capture
-// §2.2, §3.2) rather than passing a bent time base as even.
-// GPIO0..31 only (kHigh false): one register read per sample. Reading GPIO.in1 as well cost enough that 2 MHz fell
-// behind (1.92 MHz actually sampled, periods spread +-5 %, 2026-09-29); 1 MHz and below kept pace either way.
-template <bool kHigh, bool kRing>
-inline __attribute__((always_inline)) uint8_t takeSample(Pace &p) {
-  const int32_t behind = static_cast<int32_t>(esp_cpu_get_cycle_count() - p.next);
-  if (behind > p.late) p.late = behind;
-  while (static_cast<int32_t>(esp_cpu_get_cycle_count() - p.next) < 0) {}
-  p.next += p.step;
-  const uint32_t in0 = GPIO.in, in1 = kHigh ? GPIO.in1.val : 0;
-  uint8_t byte = 0;
-  for (uint32_t l = 0; l < p.lines; ++l)
-    byte |= static_cast<uint8_t>(((in0 & p.m0[l]) | (kHigh ? in1 & p.m1[l] : 0)) != 0) << l;
-  p.out[p.at] = byte;
-  if (++p.at == p.size && kRing) p.at = 0;   // one window (not a ring): no wrap to pay for
-  return byte;
-}
+static_assert(sampler::kImmediate == reg::fixture_logic::kTriggerImmediate && sampler::kLevel == reg::fixture_logic::kTriggerLevel &&
+                  sampler::kEdge == reg::fixture_logic::kTriggerEdge, "capture §3.3's trigger types");
 
 }  // namespace
 
-// Immediate: one window, interrupts off throughout (<= 164 ms at the 400 kHz floor, inside the 300 ms interrupt
-// watchdog). Triggered: bursts, each with interrupts off for at most kOffNs - the search, then the rest of the
-// segment after the trigger - and on between them (a gap: the search starts over, the pretrigger fills again). The
-// buffer is a ring during the search; the segment is turned to start at 0 afterwards.
-// Every window goes through the wire's gate (OepWireGate.h): it opens once loop()'s core has let go of the SWIO wire
-// (the request on it ended and loop() came round), and no SWIO frame starts until it closes - the GPIO.in reads here
-// move the SWIO pulses of the other core enough to garble its frames. Its start time is taken as it begins. Between the
-// bursts of a search, a wire that was refused during the burst gets kWireTurnMs before the next.
+// One capture (OepSamplerRun.h: the windows, the bursts of a search and the SWIO wire's turns in them). A sample taken
+// one period or more late (the core held up: the other core stalls this one now and then even with interrupts off,
+// 2026-09-29; a SWIO frame during a turn) makes the segment slipped (flags bit2, status flags bit1, capture §2.2,
+// §3.2) rather than passing a bent time base as even.
 // (A template cannot be IRAM_ATTR - its literals land after their use - so it is inlined into runLow / runHigh.)
 template <bool kHigh>
 inline __attribute__((always_inline)) void SamplerCapture::run() {
-  Pace p = {};
-  p.out = buffer_;
-  p.size = samples_;
-  p.step = cycles_;
-  p.lines = channels_;
-  for (uint32_t l = 0; l < p.lines; ++l) { p.m0[l] = masks0_[l]; p.m1[l] = masks1_[l]; }
-  if (trig_type_ == cap::kTriggerImmediate) {
-    gWireGate.beginWindow([] { vTaskDelay(1); });
-    portDISABLE_INTERRUPTS();
-    start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;   // the first sample's time (the op's was earlier)
-    p.next = esp_cpu_get_cycle_count();
-    for (uint32_t i = 0; i < p.size; ++i) takeSample<kHigh, false>(p);
-    portENABLE_INTERRUPTS();
-    gWireGate.endWindow();
-    late_cycles_ = static_cast<uint32_t>(p.late);
-    slipped_ = p.late >= static_cast<int32_t>(p.step);
-    return;
-  }
-  const uint32_t pre = pretrigger_, post = p.size - pre - 1;   // samples after the trigger's one
-  const uint64_t limit = static_cast<uint64_t>(cpu_hz_) / 1000u * (kOffNs / 1000000u) / p.step;
-  const uint32_t burst = static_cast<uint32_t>(limit - post);  // > pre: samples <= kBufferBytes < limit
-  const bool edge = trig_type_ == cap::kTriggerEdge;
-  const uint8_t role = trig_role_, value = static_cast<uint8_t>(trig_value_);
-  const uint32_t arm = edge && pre == 0 ? 1 : pre;             // an edge needs the sample before it
-  for (;;) {
-    p.at = 0;
-    gWireGate.beginWindow([] { vTaskDelay(1); });
-    if (control_ & kControlAbort) {                             // asked to end while the wire was waited for
-      gWireGate.endWindow();
-      aborted_ = true;
-      return;
-    }
-    portDISABLE_INTERRUPTS();
-    const uint64_t burst_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-    p.next = esp_cpu_get_cycle_count();
-    uint8_t last = 0, stop = 0;
-    bool hit = false;
-    uint32_t c = 0;
-    for (; c < burst; ++c) {
-      const uint8_t bit = (takeSample<kHigh, true>(p) >> role) & 1;
-      if (c >= arm) {
-        hit = edge ? bit != last && (value == 2 || bit == (value == 0 ? 1 : 0)) : bit == value;
-        if (hit || (stop = control_) != 0) break;
-      }
-      last = bit;
-    }
-    if (hit || (stop & kControlForce)) {
-      trig_count_ = c;
-      trig_burst_ns_ = burst_ns;
-      trig_seen_ = true;                                        // poll sends triggered while the rest comes in
-      for (uint32_t i = 0; i < post; ++i) takeSample<kHigh, true>(p);
-      portENABLE_INTERRUPTS();
-      gWireGate.endWindow();
-      std::rotate(p.out, p.out + p.at, p.out + p.size);         // the ring's oldest sample (c - pre) first
-      seg_start_ns_ = burst_ns + static_cast<uint64_t>(c - pre) * p.step * 1000000000ull / cpu_hz_;
-      late_cycles_ = static_cast<uint32_t>(p.late);
-      slipped_ = p.late >= static_cast<int32_t>(p.step);
-      return;
-    }
-    portENABLE_INTERRUPTS();
-    gWireGate.endWindow();
-    if (stop & kControlAbort) { aborted_ = true; return; }
-    // the core's own tasks (and its watchdog) run; a wire refused during the burst has its turn
-    vTaskDelay(gWireGate.takeWanted() ? pdMS_TO_TICKS(kWireTurnMs) : 1);
-  }
+  EspIo<kHigh> io;
+  io.lines = channels_;
+  for (uint32_t l = 0; l < io.lines; ++l) { io.m0[l] = masks0_[l]; io.m1[l] = masks1_[l]; }
+  sampler::Plan plan;
+  plan.out = buffer_;
+  plan.size = samples_;
+  plan.step = cycles_;
+  plan.cpu_hz = cpu_hz_;
+  plan.trig_type = trig_type_;
+  plan.trig_role = trig_role_;
+  plan.trig_value = static_cast<uint8_t>(trig_value_);
+  plan.pre = pretrigger_;
+  const uint64_t limit = static_cast<uint64_t>(cpu_hz_) / 1000u * (kOffNs / 1000000u) / cycles_;
+  plan.burst = static_cast<uint32_t>(limit - (samples_ - pretrigger_ - 1));   // > pre: samples <= kBufferBytes < limit
+  plan.turn = static_cast<uint32_t>(static_cast<uint64_t>(cpu_hz_) / 1000u * kWireTurnMs / cycles_);
+  const sampler::Outcome r = sampler::run(io, plan, control_, [this](uint32_t c, uint32_t kept, uint64_t burst_ns) {
+    trig_count_ = c;
+    trig_kept_ = kept;
+    trig_burst_ns_ = burst_ns;
+    trig_seen_ = true;   // poll sends triggered while the rest comes in
+  });
+  if (r.aborted) { aborted_ = true; return; }
+  seg_samples_ = r.samples;
+  seg_start_ns_ = r.start_ns;
+  if (!trig_type_) start_ns_ = r.start_ns;
+  late_cycles_ = r.late_cycles;
+  slipped_ = r.slipped;
 }
 
 void IRAM_ATTR SamplerCapture::runLow() { run<false>(); }
@@ -162,7 +115,7 @@ void SamplerCapture::waitIdle() {
   // a search for the trigger ends at its next sample; a window cannot be cut short (interrupts are off on core 0).
   // The wire is let go of first: a window waiting for it would otherwise wait for this loop, which waits for it.
   gWireGate.release();
-  if (sampler_) control_ = kControlAbort;
+  if (sampler_) control_ = sampler::kControlAbort;
   while (sampler_) delay(1);
 }
 
@@ -321,11 +274,11 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
 size_t SamplerCapture::segmentInfo(uint8_t *out) const {   // the segment record (oep-if-capture §2), 37 bytes
   putU32(out, 0);                  // serial
   putU64(out + 4, 0);              // position
-  putU32(out + 12, samples_);
+  putU32(out + 12, seg_samples_);
   putU64(out + 16, trig_type_ ? seg_start_ns_ : start_ns_);
   putU32(out + 24, 2000);          // the software pace's first sample against the clock read: +-2 us
-  putU32(out + 28, trig_type_ ? pretrigger_ : 0xFFFFFFFFu);   // immediate: no trigger inside
-  out[32] = slipped_ ? cap::kSegmentFlagSlipped : 0;   // bit2: a sample taken a period or more late (takeSample)
+  putU32(out + 28, trig_type_ ? trig_kept_ : 0xFFFFFFFFu);   // immediate: no trigger inside; early: fewer before it
+  out[32] = slipped_ ? cap::kSegmentFlagSlipped : 0;   // bit2: a sample taken a period or more late (OepSamplerRun.h)
   putU32(out + 33, generation_);
   return 37;
 }
@@ -337,7 +290,7 @@ void SamplerCapture::poll() {
     if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64)
       uint8_t e[16];
       putU32(e, 0);
-      putU32(e + 4, pretrigger_);
+      putU32(e + 4, trig_kept_);
       putU64(e + 8, trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
@@ -411,8 +364,8 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       out[0] = state_;
       const bool finished = state_ == cap::kStateDone;
       putU32(out + 1, finished ? 1 : 0);
-      putU64(out + 5, finished ? samples_ : 0);
-      out[13] = slipped_ ? cap::kStatusFlagSlipped : 0;   // bit1: a sample taken a period or more late (takeSample)
+      putU64(out + 5, finished ? seg_samples_ : 0);
+      out[13] = slipped_ ? cap::kStatusFlagSlipped : 0;   // bit1: a sample taken a period or more late (OepSamplerRun.h)
       putU32(out + 14, generation_);
       size_t used = 18;
       if (state_ == cap::kStateError) {   // why (TLV 0x01 error, capture §3.2): the sampling task would not start
@@ -428,7 +381,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
       if (capacity < 13) return failed();
       poll();
-      const uint64_t have = state_ == cap::kStateDone ? samples_ : 0;
+      const uint64_t have = state_ == cap::kStateDone ? seg_samples_ : 0;
       uint64_t position = getU64(p + 4);
       uint32_t max = getU32(p + 12);
       if (position > have) position = have;
@@ -465,7 +418,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (boundRefused()) return boundInGroup(*this, out, capacity);
-      if (state_ == cap::kStateWaiting) control_ = kControlForce;
+      if (state_ == cap::kStateWaiting) control_ = sampler::kControlForce;
       return completed();
     }
     default:

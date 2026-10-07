@@ -1,6 +1,72 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32: a trigger search's turn for the SWIO wire is inside its burst, and the search samples on through it
+  (bench, the V003 jig with 8bcecca: reset_probe "no capture for the software reset" - configure at 400 kHz x 130816
+  (65408) with a falling-edge trigger accepted, REBOOT sent over the dmseq console during the search, the trigger never
+  fired within 2 s; test_timing's TOGGLE 0 20 / 10 20 likewise, and the next configure then answered unavailable cause 6
+  because the capture was still waiting for its trigger - capture §3.2's table; samples are still rounded down, not a
+  regression). Cause: 51360ea gave the wire its kWireTurnMs (5 ms) between two bursts, when nothing sampled; the
+  command reached the target in that turn and the target acted in it (the software reset's marker low is about 0.57 ms,
+  the toggles some microseconds), so the edge fell in the gap every time; a burst also could not trigger in its first
+  pretrigger samples (1000: 2.5 ms at 400 kHz). Now (OepWireGate.h, the sampler's loop moved to OepSamplerRun.h so the
+  host tests run it): every SWIO frame waits for the sampler to stop reading GPIO.in (one sample at most) and the sampler
+  reads again after it - no frame meets a read in any window; an immediate window and a triggered segment after its
+  trigger stay exclusive (no take; a holder from before goes on frame by frame); a search burst gives a turn (kShared) at
+  its next sample to a request waiting for the wire, and once a burst for up to 5 ms to the console's refused polls,
+  which ends it early once it has handed the target the last byte it had (DmiPhy::backgroundSent); the gap between bursts
+  takes no frame (the next burst starts with the turn); a trigger before the pretrigger has filled gives a shorter
+  segment with trigger_index smaller (capture §3.3; triggered, the segment record, status and read use it); slipped only
+  when one of the segment's own samples was late (a turn's frames before the trigger count). Host test test_wire_gate:
+  the gate's rules, a stress of reads against frames through exclusive windows and turns (0 at once), and
+  sampler::run on a host Io against the dmseq console and a simulated target - REBOOT then a 570 us low and TOGGLE then
+  20 toggles both fire the edge trigger with the whole pulse in the segment and no frame after the trigger; a request
+  answered within the burst; an early edge's shorter segment (with the turn in the gap the reset case failed: not
+  triggered). docs/implementation-limits §4.1 (JA), guides getting-started / writing-a-probe (EN / JA). Not run on
+  hardware yet
+- (JA) classic ESP32: トリガの探索で SWIO の線に譲る番を区切りの中に置き、その間もサンプルし続けるようにしました（台、V003 の台と
+  8bcecca: reset_probe の "no capture for the software reset"。400 kHz × 130816（65408）、立ち下がりのトリガの configure は通り、探索中に
+  dmseq のコンソールで REBOOT を送り、2 s 以内にトリガが立たなかった。test_timing の TOGGLE 0 20 / 10 20 も同じで、その後の configure は
+  キャプチャがトリガ待ちのままなので unavailable cause 6（capture §3.2 の表のとおり。samples の切り下げはそのままで、退行ではない））。
+  原因: 51360ea は kWireTurnMs（5 ms）の番を区切りと区切りの間に置き、その間は誰もサンプルしなかった。コマンドはその番で target に届き、
+  target もその中で動く（ソフトウェアのリセットの印の low は約 0.57 ms、切り替えは数 µs）ので、エッジは毎回すき間に落ちた。区切りの最初の
+  プリトリガ分（1000: 400 kHz で 2.5 ms）もトリガを見なかった。今は（OepWireGate.h。sampler のループを OepSamplerRun.h に移し、host の
+  試験が同じコードを動かす）: SWIO のフレームはどれも sampler が GPIO.in を読むのを止めるのを待ち（1 サンプルまで）、sampler はその後で
+  読み直す（どの窓でもフレームと読みは重ならない）。即時の窓とトリガの後の区画の残りは排他のまま（線を取らせない。前からの持ち主は
+  フレームごとに続く）。探索の区切りは、線を待つ要求に次のサンプルで番（kShared）を譲り、断られたコンソールの poll には区切りごとに 1 回
+  最大 5 ms。コンソールは送るものの最後を target に渡したら番を早く終える（DmiPhy::backgroundSent）。区切りの間のすき間では線を取らせ
+  ない（次の区切りが番から始まる）。プリトリガが溜まる前のトリガは区画を短くし trigger_index を小さくする（capture §3.3。triggered、
+  区画の記録、status、read がそれを使う）。slipped は区画自身のサンプルが遅れたときだけ（トリガの前の番のフレームを含む）。host の試験
+  test_wire_gate: gate の規則、排他の窓と番を通した読みとフレームの負荷（重なり 0）、host の Io の sampler::run を dmseq のコンソールと
+  模擬の target に対して: REBOOT の後の 570 µs の low、TOGGLE の後の 20 回の切り替えで、どちらもエッジのトリガが立ち、パルス全体が区画に
+  入り、トリガの後にフレームが無い。区切りの中で答える要求。早いエッジの短い区画（番をすき間に置くとリセットの場合は落ちた: トリガが
+  立たない）。docs/implementation-limits §4.1（JA）、ガイド getting-started / writing-a-probe（EN / JA）。実機ではまだ動かしていない
+- (EN) The reset note in fn 0's describe firmware text tells only a reset the firmware did not intend (bench, the RP2350
+  with 8bcecca: after a plain `picotool load -x` describe read "0.0.29-dev+8bcecca (wdt at 5 s)" and the bench's version
+  check failed - picotool's reboot, like the boot ROM's and every other RP2 reboot, is a watchdog reset). RP2:
+  `BootGuard::crashed()` (a panic, a HardFault, loop() stalled) marks its own reset in the watchdog scratch record before
+  it resets; only a marked reset is a crash ("crash at <n> s", counted for the safe boot), an unmarked watchdog reset
+  is a reboot from outside (picotool, the boot ROM, a debugger) - no note, the count back to 0. Declared: an RP2 that
+  hangs with interrupts off for good is reset by the watchdog without the mark and is not told apart from such a
+  reboot. ESP32 / ESP32-P4 (checked the same way): a note for panic, int-wdt, task-wdt and cpu-lockup (the IDF's own
+  reasons), and brownout; none any more for a reset from outside - the reset pin (esptool's DTR / RTS on a bridge; a
+  classic ESP32's EN reset reads power-on anyway), the USB-Serial/JTAG's reset ("usb"), a debugger's ("jtag"), an RTC
+  watchdog reset with no panic behind it ("wdt": esptool's watchdog reset), a software restart not by the probe, and
+  any other reason. "update to <slot> did not reach setup: <reset>" unchanged. Host test test_boot_guard (46 checks:
+  the outside resets give no note and no count, a brownout is told, RP2-style marked and unmarked watchdog resets);
+  docs/implementation-limits §2.1 / §2.2 (JA), guide writing-a-probe (EN / JA). Not run on hardware yet
+- (JA) fn 0 の describe の firmware の文字列に付けるリセットの印は、firmware が意図しなかったリセットだけを言うようにしました（台、RP2350 と
+  8bcecca: ふつうの `picotool load -x` の後、describe が "0.0.29-dev+8bcecca (wdt at 5 s)" と言い、台の版の確かめが落ちた。picotool の
+  再起動も、boot ROM のものも、RP2 の再起動はどれも watchdog のリセット）。RP2: `BootGuard::crashed()`（panic、HardFault、loop() の
+  停止）はリセットの前に watchdog の scratch の記録に自分の印を付け、印のあるリセットだけが crash（"crash at <n> s"、safe boot に
+  数える）。印の無い watchdog のリセットは外からの再起動（picotool、boot ROM、debugger）で、印を付けず数を 0 に戻す。宣言: 割り込みを
+  切ったまま止まった RP2 は印無しで watchdog がリセットし、そうした再起動と区別しない。ESP32 / ESP32-P4（同じく確かめた）: 印は
+  panic、int-wdt、task-wdt、cpu-lockup（IDF 自身の理由）と brownout だけ。外からのリセットには付けない: リセットのピン（ブリッジの
+  esptool の DTR / RTS。classic ESP32 の EN のリセットはもともと電源投入と読める）、USB-Serial/JTAG のリセット（"usb"）、debugger の
+  もの（"jtag"）、panic の無い RTC watchdog のリセット（"wdt": esptool の watchdog リセット）、probe がしていない software の再起動、
+  その他の理由。"update to <slot> did not reach setup: <reset>" はそのまま。host の試験 test_boot_guard（46: 外からのリセットは印も数も
+  無し、brownout は言う、RP2 の印のある / 無い watchdog のリセット）、docs/implementation-limits §2.1 / §2.2（JA）、ガイド
+  writing-a-probe（EN / JA）。実機ではまだ動かしていない
 - (EN) Follows oep-spec 0e0e4e3 / 30b2b36 (probe.config wifi, the user's change: no entry skipped because a scan did not
   see its SSID - a hidden SSID never shows in one): `WifiStation` no longer scans first; it tries every entry in index
   order (each up to kTryMs 15 s, less when the driver reports not found or an authentication failure), keeps the first

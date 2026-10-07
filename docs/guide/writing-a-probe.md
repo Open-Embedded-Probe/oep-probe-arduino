@@ -195,7 +195,7 @@ Each source file starts with the spec sections it follows.
   update (an ESP32 with bootloader rollback) is taken as working and confirmed as it starts: leave `verifyRollbackLater`
   undefined and the ESP32 core confirms the image before `setup()`, so no later reset goes back to the one before
   (`Firmware/OepProbe/Esp32P4.h`); the safe boot covers a crash loop the saved settings set off. `BootGuard::lastBoot()`
-  says what ended the boot before (the reset, the seconds it was up, an update the bootloader did not start);
+  says what ended the boot before when the firmware did not intend it (a crash or a hang and the seconds it was up, a brownout, an update the bootloader did not start; nothing for a reset from outside or a restart on purpose - on the RP2 `crashed()` marks its own reset, so an unmarked watchdog reboot such as picotool's is no crash);
   `Firmware/OepProbe` puts it after the version in fn 0's describe firmware text (`describeCore`'s last argument), e.g.
   `0.0.29 (panic at 12 s)`.
 - A fixture UART receives through its UART's interrupt, which the bit-banged wires' frames hold off on their core
@@ -212,9 +212,14 @@ Each source file starts with the spec sections it follows.
   at the gap; the PL011's overrun and a break, read in `poll()` as flags, at the bytes counted at the look before.
 - The classic ESP32's sampler and a SWIO wire share the GPIO registers' bus: the sampler's back-to-back GPIO.in reads
   move the SWIO pulses of the other core enough to garble frames, and SWIO has no parity. `OepWireGate.h` keeps them
-  apart: a request's frames wait out a sampler window and then hold the wire until `loop()` comes round; a window waits
-  for the holder. `SamplerCapture::poll()` lets the wire go, so a sketch with both calls it every `loop()` (or no window
-  opens). The console's poll pauses while a window is open (its turn is refused; the next poll reads): oep-if-console
+  apart: every frame waits for the sampler to stop reading (one sample at most) and the sampler reads again after it;
+  the wire is taken by a frame and held until `loop()` comes round, and while a window is exclusive (an immediate
+  window, a triggered segment after its trigger, a trigger search outside its turns) no take succeeds - a request
+  waits, and a search gives it a turn inside its burst at once (the console one turn a burst, ended early by
+  `backgroundSent()` once it has sent what it had); an immediate window waits for the holder. `SamplerCapture::poll()`
+  lets the wire go, so a sketch with both calls it every `loop()` (or no immediate window opens). The sampler's loop is
+  `OepSamplerRun.h`, the same code the host tests run. The console's poll skips while it is not given the wire (the
+  next poll reads): oep-if-console
   §3 sets no reading interval, only that DMSTATUS is read before DATA0 after the connection's request and that DATA0 /
   DATA1 are left alone while the hart is halted (docs/implementation-limits.ja.md §4.1).
 

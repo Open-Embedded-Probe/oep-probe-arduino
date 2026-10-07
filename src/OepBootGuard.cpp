@@ -26,6 +26,10 @@ namespace {
 constexpr uint32_t kRunning = 0x4f45b007u;   // the record while a boot is not yet stable: a reset now was a crash
 constexpr uint32_t kSettled = 0x4f455354u;   // stable
 constexpr uint32_t kPlanned = 0x4f45504cu;   // a restart on purpose (planned): the next boot's reset is no crash
+// RP2: crashed() marks its own reset (a watchdog reset with no mark is someone else's reboot: picotool, the boot ROM, a
+// debugger, rp2040.reboot() - no crash). Fast: the boot was not yet stable.
+constexpr uint32_t kCrashedFast = 0x4f454346u;
+constexpr uint32_t kCrashedLate = 0x4f45434cu;
 
 uint8_t gCrashes = 0;
 bool gSettled = false, gUsbSeen = false, gAttachOpen = false;
@@ -59,10 +63,11 @@ void recordWrite(const Record &r) {
   watchdog_hw->scratch[1] = r.count;
   watchdog_hw->scratch[2] = r.up_s;
 }
-// Every crash path ends in a watchdog reset (crashed(), a timeout); so does rp2040.reboot(), which planned() marks.
+// A watchdog reset is every reboot's way on the RP2: crashed() (a panic, a HardFault, loop() stalled), rp2040.reboot()
+// (planned() marks it), picotool's reboot and the boot ROM's (into and out of BOOTSEL), a debugger's. Only crashed()'s
+// carries the crash mark (kCrashedFast / kCrashedLate); the reset kind alone tells no crash.
 Reset resetKind() { return watchdog_caused_reboot() ? Reset::kWdt : Reset::kPowerOn; }
-bool crashReset(Reset r) { return r == Reset::kWdt; }
-bool plannedReset(Reset r) { return r == Reset::kWdt; }
+bool crashReset(Reset) { return false; }
 uint32_t runningSlot() { return 0; }
 uint32_t bootSlot() { return 0; }
 const char *slotName(uint32_t) { return "?"; }
@@ -98,10 +103,11 @@ Reset resetKind() {
     default: return Reset::kOther;
   }
 }
+// The panic handler's and the watchdogs' own reasons (the IDF's hint survives the reset): a crash or a hang. ESP_RST_WDT
+// alone (an RTC watchdog with no panic: esptool's watchdog reset, a debugger) is no crash the firmware can tell.
 bool crashReset(Reset r) {
-  return r == Reset::kPanic || r == Reset::kIntWdt || r == Reset::kTaskWdt || r == Reset::kWdt || r == Reset::kLockup;
+  return r == Reset::kPanic || r == Reset::kIntWdt || r == Reset::kTaskWdt || r == Reset::kLockup;
 }
-bool plannedReset(Reset r) { return r == Reset::kSoftware; }   // esp_restart
 uint32_t runningSlot() {
   const esp_partition_t *p = esp_ota_get_running_partition();
   return p ? p->address : 0;
@@ -128,8 +134,7 @@ bool recordRead(Record &r) {
 }
 void recordWrite(const Record &r) { g_boot_record = {true, r.state, r.count, r.up_s, r.next}; }
 Reset resetKind() { return g_boot_reset_crash ? Reset::kPanic : static_cast<Reset>(g_boot_reset_kind); }
-bool crashReset(Reset r) { return r == Reset::kPanic || r == Reset::kTaskWdt || r == Reset::kWdt; }
-bool plannedReset(Reset r) { return r == Reset::kSoftware; }
+bool crashReset(Reset r) { return r == Reset::kPanic || r == Reset::kTaskWdt; }
 uint32_t runningSlot() { return g_boot_running_slot; }
 uint32_t bootSlot() { return g_boot_next_slot; }
 const char *slotName(uint32_t address) { return address == 0x10000 ? "app0" : address == 0x150000 ? "app1" : "?"; }
@@ -138,14 +143,19 @@ bool recordRead(Record &) { return false; }
 void recordWrite(const Record &) {}
 Reset resetKind() { return Reset::kPowerOn; }
 bool crashReset(Reset) { return false; }
-bool plannedReset(Reset) { return false; }
 uint32_t runningSlot() { return 0; }
 uint32_t bootSlot() { return 0; }
 const char *slotName(uint32_t) { return "?"; }
 #endif
 
-// What ended the boot before this one, as lastBoot() says it ("" for a power-on or a restart on purpose).
-void describeLastBoot(bool valid, const Record &before, Reset reset) {
+bool markedCrash(const Record &r) { return r.state == kCrashedFast || r.state == kCrashedLate; }
+
+// What ended the boot before this one, as lastBoot() says it: only a reset the firmware did not intend - a crash or a
+// hang (ESP: the panic handler's and the watchdogs' own reasons; RP2: crashed()'s mark) - and a brownout. "" for
+// everything else: a power-on, a restart on purpose, and a reset from outside that the firmware cannot tell from a
+// planned reboot (the reset pin, esptool's DTR / RTS, the USB-Serial/JTAG's reset, a debugger's, a software restart not
+// by the probe, an RTC watchdog reset with no panic behind it; RP2: picotool's and the boot ROM's watchdog reboots).
+void describeLastBoot(bool valid, const Record &before, Reset reset, bool crash) {
   gLastBoot[0] = 0;
   if (!valid) return;
   const uint32_t running = runningSlot();
@@ -153,8 +163,9 @@ void describeLastBoot(bool valid, const Record &before, Reset reset) {
   // a reset came before the ESP32 core confirmed it (at its start, before setup(): this boot's begin() never ran).
   if (before.state == kPlanned && before.next && running != before.next) {
     snprintf(gLastBoot, sizeof gLastBoot, "update to %s did not reach setup: %s", slotName(before.next), resetName(reset));
-  } else if (reset != Reset::kPowerOn && !(before.state == kPlanned && plannedReset(reset))) {
-    snprintf(gLastBoot, sizeof gLastBoot, "%s at %lu s", resetName(reset), static_cast<unsigned long>(before.up_s));
+  } else if (crash || reset == Reset::kBrownout) {
+    snprintf(gLastBoot, sizeof gLastBoot, "%s at %lu s", markedCrash(before) ? "crash" : resetName(reset),
+             static_cast<unsigned long>(before.up_s));
   }
 }
 
@@ -203,9 +214,10 @@ void BootGuard::begin() {
   Record before{};
   const bool valid = recordRead(before);
   const Reset reset = resetKind();
-  const bool crash = valid && before.state == kRunning && crashReset(reset);
-  gCrashes = crash ? static_cast<uint8_t>(before.count >= 254 ? 255 : before.count + 1) : 0;
-  describeLastBoot(valid, before, reset);
+  const bool crash = (valid && markedCrash(before)) || crashReset(reset);
+  const bool fast = valid && (before.state == kCrashedFast || (before.state == kRunning && crashReset(reset)));
+  gCrashes = fast ? static_cast<uint8_t>(before.count >= 254 ? 255 : before.count + 1) : 0;
+  describeLastBoot(valid, before, reset, crash);
   gSettled = gUsbSeen = gAttachOpen = false;
   gUsbSince = 0;
   gRecord = {kRunning, gCrashes, 0, 0};
@@ -246,6 +258,8 @@ void BootGuard::planned() {
 #if defined(ARDUINO_ARCH_RP2040)
 void BootGuard::crashed() {
   (void)save_and_disable_interrupts();
+  gRecord.state = gRecord.state == kSettled ? kCrashedLate : kCrashedFast;   // this reset is a crash (lastBoot, the count)
+  recordWrite(gRecord);
   // off the bus (the pull-up off) for the host to see an unplug, unless the controller is still held in reset
   if (!(resets_hw->reset & RESETS_RESET_USBCTRL_BITS)) hw_clear_bits(&usb_hw->sie_ctrl, USB_SIE_CTRL_PULLUP_EN_BITS);
   busy_wait_us_32(kRestartDetachMs * 1000u);
@@ -254,6 +268,11 @@ void BootGuard::crashed() {
 }
 #elif defined(ARDUINO_ARCH_ESP32)
 void BootGuard::crashed() { abort(); }   // the panic handler resets the chip
+#elif defined(OEP_HOST_FAKE_BOOT)
+void BootGuard::crashed() {   // as the RP2's: the mark, then the (fake) watchdog reset is the test's next boot
+  gRecord.state = gRecord.state == kSettled ? kCrashedLate : kCrashedFast;
+  recordWrite(gRecord);
+}
 #endif
 
 bool BootGuard::attachReady(bool configured) {

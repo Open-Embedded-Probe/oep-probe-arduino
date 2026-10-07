@@ -6,7 +6,7 @@
 // with interrupts off, paced by the cycle counter (one register read per sample); OEP keeps answering on core 1.
 // A sample is one byte (w = 8), channel k on bit k (logic-capture §3.0), up to 8 channels; bits of unused channels are 0.
 // Triggers: immediate, level and edge on one channel, with a pretrigger inside the segment; the search runs in bursts
-// with interrupts on between them (see run()).
+// with interrupts on between them, and gives the SWIO wire turns inside them (OepSamplerRun.h).
 //
 //   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32, generation u32   0x03 stop   0x04 force   0x05 status
 //   0x06 read(generation, position, max)   0x07 segments   0x08 release (nothing to do in one-shot)   0x09 query (no lock)
@@ -106,16 +106,18 @@ class SamplerCapture final : public Interface, public GroupTrack {
   volatile uint32_t late_cycles_ = 0;     // the most it was behind, in CPU cycles
   // the trigger, as configured; what the search found (written by the sampler task, read by poll)
   static constexpr uint64_t kOffNs = 250000000;   // the longest a burst keeps interrupts off (watchdog: 300 ms)
-  // After a burst of a trigger search during which the SWIO wire was refused (OepWireGate.h): its turn before the next
-  // burst - a few console polls, or the start of a request, which then holds the wire until it ends.
+  // A trigger search's turn for the SWIO wire inside a burst (OepWireGate.h, OepSamplerRun.h): a few console polls, or
+  // the start of a request, which then holds the wire frame by frame until it ends. The console ends it early once it
+  // has sent what it had.
   static constexpr uint32_t kWireTurnMs = 5;
-  static constexpr uint8_t kControlForce = 1, kControlAbort = 2;
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
   volatile uint8_t control_ = 0;          // from core 1: force, abort the search
   volatile bool trig_seen_ = false, aborted_ = false;
   volatile uint32_t trig_count_ = 0;      // the trigger's sample in its burst
+  volatile uint32_t trig_kept_ = 0;       // the samples before it in the segment (< pretrigger_ when it came early)
+  volatile uint32_t seg_samples_ = 0;     // the segment's samples (fewer than samples_ when the trigger came early)
   volatile uint64_t trig_burst_ns_ = 0, seg_start_ns_ = 0;
 
   Result configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query);

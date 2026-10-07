@@ -12,8 +12,9 @@
 //   reboot, INT_WDT 300 ms); begin() also puts loop() under the task watchdog with kStallMs (the core watches only
 //   CPU0's idle task, and loop() runs on CPU1).
 //
-//   Fast crash-boots counted. A boot whose reset was a crash (RP2: a watchdog reset while the record said running; ESP:
-//   esp_reset_reason a panic or a watchdog) and that came within kStableMs of the boot before it counts one more; a boot
+//   Fast crash-boots counted. A boot whose reset was a crash the firmware itself ended in (RP2: crashed()'s mark - a
+//   watchdog reset without it is picotool's, the boot ROM's or a debugger's reboot; ESP: esp_reset_reason a panic, the
+//   interrupt / task watchdog or a CPU lockup) and that came within kStableMs of the boot before it counts one more; a boot
 //   up kStableMs, a restart the firmware makes on purpose (planned) or any other reset (power-on, the reset pin) starts
 //   again at 0. After kSafeAfter in a row the boot is a safe one (safe): the sketch does not start what the saved settings
 //   would start by themselves - the at-boot slots' attach and the consoles that ride it (ProbeConfig::skipBootAttach) -
@@ -56,17 +57,23 @@ class BootGuard {
   // Before a restart the firmware makes on purpose (oep.probe.restart, a firmware update): not a crash. A firmware
   // update written to the other app slot is noted (the next boot tells if the bootloader did not start it).
   static void planned();
-  // What ended the boot before this one, as text, "" for a power-on or a restart on purpose: the reset ("panic",
-  // "task-wdt", "int-wdt", "wdt", "brownout", "usb", "jtag", "reset-pin", "cpu-lockup", "software" not by the probe,
-  // "other"; RP2 "wdt": a crash, a stall or a hard watchdog reset) and the seconds that boot was up, as
-  // "<reset> at <n> s"; an update the bootloader did not start (the image failed its check, the bootloader went back
+  // What ended the boot before this one, as text: only a reset the firmware did not intend - a crash or a hang ("panic",
+  // "task-wdt", "int-wdt", "cpu-lockup"; RP2 "crash": crashed()'s mark) - or a "brownout", with the seconds that boot
+  // was up, as "<reset> at <n> s"; "" for a power-on, a restart on purpose and any reset from outside (the reset pin,
+  // esptool's DTR / RTS or watchdog reset, the USB-Serial/JTAG's, a debugger's, picotool's and the boot ROM's watchdog
+  // reboots, a software restart not by the probe); an update the bootloader did not start (the image failed its check, the bootloader went back
   // to the one before), or that ended before setup(): "update to <slot> did not reach setup: <reset>". The
   // reference firmware puts it after its version in fn 0's describe firmware text (describeCore), so a host's describe
   // shows it with no field of its own.
   static const char *lastBoot();
-  // RP2: the panic / HardFault handlers' end - the USB device off the bus for kRestartDetachMs, then a reset (not on
-  // the host).
+  // RP2: the panic / HardFault handlers' and the stall watch's end - the reset marked a crash (the RP2 cannot tell its
+  // own crash from another watchdog reset otherwise), the USB device off the bus for kRestartDetachMs, then a reset.
+  // Host tests: the mark only (the test's next begin() is the reset).
+#if defined(OEP_HOST_FAKE_BOOT)
+  static void crashed();
+#else
   [[noreturn]] static void crashed();
+#endif
   // The at-boot attach's gate on a USB probe: `configured` is the host having configured the device now.
   static bool attachReady(bool configured);
 };

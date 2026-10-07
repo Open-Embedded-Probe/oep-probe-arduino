@@ -204,6 +204,7 @@ void DmConsole::answerDmdata() {
   const uint8_t chunk = tx_count_ > 3 ? 3 : static_cast<uint8_t>(tx_count_);
   for (uint8_t i = 0; i < chunk; ++i) p[i] = take();
   phy_.write(0x04, uint32_t(chunk + 4u) | (uint32_t(p[0]) << 8) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 24));
+  if (!tx_count_) phy_.backgroundSent();
 }
 
 // dmseq (mechanism 2), oep-spec docs/target-console-dmseq.ja.md. SerialDMDATA's carrier with
@@ -310,6 +311,7 @@ void DmConsole::seqAnswer(uint8_t k, bool with_data) {
   if (seqFault()) answer ^= 1u << (answer % 24);            // test hook: it lands corrupted
   phy_.write(0x04, answer);
   ++stats_.answers;
+  if (m && !tx_count_) phy_.backgroundSent();   // the last of the send queue on its way
 }
 
 // Every start is a fresh session, even over one that is still open: a runner that moves from one sketch to the next

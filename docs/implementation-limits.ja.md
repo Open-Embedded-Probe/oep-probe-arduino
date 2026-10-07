@@ -110,9 +110,11 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   max_op_ms + 5000 ms（15000 ms）回らなければリセットする。panic と HardFault は、device を bus から外してからチップをリセットする。
 - ESP32 / ESP32-P4: panic と割り込みの watchdog（300 ms）はチップをリセットする（core の sdkconfig）。loop() は task watchdog
   （15000 ms）の下で走る。
-- **safe boot**: 落ちた起動（RP2: 動いている記録のまま watchdog でリセット。ESP: panic か watchdog）が、前の起動から 30 秒以内に来たら
-  1 つ数える。3 回続いたら、その 1 回の起動は safe boot: 保存した設定の at boot のスロットの attach と、それに乗るコンソールを始めない。
-  30 秒動いた起動、firmware が自分でした再起動、ほかのリセット（電源投入、リセットのピン）は数を 0 に戻す。仕様（oep-if-probe-config §3.1、
+- **safe boot**: firmware 自身が落ちて終わった起動（RP2: `BootGuard::crashed()` が印を付けた watchdog のリセット。ESP: panic、割り込みの
+  watchdog、task watchdog、CPU lockup）が、前の起動から 30 秒以内に来たら 1 つ数える。3 回続いたら、その 1 回の起動は safe boot: 保存した設定の at boot のスロットの attach と、それに乗るコンソールを始めない。
+  30 秒動いた起動、firmware が自分でした再起動、ほかのリセット（電源投入、リセットのピン、外からのリセット）は数を 0 に戻す。
+  RP2 では再起動はどれも watchdog のリセットで、印の無いもの（picotool、boot ROM、debugger）は外からの再起動として扱う。割り込みを
+  切ったまま止まった RP2（餌のタイマーも止まり、印を付ける前に watchdog が落とす）は、外からの再起動と区別できない（数えず、印も付けない）。仕様（oep-if-probe-config §3.1、
   2026-10-07）は、at boot のスロットを「試せるときに」attach するとし、試さなかったことは slot_state 1 と last_try_at_ns（全ビット 1）で見える。
 - **USB の門**: 自分の USB の device を transport にする probe は、host が device を 1000 ms 構成したままになってから、host が居なければ
   起動から 5000 ms 後に、at boot の attach を始める。
@@ -120,9 +122,12 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 ### 2.2 前の起動の終わり方（firmware の文字列、この実装の動き）
 
 fn 0 の describe の firmware は、版の後ろに、前の起動を何が終わらせたかを括弧で付ける: `<version> (<note>)`。note は
-`<reset> at <n> s`（reset は panic、task-wdt、int-wdt、wdt、brownout、usb、jtag、reset-pin、cpu-lockup、software（probe がしていないもの）、
-other。RP2 は wdt）か、`update to <slot> did not reach setup: <reset>`（更新した image が setup() に届かなかった）。電源投入と probe が自分で
-した再起動の後は何も付けない。
+`<reset> at <n> s` か、`update to <slot> did not reach setup: <reset>`（更新した image が setup() に届かなかった）。`<reset> at <n> s` は
+firmware が意図しなかったリセット（落ちた、止まった）と brownout だけ: ESP は panic、task-wdt、int-wdt、cpu-lockup、brownout、RP2 は crash
+（`BootGuard::crashed()` が印を付けたもの: panic、HardFault、loop() の停止）。電源投入、probe が自分でした再起動、外からのリセットの後は
+何も付けない。外からのリセット: リセットのピン（esptool の DTR / RTS を含む）、USB-Serial/JTAG のリセット、debugger の JTAG リセット、
+probe がしていない software の再起動、panic の無い RTC watchdog のリセット（esptool の watchdog リセット）、RP2 の印の無い watchdog
+のリセット（`picotool load -x` などの再起動、boot ROM、debugger）。
 
 - 版を完全一致で比べる道具は、最初の空白から後ろを外して比べる。
 - describe は宣言だけで（core §7.3）、仕様はこの印を定めない（見直しの Q4）。この実装は利用者の判断で印を firmware の文字列に
@@ -197,12 +202,23 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   番を断られ、窓が閉じた後の poll で読む）。窓は進行中の要求が終わるのを待ってから開く。即時の窓の長さは samples ÷ 実際の rate で、
   いっぱいの 65408 サンプルなら 2 MHz で 33 ms、1 MHz で 65 ms、400 kHz で 164 ms。だから**キャプチャを始めた後に送ったコンソールの
   コマンドやデバッグのリセットは、即時のキャプチャには写らない**（窓が閉じてから target に届く）。
-- **トリガの探索**: 区切り（1 回が最大 250 ms）の間は同じく線を通さず、区切りの間に、待っている要求かコンソールの読みがあれば 5 ms
-  （`kWireTurnMs`）の番を譲る。arm の後で target に何かをさせて、それを写したい host は、トリガを使う: arm してからコマンドかリセットを
-  送ると、それは区切りの間に target に届き、それが起こす出来事でトリガが立ち、キャプチャに写る。区切りの間のすき間（約 1 ms、番を
-  譲った後は 5 ms）に来たエッジは見逃す。
-- slipped は、本当に遅れたサンプル（割り込みや周辺のバスの待ちで取るのが遅れたもの）だけを示す。SWIO のフレームは窓に入らないので、
-  それによる遅れは無い。
+- **トリガの探索**: 区切り（1 回が最大 250 ms）の中は同じく線を通さないが、その中で線に番を譲る: 要求が線を待てば次のサンプルで
+  （区切りごとに何度でも）、コンソールの読みが断られれば区切りごとに 1 回、最大 5 ms（`kWireTurnMs`）。番の間も sampler は読み続け、
+  フレームはそれと 1 つずつ交互に通る（フレームの間は読まず、その後で遅れを取り戻す: そのサンプルは遅れ、区画に入れば slipped）。
+  コンソールは送るものを target に渡し終えたら番を早く終える（target はその後、線の行き来の無いところで動く）。区切りと区切りの間の
+  すき間（約 1 ms、割り込みを戻して core 0 のタスクを回す）には線を取らせない（そこで送ったコマンドで target が動くと、誰もサンプル
+  していない）。トリガが立った後の区画の残りは排他（番の中で始まっていた要求はフレームごとに続く）。arm の後で target に何かをさせて、
+  それを写したい host は、トリガを使う: arm してからコマンドかリセットを送ると、それは番の中で target に届き、それが起こす出来事で
+  トリガが立ち、キャプチャに写る。区切りの最初のサンプルからトリガを見る（エッジは 2 つ目から）: プリトリガの分がまだ溜まっていない
+  ときは区画が短く、trigger_index が小さい（capture §3.3）。見逃すのは、すき間に来た出来事と、フレームの間（1 つ約 60〜150 µs）に
+  始まって終わるパルス。
+- 経緯: 0.0.29 の開発版 51360ea は番を区切りと区切りの間に置き、その間は誰もサンプルしなかった。コマンドやリセットはその番の中で
+  target に届き、target もその中で動くので、立ち下がりのトリガが立たなかった（V003 の台、8bcecca: ソフトウェアのリセットの印の low は
+  約 0.57 ms で 5 ms の番に収まり、reset_probe の "no capture for the software reset"。TOGGLE の 20 回も同じ）。トリガが立たないままの
+  キャプチャは state 2 のままで、次の configure は unavailable cause 6 で断られる（capture §3.2 の表のとおり。samples の切り下げとは関係
+  ない）。
+- slipped は、本当に遅れたサンプル（割り込みや周辺のバスの待ち、番の中のフレーム）が区画に入ったときだけ示す。即時の窓と、トリガの後の
+  区画の残りには、新しいフレームは入らない。
 - コンソールの読みを窓の間止めることは、仕様（console §3）の規則に反しない（読む間隔を決めない）。target の側では、SDI / DMDATA は
   その間書き込みを待ち、dmseq の target は長い待ち（1 s 以上）のうちに戻る。
 - 経緯: 0.0.29 の開発版 589acd5 は、窓の中でもフレームを 1 つずつ通した（sampler がフレームの間だけ読むのを止める）。classic の V003 の

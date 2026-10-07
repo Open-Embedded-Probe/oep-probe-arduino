@@ -4,6 +4,8 @@
 // lastBoot(), what ended the boot before: nothing for a power-on or a restart on purpose, the reset and the seconds up,
 // an update the bootloader did not start; an update that started is not undone by any later reset.
 #include <stdio.h>
+
+#include <initializer_list>
 #include <string.h>
 
 #include "OepBootGuard.h"
@@ -51,7 +53,7 @@ static void testLastBoot() {
   CHECK(is("panic at 12 s") && BootGuard::crashes() == 1);
   run(5000);
   reset(1, 0x10000);
-  CHECK(is("software at 5 s"));               // a restart the probe did not make
+  CHECK(is(""));                              // a restart the probe did not make: from outside, not a crash
   run(3000);
   BootGuard::planned();
   reset(1, 0x10000);
@@ -75,7 +77,37 @@ static void testLastBoot() {
   // then the reset pin at 40 s
   run(40000);
   reset(9, 0x150000);
-  CHECK(is("reset-pin at 40 s") && BootGuard::crashes() == 0);
+  CHECK(is("") && BootGuard::crashes() == 0);   // the reset pin (esptool's DTR / RTS): from outside
+  // the other resets from outside: no note, not counted (kinds 5 wdt, 7 usb, 8 jtag)
+  for (uint8_t kind : {uint8_t(5), uint8_t(7), uint8_t(8)}) {
+    run(3000);
+    reset(kind, 0x150000);
+    CHECK(is("") && BootGuard::crashes() == 0);
+  }
+  // a brownout is told (not a crash: not counted)
+  run(7000);
+  reset(6, 0x150000);
+  CHECK(is("brownout at 7 s") && BootGuard::crashes() == 0);
+  // RP2: every reboot is a watchdog reset; only crashed()'s mark makes it a crash (picotool load -x, 0.0.29-dev
+  // 8bcecca: "wdt at 5 s" after a plain load)
+  run(5000);
+  reset(5, 0x150000);
+  CHECK(is("") && BootGuard::crashes() == 0);   // picotool / the boot ROM: unmarked
+  run(4000);
+  BootGuard::crashed();                          // a panic, a HardFault, loop() stalled: marked, then the reset
+  reset(5, 0x150000);
+  CHECK(is("crash at 4 s") && BootGuard::crashes() == 1);
+  run(2000);
+  BootGuard::crashed();
+  reset(5, 0x150000);
+  CHECK(is("crash at 2 s") && BootGuard::crashes() == 2);   // fast: counted on
+  run(BootGuard::kStableMs + 2000);
+  BootGuard::crashed();                          // after kStableMs: told, but not a fast one
+  reset(5, 0x150000);
+  CHECK(is("crash at 32 s") && BootGuard::crashes() == 0);
+  run(1000);
+  reset(5, 0x150000);                            // the mark is gone with the boot that read it
+  CHECK(is("") && BootGuard::crashes() == 0);
 }
 
 int main() {
