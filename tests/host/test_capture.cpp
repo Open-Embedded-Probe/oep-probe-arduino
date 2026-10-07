@@ -470,6 +470,58 @@ struct Dma {
   }
 };
 
+// The DMA as the PARLIO RX driver mounts the 128 KiB ring (ESP-IDF parlio_rx_mount_transaction_buffer: 33 descriptors
+// of 3968 bytes and the rest, 64-byte aligned, at most 4032 each) and as the GDMA fills it: a partial receive per
+// descriptor, and at every eof_data_len (kSegmentBytes) of the stream an early close - the descriptor ends there and
+// the stream goes on at the next descriptor's start, the rest of that one keeping an older lap. Byte g of the stream
+// is pattern(g).
+struct GappedDma {
+  std::vector<size_t> desc_start, desc_size;
+  size_t d = 0, o = 0, begin = 0;   // the descriptor being filled, the bytes in it, the first not yet reported
+  uint64_t g = 0;        // stream bytes so far
+  GappedDma() {
+    g_fake_tasks_deferred = true;
+    g_fake_task_fn = nullptr;
+  }
+  void layout() {   // once the receive is mounted (start)
+    const size_t total = g_fake_parlio_size, max = 4032, align = 64;
+    size_t num = total / max + (total % max ? 1 : 0), offset = 0;
+    for (size_t i = 0; i < num; ++i) {
+      const size_t rest = total - offset;
+      size_t m = rest >= 2 * max ? total / align / num * align : rest <= max ? (num == 2 && i == 0 ? rest / align / 2 * align : rest)
+                                                                              : rest / align / 2 * align;
+      desc_start.push_back(offset);
+      desc_size.push_back(m);
+      offset += m;
+    }
+  }
+  ~GappedDma() { g_fake_tasks_deferred = false; }
+  template <class Pattern> void deliver(uint64_t n, Pattern pattern) {
+    auto finish = [&] {
+      parlio_rx_event_data_t e = {g_fake_parlio_buffer + desc_start[d] + begin, o - begin};
+      g_fake_parlio_callbacks.on_partial_receive(nullptr, &e, g_fake_parlio_context);
+    };
+    for (uint64_t k = 0; k < n; ++k) {
+      g_fake_parlio_buffer[desc_start[d] + o] = pattern(g);
+      ++o;
+      ++g;
+      const bool eof = g % LogicCapture::kSegmentBytes == 0;
+      if (o == desc_size[d] || eof) {
+        finish();
+        d = (d + 1) % desc_size.size();
+        o = begin = 0;
+      }
+    }
+    // a descriptor part-filled at the end of a delivery is reported once it is full (or closed early), as the driver does
+  }
+  void run() {
+    if (!g_fake_task_fn) return;
+    g_fake_queue_empty = [] { throw Dma::Idle{}; };
+    try { g_fake_task_fn(g_fake_task_arg); } catch (const Dma::Idle &) {}
+    g_fake_queue_empty = nullptr;
+  }
+};
+
 static Bytes readReq(uint32_t generation, uint64_t position, uint32_t max) {
   Bytes p(16);
   putU32(p.data(), generation);
@@ -1041,8 +1093,10 @@ static void testForcedAndEarly() {
     c.pretrigger = 1000;
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint64_t start_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
     dma.deliver(4096, 0xFF);   // no edge
     dma.run();
+    advanceMicros(50000);      // the force 50 ms after the start: the sample of that instant (about 31373)
     CHECK(ok(raw(rig.cap, LogicCapture::kOpForce, {}, out)));
     dma.deliver(4096, 0xFF);
     dma.run();
@@ -1050,6 +1104,9 @@ static void testForcedAndEarly() {
     CHECK(rig.cap.trackState() == cap::kStateDone);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
     CHECK(getU32(out.data() + 2 + 12) == 8192 && getU32(out.data() + 2 + 28) == 1000);
+    // the trigger's sample is the force's instant (capture §3.3): the segment starts 1000 samples (1594 us) before it
+    const int64_t first_ns = static_cast<int64_t>(getU64(out.data() + 2 + 16) - start_ns);
+    CHECK(first_ns > 50000000 - 1594000 - 3000 && first_ns < 50000000 - 1594000 + 3000);
   }
   {
     Rig rig(2);
@@ -1075,7 +1132,70 @@ static void testForcedAndEarly() {
   }
 }
 
+// The bench's case (P4, 87f6d40: 7233 / 41 where 8192 / 1000 was expected): 1 MHz-like, w = 1, samples 8192,
+// pretrigger 1000, an edge that never comes, force long after the pretrigger has filled - here after the ring has gone
+// round three times, with the driver's descriptors and the GDMA's early close at every kSegmentBytes, so the ring holds
+// the stream with skips. The segment is 8192 samples, trigger_index 1000, and its data is the stream's from the sample
+// 1000 before the force's: every bit compared, across the skips the pretrigger spans.
+static void testForcedAfterWrap() {
+  board(512 * 1024, size_t(32) << 20);
+  struct Case { uint8_t w; uint32_t samples, pre; };
+  // w = 1 the bench's own (role 0 high throughout); w = 2 with data on role 1 to check every sample, its pretrigger
+  // 30000 samples (7500 bytes) back across an early close's skip
+  for (const Case k : {Case{1, 8192, 1000}, Case{2, 8192, 1000}, Case{2, 60000, 30000}}) {
+    Rig rig(k.w);
+    Bytes out;
+    Config c;
+    c.samples = k.samples;
+    c.trigger = true;   // falling edge on role 0: role 0 stays high in the pattern
+    c.pretrigger = k.pre;
+    GappedDma dma;   // before the start: the harvest task runs when the test says (run)
+    CHECK(ok(configure(rig.cap, c, out)));
+    uint32_t actual = 0;
+    CHECK(findU32(out, cap::kTlvConfigureAnswerActualSamples, actual));   // whole cache lines: 60416 for 60000 at w = 2
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint32_t generation = getU32(out.data() + 4);
+    dma.layout();
+    const uint8_t w = k.w;
+    auto pattern = [w](uint64_t g) { return w == 1 ? uint8_t{0xFF} : static_cast<uint8_t>(0x55 | ((g % 13) & 1) << 1 | ((g % 7) & 1) << 3 | ((g % 11) & 1) << 5 | ((g % 5) & 1) << 7); };
+    // 3.5 laps of the ring and a bit, so the force falls 1 KiB past an early close (stream byte 7 x 65408)
+    const uint64_t before = 7ull * LogicCapture::kSegmentBytes + 1024;
+    for (uint64_t at = 0; at < before; at += 3968) { dma.deliver(std::min<uint64_t>(3968, before - at), pattern); dma.run(); }
+    // the force's instant: the clock at the stream's sample `before` bytes in (the rate is 160 MHz / 255: 1.59375 us)
+    const uint64_t t_samples = before * 8 / w;
+    advanceMicros(static_cast<uint32_t>(t_samples * 255 / 160));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpForce, {}, out)));
+    for (int n = 0; n < 40; ++n) { dma.deliver(3968, pattern); dma.run(); }
+    rig.cap.poll();
+    CHECK(rig.cap.trackState() == cap::kStateDone);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
+    const uint32_t samples = getU32(out.data() + 2 + 12), index = getU32(out.data() + 2 + 28);
+    CHECK(samples == actual && index == k.pre && (out[2 + 32] & cap::kSegmentFlagGap) == 0);
+    Bytes seg;
+    for (uint64_t at = 0; at < (static_cast<uint64_t>(samples) * w + 7) / 8;) {
+      CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at, 200), out)));
+      const uint32_t n = getU32(out.data() + 9);
+      if (!n) break;
+      seg.insert(seg.end(), out.begin() + 13, out.begin() + 13 + n);
+      at += n;
+    }
+    CHECK(seg.size() == (static_cast<uint64_t>(samples) * w + 7) / 8);
+    if (w == 1) continue;
+    // the segment's samples are the stream's from the force's sample less the pretrigger (within the clock's rounding)
+    auto streamSample = [&](uint64_t s) { return (pattern(s / 4) >> (s % 4 * 2)) & 3; };
+    auto segSample = [&](uint64_t i) { return (seg[i / 4] >> (i % 4 * 2)) & 3; };
+    int64_t found = -1;
+    for (int64_t s = static_cast<int64_t>(t_samples - k.pre) - 4; s <= static_cast<int64_t>(t_samples - k.pre) + 4 && found < 0; ++s) {
+      bool same = true;
+      for (uint64_t i = 0; i < samples && same; ++i) same = segSample(i) == streamSample(static_cast<uint64_t>(s) + i);
+      if (same) found = s;
+    }
+    CHECK(found >= 0);
+  }
+}
+
 int main() {
+  testForcedAfterWrap();
   testTriggerIndexMidByte();
   testForcedAndEarly();
   testFollowerKeeps();

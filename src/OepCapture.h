@@ -190,8 +190,18 @@ class LogicCapture final : public Interface, public GroupTrack {
   // end: produced_ after it. A chunk the queue had no room for (queue_overflow_) is seen at the next one: its start is
   // past captured_ - the bytes between are dropped with the gap flag where they were (not shifted into the positions
   // after them).
-  struct Chunk { const uint8_t *data; size_t length; uint32_t end; };
+  // ring: where in the ring the chunk begins, counted on from the start round the ring (u32, wraps with it: kRingBytes
+  // divides 2^32). The ring is not the stream laid out byte for byte: at every eof_data_len (kSegmentBytes) the DMA closes
+  // its descriptor early and goes on at the next descriptor's start, so the rest of that descriptor - up to one
+  // descriptor's bytes - keeps an older lap between two chunks of the stream (partialReceive: ring_end_).
+  struct Chunk { const uint8_t *data; size_t length; uint32_t end; uint32_t ring; };
   uint32_t missed(const Chunk &chunk) const { return chunk.end - static_cast<uint32_t>(chunk.length) - static_cast<uint32_t>(captured_); }
+  // The DMA's ring position past the last chunk it finished (the ISR, partialReceive), counted as Chunk::ring. The DMA
+  // writes on within kDmaAhead of it (the descriptor being filled, and one skipped after an early close).
+  volatile uint32_t ring_end_ = 0;
+  static constexpr uint32_t kDmaAhead = 8192;
+  // Byte `ring` (counted as Chunk::ring) is still what the DMA wrote there on that lap: the DMA has not come round to it.
+  bool ringIntact(uint32_t ring) const { return ring_end_ + kDmaAhead - ring <= kRingBytes; }
   // one-shot with a trigger (or a pretrigger): the ring and the harvest task, searching
   static constexpr size_t kPretriggerBytes = 64 * 1024;   // history the ring can give back (half of it)
   bool triggered_ = false;           // this one-shot goes through the ring
@@ -201,7 +211,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint32_t follow_pre_ = 0;          // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
   uint32_t pre() const { return follow_ ? follow_pre_ : pretrigger_; }
   volatile uint8_t trig_phase_ = 0;  // 0 waiting, 1 filling, 2 done
-  volatile bool force_ = false;      // force: the trigger is now
+  volatile bool force_ = false;      // force: the trigger is force_sample_ (capture §3.3: the sample at that instant)
   bool have_level_ = false;
   uint8_t last_level_ = 0;
   uint32_t filled_ = 0;              // bytes in buffer_ (from the byte holding the segment's first sample)
@@ -222,6 +232,19 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint64_t ext_sample_ = 0;
   uint32_t rate_hz_ = 0;                     // as asked (a follower opens the ring at it)
   void harvestTriggered(const Chunk &chunk);
+  // A triggered one-shot's map of the stream onto the ring: the recent chunks in order (stream byte, ring position,
+  // length; ring kUnmapped for chunks lost to the queue, whose bytes are somewhere in the ring but not known where).
+  // The pretrigger is copied through it, chunk by chunk.
+  struct Span { uint64_t stream; uint32_t ring; uint32_t length; };
+  static constexpr uint32_t kUnmapped = 0xFFFFFFFFu;
+  static constexpr size_t kSpans = 64;   // a lap of the ring is 33 descriptors and the early closes
+  Span spans_[kSpans];
+  uint32_t span_count_ = 0;   // spans recorded (the newest kSpans kept)
+  void addSpan(uint64_t stream, uint32_t ring, uint32_t length);
+  void mapLost(uint64_t stream, uint32_t length, uint32_t next_ring);
+  uint64_t oldestKept() const;   // the oldest stream byte the ring still holds behind the newest span, contiguous to it
+  bool copyStream(uint64_t from, uint64_t to);   // stream bytes [from, to) into buffer_ + filled_; false: not all held
+  volatile uint64_t force_sample_ = 0;       // force: the sample at that instant (written before force_)
   // What an open could not get: storage (refused unavailable cause 3) or the peripheral (failed, state 6).
   enum class Open : uint8_t { kOk, kNoMemory, kFailed };
   bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at);

@@ -1,6 +1,31 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 logic, a one-shot with a trigger: the pretrigger is copied out of the DMA ring through a map of the
+  recent chunks, not as if the ring held the stream byte for byte. The driver closes a DMA descriptor early at every
+  eof_data_len (65408 bytes of stream) and goes on at the next descriptor's start, so the rest of that descriptor - up
+  to 4 KiB - kept an older lap between two chunks; a pretrigger reaching back across it (once the stream had passed
+  64 KiB: after about 0.5 s at 1 MHz on one line) took those stale bytes in, unflagged. The ISR notes each chunk's ring
+  position (Chunk::ring), the harvest keeps the last 64 (spans_), chunks lost to the queue are placed where they can only
+  be, and every overwrite check counts in ring positions with the DMA's lead (the repeat and streaming paths too). A
+  force is the sample of its instant (capture §3.3; the start's clock), no longer the first sample of the next DMA chunk
+  (up to a chunk earlier: 51 ms at the lowest rate), and a group learns a forced trigger at once. The bench's 7233 / 41
+  for a force with an edge that never comes (8192 / 1000 expected) is not the force: an edge was found at sample 41 /
+  42 of the stream - the first 40 us read low on the idle line - and 10abb8c takes a trigger before the pretrigger has
+  filled (capture §3.3), where d520847 only looked from sample 1000 on; the force path gives 8192 / 1000 (host test of
+  that exact case after three laps of the ring, with the driver's descriptors and early closes, every sample compared).
+  Not run on hardware
+- (JA) ESP32-P4 の logic のトリガ付きワンショット: pretrigger を DMA のリングから、最近の塊の地図を通して写します（リングが
+  ストリームをそのまま並べていると見なさない）。ドライバは eof_data_len（ストリームの 65408 byte）ごとに DMA の記述子を途中で閉じ、
+  次の記述子の頭から続けるので、その記述子の残り（最大 4 KiB）には古い周のデータが二つの塊の間に残る。そこをまたいで遡る pretrigger
+  （ストリームが 64 KiB を過ぎた後: 1 本 1 MHz で約 0.5 s 後から）は、その古いバイトを印無しで取り込んでいた。ISR が塊ごとにリングの
+  位置を記録し（Chunk::ring）、harvest は最近の 64 個を持ち（spans_）、キューに入らなかった塊はあり得る位置に置き、上書きの判定はすべて
+  リングの位置と DMA の先行分で数える（リピートとストリーミングも）。force はその瞬間のサンプル（capture §3.3。start の時刻から）で、
+  次の DMA の塊の最初のサンプルではない（最大 1 塊早かった: 最も低いレートで 51 ms）。組は force のトリガをすぐ知る。ベンチの
+  7233 / 41（来ないエッジで force、8192 / 1000 のはず）は force ではない: ストリームのサンプル 41 / 42 でエッジが見つかった（最初の
+  40 us がアイドルの線で low に読めた）。10abb8c は pretrigger が溜まる前のトリガも取る（capture §3.3）が、d520847 はサンプル 1000
+  からしか探さなかった。force の道は 8192 / 1000（リングが 3 周した後のその場合の host test、ドライバの記述子と途中で閉じるところを
+  再現し、全サンプルを比べる）。実機では未確認
 - (EN) Classic ESP32 sampler: a sample's byte is packed from GPIO.in (and GPIO.in1) through a table per register byte
   (sampler::Packer, built at configure), a fixed few loads and ors whatever the line count. The loop over the lines it
   replaces compiled to about a dozen instructions and two jumps a line (d520847's runLow) inside the 120 cycles a

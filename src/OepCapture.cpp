@@ -60,7 +60,13 @@ void rateFraction(uint64_t top, uint64_t bottom, uint32_t &num, uint32_t &den) {
 bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *e, void *context) {
   auto *self = static_cast<LogicCapture *>(context);
   self->produced_ += e->recv_bytes;
-  const Chunk chunk = {static_cast<const uint8_t *>(e->data), e->recv_bytes, self->produced_};
+  // where in the ring it is: on from the last chunk's end, by what the DMA skipped after an early close (Chunk::ring)
+  const uint32_t prev = self->ring_end_;
+  const uint32_t off = static_cast<uint32_t>(static_cast<const uint8_t *>(e->data) - self->ring_);
+  uint32_t ring = (prev & ~static_cast<uint32_t>(kRingBytes - 1)) + off;
+  if (static_cast<int32_t>(ring - prev) < 0) ring += kRingBytes;
+  self->ring_end_ = ring + static_cast<uint32_t>(e->recv_bytes);
+  const Chunk chunk = {static_cast<const uint8_t *>(e->data), e->recv_bytes, self->produced_, ring};
   BaseType_t woken = pdFALSE;
   if (xQueueSendFromISR(self->queue_, &chunk, &woken) != pdTRUE) ++self->queue_overflow_;
   return woken == pdTRUE;
@@ -95,7 +101,7 @@ void LogicCapture::harvest(const Chunk &chunk) {
       gap_pending_ = false;
     }
     memcpy(store_ + static_cast<size_t>(slot) * segment_bytes_ + fill_, chunk.data + at, n);
-    if (produced_ - static_cast<uint32_t>(captured_) > kRingBytes) {   // the DMA came round and rewrote these bytes while (or before) we copied
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA came round and rewrote these bytes while (or before) we copied
       ++overruns_;
       loseSegment();   // a hole in the segment (capture §2.2)
       return;
@@ -125,7 +131,7 @@ void LogicCapture::harvestDirect(const Chunk &chunk) {
     }
     const size_t n = min(static_cast<size_t>(stage_data_ - stage_fill_), chunk.length - at);
     memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, chunk.data + at, n);
-    if (produced_ - static_cast<uint32_t>(captured_) > kRingBytes) {   // the DMA rewrote these bytes
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA rewrote these bytes
       ++overruns_;
       loseSegment();
       return;
@@ -268,43 +274,41 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
 
 // A one-shot with a trigger: look for it in each chunk; once found, the segment starts exactly pretrigger samples
 // before it (trigger_index = pretrigger, capture §2 / §3.3) - or at the oldest the ring still has, the segment then
-// that much shorter - and takes the chunks after it until full. Harvest task only.
+// that much shorter - and takes the chunks after it until full. A force, or a group's trigger when following, is the
+// sample of that instant (force_sample_, ext_sample_), taken once the stream has come that far. What comes before the
+// trigger's chunk is copied through the map of the recent chunks (spans_): the ring is not the stream byte for byte
+// (Chunk::ring). Harvest task only.
 void LogicCapture::harvestTriggered(const Chunk &chunk) {
   if (const uint32_t skip = missed(chunk)) {           // chunks lost before this one: not searched; still in the ring
+    mapLost(captured_, skip, chunk.ring);
     captured_ += skip;
     have_level_ = false;
   }
   const uint64_t base = captured_;                     // the stream byte of chunk.data[0]
-  const size_t ring_at = static_cast<size_t>(chunk.data - ring_);
-  captured_ += chunk.length;
+  const uint64_t end = base + chunk.length;
+  captured_ = end;
   if (trig_phase_ == 2) return;
-  const uint32_t ahead = produced_ - static_cast<uint32_t>(base);   // what the DMA wrote since this chunk began
-  if (ahead > kRingBytes) {                            // rewritten before it was looked at
+  addSpan(base, chunk.ring, static_cast<uint32_t>(chunk.length));
+  if (!ringIntact(chunk.ring)) {                       // rewritten before it was looked at
     if (trig_phase_ == 1) trig_overrun_ = true;
     have_level_ = false;
     ++overruns_;
     return;
   }
-  auto ringByte = [&](uint64_t g) {                    // the ring position of stream byte g (g near base)
-    const int64_t off = static_cast<int64_t>(ring_at) + static_cast<int64_t>(g - base);
-    return static_cast<size_t>(((off % static_cast<int64_t>(kRingBytes)) + kRingBytes) % kRingBytes);
-  };
-  // the stream bytes this chunk adds to the segment: from where it is filled to (a lost chunk's bytes from the ring)
-  uint64_t from = seg_first_sample_ * width_ / 8 + filled_;
   if (trig_phase_ == 0) {
     const uint64_t first = base * 8 / width_;
     uint64_t t = first;
-    if (follow_) {   // the group's trigger, at sample ext_sample_: once it is known and captured
-      if (!ext_ready_) return;
+    if (follow_ || force_) {   // the group's trigger or a force: at its sample, once the stream has come that far
+      if (follow_ && !ext_ready_) return;
       __atomic_thread_fence(__ATOMIC_ACQUIRE);
-      t = ext_sample_;
-      if (t >= (base + chunk.length) * 8 / width_) return;
-    } else if (force_) force_ = false;
-    else if (!findTrigger(chunk.data, chunk.length, first, t)) return;
+      t = follow_ ? ext_sample_ : force_sample_;
+      if (t >= end * 8 / width_) return;
+      force_ = false;
+    } else if (!findTrigger(chunk.data, chunk.length, first, t)) {
+      return;
+    }
     uint64_t s0 = t > pre() ? t - pre() : 0;   // fewer before it than the pretrigger: the segment is short (§3.3)
-    // not before the oldest byte the ring still holds (with a margin for the DMA running on)
-    const uint64_t newest = base + ahead;
-    const uint64_t oldest = newest > kRingBytes - 8192 ? newest - (kRingBytes - 8192) : 0;
+    const uint64_t oldest = oldestKept();      // not before the oldest byte the ring still holds in order
     if (s0 * width_ / 8 < oldest) s0 = (oldest * 8 + width_ - 1) / width_;
     seg_first_sample_ = s0;
     trigger_index_ = t >= s0 ? static_cast<uint32_t>(t - s0) : 0xFFFFFFFFu;   // before the ring's oldest: gone
@@ -314,25 +318,116 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
     seg_shift_ = static_cast<uint8_t>(width_ < 8 ? s0 % (8 / width_) * width_ : 0);
     seg_raw_ = static_cast<uint32_t>((seg_shift_ + static_cast<uint64_t>(seg_samples_) * width_ + 7) / 8);
     seg_aligned_ = false;
-    from = s0 * width_ / 8;
     filled_ = 0;
     trig_phase_ = 1;
+    const uint64_t from = s0 * width_ / 8;
+    if (from < base) {   // the part before this chunk, through the map
+      const uint64_t to = from + seg_raw_ < base ? from + seg_raw_ : base;
+      if (!copyStream(from, to)) trig_overrun_ = true;
+    }
   }
-  for (uint64_t g = from; g < base + chunk.length && filled_ < seg_raw_; ) {   // copy in runs up to the ring's end
-    const size_t r = ringByte(g);
-    size_t n = kRingBytes - r;
-    if (n > base + chunk.length - g) n = static_cast<size_t>(base + chunk.length - g);
+  // this chunk's part of the segment (chunks lost to the queue just before it through the map)
+  uint64_t next = seg_first_sample_ * width_ / 8 + filled_;
+  if (next < base && filled_ < seg_raw_ && !trig_overrun_) {
+    const uint64_t to = next + (seg_raw_ - filled_) < base ? next + (seg_raw_ - filled_) : base;
+    if (!copyStream(next, to)) trig_overrun_ = true;
+    next = seg_first_sample_ * width_ / 8 + filled_;
+  }
+  if (next >= base && next < end && filled_ < seg_raw_) {
+    size_t n = static_cast<size_t>(end - next);
     if (n > seg_raw_ - filled_) n = seg_raw_ - filled_;
-    memcpy(buffer_ + filled_, ring_ + r, n);
-    filled_ += n;
-    g += n;
+    memcpy(buffer_ + filled_, chunk.data + (next - base), n);
+    filled_ += static_cast<uint32_t>(n);
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(next - base))) trig_overrun_ = true;   // rewritten while we copied
   }
-  if (produced_ - static_cast<uint32_t>(from) > kRingBytes) trig_overrun_ = true;   // rewritten while we copied
   if (filled_ >= seg_raw_) {
     alignSegment(filled_);
     trig_phase_ = 2;
     done_ = true;
   }
+}
+
+// Chunks lost to the queue (`length` stream bytes from `stream`, the next chunk at ring position `next_ring`): their
+// bytes lie between the last chunk's and the next one's in the ring, with the DMA's skip after an early close in
+// between when one fell there - at a multiple of kSegmentBytes of the stream (eof_data_len). Mapped when that is
+// where they can only be; otherwise unmapped (a segment that needs them has a hole).
+void LogicCapture::mapLost(uint64_t stream, uint32_t length, uint32_t next_ring) {
+  if (span_count_) {
+    const Span &last = spans_[(span_count_ - 1) % kSpans];
+    if (last.ring != kUnmapped && last.stream + last.length == stream) {
+      const uint32_t at = last.ring + last.length;
+      const uint32_t skipped = next_ring - at - length;   // what the DMA left out between them
+      const uint64_t b = (stream / kSegmentBytes + 1) * kSegmentBytes;   // the first early close after `stream`
+      if (skipped == 0) {
+        addSpan(stream, at, length);
+        return;
+      }
+      if (skipped != 0 && skipped < kDmaAhead && b <= stream + length && b + kSegmentBytes > stream + length) {
+        const uint32_t before = static_cast<uint32_t>(b - stream);
+        addSpan(stream, at, before);
+        addSpan(b, next_ring - (length - before), length - before);
+        return;
+      }
+    }
+  }
+  addSpan(stream, kUnmapped, length);
+}
+
+void LogicCapture::addSpan(uint64_t stream, uint32_t ring, uint32_t length) {
+  if (!length) return;
+  spans_[span_count_ % kSpans] = {stream, ring, length};
+  ++span_count_;
+}
+
+// The oldest stream byte from which the recent chunks are all mapped and still in the ring, up to the newest's end.
+uint64_t LogicCapture::oldestKept() const {
+  if (!span_count_) return 0;
+  const uint32_t n = span_count_ < kSpans ? span_count_ : static_cast<uint32_t>(kSpans);
+  const Span &newest = spans_[(span_count_ - 1) % kSpans];
+  uint64_t oldest = newest.stream + newest.length;
+  for (uint32_t k = 0; k < n; ++k) {
+    const Span &sp = spans_[(span_count_ - 1 - k) % kSpans];
+    if (sp.ring == kUnmapped || sp.stream + sp.length != oldest) break;
+    if (!ringIntact(sp.ring)) {   // its first bytes rewritten already: from the first one that is not
+      const uint32_t gone = ring_end_ + kDmaAhead - kRingBytes - sp.ring;
+      if (gone < sp.length) oldest = sp.stream + gone;
+      break;
+    }
+    oldest = sp.stream;
+  }
+  return oldest;
+}
+
+// Stream bytes [from, to) - in the mapped recent chunks - appended to the segment (buffer_ at filled_). false: some of
+// them are not mapped, or the DMA came round over them before or while they were copied.
+bool LogicCapture::copyStream(uint64_t from, uint64_t to) {
+  const uint32_t n = span_count_ < kSpans ? span_count_ : static_cast<uint32_t>(kSpans);
+  uint32_t k = 0;   // the span holding `from`, counted back from the newest
+  while (k < n) {
+    const Span &sp = spans_[(span_count_ - 1 - k) % kSpans];
+    if (sp.stream <= from && from < sp.stream + sp.length) break;
+    ++k;
+  }
+  if (k == n) return false;
+  bool ok = true;
+  uint32_t first_ring = 0;
+  for (uint64_t g = from; g < to; ) {
+    if (k == UINT32_MAX) return false;   // past the newest span
+    const Span &sp = spans_[(span_count_ - 1 - k) % kSpans];
+    if (sp.ring == kUnmapped || g < sp.stream || g >= sp.stream + sp.length) return false;
+    const uint32_t q = sp.ring + static_cast<uint32_t>(g - sp.stream);
+    if (g == from) first_ring = q;
+    const size_t r = q & (kRingBytes - 1);
+    size_t m = kRingBytes - r;
+    if (m > sp.stream + sp.length - g) m = static_cast<size_t>(sp.stream + sp.length - g);
+    if (m > to - g) m = static_cast<size_t>(to - g);
+    memcpy(buffer_ + filled_, ring_ + r, m);
+    filled_ += static_cast<uint32_t>(m);
+    g += m;
+    if (g == sp.stream + sp.length) k = k ? k - 1 : UINT32_MAX;
+  }
+  if (!ringIntact(first_ring)) ok = false;   // the oldest copied byte last: the DMA only comes round from there
+  return ok;
 }
 
 // The segment's first `raw` bytes copied from the ring moved down by seg_shift_ bits, so that its first sample is at bit
@@ -361,6 +456,7 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   lost_ = false;
   lost_pos_ = 0;
   error_ = cap::kErrorPeripheral;
+  force_sample_ = 0;
   force_ = trig_type_ == cap::kTriggerImmediate && !follow_;   // a ring left by following: start at once
   filled_ = fill_ = 0;
   seg_shift_ = 0;
@@ -371,6 +467,8 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   reported_trigger_ = follow_ || trig_type_ == cap::kTriggerImmediate;
   done_ = false;
   produced_ = queue_overflow_ = overruns_ = 0;
+  ring_end_ = 0;
+  span_count_ = 0;
   captured_ = 0;
   if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
@@ -580,6 +678,7 @@ void LogicCapture::forget() {
   overruns_ = 0;
   stage_drops_ = 0;
   produced_ = 0;
+  ring_end_ = 0;
   captured_ = 0;
   dropped_ = 0;
   sent_seg_ = sent_off_ = reported_ = 0;
@@ -945,6 +1044,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   error_ = cap::kErrorPeripheral;
   carry_ = false;
   produced_ = 0;
+  ring_end_ = 0;
   sent_seg_ = 0;
   sent_off_ = 0;
   captured_ = dropped_ = 0;
@@ -1005,8 +1105,16 @@ void LogicCapture::trackTriggerAt(uint64_t ns) {
   ext_ready_ = true;
 }
 
+// The trigger's time once found - a force's at once (its sample is the instant's, force_sample_): the followers learn it
+// without waiting a DMA chunk for the harvest to take it.
 bool LogicCapture::trackTriggerNs(uint64_t &ns) const {
-  if (!triggered_ || follow_ || trig_phase_ < 1) return false;
+  if (!triggered_ || follow_) return false;
+  if (trig_phase_ < 1 && force_) {
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    ns = start_ns_ + nsOf(force_sample_);
+    return true;
+  }
+  if (trig_phase_ < 1) return false;
   __atomic_thread_fence(__ATOMIC_ACQUIRE);
   ns = start_ns_ + nsOf(seg_first_sample_ + trigger_index_);
   return true;
@@ -1392,8 +1500,13 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (!serialBefore(serial, released)) released_ = serialBefore(serial, done) ? serial + 1 : done;
       return completed();
     }
-    case kOpForce:   // waiting for the trigger: start now (the next chunk); otherwise nothing to do
-      if (state_ == kStateWaiting && trig_phase_ == 0) force_ = true;
+    case kOpForce:   // waiting for the trigger: the trigger is the sample of this instant; otherwise nothing to do
+      if (state_ == kStateWaiting && trig_phase_ == 0 && !force_) {
+        const uint64_t now = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
+        force_sample_ = samplesIn(now > start_ns_ ? now - start_ns_ : 0, rate_num_, rate_den_);
+        __atomic_thread_fence(__ATOMIC_RELEASE);   // the harvest task (the other core) reads it once force_ is set
+        force_ = true;
+      }
       return completed();
     default:
       return rejected(kRejectUnknownOperation);

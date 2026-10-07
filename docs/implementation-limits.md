@@ -35,5 +35,6 @@ advertising over mDNS is the TCP probe's choice (transports §3; this one advert
 §1.7 (oep-spec 0098b56..78fb561): the capture's pretrigger limits by board (ESP32-P4 logic declares 523263 at w = 1, less
 for wider samples, up to samples - 1; the ESP32 analog keeps 129 short of samples), a capture-group follower without a
 pretrigger (only a non-immediate trigger may have one), segment serials wrapping (255 infos kept), a segment that lost
-data inside never handed out (the track stops in state 6, stopped reason 3, error 2, write_pos at its start), copied
+data inside never handed out (the track stops in state 6, stopped reason 3, error 2, write_pos at its start), the
+P4's force at the sample of its instant, copied
 streaming sending finished segments only, and spi-target's bits at most length x 8 with no ns TLV.
