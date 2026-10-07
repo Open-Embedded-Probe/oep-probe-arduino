@@ -20,8 +20,11 @@ constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
 portMUX_TYPE gMux = portMUX_INITIALIZER_UNLOCKED;
 constexpr int kRisePolls = 1000;   // a read frame's polls of GPIO.in for the line to come back high, all bits together
 // Before a frame: the wire taken (held until loop() comes round; waited for while a sampler window is exclusive), then
-// the frame announced - the sampler stops reading GPIO.in until frameEnd(), right after its last GPIO access (before the
-// gap after it) (OepWireGate.h).
+// the frame announced - the sampler stops reading GPIO.in until frameEnd(), right after its last GPIO access (before
+// the gap after it) (OepWireGate.h). Interrupts go off a few instructions after the announcement is acknowledged and
+// come back on only after frameEnd(): the sampler waits for the frame alone, not for an interrupt or a task (the Wi-Fi
+// driver's, above loop()'s priority) that took this core in between - frameEnd() after portEXIT_CRITICAL let a pending
+// interrupt run first, and the sampler waited it out too.
 inline void IRAM_ATTR waitWire() {
   gWireGate.hold();
   gWireGate.frameBegin();
@@ -70,16 +73,16 @@ inline int IRAM_ATTR readBit(uint32_t m, int &rise_polls) {
 void IRAM_ATTR writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
   waitWire();
   const uint32_t m = gMask;
+  portENTER_CRITICAL(&gMux);
   high(m);
   outputOn(m);
-  portENTER_CRITICAL(&gMux);
   sendOne(m);
   for (uint8_t mask = 0x40; mask; mask >>= 1) (address & mask) ? sendOne(m) : sendZero(m);
   sendOne(m);
   for (uint32_t mask = 0x80000000u; mask; mask >>= 1) (value & mask) ? sendOne(m) : sendZero(m);
   if (free_after) outputOff(m);
-  portEXIT_CRITICAL(&gMux);
   gWireGate.frameEnd();
+  portEXIT_CRITICAL(&gMux);
   delayMicroseconds(8);   // E135: LinkE frame gap median 6.7 us
 }
 
@@ -124,11 +127,11 @@ bool SwioPhy::usePins(int swdio, int swclk) {
 bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   waitWire();
   const uint32_t m = gMask;
-  high(m);
-  outputOn(m);
   uint32_t result = 0;
   int rise_polls = kRisePolls;
   portENTER_CRITICAL(&gMux);
+  high(m);
+  outputOn(m);
   sendOne(m);
   for (uint8_t mask = 0x40; mask; mask >>= 1) (address & mask) ? sendOne(m) : sendZero(m);
   sendZero(m);
@@ -137,8 +140,8 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
     const int decoded = readBit(m, rise_polls);
     if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
       outputOff(m);
-      portEXIT_CRITICAL(&gMux);
       gWireGate.frameEnd();
+      portEXIT_CRITICAL(&gMux);
       rest_free_ = true;
       delayMicroseconds(8);
       return false;
@@ -149,8 +152,8 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   if (outcome == DmiPhy::kAnswered) rest_free_ = false;
   else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;   // a DMSTATUS of all ones: the line, no module
   if (rest_free_) outputOff(m);
-  portEXIT_CRITICAL(&gMux);
   gWireGate.frameEnd();
+  portEXIT_CRITICAL(&gMux);
   delayMicroseconds(8);
   value = result;
   return true;

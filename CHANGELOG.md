@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32, SWIO frames: interrupts go off a few instructions after the sampler acknowledges a frame's
+  announcement and come back on after frameEnd() (it came after portEXIT_CRITICAL, and the GPIO set-up before
+  portENTER_CRITICAL): a sampler stopped for a frame waits for the frame alone (a read about 60 us), not also for an
+  interrupt pending at the frame's end or a task it wakes - the Wi-Fi driver's, above loop()'s priority, when the radio
+  is on. docs/implementation-limits §4.1 also declares that a triggered capture may carry slipped when a host request
+  or the console's reads use the wire in its search (the data is right, the delay flagged). Not run on hardware
+- (JA) classic ESP32 の SWIO のフレーム: sampler がフレームの合図を受けた数命令後に割り込みを止め、frameEnd() の後で戻します（以前は
+  portEXIT_CRITICAL の後に frameEnd、portENTER_CRITICAL の前に GPIO の準備）。フレームで止まった sampler が待つのはフレーム（読み約
+  60 µs）だけで、フレームの終わりに溜まっていた割り込みやそれが起こす task（radio が点いていれば、loop() より優先度の高い Wi-Fi の
+  driver）の分は待ちません。docs/implementation-limits §4.1 に、探索の中で host の要求やコンソールの読みが線を使えばトリガのキャプチャに
+  slipped が立ちうることを宣言（データは正しく、遅れを示す）。実機では未確認
 - (EN) Classic ESP32: an at-boot slot's attach, its retries and its liveness checks (a DMSTATUS read every retry_ms,
   probe.config §3), and the console's re-attach after the target reset itself, wait while a logic sampler's window is
   open (DmiPhy::wirePaused; SwioPhy: the gate's window, immediate or a trigger search) and run at the first poll after;
