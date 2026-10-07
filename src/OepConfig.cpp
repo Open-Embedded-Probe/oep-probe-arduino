@@ -385,11 +385,11 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
       if (!pins_->allowed(getU16(v))) return unsupportedTag(out, capacity, raw);   // not declared: as idle
       return completed();
     case kWifiItemTag: {
-      // index below wifi_max; the passphrase none, 8-63 printable ASCII or 64 hex digits (else malformed); an SSID
-      // with a 0x00 byte this probe cannot join (unsupported)
+      // index below wifi_max (else unsupported with the tag as received); the passphrase none, 8-63 printable ASCII
+      // or 64 hex digits (else malformed); an SSID with a 0x00 byte this probe cannot join (unsupported)
       const uint8_t index = v[0], ssid_length = v[1], pass_length = v[2 + ssid_length];
       const uint8_t *pass = v + 3 + ssid_length;
-      if (index >= kMaxWifi) return rejected(kRejectMalformed);
+      if (index >= kMaxWifi) return unsupportedTag(out, capacity, raw);
       if (pass_length == 64) {
         for (uint8_t k = 0; k < 64; ++k)
           if (!isxdigit(pass[k])) return rejected(kRejectMalformed);
@@ -715,8 +715,8 @@ Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, siz
   return commit(candidate, clen, plan_fns, plan_fn_count, out, capacity, plan_raw);
 }
 
-// unset: n(u8), n x (len(u8), tag(u8), key) - len counts the tag and the key, whose length is the tag's (probe.config
-// §2: plan fn(u16), slot and bind u8, the others u16; another len is malformed). A key that is not there does nothing;
+// unset: n(u8), n x (len(u8), tag(u8), key) - len is the key's length, which is the tag's (probe.config §2: plan
+// fn(u16), slot, bind and wifi u8, the others u16; another len is malformed). A key that is not there does nothing;
 // the rest is as set.
 Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 1) return rejected(kRejectMalformed);
@@ -724,14 +724,14 @@ Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, s
   size_t at = 1;
   int undeclared = -1;   // the first key whose tag this probe does not declare
   for (uint8_t i = 0; i < n; ++i) {   // the shape of every key first
-    if (at >= length || at + 1u + payload[at] > length || payload[at] < 1) return rejected(kRejectMalformed);
+    if (at + 1 >= length || at + 2u + payload[at] > length || payload[at] < 1) return rejected(kRejectMalformed);
     // the tag is the item's tag itself (no critical bit here): one this probe does not declare (describe items) is
     // unsupported with the tag as received (§2, core §4.3)
     const uint8_t tag = payload[at + 1];
     const size_t klen = tag == cfg::kTlvItemPlan ? 2 : keyLength(tag);
     if (!klen || !declares(tag)) { if (undeclared < 0) undeclared = tag; }
-    else if (payload[at] != 1u + klen) return rejected(kRejectMalformed);
-    at += 1u + payload[at];
+    else if (payload[at] != klen) return rejected(kRejectMalformed);
+    at += 2u + payload[at];
   }
   Tail tail;
   const Result parsed = tail.parse(payload + at, length - at, out, capacity);
@@ -754,7 +754,7 @@ Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, s
     } else {
       removeItems(candidate, clen, tag, key, keyLength(tag));
     }
-    at += 1u + payload[at];
+    at += 2u + payload[at];
   }
   const Result r = commit(candidate, clen, plan_fns, plan_fn_count, out, capacity);
   if (refused(r)) return r;
@@ -1018,7 +1018,7 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {   // declarations 
   for (uint8_t tag : kItems) if (declares(tag)) items[n++] = tag;   // label, idle and disable need the pins, slot slots
   w.put(cfg::kTlvDescribeItems, items, n);
   w.u8(cfg::kTlvDescribeSlotsMax, place_count_ ? static_cast<uint8_t>(kMaxSlots) : 0);
-  if (wifi_) w.u8(kWifiDescribeMax, static_cast<uint8_t>(kMaxWifi));   // proposed: wifi_max
+  if (wifi_) w.u8(kWifiDescribeMax, static_cast<uint8_t>(kMaxWifi));   // wifi_max (probe.config §4)
   return w.ok() ? w.length() : 0;
 }
 
@@ -1074,14 +1074,16 @@ Result ProbeConfig::state(const uint8_t *payload, size_t length, uint8_t *out, s
   }
   out[binds_at] = n;
   out[0] = more ? 1 : 0;
-  if (wifi_) {   // proposed state TLV 0x01 wifi: state(u8) entry(u8, 0xFF none) reason(u8) rssi(i8) ipv4(4, 0 without one)
+  if (wifi_) {   // state TLV 0x01 wifi: state(u8) entry(u8, 0xFF none) reason(u8) rssi(i8) ipv4(4); rssi, ipv4 0 unless state 2
     const WifiControl::Status st = wifi_->status();
+    const bool up = st.state == WifiControl::kStateConnected;
     putTlvHeader(out + used, kWifiStateTlv, 8);
     out[used + kTlvHeader] = st.state;
     out[used + kTlvHeader + 1] = st.entry;
     out[used + kTlvHeader + 2] = st.reason;
-    out[used + kTlvHeader + 3] = static_cast<uint8_t>(st.rssi);
-    memcpy(out + used + kTlvHeader + 4, st.ipv4, 4);
+    out[used + kTlvHeader + 3] = up ? static_cast<uint8_t>(st.rssi) : 0;
+    if (up) memcpy(out + used + kTlvHeader + 4, st.ipv4, 4);
+    else memset(out + used + kTlvHeader + 4, 0, 4);
     used += kWifiTlv;
   }
   return completed(used);

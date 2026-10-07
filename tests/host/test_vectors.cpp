@@ -544,6 +544,14 @@ class NullUartStream final : public Stream {   // nothing on the fixture UART's 
 
 constexpr uint32_t kS = 0x11223344;
 
+// The radio behind probe.config's wifi item (the cases whose state says "items has wifi"): takes the list, reports st.
+struct VecWifi final : WifiControl {
+  Status st;
+  size_t count = 0;
+  void apply(const WifiEntry *, size_t n) override { count = n; }
+  Status status() const override { return st; }
+};
+
 struct OpsProbe {
   MemStream uart_bridge, bulk;
   uint8_t rx[2200], rx2[2200], tx[1100];
@@ -564,6 +572,10 @@ struct OpsProbe {
   Binds binds;
   ProbeConfig config{ep, binds};
   LogicCapture logic{ep, pins};
+  VecWifi wifi;
+  // The wifi cases' hashes are the probe's own (probe.config §2): the vectors write 0x5A5A0001 for the settings with
+  // wifi entry 0 and 0x5A5A0002 for the empty ones; these are what this probe answered for them.
+  uint32_t hash_entry = 0, hash_empty = 0;
   uint16_t corr = 1;
   uint32_t actual_samples = 0;   // the logic configure's answer
   bool no_open = false;          // the case's state has the lock free: the vector's session is not opened
@@ -599,6 +611,11 @@ struct OpsProbe {
     return send(m);
   }
   bool ok(const Bytes &a) const { return a.size() >= 5 && a[3] == kResolutionCompleted && a[4] == kOutcomeSuccess; }
+  // get's hash (lock-free, no session): the probe's hash of its settings now
+  uint32_t hash() {
+    const Bytes a = request(8, reg::probe_config::kOpGet, {0, 0}, 0);
+    return ok(a) && a.size() >= 10 ? getU32(&a[6]) : 0;
+  }
   bool open() { return ok(request(0, kOpOpen, {0xd0, 0x07, 0, 0, 0})); }   // session S, lease 2000 ms
   bool plan(uint16_t fn, uint8_t role, uint16_t channel) {
     return ok(request(ep.planFn(), kOpPlanApply,
@@ -679,6 +696,27 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     if (has("5 bytes written")) p.say("hello");
     return true;
   }
+  if (has("items has wifi")) {   // wifi_max 4; settings "as above": entry 0 "lab", passphrase "password1"
+    p.config.setWifi(&p.wifi);
+    p.hash_empty = p.hash();
+    if (has("connected through entry 0")) {   // -52 dBm, 192.168.1.23
+      p.wifi.st.state = WifiControl::kStateConnected;
+      p.wifi.st.entry = 0;
+      p.wifi.st.rssi = -52;
+      const uint8_t ip[4] = {192, 168, 1, 23};
+      memcpy(p.wifi.st.ipv4, ip, 4);
+      return true;
+    }
+    if (!p.open()) return false;
+    if (has("settings: the wifi entry") || has("settings as above")) {
+      const Bytes item = {reg::probe_config::kTlvItemWifi, 15, 0, 0, 3, 'l', 'a', 'b', 9,
+                          'p', 'a', 's', 's', 'w', 'o', 'r', 'd', '1'};
+      if (!p.ok(p.request(8, reg::probe_config::kOpSet, item))) return false;
+      p.hash_entry = p.hash();
+      return p.wifi.count == 1 && p.hash_entry != p.hash_empty;
+    }
+    return true;
+  }
   if (has("probe.config state")) {
     // slot 0 at boot on the rvswd wire (fn 4), pins 1 / 2, 1 MHz, dmseq console; port 0 bound to its console; set at
     // 1 ms, so the automatic attach is tried then
@@ -755,6 +793,17 @@ static void testOps(const char *file, const char *list) {
     Bytes want = hex(c["answer_hex"].string);
     OpsProbe::restarts = 0;
     Bytes got = p.send(req);
+    if (c["state"].string.find("items has wifi") != std::string::npos) {
+      // the placeholders 0x5A5A0001 (entry 0 set) / 0x5A5A0002 (empty) -> this probe's hashes; a set that made
+      // entry 0 has it now
+      if (!p.hash_entry && name.find("set: wifi entry 0") != std::string::npos) p.hash_entry = p.hash();
+      CHECK(!p.hash_entry || p.hash_entry != p.hash_empty);
+      for (size_t i = 5; i + 4 <= want.size(); ++i)
+        if (want[i + 1] == 0 && want[i + 2] == 0x5a && want[i + 3] == 0x5a && (want[i] == 1 || want[i] == 2)) {
+          putU32(&want[i], want[i] == 1 ? p.hash_entry : p.hash_empty);
+          i += 3;
+        }
+    }
     if (names(c["fns"], "oep.probe.restart"))   // the restart follows its success answer only (oep-if-restart §2)
       CHECK(OpsProbe::restarts == (name.find("completed success") != std::string::npos ? 1 : 0));
     if (name.find("logic segments") != std::string::npos && want.size() == 5 + 2 + 37 && got.size() == want.size()) {

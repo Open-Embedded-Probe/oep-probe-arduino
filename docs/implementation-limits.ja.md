@@ -7,7 +7,7 @@
 別の値を選んでよく、host はここの値に頼らない（仕様の待ちと宣言だけに頼る）。
 
 2026-10-07 の仕様の規則の見直し（oep-spec の `docs/v1-rule-review-2026-10-07.ja.md` §2、§4）で、仕様から外れて実装の値になったものを
-ここに移した。firmware は oep-spec 0f455a0 の規則に沿う（0.0.29 の開発版から）。その後の外部の見直しの再確認（2026-10-07）の変更も含めて、今は oep-spec f8bb2de に沿う。見直しで外した動き（boot_reset など）の記録は §2.6。
+ここに移した。firmware は oep-spec 0f455a0 の規則に沿う（0.0.29 の開発版から）。その後の外部の見直しの再確認（2026-10-07）の変更も含めて、今は oep-spec 62c1988（wifi の項目と TCP の見つけ方を含む）に沿う。見直しで外した動き（boot_reset など）の記録は §2.6。
 TCP と Wi-Fi（port、mDNS、Wi-Fi の設定の提案、測った値）は §6。
 
 ## 1. どの platform にも共通
@@ -230,7 +230,8 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
 
 ## 6. TCP と Wi-Fi（classic ESP32）
 
-OEP を TCP で運ぶ（oep-spec transports §1、§2、§3）。待ち受ける port と、host が probe を見つける方法は仕様の外なので、ここに書く。
+OEP を TCP で運ぶ（oep-spec transports §1、§2、§3）。待ち受ける port は probe が決める（この実装の値をここに書く）。見つけ方（DNS-SD の
+`_oep._tcp`、TXT `unit_id`）は transports §3、Wi-Fi の項目は probe.config §1.4 が定める。
 TCP は信頼できる手元のネットワークか、認証したトンネルの中でだけ使う（OEP は認証を持たない、transports §1、security §1）。
 
 ### 6.1 経路
@@ -252,32 +253,32 @@ TCP は信頼できる手元のネットワークか、認証したトンネル�
   新しい接続の confirm が答えるまで ATOM で 5.5〜6.9 s（10 回、2026-10-07）。その倍。設定の前の方の entry が見えて断られると、1 つあたり
   最長 15 s 延びる（§6.3）。
 
-### 6.2 見つけ方（mDNS）
+### 6.2 見つけ方（mDNS、transports §3）
 
 - host 名 `oep-<unit_id>.local`、service `_oep._tcp`（port 7450）、instance 名 `OEP <unit_id>`、TXT `unit_id=<unit_id>`。
   host は名指した unit_id の probe を、ほかの経路と同じく describe の unit_id で確かめる。
 - アドレスは、ほかの経路（シリアルの口）から probe.config の state の wifi の TLV（§6.3）でも分かる。
 
-### 6.3 Wi-Fi の設定（probe.config の wifi の項目、提案）
+### 6.3 Wi-Fi の設定（probe.config の wifi の項目、probe.config §1.4）
 
-ビルドに認証情報は入れない。どのネットワークに入るかは probe の設定で、ほかの項目と同じく set / save / unset する。この項目は
-**まだ仕様に無い**（oep-spec に提案中）。この実装は次の形で持ち、仕様に入ったら番号を合わせる（`src/OepConfig.h` の `kWifi*`）。
+ビルドに認証情報は入れない。どのネットワークに入るかは probe の設定で、ほかの項目と同じく set / save / unset する。項目の形と規則は
+oep-spec の probe.config §1.4、§3.3、§4（c2b8007 から）。この実装の値と動きは次のとおり。
 
 | 何 | 値 |
 |---|---|
 | 項目 0x08 wifi | index(u8)、ssid_len(u8)、ssid、pass_len(u8)、passphrase。キーは index |
 | describe 0x46 wifi_max | u8: entry の数の上限（この実装は 4） |
-| state の TLV 0x01 wifi | state(u8: 0 切、1 接続中、2 接続、3 どれも失敗して待ち)、entry(u8: 使っている / 試している index、0xFF なし)、reason(u8: 0 なし、1 見つからない、2 認証、3 アドレスが来ない、4 そのほか)、rssi(i8、dBm、接続の間)、ipv4(4 byte、接続の間) |
+| state の TLV 0x01 wifi | state(u8: 0 切、1 接続中、2 接続、3 どれも失敗して待ち)、entry(u8: 使っている / 試している index、0xFF なし)、reason(u8: 0 なし、1 見つからない、2 認証、3 アドレスが来ない、4 そのほか)、rssi(i8、dBm)、ipv4(4 byte)。rssi と ipv4 は state 2 のときだけ、ほかは 0 |
 
 - ssid は 1〜32 byte（0x00 を含むものは unsupported）。passphrase は無し（pass_len 0、開いたネットワーク）、8〜63 byte の 0x20〜0x7E、
-  または 16 進の 64 文字。ほかは malformed。index は wifi_max 未満。
+  または 16 進の 64 文字。ほかは malformed。index は wifi_max 未満（ほかは unsupported、受け取ったままの項目の tag）。
 - **passphrase は書くだけ**: get は passphrase を返さない（pass_len は、あれば 0xFF、無ければ 0、後ろに何も付けない）。set の pass_len 0xFF は
   「その index の今の passphrase のまま」（その index が無ければ malformed）: get の形をそのまま送り返しても変わらない。hash は passphrase の
   byte を含まず、passphrase が変わるたびに変わる乱数を含む（ロックなしの get から passphrase を推せないため）。state にも出ない。
 - 保存は NVS（ほかの設定と同じ、暗号化しない）。flash を読める人には読める。
 - 動き: set か起動時の適用の 300 ms 後（set の応答が先に出る）に、scan（1 channel 120 ms）。scan で見えた entry を index の順に試す
   （1 つも見えなければ全部を順に。隠した SSID のため）。1 つあたり最長 15 s。最初に IPv4 のアドレスが来たものを使う。全部だめなら 5 s 待って
-  scan からやり直す。つながった後に切れたら、すぐ scan からやり直す。使っている entry が変わらない set では切らない。entry が 0 個なら
+  scan からやり直す。つながった後に切れたら、すぐ scan からやり直す。使っている entry を変えるか消す set / unset は、応答を送ってから（300 ms 後）切って初めからやり直す。使っている entry が変わらない set では切らない（新しい並びは次にやり直すときに使う）。つながっていない間（scan、試している、待っている）の変更は、300 ms 後に初めからやり直す。entry が 0 個なら
   radio を止める。modem sleep は切る（要求が次の beacon まで待たされないように）。Wi-Fi の driver 自身の保存は使わない。
 - 失敗の reason は driver の理由を丸めたもの。passphrase も SSID もログに出さない（UART は OEP の経路でログを出さない、probe guide §3）。
 

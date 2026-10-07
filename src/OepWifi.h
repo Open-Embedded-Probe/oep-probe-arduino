@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Wi-Fi for OEP over TCP on an ESP32 with its own radio: joins the networks of oep.probe.config's wifi item (proposed
-// item 0x08, OepConfig.h), listens on one TCP port (OepTcp.h) and announces it by mDNS. Header-only: only a sketch that
+// Wi-Fi for OEP over TCP on an ESP32 with its own radio: joins the networks of oep.probe.config's wifi item (item 0x08,
+// probe.config §1.4, OepConfig.h), listens on one TCP port (OepTcp.h) and announces it by mDNS. Header-only: only a sketch that
 // includes it links the Wi-Fi stack.
 //
 //   static oep::TcpListener<3> tcp;
@@ -18,7 +18,7 @@
 // effect kApplyDelayMs later (the answer to the set that changed it goes out first, also on that link). An empty list
 // turns the radio off.
 //
-// Discovery (outside the specification, transports §1): mDNS host name "oep-<unit_id>", service _oep._tcp on the
+// Discovery (transports §3): DNS-SD over mDNS, host name "oep-<unit_id>", service _oep._tcp on the
 // listener's port, instance name "OEP <unit_id>", TXT unit_id=<unit_id>. Nothing about the networks is logged: the
 // probe's UART carries OEP and no log (probe guide §3), and a passphrase never leaves the probe.
 #pragma once
@@ -241,7 +241,7 @@ class WifiStation final : public WifiControl {
     lost_ = false;
     if (tried_ >= tries_) {   // every entry failed: wait, then scan again
       phase_ = kWaiting;
-      state_ = kStateFailed;
+      state_ = kStateWaiting;
       since_ = millis();
       return;
     }

@@ -193,8 +193,8 @@ same port. `06.Settings/ProbeConfig` explains each item.
 ## 6. Over Wi-Fi (classic ESP32)
 
 The classic ESP32 firmware also speaks OEP over TCP on port 7450, up to three connections at once, once it is on a
-network. The networks are a setting, not part of the build: oep.probe.config's wifi item (item 0x08, a proposal not yet in
-the specification; layout in [implementation limits §6.3](../implementation-limits.ja.md)) holds up to four entries
+network. The networks are a setting, not part of the build: oep.probe.config's wifi item (item 0x08, oep-spec probe.config §1.4;
+this implementation's values in [implementation limits §6.3](../implementation-limits.ja.md)) holds up to four entries
 (index, SSID, passphrase), tried in index order; set them over the serial port and save. The passphrase is write-only:
 `oep config show` and every answer leave it out. The `oep` command does not know this item yet; until it does, send it
 with oep-client-python's low-level request (`ProbeConfig(host)._call(ProbeConfig.SET, item_bytes)` then save).

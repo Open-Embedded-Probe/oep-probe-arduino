@@ -194,7 +194,7 @@ oep config show /dev/ttyACM0
 ## 6. Wi-Fi で（classic ESP32）
 
 classic ESP32 の firmware は、ネットワークに入ると TCP の port 7450 でも OEP を話します（同時に 3 つの接続まで）。どのネットワークに入るかは
-ビルドではなく設定です: oep.probe.config の wifi の項目（項目 0x08。仕様にはまだ無い提案で、形は [implementation limits §6.3](../implementation-limits.ja.md)）
+ビルドではなく設定です: oep.probe.config の wifi の項目（項目 0x08。oep-spec の probe.config §1.4。この実装の値は [implementation limits §6.3](../implementation-limits.ja.md)）
 に 4 つまでの entry（index、SSID、passphrase）を置き、index の順に試します。シリアルの口から set して save します。passphrase は書くだけで、
 `oep config show` にもどの応答にも出ません。`oep` コマンドはこの項目をまだ知らないので、それまでは oep-client-python の低い層の要求
 （`ProbeConfig(host)._call(ProbeConfig.SET, 項目のバイト)` と save）で送ります。

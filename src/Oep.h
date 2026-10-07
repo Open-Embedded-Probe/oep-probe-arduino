@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// OEP v1 core (oep-spec docs/oep-core.ja.md, f8bb2de): interfaces found by name, the probe described by fn 0 (the core,
+// OEP v1 core (oep-spec docs/oep-core.ja.md, 62c1988): interfaces found by name, the probe described by fn 0 (the core,
 // which has no name and is not listed), a lock held by a host-chosen session id, one clock (ns since boot, u64) and one
 // space of resource numbers. The interfaces' shared parts are in OepStream.h (position streams) and OepDebug.h (wire /
 // target status, pin pairs). Every number comes from the registry (OepRegistry.h, generated from oep-spec

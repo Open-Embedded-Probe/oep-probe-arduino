@@ -1,9 +1,6 @@
 # Changelog / 変更履歴
 
 ## Unreleased
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 - (EN) Follows oep-spec f8bb2de (the external review re-check of 2026-10-07 and what followed it: 0f455a0..f8bb2de; the
   registry header and the test vectors synced, tools/sync_registry.sh with OEP_SPEC_REF=f8bb2de). Interface names are
   1 to 48 bytes (registry interface_name_max_bytes 48; `interfaceName` refuses a 49-byte name); resend_max is gone from

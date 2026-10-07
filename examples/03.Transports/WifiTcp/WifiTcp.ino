@@ -3,10 +3,10 @@
 
 // OEP over TCP on an ESP32 with its own radio (oep-spec docs/oep-transports.ja.md §1): the board's serial port as
 // transport 0 and a TCP listener as transport 1, up to three connections at once - each its own transport, all sharing
-// the one session and lock. No credentials in the build: the networks are oep.probe.config's wifi item (proposed item
-// 0x08, OepConfig.h), set over the serial port and saved like any other setting; the probe joins the first that works.
+// the one session and lock. No credentials in the build: the networks are oep.probe.config's wifi item (item 0x08,
+// probe.config §1.4), set over the serial port and saved like any other setting; the probe joins the first that works.
 //
-// Discovery is outside the specification: this sketch announces _oep._tcp by mDNS (host "oep-<unit_id>", TXT
+// Discovery (transports §3): this sketch announces _oep._tcp by DNS-SD over mDNS (host "oep-<unit_id>", TXT
 // unit_id), and the config state's wifi TLV gives the address (docs/implementation-limits.ja.md). Then on the PC:
 //
 //   oep dump --port tcp://<address>:7450

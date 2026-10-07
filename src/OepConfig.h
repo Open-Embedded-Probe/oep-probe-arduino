@@ -6,7 +6,7 @@
 //
 //   0x01 get(first u16) -> more(u8) hash(u32) items      (no lock)
 //   0x02 set(items) -> hash(u32)      0x03 save -> hash(u32)      0x04 erase
-//   0x05 unset(n u8, n x (len u8, tag u8, key)) -> hash(u32)
+//   0x05 unset(n u8, n x (len u8, tag u8, key; len the key's length)) -> hash(u32)
 //   0x06 state(first_slot u8, first_bind u8) -> more storage_state storage_hash unreadable_reason
 //        n_slots x slot_state n_binds x bind_state                         (no lock)
 //
@@ -24,16 +24,17 @@
 //   0x07 disable channel(u16)                            key channel: never used, driven or configured (not on this
 //                                                        board): every request naming it is unavailable cause 5, and
 //                                                        the pin is never parked; describe still offers it
-//   0x08 wifi  index(u8) ssid_len(u8) ssid pass_len(u8) passphrase   key index (PROPOSED, not yet in oep-spec: the
-//              layout this probe implements until the specification has it, kWifi* below). A network the probe joins
-//              to serve OEP over TCP: entries tried in index order (a scan first: only those seen, unless none is
-//              seen), the first that connects is kept, and the list is tried again after the link goes. ssid 1-32
-//              bytes (no 0x00 here: unsupported); passphrase none (pass_len 0, an open network), 8-63 bytes 0x20-0x7E
-//              or 64 hex digits, else malformed. The passphrase is write-only: get carries pass_len 0xFF and no
-//              passphrase for an entry that has one (0 for none); a set with pass_len 0xFF keeps the passphrase the
-//              entry has (malformed when there is no such entry). The hash never covers the passphrase itself (a
-//              random token that changes when one does). Up to kMaxWifi entries (describe wifi_max 0x46, proposed);
-//              state carries the link (TLV 0x01 wifi, proposed): state(u8) entry(u8) reason(u8) rssi(i8) ipv4(4).
+//   0x08 wifi  index(u8) ssid_len(u8) ssid pass_len(u8) passphrase   key index (probe.config §1.4). A network the
+//              probe joins to serve OEP over TCP: entries tried in index order (a scan first: only those seen, unless
+//              none is seen), the first that connects is kept, and the list is tried again after the link goes. index
+//              below wifi_max (else unsupported with the tag as received); ssid 1-32 bytes (no 0x00 here:
+//              unsupported); passphrase none (pass_len 0, an open network), 8-63 bytes 0x20-0x7E or 64 hex digits,
+//              else malformed. The passphrase is write-only: get carries pass_len 0xFF and no passphrase for an entry
+//              that has one (0 for none); a set with pass_len 0xFF keeps the passphrase the entry has (malformed when
+//              there is no such entry). The hash never covers the passphrase itself (a random token that changes when
+//              one does). Up to kMaxWifi entries (describe wifi_max 0x46); a set / unset that changes or removes the
+//              entry in use drops the link after its answer, other changes keep it (OepWifi.h); state carries the
+//              link (TLV 0x01 wifi): state(u8) entry(u8) reason(u8) rssi(i8) ipv4(4), rssi and ipv4 0 unless state 2.
 // Every item has one form (probe.config §1): a value of any other length is malformed, critical or not. The probe
 // keeps every item's bytes as the host sent them (the critical bit cleared), ordered by tag, then by key compared as
 // numbers - the order get pages them in. The hash is the probe's own: CRC-32 of those bytes (a host never computes it).
@@ -62,11 +63,11 @@ namespace oep {
 
 class Endpoint;
 
-// The wifi item (proposed oep.probe.config item 0x08, above): the numbers this probe uses until the registry has them.
-constexpr uint8_t kWifiItemTag = 0x08;        // item: index(u8) ssid_len(u8) ssid pass_len(u8) passphrase
-constexpr uint8_t kWifiDescribeMax = 0x46;    // describe: wifi_max(u8)
-constexpr uint8_t kWifiStateTlv = 0x01;       // state answer TLV: state(u8) entry(u8) reason(u8) rssi(i8) ipv4(4 bytes)
-constexpr uint8_t kWifiPassHidden = 0xFF;     // get's pass_len for an entry with a passphrase; set: keep it
+// The wifi item (probe.config §1.4): the registry's numbers under this file's names.
+constexpr uint8_t kWifiItemTag = reg::probe_config::kTlvItemWifi;            // index ssid_len ssid pass_len passphrase
+constexpr uint8_t kWifiDescribeMax = reg::probe_config::kTlvDescribeWifiMax; // describe: wifi_max(u8)
+constexpr uint8_t kWifiStateTlv = reg::probe_config::kTlvStateAnswerWifi;    // state: state entry reason rssi ipv4
+constexpr uint8_t kWifiPassHidden = reg::probe_config::kWifiPassLenHidden;   // get: has a passphrase; set: keep it
 
 // One network the probe may join (the wifi item, decoded).
 struct WifiEntry {
@@ -83,9 +84,16 @@ struct WifiEntry {
 // What joins the networks (OepWifi.h on an ESP32): the settings hand it their list, it reports the link.
 class WifiControl {
  public:
-  enum : uint8_t { kStateOff = 0, kStateConnecting = 1, kStateConnected = 2, kStateFailed = 3 };
-  enum : uint8_t { kReasonNone = 0, kReasonNotFound = 1, kReasonAuth = 2, kReasonNoAddress = 3, kReasonOther = 4 };
-  static constexpr uint8_t kNoEntry = 0xFF;
+  enum : uint8_t {
+    kStateOff = reg::probe_config::kWifiStateOff, kStateConnecting = reg::probe_config::kWifiStateConnecting,
+    kStateConnected = reg::probe_config::kWifiStateConnected, kStateWaiting = reg::probe_config::kWifiStateWaiting,
+  };
+  enum : uint8_t {
+    kReasonNone = reg::probe_config::kWifiReasonNone, kReasonNotFound = reg::probe_config::kWifiReasonNotFound,
+    kReasonAuth = reg::probe_config::kWifiReasonAuth, kReasonNoAddress = reg::probe_config::kWifiReasonNoAddress,
+    kReasonOther = reg::probe_config::kWifiReasonOther,
+  };
+  static constexpr uint8_t kNoEntry = reg::probe_config::kWifiEntryNone;
   struct Status {
     uint8_t state = kStateOff, entry = kNoEntry, reason = kReasonNone;
     int8_t rssi = 0;          // dBm while connected (0: not known)

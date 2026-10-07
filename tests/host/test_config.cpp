@@ -273,7 +273,7 @@ int main() {
     CHECK(unavailableWith(set(config, item(slot_raw, other), out), out, reg::core::kUnavailableCauseLimit));
     other[kSlotAttachAt] = cfg::kSlotAttachHost;   // a host slot on that pair: taken
     CHECK(ok(set(config, item(slot_raw, other), out)));
-    const uint8_t unset1[] = {1, 2, cfg::kTlvItemSlot, 1};
+    const uint8_t unset1[] = {1, 1, cfg::kTlvItemSlot, 1};
     out.assign(64, 0);
     CHECK(ok(config.handle(cfg::kOpUnset, unset1, sizeof unset1, out.data(), out.size())));
     port.pin_choice = 0;
@@ -319,13 +319,13 @@ int main() {
   // ---- unset (§2): the key's length is the tag's ----
   {
     out.assign(64, 0);
-    const uint8_t wrong[] = {1, 3, cfg::kTlvItemBind, 0, 0};   // a bind key of 2 bytes
+    const uint8_t wrong[] = {1, 2, cfg::kTlvItemBind, 0, 0};   // a bind key of 2 bytes
     CHECK(malformed(config.handle(cfg::kOpUnset, wrong, sizeof wrong, out.data(), out.size())));
-    const uint8_t undeclared[] = {1, 2, 0x30, 0};
+    const uint8_t undeclared[] = {1, 1, 0x30, 0};
     CHECK(unsupportedWith([&] { Result u = config.handle(cfg::kOpUnset, undeclared, sizeof undeclared, out.data(), out.size());
                                 out.resize(u.length); return u; }(), out, 0x30));
     out.assign(64, 0);
-    const uint8_t nothing[] = {1, 2, cfg::kTlvItemBind, 1};   // no bind on port 1: nothing to do
+    const uint8_t nothing[] = {1, 1, cfg::kTlvItemBind, 1};   // no bind on port 1: nothing to do
     CHECK(ok(config.handle(cfg::kOpUnset, nothing, sizeof nothing, out.data(), out.size())));
   }
 
@@ -581,7 +581,7 @@ int main() {
 #endif
     CHECK(ok(set(cfga, item(cfg::kTlvItemIdle | kTagCritical, {7, 0, cfg::kIdleModeOutputHigh, 0xff}), out)));
     out.assign(64, 0);
-    const uint8_t unset_idle[] = {1, 3, cfg::kTlvItemIdle, 7, 0};
+    const uint8_t unset_idle[] = {1, 2, cfg::kTlvItemIdle, 7, 0};
     CHECK(ok(cfga.handle(cfg::kOpUnset, unset_idle, sizeof unset_idle, out.data(), out.size())));
     const Bytes plan_item = item(cfg::kTlvItemPlan | kTagCritical, {1, 0, reg::fixture_gpio::kRoleLine, 5, 0});
     CHECK(ok(set(cfga, plan_item, out)));
@@ -680,7 +680,7 @@ int main() {
     CHECK(tried(cfg6));
   }
 
-  // ---- the wifi item (proposed item 0x08, OepConfig.h): index ssid_len ssid pass_len passphrase, key index ----
+  // ---- the wifi item (item 0x08, probe.config §1.4): index ssid_len ssid pass_len passphrase, key index ----
   {
     struct FakeWifi final : WifiControl {
       std::vector<WifiEntry> got;
@@ -775,7 +775,10 @@ int main() {
     CHECK(malformed(set(cfg7, item(wraw, wv(2, "x", std::string(64, 'g').c_str())), out)));   // 64, not hex
     CHECK(ok(set(cfg7, item(wraw, wv(2, "x", std::string(64, 'a').c_str())), out)));
     CHECK(malformed(set(cfg7, item(wraw, wv(2, "x", "pass\tword")), out)));             // a control byte
-    CHECK(malformed(set(cfg7, item(wraw, wv(uint8_t(ProbeConfig::kMaxWifi), "x", "")), out)));   // index past wifi_max
+    // index at wifi_max: unsupported with the tag as received (probe.config §1.4), critical or not
+    CHECK(unsupportedWith(set(cfg7, item(wraw, wv(uint8_t(ProbeConfig::kMaxWifi), "x", "")), out), out, wraw));
+    CHECK(unsupportedWith(set(cfg7, item(wraw | kTagCritical, wv(uint8_t(ProbeConfig::kMaxWifi), "x", "")), out), out,
+                          uint8_t(wraw | kTagCritical)));
     CHECK(malformed(set(cfg7, item(wraw, wv(2, std::string(33, 'a').c_str(), "")), out)));      // ssid 33 bytes
     CHECK(malformed(set(cfg7, item(wraw, wv(2, "", "")), out)));                          // ssid empty
     {
@@ -786,7 +789,17 @@ int main() {
       CHECK(unsupportedWith(set(cfg7, item(wraw, v), out), out, wraw));
     }
     CHECK(malformed(set(cfg7, cat(item(wraw, wv(3, "a", "")), item(wraw, wv(3, "b", ""))), out)));   // one key twice
-    // the state: TLV 0x01 wifi state entry reason ipv4
+    // the state: TLV 0x01 wifi state entry reason rssi ipv4; rssi and ipv4 0 unless connected, whatever the radio says
+    fake.st.state = WifiControl::kStateWaiting;
+    fake.st.entry = WifiControl::kNoEntry;
+    fake.st.reason = WifiControl::kReasonAuth;
+    fake.st.rssi = -70;
+    memset(fake.st.ipv4, 7, 4);
+    {
+      const Bytes w = describeTlv(stateOf(cfg7), 9, kWifiStateTlv);
+      CHECK(w == Bytes({3, 0xFF, 2, 0, 0, 0, 0, 0}));
+    }
+    fake.st.reason = WifiControl::kReasonNone;
     fake.st.state = WifiControl::kStateConnected;
     fake.st.entry = 1;
     fake.st.rssi = -61;
@@ -800,7 +813,7 @@ int main() {
             w[7] == 23);
     }
     // unset by index; saved and read back with the passphrases (never shown)
-    const uint8_t unset2[] = {1, 2, kWifiItemTag, 2};
+    const uint8_t unset2[] = {1, 1, kWifiItemTag, 2};
     out.assign(64, 0);
     CHECK(ok(cfg7.handle(cfg::kOpUnset, unset2, sizeof unset2, out.data(), out.size())));
     CHECK(fake.got.size() == 2 && fake.got[1].index == 1);
@@ -826,7 +839,7 @@ int main() {
       CHECK(!leaks(got) && !leaks(st) && hashIn(u32(h)) == uint32_t(st[2] | st[3] << 8 | st[4] << 16 | uint32_t(st[5]) << 24));
     }
     // every item unset: the list empty (Wi-Fi off)
-    const uint8_t unset01[] = {2, 2, kWifiItemTag, 0, 2, kWifiItemTag, 1};
+    const uint8_t unset01[] = {2, 1, kWifiItemTag, 0, 1, kWifiItemTag, 1};
     out.assign(64, 0);
     CHECK(ok(cfg9.handle(cfg::kOpUnset, unset01, sizeof unset01, out.data(), out.size())));
     CHECK(fake9.applied == 2 && fake9.got.empty());
