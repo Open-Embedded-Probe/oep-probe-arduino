@@ -378,7 +378,7 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
   if (segment_count_) fill_slot_ = (fill_slot_ + 1) % segment_count_;
   ++completed_;   // wraps after 0xFFFFFFFF (capture §2.2)
   __atomic_thread_fence(__ATOMIC_RELEASE);
-  if (kept_infos_ < kInfos - 1) ++kept_infos_;   // after completed_: a reader takes this first (keptSerials)
+  if (kept_infos_ < kInfos - 1) kept_infos_ = kept_infos_ + 1;   // after completed_: a reader takes this first (keptSerials)
 }
 
 // Harvest task: the data being gathered has a hole (capture §2.2). The segment being filled - in zero-copy streaming the
@@ -908,7 +908,8 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (capacity < 8) return failed();
   completed_ = released_ = fill_ = queue_overflow_ = overruns_ = stage_drops_ = 0;
-  fill_slot_ = kept_infos_ = 0;
+  fill_slot_ = 0;
+  kept_infos_ = 0;
   lost_ = false;
   lost_pos_ = 0;
   error_ = cap::kErrorPeripheral;
