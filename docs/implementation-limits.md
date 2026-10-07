@@ -20,4 +20,7 @@ wifi item 0x08 (several networks tried in index order, the passphrase write-only
 measurements on the ATOM, and the limits (sampler windows pause the network, ESP32-P4 and RP2040 / RP2350 without Wi-Fi).
 The firmware follows oep-spec 0f455a0 (0.0.29 development builds) and, with the external review re-check of 2026-10-07,
 oep-spec 30b2b36 (with the wifi item, TCP discovery and unset's len as the key's length); §2.6 records what 0f455a0 removed (boot_reset and the rest). §1.6 adds: one max_frame for every transport
-(the describe and max_length fit them all) and frames written whole, never paused inside.
+(the describe and max_length fit them all) and frames written whole, never paused inside; with oep-spec 9118dc0, a probe
+with the wifi item answers max_frame 112 (`wifi_min_max_frame`) or more on every transport - `ProbeConfig::setWifi`
+returns false and leaves the item undeclared below that, and the Wi-Fi sketches static_assert it (512 and 1024) - and
+advertising over mDNS is the TCP probe's choice (transports §3; this one advertises).

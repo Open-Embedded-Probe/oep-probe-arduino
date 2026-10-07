@@ -95,7 +95,10 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   失われることがある。重複も欠落も許されないなら dmseq を使う。
 - **max_frame はどの経路も同じ**: 1 つの `Endpoint` の max_frame / window / max_inflight は、シリアルの口、USB、TCP の接続のすべてで同じ値
   （`Limits`）。describe の TLV と max_length はその値から決めるので、どの経路の max_frame にも収まる（core §7.3、§7.4）。経路ごとに
-  違う max_frame は持たない。
+  違う max_frame は持たない。wifi の項目を持つ probe はどの経路でも max_frame 112（`wifi_min_max_frame`）以上を答える
+  （probe.config §1.4: いちばん長い wifi の項目 1 つの set が 10 + 3 + 3 + 32 + 64 = 112 byte）。`ProbeConfig::setWifi` は
+  `Endpoint` の max_frame が 112 未満なら false を返して wifi の項目を宣言せず、Wi-Fi を持つ sketch（classic ESP32 の firmware の
+  `kMaxFrame` 512、`03.Transports/WifiTcp` の 1024）は static_assert で確かめる。
 - **フレームは途中で止めずに書く**: 応答と通知は 1 つの `poll()` の中で 1 フレームずつ丸ごと書き、フレームの途中でほかの仕事をしない
   （transports §2）。ESP32-P4 の vendor bulk はフレームを丸ごと 1 つのバッファに入れ、入らなければ丸ごと捨てる。止まりうるのは、host が
   読まなくなって経路のバッファが埋まったときだけである。
@@ -258,6 +261,7 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
 
 OEP を TCP で運ぶ（oep-spec transports §1、§2、§3）。待ち受ける port は probe が決める（この実装の値をここに書く）。見つけ方（DNS-SD の
 `_oep._tcp`、TXT `unit_id`）は transports §3、Wi-Fi の項目は probe.config §1.4 が定める。
+TCP の probe が自分を知らせるかは probe が選ぶ（transports §3）。この実装は知らせる。
 TCP は信頼できる手元のネットワークか、認証したトンネルの中でだけ使う（OEP は認証を持たない、transports §1、security §1）。
 
 ### 6.1 経路

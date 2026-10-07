@@ -21,12 +21,16 @@
 static constexpr uint16_t kPort = 7450;
 static constexpr size_t kConnections = 3;
 
+static constexpr uint16_t kMaxFrame = 1024;   // confirm's max_frame on every transport (the UART and each connection)
+// probe.config §1.4: with the wifi item, every transport answers max_frame 112 or more (one set of the longest wifi item)
+static_assert(kMaxFrame >= oep::kWifiMinMaxFrame, "a probe with the wifi item answers max_frame >= wifi_min_max_frame");
 static uint8_t rxBuffer[1100];   // the serial port's encoded frame (a little more than max_frame)
+static_assert(sizeof rxBuffer >= oep::cobsFrameMax(kMaxFrame), "the serial port's encoded candidate");
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 4},
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {kMaxFrame, 4096, 4},
                               oep::Endpoint::kUartBridge);
 static oep::TcpListener<kConnections> tcp;
-static uint8_t rxTcp[kConnections][1024 + 2];   // one frame of max_frame per connection
+static uint8_t rxTcp[kConnections][kMaxFrame + 2];   // one frame of max_frame per connection
 static oep::WifiStation wifi(tcp, kPort);
 static oep::Binds binds;
 static oep::ProbeConfig config(endpoint, binds);   // the wifi item (and save) lives here

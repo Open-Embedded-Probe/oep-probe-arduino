@@ -41,9 +41,11 @@
 // raised the link waits on the bridge's round trip, and a second frame in flight nearly doubles what moves (1500000:
 // 58-65 -> 78 KB/s on an ATOM's FTDI); at 115200 it changes nothing (9.3 -> 9.5 KB/s, no more broken frames) (oep-spec
 // docs/uart-speed-negotiation.ja.md §3b, 2026-10-01).
+static constexpr uint16_t kMaxFrame = 512;   // confirm's max_frame on every transport (UART0 and each TCP connection)
 static uint8_t rxBuffer[1024];   // the encoded candidate: cobsFrameMax(512)
+static_assert(sizeof rxBuffer >= oep::cobsFrameMax(kMaxFrame), "UART0's encoded candidate");
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 1024, 2},
+static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {kMaxFrame, 1024, 2},
                               oep::Endpoint::kUartBridge);
 static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 
@@ -56,8 +58,10 @@ static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 static constexpr uint16_t kTcpPort = 7450;
 static constexpr size_t kTcpConnections = 3;
 static oep::TcpListener<kTcpConnections> tcp;
-static uint8_t rxTcp[kTcpConnections][512 + 2];   // one frame of max_frame each
+static uint8_t rxTcp[kTcpConnections][kMaxFrame + 2];   // one frame of max_frame each
 static oep::WifiStation wifi(tcp, kTcpPort);
+// probe.config §1.4: with the wifi item, every transport answers max_frame 112 or more (one set of the longest wifi item)
+static_assert(kMaxFrame >= oep::kWifiMinMaxFrame, "a probe with the wifi item answers max_frame >= wifi_min_max_frame");
 #endif
 
 // port_speed (oep-if-link §3): the host may raise UART0's baud for its session; every revert goes back to 115200, the

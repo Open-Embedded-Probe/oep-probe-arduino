@@ -1,6 +1,25 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Follow oep-spec 2b17990 .. 9118dc0 (registry and vectors synced with OEP_SPEC_REF=9118dc0). probe.config §1.4:
+  a probe with the wifi item answers max_frame 112 or more on every transport (`wifi_min_max_frame`: one set of the
+  longest wifi item, 10 + 3 + 3 + 32 + 64). Checked: every transport of an `Endpoint` answers its one max_frame; the
+  classic ESP32 firmware (UART0 and each TCP connection) answers 512, 03.Transports/WifiTcp (its UART and each
+  connection) 1024 - both already compliant, now held by a static_assert in each (with the serial port's encoded
+  candidate, cobsFrameMax). `ProbeConfig::setWifi` returns false and leaves the wifi item undeclared on an endpoint
+  below 112 (`Endpoint::maxFrame()`, `oep::kWifiMinMaxFrame`). The new 112-byte wifi set vector passes (its hash
+  placeholder 0x5A5A0003 mapped to the probe's); host test test_config: 111 not declared, 112 declared, the limit is
+  the sum. transports §3: advertising is the TCP probe's choice - this one still advertises `_oep._tcp`.
+  docs/implementation-limits (EN / JA)
+- (JA) oep-spec 2b17990〜9118dc0 に合わせました（registry と vector を OEP_SPEC_REF=9118dc0 で同期）。probe.config §1.4: wifi の
+  項目を持つ probe はどの経路でも max_frame 112 以上を答える（`wifi_min_max_frame`: いちばん長い wifi の項目 1 つの set、
+  10 + 3 + 3 + 32 + 64）。確かめたこと: `Endpoint` のどの経路も 1 つの max_frame を答える。classic ESP32 の firmware（UART0 と
+  TCP の各接続）は 512、03.Transports/WifiTcp（UART と各接続）は 1024 で、どちらも既に守っていた。それぞれに static_assert を
+  置いた（シリアルの口の符号化した候補の大きさ cobsFrameMax も）。`ProbeConfig::setWifi` は max_frame が 112 未満の endpoint では
+  false を返し、wifi の項目を宣言しない（`Endpoint::maxFrame()`、`oep::kWifiMinMaxFrame`）。新しい 112 byte の wifi の set の
+  vector は通る（hash の置き場 0x5A5A0003 はこの probe の hash に置き換える）。host のテスト test_config: 111 なら宣言しない、
+  112 なら宣言する、上限は和に等しい。transports §3: TCP の probe が知らせるかは probe が選ぶ。この probe は今までどおり
+  `_oep._tcp` を知らせる。docs/implementation-limits（EN / JA）
 - (EN) Classic ESP32: a trigger search's turn for the SWIO wire is inside its burst, and the search samples on through it
   (bench, the V003 jig with 8bcecca: reset_probe "no capture for the software reset" - configure at 400 kHz x 130816
   (65408) with a falling-edge trigger accepted, REBOOT sent over the dmseq console during the search, the trigger never

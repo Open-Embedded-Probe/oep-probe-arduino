@@ -67,6 +67,7 @@ class Endpoint;
 constexpr uint8_t kWifiItemTag = reg::probe_config::kTlvItemWifi;            // index ssid_len ssid pass_len passphrase
 constexpr uint8_t kWifiDescribeMax = reg::probe_config::kTlvDescribeWifiMax; // describe: wifi_max(u8)
 constexpr uint8_t kWifiStateTlv = reg::probe_config::kTlvStateAnswerWifi;    // state: state entry reason rssi ipv4
+constexpr uint16_t kWifiMinMaxFrame = reg::kLimitWifiMinMaxFrame;            // max_frame of a probe with the wifi item
 constexpr uint8_t kWifiPassHidden = reg::probe_config::kWifiPassLenHidden;   // get: has a passphrase; set: keep it
 
 // One network the probe may join (the wifi item, decoded).
@@ -125,8 +126,15 @@ class ProbeConfig final : public Interface {
   bool addUart(FixtureUart &uart);
   // The pins whose idle state the idle item sets and the disable item takes away (without it, both are refused).
   void setPins(PinTable *pins) { pins_ = pins; endpoint_.setPins(pins); }   // the endpoint's plan replacements too
-  // The networks the wifi item lists go to `wifi` (before load(); without one the item is not declared).
-  void setWifi(WifiControl *wifi) { wifi_ = wifi; }
+  // The networks the wifi item lists go to `wifi` (before load(); without one the item is not declared). A probe with
+  // the wifi item answers max_frame wifi_min_max_frame (112) or more on every transport - one set of the longest wifi
+  // item is that long (probe.config §1.4); every transport here answers the endpoint's max_frame, and below 112 the
+  // item is not declared and this returns false.
+  bool setWifi(WifiControl *wifi) {
+    if (wifi && endpoint_.maxFrame() < kWifiMinMaxFrame) return false;
+    wifi_ = wifi;
+    return true;
+  }
 
   // Read what was saved, then apply it: both after the sketch's last endpoint.add(). The saved items keep the
   // (name, instance, revision) of every interface they name and are renumbered to where those are now; one gone (or of

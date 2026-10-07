@@ -794,13 +794,19 @@ static void testOps(const char *file, const char *list) {
     OpsProbe::restarts = 0;
     Bytes got = p.send(req);
     if (c["state"].string.find("items has wifi") != std::string::npos) {
-      // the placeholders 0x5A5A0001 (entry 0 set) / 0x5A5A0002 (empty) -> this probe's hashes; a set that made
-      // entry 0 has it now
+      // the placeholders 0x5A5A0001 (entry 0 set) / 0x5A5A0002 (empty) / 0x5A5A0003 (the new settings of a set, the
+      // 112-byte one of the longest wifi item) -> this probe's hashes; a set that made entry 0 has it now
       if (!p.hash_entry && name.find("set: wifi entry 0") != std::string::npos) p.hash_entry = p.hash();
       CHECK(!p.hash_entry || p.hash_entry != p.hash_empty);
+      uint32_t hash_new = 0;
+      if (c["state"].string.find("the probe's hash for the new settings is 0x5A5A0003") != std::string::npos) {
+        CHECK(req.size() == reg::kLimitWifiMinMaxFrame && p.wifi.count == 1);   // a 112-byte set, taken
+        hash_new = p.hash();
+        CHECK(hash_new != p.hash_empty);
+      }
       for (size_t i = 5; i + 4 <= want.size(); ++i)
-        if (want[i + 1] == 0 && want[i + 2] == 0x5a && want[i + 3] == 0x5a && (want[i] == 1 || want[i] == 2)) {
-          putU32(&want[i], want[i] == 1 ? p.hash_entry : p.hash_empty);
+        if (want[i + 1] == 0 && want[i + 2] == 0x5a && want[i + 3] == 0x5a && want[i] >= 1 && want[i] <= 3) {
+          putU32(&want[i], want[i] == 1 ? p.hash_entry : want[i] == 2 ? p.hash_empty : hash_new);
           i += 3;
         }
     }

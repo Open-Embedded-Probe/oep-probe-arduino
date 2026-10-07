@@ -123,6 +123,8 @@ class Endpoint {
     addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
     setPushQueue(1024);
   }
+  // confirm's max_frame: the same on every transport of this endpoint.
+  uint16_t maxFrame() const { return limits_.max_frame; }
   // confirm's values within core §7.1's bounds, whatever the sketch gave: max_frame 64 or more, window max_frame or
   // more, max_inflight 1 or more (a host treats a transport answering outside them as not usable). max_inflight is at
   // most the resend table's entries: the table remembers at least max_inflight requests (core §5.2).

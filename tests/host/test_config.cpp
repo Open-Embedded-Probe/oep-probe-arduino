@@ -843,6 +843,30 @@ int main() {
     out.assign(64, 0);
     CHECK(ok(cfg9.handle(cfg::kOpUnset, unset01, sizeof unset01, out.data(), out.size())));
     CHECK(fake9.applied == 2 && fake9.got.empty());
+
+    // probe.config §1.4: a probe with the wifi item answers max_frame 112 or more on every transport - one set of the
+    // longest wifi item (32-byte ssid, 64 hex digits) is 10 + 3 + 3 + 32 + 64 = 112 bytes. Below that the item is not
+    // declared; at 112 it is.
+    static_assert(kWifiMinMaxFrame == 10 + 3 + 3 + reg::kLimitWifiSsidMaxBytes + reg::kLimitWifiPskHexDigits, "§1.4");
+    static NullStream s10, s11;
+    static uint8_t rx10[512], tx10[512], rx11[512], tx11[512];
+    static Endpoint ep10(s10, rx10, sizeof rx10, tx10, sizeof tx10, {kWifiMinMaxFrame - 1, 1024, 2}, Endpoint::kUartBridge);
+    static Endpoint ep11(s11, rx11, sizeof rx11, tx11, sizeof tx11, {kWifiMinMaxFrame, 1024, 2}, Endpoint::kTcp);
+    static Binds binds10, binds11;
+    static ProbeConfig cfg10(ep10, binds10), cfg11(ep11, binds11);
+    static FakeWifi fake10, fake11;
+    ep10.add(cfg10);
+    ep11.add(cfg11);
+    CHECK(!cfg10.setWifi(&fake10) && cfg11.setWifi(&fake11));
+    {
+      Bytes d(256);
+      bool found = true;
+      describeTlv(Bytes(d.begin(), d.begin() + cfg10.describe(d.data(), d.size())), 0, kWifiDescribeMax, &found);
+      CHECK(!found);
+      describeTlv(Bytes(d.begin(), d.begin() + cfg11.describe(d.data(), d.size())), 0, kWifiDescribeMax, &found);
+      CHECK(found);
+    }
+    CHECK(unsupportedWith(set(cfg10, item(wraw, wv(0, "lab", secret)), out), out, wraw));
   }
 
   printf("config: %d checks, %d failures\n", checks, failures);
