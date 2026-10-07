@@ -15,8 +15,8 @@
 //
 // Failures that happened while executing are completed failed / partial with the success-shaped payload and a
 // status byte (ok / wait / line / fault / timeout / state); rejected is kept for requests not accepted. A request that
-// gets nothing back from the wire within its wire_retry_ms answers status line and keeps the connection; the
-// connection closes (after that answer) only when the wire has failed for wire_lost_ms of real time with no good
+// gets nothing back from the wire within its limits::kWireRetryMs answers status line and keeps the connection; the
+// connection closes (after that answer) only when the wire has failed for limits::kWireLostMs of real time with no good
 // exchange between (§2: the PHY's wire-loss clock, which the console's reads and a slot's liveness check share).
 // The probe knows nothing about the target: no chip names, no flash controller. The host composes
 // everything else from these (experiments/flash-primitives F4).
@@ -35,7 +35,7 @@ struct DebugPort {
   Ch32Dm &dm;
   uint16_t swdio, swclk;   // probe channels, for scan results and the describe pin set (swclk 0xffff: one wire)
   bool connected = false;
-  // Host resets of the target that the console marks and last-reset follows: riscv-dm's reset and attach's reset TLV.
+  // Host resets of the target that the console marks: riscv-dm's reset and attach's reset TLV.
   // reset_detail: how the last one was done (mark_detail_reset: 1 ndmreset, 3 attach's reset TLV).
   uint32_t resets = 0;
   uint8_t reset_detail = 0;
@@ -70,21 +70,12 @@ struct DebugPort {
   uint16_t number = 0;
 };
 
-// The reset line of a probe's own attach (oep-if-probe-config §3.1, the retry with reset): pulled low for hold_ms and
-// released before the attach, as attach's reset TLV with method 0 (oep-if-debug §3). Not a host reset: `resets` is not
-// counted, so a last-reset bind keeps its selection (probe.config §3.1 / §1.2). held_at_ns: when the pull started.
-struct AttachReset {
-  uint16_t channel;
-  uint16_t hold_ms;
-  uint64_t held_at_ns;
-};
 // Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the
 // host's attach, havereset acknowledged. Joins an existing connection. Adds `user`. false: the target did not answer
 // (no_answer set: the wire got nothing back - status line), or no connection number was left.
 // A new connection takes the line settings given (oep-if-debug §3: a slot's max_speed / idle_clock); an existing one keeps
-// its own. `reset`: a new connection pulls that reset line first (an existing one is joined without it).
-bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false,
-                   AttachReset *reset = nullptr, bool *no_answer = nullptr);
+// its own.
+bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`). lost: the line was found gone (the console
@@ -93,7 +84,7 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost = fa
 // No connection holds the wire's pins (closed, a scan's try, a failed attach): to their free state (oep-core §8).
 void freeWire(DebugPort &port);
 // An at-boot slot's liveness check (oep-if-probe-config §3.1): DMSTATUS read once; false = the wire is lost (no good
-// exchange for wire_lost_ms, oep-if-debug §2) and the connection was closed. A single failed check keeps it.
+// exchange for limits::kWireLostMs, oep-if-debug §2) and the connection was closed. A single failed check keeps it.
 bool checkConnection(DebugPort &port);
 // Host-chosen pins (oep-if-debug §1). pairAllowed: a pair this wire may use at all; pairFree: none of its channels held
 // by anything but this wire's live connection on that pair; usePair: move the link there (no live connection; the pair
@@ -102,7 +93,7 @@ bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 bool pairFree(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 bool usePair(DebugPort &port, uint16_t swdio, uint16_t swclk);
 // The first channel of the pair held by anything but this wire's own connection (0xFFFF: none), and the
-// unavailable refusal for it (core §4.3: cause 1, the channel, its holder_kind).
+// unavailable refusal for it (core §4.3: cause 1, the channel).
 uint16_t pairHeld(const DebugPort &port, uint16_t swdio, uint16_t swclk);
 Result pairHeldRefusal(const DebugPort &port, uint16_t swdio, uint16_t swclk, uint8_t *out, size_t capacity);
 void holdPins(DebugPort &port);
@@ -138,7 +129,7 @@ class WireRvswd final : public Interface {
   uint16_t instance_;
   const char *name_;
   bool isRvswd() const { return strcmp(name_, reg::wire_rvswd::kName) == 0; }
-  struct PinRefusal { uint8_t cause; uint16_t channel; uint8_t holder_kind; };   // an unavailable's payload (core §4.3)
+  struct PinRefusal { uint8_t cause; uint16_t channel; };   // an unavailable's payload (core §4.3)
   uint8_t choosePair(const uint8_t *pins, size_t len, PinRefusal &why);
   Result scan(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result attach(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);

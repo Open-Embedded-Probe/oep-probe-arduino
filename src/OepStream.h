@@ -70,17 +70,16 @@ class PositionStream {
     mark(reg::common::kMarkKindClear);
   }
 
-  // A read request's values (common §1.2), p: from(u8) arg(u64) max(u16): from 3 with arg over 0xFF is malformed (a mark
-  // kind is u8), from 4 or more unsupported, payload 0x00 (a later revision may define it). Completed: it may be read.
+  // A read request's values (common §1.2), p: from(u8) arg(u64) max(u16): from 4 or more unsupported, payload 0x00 (a
+  // later revision may define it). Completed: it may be read. (From 3 with an arg over 0xFF is taken: no mark kind
+  // matches it, so it reads from now.)
   static Result checkRead(const uint8_t *p, uint8_t *out, size_t capacity) {
-    if (p[0] == reg::common::kReadFromLastMark && getU64(p + 1) > 0xff) return rejected(kRejectMalformed);
     if (p[0] > reg::common::kReadFromLastMark) return unsupportedValue(out, capacity);
     return completed();
   }
-  // p: from(u8) arg(u64) max(u16), as checkRead passes it. The answer leaves `reserve` bytes of the capacity for what the
-  // caller appends (an ignored TLV).
-  Result read(const uint8_t *p, uint8_t *out, size_t capacity, uint16_t max_read, size_t reserve = 0) const {
-    if (capacity < kReadHeader + reserve) return failed();
+  // p: from(u8) arg(u64) max(u16), as checkRead passes it.
+  Result read(const uint8_t *p, uint8_t *out, size_t capacity, uint16_t max_read) const {
+    if (capacity < kReadHeader) return failed();
     const uint8_t from = p[0];
     const uint64_t arg = getU64(p + 1);
     uint64_t start = total_;
@@ -99,7 +98,7 @@ class PositionStream {
     if (start < oldest()) { start = oldest(); flags |= reg::common::kReadFlagsGap; }   // gap: pushed out or cleared
     if (start > total_) start = total_;
     uint32_t count = static_cast<uint32_t>(total_ - start);
-    uint32_t room = static_cast<uint32_t>(capacity - kReadHeader - reserve);
+    uint32_t room = static_cast<uint32_t>(capacity - kReadHeader);
     uint16_t max = getU16(p + 9);
     if (max > max_read) max = max_read;
     if (room > max) room = max;
@@ -158,11 +157,6 @@ class BindSource {
   virtual const PositionStream *bindStream() const = 0;      // nullptr: nothing to carry now
   virtual uint16_t bindStreamNumber() const = 0;             // the stream's number (a console's; a UART's is fixed)
   virtual size_t bindInput(const uint8_t *data, size_t length) = 0;   // the port's raw bytes: how many were taken
-  // Resets of this stream's target that last-reset counts (riscv-dm reset, attach's reset TLV); 0 for a UART.
-  virtual uint32_t hostResets() const { return 0; }
-  // The position of the reset mark (common §1.3) the stream placed when hostResets() reached `resets`; false: none
-  // placed for it (yet, or the stream was not open). A port resumes from it after a session (probe.config §1.2).
-  virtual bool hostResetMark(uint32_t resets, uint64_t &position) const { (void)resets; (void)position; return false; }
 
  protected:
   ~BindSource() = default;

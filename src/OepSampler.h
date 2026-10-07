@@ -102,7 +102,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   uint32_t masks0_[kMaxChannels] = {}, masks1_[kMaxChannels] = {};
   TaskHandle_t sampler_ = nullptr;
   volatile bool done_ = false, reported_ = true;
-  volatile bool slipped_ = false;         // the last window had a sample more than one period late
+  volatile bool slipped_ = false;         // the last window took a sample one period or more late
   volatile uint32_t late_cycles_ = 0;     // the most it was behind, in CPU cycles
   // the trigger, as configured; what the search found (written by the sampler task, read by poll)
   static constexpr uint64_t kOffNs = 250000000;   // the longest a burst keeps interrupts off (watchdog: 300 ms)

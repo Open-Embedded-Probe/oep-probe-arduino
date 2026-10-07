@@ -51,7 +51,7 @@ class DmiPhy {
   virtual void free() { release(); }
   virtual bool attached() const = 0;
   // One DMI read with the PHY's own bounded retry (readWire). Its outcome runs the connection's wire-loss clock
-  // (oep-if-debug §2: lost after wire_lost_ms of exchanges with no answer from the wire, with no successful one between).
+  // (oep-if-debug §2: lost after limits::kWireLostMs of exchanges with no answer from the wire, with no successful one between).
   // A good exchange is a read that came back with a value other than all zeros or all ones: a line held low, or one
   // that rises through its pull-up with no module behind it, reads one of those (a read cell, a parity bit included,
   // comes back as the line rests). Such a value is no answer on DMSTATUS - the probe answers status line for it
@@ -134,7 +134,7 @@ class DmiPhy {
   uint32_t searchRetries() const { return search_retries_; }
   void clearSearchRetries() { search_retries_ = 0; }
   void countSearchRetry() { ++search_retries_; }   // a try above the PHY (a whole attach() again) failed
-  // The attach budget (oep-if-debug §1, limits.attach_budget_ms): attach() starts no further step of its search once
+  // The attach budget (oep-if-debug §1, limits::kAttachBudgetMs): attach() starts no further step of its search once
   // millis() reaches `at_ms` and answers false. The caller sets it before and clears it after.
   // end_ms: the budget's own end - what follows the search (a halt's rounds, an abstract command's wait) stops there.
   void setDeadline(uint32_t at_ms, uint32_t end_ms) { deadline_ms_ = at_ms; end_ms_ = end_ms; has_deadline_ = true; }
@@ -147,16 +147,32 @@ class DmiPhy {
   // backend whose wire never pauses leaves both alone (SwioPhy on the classic ESP32: the sampler's windows, OepWireGate.h).
   virtual bool backgroundTurn() { return true; }
   virtual void backgroundDone() {}
-  // Retries inside one request (oep-if-debug §2, limits.wire_retry_ms): a request starts with the whole allowance, and
-  // read() retries no more once it is spent (the request then ends with status line).
+  // Retries inside one request (oep-if-debug §2; this implementation's limits::kWireRetryMs): a request starts with the
+  // whole allowance, and read() retries no more once it is spent (the request then ends with status line).
   void beginRequest() { retry_us_ = 0; }
+  // oep-if-debug §2: while a connection exists, the probe's own retries and resyncs do not change the target's state - a
+  // wake that may reset the target (RVSWD's wake pattern resets a CH32L103) goes out on a connection only inside attach
+  // and reset. The wire's owner holds the wakes while a connection is open (holdWakes) and lets them through for the
+  // span of an attach or a reset (WakeScope); a backend whose bring-up cannot reset the target ignores both.
+  void holdWakes(bool held) { wakes_held_ = held; }
+  bool wakesHeld() const { return wakes_held_ && !wake_scope_; }
+  class WakeScope {
+   public:
+    explicit WakeScope(DmiPhy &phy) : phy_(phy) { ++phy_.wake_scope_; }
+    ~WakeScope() { --phy_.wake_scope_; }
+    WakeScope(const WakeScope &) = delete;
+    WakeScope &operator=(const WakeScope &) = delete;
+
+   private:
+    DmiPhy &phy_;
+  };
 
  protected:
   virtual bool readWire(uint8_t address, uint32_t &value) = 0;
-  bool retryLeft() const { return retry_us_ < v1::reg::kLimitWireRetryMs * 1000u; }
+  bool retryLeft() const { return retry_us_ < limits::kWireRetryMs * 1000u; }
   // One more retry that takes about cost_us still ends inside the allowance (so a request never spends more than
-  // wire_retry_ms retrying, even when one retry is long - a wake at a slow max_speed takes tens of ms).
-  bool retryFits(uint32_t cost_us) const { return retry_us_ + cost_us <= v1::reg::kLimitWireRetryMs * 1000u; }
+  // limits::kWireRetryMs retrying, even when one retry is long - a wake at a slow max_speed takes tens of ms).
+  bool retryFits(uint32_t cost_us) const { return retry_us_ + cost_us <= limits::kWireRetryMs * 1000u; }
   void spentRetrying(uint32_t us) { retry_us_ += us; }
   uint32_t search_retries_ = 0;
 
@@ -164,21 +180,23 @@ class DmiPhy {
   uint32_t deadline_ms_ = 0, end_ms_ = 0;
   bool has_deadline_ = false;
   uint32_t retry_us_ = 0;
+  bool wakes_held_ = false;
+  uint8_t wake_scope_ = 0;
   uint32_t last_read_ = 0, revives_at_read_ = 0;
   bool last_known_ = false;
   WireLossClock loss_;
 };
 
-// The attach budget (oep-if-debug §1, limits.attach_budget_ms) over one attach: the PHY's deadline from construction to
+// The attach budget (oep-if-debug §1; this implementation's limits::kAttachBudgetMs) over one attach: the PHY's deadline from construction to
 // destruction. One attach answer takes at most the budget of the probe's time, a reset's hold_ms (extra_ms) aside; the
 // PHY's search gets it less kTailMs - what follows the search (havereset, a halt, the target_id and dpc reads) and
-// the request's wire retries (wire_retry_ms); a search step running when the deadline passes ends there, and the steps
+// the request's wire retries (limits::kWireRetryMs); a search step running when the deadline passes ends there, and the steps
 // after the search end at the budget's end (pastBudget).
 class AttachDeadline {
  public:
-  static constexpr uint32_t kTailMs = v1::reg::kLimitWireRetryMs + 100;
+  static constexpr uint32_t kTailMs = limits::kWireRetryMs + 100;
   AttachDeadline(DmiPhy &phy, uint32_t extra_ms = 0) : phy_(phy) {
-    const uint32_t end = millis() + v1::reg::kLimitAttachBudgetMs + extra_ms;
+    const uint32_t end = millis() + limits::kAttachBudgetMs + extra_ms;
     phy_.setDeadline(end - kTailMs, end);
   }
   ~AttachDeadline() { phy_.clearDeadline(); }

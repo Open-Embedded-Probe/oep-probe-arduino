@@ -39,12 +39,9 @@ class PinTable {
   bool disabled(uint16_t channel) const { return channel < kChannels && (disabled_ >> channel) & 1; }
   uint64_t disabledMask() const { return disabled_; }
   bool free(uint16_t channel) const { return allowed(channel) && !disabled(channel) && owner_[channel] == 0; }
-  // kind: who holds it, for an unavailable refusal's holder_kind (core §4.3): a plan (an interface's planApply), or a
-  // wire's live connection (reg::core::kHolderKindConnection).
-  bool claim(uint16_t channel, uint8_t owner, uint8_t kind = reg::core::kHolderKindPlan) {
+  bool claim(uint16_t channel, uint8_t owner) {
     if (!free(channel)) return false;
     owner_[channel] = owner;
-    kind_[channel] = kind;
     pending_ &= ~(uint64_t{1} << channel);   // taken again within a replacement: its pad untouched
     return true;
   }
@@ -87,8 +84,6 @@ class PinTable {
   }
   uint64_t allowedMask() const { return allowed_; }
   uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
-  // The holder_kind of a held channel (what claim was given), 0 when nobody holds it.
-  uint8_t holderKind(uint16_t channel) const { return channel < kChannels && owner_[channel] ? kind_[channel] : 0; }
   // Idle states (oep.probe.config idle: 0 Hi-Z, 1 pull-up, 2 pull-down, 3 output low, 4 output high; kIdleUnset =
   // Hi-Z). Applied now to a free channel (apply false: only kept, for a channel about to be disabled), and at every
   // release; an output idle drives its level for as long as the channel is free, at its strength `drive` (a level of
@@ -97,8 +92,7 @@ class PinTable {
   // pull-down idle on a channel without that pull (setNoPull).
   static constexpr uint8_t kIdleHiZ = 0, kIdlePullUp = 1, kIdlePullDown = 2, kIdleOutputLow = 3, kIdleOutputHigh = 4,
                            kIdleUnset = 0xff;
-  static constexpr uint8_t kDriveDefault = 0xff;   // no strength given: the default level
-  static constexpr uint8_t kNotDriven = reg::fixture_gpio::kDriveReadNotDriven;
+  static constexpr uint8_t kDriveDefault = reg::fixture_gpio::kDriveLevelDefault;   // no strength given: the default level
   bool setIdle(uint16_t channel, uint8_t mode, bool apply = true, uint8_t drive = kDriveDefault) {
     if (!allowed(channel) || (mode > kIdleOutputHigh && mode != kIdleUnset)) return false;
     if ((mode == kIdleOutputLow || mode == kIdleOutputHigh) && !canOutput(channel)) return false;
@@ -146,26 +140,13 @@ class PinTable {
     platformDrive(channel, platformDriveLevels().default_level);
     strong_ &= ~bit;
   }
-  // The level a channel is driven at in mode 3 / 4 now (a set's output or an output idle), kNotDriven when it is not
-  // (fixture §1.1 read's drive TLV).
-  uint8_t drivenLevel(uint16_t channel) const {
-    return channel < kChannels && level_[channel] ? static_cast<uint8_t>(level_[channel] - 1) : kNotDriven;
-  }
-  // A drive specification (fixture §1.1: kind 0 a level number, kind 1 the strongest level of at most `value` mA, level 0
-  // when none is) as a level of `d`. false: kind 0 with a level the probe does not have (the caller checks kind first).
-  static bool driveLevelOf(const DriveLevels &d, uint8_t kind, uint16_t value, uint8_t &level) {
-    if (kind > reg::fixture_gpio::kDriveKindDefault) return false;   // undefined (3+): a value this probe cannot handle
-    if (kind == reg::fixture_gpio::kDriveKindDefault) {   // the default level of drive_levels (value 0, fixture §1.1)
-      level = d.default_level;
-      return true;
-    }
-    if (kind == reg::fixture_gpio::kDriveKindLevel) {
-      if (value >= d.count) return false;
-      level = static_cast<uint8_t>(value);
-      return true;
-    }
-    level = 0;
-    for (uint8_t i = 0; i < d.count; ++i) if (d.ma[i] <= value) level = i;
+  // A drive level (fixture §1.1: a level number of drive_levels, 0xFF its default level) as a level of `d`. false: a
+  // level past drive_levels, or any level on a probe without drive_levels (refused unsupported).
+  static bool driveLevelOf(const DriveLevels &d, uint8_t value, uint8_t &level) {
+    if (!d.count) return false;
+    if (value == kDriveDefault) { level = d.default_level; return true; }
+    if (value >= d.count) return false;
+    level = value;
     return true;
   }
   // Channels the probe can only read (the classic ESP32's GPIO34-39): no output idle on them (probe.config §1), and left
@@ -187,7 +168,6 @@ class PinTable {
   uint64_t strong_ = 0;       // pads setPad left at another strength than the default
   uint8_t deferring_ = 0;
   uint8_t owner_[kChannels] = {};
-  uint8_t kind_[kChannels] = {};
   uint8_t idle_[kChannels] = {kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
                               kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,

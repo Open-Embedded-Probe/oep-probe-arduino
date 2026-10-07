@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host tests: oep.fixture.capture-group (oep-spec oep-if-capture §4) over fake tracks, and the endpoint's plan rules for
-// a bound track (§4.1: plan_apply / plan_release of its fn refused unavailable cause 4 with the group's fn).
+// a bound track (§4.1: plan_apply / plan_release of its fn refused unavailable cause 4, the cause alone).
 #include <stdio.h>
 
 #include <algorithm>
@@ -131,16 +131,18 @@ struct Rig {
 static bool rejectedAs(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
 
-// A bound track's plan is the group's (§4.1): plan_apply and plan_release of its fn are refused unavailable cause 4,
-// holder_fn the group, and nothing changes; unbound, they go through again.
+// A bound track's plan is the group's (§4.1): plan_apply and plan_release of its fn are refused unavailable cause 4 (the
+// cause alone, core §4.3), and nothing changes; unbound, they go through again.
 static void testBoundPlan() {
   Rig rig;
   CHECK(rig.send(request(1, 0, 0x10, openPayload(7, 3000)))[5] == 1);
   CHECK(rig.send(request(2, rig.ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 12, 0, 0x90, 5, 0, 2, 0, 0, 13, 0}, true, 7))[5] == 1);
   CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
-  const Bytes cause4 = {0x01, 1, 0, 4, 0x03, 2, 0, 3, 0};   // cause 4, holder_fn 3
+  const Bytes cause4 = {0x01, 1, 0, 4};   // cause 4
+  const Bytes holder_fn = {0x03, 2, 0, 3, 0};   // gone from the payload (core §4.3)
   Bytes r = rig.send(request(3, rig.ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 14, 0}, true, 7));
-  CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4));
+  CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4) &&
+        !contains(r, holder_fn));
   r = rig.send(request(4, rig.ep.planFn(), kOpPlanRelease, {1, 2, 0}, true, 7));
   CHECK(r.size() > 7 && r[5] == kResolutionRejected && r[6] == kRejectUnavailable && contains(r, cause4));
   r = rig.send(request(5, rig.ep.planFn(), kOpPlanRelease, {0}, true, 7));   // every fn: refused whole
@@ -198,14 +200,34 @@ static void testBudgetNamesTrack() {
   CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
 }
 
-// describe start_skew (§4.3): one per track, a typical 0 included.
-static void testStartSkewPerTrack() {
+// describe (§4.3): tracks only - max_tracks, budget and start_skew (0x41-0x43) are not declared; a host tries bind.
+static void testDescribe() {
   Rig rig;
+  CHECK(rig.group.addBudget(100, rig.a, rig.b));
   uint8_t d[256];
   const size_t n = rig.group.describe(d, sizeof d);
   const Bytes all(d, d + n);
-  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 0, 1, 0, 0, 0, 0, 0}));
-  CHECK(contains(all, {grp::kTlvDescribeStartSkew, 6, 0, 2, 0, 0, 0, 0, 0}));
+  CHECK(all == (Bytes{grp::kTlvDescribeTracks, 5, 0, 2, 1, 0, 2, 0}));
+}
+
+// bind's trigger_track (§4.1) is checked the same with or without bit 7 (core §2.3): sent plain it is used as sent
+// critical; a length other than 2, or a track not in the list, is malformed; nothing is bound by a refusal. An unknown
+// non-critical TLV is passed over, an unknown critical one refused unsupported with its tag.
+static void testBindTriggerTrack() {
+  for (const uint8_t bit : {uint8_t(0), uint8_t(0x80)}) {
+    Rig rig(true);   // a holds the trigger
+    const uint8_t tag = bit | grp::kTlvBindTriggerTrack;
+    CHECK(rejectedAs(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 3, 0, 1, 0, 0}), kRejectMalformed));   // too long
+    CHECK(rejectedAs(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 1, 0, 1}), kRejectMalformed));         // too short
+    CHECK(rejectedAs(rig.op(grp::kOpBind, {1, 2, 0, tag, 2, 0, 1, 0}), kRejectMalformed));           // not in the list
+    CHECK(rig.a.boundTo() == 0 && rig.b.boundTo() == 0);
+    CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 2, 0, 1, 0, 0x61, 1, 0, 9})));
+    CHECK(ok(rig.op(grp::kOpStart)) && rig.a.starts == 0 && rig.b.starts == 1);   // b follows: it runs first
+    CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateWaiting && rig.a.starts == 1);   // then a, the trigger
+    rig.op(grp::kOpStop);
+    const Result r = rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0xE1, 0, 0});
+    CHECK(rejectedAs(r, kRejectUnsupported) && rig.payload(r) == Bytes{0xE1});
+  }
 }
 
 // status state (§4.1): 2 only while the trigger has not fired and a track is 2 or 3; tracks paused (5) make it 3.
@@ -224,7 +246,8 @@ int main() {
   testStartPrerequisites();
   testTriggerTrackFails();
   testBudgetNamesTrack();
-  testStartSkewPerTrack();
+  testDescribe();
+  testBindTriggerTrack();
   testStatusState();
   testBoundPlan();
   printf("capture-group: %d checks, %d failures\n", checks, failures);

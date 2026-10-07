@@ -4,7 +4,7 @@
 // RP2040 / RP2350 (built for the Raspberry Pi Pico / Pico 2; profiles rp2040 / rp2350).
 //
 // Transport: USB CDC (Serial), a serial port: COBS frames (oep-transports §1). The USB device is the project's VID:PID
-// 1209:4F45 (registry usb; PID-USE.md), serial = the unit id, describe discoverable 1; its iProduct "OEP probe (RP2040)" /
+// 1209:4F45 (registry usb; PID-USE.md), serial = the unit id; its iProduct "OEP probe (RP2040)" /
 // "(RP2350)" is a name for people.
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
@@ -117,7 +117,7 @@ static bool autoAttachReady() { return oep::BootGuard::attachReady(tud_mounted()
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];   // the flash's unique id: the probe says who it is on any transport
-  oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30, kReserved,
+  oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30,
                     oep::BootGuard::lastBoot());   // the firmware text: the version (and what ended the boot before)
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
@@ -147,8 +147,8 @@ void setup() {
   }
   config.setAttachGate(autoAttachReady);
   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one.
-  // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied
-  // before any idle / park; applySaved below gives them back if the settings are not applied).
+  // The saved settings are read first: their disable items' channels are never parked (probe.config §2: disable
+  // before anything else; applySaved below gives them back if the settings are not applied).
   config.load();
   pins.setDisabled(config.savedDisabled());
   oep::platformParkMask(kChannels & ~pins.disabledMask());
@@ -158,7 +158,6 @@ void setup() {
   swd.pin_choice = kChannels;
   swd.pins = &pins;
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  endpoint.setDiscoverable(true);   // its one transport is USB with the project's VID:PID (transports §3, core §7.5)
   endpoint.setRestart(oep::platformRestart, kRestartMaxMs);
   endpoint.add(wireRvswd);
   endpoint.add(riscvDm);
@@ -178,8 +177,8 @@ void setup() {
   endpoint.add(oepLink);   // oep.probe.link (the link test), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
-  // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
-  // slots' attach last (on its poll), so a target powered through an output idle is up before it.
+  // probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach comes on
+  // config.poll(), so a target powered through an output idle is up before it.
   config.applySaved();   // read by config.load() at the top
 }
 

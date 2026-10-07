@@ -182,7 +182,7 @@ sampler はトリガのトラックにはなれますが、ほかのトリガに
 
 ```sh
 oep config slot /dev/ttyACM0 --name dut --wire rvswd --pins 2,3 --attach at-boot --retry 1 --mechanism dmseq
-oep config bind /dev/ttyACM0 --port 0 --mode last-reset --stream slot:dut      # target のコンソールをこの口に
+oep config bind /dev/ttyACM0 --port 0 --stream slot:dut      # target のコンソールをこの口に
 oep config idle /dev/ttyACM0 5 pull-up --save
 oep config disable /dev/ttyACM0 28 29 --save            # このボードに出ていない: 使わず、触れない
 oep config show /dev/ttyACM0

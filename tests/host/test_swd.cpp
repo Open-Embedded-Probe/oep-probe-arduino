@@ -61,19 +61,17 @@ static bool isSettingsIdle(const Result &r, const Bytes &out, uint16_t channel) 
   size_t len = 0;
   const uint8_t *cause = tlv(out, 0, reg::core::kTlvUnavailablePayloadCause, len);
   const uint8_t *ch = tlv(out, 0, reg::core::kTlvUnavailablePayloadChannel, len);
-  const uint8_t *kind = tlv(out, 0, reg::core::kTlvUnavailablePayloadHolderKind, len);
   return cause && cause[0] == reg::core::kUnavailableCauseHeldBySettings && ch && (ch[0] | ch[1] << 8) == channel &&
-         kind && kind[0] == reg::core::kHolderKindSettingsIdle;
+         out.size() == 4 + 5;   // cause and channel only (core §4.3: no holder_kind)
 }
 
-static bool isHeld(const Result &r, const Bytes &out, uint16_t channel, uint8_t holder_kind) {
+static bool isHeld(const Result &r, const Bytes &out, uint16_t channel) {
   if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
   size_t len = 0;
   const uint8_t *cause = tlv(out, 0, reg::core::kTlvUnavailablePayloadCause, len);
   const uint8_t *ch = tlv(out, 0, reg::core::kTlvUnavailablePayloadChannel, len);
-  const uint8_t *kind = tlv(out, 0, reg::core::kTlvUnavailablePayloadHolderKind, len);
-  return cause && cause[0] == reg::core::kUnavailableCausePinInUse && ch && (ch[0] | ch[1] << 8) == channel && kind &&
-         kind[0] == holder_kind;
+  return cause && cause[0] == reg::core::kUnavailableCausePinInUse && ch && (ch[0] | ch[1] << 8) == channel &&
+         out.size() == 4 + 5;
 }
 
 int main() {
@@ -177,10 +175,10 @@ int main() {
     // a channel a plan holds: unavailable cause 1, the channel, holder_kind 1 (core §4.3; 0.0.28: the cause alone)
     CHECK(pins.claim(7, 0x01));
     r = call(wire2, WireSwd::kOpAttach, attachRequest(6, 7), out);
-    CHECK(isHeld(r, out, 7, reg::core::kHolderKindPlan) && !chosen.connected);
+    CHECK(isHeld(r, out, 7) && !chosen.connected);
     const Bytes scan67 = {1, 6, 0, 7, 0};
     r = call(wire2, WireSwd::kOpScan, scan67, out);
-    CHECK(isHeld(r, out, 7, reg::core::kHolderKindPlan));
+    CHECK(isHeld(r, out, 7));
     // a combination the declaration does not allow, listed after the held one: unsupported, tag 0x00 and TLV 0x40 its
     // index, before any held channel (oep-if-debug §1, core §4.3 order 6 before 7; it answered unavailable)
     r = call(wire2, WireSwd::kOpScan, {2, 6, 0, 7, 0, 7, 0, 7, 0}, out);
@@ -236,7 +234,7 @@ int main() {
     r = call(adi, TargetArmAdi::kOpTransfer, t, out);
     const uint32_t took = micros() - before;
     printf("  a transfer with nothing there: %u ms\n", took / 1000);
-    CHECK(out[2] == kStatusLine && took >= 150000u && took <= reg::kLimitWireRetryMs * 1000u + 2000u);
+    CHECK(out[2] == kStatusLine && took >= 150000u && took <= limits::kWireRetryMs * 1000u + 2000u);
     g_swd.absent = false;
     r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
@@ -310,7 +308,7 @@ int main() {
     const uint32_t took = micros() - before;
     printf("  an attach with nothing there: %u ms\n", took / 1000);
     CHECK(r.resolution == kResolutionCompleted && out.size() >= 1 && out[0] == kStatusLine && !fixed.connected);
-    CHECK(took >= 150000u && took <= reg::kLimitWireRetryMs * 1000u + 2000u);
+    CHECK(took >= 150000u && took <= limits::kWireRetryMs * 1000u + 2000u);
     // at the slowest clock this wire takes (min_clock_hz 10 kHz): still well inside the attach budget
     Bytes slow = {0, uint8_t(sw::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x10, 0x27, 0, 0};   // 10000 Hz
     const uint32_t before_slow = micros();
@@ -318,7 +316,7 @@ int main() {
     const uint32_t took_slow = micros() - before_slow;
     printf("  an attach with nothing there at 10 kHz: %u ms\n", took_slow / 1000);
     CHECK(r.resolution == kResolutionCompleted && out.size() >= 1 && out[0] == kStatusLine);
-    CHECK(took_slow <= reg::kLimitAttachBudgetMs * 1000u);
+    CHECK(took_slow <= limits::kAttachBudgetMs * 1000u);
     slow[4] = 0x0f;   // 9999 Hz: under min_clock_hz, unsupported
     slow[5] = 0x27;
     r = call(wire, WireSwd::kOpAttach, slow, out);
@@ -356,7 +354,7 @@ int main() {
     g_swd.absent = true;
     r = call(adi, TargetArmAdi::kOpTransfer, t, out);
     CHECK(out[2] == kStatusLine && fixed.connected);
-    g_millis += reg::kLimitWireLostMs;
+    g_millis += limits::kWireLostMs;
     r = call(wire, WireSwd::kOpScan, {0}, out);
     CHECK(ok(r) && out.size() >= 2 && out[1] == 0 && !fixed.connected);   // 68d9694: kept
     g_swd.absent = false;

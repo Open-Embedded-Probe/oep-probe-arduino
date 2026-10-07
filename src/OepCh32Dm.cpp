@@ -6,7 +6,7 @@
 
 namespace oep {
 namespace {
-constexpr uint32_t kDmWaitMs = v1::reg::kLimitDmWaitMs;   // one wait for DM state inside a high-level op (oep-if-debug §4)
+constexpr uint32_t kDmWaitMs = limits::kDmWaitMs;   // one wait for DM state inside a high-level op (oep-if-debug §4)
 constexpr uint8_t kData0 = 0x04, kData1 = 0x05, kDmControl = 0x10, kDmStatus = 0x11, kDmHartInfo = 0x12,
                   kAbstractCs = 0x16, kCommand = 0x17, kAbstractAuto = 0x18, kProgBuf0 = 0x20;
 // E156 reader: lw s0,0(a1); lw s1,0(s0); addi s0,4; sw s1,0(a0); sw s0,0(a1); ebreak
@@ -515,7 +515,7 @@ bool Ch32Dm::halt() {
   // probe (2026-09-23): DMCONTROL reads the request back as set while the hart keeps
   // running, and abstract commands fail cmderr=4; repeating it makes the halt land every
   // time. minichlink writes it three or four times in a row for the same reason, so
-  // re-issue between polls instead of only polling - for dm_wait_ms of time at most (oep-if-debug §4: the wait for
+  // re-issue between polls instead of only polling - for limits::kDmWaitMs of time at most (oep-if-debug §4: the wait for
   // allhalted; the attach budget's end too, inside an attach).
   const uint32_t started = millis();
   auto waited = [&]() { return millis() - started >= kDmWaitMs || phy_.pastBudget(); };
@@ -552,7 +552,7 @@ bool Ch32Dm::resume() {
   // nothing is given back here (§4).
   relink();                                                      // a change of state drops the CH32's link
   phy_.write(kDmControl, 0x40000001);                            // resumereq, once (haltreq lowered)
-  // Looked for in DMSTATUS for dm_wait_ms of time (oep-if-debug §4, §4.2: not seen by then, status state).
+  // Looked for in DMSTATUS for limits::kDmWaitMs of time (oep-if-debug §4, §4.2: not seen by then, status state).
   bool ok = false;
   const uint32_t started = millis();
   uint32_t relinked_us = micros();
@@ -597,7 +597,7 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
   // came through first time in only 9 of 20 resets on the CH32L103 and failed 5, while reset-halt + resume ran
   // 20 of 20 on the L103, the X035 and the V003 alike (2026-09-25). Stopping at the vector first also takes care of
   // the X035's parked-at-vector resets (E158).
-  // The procedure is redone at most reset_retries (1) times (oep-if-debug §4.3: flags bit2).
+  // The procedure is redone at most limits::kResetRetries (1) times (this implementation's choice, oep-if-debug §4.3).
   //
   // A target may restart itself on its way out of the reset: a CH32V003 that boots through its bootloader (BOOT_MODE
   // set, as after a power-on) runs it from the vector and then hands over to the application with a system reset; its
@@ -605,14 +605,14 @@ Ch32Dm::ResetReport Ch32Dm::reset(bool confirm) {
   // failed at 212 ms with status line, a mode 0 reset answered ok and the next requests got line). So after the resume
   // the op looks at the module once more (after the same 1 ms the confirmation gives the image) and, when it is silent,
   // waits for it to answer again - relinking, its havereset acknowledged - before it confirms or answers: a host's next
-  // request finds the module answering. The silent waits together end kResetSettleMs (limits.reset_settle_ms) after the
+  // request finds the module answering. The silent waits together end kResetSettleMs (limits::kResetSettleMs) after the
   // op started - at most that much waiting, as oep-if-debug §4.3 bounds it; the host counts it as argument time
   // (core §4.4). Still silent then: bit0 cleared, no redo (a redo restarts the target into the same hand-over), and the
   // caller answers status line with the connection kept.
   ResetReport report = {0, 0, 0};
   cmderr_ = 0;   // a cmderr of this reset's own abstract commands says fault (§4.3)
   const uint32_t settle_end = millis() + kResetSettleMs;
-  for (uint8_t attempt = 1; attempt <= 1 + v1::reg::kLimitResetRetries; ++attempt) {
+  for (uint8_t attempt = 1; attempt <= 1 + limits::kResetRetries; ++attempt) {
     report.attempts = attempt;
     if (attempt > 1) report.flags |= 4;                     // redone
     uint32_t dpc = 0;
@@ -840,10 +840,13 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
 bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *values, size_t count,
                           uint32_t timeout_ms, const uint16_t *outs, uint32_t *out_values, size_t out_count,
                           RunReport &report) {
-  report = {false, false, 0, 0};
+  report = {false, false, true, 0, 0};   // not run until the resumereq goes out
   if (!halted_) return false;
   if (!keepAuto()) return false;   // abstractauto as found goes back before the answer (§4's table), whatever the way out
   AutoBack auto_back(*this);
+  // DATA0 / DATA1 as the target left them (its console's mailbox): the abstract commands below go through DATA0, so
+  // they are kept now and put back before the hart runs (oep-if-debug §4: the probe's own abstract commands)
+  if (!keepMailbox()) return false;
   // Without ebreakm the final ebreak traps through mtvec and the application restarts
   // (the V003 loader finding, 2026-09-22). prv = M: the hart may have been stopped in U mode
   // (ArduinoCore-CH32 sketches on V3B/V4 run there), where interrupts cannot be masked; the
@@ -862,6 +865,7 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   uint32_t dcsr = 0;
   if (!held([&] { return readRegisterSure(0x07b0, dcsr); })) {
     OEP_LOGF("dm run: dcsr read failed (cmderr %u)", cmderr_);
+    giveMailbox();
     return false;
   }
   const uint32_t ebreak_su = dcsr & kEbreakSU;
@@ -877,7 +881,12 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     }
     return writeRegisterSeen(0x07b1, pc);
   });
-  if (!set) { OEP_LOGF("dm run: dcsr / register / dpc write failed (cmderr %u)", cmderr_); return false; }
+  if (!set) {
+    OEP_LOGF("dm run: dcsr / register / dpc write failed (cmderr %u)", cmderr_);
+    giveMailbox();
+    return false;
+  }
+  if (!giveMailbox()) return false;   // the mailbox back before the hart runs (not seen back: not run)
   OEP_LOGF("dm run: pc %08lx dcsr %08lx, %u regs in, resumereq", static_cast<unsigned long>(pc),
            static_cast<unsigned long>(dcsr), static_cast<unsigned>(count));
   phy_.write(kAbstractAuto, 0);
@@ -890,6 +899,7 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     if (timeout_ms <= 4000000u) return micros() - started >= timeout_ms * 1000u;
     return millis() - started_ms >= timeout_ms;
   };
+  report.not_run = false;
   phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
   bool halted = false;
   uint32_t relinked_us = micros(), looks = 0, unanswered = 0, last_status = 0;
@@ -974,7 +984,7 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   // Out of reset the hart may be unavailable for a while; it should then come up halted at the reset vector.
   // The release is written again with haltreq in case the DM ignored it (it ignores DMI writes for a while after
   // ndmreset, 2026-09-22), and ndmreset is checked clear at the end.
-  // The wait for the hart to halt after the release is dm_wait_ms of time per procedure (oep-if-debug §4.3).
+  // The wait for the hart to halt after the release is limits::kDmWaitMs of time per procedure (oep-if-debug §4.3).
   bool halted = false;
   const uint32_t released_at = millis();
   uint32_t relinked_us = micros();
@@ -1018,7 +1028,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   phy_.write(kAbstractAuto, 0);
   if (!giveMailbox()) return false;        // the instruction runs on the target's own mailbox
   phy_.write(kDmControl, 0x40000001);      // resumereq, once
-  // Back in debug mode by itself within dm_wait_ms of time (oep-if-debug §4.2)?
+  // Back in debug mode by itself within limits::kDmWaitMs of time (oep-if-debug §4.2)?
   bool halted = false;
   const uint32_t started = millis();
   uint32_t relinked_us = micros();
@@ -1032,7 +1042,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
     phy_.write(kAbstractCs, 0x700);
     steady();                              // the stop changed the hart's state
   } else {
-    // Not back: haltreq, and dm_wait_ms more (halt()). Halted by the probe, dcsr.step is cleared and DATA put back as
+    // Not back: haltreq, and limits::kDmWaitMs more (halt()). Halted by the probe, dcsr.step is cleared and DATA put back as
     // below and the answer is status state with dpc_after; still running, halt() has cleared haltreq and the answer is
     // status state with step_left - dcsr.step may still be set, the host halts the hart and clears it (§4.2).
     halted_ = false;

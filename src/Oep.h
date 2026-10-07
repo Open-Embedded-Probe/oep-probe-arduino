@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// OEP v1 core (oep-spec docs/oep-core.ja.md, 498ae95): interfaces found by name, the probe described by fn 0 (the core,
+// OEP v1 core (oep-spec docs/oep-core.ja.md, 0f455a0): interfaces found by name, the probe described by fn 0 (the core,
 // which has no name and is not listed), a lock held by a host-chosen session id, one clock (ns since boot, u64) and one
 // space of resource numbers. The interfaces' shared parts are in OepStream.h (position streams) and OepDebug.h (wire /
 // target status, pin pairs). Every number comes from the registry (OepRegistry.h, generated from oep-spec
@@ -38,8 +38,8 @@ namespace reg = v1::reg;
 // (an RP2's watchdog reset fires 10 ms on). A reset with the device still on the bus left an RP2350 and an ESP32-P4
 // failing their device descriptor request after they came back, until a replug (bench, 0.0.29-dev+3c0cd99: Windows'
 // "unknown USB device (device descriptor request failed)"). Endpoint::kRestartSettleMs (the answer's last packet taken)
-// before the handler, these after it: the reset starts within restart_after_answer_ms (oep-if-restart §2, checked in
-// OepEndpoint.h).
+// before the handler, these after it: the reset starts soon after the answer (oep-if-restart §2: nothing is answered
+// until it does).
 constexpr uint32_t kRestartDetachMs = 60, kRestartResetMs = 10;
 
 constexpr uint8_t kRoleRequest = reg::kRoleRequest, kRoleResult = reg::kRoleResult;
@@ -55,15 +55,16 @@ constexpr size_t kEventHeader = 6;
 constexpr size_t kRequestHeader = 10, kResultHeader = 5;
 
 // Reject reasons added in v1 (0x01..0x06 as in v0).
-constexpr uint8_t kRejectResultLost = reg::kRejectResultLost, kRejectCorrReused = reg::kRejectCorrReused;
+constexpr uint8_t kRejectResultLost = reg::kRejectResultLost;
 constexpr uint8_t kRejectNoSession = reg::kRejectNoSession;              // a session_id while no session holds the lock: open again
 constexpr uint8_t kRejectLocked = reg::kRejectLocked;                    // another session holds it; payload = remaining ms
 constexpr uint8_t kRejectSessionRequired = reg::kRejectSessionRequired;  // an op that needs the lock with session_id 0
 constexpr uint8_t kRejectNoConnection = reg::kRejectNoConnection;        // the request's connection is not known
 constexpr uint8_t kRejectUnsupported = reg::kRejectUnsupported;          // defined, not handled here: payload tag(u8) [TLV]
 
-// The longest one request may take (core §7.5 max_op_ms, declared in fn 0's describe): the reference firmware's value.
-constexpr uint32_t kMaxOpMs = reg::kReferenceMaxOpMs;
+// The longest one request may take (core §7.5 max_op_ms, declared in fn 0's describe): this implementation's value
+// (docs/implementation-limits.ja.md §1.1; the specification leaves it to the probe).
+constexpr uint32_t kMaxOpMs = 10000;
 static_assert(kMaxOpMs >= 1 && kMaxOpMs <= reg::kLimitMaxOpMsMax, "max_op_ms is 1 to max_op_ms_max (core §7.5)");
 
 // core (fn 0, core §12): every op required, none optional
@@ -76,23 +77,22 @@ constexpr uint8_t kOpOpen = reg::core::kOpOpen, kOpEnd = reg::core::kOpEnd, kOpK
 constexpr uint8_t kOpSubscribe = reg::kOpSubscribe, kOpUnsubscribe = reg::kOpUnsubscribe;
 // oep.probe.plan (oep-if-plan) and oep.probe.restart (oep-if-restart): their own fns, which the endpoint lists itself
 constexpr uint8_t kOpPlanApply = reg::probe_plan::kOpPlanApply, kOpPlanRelease = reg::probe_plan::kOpPlanRelease;
-constexpr uint8_t kTagRoleAssignment = reg::probe_plan::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16), sent critical (0x90)
+constexpr uint8_t kTagRoleAssignment = reg::probe_plan::kTlvPlanApplyRoleAssignment;   // fn(u16) role(u8) channel(u16)
 constexpr uint8_t kOpRestart = reg::probe_restart::kOpRestart;
 
 // common describe tags (core §7.4)
 constexpr uint8_t kTagRoleChannels = reg::kDescribeRoleChannels, kTagMaxClockHz = reg::kDescribeMaxClockHz,
                   kTagMaxLength = reg::kDescribeMaxLength, kTagMinClockHz = reg::kDescribeMinClockHz,
-                  kTagFeatures = reg::kDescribeFeatures, kTagImplementation = reg::kDescribeImplementation,
+                  kTagFeatures = reg::kDescribeFeatures,
                   kTagChannelGroup = reg::kDescribeChannelGroup, kTagOps = reg::kDescribeOps;
 // fn 0's own describe tags: the probe itself (core §7.5)
 constexpr uint8_t kCoreFirmware = reg::core::kTlvDescribeFirmware, kCoreModel = reg::core::kTlvDescribeModel,
                   kCoreUnitId = reg::core::kTlvDescribeUnitId, kCoreChannels = reg::core::kTlvDescribeChannels,
-                  kCoreReserved = reg::core::kTlvDescribeReserved, kCoreProfile = reg::core::kTlvDescribeProfile,
-                  kCoreLabel = reg::core::kTlvDescribeLabel, kCoreResetsOnOpen = reg::core::kTlvDescribeResetsOnOpen;
+                  kCoreLabel = reg::core::kTlvDescribeLabel, kCoreChip = reg::core::kTlvDescribeChip;
 
-// TLV tag bits (core §2.2): bit 7 = critical (in requests); 0x7F = ignored (in every result); 0xFF invalid; 0x00 never a
-// tag (the rejected unsupported payload's "fixed-part value" marker).
-constexpr uint8_t kTagCritical = reg::kTagCritical, kTagIgnored = reg::kTagIgnored, kTagInvalid = reg::kTagInvalid;
+// TLV tag bits (core §2.2): bit 7 = critical (in requests); 0x00 and 0x7F are never tags (0x00: the rejected
+// unsupported payload's "fixed-part value" marker).
+constexpr uint8_t kTagCritical = reg::kTagCritical;
 constexpr uint8_t kTagValue = reg::kTagReservedZero;
 
 inline uint16_t getU16(const uint8_t *p) { return uint16_t(p[0]) | uint16_t(p[1]) << 8; }
@@ -113,8 +113,6 @@ constexpr size_t kTlvHeader = 3;
 inline void putTlvHeader(uint8_t *p, uint8_t tag, uint16_t length) { p[0] = tag; putU16(p + 1, length); }
 // The bytes a TLV of `length` takes with its header.
 constexpr size_t tlvSize(size_t length) { return length + kTlvHeader; }
-// The room an answer keeps for its ignored TLV when it sizes its variable data (core §2.3): tag, len and 16 entries.
-constexpr size_t kIgnoredRoom = kTlvHeader + reg::kLimitIgnoredMaxEntries;
 
 // The probe's one clock (core §2.6a): ns since boot, u64; it does not decrease and does not wrap while the boot_id is
 // the same. fn 0's clock op (core §7.7), marks, segments and the slots' "last tried" all use it; "not yet" is all ones.
@@ -212,31 +210,7 @@ inline bool blockCountFits(uint16_t count, uint16_t max_length) { return 4u * co
 // (openembeddedprobe_version.h, written by the release). A build between releases reports the last release.
 constexpr const char *kFirmwareVersion = OPENEMBEDDEDPROBE_VERSION_STR;
 
-// Text in a request (core §2.1): valid UTF-8 (shortest form, no surrogates, at most U+10FFFF) with no C0 control
-// character and no 0x7F. false: the request is malformed.
-inline bool requestText(const uint8_t *p, size_t n) {
-  for (size_t i = 0; i < n;) {
-    const uint8_t c = p[i];
-    if (c < 0x20 || c == 0x7F) return false;
-    if (c < 0x80) { ++i; continue; }
-    size_t more;
-    uint32_t cp, min;
-    if ((c & 0xE0) == 0xC0) { more = 1; cp = c & 0x1F; min = 0x80; }
-    else if ((c & 0xF0) == 0xE0) { more = 2; cp = c & 0x0F; min = 0x800; }
-    else if ((c & 0xF8) == 0xF0) { more = 3; cp = c & 0x07; min = 0x10000; }
-    else return false;
-    if (more > n - 1 - i) return false;   // cut short
-    for (size_t k = 1; k <= more; ++k) {
-      if ((p[i + k] & 0xC0) != 0x80) return false;
-      cp = (cp << 6) | (p[i + k] & 0x3F);
-    }
-    if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return false;
-    i += 1 + more;
-  }
-  return true;
-}
-
-// A token of `a-z 0-9 -` only, 1 to `max` bytes (core §7.5: model, unit_id).
+// A token of `a-z 0-9 -` only, 1 to `max` bytes (core §7.5: unit_id; interface names' labels).
 inline bool lowerToken(const uint8_t *p, size_t n, size_t max) {
   if (n == 0 || n > max) return false;
   for (size_t i = 0; i < n; ++i)
@@ -275,87 +249,37 @@ inline bool tlvAt(const uint8_t *p, size_t n, size_t at, uint8_t &tag, const uin
 // The TLVs after a request's fixed part (core §2.3). A handler checks the fixed part (shorter = malformed), then:
 //
 //   Tail tail;
-//   const Result r = tail.parse(p + fixed, n - fixed, kKnown, out, capacity);   // kKnown: tags (bit 7 clear) it reads
+//   const Result r = tail.parse(p + fixed, n - fixed, kKnown, out, capacity);   // kKnown: the tags (bit 7 clear) it implements
 //   if (r.resolution != kResolutionCompleted) return r;                         // malformed, or unsupported + tag
-//   ... tail.find(tag, len, &critical) for a known tag; tail.refuse(tag, critical, ...) for a value it cannot honour
-//   return tail.finish(result, out, capacity);                                  // appends ignored (0x7F) if any
+//   ... tail.fixed(tag, size, value, ...) / tail.find(tag, len, &critical) for an implemented tag;
+//   Tail::refuse(tag, critical, ...) for a value it does not handle
 //
-// Unknown critical tags reject the request (unsupported, payload = the tag byte as received); unknown
-// non-critical ones are ignored and listed in the result's ignored TLV, once per TLV ignored. Tag 0xFF or 0x7F anywhere
-// is malformed. A known TLV whose value is longer than its one form is a longer request TLV (core §2.3): the handler
-// refuses it (critical: unsupported with its tag as received) or ignores it (refuse() does both). ignored goes on every
-// completed answer, a failed status too (core §2.3): the list lives for the request (RequestIgnored), and the endpoint
-// appends it to a completed answer whose handler did not (finish) - a handler's early `return failed()` keeps it.
-struct RequestIgnored {
-  static constexpr size_t kMax = reg::kLimitIgnoredMaxEntries;
-  uint8_t tags[kMax];
-  uint8_t count;
-  bool more;      // more than kMax were ignored: the last entry is 0x00 (core §2.3)
-  bool written;   // finish put it in the answer already
-  void reset() { count = 0; more = false; written = false; }
-  void add(uint8_t tag) {
-    if (count < kMax) tags[count++] = tag & ~kTagCritical;
-    else more = true;
-  }
-  // The bytes the ignored TLV takes (0: nothing ignored): what an answer keeps free when it sizes its variable data.
-  size_t room() const { return count ? kTlvHeader + count : 0; }
-  // Append the ignored TLV after a completed result's payload: one entry per ignored TLV in request order, at most 16 -
-  // more: the first 15 and 0x00; fewer than that fit: as many as fit, 0x00 the last (core §2.3: 4 bytes always fit).
-  Result append(Result result, uint8_t *out, size_t capacity) {
-    if (result.resolution != kResolutionCompleted || !count || written) return result;
-    if (result.length + kTlvHeader + 1 > capacity) return result;
-    size_t n = count;
-    bool cut = more;
-    if (result.length + kTlvHeader + n > capacity) { n = capacity - result.length - kTlvHeader; cut = true; }
-    putTlvHeader(out + result.length, kTagIgnored, static_cast<uint16_t>(n));
-    memcpy(out + result.length + kTlvHeader, tags, n);
-    if (cut) out[result.length + kTlvHeader + n - 1] = kTagValue;   // "more were ignored" (0x00 is never a tag)
-    result.length += kTlvHeader + n;
-    written = true;
-    return result;
-  }
-};
-inline RequestIgnored g_request_ignored = {};
-
+// An unknown tag (one this probe does not implement) that is critical rejects the request (unsupported, payload = the
+// tag byte as received); an unknown non-critical one is ignored, nothing said about it. An implemented TLV is checked the
+// same with or without bit 7: a value whose length differs from its definition, or a value the definition excludes, is
+// malformed; a value the definition leaves unused or this probe does not handle is unsupported with the tag as received
+// (core §2.3). A tag that appears twice where its definition does not say it repeats: the first one is used.
 class Tail {
  public:
-  static constexpr size_t kMaxIgnored = RequestIgnored::kMax;
-
-  // The whole tail's form is checked before any unknown critical tag is refused (core §4.3: malformed, order 5, comes
-  // before unsupported, order 6). deferred: the unsupported refusal is not returned but stored there (the first one;
-  // completed when there is none), for a handler with checks of its own that come first (plan_apply's fns).
+  // The whole tail's form is checked before any unknown critical tag is refused (one answer per request, core §4.3).
+  // deferred: the unsupported refusal is not returned but stored there (the first one; completed when there is none),
+  // for a handler with checks of its own that come first (plan_apply's fns).
   Result parse(const uint8_t *p, size_t n, const uint8_t *known, size_t known_count, uint8_t *out, size_t capacity,
                Result *deferred = nullptr) {
     p_ = p;
     n_ = n;
-    g_request_ignored.reset();
     size_t at = 0;
     uint8_t raw = 0;
     size_t len = 0;
     const uint8_t *value = nullptr;
-    while (at < n) {
+    while (at < n)
       if (!step(at, raw, value, len)) return rejected(kRejectMalformed);
-      // 0x7F / 0xFF (ignored, invalid) and 0x00 / 0x80 (never a tag) in a request: malformed (core §2.2, §2.3)
-      if ((raw & ~kTagCritical) == kTagIgnored || (raw & ~kTagCritical) == kTagValue) return rejected(kRejectMalformed);
-      // a known tag whose definition does not say it repeats appears at most once, critical or not (core §2.3)
-      const uint8_t tag = raw & ~kTagCritical;
-      if (!listed(known, known_count, tag) || listed(repeating_, repeating_count_, tag)) continue;
-      size_t later = at, later_len = 0;
-      uint8_t later_raw = 0;
-      const uint8_t *later_value = nullptr;
-      while (later < n && step(later, later_raw, later_value, later_len))
-        if ((later_raw & ~kTagCritical) == tag) return rejected(kRejectMalformed);
-    }
     if (deferred) *deferred = completed();
     for (at = 0; at < n && step(at, raw, value, len);) {
       const uint8_t tag = raw & ~kTagCritical;
-      if (listed(known, known_count, tag)) continue;
-      if (raw & kTagCritical) {
-        if (!deferred) return unsupportedTag(out, capacity, raw);
-        if (deferred->resolution == kResolutionCompleted) *deferred = unsupportedTag(out, capacity, raw);
-        continue;
-      }
-      ignore(tag);
+      if (listed(known, known_count, tag) || !(raw & kTagCritical)) continue;   // unknown non-critical: ignored
+      if (!deferred) return unsupportedTag(out, capacity, raw);
+      if (deferred->resolution == kResolutionCompleted) *deferred = unsupportedTag(out, capacity, raw);
     }
     return completed();
   }
@@ -368,77 +292,46 @@ class Tail {
     return parse(p, n, known, N, out, capacity, deferred);
   }
 
-  // The bytes the ignored TLV will take after the answer's payload (0: none): kept free by an answer that sizes its
-  // variable data (a page, the bytes of a read) - core §2.3.
-  size_t room() const { return g_request_ignored.room(); }
-
-  // The known tags whose definition says they repeat (core §2.3): set before parse. Every other known tag that appears
-  // twice is malformed.
-  template <size_t N>
-  Tail &repeats(const uint8_t (&tags)[N]) {
-    repeating_ = tags;
-    repeating_count_ = N;
-    return *this;
-  }
-
-  // A known tag's value (its last occurrence), nullptr when absent. critical: whether the host marked it.
+  // An implemented tag's value (its first occurrence, core §2.3), nullptr when absent. critical: whether the host marked it.
   const uint8_t *find(uint8_t tag, size_t &length, bool *critical = nullptr) const {
-    const uint8_t *found = nullptr;
     size_t at = 0;
     uint8_t raw = 0;
     size_t len = 0;
     const uint8_t *value = nullptr;
     while (at < n_ && step(at, raw, value, len)) {
       if ((raw & ~kTagCritical) != (tag & ~kTagCritical)) continue;
-      found = value;
       length = len;
       if (critical) *critical = raw & kTagCritical;
+      return value;
     }
-    return found;
+    return nullptr;
   }
-  // A known TLV of one fixed `size` (core §2.3): `value` it when present with that length. Shorter: malformed. Longer
-  // (a request TLV is never extended at its end): critical -> unsupported with the tag as received, else the whole TLV
-  // is ignored (listed) and `value` is nullptr as when absent. completed() unless refused.
+  // An implemented TLV of one fixed `size` (core §2.3): `value` it when present with that length; any other length is
+  // malformed, critical or not. completed() unless refused.
   Result fixed(uint8_t tag, size_t size, const uint8_t *&value, uint8_t *out, size_t capacity, bool *critical = nullptr) {
+    (void)out;
+    (void)capacity;
     size_t len = 0;
     bool crit = false;
     value = find(tag, len, &crit);
     if (critical) *critical = crit;
     if (!value) return completed();
-    if (len < size) { value = nullptr; return rejected(kRejectMalformed); }
-    if (len > size) { value = nullptr; return refuse(tag, crit, out, capacity); }
+    if (len != size) { value = nullptr; return rejected(kRejectMalformed); }
     return completed();
   }
   // Every TLV in order (for a request that is a list of them, like plan_apply). false at the end.
   bool next(size_t &at, uint8_t &raw, const uint8_t *&value, size_t &length) const {
     return at < n_ && step(at, raw, value, length);
   }
-  // A known tag whose value this probe cannot honour, or whose value is longer than its one form (core §2.3: request
-  // TLV values never grow at their end): critical -> the rejection (unsupported + the tag as received, critical bit
-  // set) to return; otherwise it goes on the ignored list and the result is completed() (go on without it).
-  Result refuse(uint8_t tag, bool critical, uint8_t *out, size_t capacity) {
-    tag &= ~kTagCritical;
-    if (critical) return unsupportedTag(out, capacity, tag | kTagCritical);
-    ignore(tag);
-    return completed();
-  }
-  // A known tag its interface's definition makes critical whether or not bit 7 is set (core §2.3; capture §3.3 sent
-  // critical): a value this probe cannot honour is always refused - unsupported, the tag byte as received (bit 7 as
-  // the host sent it) - and never ignored.
-  static Result refuseCritical(uint8_t tag, bool critical, uint8_t *out, size_t capacity) {
+  // An implemented tag whose value this probe does not handle (or the definition leaves unused): rejected unsupported,
+  // the tag byte as received (bit 7 as the host sent it), whether or not it was critical (core §2.3).
+  static Result refuse(uint8_t tag, bool critical, uint8_t *out, size_t capacity) {
     return unsupportedTag(out, capacity, critical ? tag | kTagCritical : tag & ~kTagCritical);
   }
-  bool anyIgnored() const { return g_request_ignored.count != 0; }
-  // One more TLV of `tag` ignored (a known tag whose value this probe skips without a refusal, like gpio set's drive).
-  void ignore(uint8_t tag) { g_request_ignored.add(tag); }
-  // Append the ignored TLV after a completed result's payload (any status).
-  Result finish(Result result, uint8_t *out, size_t capacity) const { return g_request_ignored.append(result, out, capacity); }
 
  private:
   const uint8_t *p_ = nullptr;
   size_t n_ = 0;
-  const uint8_t *repeating_ = nullptr;
-  size_t repeating_count_ = 0;
   static bool listed(const uint8_t *tags, size_t count, uint8_t tag) {
     for (size_t i = 0; i < count; ++i) if ((tags[i] & ~kTagCritical) == tag) return true;
     return false;
@@ -524,20 +417,19 @@ class TlvWriter {
 };
 
 // The resource numbers (core §9): one u16 space for the whole probe (connections, streams, whatever an interface numbers),
-// 1 upwards, 65535 then 1 again, a number closed recently (the last kRecent) not given out again. Live numbers are
-// remembered with their kind so a request naming a live number of another kind is refused unavailable cause 6, and a
-// number nobody holds no_connection.
+// each new one the previous plus 1 (65535 then 1 again), a number in use skipped. Live numbers are remembered with their
+// kind so a request naming a live number of another kind is refused unavailable cause 6, and a number nobody holds
+// no_connection.
 class ResourceNumbers {
  public:
   enum Kind : uint8_t { kNone = 0, kConnection = 1, kStream = 2 };
-  // A closed number is not taken again while it is among the last resource_reuse_distance closed (core §9).
-  static constexpr size_t kRecent = reg::kLimitResourceReuseDistance, kLive = 16;
-  // The next free number, registered live as `kind` (0 when every number is live or recently closed - not in practice).
+  static constexpr size_t kLive = 16;
+  // The next free number, registered live as `kind` (0 when every number is live - not in practice).
   static uint16_t take(Kind kind) {
     for (uint32_t tries = 0; tries < 0x10000; ++tries) {
       const uint16_t n = next_++;
       if (next_ == 0) next_ = 1;
-      if (n == 0 || recentlyClosed(n) || kindOf(n) != kNone) continue;
+      if (n == 0 || kindOf(n) != kNone) continue;
       for (Live &l : live_) if (l.kind == kNone) { l = {n, kind}; return n; }
       return 0;
     }
@@ -545,7 +437,6 @@ class ResourceNumbers {
   }
   static void close(uint16_t number) {
     for (Live &l : live_) if (l.kind != kNone && l.number == number) l.kind = kNone;
-    recent_[recent_at_++ % kRecent] = number;
   }
   // Re-register a number that was closed (a console stream opened again at the same place keeps its number).
   static bool reopen(uint16_t number, Kind kind) {
@@ -557,11 +448,9 @@ class ResourceNumbers {
     for (const Live &l : live_) if (l.kind != kNone && l.number == number) return l.kind;
     return kNone;
   }
-  // As at boot: nothing live, nothing closed recently, the next number 1 (a host test that plays a probe from boot).
+  // As at boot: nothing live, the next number 1 (a host test that plays a probe from boot).
   static void reset() {
     next_ = 1;
-    recent_at_ = 0;
-    for (uint16_t &r : recent_) r = 0;
     for (Live &l : live_) l = {0, kNone};
   }
   // The rejection for a number that is not the resource asked for: another live kind = unavailable cause 6, else
@@ -579,13 +468,7 @@ class ResourceNumbers {
 
  private:
   struct Live { uint16_t number; Kind kind; };
-  static bool recentlyClosed(uint16_t n) {
-    for (size_t i = 0; i < kRecent; ++i) if (recent_[i] == n) return true;
-    return false;
-  }
   static inline uint16_t next_ = 1;
-  static inline uint16_t recent_[kRecent] = {};
-  static inline size_t recent_at_ = 0;
   static inline Live live_[kLive] = {};
 };
 
@@ -624,18 +507,18 @@ class Interface {
     return count ? kRejectUnavailable : 0;
   }
   // The cause (core §4.3 unavailable payload) of the last planCheck that answered unavailable when none of its channels
-  // is held by something else (the endpoint reports a held channel itself: cause 1, the channel, its holder_kind).
+  // is held by something else (the endpoint reports a held channel itself: cause 1, the channel).
   virtual uint8_t planRefusalCause() const { return reg::core::kUnavailableCauseWrongState; }
-  // ... and the channel it met and its holder_kind, when the cause has them (0xFFFF / 0: left out) - an analog channel
-  // whose idle is an output: cause 5, the channel, holder_kind 7 (core §8, oep-if-capture §1.2).
-  virtual void planRefusalDetail(uint16_t &channel, uint8_t &holder_kind) const { (void)channel; (void)holder_kind; }
+  // ... and the channel it met, when the cause has one (0xFFFF: left out) - an analog channel whose idle is an output:
+  // cause 5, the channel (core §8, oep-if-capture §1.2).
+  virtual void planRefusalDetail(uint16_t &channel) const { (void)channel; }
   virtual bool planApply(const RoleAssignment *roles, size_t count) { (void)roles; (void)count; return true; }
   virtual void planRelease() {}
   // false: this interface's planned channels are shared with no other fn's plan (core §8.1) - an analog input that
   // takes its pad from the digital side (oep-if-capture §1.2). The endpoint refuses the overlap whichever comes second.
   virtual bool planShares() const { return true; }
   // The capture-group fn this interface is bound into, 0 = none (oep-if-capture §4.1): plan_apply and plan_release of
-  // its fn are refused unavailable cause 4 with that holder_fn, before anything changes.
+  // its fn are refused unavailable cause 4, before anything changes.
   virtual uint16_t boundTo() const { return 0; }
   // The lock holder's session ended - end, its lease lapsed, or another host took the lock by force, all alike (core
   // §6.4, §9): drop everything that session created or shared (a wire: the host's use of its connections; a console:
@@ -683,14 +566,14 @@ class DirectTransport {
   ~DirectTransport() = default;
 };
 
-// The part of fn 0's describe every probe writes the same way: firmware, model, unit id, channel count and
-// the reserved-channel bitmap. The sketch adds its profile and fixed labels after it; the endpoint adds the transports,
-// discoverable and max_op_ms (plan_roles and restart_max_ms are oep.probe.plan's and oep.probe.restart's describes). unit_id is mandatory (core §7.5, 1 to 32 bytes of a-z 0-9 -): without one the
-// writer fails rather than send a describe that leaves it out; a model outside its form (core §7.5) fails it too.
+// The part of fn 0's describe every probe writes the same way: firmware, model, unit id and channel count. The sketch
+// adds its fixed labels and chip after it; the endpoint adds the transports and max_op_ms (plan_roles and restart_max_ms
+// are oep.probe.plan's and oep.probe.restart's describes). unit_id is mandatory (core §7.5, 1 to 32 bytes of a-z 0-9 -):
+// without one the writer fails rather than send a describe that leaves it out. model is free text (left out when empty).
 // firmware_note: put after the version in the firmware text, in parentheses, when not empty (the reference firmware's
-// BootGuard::lastBoot(): what ended the boot before this one).
+// BootGuard::lastBoot(): what ended the boot before this one - this implementation's, docs/implementation-limits §2.2).
 inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id, size_t unit_id_length,
-                         uint16_t channels, uint64_t reserved, const char *firmware_note = nullptr) {
+                         uint16_t channels, const char *firmware_note = nullptr) {
   if (firmware_note && *firmware_note) {
     char firmware[128];
     snprintf(firmware, sizeof firmware, "%s (%s)", kFirmwareVersion, firmware_note);
@@ -698,34 +581,22 @@ inline bool describeCore(TlvWriter &w, const char *model, const uint8_t *unit_id
   } else {
     w.text(kCoreFirmware, kFirmwareVersion);
   }
-  // model: lowercase a-z 0-9 -, 1 to 32 bytes (core §7.5); unit_id: the same characters, 1 to 32 bytes
-  if (!lowerToken(reinterpret_cast<const uint8_t *>(model), model ? strlen(model) : 0, reg::kLimitModelMaxBytes)) {
-    w.fail();
-    return false;
-  }
-  w.text(kCoreModel, model);
+  if (model && *model) w.text(kCoreModel, model);
   if (!lowerToken(unit_id, unit_id_length, reg::kLimitUnitIdMaxBytes)) {
     w.fail();
     return false;
   }
   w.put(kCoreUnitId, unit_id, unit_id_length);
-  w.u16(kCoreChannels, channels);
-  uint8_t bitmap[2 + 8] = {0, 0};                       // first channel (u16) = 0, then one bit per channel
-  const size_t bytes = (channels + 7) / 8 < 8 ? (channels + 7) / 8 : 8;
-  for (size_t i = 0; i < bytes; ++i) bitmap[2 + i] = static_cast<uint8_t>(reserved >> (8 * i));
-  return w.put(kCoreReserved, bitmap, 2 + bytes);
+  return w.u16(kCoreChannels, channels);
 }
 
-// rejected unavailable with core §4.3's payload: why (cause, 0 = left out), the channel it met and who holds it
-// (0xFFFF / 0 = left out), then an interface's own TLVs (`extra`, 0x40 and up). Hosts may ignore all of it.
+// rejected unavailable with core §4.3's payload: why (cause, 0 = left out), the channel it met (0xFFFF = left out), then
+// an interface's own TLVs or the capture-group's fn (`extra`). Hosts may ignore all of it.
 inline Result unavailable(uint8_t *out, size_t capacity, uint8_t cause, uint16_t channel = 0xFFFF,
-                          uint16_t holder_fn = 0xFFFF, uint8_t holder_kind = 0, const uint8_t *extra = nullptr,
-                          size_t extra_length = 0) {
+                          const uint8_t *extra = nullptr, size_t extra_length = 0) {
   TlvWriter w(out, capacity);
   if (cause) w.u8(reg::core::kTlvUnavailablePayloadCause, cause);
   if (channel != 0xFFFF) w.u16(reg::core::kTlvUnavailablePayloadChannel, channel);
-  if (holder_fn != 0xFFFF) w.u16(reg::core::kTlvUnavailablePayloadHolderFn, holder_fn);
-  if (holder_kind) w.u8(reg::core::kTlvUnavailablePayloadHolderKind, holder_kind);
   if (extra && extra_length && w.length() + extra_length <= capacity) { memcpy(out + w.length(), extra, extra_length); }
   const size_t n = w.ok() ? w.length() + (extra && w.length() + extra_length <= capacity ? extra_length : 0) : 0;
   return {kResolutionRejected, kRejectUnavailable, n};

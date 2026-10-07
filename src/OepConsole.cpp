@@ -13,7 +13,6 @@ size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   static const uint8_t kMechanisms[] = {con::kMechanismSdi, con::kMechanismDmdata, con::kMechanismDmseq};
   w.put(con::kTlvDescribeMechanisms, kMechanisms, sizeof kMechanisms);   // oep-if-console §1
-  w.u16(con::kTlvDescribeSendQueue, DmConsole::kSendQueue);              // §1: required with DMDATA / dmseq
   return w.ok() ? w.length() : 0;
 }
 
@@ -54,9 +53,6 @@ void TargetConsoleStream::poll() {
   if (!open_) return;
   if (port_.resets != seen_resets_) {     // a reset the host asked for (riscv-dm reset, attach's reset TLV)
     seen_resets_ = port_.resets;
-    reset_marked_ = true;                 // where a bind's port resumes after a session (probe.config §1.2)
-    reset_mark_resets_ = port_.resets;
-    reset_mark_position_ = stream_.end();
     stream_.mark(kMarkReset, port_.reset_detail);
   }
   if (port_.dm.restarts() != seen_restarts_) {   // havereset seen and acknowledged: the target restarted by itself
@@ -140,7 +136,7 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     if (!openStream(mechanism, kUserHost, existing)) return failedStatus(kStatusLine, out, capacity);
     putU16(out, stream_number_);
     out[2] = existing ? con::kOpenFlagsExisting : 0;
-    return tail.finish(completed(3), out, capacity);
+    return completed(3);
   }
   if (op == kOpStreams) {   // first(u8) [TLV] -> more(u8) count(u8) count x (stream(u16) connection(u16) mechanism(u8) users(u8) state(u8))
     const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
@@ -148,17 +144,17 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     if (capacity < 9) return failed();
     out[0] = 0;   // more: never (one stream at most)
     out[1] = exists_ && payload[0] == 0 ? 1 : 0;
-    if (!out[1]) return tail.finish(completed(2), out, capacity);
+    if (!out[1]) return completed(2);
     putU16(out + 2, stream_number_);   // no element length (core §2.3)
     putU16(out + 4, connection_);
     out[6] = mechanism_;
     out[7] = users_;
     out[8] = open_ ? con::kStreamStateOpen : con::kStreamStateClosed;
-    return tail.finish(completed(9), out, capacity);
+    return completed(9);
   }
   if (length < 2) return rejected(kRejectMalformed);
-  // The request's form and values first, nothing done: a number it does not know is the last refusal of core §4.3
-  // (order 8), after malformed and unsupported.
+  // The request's form and values first, nothing done, then the number it names (core §4.3: every check before
+  // anything changes).
   checking_ = true;
   const Result checked = streamOp(op, payload + 2, length - 2, out, capacity);
   checking_ = false;
@@ -176,11 +172,11 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
     case kOpRead: {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) len(u16) data [TLV]
       const Result parsed = plainTail(tail, p, n, PositionStream::kReadRequest, out, capacity);
       if (refused(parsed)) return parsed;
-      const Result values = PositionStream::checkRead(p, out, capacity);   // from 3's arg, from 4+ (common §1.2)
+      const Result values = PositionStream::checkRead(p, out, capacity);   // from 4+ (common §1.2)
       if (refused(values)) return values;
       if (checking_) return completed();
       poll();   // take what is waiting first
-      return tail.finish(stream_.read(p, out, capacity, max_read_, tail.room()), out, capacity);
+      return stream_.read(p, out, capacity, max_read_);
     }
     case kOpMarks: {   // from_serial(u32) [TLV]  ->  more(u8) count(u8) entries [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
@@ -188,15 +184,14 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (checking_) return completed();
       if (capacity < 2) return failed();
       poll();
-      const size_t room = capacity - tail.room();
-      return tail.finish(completed(stream_.marks(getU32(p), out, room)), out, capacity);
+      return completed(stream_.marks(getU32(p), out, capacity));
     }
     case kOpClose: {   // the host's share goes; a closed stream's close does nothing (oep-if-console §1)
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (checking_) return completed();
       release(kUserHost, reg::common::kMarkDetailClosedAllReleased);
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case kOpClear: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
@@ -204,7 +199,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (checking_) return completed();
       if (!open_) return wrongState(out, capacity);
       stream_.clear();
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case kOpMark: {   // value(u8) [TLV]
       const Result parsed = plainTail(tail, p, n, 1, out, capacity);
@@ -212,25 +207,25 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (checking_) return completed();
       if (!open_) return wrongState(out, capacity);
       stream_.mark(kMarkHost, p[0]);
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case kOpWrite: {   // count(u16) data [TLV]  ->  accepted(u16) [TLV]: what went into the send queue (§2)
       if (n < 2) return rejected(kRejectMalformed);
       const uint16_t count = getU16(p);
       const Result parsed = plainTail(tail, p, n, 2u + count, out, capacity);
       if (refused(parsed)) return parsed;
-      if (count == 0) return rejected(kRejectMalformed);
       if (checking_) return completed();
       if (!open_) return wrongState(out, capacity);
       if (capacity < 2) return failed();
       poll();   // a frame waiting takes from the queue first, so its free space is as it is now
       if (!open_) return wrongState(out, capacity);
-      // min(count, free space); 0 only when the queue is full, or always on SDI (one way, §3.1)
+      // min(count, free space); 0 only when the queue is full, or always on SDI (one way, §3.1); count 0: success
+      // (accepted = count, common §1.4)
       const size_t queued = driver_.queue(p + 2, count);
       driver_.poll();   // start it on its way
       putU16(out, static_cast<uint16_t>(queued));
       const Result r = queued == count ? completed(2) : queued ? partial(2) : failed(2);
-      return tail.finish(r, out, capacity);
+      return r;
     }
     default:
       return rejected(kRejectUnknownOperation);

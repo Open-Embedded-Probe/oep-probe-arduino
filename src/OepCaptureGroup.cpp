@@ -9,9 +9,9 @@ namespace oep {
 namespace grp = reg::fixture_capture_group;
 namespace cap = reg::fixture_logic;
 
-bool CaptureGroup::addTrack(Interface &interface, GroupTrack &track, uint32_t start_skew_ns) {
+bool CaptureGroup::addTrack(Interface &interface, GroupTrack &track) {
   if (count_ >= kMaxTracks) return false;
-  tracks_[count_++] = {&interface, &track, start_skew_ns};
+  tracks_[count_++] = {&interface, &track};
   return true;
 }
 
@@ -38,21 +38,7 @@ size_t CaptureGroup::describe(uint8_t *out, size_t capacity) {
   uint8_t fns[1 + 2 * kMaxTracks] = {static_cast<uint8_t>(count_)};   // n(u8) n x fn(u16)
   for (size_t i = 0; i < count_; ++i) putU16(fns + 1 + 2 * i, endpoint_.fnOf(*tracks_[i].interface));
   w.put(grp::kTlvDescribeTracks, fns, 1 + 2 * count_);
-  w.u8(grp::kTlvDescribeMaxTracks, static_cast<uint8_t>(count_));
-  for (size_t k = 0; k < budget_count_; ++k) {   // max_sps(u32) n(u8) n x fn(u16)
-    uint8_t v[9] = {};
-    putU32(v, budgets_[k].max_rate);
-    v[4] = 2;
-    putU16(v + 5, endpoint_.fnOf(*tracks_[budgets_[k].a].interface));
-    putU16(v + 7, endpoint_.fnOf(*tracks_[budgets_[k].b].interface));
-    w.put(grp::kTlvDescribeBudget, v, sizeof v);
-  }
-  for (size_t i = 0; i < count_; ++i) {   // one per track, a typical 0 too (§4.3)
-    uint8_t v[6];
-    putU16(v, endpoint_.fnOf(*tracks_[i].interface));
-    putU32(v + 2, tracks_[i].skew_ns);
-    w.put(grp::kTlvDescribeStartSkew, v, sizeof v);
-  }
+  // which sets bind together (the budgets, a track that cannot follow) is found by trying bind (§4.3)
   return w.ok() ? w.length() : 0;
 }
 
@@ -69,7 +55,7 @@ void CaptureGroup::unbind() {
 Result CaptureGroup::refuseTrack(uint8_t cause, uint16_t fn, uint8_t *out, size_t capacity) const {
   uint8_t extra[5] = {reg::core::kTlvUnavailablePayloadFn, 2, 0, 0, 0};   // tag len(u16) fn(u16)
   putU16(extra + 3, fn);
-  return unavailable(out, capacity, cause, 0xFFFF, 0xFFFF, 0, extra, sizeof extra);
+  return unavailable(out, capacity, cause, 0xFFFF, extra, sizeof extra);
 }
 
 uint8_t CaptureGroup::state() const {
@@ -105,7 +91,7 @@ void CaptureGroup::stopAll(uint8_t reason, uint8_t error) {
 Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (op) {
-    case grp::kOpBind: {   // n(u8) n x fn(u16) [TLV 0x01 trigger_track fn(u16), critical]
+    case grp::kOpBind: {   // n(u8) n x fn(u16) [TLV 0x01 trigger_track fn(u16)]
       if (length < 1 || length < 1u + 2u * payload[0]) return rejected(kRejectMalformed);
       const uint8_t n = payload[0];
       static const uint8_t kKnown[] = {grp::kTlvBindTriggerTrack};
@@ -115,13 +101,13 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       for (uint8_t k = 0; k < n; ++k)   // the same fn twice: malformed (core §4.3)
         for (uint8_t j = 0; j < k; ++j)
           if (getU16(payload + 1 + 2 * k) == getU16(payload + 1 + 2 * j)) return rejected(kRejectMalformed);
-      size_t len = 0;
+      // trigger_track: checked the same with or without bit 7 (core §2.3) - a length other than 2, or a track not in
+      // the list, is malformed
       int trigger = -1;
-      bool trigger_critical = false;
-      if (const uint8_t *v = tail.find(grp::kTlvBindTriggerTrack, len, &trigger_critical)) {
-        if (len < 2) return rejected(kRejectMalformed);
-        // always critical (capture §4.1): a value longer than its form is refused, never ignored (core §2.3)
-        if (len > 2) return Tail::refuseCritical(grp::kTlvBindTriggerTrack, trigger_critical, out, capacity);
+      const uint8_t *v = nullptr;
+      const Result fixed = tail.fixed(grp::kTlvBindTriggerTrack, 2, v, out, capacity);
+      if (refused(fixed)) return fixed;
+      if (v) {
         trigger = indexOf(getU16(v));
         bool in = false;
         for (uint8_t k = 0; k < n; ++k) in |= getU16(payload + 1 + 2 * k) == getU16(v);
@@ -130,7 +116,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       if (n == 0) {   // unbind: not while capturing (state 3)
         if (state() == cap::kStateCapturing) return wrongState(out, capacity);
         unbind();
-        return tail.finish(completed(), out, capacity);
+        return completed();
       }
       for (uint8_t k = 0; k < n; ++k) {
         const int i = indexOf(getU16(payload + 1 + 2 * k));
@@ -157,7 +143,8 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         if (chosen[k] != trigger && (t.trackTriggered() || (triggered && !t.trackCanFollow())))
           return refuseAt(reg::core::kUnavailableCauseWrongState, k);
       }
-      for (size_t b = 0; b < budget_count_; ++b) {   // over a budget: cause 2, the track whose load goes over it
+      // short of the resources to capture together (a budget the tracks share): cause 2, the track whose load goes over
+      for (size_t b = 0; b < budget_count_; ++b) {
         uint64_t load = 0;
         for (uint8_t k = 0; k < n; ++k) {
           if (chosen[k] != budgets_[b].a && chosen[k] != budgets_[b].b) continue;
@@ -174,7 +161,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       }
       bound_count_ = n;
       trigger_ = triggered ? trigger : -1;
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case grp::kOpStart: {   // -> blocking_ms(u32) start_ns(u64) [TLV 0x01 generations: n x (fn(u16) generation(u32))]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -212,13 +199,13 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         const uint32_t gen = tracks_[bound_[k]].track->trackGeneration();
         putU32(out + 17 + 6 * k, static_cast<int>(bound_[k]) == trigger_ ? gen + 1 : gen);
       }
-      return tail.finish(completed(15 + 6 * bound_count_), out, capacity);
+      return completed(15 + 6 * bound_count_);
     }
     case grp::kOpStop: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       stopAll(cap::kStoppedReasonHost, 0);
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case grp::kOpForce: {   // the trigger track starts now; the others follow it as for a trigger
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -228,7 +215,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         forced_ = true;
         tracks_[trigger_].track->trackForce();
       }
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case grp::kOpStatus: {   // -> state(u8) start_ns(u64) trigger_ns(u64) trigger_fn(u16) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -239,7 +226,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       putU64(out + 1, start_ns_);
       putU64(out + 9, trigger_ns_);   // not (yet) triggered, or immediate: all ones
       putU16(out + 17, trigger_ns_ != ~uint64_t{0} && !forced_ ? endpoint_.fnOf(*tracks_[trigger_].interface) : 0);
-      return tail.finish(completed(19), out, capacity);
+      return completed(19);
     }
     default:
       return rejected(kRejectUnknownOperation);

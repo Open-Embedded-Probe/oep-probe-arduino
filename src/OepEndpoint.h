@@ -132,13 +132,7 @@ class Endpoint {
   void setRawPorts(RawPorts *raw) { raw_ = raw; }
   // A session holds the lock / holds serial port `port` (its raw transfer is stopped, transports §4).
   bool locked() const { return locked_; }
-  // A session has taken the lock at least once since boot (oep-if-probe-config §3.1: no retry with reset after that).
-  bool lockEverTaken() const { return have_last_; }
   bool held(size_t port) const { return locked_ && ((held_ >> port) & 1); }
-  // The probe enumerates with the project's USB VID:PID, registry usb project_vid / project_pid (describe discoverable,
-  // transports §3, core §7.5). Set it only once it actually does: a probe behind a UART bridge or on a fixed-ID built-in USB
-  // serial leaves it 0.
-  void setDiscoverable(bool on) { discoverable_ = on; }
   // The longest one request takes (describe max_op_ms, core §7.5): what every interface's long op is bounded by.
   static constexpr uint32_t kMaxOpMs = oep::kMaxOpMs;
   // The max_op_ms the describe declares: kMaxOpMs unless set. A probe whose ops all finish sooner may declare less
@@ -189,10 +183,9 @@ class Endpoint {
   size_t plan(RoleAssignment *out, size_t max, bool persistent_only = false) const;
   uint8_t replacePlan(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns);
   // The unavailable answer for the last replacement refused unavailable (core §4.3: the cause, the channel that met
-  // something, who holds it).
+  // something).
   Result planUnavailable(uint8_t *out, size_t capacity) const {
-    return unavailable(out, capacity, plan_refusal_.cause, plan_refusal_.channel, plan_refusal_.holder_fn,
-                       plan_refusal_.holder_kind);
+    return unavailable(out, capacity, plan_refusal_.cause, plan_refusal_.channel);
   }
   // The channels oep.probe.config's disable items take away (channel < 64): a plan_apply naming one is refused
   // unavailable cause 5 (held by settings) with the channel (probe.config §1).
@@ -218,7 +211,8 @@ class Endpoint {
   // unknown_operation).
   // fn(port, baud, apply): apply false = the rate the port would run at for `baud` (0: this UART cannot make it, the
   // request is unsupported); apply true = switch the port to `baud` (its output already flushed) and return the rate it
-  // runs at. `base` is the boot speed every revert goes back to.
+  // runs at. `base` is the boot speed every revert goes back to. A rate further than port_speed_tolerance_pct from the
+  // baud asked is refused unsupported (the endpoint checks it).
   using PortSpeedFn = uint32_t (*)(uint8_t port, uint32_t baud, bool apply);
   void setPortSpeed(PortSpeedFn fn, uint32_t base) { port_speed_ = fn; speed_base_ = base; }
   // The optional oep.probe.restart (oep-if-restart). Setting a handler before the first poll() lists the interface (after
@@ -226,22 +220,20 @@ class Endpoint {
   // the probe does not list it. A call after the first poll() changes nothing (the list is fixed for the boot, core §7.2).
   // fn restarts the chip as from power-on and does not return (oep::platformRestart: esp_restart on an ESP32, the
   // watchdog on an RP2). max_ms: the longest from the answer leaving the transport until the probe answers confirm on
-  // that transport again - boot, USB re-enumeration included; at least restart_after_answer_ms (raised to it).
+  // that transport again - boot, USB re-enumeration included.
   // A restart taken: the session's notifications end and the zero-copy data already queued goes out first (at most
   // kRestartDrainMs), then the answer; it is flushed (a UART's flush waits for its last bit), the session ends, every
   // interface lets go of its connections (probeRestart) and every plan goes, the settings' too, so each channel is in
   // its free state (core §8); kRestartSettleMs after the flush - the host's USB stack takes the last packet meanwhile -
   // fn is called. A probe on USB takes its device off the bus in fn, waits kRestartDetachMs and resets the chip
-  // (kRestartResetMs to start; Oep.h): the reset starts within restart_after_answer_ms of the answer. From the answer on
-  // nothing is served or sent (restarting()).
+  // (kRestartResetMs to start; Oep.h): the reset starts within about 100 ms of the answer. From the answer on nothing
+  // is served or sent (restarting()).
   using RestartFn = void (*)();
   static constexpr uint32_t kRestartSettleMs = 20, kRestartDrainMs = 200;
-  static_assert(kRestartSettleMs + kRestartDetachMs + kRestartResetMs < reg::kLimitRestartAfterAnswerMs,
-                "the reset after a restart's answer must start within restart_after_answer_ms");
   void setRestart(RestartFn fn, uint32_t max_ms) {
     if (polled_) return;
     restart_ = fn;
-    restart_max_ms_ = max_ms < reg::kLimitRestartAfterAnswerMs ? reg::kLimitRestartAfterAnswerMs : max_ms;
+    restart_max_ms_ = max_ms ? max_ms : 1;
   }
   bool restarting() const { return restarting_; }
   // The rate a sped-up port runs at now (0: every port at its boot speed), and whether it is committed (else trying).
@@ -292,7 +284,6 @@ class Endpoint {
   void releaseLock();
   RawPorts *raw_ = nullptr;
   uint32_t held_ = 0;   // serial ports the lock holder's requests came in on (transports §4)
-  bool discoverable_ = false;
   uint8_t decode_[kMaxSerialFrame + 2];
   uint8_t owner_[32];   // the lock holder's owner text (core §6.4)
   uint8_t owner_length_ = 0;
@@ -316,26 +307,22 @@ class Endpoint {
   size_t probe_tlv_length_ = 0;
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
   PinTable *pins_ = nullptr;                     // setPins
-  // What the last plan replacement refused unavailable met (core §4.3's payload: cause, channel, holder_fn,
-  // holder_kind; 0xFFFF / 0 = left out). replaceFns fills it.
-  struct PlanRefusal { uint8_t cause; uint16_t channel, holder_fn; uint8_t holder_kind; };
-  PlanRefusal plan_refusal_ = {0, 0xffff, 0xffff, 0};
+  // What the last plan replacement refused unavailable met (core §4.3's payload: cause, channel; 0xFFFF = left out).
+  // replaceFns fills it.
+  struct PlanRefusal { uint8_t cause; uint16_t channel; };
+  PlanRefusal plan_refusal_ = {0, 0xffff};
   uint32_t boot_id_ = 0;
   bool boot_id_set_ = false;
-  // port_speed (oep-if-link §3): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed; one
-  // broken candidate after the first good frame at the new speed reverts) or committed (idle_ms, at most
-  // kPortSpeedIdleMaxMs, with no good frame - not counted while a request runs, like the lease - or kSpeedBadRun broken
-  // candidates in a row with no good frame between them, revert). A step that does not fit the port's state is
-  // unavailable cause 6. A switch or a revert asked by a request happens after its answer is out.
+  // port_speed (oep-if-link §3): one UART bridge at a time is off its boot speed, trying (verify_ms to be committed) or
+  // committed (port_speed_idle_ms with no good frame - not counted while a request runs, like the lease - reverts). A
+  // step that does not fit the port's state is unavailable cause 6. A switch or a revert asked by a request happens
+  // after its answer is out.
   enum : uint8_t { kSpeedBase, kSpeedTry, kSpeedCommitted };
   enum : uint8_t { kSpeedNone, kSpeedSwitch, kSpeedRevert };
-  static constexpr uint8_t kSpeedBadRun = 3;
   PortSpeedFn port_speed_ = nullptr;
   uint32_t speed_base_ = 115200;
   uint8_t speed_state_ = kSpeedBase, speed_port_ = 0xff;
-  uint32_t speed_asked_ = 0, speed_rate_ = 0, speed_until_ = 0, speed_idle_ms_ = 0, speed_good_ms_ = 0;
-  bool speed_heard_ = false;   // a good frame came at the new speed (until then a broken candidate is the switch-over's)
-  uint8_t speed_bad_run_ = 0;  // broken candidates since the last good frame on the sped-up port (committed)
+  uint32_t speed_asked_ = 0, speed_rate_ = 0, speed_until_ = 0, speed_good_ms_ = 0;
   uint8_t speed_pending_ = kSpeedNone, speed_pending_port_ = 0xff;
   uint32_t speed_pending_baud_ = 0, speed_pending_verify_ = 0;
   friend class Link;
@@ -344,7 +331,7 @@ class Endpoint {
   void speedApply();             // the switch or revert a request asked for, after its answer
   void speedRevert();            // back to the boot speed (nothing when there already)
   void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
-  void speedBad();               // a broken candidate on the sped-up port
+  static bool speedWithin(uint32_t rate, uint32_t baud);   // port_speed_tolerance_pct
   RestartFn restart_ = nullptr;  // setRestart: oep.probe.restart listed
   uint32_t restart_max_ms_ = 0;
   bool restart_taken_ = false;   // this request is a restart answered success: the probe restarts after the answer
@@ -358,7 +345,7 @@ class Endpoint {
 
   uint32_t max_op_ms_ = kMaxOpMs;
 
-  static constexpr int kExperimentalOps = 0xF0;   // 0xF0..0xFF: never in ops (core §1.2, §2.5)
+  static constexpr int kReservedOps = 0xF0;   // 0xF0..0xFF: reserved, never in ops (core §2.5)
   void handleMessage(const uint8_t *message, size_t length);
   bool coreOffers(uint8_t op) const;
   bool offersOp(uint16_t fn, uint8_t op) const;
@@ -394,17 +381,15 @@ class Endpoint {
   void push();
   void endSubscriptions();
   void send(size_t length);
-  // Dedup of the last session's requests sent again (core §5.2): the last kDedupEntries results, keyed on corr
-  // and checked against fn, op and a CRC of the payload; dropped at every successful open (kept over end, lapse, force). Results over kDedupBytes are not kept
+  // Dedup of the last session's requests sent again (core §5.2): the last kDedupEntries (corr, answer), keyed on corr
+  // alone; dropped at every successful open (kept over end, lapse, force). Results over kDedupBytes are not kept
   // (rejected result_lost): kDedupBytes covers a whole frame of the largest profile, so a 1 KiB read_block whose answer
   // was corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).
   static constexpr size_t kDedupEntries = 8, kDedupBytes = 1024 + 5;
   struct Dedup {
     bool used = false, kept = false;
-    uint16_t corr = 0, fn = 0;
-    uint8_t op = 0;
+    uint16_t corr = 0;
     uint16_t length = 0;
-    uint32_t crc = 0;
     uint8_t result[kDedupBytes];
   };
   Dedup dedup_[kDedupEntries];
@@ -417,12 +402,11 @@ class Endpoint {
   void lapse();
   void loseSession();
   void sendReject(uint16_t corr, uint8_t reason);
-  static uint32_t crc32(const uint8_t *data, size_t length);
   uint32_t remaining() const;
 };
 
 // oep.probe.link (oep-if-link): the link test - source (length(u32) -> len(u16) data, byte k = k & 0xFF, at most
-// max_frame - 26: link_source_overhead_bytes, the room for an ignored TLV kept whatever the request carries) and sink
+// max_frame - 7: the answer's header and len) and sink
 // (count(u16) data -> nothing) - and, when the endpoint has a port_speed handler (setPortSpeed), port_speed on a UART
 // bridge. An optional interface: a probe lists at most one; add it like any other (endpoint.add(link)).
 class Link final : public Interface {

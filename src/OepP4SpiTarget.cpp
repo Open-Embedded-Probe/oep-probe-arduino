@@ -63,7 +63,6 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   w.u16(kTagMaxLength, kMaxFrame);
   w.u32(kTagMaxClockHz, kMaxClockHz);
   w.u32(kTagFeatures, 1);   // bit0 LSB first
-  w.u8(kTagImplementation, 2);   // a dedicated peripheral
   w.u8(reg::fixture_spi_target::kTlvDescribeQueueDepth, kQueueDepth);
 #if defined(OEP_SPI_MISO_GATE)
   // cs_setup_ns (u32): how long after CS falls MISO may still be undriven, and after CS rises still driven - the
@@ -259,10 +258,9 @@ void P4SpiTarget::service() {
   if (armed_done && armed_) {
     armed_ = false;
     ++transactions_;
-    if (armed_bits > armed_length_ * 8) ++errors_;   // over length: the rest was dropped
-    if (queue_count_ == kQueueDepth) {
-      ++errors_;
-    } else {
+    // over length (the rest dropped) or the queue full (not queued): errors goes up once for the transfer (fixture §4)
+    if (armed_bits > armed_length_ * 8 || queue_count_ == kQueueDepth) ++errors_;
+    if (queue_count_ < kQueueDepth) {
       const size_t bytes = (armed_bits + 7) / 8 > armed_length_ ? armed_length_ : (armed_bits + 7) / 8;
       memcpy(queue_[queue_count_], rx_buffer_, bytes);
       queue_length_[queue_count_] = static_cast<uint8_t>(bytes);
@@ -295,7 +293,7 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       stop();   // the queue and the wait go
       mode_ = payload[0]; bit_order_ = payload[1]; transactions_ = 0; errors_ = 0;
       if (!start()) return failed();
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case kOpArm: {   // length(u16) count(u16) tx [TLV]: MISO bytes for the next CS-framed transaction of length bytes
       if (length < 4) return rejected(kRejectMalformed);
@@ -306,7 +304,7 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       if (want > kMaxFrame) return unsupportedValue(out, capacity);   // over max_length
       if (!started_ || armed_) return wrongState(out, capacity);       // not configured, or one is waiting already
       if (!arm(payload + 4, count, want)) return failed();
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case kOpReadRx: {   // [TLV] -> pending(u8) bits(u32) count(u16) data: the oldest finished transaction
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -324,7 +322,7 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
         memmove(queue_length_, queue_length_ + 1, queue_count_);
         memmove(queue_bits_, queue_bits_ + 1, sizeof(queue_bits_[0]) * queue_count_);
       }
-      return tail.finish(completed(7 + data), out, capacity);
+      return completed(7 + data);
     }
     case kOpStatus: {   // [TLV] -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -337,15 +335,7 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       out[4] = static_cast<uint8_t>(queue_count_);
       putU32(out + 5, transactions_);
       putU32(out + 9, errors_);
-      return tail.finish(completed(13), out, capacity);
-    }
-    case kOpReset: {
-      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
-      if (refused(parsed)) return parsed;
-      if (!started_) return wrongState(out, capacity);   // state 0 (fixture §4)
-      stop(); transactions_ = 0; errors_ = 0;
-      if (!start()) return failed();
-      return tail.finish(completed(), out, capacity);
+      return completed(13);
     }
     default:
       return rejected(kRejectUnknownOperation);

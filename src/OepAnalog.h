@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // oep.fixture.analog revision 1 (oep-spec docs/oep-if-capture.ja.md §1.2, §3.3, §3.8): one ADC's channels in turn,
-// one-shot, immediate or a threshold crossed up / down on one channel, with a pretrigger. Raw values only: the answer gives the probe's nominal 1st-order scale, the reference, the
-// frontend (attenuation) of each channel and how sure the rate is; calibration gives the factory data as read.
+// one-shot, immediate or a threshold crossed up / down on one channel, with a pretrigger. Raw values only: the answer gives the probe's nominal 1st-order scale, the reference and the
+// frontend (attenuation) of each channel; calibration gives the factory data as read.
 //
 //   ESP32-P4 / classic ESP32   ADC1 in continuous (DMA) mode (esp_adc adc_continuous), a pattern entry per channel with
 //                              its own attenuation. The P4's driver leaves out its first conversion frame: the first
@@ -71,13 +71,11 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   uint8_t planRefusalCause() const override { return refusal_cause_; }   // capturing: 6; the roles' count: 2; idle: 5
-  void planRefusalDetail(uint16_t &channel, uint8_t &holder_kind) const override {
-    channel = refusal_channel_;
-    holder_kind = refusal_kind_;
-  }
+  void planRefusalDetail(uint16_t &channel) const override { channel = refusal_channel_; }
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
+  // read returns at most this much (capture §3.2: the probe's choice, within max and max_frame)
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
@@ -118,7 +116,6 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint8_t state_ = reg::fixture_analog::kStateUnconfigured;
   uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;   // planRefusalCause
   uint16_t refusal_channel_ = 0xFFFF;                                  // planRefusalDetail
-  uint8_t refusal_kind_ = 0;
   uint32_t total_hz_ = 0, rate_num_ = 0, rate_den_ = 1;   // the conversions a second; the rate a channel = num / den
   uint32_t samples_ = 0, frames_ = 0;                     // asked; complete frames captured
   uint16_t *buffer_ = nullptr;                            // samples_ x channels_ values, frame after frame

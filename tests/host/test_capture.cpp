@@ -4,7 +4,8 @@
 // Host tests: the ESP32-P4 logic capture's configure (oep-spec oep-if-capture §3.3) on fakes of the PARLIO RX driver
 // and the heap (OEP_HOST_FAKE_PARLIO): a samples above what the probe can hold is rounded down to its limit in every
 // mode (one-shot with and without a trigger, repeat), actual_samples is what the segment holds, and a configure in
-// every mode at the lowest declared rate succeeds on boards with and without PSRAM.
+// every mode at the lowest declared rate succeeds on boards with and without PSRAM; every configure TLV is checked the
+// same with or without bit 7 (core §2.3), the answer and describe carry only what capture §3.3 / §3.5 define.
 #include <stdio.h>
 
 #include <algorithm>
@@ -202,9 +203,16 @@ static void testStreamingWithoutStages() {
   }
 }
 
-// mode, rate, trigger and pretrigger are critical whether or not bit 7 is set (capture §3.3, core §2.3): a value the
-// probe cannot honour refuses configure and query with the tag as received; never ignored, never listed in ignored.
-static void testSentCritical() {
+static bool hasTag(const Bytes &a, uint8_t tag) {
+  for (size_t at = 0; at + kTlvHeader <= a.size(); at += kTlvHeader + getU16(a.data() + at + 1))
+    if (a[at] == tag) return true;
+  return false;
+}
+
+// core §2.3 (capture §3.3): every configure TLV is checked the same with or without bit 7. A value the probe cannot
+// honour refuses configure and query unsupported with the tag as received (bit 7 as sent) - nothing is ignored; a length
+// other than the definition is malformed; an unknown non-critical tag is passed over.
+static void testValuesRefused() {
   board(512 * 1024, size_t(32) << 20);
   Rig rig(2);
   Bytes out;
@@ -221,19 +229,53 @@ static void testSentCritical() {
       tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerEdge, 0, 0, 0, 0, 0}); // an edge in repeat
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureTrigger)});
       p.clear();
+      tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerLevel, 5, 1, 0, 0, 0}); // a role not in the plan
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureTrigger)});
+      p.clear();
       tlv(p, bit | cap::kTlvConfigurePretrigger, u32(0x7FFFFFFF));                // more than the ring holds
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigurePretrigger)});
-      p.clear();
-      tlv(p, bit | cap::kTlvConfigureMode, {1, 0});                               // longer than it knows (core §2.3)
-      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureMode)});
+      // a length other than the definition: malformed, longer or shorter, any tag (none is ignored)
+      for (const uint8_t tag : {cap::kTlvConfigureMode, cap::kTlvConfigureRate, cap::kTlvConfigureSamples,
+                                cap::kTlvConfigureSegments, cap::kTlvConfigureTrigger, cap::kTlvConfigurePretrigger}) {
+        const size_t size = tag == cap::kTlvConfigureMode ? 1 : tag == cap::kTlvConfigureTrigger ? 6 : 4;
+        for (const size_t len : {size - 1, size + 1}) {
+          p.clear();
+          tlv(p, bit | tag, Bytes(len, 1));
+          CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectMalformed));
+        }
+      }
     }
   }
-  // samples goes by its bit: longer and not critical, ignored and listed
+  // an unknown non-critical tag is passed over; the answer has no ignored (0x7F), timing (0x54) or rate_accuracy (0x5A)
   Bytes p;
-  tlv(p, cap::kTlvConfigureSamples, {1, 0, 0, 0, 0});
-  const Bytes ignored = {0x7F, 1, 0, cap::kTlvConfigureSamples};
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)) &&
-        std::search(out.begin(), out.end(), ignored.begin(), ignored.end()) != out.end());
+  tlv(p, cap::kTlvConfigureSamples, u32(1000));
+  tlv(p, 0x61, {1, 2, 3});
+  tlv(p, 0x7F, {cap::kTlvConfigureSamples});   // no longer a special tag: unknown, non-critical
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)));
+  CHECK(hasTag(out, cap::kTlvConfigureAnswerActualRate) && hasTag(out, cap::kTlvConfigureAnswerLayout) &&
+        hasTag(out, cap::kTlvConfigureAnswerActualSamples) && hasTag(out, cap::kTlvConfigureAnswerActualSegments) &&
+        hasTag(out, cap::kTlvConfigureAnswerBlockingMs));
+  CHECK(!hasTag(out, 0x7F) && !hasTag(out, 0x54) && !hasTag(out, 0x5A));
+}
+
+// capture §3.5: mode is mode(u8) max_samples(u32) max_segments(u32), one per mode; channels is max(u8); rate_list,
+// rate_limit, max_read and segment_ring (0x42, 0x43, 0x47, 0x48) are not declared.
+static void testDescribe() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Bytes d(1024);
+  d.resize(rig.cap.describe(d.data(), d.size()));
+  CHECK(!d.empty());
+  int modes = 0;
+  bool channels = false;
+  for (size_t at = 0; at + kTlvHeader <= d.size(); at += kTlvHeader + getU16(d.data() + at + 1)) {
+    const uint8_t tag = d[at];
+    const uint16_t len = getU16(d.data() + at + 1);
+    if (tag == cap::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == modes); }
+    if (tag == cap::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == LogicCapture::kMaxChannels); }
+    CHECK(tag != 0x42 && tag != 0x43 && tag != 0x47 && tag != 0x48);
+  }
+  CHECK(modes == 3 && channels);
 }
 
 // core §4.3: malformed before unsupported before unavailable, over the whole request; the plan (cause 6) last.
@@ -258,8 +300,8 @@ static void testConfigureOrder() {
   CHECK(rejectedAs(raw(c, LogicCapture::kOpQuery, p, out), kRejectMalformed));
 }
 
-// rate_limit (capture §3.5, configure §3.3): a one-shot rate above the declared limit for the channel count (8 lines
-// 100 MHz, 16 lines 48 MHz) is set to the limit, not run at the rate asked (160 MHz was taken for any count).
+// configure §3.3: inside rate_range, a one-shot rate above what the channel count allows (8 lines 100 MHz, 16 lines
+// 48 MHz; not declared) is set to the nearest it allows, not run at the rate asked (160 MHz was taken for any count).
 static void testRateLimit() {
   for (const uint8_t channels : {8, 16}) {
     board(512 * 1024, size_t(32) << 20);
@@ -280,8 +322,8 @@ static void testRateLimit() {
 }
 
 // Bound into a capture-group (§4.1): the track's own configure / start / stop / force are refused unavailable cause 4
-// with the group's fn - after the request's form (core §4.3: a malformed request is malformed first) - and its plan is
-// the group's (boundTo: the endpoint refuses plan_apply / plan_release of its fn).
+// (the cause alone, core §4.3) - a malformed request is malformed (the form is checked before anything changes) - and
+// its plan is the group's (boundTo: the endpoint refuses plan_apply / plan_release of its fn).
 static void testBound() {
   board(512 * 1024, size_t(32) << 20);
   Rig rig(2);
@@ -296,13 +338,13 @@ static void testBound() {
   uint8_t g[16];
   CHECK(ok(group.handle(grp::kOpBind, bind, sizeof bind, g, sizeof g)));
   CHECK(rig.cap.boundTo() == 2);
-  const Bytes cause4 = {0x01, 1, 0, 4, 0x03, 2, 0, 2, 0};
+  const Bytes cause4 = {0x01, 1, 0, 4};
   CHECK(rejectedAs(configure(rig.cap, c, out), kRejectUnavailable) && out == cause4);
   Bytes p;
-  tlv(p, kCrit | cap::kTlvConfigureRate, {1});   // short: malformed comes first
+  tlv(p, kCrit | cap::kTlvConfigureRate, {1});   // short: malformed
   CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, p, out), kRejectMalformed));
   CHECK(ok(configure(rig.cap, c, out, true)));   // query: not the group's
-  const Bytes bad_tail = {0x7F, 0, 0};   // the ignored tag in a request (core §2.3)
+  const Bytes bad_tail = {0x60, 4, 0, 1};   // a TLV longer than the request (core §2.3)
   for (const uint8_t op : {LogicCapture::kOpStart, LogicCapture::kOpStop, LogicCapture::kOpForce}) {
     CHECK(rejectedAs(raw(rig.cap, op, bad_tail, out), kRejectMalformed));
     CHECK(rejectedAs(raw(rig.cap, op, {}, out), kRejectUnavailable) && out == cause4);
@@ -705,7 +747,8 @@ int main() {
   testPlanReleaseForgets();
   testBound();
   testRateLimit();
-  testSentCritical();
+  testValuesRefused();
+  testDescribe();
   testConfigureOrder();
   testStreamingWithoutStages();
   testOverLimitRoundsDown();

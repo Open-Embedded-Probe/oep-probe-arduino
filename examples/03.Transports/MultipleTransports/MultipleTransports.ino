@@ -16,8 +16,8 @@
 // The HS vendor bulk interface is written directly (build_opt.h: CFG_TUD_VENDOR_TXRX_BUFFERED=0 and friends; compile
 // with --clean after changing it): oep::DirectBulkStream hands whole frames to the USB stack. The HS device is the
 // project's VID:PID 1209:4F45 (registry usb; PID-USE.md) with a serial number of the chip's MAC (the unit_id, how a host
-// finds a probe named by it, transports §3); its iProduct is a name for people. describe discoverable is 1 once the HS port
-// has enumerated: USB-Serial/JTAG keeps the chip's fixed ID, so a board with only that port wired says 0.
+// finds a probe named by it, transports §3); its iProduct is a name for people. USB-Serial/JTAG keeps the chip's fixed
+// ID: a host reaches that port by the user choosing it.
 //
 // One interface, oep.fixture.gpio, so there is something to use; add yours the same way.
 #include <esp_mac.h>
@@ -56,7 +56,7 @@ static char serial_[20];
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "multiple-transports", id, oep::platformUnitId(id, sizeof id), 55, ~kChannels & ((1ull << 55) - 1));
+  oep::describeCore(w, "multiple-transports", id, oep::platformUnitId(id, sizeof id), 55);
   return w.ok() ? w.length() : 0;
 }
 
@@ -84,17 +84,10 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setFlushAfterBurst(true);
-  // describe discoverable: set in loop() once the HS port has enumerated with the project's VID:PID (transports §3, core §7.5)
-
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.add(gpio);
 }
 
 void loop() {
-  static bool mounted = false;
-  if (!mounted && usbDevice.ready()) {   // the HS port enumerated (configured by a host)
-    mounted = true;
-    endpoint.setDiscoverable(true);      // the probe enumerates with the project's VID:PID (core §7.5)
-  }
   endpoint.poll();   // every transport, in turn
 }

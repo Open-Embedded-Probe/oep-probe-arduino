@@ -38,8 +38,7 @@ static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
   // the channels up to the wire's pair: the pair is the wire's, the ones below it are not offered (reserved)
-  oep::describeCore(w, "swd-debug-probe", id, oep::platformUnitId(id, sizeof id), kChannelCount,
-                    ((1ull << kChannelCount) - 1) & ~kChannels);
+  oep::describeCore(w, "swd-debug-probe", id, oep::platformUnitId(id, sizeof id), kChannelCount);
   return w.ok() ? w.length() : 0;
 }
 

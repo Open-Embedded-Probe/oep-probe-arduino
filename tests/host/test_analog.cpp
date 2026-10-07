@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host tests: the analog capture (oep-spec oep-if-capture §1.2, §3.2, §3.3) in its RP2 build, on fakes of the RP2's ADC
-// and DMA (OEP_HOST_FAKE_RP2_ADC): configure's refusals in core §4.3's order, the sent-critical TLVs, the plan's
-// refusals, and what start / stop / plan_release leave to read.
+// and DMA (OEP_HOST_FAKE_RP2_ADC): configure's refusals (core §4.3), its TLVs checked the same with or without bit 7
+// (core §2.3), the answer and describe, the plan's refusals, and what start / stop / plan_release leave to read.
 #include <stdio.h>
 
 #include <algorithm>
@@ -85,9 +85,16 @@ static Bytes configureRequest(uint32_t rate, uint32_t samples = 0) {
   return p;
 }
 
-// mode, rate, trigger, pretrigger and frontend are critical whether or not bit 7 is set (capture §3.3, core §2.3):
-// a value the probe cannot honour refuses the configure, with the tag as received; never ignored.
-static void testSentCritical() {
+static bool hasTag(const Bytes &a, uint8_t tag) {
+  for (size_t at = 0; at + kTlvHeader <= a.size(); at += kTlvHeader + getU16(a.data() + at + 1))
+    if (a[at] == tag) return true;
+  return false;
+}
+
+// core §2.3 (capture §3.3): every configure TLV is checked the same with or without bit 7. A value the probe cannot
+// honour refuses the configure unsupported with the tag as received (bit 7 as sent) - nothing is ignored; a length
+// other than the definition is malformed; an unknown non-critical tag is passed over.
+static void testValuesRefused() {
   Rig rig;
   CHECK(rig.plan({26}) == 0);
   for (const uint8_t bit : {uint8_t(0), kCrit}) {
@@ -113,16 +120,55 @@ static void testSentCritical() {
     r = rig.op(ana::kOpConfigure, p);
     CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureFrontend));
     p.clear();
-    tlv(p, bit | ana::kTlvConfigureRate, {0x10, 0x27, 0, 0, 0});   // longer than it knows (core §2.3)
+    tlv(p, bit | ana::kTlvConfigureRate, u32(10000));
+    tlv(p, bit | ana::kTlvConfigureFrontend, {1, 0});              // a role not in the plan
     r = rig.op(ana::kOpConfigure, p);
-    CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureRate));
+    CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureFrontend));
+    // a length other than the definition: malformed, longer or shorter, any tag (none is ignored)
+    for (const uint8_t tag : {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
+                              ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
+                              ana::kTlvConfigureFrontend}) {
+      const size_t size = tag == ana::kTlvConfigureMode ? 1 : tag == ana::kTlvConfigureTrigger ? 6
+                        : tag == ana::kTlvConfigureFrontend ? 2 : 4;
+      for (const size_t len : {size - 1, size + 1}) {
+        p = configureRequest(10000);
+        if (tag == ana::kTlvConfigureMode || tag == ana::kTlvConfigureRate) p.clear();
+        if (tag == ana::kTlvConfigureMode) tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
+        tlv(p, bit | tag, Bytes(len, 1));
+        CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
+      }
+    }
   }
-  // samples goes by its bit: longer than known and not critical, ignored and listed
+  // an unknown non-critical tag is passed over; the answer has no ignored (0x7F), timing (0x54) or rate_accuracy (0x5A),
+  // and keeps skew, scale, blocking_ms, frontend_used and reference
   Bytes p = configureRequest(10000);
-  tlv(p, ana::kTlvConfigureSamples, {1, 0, 0, 0, 0});
-  const Result r = rig.op(ana::kOpConfigure, p);
-  const Bytes ignored = {0x7F, 1, 0, ana::kTlvConfigureSamples};
-  CHECK(ok(r) && std::search(rig.out.begin(), rig.out.end(), ignored.begin(), ignored.end()) != rig.out.end());
+  tlv(p, 0x61, {1, 2, 3});
+  tlv(p, 0x7F, {ana::kTlvConfigureSamples});   // no longer a special tag: unknown, non-critical
+  CHECK(ok(rig.op(ana::kOpConfigure, p)));
+  CHECK(!hasTag(rig.out, 0x7F) && !hasTag(rig.out, 0x54) && !hasTag(rig.out, 0x5A));
+  CHECK(hasTag(rig.out, ana::kTlvConfigureAnswerSkew) && hasTag(rig.out, ana::kTlvConfigureAnswerScale) &&
+        hasTag(rig.out, ana::kTlvConfigureAnswerBlockingMs) && hasTag(rig.out, ana::kTlvConfigureAnswerFrontendUsed) &&
+        hasTag(rig.out, ana::kTlvConfigureAnswerReference));
+}
+
+// capture §3.5: mode is mode(u8) max_samples(u32) max_segments(u32); channels is max(u8); rate_limit, max_read,
+// segment_ring and frontend_shared (0x43, 0x47, 0x48, 0x49) are not declared.
+static void testDescribe() {
+  Rig rig;
+  Bytes d(1024);
+  d.resize(rig.cap.describe(d.data(), d.size()));
+  CHECK(!d.empty());
+  int modes = 0, frontends = 0;
+  bool channels = false;
+  for (size_t at = 0; at + kTlvHeader <= d.size(); at += kTlvHeader + getU16(d.data() + at + 1)) {
+    const uint8_t tag = d[at];
+    const uint16_t len = getU16(d.data() + at + 1);
+    if (tag == ana::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == ana::kModeOneShot); }
+    if (tag == ana::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == AnalogCapture::kMaxChannels); }
+    if (tag == ana::kTlvDescribeFrontend) ++frontends;
+    CHECK(tag != 0x42 && tag != 0x43 && tag != 0x47 && tag != 0x48 && tag != 0x49);
+  }
+  CHECK(modes == 1 && channels && frontends == 1);
 }
 
 // core §4.3: malformed before unsupported before unavailable, over the whole request.
@@ -135,8 +181,8 @@ static void testConfigureOrder() {
   tlv(p, ana::kTlvConfigureSamples, {1, 0});                              // and a short samples
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
   p = configureRequest(10000);
-  tlv(p, kCrit | ana::kTlvConfigureMode, {});                             // mode twice: malformed (core §2.3)
-  CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
+  tlv(p, kCrit | ana::kTlvConfigureMode, {});                             // mode twice: the first is used (core §2.3)
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnavailable));
   p.clear();
   tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
   tlv(p, kCrit | ana::kTlvConfigureTrigger, {3, 3, 0, 8, 0, 0});          // role 3 without a plan: the plan's refusal
@@ -155,7 +201,7 @@ static bool findTlv(const Bytes &a, uint8_t tag, Bytes &v) {
 }
 
 // rate (capture §3.3): outside the declared rate_range unsupported, tag 0x42 as received; inside it, the nearest the
-// channel count's rate_limit allows (500 kS/s in all on the RP2).
+// shared ADC allows for the channel count (500 kS/s in all on the RP2; not declared).
 static void testRateRange() {
   Rig rig;
   CHECK(rig.plan({26, 27}) == 0);
@@ -185,8 +231,8 @@ static void testQueryAsConfigure() {
   CHECK(findTlv(rig.out, ana::kTlvConfigureAnswerLayout, layout) && layout == (Bytes{16, 0, 12, 3, 1, 2, 0}));
 }
 
-// An analog plan on a channel whose idle is an output (core §8, capture §1.2): unavailable cause 5, the channel,
-// holder_kind 7 (settings idle); nothing changes.
+// An analog plan on a channel whose idle is an output (core §8, capture §1.2): unavailable cause 5 and the channel;
+// nothing changes.
 static void testOutputIdle() {
   Rig rig;
   CHECK(rig.pins.setIdle(27, PinTable::kIdleOutputHigh, false));
@@ -195,7 +241,7 @@ static void testOutputIdle() {
   CHECK(rig.ep.replacePlan(roles, 2, fns, 1) == kRejectUnavailable);
   uint8_t out[32];
   const Result r = rig.ep.planUnavailable(out, sizeof out);
-  CHECK(rejectedAs(r, kRejectUnavailable) && Bytes(out, out + r.length) == (Bytes{0x01, 1, 0, 5, 0x02, 2, 0, 27, 0, 0x04, 1, 0, 7}));
+  CHECK(rejectedAs(r, kRejectUnavailable) && Bytes(out, out + r.length) == (Bytes{0x01, 1, 0, 5, 0x02, 2, 0, 27, 0}));
   RoleAssignment now[2];
   CHECK(rig.ep.plan(now, 2) == 0 && rig.pins.owner(26) == 0);
   CHECK(rig.pins.setIdle(27, PinTable::kIdlePullUp, false));   // an input idle: fine
@@ -302,7 +348,8 @@ int main() {
   testOutputIdle();
   testRateRange();
   testQueryAsConfigure();
-  testSentCritical();
+  testValuesRefused();
+  testDescribe();
   testConfigureOrder();
   printf("analog: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

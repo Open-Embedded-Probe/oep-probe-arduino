@@ -157,7 +157,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | PATH | 中身 |
 |---|---|
 | `src/Oep.h`、`src/OepEndpoint.*`、`src/OepRegistry.h` | v1 の本体（oep-core、oep-transports）: フレーム、名前で探すインターフェースとその ops、ロック、複数の経路（describe の transport）、シリアルの口の共用（transports §4）、通知（送り出す fn への subscribe）、fn 0 の clock。`oep::ProbePlan` / `oep::ProbeRestart` が `oep.probe.plan` / `oep.probe.restart` で、endpoint がスケッチのインターフェースの後に自分で出す。`oep::Link` が `oep.probe.link`（線の試験、port_speed） |
-| `src/OepBind.*` | シリアルの口に流すもの（bind: last-reset / manual / mixed、セッション中の停止と最後の reset からの再開） |
+| `src/OepBind.*` | シリアルの口に流すもの（bind: 口ごとに 1 本のストリーム、セッション中の停止と止めた位置からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind。ESP32 は NVS、RP2040 / RP2350 は flash に保存）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブで実装。2026-09-30 までは独自の `io.github.ch32-riscv-ug.esp32.*`） |
@@ -220,7 +220,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
    ```sh
    oep config slot <probe> --name l103 --wire rvswd --pins 2,54 --attach at-boot --retry 1 --mechanism dmseq \
        --max-speed 1000000 --idle-clock low
-   oep config bind <probe> --port 1 --mode last-reset --stream slot:l103 --save
+   oep config bind <probe> --port 1 --stream slot:l103 --save
    oep config show <probe>
    ```
 

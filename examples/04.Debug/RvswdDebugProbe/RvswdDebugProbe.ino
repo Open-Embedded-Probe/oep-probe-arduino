@@ -66,8 +66,7 @@ static size_t describeProbe() {
   uint8_t id[17];
   // the channels up to the wire's pair: the pair is the wire's (role_channels), the ones below it are not offered
   // (reserved); this probe has no plan, so no other channel is declared
-  oep::describeCore(w, "rvswd-debug-probe", id, oep::platformUnitId(id, sizeof id), kChannelCount,
-                    ((1ull << kChannelCount) - 1) & ~kChannels);
+  oep::describeCore(w, "rvswd-debug-probe", id, oep::platformUnitId(id, sizeof id), kChannelCount);
   return w.ok() ? w.length() : 0;
 }
 

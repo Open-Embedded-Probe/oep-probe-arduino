@@ -2,9 +2,10 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host tests of fn 0 (the core) against core §1.2, §7.1, §7.5, §7.7 and §12: confirm's transport TLV on every transport kind
-// (the index of the describe entry it came on), describe's discoverable always sent and the ops tag first in every fn's
-// describe, list's reserved flags and prefix text, open's force and owner, a repeated non-repeating TLV, the header
-// refusals (§4.3 order 1) neither kept nor restarting the lease, the ignored list's 16 entries, no resume (§6.2, §9),
+// (the index of the describe entry it came on), the ops tag first in every fn's describe and fn 0's describe without the
+// removed declarations, list's first only, open's force and owner, a repeated non-repeating TLV (the first used), the
+// header refusals (§4.3 order 1) neither kept nor restarting the lease, unknown TLVs (§2.3: no ignored list), the
+// resend table keyed on corr alone (§5.2), resource numbers (§9), no resume (§6.2, §9),
 // the length-prefixed reader's over-long length and TCP pause rules (transports §1, §2), the ops encoding (core §7.4:
 // oep-spec's ops_encoding.json, checked in test_vectors.cpp, and every fn's ops here), and the optional oep.probe.restart
 // (oep-if-restart: listed after the sketch's interfaces with restart_max_ms, its refusals, the answer first, nothing
@@ -141,11 +142,6 @@ static bool describedAs(const Bytes &answer, uint8_t index, uint8_t kind) {
   }
   return false;
 }
-static int discoverableIn(const Bytes &answer) {   // -1: absent
-  bool found = false;
-  const Bytes v = describeTlv(answer, reg::core::kTlvDescribeDiscoverable, &found);
-  return found && v.size() == 1 ? v[0] : -1;
-}
 
 // core §7.1: the probe always attaches TLV 0x01 transport (u8), the index of the transport the confirm came on, the
 // entry of describe's transport list. Every kind: UART bridge, USB CDC, built-in USB serial, vendor bulk, HID, TCP.
@@ -223,22 +219,40 @@ static void testOps() {
   CHECK(!ep.add(none));
 }
 
-// core §2.3: ignored lists one entry per ignored TLV in request order, at most 16 - more: the first 15 and 0x00.
-static void testIgnoredList() {
+// core §2.3: an unknown non-critical TLV is ignored and nothing says so (no ignored list, tags 0x00 and 0x7F included);
+// an unknown critical one is refused unsupported with its tag as received; an implemented TLV with another length than
+// its definition is malformed, critical or not.
+static void testUnknownTlvs() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
   Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
   Bytes p;
-  for (uint8_t t = 0x20; t < 0x22; ++t) p = withTlv(p, t, {});
-  Bytes r = exchange(ep, s, false, request(1, 0, 0x13, p));   // lock_state with two unknown non-critical TLVs
-  CHECK(r.size() == 5 + 5 + 5 && Bytes(r.begin() + 10, r.end()) == hex("7f02002021"));
-  p.clear();
-  for (uint8_t t = 0x20; t < 0x31; ++t) p = withTlv(p, t, {});   // 17
-  r = exchange(ep, s, false, request(2, 0, 0x13, p));
-  Bytes want = {0x7f, 16, 0};
-  for (uint8_t t = 0x20; t < 0x2f; ++t) want.push_back(t);
-  want.push_back(0x00);
-  CHECK(r.size() == 5 + 5 + want.size() && Bytes(r.begin() + 10, r.end()) == want);
+  for (uint8_t t : {0x20, 0x21, 0x7f, 0x00}) p = withTlv(p, t, {1, 2});
+  Bytes r = exchange(ep, s, false, request(1, 0, 0x13, p));   // lock_state with unknown non-critical TLVs
+  CHECK(r.size() == 5 + 5 && r[3] == kResolutionCompleted);   // locked(u8) remaining(u32), nothing after
+  r = exchange(ep, s, false, request(2, 0, 0x13, withTlv(p, 0xa1, {})));
+  CHECK(reason(r) == kRejectUnsupported && r.size() == 6 && r[5] == 0xa1);
+  r = exchange(ep, s, false, request(3, 0, 0x13, withTlv({}, 0xff, {})));   // 0xFF: tag 0x7F critical, unknown
+  CHECK(reason(r) == kRejectUnsupported && r.size() == 6 && r[5] == 0xff);
+  // open's owner (implemented): another length than 1..32 is malformed with bit 7 or without
+  CHECK(reason(exchange(ep, s, false, request(4, 0, 0x10, withTlv(openReq(9, 3000), 0x01, {})))) == kRejectMalformed);
+  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x10, withTlv(openReq(9, 3000), 0x81, Bytes(33, 'a'))))) == kRejectMalformed);
+  CHECK(!ep.locked());
+}
+
+// core §5.2: the resend table keeps (corr, answer) - the same corr is a resend whatever it carries (no corr_reused).
+static void testResendByCorr() {
+  MemStream s;
+  static uint8_t rx[1200], tx[1100];
+  Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
+  CHECK(exchange(ep, s, false, request(1, 0, 0x10, openReq(7, 5000)))[3] == kResolutionCompleted);
+  const Bytes first = exchange(ep, s, false, request(2, 0, 0x12, {}, true, 7));   // keepalive
+  CHECK(first.size() == 5 && first[3] == kResolutionCompleted);
+  // corr 2 again with another op (end): the kept answer, nothing run - the lock stays
+  CHECK(exchange(ep, s, false, request(2, 0, 0x11, {}, true, 7)) == first && ep.locked());
+  // an older corr not in the table: result_lost
+  CHECK(reason(exchange(ep, s, false, request(1, 0, 0x12, {}, true, 7))) == kRejectResultLost);
+  CHECK(exchange(ep, s, false, request(3, 0, 0x11, {}, true, 7))[3] == kResolutionCompleted && !ep.locked());
 }
 
 // core §6.2, §6.4, §9: no resume - after end the id is no_session; a lapse and force release alike; a resent open of
@@ -271,43 +285,49 @@ static void testNoResume() {
   CHECK(reason(r) == kRejectLocked && r.size() == 5 + 4 + 4 && Bytes(r.begin() + 9, r.end()) == hex("0101007a"));
 }
 
-// core §7.5: discoverable is always sent - 0 by a probe that does not enumerate with the project's VID:PID.
-static void testDiscoverableAlways() {
+// core §7.5: fn 0's describe carries no discoverable, reserved, profile, resets_on_open or implementation (removed
+// from v1); the transports and max_op_ms are the endpoint's. core §7.2: list is first(u16) only; total is the
+// interfaces' count, a first past it answers count 0.
+static void testDescribeAndList() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
   Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
-  CHECK(discoverableIn(exchange(ep, s, false, request(1, 0, 0x03, {0, 0, 0, 0}))) == 0);
-  ep.setDiscoverable(true);
-  CHECK(discoverableIn(exchange(ep, s, false, request(2, 0, 0x03, {0, 0, 0, 0}))) == 1);
+  Toy toy;
+  ep.add(toy);
+  const Bytes d = exchange(ep, s, false, request(1, 0, 0x03, {0, 0, 0, 0}));
+  bool found = false;
+  for (uint8_t gone : {0x44, 0x45, 0x47, 0x4A, 0x07}) {
+    describeTlv(d, gone, &found);
+    CHECK(!found);
+  }
+  describeTlv(d, reg::core::kTlvDescribeMaxOpMs, &found);
+  CHECK(found);
+  Bytes r = exchange(ep, s, false, request(2, 0, 0x02, {0, 0}));
+  CHECK(r.size() == 5 + 3 + 7 + strlen(toy.name()) && getU16(&r[5]) == 1 && r[7] == 1);
+  r = exchange(ep, s, false, request(3, 0, 0x02, {1, 0}));
+  CHECK(r.size() == 5 + 3 && getU16(&r[5]) == 1 && r[7] == 0);
+  CHECK(reason(exchange(ep, s, false, request(4, 0, 0x02, {0}))) == kRejectMalformed);
+  r = exchange(ep, s, false, request(5, 0, 0x02, withTlv({0, 0}, 0x90, {})));
+  CHECK(reason(r) == kRejectUnsupported && r.size() == 6 && r[5] == 0x90);
 }
 
-
-// core §7.2: list's flags bits 1 to 7 are reserved (unsupported, tag 0x00); the prefix is text (core §2.1, malformed).
-// core §6.4 / §2.1: open's force is a boolean; owner is text of 1 to 32 bytes; core §2.3: a repeated non-repeating TLV.
+// core §6.4 / §2.1: open's force reads any non-zero as true; owner is text of 1 to 32 bytes (other text is taken as
+// sent); core §2.3: a repeated non-repeating TLV - the first one is used.
 static void testRequestValues() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
   Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
-  Bytes r = exchange(ep, s, false, request(1, 0, 0x02, {0x02, 0, 0, 0}));
-  CHECK(reason(r) == kRejectUnsupported && r.size() == 6 && r[5] == 0);
-  CHECK(reason(exchange(ep, s, false, request(2, 0, 0x02, {0, 0, 0, 3, 'o', 0x01, 'p'}))) == kRejectMalformed);
-  CHECK(reason(exchange(ep, s, false, request(3, 0, 0x02, {0, 0, 0, 2, 0xC3, 0x28}))) == kRejectMalformed);   // bad UTF-8
-  r = exchange(ep, s, false, request(4, 0, 0x02, {1, 0, 0, 3, 'o', 'e', 'p'}));   // exact "oep": none, fine
-  CHECK(r.size() >= 8 && r[3] == kResolutionCompleted && r[5 + 2] == 0);
-
-  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x10, openReq(9, 3000, 2)))) == kRejectMalformed);
-  CHECK(reason(exchange(ep, s, false, request(6, 0, 0x10, withTlv(openReq(9, 3000), 0x01, {})))) == kRejectMalformed);
-  CHECK(reason(exchange(ep, s, false, request(7, 0, 0x10, withTlv(openReq(9, 3000), 0x01, Bytes(33, 'a'))))) == kRejectMalformed);
-  CHECK(reason(exchange(ep, s, false, request(8, 0, 0x10, withTlv(openReq(9, 3000), 0x81, {'a', 0x0a})))) == kRejectMalformed);
-  CHECK(reason(exchange(ep, s, false, request(9, 0, 0x10, withTlv(openReq(9, 3000), 0x01, {0xED, 0xA0, 0x80})))) == kRejectMalformed);
-  const Bytes twice = withTlv(withTlv(openReq(9, 3000), 0x01, {'a'}), 0x01, {'b'});
-  CHECK(reason(exchange(ep, s, false, request(10, 0, 0x10, twice))) == kRejectMalformed);
-  CHECK(!ep.locked());
-  r = exchange(ep, s, false, request(11, 0, 0x10, withTlv(openReq(9, 3000, 1), 0x01, {'t', 0xC3, 0xA9, 's', 't'})));
+  CHECK(reason(exchange(ep, s, false, request(1, 0, 0x10, withTlv(openReq(9, 3000), 0x01, Bytes(33, 'a'))))) == kRejectMalformed);
+  const Bytes twice = withTlv(withTlv(openReq(9, 3000), 0x01, {'a', 0x0a}), 0x01, {'b'});
+  Bytes r = exchange(ep, s, false, request(2, 0, 0x10, twice));
   CHECK(r.size() == 5 + 8 && r[3] == kResolutionCompleted && ep.locked());   // lease_ms boot_id (core §6.4)
-  r = exchange(ep, s, false, request(12, 0, 0x13, {}));   // lock_state shows the owner as sent
-  const Bytes owner = {0x01, 5, 0, 't', 0xC3, 0xA9, 's', 't'};
+  r = exchange(ep, s, false, request(3, 0, 0x13, {}));   // lock_state shows the first owner, as sent
+  const Bytes owner = {0x01, 2, 0, 'a', 0x0a};
   CHECK(r.size() == 5 + 5 + owner.size() && Bytes(r.begin() + 10, r.end()) == owner);
+  // force 2 is true: another session takes the lock
+  r = exchange(ep, s, false, request(4, 0, 0x10, openReq(8, 3000, 2)));
+  CHECK(r[3] == kResolutionCompleted && ep.locked());
+  CHECK(reason(exchange(ep, s, false, request(5, 0, 0x12, {}, true, 9))) == kRejectLocked);
 }
 
 // core §4.3 order 1 comes before the resend table (order 2): a header refusal of the last session's request is not
@@ -326,7 +346,7 @@ static void testHeaderRefusalsNotKept() {
   g_millis += 200;   // 1100 ms after the open: the refusals did not extend it
   ep.poll();
   CHECK(!ep.locked());
-  // the lapsed session's next request: no_session (no resume), and corr 2 was not taken by the refusal (no corr_reused)
+  // the lapsed session's next request: no_session (no resume), and corr 2 was not taken by the refusal
   CHECK(reason(exchange(ep, s, false, request(2, 0, 0x12, {}, true, 7))) == kRejectNoSession);
 }
 
@@ -360,15 +380,6 @@ static void testLengthPrefixedReader() {
   }
 }
 
-static void testRequestText() {
-  const uint8_t ok[] = {'a', 0xC3, 0xA9, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80};
-  CHECK(requestText(ok, sizeof ok));
-  const uint8_t overlong[] = {0xC0, 0xAF}, surrogate[] = {0xED, 0xA0, 0x80}, cut[] = {'a', 0xE2, 0x82},
-                high[] = {0xF4, 0x90, 0x80, 0x80}, del[] = {0x7F}, tab[] = {0x09};
-  CHECK(!requestText(overlong, 2) && !requestText(surrogate, 3) && !requestText(cut, 3) && !requestText(high, 4));
-  CHECK(!requestText(del, 1) && !requestText(tab, 1) && requestText(nullptr, 0));
-}
-
 // core §5.2: the resend table remembers at least max_inflight requests - confirm never offers more than it has entries.
 static void testInflightWithinTable() {
   MemStream s;
@@ -378,26 +389,19 @@ static void testInflightWithinTable() {
   CHECK(r.size() == 5 + 21 && r[5 + 12] >= 1 && r[5 + 12] <= 8);
 }
 
-// core §9: a closed resource number is not given out again while it is among the last 1024 closed
-// (resource_reuse_distance), also when the counter comes round to it soon after it closed.
-static void testResourceReuseDistance() {
+// core §9: each new resource number is the previous plus 1 (65535 then 1), a number in use skipped.
+static void testResourceNumbers() {
   using RN = ResourceNumbers;
-  const uint16_t a = RN::take(RN::kConnection);   // held while the counter goes round
-  CHECK(a != 0);
-  const uint16_t stop = static_cast<uint16_t>(a > 151 ? a - 151 : a - 151 - 1);   // 150 numbers before a (0 skipped)
-  for (uint32_t i = 0; i < 0x20000; ++i) {
-    const uint16_t n = RN::take(RN::kStream);
-    RN::close(n);
-    if (n == stop) break;
-  }
-  RN::close(a);   // closed now: 150 more closes until the counter is back at a
-  bool reused = false;
-  for (int i = 0; i < 400; ++i) {
-    const uint16_t n = RN::take(RN::kStream);
-    reused |= n == a;
-    RN::close(n);
-  }
-  CHECK(!reused);
+  RN::reset();
+  const uint16_t a = RN::take(RN::kConnection), b = RN::take(RN::kStream);
+  CHECK(a == 1 && b == 2);
+  RN::close(a);
+  const uint16_t c = RN::take(RN::kStream);
+  CHECK(c == 3);   // not a, though it is free
+  for (uint32_t i = 0; i < 0xFFFF - 3; ++i) RN::close(RN::take(RN::kStream));   // round to 65535
+  CHECK(RN::take(RN::kStream) == 1);   // 1 free again: taken; 2 and 3 live: skipped
+  CHECK(RN::take(RN::kStream) == 4);
+  RN::reset();
 }
 
 // core §7.2: interfaces with the same (name, revision) are numbered from 0 in ascending fn, whatever instance() the
@@ -423,7 +427,7 @@ static void testInstanceNumbering() {
   ep.add(b);
   ep.add(c);
   ep.add(d);
-  const Bytes r = exchange(ep, s, false, request(1, 0, 0x02, {0, 0, 0, 0}));
+  const Bytes r = exchange(ep, s, false, request(1, 0, 0x02, {0, 0}));
   // total(u16) count(u8), then fn(u16) instance(u16) revision flags name_len name (no element length): fn 1 to 4 (fn 0,
   // the core, is never an entry)
   std::vector<uint16_t> fns, instances;
@@ -436,8 +440,8 @@ static void testInstanceNumbering() {
   CHECK(ep.instanceOf(3) == 1 && ep.instanceOf(4) == 0);
 }
 
-// core §13 rule 1 / §7.5: an interface name outside the form is not added; describeCore refuses a model or unit_id
-// outside a-z 0-9 -.
+// core §13 rule 1 / §7.5: an interface name outside the form is not added; describeCore refuses a unit_id outside
+// a-z 0-9 - (model is free text).
 static void testNamesAndTokens() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
@@ -448,23 +452,22 @@ static void testNamesAndTokens() {
   uint8_t buf[200];
   const uint8_t id[] = {'a', '1'}, bad_id[] = {'A', '1'};
   TlvWriter w1(buf, sizeof buf);
-  CHECK(describeCore(w1, "my-probe", id, sizeof id, 0, 0));
+  CHECK(describeCore(w1, "my-probe", id, sizeof id, 0));
   TlvWriter w2(buf, sizeof buf);
-  CHECK(!describeCore(w2, "My-Probe", id, sizeof id, 0, 0));
+  CHECK(describeCore(w2, "My Probe 2", id, sizeof id, 0));
   TlvWriter w3(buf, sizeof buf);
-  CHECK(!describeCore(w3, "my-probe", bad_id, sizeof bad_id, 0, 0));
+  CHECK(!describeCore(w3, "my-probe", bad_id, sizeof bad_id, 0));
 }
 
 // oep.probe.restart (oep-if-restart): listed only with a handler set before the first poll, after the sketch's
-// interfaces and oep.probe.plan, with restart (0x01) in its ops and restart_max_ms (0x40) in its describe (raised to
-// restart_after_answer_ms at least); a handler set after the first poll changes nothing (the list is fixed for the
-// boot). restart needs the lock - session_required, no_session, locked, the handler not called; a critical TLV is
-// unsupported (no restart), another is ignored and listed. The answer goes first: the session's notifications end (an
-// event queued is not sent), it is written, then everything is let go of - the session (sessionOver), what the
-// settings keep (probeRestart), every plan, the settings' too - and the handler is called kRestartSettleMs after it,
-// early enough that the handler's own detach (kRestartDetachMs) and reset (kRestartResetMs) still start the reset within
-// restart_after_answer_ms. Nothing after the answer is served or sent, on any transport: the request
-// behind it in the same read, a request on another transport.
+// interfaces and oep.probe.plan, with restart (0x01) in its ops and restart_max_ms (0x40) in its describe; a handler
+// set after the first poll changes nothing (the list is fixed for the boot). restart needs the lock - session_required,
+// no_session, locked, the handler not called; a critical TLV is unsupported (no restart), another is ignored. The
+// answer goes first: the session's notifications end (an event queued is not sent), it is written, then everything is
+// let go of - the session (sessionOver), what the settings keep (probeRestart), every plan, the settings' too - and the
+// handler is called kRestartSettleMs after it; the handler's own detach (kRestartDetachMs) and reset (kRestartResetMs)
+// start the reset within about 100 ms of the answer. Nothing after the answer is served or sent, on any transport: the
+// request behind it in the same read, a request on another transport.
 class PlanToy final : public Interface {
  public:
   explicit PlanToy(const char *name, bool talks = false) : name_(name), talks_(talks) {}
@@ -523,14 +526,14 @@ static void testRestart() {
     ep.add(a);
     ep.add(b);
     CHECK(ep.planFn() == 3 && ep.restartFn() == 0);
-    const Bytes l = exchange(ep, s, false, request(1, 0, 0x02, {0, 0, 0, 0}));
+    const Bytes l = exchange(ep, s, false, request(1, 0, 0x02, {0, 0}));
     CHECK(l.size() >= 8 && getU16(&l[5]) == 3);
     CHECK(reason(describe(ep, s, 2, 4)) == kRejectUnknownFunction);
     CHECK(reason(exchange(ep, s, false, request(3, 4, kOpRestart, {}, true, 7))) == kRejectUnknownFunction);
     ep.setRestart(hook, 1500);
     CHECK(ep.restartFn() == 0 && reason(describe(ep, s, 4, 4)) == kRejectUnknownFunction);
   }
-  {   // a handler with 50 ms: restart_max_ms raised to restart_after_answer_ms; its ops restart only; no plan roles
+  {   // a handler with 50 ms: restart_max_ms 50 as given; its ops restart only; no plan roles
     MemStream s;
     static uint8_t rx[1200], tx[1100];
     Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
@@ -539,11 +542,10 @@ static void testRestart() {
     ep.setRestart(hook, 50);
     CHECK(ep.planFn() == 0 && ep.restartFn() == 2);
     const Bytes d = describe(ep, s, 1, 2);
-    CHECK(restartMaxMs(d) == reg::kLimitRestartAfterAnswerMs);
-    CHECK(Bytes(d.begin() + 6, d.end()) == hex("090200010140040064000000"));   // ops {restart}, restart_max_ms 100
-    const Bytes l = exchange(ep, s, false, request(2, 0, 0x02, {1, 0, 0, 17, 'o', 'e', 'p', '.', 'p', 'r', 'o', 'b', 'e', '.',
-                                                                 'r', 'e', 's', 't', 'a', 'r', 't'}));
-    CHECK(l.size() >= 5 + 3 + 7 && getU16(&l[5]) == 1 && getU16(&l[8]) == 2 && getU16(&l[10]) == 0);   // fn 2, instance 0
+    CHECK(restartMaxMs(d) == 50);
+    CHECK(Bytes(d.begin() + 6, d.end()) == hex("090200010140040032000000"));   // ops {restart}, restart_max_ms 50
+    const Bytes l = exchange(ep, s, false, request(2, 0, 0x02, {1, 0}));   // from the second: oep.probe.restart
+    CHECK(l.size() == 5 + 3 + 7 + 17 && getU16(&l[5]) == 2 && getU16(&l[8]) == 2 && getU16(&l[10]) == 0);   // fn 2, instance 0
   }
   MemStream s, u;
   static uint8_t rx[1200], rx2[1200], tx[1100];
@@ -578,7 +580,7 @@ static void testRestart() {
   CHECK(ep.replacePlan(settings, 1, &fn_b, 1) == 0 && a.planned && b.planned);
   CHECK(exchange(ep, s, false, request(11, 2, kOpSubscribe, {0, 0, 10, 0, 0, 0}, true, 7))[3] == kResolutionCompleted);
   CHECK(b.subscribed);
-  // restart with a TLV it ignores, and a lock_state right behind it in the same read; an event of b queued
+  // restart with an unknown TLV (ignored), and a lock_state right behind it in the same read; an event of b queued
   s.tx.clear();
   const Bytes m1 = request(12, rf, kOpRestart, withTlv({}, 0x20, {}), true, 7), m2 = request(13, 0, kOpLockState, {});
   for (const Bytes *m : {&m1, &m2}) { s.send({uint8_t(m->size()), uint8_t(m->size() >> 8)}); s.send(*m); }
@@ -586,14 +588,14 @@ static void testRestart() {
   CHECK(ep.event(b, 0x01, ev, sizeof ev));
   const uint32_t before = g_millis;
   ep.poll();
-  // one answer: completed success, no payload but the ignored list (core §2.3); no event
-  CHECK(s.tx == hex("0900020c0001007f010020"));
+  // one answer: completed success, no payload (core §2.3: nothing says the TLV was ignored); no event
+  CHECK(s.tx == hex("0500020c000100"));
   CHECK(g_seen.calls == 1 && g_seen.tx == s.tx.size() && ep.restarting());
-  CHECK(g_seen.at_ms - before >= Endpoint::kRestartSettleMs && g_seen.at_ms - before < reg::kLimitRestartAfterAnswerMs);
+  CHECK(g_seen.at_ms - before >= Endpoint::kRestartSettleMs && g_seen.at_ms - before < 100);
   // the handler's own part - a USB device off the bus kRestartDetachMs, then the reset (kRestartResetMs to start) - still
-  // starts the reset within restart_after_answer_ms of the answer (a reset with the device on the bus left the host
-  // failing its device descriptor request after the restart)
-  CHECK(g_seen.at_ms - before + kRestartDetachMs + kRestartResetMs < reg::kLimitRestartAfterAnswerMs);
+  // starts the reset within about 100 ms of the answer (a reset with the device on the bus left the host failing its
+  // device descriptor request after the restart)
+  CHECK(g_seen.at_ms - before + kRestartDetachMs + kRestartResetMs < 100);
   CHECK(kRestartDetachMs >= 50);   // long enough for the host to see the device gone
   CHECK(!g_seen.locked && !g_seen.planned && !b.subscribed);   // let go of before the handler
   CHECK(a.session_overs == 1 && b.session_overs == 1 && a.probe_restarts == 1 && b.probe_restarts == 1);
@@ -610,15 +612,15 @@ static void testRestart() {
 int main() {
   testConfirmTransportEveryKind();
   testOps();
-  testIgnoredList();
+  testUnknownTlvs();
+  testResendByCorr();
   testNoResume();
-  testDiscoverableAlways();
+  testDescribeAndList();
   testRequestValues();
   testHeaderRefusalsNotKept();
   testLengthPrefixedReader();
-  testRequestText();
   testInflightWithinTable();
-  testResourceReuseDistance();
+  testResourceNumbers();
   testInstanceNumbering();
   testNamesAndTokens();
   testRestart();

@@ -337,7 +337,7 @@ int main() {
     const uint32_t took = micros() - before;
     printf("  a failed read at 10 kHz: %u ms\n", took / 1000);
     // the allowance, plus the two reads that are not retries (the revive's first look, the read's first try)
-    CHECK(took <= v1::reg::kLimitWireRetryMs * 1000u + 2 * 6000u);
+    CHECK(took <= limits::kWireRetryMs * 1000u + 2 * 6000u);
     // the next request has its own allowance; a request already spent retries nothing more
     const uint32_t before2 = micros();
     CHECK(!phy.read(0x11, value));

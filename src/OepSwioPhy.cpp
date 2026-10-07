@@ -19,12 +19,8 @@ constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
 constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
 portMUX_TYPE gMux = portMUX_INITIALIZER_UNLOCKED;
 constexpr int kRisePolls = 1000;   // a read frame's polls of GPIO.in for the line to come back high, all bits together
-// The console's poll has the wire's turn without waiting (backgroundTurn): its frames do not wait for a window either.
-bool gBackground = false;
 // Before a frame: no sampler window open, and the wire held until loop() comes round (OepWireGate.h).
-inline void IRAM_ATTR waitWire() {
-  if (!gBackground) gWireGate.hold();
-}
+inline void IRAM_ATTR waitWire() { gWireGate.hold(); }
 
 inline void IRAM_ATTR waitCycles(int count) {
   asm volatile("1: addi %[n], %[n], -1\n   bbci %[n], 31, 1b\n" : [n] "+r"(count));
@@ -185,18 +181,10 @@ void SwioPhy::free() {
   if (gPin >= 0) pinMode(gPin, INPUT);
 }
 
-// The console's turn (DmiPhy::backgroundTurn): the wire taken when no window is open; otherwise read on through it
-// (oep-if-console §3 as it stands), or with the test hook OEP_SWIO_PAUSE_CONSOLE, not read until the window has closed.
-bool SwioPhy::backgroundTurn() {
-#if OEP_SWIO_PAUSE_CONSOLE
-  return gWireGate.tryHold();
-#else
-  if (gWireGate.tryHold(false)) return true;
-  gBackground = true;
-  return true;
-#endif
-}
-void SwioPhy::backgroundDone() { gBackground = false; }
+// The console's turn (DmiPhy::backgroundTurn): the wire taken when no window is open; otherwise refused - the console
+// reads nothing until the window has closed (the next poll), and the sampler is told a take was wanted.
+bool SwioPhy::backgroundTurn() { return gWireGate.tryHold(); }
+void SwioPhy::backgroundDone() {}
 
 }  // namespace oep
 
@@ -467,27 +455,16 @@ namespace {
 int gPin = -1;
 constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
 constexpr uint32_t kCfgr = 0x5aa50400;
-bool gBackground = false;
 // as the classic's: the frames go through the sampler's gate (OepWireGate.h)
-void waitWire() {
-  if (!gBackground) gWireGate.hold();
-}
+void waitWire() { gWireGate.hold(); }
 void writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
   waitWire();
   fakeSwioWrite(address, value, free_after);
 }
 }  // namespace
 
-bool SwioPhy::backgroundTurn() {
-#if OEP_SWIO_PAUSE_CONSOLE
-  return gWireGate.tryHold();
-#else
-  if (gWireGate.tryHold(false)) return true;
-  gBackground = true;
-  return true;
-#endif
-}
-void SwioPhy::backgroundDone() { gBackground = false; }
+bool SwioPhy::backgroundTurn() { return gWireGate.tryHold(); }
+void SwioPhy::backgroundDone() {}
 
 bool SwioPhy::begin(int swio) {
   gPin = swio;
@@ -540,7 +517,7 @@ constexpr int kCheckRounds = 2;   // x 8 patterns: about 2 ms of frames
 // link brought back in step first (resync): a target that reset itself through a system reset - a CH32V003 whose
 // bootloader hands over to the application - drops its SWIO configuration and its debug module with it, and nothing
 // answers until the configuration pair is written again (a fresh attach worked; the connection was lost: oep-if-debug
-// §2 says a target reset does not close it). A retry starts only when it still ends within wire_retry_ms (§2).
+// §2 says a target reset does not close it). A retry starts only when it still ends within limits::kWireRetryMs (§2).
 bool SwioPhy::readRetried(uint8_t address, uint32_t &value) {
   auto answered = [&](bool ok, uint32_t v) { return ok && DmiPhy::outcomeOf(address, true, v) != DmiPhy::kNoAnswer; };
   uint32_t t0 = micros();

@@ -7,7 +7,8 @@
 // idle drive until the first set (no glitch on a power line), a debug wire's release touches only channels with an
 // idle, the reset line goes back to its idle, and a plan replaced through the endpoint releases only the channels that
 // leave it (a power line kept in both plans never blinks off). The output drive strength (oep-if-fixture §1.1): describe's
-// drive_levels, set's drive TLV per element (malformed / ignored), the inheritance set -> idle -> default, read's drive.
+// drive_levels, set's drive TLV per element (index level; malformed / unsupported), the inheritance set -> idle ->
+// default; read has no drive TLV, mode 7 is unsupported like 8.
 #include <stdio.h>
 
 #include <vector>
@@ -159,12 +160,7 @@ static void testGpioTakeKeepsIdle() {
   CHECK(g_pin_changes == before);   // taking it changes nothing
   CHECK(drives(10, HIGH));
   Bytes out;
-#if defined(OEP_HOST_FAKE_DRIVE)
-  // n level, then the drive TLV: 01 len(u16) level
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(10), out)) && out.size() == 6 && out[1] == 1 && out[5] == 2);
-#else
   CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(10), out)) && out.size() == 2 && out[1] == 1);
-#endif
   // the first set changes it (output low: power off), and nothing before it did
   CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setOne(10, reg::fixture_gpio::kModeOutputLow), out)));
   CHECK(drives(10, LOW));
@@ -248,19 +244,17 @@ static void testReplaceKeepsSharedChannels() {
   CHECK(floating(40) && floating(42) && drives(43, LOW));
 }
 
-// A plan refused unavailable says what it met (core §4.3): cause 1, the channel, holder_kind - a wire's live connection
-// (2), another session's plan (1), a plan the settings put in (5). 0.0.28 sent an empty payload for a channel a
-// connection held.
-static bool unavailableWith(const Result &r, const Bytes &out, uint8_t cause, uint16_t channel, uint8_t kind) {
+// A plan refused unavailable says what it met (core §4.3): cause 1 and the channel - a wire's live connection, a plan
+// the settings put in. 0.0.28 sent an empty payload for a channel a connection held.
+static bool unavailableWith(const Result &r, const Bytes &out, uint8_t cause, uint16_t channel) {
   if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
-  uint8_t got_cause = 0, got_kind = 0;
+  uint8_t got_cause = 0;
   uint16_t got_channel = 0xffff;
   for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1)) {
     if (out[at] == reg::core::kTlvUnavailablePayloadCause) got_cause = out[at + 3];
     if (out[at] == reg::core::kTlvUnavailablePayloadChannel) got_channel = getU16(out.data() + at + 3);
-    if (out[at] == reg::core::kTlvUnavailablePayloadHolderKind) got_kind = out[at + 3];
   }
-  return got_cause == cause && got_channel == channel && got_kind == kind;
+  return got_cause == cause && got_channel == channel;
 }
 
 static void testPlanRefusalPayload() {
@@ -273,13 +267,13 @@ static void testPlanRefusalPayload() {
   ep.add(gpio2);   // fn 2
   ep.setPins(&pins);
   const uint16_t fn = 1, fn2 = 2;
-  CHECK(pins.claim(44, 0xf0, reg::core::kHolderKindConnection));   // a debug wire's live connection on 44
+  CHECK(pins.claim(44, 0xf0));   // a debug wire's live connection on 44
   const RoleAssignment on44[] = {{fn, reg::fixture_gpio::kRoleLine, 44}};
   CHECK(ep.replacePlan(on44, 1, &fn, 1) == kRejectUnavailable);
   Bytes out(64);
   Result r = ep.planUnavailable(out.data(), out.size());
   out.resize(r.length);
-  CHECK(unavailableWith(r, out, reg::core::kUnavailableCausePinInUse, 44, reg::core::kHolderKindConnection));
+  CHECK(unavailableWith(r, out, reg::core::kUnavailableCausePinInUse, 44));
   CHECK(pins.owner(44) == 0xf0);
   pins.releaseQuiet(0xf0);
   // fn 2's plan, put in through the settings (replacePlan), holds 45: fn 1 naming 45 meets a settings plan
@@ -290,7 +284,7 @@ static void testPlanRefusalPayload() {
   out.assign(64, 0);
   r = ep.planUnavailable(out.data(), out.size());
   out.resize(r.length);
-  CHECK(unavailableWith(r, out, reg::core::kUnavailableCausePinInUse, 45, reg::core::kHolderKindSettingsPlan));
+  CHECK(unavailableWith(r, out, reg::core::kUnavailableCausePinInUse, 45));
   CHECK(ep.replacePlan(nullptr, 0, &fn2, 1) == 0);
 }
 
@@ -300,7 +294,7 @@ static Bytes setWithDrive(std::vector<std::pair<uint16_t, uint8_t>> elements, st
   Bytes p;
   p.push_back(static_cast<uint8_t>(elements.size()));
   for (auto &e : elements) { p.push_back(e.first & 0xff); p.push_back(e.first >> 8); p.push_back(e.second); }
-  for (auto &d : drives) {   // index kind value(u16) - or whatever bytes a test gives
+  for (auto &d : drives) {   // index level - or whatever bytes a test gives
     p.push_back(reg::fixture_gpio::kTlvSetDrive);
     p.push_back(static_cast<uint8_t>(d.size()));   // len(u16 LE)
     p.push_back(0);
@@ -308,12 +302,14 @@ static Bytes setWithDrive(std::vector<std::pair<uint16_t, uint8_t>> elements, st
   }
   return p;
 }
-#if defined(OEP_HOST_FAKE_DRIVE)
-static bool ignoredDrive(const Bytes &out, size_t at) {   // 7F len(u16) = 1, the drive tag
-  return out.size() == at + 4 && out[at] == kTagIgnored && out[at + 1] == 1 && out[at + 2] == 0 &&
-         out[at + 3] == reg::fixture_gpio::kTlvSetDrive;
+static Result driveRefused(FixtureGpio &gpio, const Bytes &request, Bytes &out) {
+  return gpioCall(gpio, FixtureGpio::kOpSet, request, out);
+}
+static bool unsupportedTagIs(const Result &r, const Bytes &out, uint8_t tag) {
+  return r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() == 1 && out[0] == tag;
 }
 
+#if defined(OEP_HOST_FAKE_DRIVE)
 static void testDriveDescribe() {
   PinTable pins(1ull << 20);
   FixtureGpio gpio(pins, 0, 1);
@@ -338,96 +334,72 @@ static void testDriveSet() {
   CHECK(gpio.planApply(roles, 4));
   Bytes out;
   const uint8_t hi = reg::fixture_gpio::kModeOutputHigh, lo = reg::fixture_gpio::kModeOutputLow;
-  // taken: the idle's level read back, the others not driven (n, 4 levels, then the drive TLV 01 len(u16) 4 x level)
+  const uint8_t tag = reg::fixture_gpio::kTlvSetDrive, crit_tag = tag | kTagCritical;
+  // read: n levels and no drive TLV
   Bytes rd = {4, 20, 0, 21, 0, 22, 0, 23, 0};
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, rd, out)) && out.size() == 5 + 7 && out[5] == reg::fixture_gpio::kTlvReadAnswerDrive &&
-        out[6] == 4 && out[7] == 0 && out[8] == 0xff && out[9] == 0xff && out[10] == 0xff && out[11] == 0);
-  // one request, a strength per element: 20 at level 3, 21 by mA (12 mA -> 10 mA, level 1), 22 without (default 2),
-  // 23 without (its idle's, 0)
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, rd, out)) && out.size() == 5 && out[4] == 1);
+  // one request, a strength per element: 20 at level 3, 21 at 0xFF (the default, 2), 22 without (default 2), 23 without
+  // (its idle's, 0)
   CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet,
-                    setWithDrive({{20, hi}, {21, lo}, {22, hi}, {23, lo}}, {{0, 0, 3, 0}, {1, 1, 12, 0}}), out)) && out.empty());
+                    setWithDrive({{20, hi}, {21, lo}, {22, hi}, {23, lo}}, {{0, 3}, {1, 0xFF}}), out)) && out.empty());
   CHECK(drives(20, HIGH) && g_pin_drive[20] == 3);
-  CHECK(drives(21, LOW) && g_pin_drive[21] == 1);
+  CHECK(drives(21, LOW) && g_pin_drive[21] == 2);
   CHECK(drives(22, HIGH) && g_pin_drive[22] == 2);
   CHECK(drives(23, LOW) && g_pin_drive[23] == 0);
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, rd, out)) && out[8] == 3 && out[9] == 1 && out[10] == 2 && out[11] == 0);
-  // two ignored: 0x01 listed for each; an unknown tag once, before them (ignored: 7F len(u16) entries)
-  Bytes two = setWithDrive({{20, hi}, {21, hi}}, {{0, 0, 9, 0}, {1, 0, 4, 0}});
-  two.insert(two.end(), {0x30, 0, 0});
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, two, out)) && out.size() == 6 && out[0] == kTagIgnored && out[1] == 3 &&
-        out[2] == 0 && out[3] == 0x30 && out[4] == reg::fixture_gpio::kTlvSetDrive && out[5] == reg::fixture_gpio::kTlvSetDrive);
-  // critical where it would be ignored: rejected unsupported with the tag as received; a usable one critical is taken
-  Bytes crit = setWithDrive({{20, hi}}, {{0, 0, 4, 0}});
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, rd, out)) && out.size() == 5);
+  // critical or not, the same: a level the probe has is taken, an unknown non-critical tag beside it is ignored
+  Bytes crit = setWithDrive({{20, hi}}, {{0, 1}});
   crit[4] |= kTagCritical;
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, crit, out).detail == kRejectUnsupported && out.size() == 1 &&
-        out[0] == (reg::fixture_gpio::kTlvSetDrive | kTagCritical));
-  crit = setWithDrive({{20, hi}}, {{0, 0, 1, 0}});
-  crit[4] |= kTagCritical;
+  crit.insert(crit.end(), {0x30, 0, 0});
   CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, crit, out)) && out.empty() && g_pin_drive[20] == 1);
-  // a mA under every level: level 0
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{21, lo}}, {{0, 1, 1, 0}}), out)) && g_pin_drive[21] == 0);
   // kept until the channel is set again: a set without drive takes the idle's / default again
   CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {}), out)) && g_pin_drive[20] == 2);
-  // a level the probe does not have: that TLV ignored (listed), the set done at the default
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 0, 4, 0}}), out)) && ignoredDrive(out, 0));
-  CHECK(drives(20, HIGH) && g_pin_drive[20] == 2);
-  // kind 2: the default level (value 0), taken
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 0, 3, 0}}), out)) && g_pin_drive[20] == 3);
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 2, 0, 0}}), out)) && out.empty());
-  CHECK(drives(20, HIGH) && g_pin_drive[20] == 2);
-  // an undefined kind (3+): a value this probe cannot handle - that TLV ignored, or unsupported when critical (C-02)
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 3, 0, 0}}), out)) && ignoredDrive(out, 0));
-  CHECK(drives(20, HIGH) && g_pin_drive[20] == 2);
-  Bytes kind3 = setWithDrive({{20, hi}}, {{0, 3, 0, 0}});
-  kind3[4] |= kTagCritical;
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, kind3, out).detail == kRejectUnsupported && out.size() == 1 &&
-        out[0] == (reg::fixture_gpio::kTlvSetDrive | kTagCritical));
-  // longer than its form (index kind value = 4 bytes) is never an extension: the whole TLV ignored, or unsupported with
-  // the tag as received when critical (core §2.3)
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 0, 3, 0, 0}}), out)) && ignoredDrive(out, 0));
-  CHECK(drives(20, HIGH) && g_pin_drive[20] == 2);
-  Bytes longer = setWithDrive({{20, hi}}, {{0, 0, 3, 0, 0}});
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{23, hi}}, {}), out)) && g_pin_drive[23] == 0);
+  // a level past drive_levels (4 levels: 4..0xFE): rejected unsupported with the tag as received, nothing done
+  int before = g_pin_changes;
+  CHECK(unsupportedTagIs(driveRefused(gpio, setWithDrive({{20, hi}}, {{0, 4}}), out), out, tag));
+  CHECK(unsupportedTagIs(driveRefused(gpio, setWithDrive({{20, hi}, {21, hi}}, {{0, 1}, {1, 0xFE}}), out), out, tag));
+  Bytes past = setWithDrive({{20, hi}}, {{0, 9}});
+  past[4] |= kTagCritical;
+  CHECK(unsupportedTagIs(driveRefused(gpio, past, out), out, crit_tag));
+  CHECK(g_pin_changes == before && drives(20, LOW) && g_pin_drive[20] == 2);
+  // malformed, nothing done: another length (shorter or longer), index out of range, the same index twice, an element
+  // not 3 / 4 (an undefined mode too) - critical or not, and wherever it is among the drive TLVs
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0}}), out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 1, 0}}), out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 1, 0, 0}}), out).detail == kRejectMalformed);
+  Bytes longer = setWithDrive({{20, lo}}, {{0, 1, 0}});
   longer[4] |= kTagCritical;
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, longer, out).detail == kRejectUnsupported && out.size() == 1 &&
-        out[0] == (reg::fixture_gpio::kTlvSetDrive | kTagCritical));
-  // malformed, nothing done: index out of range, the same index twice, an element not 3 / 4, length
-  const int before = g_pin_changes;
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{1, 0, 0, 0}}), out).detail == kRejectMalformed);
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0, 0, 0}, {0, 0, 1, 0}}), out).detail == kRejectMalformed);
-  // an undefined mode (8+) is unsupported like an undeclared one, with the channel and its index (C-02)
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, 8}}, {}), out).detail == kRejectUnsupported && out.size() >= 1 &&
-        out[0] == kTagValue);
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}, {21, 0}}, {{1, 0, 0, 0}}), out).detail == kRejectMalformed);
-  // a drive on an element whose mode is undefined (8+): unsupported for the mode with its channel and index, not malformed
-  // for a drive on a mode other than 3 / 4 (core §4.3 "Contradictions and undefined values"); critical too
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}, {21, 8}}, {{1, 0, 0, 0}}), out).detail == kRejectUnsupported &&
-        out.size() >= 1 && out[0] == kTagValue);
-  Bytes undefined_crit = setWithDrive({{21, 9}}, {{0, 0, 9, 0}});
-  undefined_crit[4] |= kTagCritical;
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, undefined_crit, out).detail == kRejectUnsupported && out.size() >= 1 &&
-        out[0] == kTagValue);
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0, 0}}), out).detail == kRejectMalformed);
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 2, 1, 0}}), out).detail == kRejectMalformed);   // kind 2, value != 0
-  // malformed wins wherever it is: after an ignored one, and after a critical one that would be unsupported
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0, 9, 0}, {5, 0, 0, 0}}), out).detail == kRejectMalformed);
-  Bytes late = setWithDrive({{20, lo}}, {{0, 0, 9, 0}, {5, 0, 0, 0}});
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, longer, out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{1, 0}}), out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 0}, {0, 1}}), out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}, {21, 0}}, {{1, 0}}), out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}, {21, 8}}, {{1, 0}}), out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, lo}}, {{0, 9}, {5, 0}}), out).detail == kRejectMalformed);
+  Bytes late = setWithDrive({{20, lo}}, {{0, 9}, {5, 0}});
   late[4] |= kTagCritical;
   CHECK(gpioCall(gpio, FixtureGpio::kOpSet, late, out).detail == kRejectMalformed);
-  CHECK(g_pin_changes == before && drives(20, HIGH) && g_pin_drive[20] == 2);
-  // an input: not driven (0xFF), and the pad back at the default strength for whoever takes it next
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 0, 3, 0}}), out)) && g_pin_drive[20] == 3);
+  // mode 7 (no longer in the table) and 8+: unsupported like an undeclared mode, with the channel and its index
+  for (const uint8_t m : {7, 8}) {
+    CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, m}}, {}), out).detail == kRejectUnsupported && out.size() >= 1 &&
+          out[0] == kTagValue);
+  }
+  CHECK(g_pin_changes == before && drives(20, LOW) && g_pin_drive[20] == 2);
+  // an input: the pad back at the default strength for whoever takes it next
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 3}}), out)) && g_pin_drive[20] == 3);
   CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setOne(20, reg::fixture_gpio::kModeInput), out)) && g_pin_drive[20] == 2);
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(20), out)) && out.size() == 6 && out[5] == 0xff);
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(20), out)) && out.size() == 2);
   // released: each to its idle state with its strength (23: output high at level 0; 21 at level 0 -> Hi-Z, default)
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{23, lo}}, {{0, 0, 3, 0}}), out)) && g_pin_drive[23] == 3);
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{23, lo}, {21, lo}}, {{0, 3}, {1, 0}}), out)));
+  CHECK(g_pin_drive[23] == 3 && g_pin_drive[21] == 0);
   gpio.planRelease();
-  CHECK(drives(23, HIGH) && g_pin_drive[23] == 0 && pins.drivenLevel(23) == 0);
-  CHECK(floating(21) && g_pin_drive[21] == 2 && pins.drivenLevel(21) == PinTable::kNotDriven);
+  CHECK(drives(23, HIGH) && g_pin_drive[23] == 0);
+  CHECK(floating(21) && g_pin_drive[21] == 2);
 }
 
 #else
-// A chip without drive_levels: drive is an unknown tag - no form checked, each one ignored (0x01 listed once per TLV),
-// a critical one rejected unsupported; read has no drive TLV.
+// A chip without drive_levels: any drive is rejected unsupported with the tag as received (its form checked first, as
+// everywhere); read has no drive TLV; mode 7 unsupported.
 static void testNoDriveLevels() {
   PinTable pins(1ull << 20);
   FixtureGpio gpio(pins, 0, 1);
@@ -438,13 +410,19 @@ static void testNoDriveLevels() {
   const RoleAssignment roles[] = {{1, reg::fixture_gpio::kRoleLine, 20}};
   CHECK(gpio.planApply(roles, 1));
   Bytes out;
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, 0}}, {{5, 9}, {0, 0, 3, 0}}), out)) && out.size() == 5 &&
-        out[0] == kTagIgnored && out[1] == 2 && out[2] == 0 && out[3] == reg::fixture_gpio::kTlvSetDrive &&
-        out[4] == reg::fixture_gpio::kTlvSetDrive);
-  Bytes crit = setWithDrive({{20, reg::fixture_gpio::kModeOutputHigh}}, {{0, 0, 3, 0}});
+  const uint8_t hi = reg::fixture_gpio::kModeOutputHigh;
+  const int before = g_pin_changes;
+  CHECK(unsupportedTagIs(driveRefused(gpio, setWithDrive({{20, hi}}, {{0, 0xFF}}), out), out, reg::fixture_gpio::kTlvSetDrive));
+  CHECK(unsupportedTagIs(driveRefused(gpio, setWithDrive({{20, hi}}, {{0, 0}}), out), out, reg::fixture_gpio::kTlvSetDrive));
+  Bytes crit = setWithDrive({{20, hi}}, {{0, 0}});
   crit[4] |= kTagCritical;
-  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, crit, out).detail == kRejectUnsupported);
-  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(20), out)) && out.size() == 2);
+  CHECK(unsupportedTagIs(driveRefused(gpio, crit, out), out, reg::fixture_gpio::kTlvSetDrive | kTagCritical));
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, 0}}, {{0, 0}}), out).detail == kRejectMalformed);   // not 3 / 4
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {{0, 0, 3, 0}}), out).detail == kRejectMalformed);
+  CHECK(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, 7}}, {}), out).detail == kRejectUnsupported);
+  CHECK(g_pin_changes == before);
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpSet, setWithDrive({{20, hi}}, {}), out)) && out.empty() && drives(20, HIGH));
+  CHECK(ok(gpioCall(gpio, FixtureGpio::kOpRead, readOne(20), out)) && out.size() == 2 && out[1] == 1);
 }
 #endif
 

@@ -3,7 +3,9 @@
 
 // Host tests: the fixture UART's receive on a fake UART (OEP_HOST_FAKE_UART: platformUartBegin starts it). The UART
 // begins on the core the sketch named (setInterruptCore, every begin: plan, configure, a configure refused and put
-// back); configure takes 2000000 and refuses a faster rate unsupported; what the UART received is in the stream in
+// back); configure takes 2000000 and refuses a faster rate unsupported; configure's format TLV (a value the definition
+// leaves unused unsupported with the tag as received, critical or not; another length malformed), status (baud format),
+// write with count 0 (accepted 0, success; a full send buffer failed); what the UART received is in the stream in
 // order. A lost mark is at or before the first byte after the loss, never after it (oep-if-common §1.3, oep-if-fixture
 // §2), at it where the driver tells: ESP-IDF style (the default build) - the driver's events in order, a FIFO overflow
 // exactly at the gap also when the events come late, a framing / parity error at or before the bad byte, a buffer full
@@ -90,6 +92,51 @@ static void testCoreAndRates() {
   FixtureUart other(pins, serial, 1, 5);   // no setInterruptCore: the caller's core (-1)
   CHECK(other.planApply(plan, 2) && serial.fake_irq_core == -1);
   other.planRelease();
+}
+
+static Result call(FixtureUart &uart, uint8_t op, const std::vector<uint8_t> &p, uint8_t *out, size_t capacity) {
+  return uart.handle(op, p.data(), p.size(), out, capacity);
+}
+
+static void testOps() {
+  PinTable pins((1ull << 4) | (1ull << 5));
+  HardwareSerial serial;
+  FixtureUart uart(pins, serial, 0, 2);
+  uint8_t out[64];
+  // not planned: status baud 0 format 0
+  Result r = call(uart, ua::kOpStatus, {}, out, sizeof out);
+  CHECK(r.resolution == kResolutionCompleted && r.length == 5 && getU32(out) == 0 && out[4] == 0);
+  const RoleAssignment plan[] = {{1, ua::kRoleRx, 4}, {1, ua::kRoleTx, 5}};
+  CHECK(uart.planApply(plan, 2));
+  r = call(uart, ua::kOpStatus, {}, out, sizeof out);   // the default: 115200 8N1
+  CHECK(r.resolution == kResolutionCompleted && r.length == 5 && getU32(out) == FixtureUart::kDefaultBaud && out[4] == 0);
+  // format 7E2 (data 1, parity 1, stop 1): taken, in status
+  const uint8_t f7e2 = 0x01 | ua::kFormatFieldParityEven | ua::kFormatFieldStopBits2;
+  std::vector<uint8_t> p = {0x00, 0xC2, 0x01, 0x00, ua::kTlvConfigureFormat, 1, 0, f7e2};   // 115200
+  r = call(uart, ua::kOpConfigure, p, out, sizeof out);
+  CHECK(r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess && r.length == 4 && getU32(out) == 115200);
+  r = call(uart, ua::kOpStatus, {}, out, sizeof out);
+  CHECK(r.length == 5 && getU32(out) == 115200 && out[4] == f7e2);
+  // parity 3 (unused by the definition): unsupported with the tag as received, critical or not; nothing changed
+  for (const uint8_t tag : {ua::kTlvConfigureFormat, static_cast<uint8_t>(ua::kTlvConfigureFormat | kTagCritical)}) {
+    p = {0x00, 0xC2, 0x01, 0x00, tag, 1, 0, ua::kFormatFieldParityMask};
+    r = call(uart, ua::kOpConfigure, p, out, sizeof out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && r.length == 1 && out[0] == tag);
+  }
+  p = {0x00, 0xC2, 0x01, 0x00, ua::kTlvConfigureFormat, 2, 0, 0, 0};   // another length: malformed
+  r = call(uart, ua::kOpConfigure, p, out, sizeof out);
+  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
+  p = {0x00, 0xC2, 0x01, 0x00, 0x30, 1, 0, 0};   // an unknown non-critical tag: ignored
+  r = call(uart, ua::kOpConfigure, p, out, sizeof out);
+  CHECK(r.resolution == kResolutionCompleted && r.length == 4);
+  r = call(uart, ua::kOpStatus, {}, out, sizeof out);
+  CHECK(r.length == 5 && getU32(out) == 115200 && out[4] == 0);
+  // write: count 0 is accepted 0, success; a send buffer with no room takes nothing (failed, accepted 0)
+  r = call(uart, ua::kOpWrite, {0, 0}, out, sizeof out);
+  CHECK(r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess && r.length == 2 && getU16(out) == 0);
+  r = call(uart, ua::kOpWrite, {1, 0, 0x55}, out, sizeof out);
+  CHECK(r.resolution == kResolutionCompleted && r.detail == kOutcomeFailed && r.length == 2 && getU16(out) == 0);
+  uart.planRelease();
 }
 
 struct Feed {
@@ -351,6 +398,7 @@ static void testOverrunRounds() {
 
 int main() {
   testCoreAndRates();
+  testOps();
 #if !defined(OEP_HOST_FAKE_UART_RP2)
   testOverflowAtGap();
   testOverflowRounds();

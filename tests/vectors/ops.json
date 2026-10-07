@@ -1,5 +1,5 @@
 {
-  "about": "Per-op byte vectors. `fns` says which interface each fn number is in the example; `state` is the probe state the answer assumes. Requests with session_id 0x11223344 come from the session that holds the lock; lock-free requests carry 0. Answers carry no ignored TLV because no request TLV is ignored.",
+  "about": "Per-op byte vectors. `fns` says which interface each fn number is in the example; `state` is the probe state the answer assumes. Requests with session_id 0x11223344 come from the session that holds the lock; lock-free requests carry 0.",
   "cases": [
     {
       "name": "restart: completed success, sent before the probe restarts",
@@ -39,29 +39,29 @@
         "2": "oep.fixture.gpio"
       },
       "state": "session S holds the lock; channel 3 free and in gpio's role_channels for role 1; plan_roles not exceeded",
-      "request_hex": "0114000a0001443322119005000200010300",
+      "request_hex": "0114000a0001443322111005000200010300",
       "answer_hex": "0214000100"
     },
     {
       "name": "plan_apply naming fn 0: malformed",
-      "spec": "oep-if-plan §2.5, core §4.3 order 5",
+      "spec": "oep-if-plan §2.5, core §4.3",
       "fns": {
         "10": "oep.probe.plan",
         "2": "oep.fixture.gpio"
       },
       "state": "session S",
-      "request_hex": "0115000a0001443322119005000000010300",
+      "request_hex": "0115000a0001443322111005000000010300",
       "answer_hex": "0215000003"
     },
     {
       "name": "plan_apply naming a fn the probe does not have: unknown_function",
-      "spec": "oep-if-plan §2.5, core §4.3 order 5",
+      "spec": "oep-if-plan §2.5, core §4.3",
       "fns": {
         "10": "oep.probe.plan",
         "2": "oep.fixture.gpio"
       },
       "state": "session S; no fn 12",
-      "request_hex": "0116000a0001443322119005000c00010300",
+      "request_hex": "0116000a0001443322111005000c00010300",
       "answer_hex": "0216000001"
     },
     {
@@ -77,7 +77,7 @@
     },
     {
       "name": "plan_release: n = 2 with one fn",
-      "spec": "oep-if-plan §2.5, core §4.3 order 5",
+      "spec": "oep-if-plan §2.5, core §4.3",
       "fns": {
         "10": "oep.probe.plan",
         "2": "oep.fixture.gpio"
@@ -94,7 +94,7 @@
         "2": "oep.fixture.gpio"
       },
       "state": "—",
-      "request_hex": "0119000a0001000000009005000200010300",
+      "request_hex": "0119000a0001000000001005000200010300",
       "answer_hex": "0219000009"
     },
     {
@@ -108,14 +108,14 @@
       "answer_hex": "022000010008000001020304050607"
     },
     {
-      "name": "link source: more than fits, len = max_frame - 26",
-      "spec": "oep-if-link §2, core §2.3",
+      "name": "link source: more than fits, len = max_frame - 7",
+      "spec": "oep-if-link §2",
       "fns": {
         "1": "oep.probe.link"
       },
       "state": "max_frame 1024",
       "request_hex": "01250001000100000000d0070000",
-      "answer_hex": "0225000100e603000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5"
+      "answer_hex": "0225000100f903000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8"
     },
     {
       "name": "link source: length 0",
@@ -139,7 +139,7 @@
     },
     {
       "name": "link sink: count larger than the bytes that follow",
-      "spec": "oep-if-link §2, core §4.3 order 5",
+      "spec": "oep-if-link §2, core §4.3",
       "fns": {
         "1": "oep.probe.link"
       },
@@ -154,7 +154,7 @@
         "1": "oep.probe.link"
       },
       "state": "ops of fn 1: source and sink only",
-      "request_hex": "012400010003443322110000100e0000d007b80b0000",
+      "request_hex": "0124000100034433221100100e0000d007",
       "answer_hex": "0224000002"
     },
     {
@@ -179,7 +179,7 @@
     },
     {
       "name": "gpio set: channel 9 not in the plan",
-      "spec": "fixture §1, core §4.3 order 7",
+      "spec": "fixture §1, core §4.3",
       "fns": {
         "2": "oep.fixture.gpio"
       },
@@ -199,7 +199,7 @@
     },
     {
       "name": "gpio set: n = 2 with one element",
-      "spec": "core §4.3 order 5",
+      "spec": "core §4.3",
       "fns": {
         "2": "oep.fixture.gpio"
       },
@@ -269,7 +269,7 @@
     },
     {
       "name": "riscv-dm halt on an unknown connection",
-      "spec": "core §4.3 order 8",
+      "spec": "core §4.3",
       "fns": {
         "6": "oep.target.riscv-dm"
       },
@@ -286,6 +286,16 @@
       "state": "ops of fn 6: dmi, halt, resume (09 02 00 01 07)",
       "request_hex": "01520006000744332211010000000020640000000000",
       "answer_hex": "0252000002"
+    },
+    {
+      "name": "riscv-dm run: the preparation fails, the hart is not run",
+      "spec": "debug §4.4",
+      "fns": {
+        "6": "oep.target.riscv-dm"
+      },
+      "state": "session S; connection 1; run offered in ops; the hart is halted and writing a0 fails with no answer from the wire",
+      "request_hex": "0156000600074433221101000000002064000000010a100700000000",
+      "answer_hex": "02560001010203000000000000000000"
     },
     {
       "name": "riscv-dm dmi: one read of DMSTATUS",
@@ -309,7 +319,7 @@
     },
     {
       "name": "riscv-dm dmi: an unknown step kind",
-      "spec": "debug §4.1, core §4.3 order 5",
+      "spec": "debug §4.1, core §4.3",
       "fns": {
         "6": "oep.target.riscv-dm"
       },
@@ -349,7 +359,7 @@
     },
     {
       "name": "console read from 4",
-      "spec": "common §1.2, core §4.3 order 6",
+      "spec": "common §1.2, core §4.3",
       "fns": {
         "7": "oep.target.console"
       },
@@ -363,9 +373,9 @@
       "fns": {
         "8": "oep.probe.config"
       },
-      "state": "no save; slot 0 connected on connection 1 (last try at 1 ms, no retry with reset), target_id scheme 1; bind on port 0, last-reset, streaming",
+      "state": "no save; slot 0 connected on connection 1 (last try at 1 ms); bind on port 0, streaming",
       "request_hex": "017000080006000000000000",
-      "answer_hex": "027000010000000000000000010000010040420f0000000000ffffffffffffffff0104003520000100000001"
+      "answer_hex": "027000010000000000000000010000010040420f0000000000010001"
     },
     {
       "name": "probe.config save not offered",
@@ -378,13 +388,13 @@
       "answer_hex": "0271000002"
     },
     {
-      "name": "probe.config set: an input idle with a drive other than kind 2 value 0",
-      "spec": "probe settings §1",
+      "name": "probe.config set: an idle value of 6 bytes (longer than its 4)",
+      "spec": "probe settings §1, core §2.3",
       "fns": {
         "8": "oep.probe.config"
       },
       "state": "session S",
-      "request_hex": "01720008000244332211830600040000000100",
+      "request_hex": "01720008000244332211030600040003000000",
       "answer_hex": "0272000003"
     },
     {

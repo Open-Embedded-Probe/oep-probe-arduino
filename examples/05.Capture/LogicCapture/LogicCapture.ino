@@ -42,7 +42,7 @@ static char serial_[20];
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "logic-capture", id, oep::platformUnitId(id, sizeof id), 55, kReserved);
+  oep::describeCore(w, "logic-capture", id, oep::platformUnitId(id, sizeof id), 55);
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   w.label(51, "LED");
   return w.ok() ? w.length() : 0;
@@ -67,9 +67,6 @@ void setup() {
   endpoint.setPushQueue(4096);
   if (direct) endpoint.setDirect(&bulk);
   endpoint.setFlushAfterBurst(true);
-  // describe discoverable 1: OEP's one transport here is the HS device, so a host that asks reached it through the
-  // project's VID:PID (transports §3, core §7.5)
-  endpoint.setDiscoverable(true);
   endpoint.add(capture);
   endpoint.add(signal_);
   Serial.printf("# OEP P4 capture probe usb_begin=%d direct=%d serial=%s\n", ok ? 1 : 0, direct ? 1 : 0, serial_);

@@ -320,7 +320,7 @@ void RvswdPhy::configureBus(bool with_wake) {
   gIo.bothHigh();
   ioDrive(swdio_, swclk_);
   delayMicroseconds(20);
-  if (with_wake) {
+  if (with_wake && !wakesHeld()) {   // not on a connection outside attach and reset (oep-if-debug §2; DmiPhy::holdWakes)
     rvswd::wake(gIo);
     delayMicroseconds(20);
     exchangeEnds(DmiPhy::kNeither);   // the wake pattern is one exchange (§2): the lines free after it while failing
@@ -375,7 +375,7 @@ void RvswdPhy::resyncAt(uint32_t half) {
 // that gives the last value read passes a DMSTATUS read when that value was a DMSTATUS.
 //
 // Everything after the first look that did not pass is a retry of the request's (oep-if-debug §2): the re-syncs and
-// each wake are charged to its wire_retry_ms, and none starts that would end past it (one wake at a slow max_speed
+// each wake are charged to its limits::kWireRetryMs, and none starts that would end past it (one wake at a slow max_speed
 // takes tens of ms; at 10 kHz twelve of them and the read's own retries made one request 691 ms). revives() counts the
 // times the link had to be brought back here - behind the layer above, which may have met the drop in a group it
 // takes for held (Ch32Dm::held) or in a raw dmi request (TargetRiscvDm::dmi answers it line).
@@ -436,7 +436,7 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
   return ok;
 }
 
-// A failed read is retried while the request's allowance lasts (oep-if-debug §2: at most wire_retry_ms of one request
+// A failed read is retried while the request's allowance lasts (oep-if-debug §2: at most limits::kWireRetryMs of one request
 // goes to retries, the revive's re-sync and wakes included), and no more than 200 times in a row.
 bool RvswdPhy::readWire(uint8_t address, uint32_t &value) {
   reviveIfIdle();

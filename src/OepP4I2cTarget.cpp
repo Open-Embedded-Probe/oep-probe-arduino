@@ -45,7 +45,7 @@ void P4I2cTarget::planRelease() {
   stop();
   pins_.release(kOwnerId);   // each pin to its idle state
   sda_ = scl_ = -1;
-  mode_ = kModeNone; address_ = 0; stretch_us_ = 0;
+  address_ = 0; stretch_us_ = 0;
   clearTarget();
 }
 
@@ -59,55 +59,48 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   w.u16(kTagMaxLength, kMaxFrame);
   w.u32(kTagMaxClockHz, 1000000u);
   namespace i2c = reg::fixture_i2c_target;
-  // bit0 preloaded tx, bit1 clock stretching, bit2 the internal pull-ups start() enables (fixture §3)
-  w.u32(kTagFeatures, i2c::kFeaturesPreloadedTx | i2c::kFeaturesInternalPullups);   // stretch: in the ops tag (offers)
-  w.u8(kTagImplementation, 2);   // a dedicated peripheral
+  // bit2 the internal pull-ups start() enables (fixture §3); stretch is in the ops tag (offers)
+  w.u32(kTagFeatures, i2c::kFeaturesInternalPullups);
   w.u8(i2c::kTlvDescribeQueueDepth, kQueueDepth);
   if (kStretch) w.u32(i2c::kTlvDescribeMaxStretchUs, kMaxStretchUs);
-  w.u32(i2c::kTlvDescribePullupOhms, kPullupOhms);
   return w.ok() ? w.length() : 0;
 }
 
 void P4I2cTarget::clearTarget() {
   lock();
-  rx_frames_ = 0; errors_ = 0; armed_ = 0; queue_count_ = 0;
-  slot_head_ = 0; slot_count_ = 0; slot_serial_ = 0;
+  rx_frames_ = 0; errors_ = 0; queue_count_ = 0;
+  slot_head_ = 0; slot_count_ = 0;
   rx_count_ = 0; tx_loaded_ = 0; tx_pos_ = 0; tx_stale_ = false;
   unlock();
 }
 
 uint8_t P4I2cTarget::txByte(size_t pos) const {
-  if (mode_ != kModePreloadedTx || !slot_count_ || pos >= slot_length_[slot_head_]) return 0xFF;
+  if (!slot_count_ || pos >= slot_length_[slot_head_]) return 0xFF;
   return slot_[slot_head_][pos];
 }
 
-void P4I2cTarget::pushFrame(const uint8_t *data, size_t length) {
-  if (queue_count_ == kQueueDepth) { ++errors_; return; }   // the host did not drain in time: dropped, not a frame
+// false: the queue was full (the host did not drain in time), the frame dropped and not counted in rx_frames.
+bool P4I2cTarget::pushFrame(const uint8_t *data, size_t length) {
+  if (queue_count_ == kQueueDepth) return false;
   memcpy(queue_[queue_count_], data, length);
   queue_length_[queue_count_] = static_cast<uint8_t>(length);
   ++queue_count_;
   ++rx_frames_;
+  return true;
 }
 
-// One transaction ended (STOP). Its write, by byte count (fixture §3): none (the address alone) counts nothing; mode 1
-// takes exactly the armed length (else, and when not armed, it is dropped with an error and the wait goes on); mode 2
-// takes a length byte L (1..max_length) and exactly L more; mode 3 takes no write. A read used up the head slot.
+// One transaction ended (STOP or the next START). Its write (fixture §3): none (the address alone) counts nothing; one
+// with data is one frame, its bytes past max_length dropped. errors goes up once for a write that was too long, was
+// dropped for a full queue, or both. A read used up the head slot.
 void P4I2cTarget::onTransaction(bool read) {
   const size_t count = rx_count_;
   rx_count_ = 0;
   if (count) {
-    if (mode_ == kModeFixedRx) {
-      if (armed_ && count == armed_) pushFrame(rx_, count);
-      else ++errors_;
-    } else if (mode_ == kModeFramedRx) {
-      const size_t frame = rx_[0];
-      if (frame && frame <= kMaxFrame && count == frame + 1) pushFrame(rx_ + 1, frame);
-      else ++errors_;
-    } else {
-      ++errors_;
-    }
+    const bool long_write = count > kMaxFrame;
+    const bool kept = pushFrame(rx_, long_write ? kMaxFrame : count);
+    if (long_write || !kept) ++errors_;
   }
-  if (read && mode_ == kModePreloadedTx && slot_count_) {
+  if (read && slot_count_) {
     slot_head_ = static_cast<uint8_t>((slot_head_ + 1) % kQueueDepth);
     --slot_count_;
   }
@@ -132,7 +125,7 @@ uint32_t txFifoHeld() {
 void P4I2cTarget::lock() { portENTER_CRITICAL_SAFE(&lock_); }
 void P4I2cTarget::unlock() { portEXIT_CRITICAL_SAFE(&lock_); }
 
-// The received bytes so far into rx_ (past its size only counted: such a write fits no mode anyway).
+// The received bytes so far into rx_ (past max_length only counted: dropped from the frame).
 void P4I2cTarget::drainRx() {
   uint32_t n = 0;
   i2c_ll_get_rxfifo_cnt(kDev, &n);
@@ -145,7 +138,7 @@ void P4I2cTarget::drainRx() {
   }
 }
 
-// Keep the TX FIFO full: the head slot from tx_pos_, then 0xFF (fixture §3: an empty set, and modes 1 / 2, send 0xFF).
+// Keep the TX FIFO full: the head slot from tx_pos_, then 0xFF (fixture §3: with no slot, 0xFF).
 void P4I2cTarget::fillTx() {
   uint32_t room = 0;
   i2c_ll_get_txfifo_len(kDev, &room);
@@ -218,7 +211,7 @@ bool P4I2cTarget::start() {
   // input read 0 on the wire), so a real bus needs them here: the GPIO matrix lets the pad keep its
   // ~45 kOhm internal pull-up while the I2C peripheral owns it, as the IDF master driver does with
   // enable_internal_pullup. Weak, but a bus for master tests at <= 400 kHz rather than no bus. Declared in describe
-  // (features bit2, pullup_ohms kPullupOhms: fixture §3).
+  // (features bit2: fixture §3).
   gpio_set_pull_mode(static_cast<gpio_num_t>(sda_), GPIO_PULLUP_ONLY);
   gpio_set_pull_mode(static_cast<gpio_num_t>(scl_), GPIO_PULLUP_ONLY);
   // This handler on the driver's shared interrupt: added later, so it runs first (esp_intr_alloc chains the newest
@@ -292,33 +285,19 @@ void P4I2cTarget::stop() { started_ = false; }
 Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (operation) {
-    case kOpConfigure: {   // address(u8) mode(u8) [TLV]
-      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+    case kOpConfigure: {   // address(u8) [TLV]
+      const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
       if (refused(parsed)) return parsed;
       if (payload[0] > 0x7f) return rejected(kRejectMalformed);
-      // an undefined mode (0, 4+: a later revision may define it, core §2.5): unsupported, payload 0x00 (fixture §3)
-      if (payload[1] < kModeFixedRx || payload[1] > kModePreloadedTx) return unsupportedValue(out, capacity);
       // the addresses the I2C specification reserves (general call, start byte, the 10-bit prefix, ...): 0x00 - 0x07 and
       // 0x78 - 0x7F, unsupported, payload 0x00 (fixture §3)
       if (payload[0] < 0x08 || payload[0] > 0x77) return unsupportedValue(out, capacity);
       if (sda_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §3: unavailable cause 6)
       stop();
-      clearTarget();   // frames, the wait, slots, rx_frames and errors go; stretch stays
-      address_ = payload[0]; mode_ = payload[1];
+      clearTarget();   // frames, slots, rx_frames and errors go; stretch stays
+      address_ = payload[0];
       if (!start()) return failed();
-      return tail.finish(completed(), out, capacity);
-    }
-    case kOpArmRx: {   // length(u16) [TLV]
-      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
-      if (refused(parsed)) return parsed;
-      const uint16_t want = getU16(payload);
-      if (!want) return rejected(kRejectMalformed);
-      if (want > kMaxFrame) return unsupportedValue(out, capacity);   // over max_length (fixture §3)
-      if (!started_ || mode_ != kModeFixedRx) return wrongState(out, capacity);
-      lock();
-      armed_ = want;   // replaces a wait already there; it lasts until the next arm_rx, reset, configure or plan
-      unlock();
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case kOpReadRx: {   // [TLV] -> pending(u8) count(u16) data: the oldest received frame, then the ones still queued
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -335,17 +314,16 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       out[0] = queue_count_;   // pending after this frame
       unlock();
       putU16(out + 1, static_cast<uint16_t>(data));
-      return tail.finish(completed(3 + data), out, capacity);
+      return completed(3 + data);
     }
-    case kOpPreloadTx: {   // count(u16) data [TLV] -> slots(u8)
+    case kOpPreloadTx: {   // count(u16) data [TLV]: one slot, read by the controller after those before it
       if (length < 2) return rejected(kRejectMalformed);
       const uint16_t count = getU16(payload);
       const Result parsed = plainTail(tail, payload, length, 2u + count, out, capacity);
       if (refused(parsed)) return parsed;
       if (!count) return rejected(kRejectMalformed);
       if (count > kMaxFrame) return unsupportedValue(out, capacity);
-      if (!started_ || mode_ != kModePreloadedTx) return wrongState(out, capacity);
-      if (capacity < 1) return failed();
+      if (!started_) return wrongState(out, capacity);   // state 0 (fixture §3)
       lock();
       if (slot_count_ == kQueueDepth) {   // queue_depth unread slots already (fixture §3): nothing placed
         unlock();
@@ -355,7 +333,6 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       memcpy(slot_[at], payload + 2, count);
       slot_length_[at] = static_cast<uint8_t>(count);
       ++slot_count_;
-      out[0] = ++slot_serial_;
 #if defined(ARDUINO_ARCH_ESP32)
       if (slot_count_ == 1) {   // the TX FIFO held 0xFF: put this slot there, unless a read may be under way
         if (i2c_ll_is_bus_busy(kDev)) tx_stale_ = true;
@@ -363,22 +340,20 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       }
 #endif
       unlock();
-      return tail.finish(completed(1), out, capacity);
+      return completed();
     }
-    case kOpStatus: {   // [TLV] -> state mode armed queued (u8 each) rx_frames(u32) tx_slots(u8) errors(u32) [TLV]
+    case kOpStatus: {   // [TLV] -> state(u8) queued(u8) rx_frames(u32) tx_slots(u8) errors(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 13) return failed();
+      if (capacity < 11) return failed();
       lock();
-      out[0] = started_ ? 1 : 0;   // state: 0 not configured, 1 running
-      out[1] = mode_;
-      out[2] = armed_ ? 1 : 0;
-      out[3] = queue_count_;
-      putU32(out + 4, rx_frames_);
-      out[8] = mode_ == kModePreloadedTx ? slot_count_ : 0;   // unread slots
-      putU32(out + 9, errors_);
+      out[0] = started_ ? reg::fixture_i2c_target::kStateRunning : reg::fixture_i2c_target::kStateUnconfigured;
+      out[1] = queue_count_;
+      putU32(out + 2, rx_frames_);
+      out[6] = slot_count_;   // unread slots
+      putU32(out + 7, errors_);
       unlock();
-      return tail.finish(completed(13), out, capacity);
+      return completed(11);
     }
     case kOpStretch: {   // stretch_us(u32) [TLV]: in any state, from the next byte on (fixture §3)
       if (!kStretch) return rejected(kRejectUnknownOperation);   // not in the ops tag (offers)
@@ -392,16 +367,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       if (started_) applyStretch();
 #endif
       unlock();
-      return tail.finish(completed(), out, capacity);
-    }
-    case kOpReset: {
-      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
-      if (refused(parsed)) return parsed;
-      if (!started_) return wrongState(out, capacity);   // state 0 (fixture §3)
-      stop();
-      clearTarget();   // as right after configure: mode, address and stretch stay
-      if (!start()) return failed();
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     default:
       return rejected(kRejectUnknownOperation);

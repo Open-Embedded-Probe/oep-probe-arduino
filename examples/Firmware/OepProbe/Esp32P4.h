@@ -19,8 +19,7 @@
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
 // a slot's console, a fixture UART). The HS device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial =
 // the unit id (the MAC, lowercase hex); its iProduct "OEP probe (ESP32-P4)" is a name for people. USB-Serial/JTAG keeps the
-// chip's fixed ID: a host reaches it by the user choosing its port. describe discoverable is 1 once the HS port has
-// enumerated (a board with only USB-Serial/JTAG wired never gets there and says 0).
+// chip's fixed ID: a host reaches it by the user choosing its port.
 // How a host tells the ports apart inside a device known to be OEP (transports §3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
@@ -166,7 +165,7 @@ static char serial_[20];
 // oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
 // silent, waits oep::kRestartDetachMs for the host to see it (20 ms, as EspUsbDevice's own restarts wait, left the WeAct
 // P4 failing its device descriptor request after the restart until a replug, bench 0.0.29-dev+3c0cd99), then
-// esp_restart - within restart_after_answer_ms of the answer (Oep.h). restart_max_ms (its describe): the chip is in
+// esp_restart - within about 100 ms of the answer (Oep.h). restart_max_ms (its describe): the chip is in
 // setup() after about 0.5 s (the ROM, the bootloader checking the app image of about 0.6 MB with rollback on, the
 // PSRAM); then the host enumerates the HS device again - a composite of HID, vendor bulk, CDC and DFU, for which an OS
 // binds four drivers (Windows about 1 s or more) - and the transport opens again before it confirms (USB-Serial/JTAG,
@@ -202,7 +201,7 @@ static bool autoAttachReady() { return oep::BootGuard::attachReady(usbDevice.rea
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "esp32p4", id, oep::platformUnitId(id, sizeof id), 55, kReserved,
+  oep::describeCore(w, "esp32p4", id, oep::platformUnitId(id, sizeof id), 55,
                     oep::BootGuard::lastBoot());   // the firmware text: the version (and what ended the boot before)
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
@@ -239,7 +238,6 @@ void setup() {
   endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
-  // describe discoverable: set in loop() once the HS port has enumerated with the project's VID:PID (transports §3, core §7.5)
   endpoint.setRestart(restartProbe, kRestartMaxMs);
 
   rvswd.pin_choice = kChannels;
@@ -271,7 +269,7 @@ void setup() {
   endpoint.add(analog);   // after config: the fns before it keep their numbers
   endpoint.add(group);
   group.addTrack(capture, capture);
-  group.addTrack(analog, analog, 1400000);   // its first value comes a conversion frame after the start
+  group.addTrack(analog, analog);
   endpoint.add(swioWire);   // after the group: the fns before it keep their numbers
   endpoint.add(swioConsole);
   config.addPlace(swioWire, swioConsole);   // a slot on the one wire (CH32V00x): the second place
@@ -280,12 +278,12 @@ void setup() {
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
   config.load();
   // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
-  // disable items' channels, which are never touched (probe.config §2: applied before any idle / park; applySaved
+  // disable items' channels, which are never touched (probe.config §2: disable before anything else; applySaved
   // gives them back if the settings are not applied).
   pins.setDisabled(config.savedDisabled());
   oep::platformParkMask(kChannels & ~pins.disabledMask());
-  // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
-  // slots' attach last (on its poll), so a target powered through an output idle is up before it.
+  // probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach comes on
+  // config.poll(), so a target powered through an output idle is up before it.
   if (oep::BootGuard::safe()) config.skipBootAttach();   // after BootGuard::kSafeAfter fast crash-boots
   config.setAttachGate(autoAttachReady);
   config.applySaved();
@@ -293,11 +291,6 @@ void setup() {
 
 void loop() {
   oep::BootGuard::poll();
-  static bool discoverable = false;
-  if (!discoverable && usbDevice.ready()) {   // the HS port enumerated (configured by a host)
-    discoverable = true;
-    endpoint.setDiscoverable(true);           // the probe enumerates with the project's VID:PID (core §7.5)
-  }
   restartAfterDfu();
   endpoint.poll();
   console.poll();

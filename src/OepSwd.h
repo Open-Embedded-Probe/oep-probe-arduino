@@ -6,7 +6,7 @@
 //   oep.wire.swd         scan / attach / detach / connections on the probe's SWD pair (fixed or host-chosen); attach
 //                        (method 0 only) wakes the port (JTAG-to-SWD, then the dormant wake: flags bit2), sends
 //                        TARGETSEL when the host gives one, and returns DPIDR; attaching an attached port hands its
-//                        connection back (flags bit1). The wake is tried again within wire_retry_ms (search_retries
+//                        connection back (flags bit1). The wake is tried again within limits::kWireRetryMs (search_retries
 //                        counts the failed tries), and a transfer that got nothing back is tried again after the line
 //                        reset / dormant wake (oep-if-debug §2, §5). The reset TLV is not offered (rejected unsupported). The
 //                        connections entry's tid is scheme 2 = TARGETSEL (0 when none).
@@ -50,11 +50,11 @@ struct SwdPort {
   bool rest_free = false;      // oep-if-debug §2: no answer since the last exchange - the lines free between exchanges
 };
 
-// One request's wire retries (oep-if-debug §2): at most wire_retry_ms of it goes to retrying the wire. fits: one more
+// One request's wire retries (oep-if-debug §2): at most limits::kWireRetryMs of it goes to retrying the wire. fits: one more
 // round that takes about cost_us still ends inside it.
 struct WireRetry {
   uint32_t spent_us = 0;
-  bool fits(uint32_t cost_us) const { return spent_us + cost_us <= reg::kLimitWireRetryMs * 1000u; }
+  bool fits(uint32_t cost_us) const { return spent_us + cost_us <= limits::kWireRetryMs * 1000u; }
 };
 
 // The live connection goes: pins released (Hi-Z), its number closed, let go of in the pin table.
@@ -86,7 +86,7 @@ class WireSwd final : public Interface {
   void close();                      // the live connection goes: pins released (Hi-Z), let go of in the pin table
   bool allowed(uint16_t swdio, uint16_t swclk) const;
   bool free(uint16_t swdio, uint16_t swclk) const;   // nothing but this link's live connection on that pair holds them
-  // unavailable for a pair free() refuses: cause 1, the held channel and its holder_kind (core §4.3)
+  // unavailable for a pair free() refuses: cause 1, the held channel (core §4.3)
   Result heldRefusal(uint16_t swdio, uint16_t swclk, uint8_t *out, size_t capacity) const;
   uint16_t disabledOf(uint16_t swdio, uint16_t swclk) const;   // a channel the settings disable, or 0xFFFF
   // a channel with an idle item in the settings (outputs: an output idle only), or 0xFFFF (oep-if-debug §1)
@@ -113,7 +113,7 @@ class TargetArmAdi final : public Interface {
  private:
   // with WAIT retries and the request's wire retries (retry_); returns the last ACK
   uint8_t xfer(bool ap, bool read, uint8_t a23, uint32_t &data);
-  // the request after its connection; checking_: its form and values only, nothing run (handle: core §4.3 order 8 last)
+  // the request after its connection; checking_: its form and values only, nothing run (handle: the number after)
   Result run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   bool checking_ = false;
   WireRetry retry_;

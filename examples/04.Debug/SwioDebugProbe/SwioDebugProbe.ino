@@ -42,7 +42,7 @@ static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
   // the channels up to the wire's pin: the pin is the wire's, the ones below it are not offered (reserved)
-  oep::describeCore(w, "swio-debug-probe", id, oep::platformUnitId(id, sizeof id), kSwio + 1, (1ull << kSwio) - 1);
+  oep::describeCore(w, "swio-debug-probe", id, oep::platformUnitId(id, sizeof id), kSwio + 1);
   return w.ok() ? w.length() : 0;
 }
 

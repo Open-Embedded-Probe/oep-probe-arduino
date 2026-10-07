@@ -3,8 +3,9 @@
 
 // Host tests: oep.fixture.spi-target (oep-spec oep-if-fixture §4) on a fake of the ESP-IDF spi_slave driver - a transfer
 // nobody armed counts in transactions and errors, an armed one is queued, a CS frame with no clock counts nothing and
-// leaves the arm waiting, one arm at a time, over length counts an error (and over length with the queue full two),
-// read_rx in state 0 is unavailable cause 6, configure clears the counts, releasing the plan goes back to describe's
+// leaves the arm waiting, one arm at a time, over length counts an error (over length with the queue full one too: at
+// most one per transfer), read_rx in state 0 is unavailable cause 6, op 0x05 (reset, gone) is unknown_operation,
+// configure clears the counts, releasing the plan goes back to describe's
 // state. The next transaction is loaded at the CS rising edge that ended the last one, never inside a frame: the bench
 // sequence of 0.0.28 (a 0-bit frame before a 64-byte one, loop() running during it), and an unarmed frame right after
 // an armed one. arm does not restart the driver. MISO is driven only while CS is low. Modes 1 / 3 are refused unsupported
@@ -131,9 +132,13 @@ int main() {
   CHECK(t.planCheck(roles, 4) == 0);
   CHECK(t.planApply(roles, 4));
   Bytes out;
-  // state 0: read_rx is unavailable cause 6, as reset is
+  // state 0: read_rx is unavailable cause 6; there is no reset op (0x05)
   CHECK(unavailableCause(call(t, P4SpiTarget::kOpReadRx, {}, out), out, 6));
-  CHECK(unavailableCause(call(t, P4SpiTarget::kOpReset, {}, out), out, 6));
+  CHECK(!t.offers(0x05));
+  {
+    const Result r = call(t, 0x05, {}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnknownOperation);
+  }
   CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
   Status s = status(t);
   CHECK(s.state == 1 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
@@ -187,8 +192,8 @@ int main() {
   CHECK(ok(call(t, P4SpiTarget::kOpReadRx, {}, out)));
   CHECK(out.size() == 9 && getU32(out.data() + 1) == 32 && getU16(out.data() + 5) == 2 && out[7] == 0x11 && out[8] == 0x22);
 
-  // reset clears the counts; unarmed transfers are seen again
-  CHECK(ok(call(t, P4SpiTarget::kOpReset, {}, out)));
+  // configure again clears the counts; unarmed transfers are seen again
+  CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
   s = status(t);
   CHECK(s.state == 1 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
   CHECK(fakeSpiTransfer(8, mosi));
@@ -196,7 +201,7 @@ int main() {
   s = status(t);
   CHECK(s.transactions == 1 && s.errors == 1);
 
-  // over length with the queue full: counted in transactions, not queued, errors + 2
+  // over length with the queue full: counted in transactions, not queued, errors + 1 (once per transfer)
   for (int i = 0; i < 4; ++i) {
     CHECK(ok(arm(t, 4, {})));
     CHECK(fakeSpiTransfer(32, mosi));
@@ -208,7 +213,7 @@ int main() {
   CHECK(fakeSpiTransfer(32, mosi));
   t.service();
   s = status(t);
-  CHECK(s.queued == 4 && s.transactions == 6 && s.errors == 3);
+  CHECK(s.queued == 4 && s.transactions == 6 && s.errors == 2);
 
   // configure makes the target anew: queue, wait and counts go
   CHECK(ok(arm(t, 4, {})));
@@ -295,8 +300,6 @@ int main() {
     CHECK(fakeSpiTransfer(16));
     CHECK(g_fake_spi.miso == Bytes({0x01, 0x00}));
     CHECK(!fakeMisoDriven());
-    CHECK(ok(call(t, P4SpiTarget::kOpReset, {}, out)));
-    CHECK(!fakeMisoDriven());                               // reset
     CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {2, 0}, out)));
     CHECK(!fakeMisoDriven());                               // configured anew
     // configured while selected: driven at once

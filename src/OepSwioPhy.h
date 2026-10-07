@@ -20,10 +20,6 @@
 #include "OepDmiPhy.h"
 #include "OepWireGate.h"
 
-#ifndef OEP_SWIO_PAUSE_CONSOLE
-#define OEP_SWIO_PAUSE_CONSOLE 0
-#endif
-
 namespace oep {
 
 class SwioPhy final : public DmiPhy {
@@ -63,11 +59,9 @@ class SwioPhy final : public DmiPhy {
   uint32_t transactions() const override { return transactions_; }
   // The classic ESP32: no frame while the core-0 sampler has a window open (OepWireGate.h) - a request's frames wait
   // it out (at most one window: up to 164 ms immediate, 250 ms a burst of a trigger search) and then hold the wire until
-  // loop() comes round. The console's reading (backgroundTurn) does not wait: oep-if-console §3 lets the probe stop
-  // reading only for a riscv-dm request of the connection or a halted hart, so it reads on through a window as before
-  // (its frames there may be garbled; dmseq's CRC and the reads twice take most of that). Test hook, off unless a build
-  // defines it: OEP_SWIO_PAUSE_CONSOLE=1 pauses the reading instead (the wire's turn refused while a window is open) -
-  // the bench's check of the mechanism; a spec change would be needed before it is the behaviour.
+  // loop() comes round. The console's reading (backgroundTurn) pauses while a window is open: its turn is refused and
+  // the next poll reads (oep-if-console §3 asks only for the order of DMSTATUS and DATA0 and no reading while halted or
+  // during the connection's request; docs/implementation-limits.ja.md §4.1).
   bool backgroundTurn() override;
   void backgroundDone() override;
 
@@ -81,7 +75,7 @@ class SwioPhy final : public DmiPhy {
   bool rest_free_ = false;
   uint32_t retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   bool readRaw(uint8_t address, uint32_t &value);   // IRAM_ATTR on the definition: the attribute is ESP32-only
-  bool readRetried(uint8_t address, uint32_t &value);   // up to 4 tries, within the request's wire_retry_ms
+  bool readRetried(uint8_t address, uint32_t &value);   // up to 4 tries, within the request's limits::kWireRetryMs
   void resync();            // the configuration pair twice, dmactive when it reads clear (no line or write check)
   bool lineUp();            // the pull-up look (2 ms), then the line driven high
   bool configureModule();   // the configuration pair twice, dmactive when not set, the configuration read back

@@ -11,7 +11,7 @@ namespace oep {
 namespace {
 
 namespace sw = reg::wire_swd;
-constexpr int kWaitRetries = 100;
+constexpr int kWaitRetries = limits::kSwdWaitRetries;
 
 // oep-if-common §3 status from the last ACK: WAIT to the end = wait, FAULT = fault, no answer or parity = line.
 uint8_t statusOf(uint8_t ack) {
@@ -19,7 +19,7 @@ uint8_t statusOf(uint8_t ack) {
 }
 
 // A request's outcome on the wire-loss clock (oep-if-debug §2): any answer (OK, WAIT, FAULT) stops it, status line
-// starts it. true: the wire is now lost - no good exchange for wire_lost_ms of real time - and the connection closes
+// starts it. true: the wire is now lost - no good exchange for limits::kWireLostMs of real time - and the connection closes
 // once the answer is out. One request that got nothing back within its retries keeps the connection.
 bool lostAfter(SwdPort &port, uint8_t status) {
   if (status != kStatusLine) { port.loss.answered(); return false; }
@@ -83,7 +83,7 @@ uint32_t roundUs(const SwdPort &port) {
 
 // A transfer with the WAIT retries (kWaitRetries) and the request's wire retries (oep-if-debug §2, §5): a transfer that
 // got nothing back - no ACK, or a read's data parity - is tried again after relink() while one more round still ends
-// inside the request's wire_retry_ms. An AP read with a bad parity is not repeated: the target took it (TAR moved, the
+// inside the request's limits::kWireRetryMs. An AP read with a bad parity is not repeated: the target took it (TAR moved, the
 // posted value changed), and a second read would return another word. Returns the last ACK.
 uint8_t transferRetried(SwdPort &port, bool ap, bool read, uint8_t a23, uint32_t &data, WireRetry &retry) {
   int waits = 0;
@@ -115,7 +115,6 @@ size_t describePins(const SwdPort &port, uint8_t *out, size_t capacity) {
   } else {
     w.pinGroup(port.swdio, port.swclk); // fixed on this probe
   }
-  w.u8(kTagImplementation, 1);          // bit-bang
   w.u32(kTagMaxClockHz, hzOf(port.half_ns));
   w.u32(kTagMinClockHz, hzOf(kSlowHalfNs));
   return w.ok() ? w.length() : 0;
@@ -161,7 +160,7 @@ Result WireSwd::heldRefusal(uint16_t swdio, uint16_t swclk, uint8_t *out, size_t
     held = taken(swdio) ? swdio : taken(swclk) ? swclk : 0xffff;
   }
   if (held == 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
-  return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, held, 0xFFFF, port_.pins->holderKind(held));
+  return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, held);
 }
 
 bool WireSwd::move(uint16_t swdio, uint16_t swclk) {
@@ -248,20 +247,18 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       const uint8_t count = payload[0];
       const size_t fixed = 1u + 4u * count;
       static const uint8_t kScanTags[] = {sw::kTlvScanMaxSpeed, sw::kTlvScanSkip, sw::kTlvScanTargetsel};
-      Result unknown = completed();   // an unknown critical tag: unsupported once the format is checked (core §4.3)
+      Result unknown = completed();   // an unknown critical tag: unsupported once the format is checked
       const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, out, capacity, &unknown);
       if (refused(parsed)) return parsed;
       uint16_t skip = 0;
       uint32_t max_hz = 0, scan_targetsel = 0;
       bool scan_select = false;
       {
-        // each TLV's one form (core §2.3: shorter malformed; longer unsupported when critical, else ignored)
-        size_t len = 0;
-        if (tail.find(sw::kTlvScanSkip, len) && count) return rejected(kRejectMalformed);   // skip goes with count 0 only
+        // each TLV's one form (core §2.3: another length is malformed, critical or not)
         const uint8_t *v = nullptr;
         Result r = tail.fixed(sw::kTlvScanSkip, 2, v, out, capacity);
         if (refused(r)) return r;
-        if (v) skip = getU16(v);
+        if (v && count == 0) skip = getU16(v);   // a count > 0 scan does not look at skip (oep-if-debug §1)
         r = tail.fixed(sw::kTlvScanMaxSpeed, 4, v, out, capacity);
         if (refused(r)) return r;
         if (v && getU32(v) == 0) return rejected(kRejectMalformed);
@@ -271,21 +268,19 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         if (v) { scan_targetsel = getU32(v); scan_select = true; }
       }
       if (refused(unknown)) return unknown;
-      // every pair listed allowed (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index), all of them before
-      // any is looked at for what holds it (core §4.3: order 6 before order 7)
+      // every pair listed allowed (oep-if-debug §1: unsupported, tag 0x00 and TLV 0x40 its index); every check before
+      // anything is done on the wire (core §4.3)
       for (uint8_t k = 0; k < count; ++k)
         if (!allowed(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k))) return unsupportedIndex(out, capacity, k);
       for (uint8_t k = 0; k < count; ++k) {   // free, and - the one seat taken - the live pair
         const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
         const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
-        if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
-                                           reg::core::kHolderKindDisabled);
-        const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5, holder_kind 7 (oep-if-debug §1)
-        if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
-                                                reg::core::kHolderKindSettingsIdle);
+        if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+        const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5 (oep-if-debug §1)
+        if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
         if (port_.connected && (d != port_.swdio || c != port_.swclk))   // the one seat taken (debug §1): a count limit
           return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
-        if (!free(d, c)) return heldRefusal(d, c, out, capacity);   // cause 1, the channel, its holder (core §4.3)
+        if (!free(d, c)) return heldRefusal(d, c, out, capacity);   // cause 1, the channel (core §4.3)
       }
       if (capacity < 2) return failed();
       // the scan's clock: the slowest this probe goes when no ceiling is given (oep-if-debug §3), else under max_speed
@@ -294,12 +289,12 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (half < port_.half_ns) half = port_.half_ns;
       size_t at = 2;
       uint8_t tried = 0, found = 0;
-      // No pair starts later than scan_budget_ms after the request (oep-if-debug §1): the host goes on with the rest
+      // No pair starts later than limits::kScanBudgetMs after the request (oep-if-debug §1): the host goes on with the rest
       // (count 0 with skip, or the pairs after tried). 26 free pins bit-banged pair by pair kept an RP2350 from answering
       // for seconds (0.0.18). One try is a line reset and a dormant wake at most: well inside the attach budget.
       const uint32_t began = millis();
       auto tryPair = [&](uint16_t d, uint16_t c) {   // false: the answer is full, or its time is up
-        if (at + 9 + tail.room() > capacity || (tried && millis() - began >= reg::kLimitScanBudgetMs)) return false;
+        if (at + 9 > capacity || (tried && millis() - began >= limits::kScanBudgetMs)) return false;
         uint32_t dpidr = 0;
         bool ok = false;
         if (port_.connected) {   // look through the live connection: waking the port again would reset its DP state
@@ -339,14 +334,14 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       }
       out[0] = tried;
       out[1] = found;
-      return tail.finish(completed(at), out, capacity);
+      return completed(at);
     }
     case kOpAttach: {
       // method(u8: 0 only) [TLV 0x01 max_speed u32 Hz (required), 0x02 targetsel u32, 0x03 pins]
       //   ->  connection(u16) DPIDR(u32) flags(u8: bit1 existing connection, bit2 woke from dormant) speed_hz(u32) [TLV]
       if (length < 1) return rejected(kRejectMalformed);
-      // every format check before anything this probe does not handle (core §4.3: malformed, order 5, before
-      // unsupported, order 6): an unknown critical tag (the reset TLV among them) is held back until then
+      // every format check before anything this probe does not handle: an unknown critical tag (the reset TLV among
+      // them) is held back until then
       Result unknown = completed();
       const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, out, capacity, &unknown);
       if (refused(parsed)) return parsed;
@@ -356,7 +351,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       bool pins_critical = false;
       const uint8_t *pins = nullptr;
       {
-        // each TLV's one form (core §2.3: shorter malformed; longer unsupported when critical, else ignored)
+        // each TLV's one form (core §2.3: another length is malformed, critical or not)
         const uint8_t *v = nullptr;
         Result r = tail.fixed(sw::kTlvAttachMaxSpeed, 4, v, out, capacity, &critical);
         if (refused(r)) return r;
@@ -372,33 +367,25 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (refused(unknown)) return unknown;
       if (payload[0] != 0) return unsupportedValue(out, capacity);   // 0 only: arm-adi has no halt (oep-if-debug §5)
       if (max_hz < hzOf(kSlowHalfNs)) return unsupportedTag(out, capacity, sw::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
-      // a pair this wire does not declare: unsupported with the tag as received when critical, else ignored (core §2.3)
-      if (pins && !allowed(getU16(pins), getU16(pins + 2))) {
-        if (pins_critical) return unsupportedTag(out, capacity, sw::kTlvAttachPins | kTagCritical);
-        tail.ignore(sw::kTlvAttachPins);
-        pins = nullptr;
-      }
+      // a pair this wire does not declare: unsupported with the tag as received, critical or not (core §2.3)
+      if (pins && !allowed(getU16(pins), getU16(pins + 2))) return Tail::refuse(sw::kTlvAttachPins, pins_critical, out, capacity);
       {
         if (!pins) {   // the live connection's pair (join it), the fixed pair, else the host names one
           if (port_.pin_choice && !port_.connected) return unavailable(out, capacity, reg::core::kUnavailableCauseWrongState);
           const uint16_t off = port_.connected ? 0xffff : disabledOf(port_.swdio, port_.swclk);
-          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
-                                           reg::core::kHolderKindDisabled);
+          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
           // the fixed pair with an idle item is not a candidate (oep-if-debug §1): none left
           const uint16_t idle = port_.connected ? 0xffff : idleOf(port_.swdio, port_.swclk, false);
-          if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
-                                                  reg::core::kHolderKindSettingsIdle);
+          if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
         } else {
           const uint16_t d = getU16(pins), c = getU16(pins + 2);
           const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
-          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off, 0xFFFF,
-                                           reg::core::kHolderKindDisabled);
-          const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5, holder_kind 7
-          if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle, 0xFFFF,
-                                                  reg::core::kHolderKindSettingsIdle);
+          if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+          const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5
+          if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
           if (port_.connected && (d != port_.swdio || c != port_.swclk))   // no seat (max_connections 1): a count limit
             return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
-          if (!free(d, c)) return heldRefusal(d, c, out, capacity);   // cause 1, the channel, its holder (core §4.3)
+          if (!free(d, c)) return heldRefusal(d, c, out, capacity);   // cause 1, the channel (core §4.3)
           if (!move(d, c)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
         }
       }
@@ -427,7 +414,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         if (lostAfter(port_, ok ? kStatusOk : kStatusLine)) close();
       } else {
         // The wake, tried again while the wire retries of oep-if-debug §2 last (each try the line reset, the dormant
-        // wake, TARGETSEL: §5), a try started only when it still ends inside wire_retry_ms - well inside the attach
+        // wake, TARGETSEL: §5), a try started only when it still ends inside limits::kWireRetryMs - well inside the attach
         // budget. Each failed try is one of the answer's search_retries.
         bool dormant = false;
         WireRetry retry;
@@ -450,8 +437,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           port_.number = number;
           port_.loss.clear();   // a new connection: its own wire-loss clock (oep-if-debug §2)
           if (port_.pin_choice && port_.pins) {   // the live connection holds its pins (core §8.1)
-            port_.pins->claim(port_.swdio, port_.pin_owner, reg::core::kHolderKindConnection);
-            port_.pins->claim(port_.swclk, port_.pin_owner, reg::core::kHolderKindConnection);
+            port_.pins->claim(port_.swdio, port_.pin_owner);
+            port_.pins->claim(port_.swclk, port_.pin_owner);
           }
           port_.active_half_ns = half;
           port_.active_targetsel = have_targetsel;
@@ -459,7 +446,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
           if (dormant) flags |= sw::kAttachFlagsDormantWoken;
         }
       }
-      if (!ok) return tail.finish(failedStatus(kStatusLine, out, capacity), out, capacity);
+      if (!ok) return failedStatus(kStatusLine, out, capacity);
       putU16(out, port_.number);
       putU32(out + 2, dpidr);
       out[6] = flags;
@@ -470,7 +457,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         putU16(out + n + kTlvHeader, static_cast<uint16_t>(search_retries < 0xffff ? search_retries : 0xffff));
         n += kTlvHeader + 2;
       }
-      return tail.finish(completed(n), out, capacity);
+      return completed(n);
     }
     case kOpConnections: {   // first(u8) [TLV] -> more(u8) count(u8), the live connection (users: the host only; tid scheme 2 = TARGETSEL)
       const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
@@ -478,7 +465,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (capacity < 20) return failed();
       out[0] = 0;   // more: never (one entry at most)
       out[1] = port_.connected && payload[0] == 0 ? 1 : 0;
-      if (!out[1]) return tail.finish(completed(2), out, capacity);
+      if (!out[1]) return completed(2);
       putU16(out + 2, port_.number);   // count x entry, no element length (core §2.3)
       putU16(out + 4, port_.swdio);
       putU16(out + 6, port_.swclk);
@@ -486,9 +473,9 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       out[12] = sw::kConnectionUsersHostSession;
       out[13] = 0xff;   // no slot
       out[14] = reg::common::kTargetIdSchemeTargetsel;
-      out[15] = reg::common::kTargetIdLenTargetsel;
+      out[15] = 4;   // tid_len: the TARGETSEL value is a u32
       putU32(out + 16, port_.active_targetsel ? port_.targetsel : 0);
-      return tail.finish(completed(20), out, capacity);
+      return completed(20);
     }
     case kOpDetach: {   // connection(u16) [TLV 0x01 force]
       static const uint8_t kDetachTags[] = {sw::kTlvDetachForce};
@@ -501,7 +488,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (!port_.connected || getU16(payload) != port_.number)
         return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
       close();   // the host is this connection's only user: its detach closes it (oep-if-debug §5)
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     default:
       return rejected(kRejectUnknownOperation);
@@ -525,8 +512,8 @@ uint8_t TargetArmAdi::xfer(bool ap, bool read, uint8_t a23, uint32_t &data) {
 
 Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (length < 2) return rejected(kRejectMalformed);
-  // The request's form and values first, nothing run: an unknown connection is the last refusal of core §4.3 (order 8),
-  // after malformed and unsupported.
+  // The request's form and values first, nothing run, then the connection it names (core §4.3: every check before
+  // anything runs).
   checking_ = true;
   const Result checked = run(op, payload + 2, length - 2, out, capacity);
   checking_ = false;
@@ -579,12 +566,12 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       out[3] = ack;
       putU16(out + 4, nvals);
       if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
-      return tail.finish(outcome(status, done, o), out, capacity);
+      return outcome(status, done, o);
     }
     case kOpReadBlock: {
       // address(u32) count(u16) [TLV] words through the current MEM-AP (the host has set SELECT to the bank holding
-      // TAR / DRW and CSW to 32-bit, single increment). TAR is written again at each 1 KiB boundary, where its
-      // auto-increment may stop.  ->  done(u16) status(u8) words (done of them)
+      // TAR / DRW and CSW to 32-bit, single increment). TAR is written again at each limits::kTarRewriteBytes boundary,
+      // where its auto-increment may stop (ADI).  ->  done(u16) status(u8) words (done of them)
       const Result parsed = plainTail(tail, p, n, 6, out, capacity);
       if (refused(parsed)) return parsed;
       uint32_t address = getU32(p);
@@ -598,7 +585,8 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       uint16_t left = count;
       uint8_t ack = swd::kOk;
       while (left && ack == swd::kOk) {
-        const uint16_t chunk = uint16_t(min<uint32_t>(left, (0x400 - (address & 0x3ff)) / 4));
+        const uint16_t chunk =
+            uint16_t(min<uint32_t>(left, (limits::kTarRewriteBytes - (address & (limits::kTarRewriteBytes - 1))) / 4));
         uint32_t v = address;
         if ((ack = xfer(true, false, 0x1, v)) != swd::kOk) break;             // TAR
         if ((ack = xfer(true, true, 0x3, v)) != swd::kOk) break;              // DRW: posted, first value is stale
@@ -617,7 +605,7 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       putU16(out, done);
       out[2] = status;
       if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
-      return tail.finish(outcome(status, done, o), out, capacity);
+      return outcome(status, done, o);
     }
     case kOpWriteBlock: {
       // address(u32) count(u16) count x word [TLV]  ->  done(u16) status(u8). A write's bus error shows as FAULT on
@@ -637,7 +625,8 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       uint8_t ack = swd::kOk;
       bool faulted = false;
       while (index < count && ack == swd::kOk) {
-        const size_t chunk = min<size_t>(count - index, (0x400 - (address & 0x3ff)) / 4);
+        const size_t chunk =
+            min<size_t>(count - index, (limits::kTarRewriteBytes - (address & (limits::kTarRewriteBytes - 1))) / 4);
         uint32_t v = address;
         if ((ack = xfer(true, false, 0x1, v)) != swd::kOk) { faulted = ack == swd::kFault; break; }   // TAR
         for (size_t i = 0; i < chunk; ++i) {
@@ -657,7 +646,7 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       putU16(out, done);
       out[2] = status;
       if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
-      return tail.finish(outcome(status, done, 3), out, capacity);
+      return outcome(status, done, 3);
     }
     default:
       return rejected(kRejectUnknownOperation);

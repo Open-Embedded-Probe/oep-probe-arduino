@@ -123,18 +123,16 @@ int main() {
   open.push_back(0);
   CHECK(completed(p.send(0, reg::core::kOpOpen, open, true, sid)));
   // port_speed: try in the session, confirms at the new rate (0x01), the link measured without a session, commit
-  Bytes speed = {0};
-  append(speed, u32(921600));
+  Bytes speed = u32(921600);   // baud(u32) step(u8) verify_ms(u16)
   speed.push_back(reg::probe_link::kPortSpeedStepTry);
   append(speed, u16(2000));
-  append(speed, u32(0));
   CHECK(completed(p.send(2, reg::probe_link::kOpPortSpeed, speed, true, sid)));
   for (int i = 0; i < 3; ++i) CHECK(completed(p.send(0, reg::core::kOpConfirm, confirm(), false, 0)));
   CHECK(completed(p.send(2, reg::probe_link::kOpSource, u32(64), false, 0)));
   Bytes sink = u16(64);
   append(sink, Bytes(64, 0x55));
   CHECK(completed(p.send(2, reg::probe_link::kOpSink, sink, false, 0)));
-  speed[5] = reg::probe_link::kPortSpeedStepCommit;
+  speed[4] = reg::probe_link::kPortSpeedStepCommit;
   CHECK(completed(p.send(2, reg::probe_link::kOpPortSpeed, speed, true, sid)));
   CHECK(completed(p.send(0, reg::core::kOpKeepalive, {}, true, sid)));
   CHECK(completed(p.send(fn, P4SpiTarget::kOpStatus, {}, false, 0)));   // a client's lock-free request, 0x01

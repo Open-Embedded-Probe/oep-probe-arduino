@@ -6,8 +6,8 @@
 // Transport: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
 // below) - the probe's one transport, serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-transports §4). The bridge's auto-reset
 // circuit resets the ESP32 when the port is opened with DTR / RTS in the wrong order: a host opens it with both on
-// (host guide §1). The bridge's USB ID is not the project's VID:PID, so describe discoverable stays 0: a host reaches this
-// probe by the user choosing its port, then asking (confirm).
+// (host guide §1). The bridge's USB ID is not the project's VID:PID: a host reaches this probe by the user choosing its
+// port, then asking (confirm).
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
 // oep.fixture.gpio / uart / capture (the core-0 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C
@@ -79,7 +79,7 @@ static uint32_t portSpeed(uint8_t, uint32_t baud, bool apply) {   // port 0, UAR
 // oep.probe.restart (oep-if-restart): esp_restart, UART0 back at 115200 as at every boot. restart_max_ms (its describe):
 // the UART bridge stays on the bus (no re-enumeration, the host's port stays), and the chip is back in about 0.5 s -
 // the ROM (its banner goes out on UART0 as raw bytes), the bootloader checking the app image (about 0.4 MB), setup()
-// reading the settings; the host's reopen after restart_after_answer_ms and its confirms at 115200 add little. 1500 ms
+// reading the settings; the host's reopen and its confirms at 115200 add little. 1500 ms
 // is about three times that (an estimate from the boot path, to be measured on the bench).
 static constexpr uint32_t kRestartMaxMs = 1500;
 
@@ -130,7 +130,7 @@ static uint8_t probeTlv[256];   // with the firmware text's note of the boot bef
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40, kReserved | oep::platformUnusablePins(),
+  oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40,
                     oep::BootGuard::lastBoot());
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
@@ -145,8 +145,8 @@ void setup() {
   Serial.setRxFIFOFull(kRxFifoFull);   // after begin(): begin() sets its own (120 above 57600 baud)
   // Every channel genuinely Hi-Z until the host takes it (a pull on a target's USB line breaks its enumeration, E132).
   // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
-  // The saved settings are read first: their disable items' channels are never parked (probe.config §2: applied
-  // before any idle / park; applySaved below gives them back if the settings are not applied).
+  // The saved settings are read first: their disable items' channels are never parked (probe.config §2: disable
+  // before anything else; applySaved below gives them back if the settings are not applied).
   const uint64_t unusable = oep::platformUnusablePins();
   pins.forbid(unusable);
   // GPIO34-39 are inputs without pulls (ESP32 datasheet, GPIO): no output idle, no pull-up / pull-down idle (probe.config
@@ -186,8 +186,8 @@ void setup() {
   endpoint.add(oepLink);   // oep.probe.link: the link test and port_speed (oep-if-link), last: the fns before it keep their numbers
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot, 0.0.11-0.0.16).
-  // In the order of probe.config §2: every idle (outputs driven) first, then the plans, the uarts, and the at-boot
-  // slots' attach last (on its poll), so a target powered through an output idle is up before it.
+  // probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach comes on
+  // config.poll(), so a target powered through an output idle is up before it.
   // No USB device of its own (a bridge carries the UART): no gate on the at-boot attach. After BootGuard::kSafeAfter
   // fast crash-boots the saved at-boot slots wait for the host.
   if (oep::BootGuard::safe()) config.skipBootAttach();

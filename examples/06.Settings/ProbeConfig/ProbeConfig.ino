@@ -2,12 +2,12 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // A jig that sets itself up at boot: oep.probe.config keeps what the host set, and the probe does it again every boot
-// (oep-spec docs/oep-if-probe-config.ja.md). Nothing about the jig is in this sketch; its settings say:
+// (oep-spec interfaces/oep-if-probe-config.ja.md). Nothing about the jig is in this sketch; its settings say:
 //
 //   slot   a place a target is wired to (a wire and its pins), with a name - attach at boot and retry, the console's
-//          mechanism, the line's settings (max_speed_hz, idle_clock), a lock on the chip id
-//   bind   what a serial port carries outside the OEP frames: the slot's console (so a terminal on the probe's port
-//          shows the target's output, on the same line as OEP), a fixture UART, or several, marked by name
+//          mechanism, the line's settings (max_speed_hz, idle_clock)
+//   bind   the one stream a serial port carries outside the OEP frames: the slot's console (so a terminal on the
+//          probe's port shows the target's output, on the same line as OEP) or a fixture UART
 //   plan   pins an interface keeps (a fixture UART on the DUT's TX / RX)
 //   idle   how a free pin rests (pull-up on a DUT input that must not float)
 //   disable a channel the probe never uses or touches (not on this board, or wired to another part): every request
@@ -17,14 +17,14 @@
 // sector on RP2040 / RP2350):
 //
 //   oep config slot  <port> --name dut --wire rvswd --pins 2,3 --attach at-boot --retry 1 --mechanism dmseq
-//   oep config bind  <port> --port 0 --mode last-reset --stream slot:dut
+//   oep config bind  <port> --port 0 --stream slot:dut
 //   oep config plan  <port> oep.fixture.uart#1 rx=5 tx=4
 //   oep config idle  <port> 5 pull-up --save
 //   oep config disable <port> 28 29 --save
 //   oep config show  <port>
 //
 // Then the probe's USB serial port shows the target's console from boot, and a flash tool still talks OEP on the same
-// port: during its session the console is held and resumes, afterwards, from the target's last reset (transports §4).
+// port: during its session the console is held and resumes, afterwards, where it stopped (transports §4).
 // Saved settings belong to this firmware's interface list: another firmware leaves them unapplied.
 #include <OepBind.h>
 #include <OepCh32Dm.h>
@@ -68,7 +68,7 @@ static uint8_t probeTlv[64];
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "probe-config", id, oep::platformUnitId(id, sizeof id), 30, ((1ull << 30) - 1) & ~kChannels);
+  oep::describeCore(w, "probe-config", id, oep::platformUnitId(id, sizeof id), 30);
   return w.ok() ? w.length() : 0;
 }
 
@@ -76,7 +76,7 @@ void setup() {
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
   // RP2 pads boot with a pull-down: Hi-Z until the plan or an idle item says - except the channels the saved settings
-  // disable, which are never touched (read first: probe.config §2 applies them before any park)
+  // disable, which are never touched (read first: probe.config §2 applies disable and idle before anything else)
   config.load();
   pins.setDisabled(config.savedDisabled());
   oep::platformParkMask(kChannels & ~pins.disabledMask());

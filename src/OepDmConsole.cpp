@@ -22,7 +22,7 @@ uint8_t DmConsole::take() {
 }
 
 // A DMI read of the mailbox. Its outcome runs the PHY's wire-loss clock (oep-if-debug §2, shared with the host's
-// requests on the connection): the wire is lost once reads have got nothing back for wire_lost_ms with no answer between.
+// requests on the connection): the wire is lost once reads have got nothing back for limits::kWireLostMs with no answer between.
 bool DmConsole::readData(uint8_t address, uint32_t &value) {
   const bool ok = phy_.read(address, value);
   if (phy_.loss().lost()) lost_ = true;   // also a DMSTATUS of all zeros / ones (no answer, DmiPhy::read)
@@ -59,11 +59,11 @@ bool DmConsole::confirm(uint32_t data0, bool with_data1, uint32_t &data1, uint8_
 
 void DmConsole::poll() {
   // DATA0 and DATA1 are the abstract command's operands too, so leave them alone unless the target is attached and
-  // running its own code. Whether the hart runs is judged from DMSTATUS, read every kStatusMs (oep-if-console §3: the
-  // host may have halted or resumed it through raw DMI, which Ch32Dm's own view does not see - a raw resume after the
-  // probe's halt left the console silent until the next high-level op); in between, a halt by the probe itself counts
-  // at once. A reset the target did by itself (havereset) is acknowledged there too (oep-if-debug §4.6: the stream marks
-  // a restart, dmseq starts over).
+  // running its own code (oep-if-console §3). Whether the hart runs is judged from DMSTATUS, read before the first DATA0
+  // read after a riscv-dm request on the connection was answered (the host may have halted or resumed it through raw
+  // DMI, which Ch32Dm's own view does not see) and every kStatusMs besides; in between, a halt by the probe itself
+  // counts at once. A reset the target did by itself (havereset) is acknowledged there too (oep-if-debug §4.6: the
+  // stream marks a restart, dmseq starts over).
   if (!enabled_ || lost_) return;
   if (!phy_.backgroundTurn()) return;   // the wire paused (DmiPhy::backgroundTurn): nothing read, the next poll reads
   struct TurnDone {
@@ -83,15 +83,16 @@ void DmConsole::poll() {
       if (phy_.loss().lost()) lost_ = true;
       return;
     }
+    last_status_ms_ = millis() - kStatusMs;   // the link brought up again: DMSTATUS before DATA0
   }
-  if (millis() - last_status_ms_ >= kStatusMs) {
+  if (dm_.requests() != seen_requests_ || millis() - last_status_ms_ >= kStatusMs) {
     last_status_ms_ = millis();
     uint32_t status = 0, control = 0, again = 0;
     if (!readData(0x11, status)) return;
     if (!dmVersionKnown(status)) {
       // No module's (all ones): the link may have dropped - a CH32L103 drops it at every change of hart state, its own
       // restarts too - and back-to-back polls leave the PHY no idle time to revive it. The bus is brought back in step
-      // (the wire's configuration sequence, no debug-module register written); it read all ones until wire_lost_ms
+      // (the wire's configuration sequence, no debug-module register written); it read all ones until limits::kWireLostMs
       // closed the stream.
       phy_.reinit();
       return;
@@ -111,7 +112,8 @@ void DmConsole::poll() {
       if (dm_.ackHaveReset()) unsync();
       return;
     }
-    hart_halted_ = (status & (1u << 9)) != 0;
+    seen_requests_ = dm_.requests();   // DMSTATUS read since the last request: DATA0 may be read (if running)
+    hart_halted_ = (status & (1u << 9)) != 0;   // anyhalted
     // a running hart is running for the ops too (a halted one is brought in line by their checkHalted, which also
     // re-syncs the link after the change of state)
     if (!hart_halted_) dm_.noteRunning();
@@ -258,18 +260,10 @@ void DmConsole::pollSeq() {
   // in DATA0 - decodes to exactly that.
   if (n > 6 || crc8(b, static_cast<size_t>(1 + n)) != b[1 + n]) {
     ++stats_.invalid;
-    // Usually a bad read, and the next poll reads it right. If it stays bad the word may be
-    // our own answer, corrupted into a shape with bit 7 set, and then both sides wait.
-    // Answering K = the last S we accepted is safe whatever is there: if the target's
-    // outstanding frame is that one, it was ours already; if it is a new one, K does not
-    // match and the target posts it again.
-    // The count (dmseq host rule 1, DS-5) stops at 3 while not synced, which never answers; it restarts at a valid
-    // frame, after this answer, and when a session starts (start, unsync).
-    if (seq_bad_run_ < 3) ++seq_bad_run_;
-    if (seq_bad_run_ >= 3 && seq_synced_) { seq_bad_run_ = 0; seqAnswer(seq_last_s_, false); }
+    // Not answered (dmseq host rule 1): the next poll reads it again; a target that sees its frame stand posts it
+    // again by its own rule 0.
     return;
   }
-  seq_bad_run_ = 0;
   const uint8_t s = (w0 >> 5) & 1u, a = (w0 >> 4) & 1u;
   const bool syn = (w0 & 0x08u) != 0;
   // A SYN frame posted again (its answer did not land) is a duplicate like any other; only
@@ -334,14 +328,13 @@ bool DmConsole::start(uint8_t mechanism) {
   saw_empty_ = false;
   seq_synced_ = false;
   seq_last_syn_ = false;
-  seq_bad_run_ = 0;
   seq_syn_drops_ = 0;
   seq_chunk_len_ = 0;
   seq_resyncs_ = 0;
   enabled_ = true;
   lost_ = false;
   hart_halted_ = false;
-  last_status_ms_ = millis();
+  last_status_ms_ = millis() - kStatusMs;   // DMSTATUS first, before any DATA0 read
   mechanism_ = mechanism;
   return true;
 }

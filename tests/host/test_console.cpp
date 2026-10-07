@@ -3,10 +3,11 @@
 
 // Host tests: oep.target.console (OepConsole.cpp) over DmConsole and Ch32Dm on a fake DMI PHY whose debug module keeps
 // DATA0 / DATA1 and DMSTATUS's halted / havereset bits; the test plays the target's side of the mailbox.
-// - core §4.3's order: a stream op's form and values are checked before its stream number (no_connection last); read
-//   from 3 with arg over 0xFF is malformed (common §1.2), the fixture UART's read too.
-// - write fills the stream's send queue, declared in describe (console §1, §2); DMDATA by §3.2 (no slot, empty slot,
-//   a bit-7-clear word left alone, open writes nothing); the console reads while DMSTATUS says the hart runs (console §3).
+// - core §4.3: a stream op's form and values are checked before its stream number; read from 3 with arg over 0xFF
+//   reads from now (common §1.2), the fixture UART's read too; write count 0 is success.
+// - write fills the stream's send queue, not declared (console §1, §2); DMDATA by §3.2 (no slot, empty slot, a
+//   bit-7-clear word left alone, open writes nothing); the console reads while DMSTATUS says the hart runs, and after
+//   a riscv-dm request of the connection it reads DMSTATUS before DATA0 (console §3).
 // - a session's end (end or lapse) takes its share of the stream before the connection's: closed 2 when it was the last
 //   user, readable after, and the same place and mechanism opened again gives the same number and marks (console §2).
 #include <stdio.h>
@@ -42,6 +43,7 @@ class FakePhy final : public DmiPhy {
   bool attached_flag = false, halted = false, havereset = false;
   uint32_t data0 = 0, data1 = 0;
   int reads = 0, status_reads = 0, data0_reads = 0;
+  std::vector<uint8_t> order;   // the DMSTATUS (0x11) and DATA0 (0x04) reads, in order
   std::vector<uint32_t> data0_writes;
   // faults: the next `bad_havereset` DMSTATUS reads come back with havereset set though none is pending (a bad read);
   // the next `lose_data0` writes of DATA0 do not land; `dropped`: the link reads all ones until reinit() (a CH32L103
@@ -84,11 +86,12 @@ class FakePhy final : public DmiPhy {
     ++reads;
     if (dropped) { value = 0xffffffffu; return true; }
     switch (address) {
-      case 0x04: value = data0; ++data0_reads; break;
+      case 0x04: value = data0; ++data0_reads; order.push_back(0x04); break;
       case 0x05: value = data1; break;
       case 0x10: value = 1; break;
       case 0x11:
         ++status_reads;
+        order.push_back(0x11);
         value = 2 | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (havereset || bad_havereset > 0 ? (3u << 18) : 0);
         if (bad_havereset > 0) --bad_havereset;
         break;
@@ -263,25 +266,28 @@ int main() {
     CHECK(!marks.empty() && marks.back().kind == reg::common::kMarkKindAttach && marks.back().detail == 0);
   }
 
-  // ---- core §4.3: the form first, an unknown stream number last (it answered no_connection first) ----
+  // ---- core §4.3: the form first, then the stream number ----
   {
     const Bytes unknown = le16(uint16_t(stream + 100));
     r = call(console, TargetConsoleStream::kOpRead, cat(unknown, {0, 0, 0}), out);   // cut short
     CHECK(rejectedWith(r, kRejectMalformed));
     r = call(console, TargetConsoleStream::kOpRead, cat(unknown, {4, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);   // from 4
     CHECK(rejectedWith(r, kRejectUnsupported));
-    r = call(console, TargetConsoleStream::kOpWrite, cat(unknown, {0, 0}), out);   // count 0
-    CHECK(rejectedWith(r, kRejectMalformed));
+    r = call(console, TargetConsoleStream::kOpWrite, cat(unknown, {0, 0}), out);   // count 0: well formed
+    CHECK(rejectedWith(r, kRejectNoConnection));
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(stream), {0, 0}), out);   // accepted 0 = count: success
+    CHECK(ok(r) && out == le16(0));
     r = call(console, TargetConsoleStream::kOpMark, unknown, out);                 // no value
     CHECK(rejectedWith(r, kRejectMalformed));
     r = call(console, TargetConsoleStream::kOpMark, cat(unknown, {1}), out);       // well formed: no_connection
     CHECK(rejectedWith(r, kRejectNoConnection));
   }
 
-  // ---- read from 3 (the last mark of kind arg): arg over 0xFF is malformed (common §1.2; it read kind arg & 0xFF) ----
+  // ---- read from 3 (the last mark of kind arg): arg over 0xFF matches no mark - from now (common §1.2; it read kind
+  // arg & 0xFF, then was malformed) ----
   {
     r = call(console, TargetConsoleStream::kOpRead, cat(le16(stream), {3, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}), out);
-    CHECK(rejectedWith(r, kRejectMalformed));
+    CHECK(ok(r) && out.size() == 11 && out[8] == 0 && out[9] == 0);   // start = now, no flags, len 0
     r = call(console, TargetConsoleStream::kOpRead, cat(le16(stream), {3, 0xff, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
     CHECK(ok(r));
     // the fixture UART's read alike
@@ -289,7 +295,7 @@ int main() {
     static HardwareSerial serial;
     static FixtureUart uart(uart_pins, serial, 0);
     r = call(uart, FixtureUart::kOpRead, {3, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}, out);
-    CHECK(rejectedWith(r, kRejectMalformed));
+    CHECK(!rejectedWith(r, kRejectMalformed));
     r = call(uart, FixtureUart::kOpRead, {4, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}, out);   // from 4: unsupported
     CHECK(rejectedWith(r, kRejectUnsupported));
     r = call(uart, FixtureUart::kOpRead, {3, 0x07, 0, 0, 0, 0, 0, 0, 0, 16, 0}, out);
@@ -297,7 +303,7 @@ int main() {
   }
 
   // ---- write fills the stream's send queue (oep-if-console §2): accepted = min(count, free space), 0 only when it is
-  // full; describe declares its size (send_queue, at least console_send_queue_min_bytes); SDI takes nothing; the queue
+  // full; describe does not declare its size (console §1: the probe's); SDI takes nothing; the queue
   // goes with the stream when it closes; a bind's input fills the same queue. (It took only the mechanism's send slot,
   // 2 / 3 bytes, and 0 while that held a chunk.) ----
   {
@@ -305,9 +311,8 @@ int main() {
     const size_t dn = console.describe(d.data(), d.size());
     bool declared = false;
     for (size_t at = 0; at + kTlvHeader <= dn; at += kTlvHeader + (d[at + 1] | d[at + 2] << 8))
-      if (d[at] == con::kTlvDescribeSendQueue && d[at + 1] == 2 && d[at + 2] == 0)
-        declared = uint16_t(d[at + 3] | d[at + 4] << 8) == DmConsole::kSendQueue;
-    CHECK(declared && DmConsole::kSendQueue >= reg::kLimitConsoleSendQueueMinBytes);
+      declared |= d[at] == 0x41;   // the old send_queue tag
+    CHECK(!declared && dn == kTlvHeader + 3);   // mechanisms only
     phy.halted = true;   // nothing taken from the queue meanwhile (the console does not read a halted hart's mailbox)
     g_millis += 25;
     console.poll();
@@ -423,6 +428,28 @@ int main() {
     data0_reads = phy.data0_reads;
     for (int i = 0; i < 3; ++i) { g_millis += 5; console.poll(); }
     CHECK(phy.data0_reads == data0_reads);
+    CHECK(dm.writeDmi(0x10, 0x40000001) && !phy.halted);
+    // the order (console §3): after a riscv-dm request of the connection is answered (noteRequest), DMSTATUS is read
+    // before the next DATA0 read - well inside the status interval, which alone would not read it
+    g_millis += 25;
+    console.poll();
+    g_millis += 1;
+    console.poll();
+    phy.order.clear();
+    console.poll();
+    CHECK(!phy.order.empty() && phy.order.front() == 0x04);   // no request: DATA0 straight away
+    dm.noteRequest();
+    phy.order.clear();
+    console.poll();
+    CHECK(phy.order.size() >= 2 && phy.order.front() == 0x11);   // DMSTATUS first
+    // a request that halted the hart (a raw dmi halt): after it, DATA0 is not read at all
+    CHECK(dm.writeDmi(0x10, 0x80000001) && phy.halted);
+    dm.noteRequest();
+    phy.order.clear();
+    console.poll();
+    bool data0_read = false;
+    for (uint8_t a : phy.order) data0_read |= a == 0x04;
+    CHECK(!phy.order.empty() && phy.order.front() == 0x11 && !data0_read);
     CHECK(dm.writeDmi(0x10, 0x40000001) && !phy.halted);
   }
 
@@ -716,9 +743,8 @@ int main() {
     }
   }
 
-  // ---- a paused wire (DmiPhy::backgroundTurn false: the classic ESP32's sampler window with the test hook
-  // OEP_SWIO_PAUSE_CONSOLE): the console's poll reads nothing and writes nothing, the write op still fills the queue,
-  // and once the wire is back the line reaches the target whole; every turn given is ended ----
+  // ---- a paused wire (DmiPhy::backgroundTurn false: the classic ESP32's sampler window): the console's poll reads
+  // nothing and writes nothing, the write op still fills the queue, and once the wire is back the line reaches the target whole; every turn given is ended ----
   {
     static FakePhy phy5;
     static Ch32Dm dm5(phy5);

@@ -6,7 +6,7 @@
 // and says when it started. Every track stamps its own first sample on the probe's one clock (segment start_ns), so a
 // track's offset is its first segment's start_ns minus the group's.
 //
-//   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn, critical]) -> -
+//   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn]) -> -
 //   0x02 start -> blocking_ms u32, start_ns u64, [TLV 0x01 generations: n x (fn u16, generation u32)]
 //   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16 (no lock)
 //   events: 0x03 triggered (trigger_fn u16, trigger_ns u64), 0x02 stopped (reason u8, error u8)
@@ -14,7 +14,8 @@
 // With trigger_track, that track waits for its own trigger and the others follow: they run into their rings from the
 // start (the trigger track starts once each holds its pretrigger), and when the trigger's time is known (trackTriggerNs)
 // the group hands it to them (trackTriggerAt), and each cuts its segment around the sample nearest to it, with its own
-// pretrigger. A track that cannot follow (no ring) is refused at bind.
+// pretrigger. A track that cannot follow (no ring) is refused at bind, and so is a set of tracks over a budget they
+// share (addBudget): the probe's own limit, declared nowhere (capture §4.3: a host tries bind).
 #pragma once
 #include <Arduino.h>
 #include "Oep.h"
@@ -34,7 +35,7 @@ class GroupTrack {
   virtual bool trackCanStart() const { return trackReady(); }
   virtual uint8_t trackMode() const = 0;      // the configured mode (one-shot, repeat, streaming)
   virtual bool trackTriggered() const = 0;    // a trigger other than immediate is configured
-  virtual uint32_t trackLoad() const = 0;     // channels x rate, sample/s (for budgets)
+  virtual uint32_t trackLoad() const = 0;     // channels x rate, sample/s (for the group's budgets)
   virtual bool trackStart() = 0;              // start now; false: it could not
   virtual void trackStop() = 0;
   virtual uint8_t trackState() const = 0;     // the capture state (oep-if-capture §3.2)
@@ -51,7 +52,7 @@ class GroupTrack {
   virtual bool trackArmed() const { return true; }   // following: it holds its pretrigger's worth of samples
   void setBound(bool on, uint16_t group_fn = 0) { bound_ = on; group_fn_ = on ? group_fn : 0; if (!on) following_ = false; }
   bool bound() const { return bound_; }
-  uint16_t groupFn() const { return group_fn_; }   // the fn holding it (rejected unavailable cause 4's holder_fn)
+  uint16_t groupFn() const { return group_fn_; }   // the group's fn while bound (0: not bound)
 
  protected:
   bool bound_ = false;
@@ -60,10 +61,11 @@ class GroupTrack {
   friend class CaptureGroup;
 };
 
-// A bound track's own configure / start / stop / force, and plan changes of its fn: rejected unavailable cause 4 with the
-// group's fn (oep-if-capture §4.1).
+// A bound track's own configure / start / stop / force, and plan changes of its fn: rejected unavailable cause 4, the
+// cause alone (oep-if-capture §4.1, core §4.3).
 inline Result boundInGroup(const GroupTrack &track, uint8_t *out, size_t capacity) {
-  return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup, 0xFFFF, track.groupFn());
+  (void)track;
+  return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup);
 }
 
 // The sample (of a rate num / den a second) nearest to dns ns after the first one.
@@ -77,10 +79,10 @@ class CaptureGroup final : public Interface {
  public:
   static constexpr size_t kMaxTracks = 4;
   CaptureGroup(Endpoint &endpoint, uint16_t instance = 0) : endpoint_(endpoint), instance_(instance) {}
-  // A track the group may bind (add both to the endpoint first). start_skew_ns: how late it typically starts after
-  // the group (describe, for display).
-  bool addTrack(Interface &interface, GroupTrack &track, uint32_t start_skew_ns = 0);
-  // A budget the listed tracks share when bound together: channels x rate summed, sample/s.
+  // A track the group may bind (add both to the endpoint first; describe's tracks).
+  bool addTrack(Interface &interface, GroupTrack &track);
+  // A budget the listed tracks share when bound together: channels x rate summed, sample/s. Not declared: a bind over
+  // it is refused unavailable cause 2 with the track's fn (capture §4.1).
   bool addBudget(uint32_t max_rate, GroupTrack &a, GroupTrack &b);
   const char *name() const override { return reg::fixture_capture_group::kName; }
   uint16_t instance() const override { return instance_; }
@@ -97,7 +99,7 @@ class CaptureGroup final : public Interface {
   void poll();   // from loop(): the stopped event once every bound track is done
 
  private:
-  struct Entry { Interface *interface; GroupTrack *track; uint32_t skew_ns; };
+  struct Entry { Interface *interface; GroupTrack *track; };
   struct Budget { uint32_t max_rate; uint8_t a, b; };
   Endpoint &endpoint_;
   uint16_t instance_;

@@ -223,17 +223,16 @@ int main() {
       const uint32_t began = millis();
       r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], mode}, out);
       const uint32_t took = millis() - began;
-      CHECK(out.size() == 7);
+      CHECK(out.size() == 6);
       CHECK(ok(r) && out[0] == kStatusOk && (out[1] & reg::target_riscv_dm::kResetFlagsReached));
-      if (!ok(r) || out.size() < 7 || out[0] != kStatusOk)
-        printf("  mode %u boot %u us silent from %d: status %u flags %#x attempts %u, %u ms\n", mode, boot.boot_us,
-               silent ? int(boot.dark_after_us) : -1, out.size() > 0 ? out[0] : 0, out.size() > 1 ? out[1] : 0,
-               out.size() > 2 ? out[2] : 0, took);
+      if (!ok(r) || out.size() < 6 || out[0] != kStatusOk)
+        printf("  mode %u boot %u us silent from %d: status %u flags %#x, %u ms\n", mode, boot.boot_us,
+               silent ? int(boot.dark_after_us) : -1, out.size() > 0 ? out[0] : 0, out.size() > 1 ? out[1] : 0, took);
       // the pc confirmed: the application's after a silent bootloader (the op waited for the hand-over), else the
       // bootloader's or the application's - whichever ran at the confirmation's halt
       if (mode == 1)
         CHECK((out[1] & reg::target_riscv_dm::kResetFlagsVerified) &&
-              (silent ? getU32(out.data() + 3) == 0x2f6u : getU32(out.data() + 3) != 0));
+              (silent ? getU32(out.data() + 2) == 0x2f6u : getU32(out.data() + 2) != 0));
       // a silent hand-over waited out inside the op, which still answers within the host's wait (core §4.4)
       if (silent && mode != 2) CHECK(took >= 400 && took < v1::reg::kHostWaitAddMs && t.system_resets == 1);
       if (mode == 2) {
@@ -274,8 +273,8 @@ int main() {
     const uint32_t began = millis();
     r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], mode}, out);
     const uint32_t took = millis() - began;
-    CHECK(r.resolution == kResolutionCompleted && r.detail != kOutcomeSuccess && out.size() == 7);
-    CHECK(out.size() == 7 && out[0] == kStatusLine && !(out[1] & 3) && out[2] == 1);
+    CHECK(r.resolution == kResolutionCompleted && r.detail != kOutcomeSuccess && out.size() == 6);
+    CHECK(out.size() == 6 && out[0] == kStatusLine && !(out[1] & 3));   // status flags pc: no attempts (debug §4.3)
     CHECK(took >= Ch32Dm::kResetSettleMs && took < v1::reg::kHostWaitAddMs);
     CHECK(port.connected);
     g_millis += 5000;   // handed over at last
@@ -305,7 +304,7 @@ int main() {
     r = call(w, WireRvswd::kOpAttach, with_reset, out);
     const uint32_t took = millis() - began;
     CHECK(ok(r) && port.connected && t.line_resets == 1 && t.system_resets == 1);
-    CHECK(took >= 400 && took < v1::reg::kLimitAttachBudgetMs + 10);
+    CHECK(took >= 400 && took < limits::kAttachBudgetMs + 10);
     if (!ok(r)) printf("  attach with reset, live %d: %u ms, outcome %u\n", live, took, r.detail);
     conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
     r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);

@@ -346,26 +346,24 @@ static const uint8_t *answerTlv(const Bytes &out, size_t from, uint8_t tag, size
   return nullptr;
 }
 
-// rejected unavailable, cause 5, the channel, holder_kind 7 settings_idle (debug §1)
+// rejected unavailable, cause 5, the channel (debug §1; no holder_kind any more, core §4.3)
 static bool isSettingsIdle(const Result &r, const Bytes &out, uint16_t channel) {
   if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
   size_t len = 0;
   const uint8_t *cause = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadCause, len);
   const uint8_t *ch = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadChannel, len);
-  const uint8_t *kind = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadHolderKind, len);
   return cause && cause[0] == reg::core::kUnavailableCauseHeldBySettings && ch && (ch[0] | ch[1] << 8) == channel &&
-         kind && kind[0] == reg::core::kHolderKindSettingsIdle;
+         out.size() == 4 + 5;   // cause and channel only
 }
 
-// rejected unavailable, cause 1 pin in use, the channel, its holder_kind (core §4.3)
-static bool isHeld(const Result &r, const Bytes &out, uint16_t channel, uint8_t holder_kind) {
+// rejected unavailable, cause 1 pin in use, the channel (core §4.3)
+static bool isHeld(const Result &r, const Bytes &out, uint16_t channel) {
   if (r.resolution != kResolutionRejected || r.detail != kRejectUnavailable) return false;
   size_t len = 0;
   const uint8_t *cause = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadCause, len);
   const uint8_t *ch = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadChannel, len);
-  const uint8_t *kind = answerTlv(out, 0, reg::core::kTlvUnavailablePayloadHolderKind, len);
-  return cause && cause[0] == reg::core::kUnavailableCausePinInUse && ch && (ch[0] | ch[1] << 8) == channel && kind &&
-         kind[0] == holder_kind;
+  return cause && cause[0] == reg::core::kUnavailableCausePinInUse && ch && (ch[0] | ch[1] << 8) == channel &&
+         out.size() == 4 + 5;
 }
 
 // ---- the target's side of the console's mailbox, for the glitch tests (each writes DATA1 before DATA0, directly) ----
@@ -641,17 +639,17 @@ int main() {
     CHECK(r.resolution == kResolutionCompleted && r.detail != kOutcomeSuccess && !chosen.connected);
     CHECK(phy2.state == FakePhy::kFree && pins.free(6) && pins.free(7));
     CHECK(g_pin_mode[6] == INPUT_PULLDOWN);
-    // a pair this wire does not declare: unsupported with the pins tag as received; sent without the critical bit it is
-    // ignored and listed (core §2.3)
+    // a pair this wire does not declare: unsupported with the pins tag as received, critical or not (core §2.3)
     phy2.present = true;
     Bytes bad = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00,
                  uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 0, 9, 0, 5, 0};
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 &&
           out[0] == (wire::kTlvAttachPins | kTagCritical));
-    bad[8] = wire::kTlvAttachPins;   // not critical: ignored; no live connection and the host must name a pair
+    bad[8] = wire::kTlvAttachPins;   // not critical: the same, the tag as received
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 &&
+          out[0] == wire::kTlvAttachPins);
     // count = 0 leaves out every channel with an idle item, input ones too (4, 5, 6 here): only 7 is left, no pair
     const Bytes scan_all = {0};
     r = call(wire_chosen, WireRvswd::kOpScan, scan_all, out);
@@ -733,17 +731,17 @@ int main() {
     CHECK(pins5.claim(5, 0x01));                                                    // a gpio plan takes 5
     phy5.attaches = phy5.bring_ups = 0;
     r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 4, 5), out);
-    // unavailable cause 1, channel 5, holder_kind 1 plan (core §4.3; 0.0.28: attached)
-    CHECK(isHeld(r, out, 5, reg::core::kHolderKindPlan) && !chosen5.connected);
+    // unavailable cause 1, channel 5 (core §4.3; 0.0.28: attached)
+    CHECK(isHeld(r, out, 5) && !chosen5.connected);
     CHECK(phy5.attaches == 0 && pins5.owner(5) == 0x01);
     CHECK(!usePair(chosen5, 4, 5));                                                 // a slot's attach: the same
     const Bytes scan45 = {1, 4, 0, 5, 0};
     r = call(wire5, WireRvswd::kOpScan, scan45, out);
-    CHECK(isHeld(r, out, 5, reg::core::kHolderKindPlan) && phy5.bring_ups == 0);   // 0.0.28: no holder_kind
+    CHECK(isHeld(r, out, 5) && phy5.bring_ups == 0);
     pins5.release(0x01);
     r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 4, 5), out);
     CHECK(ok(r) && chosen5.connected);
-    // another wire on the same pins meets this connection: holder_kind 2
+    // another wire on the same pins meets this connection: cause 1
     static FakePhy phy6;
     static Ch32Dm dm6(phy6);
     static DebugPort other{dm6, 0xfffe, 0xfffe};
@@ -752,10 +750,10 @@ int main() {
     other.pin_owner = 0xf2;
     static WireRvswd wire6(other, 5);
     r = call(wire6, WireRvswd::kOpAttach, attachRequest(0, 6, 4), out);
-    CHECK(isHeld(r, out, 4, reg::core::kHolderKindConnection) && !other.connected);
+    CHECK(isHeld(r, out, 4) && !other.connected);
     const Bytes scan64 = {1, 6, 0, 4, 0};
     r = call(wire6, WireRvswd::kOpScan, scan64, out);
-    CHECK(isHeld(r, out, 4, reg::core::kHolderKindConnection));
+    CHECK(isHeld(r, out, 4));
     // the one seat taken by the host on 4 / 5: another pair of this wire is a count limit (cause 2)
     r = call(wire5, WireRvswd::kOpAttach, attachRequest(0, 6, 5), out);
     size_t clen = 0;
@@ -814,7 +812,7 @@ int main() {
     r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
     const uint32_t halt_ms = millis() - before;
     CHECK(r.detail == kOutcomeFailed && out.size() == 1 && out[0] == kStatusTimeout);
-    CHECK(halt_ms >= reg::kLimitDmWaitMs && halt_ms <= reg::kLimitDmWaitMs + 5);
+    CHECK(halt_ms >= limits::kDmWaitMs && halt_ms <= limits::kDmWaitMs + 5);
     CHECK(phy.dmcontrol == 1 && !dm.halted());   // haltreq cleared, dmactive kept
     phy.ignore_halt = phy.ignore_resume = false;
     r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
@@ -824,7 +822,7 @@ int main() {
     r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
     const uint32_t resume_ms = millis() - before;
     CHECK(r.detail == kOutcomeFailed && out.size() == 1 && out[0] == kStatusState);
-    CHECK(resume_ms >= reg::kLimitDmWaitMs && resume_ms <= reg::kLimitDmWaitMs + 5);
+    CHECK(resume_ms >= limits::kDmWaitMs && resume_ms <= limits::kDmWaitMs + 5);
     phy.ignore_halt = phy.ignore_resume = false;
     // step (oep-if-debug §4.2): back by itself - ok; not back in dm_wait_ms but stopped by the probe's haltreq - state,
     // dpc_after valid, haltreq lowered; still running dm_wait_ms after that - state with TLV 0x01 step_left (01 00 00),
@@ -836,14 +834,14 @@ int main() {
     before = millis();
     r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
     CHECK(r.detail == kOutcomeFailed && out.size() == 10 && out[0] == kStatusState && phy.halted && phy.dmcontrol == 1);
-    CHECK(millis() - before >= reg::kLimitDmWaitMs && millis() - before <= reg::kLimitDmWaitMs + 10);
+    CHECK(millis() - before >= limits::kDmWaitMs && millis() - before <= limits::kDmWaitMs + 10);
     phy.ignore_halt = true;
     before = millis();
     r = call(riscv, TargetRiscvDm::kOpStep, conn, out);
     CHECK(r.detail == kOutcomeFailed && out.size() == 13 && out[0] == kStatusState && out[10] == 0x01 && out[11] == 0 &&
           out[12] == 0);
     CHECK(!phy.halted && phy.dmcontrol == 1 && !dm.halted());
-    CHECK(millis() - before >= 2 * reg::kLimitDmWaitMs && millis() - before <= 2 * reg::kLimitDmWaitMs + 10);
+    CHECK(millis() - before >= 2 * limits::kDmWaitMs && millis() - before <= 2 * limits::kDmWaitMs + 10);
     phy.ignore_halt = false;
     // a dmi request within max_op_ms of time (oep-if-debug §4.1): one that reaches it ends at that step with status
     // timeout, done = the step's index (it ran on: a poll of 65535 reads at 200 us each took 13 s)
@@ -904,19 +902,32 @@ int main() {
       r = call(riscv, op, conn, out);
       CHECK(ok(r) && phy.hartsel == 0);
     }
-    // reset (oep-if-debug §4.3): the procedure redone at most once (reset_retries; it ran 3 times), and a cmderr of
-    // its own abstract commands is status fault (it was timeout)
+    // reset (oep-if-debug §4.3): status(u8) flags(u8: bit0 / bit1 only) pc(u32) - no attempts; the procedure is redone
+    // here at most once (limits::kResetRetries) without saying so, and a cmderr of its own abstract commands is status
+    // fault (it was timeout)
     phy.ignore_resume = true;
     r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], 0}, out);
-    CHECK(r.detail == kOutcomeFailed && out.size() == 7 && out[0] == kStatusTimeout && out[2] == 2 &&
-          (out[1] & reg::target_riscv_dm::kResetFlagsRetried));
+    CHECK(r.detail == kOutcomeFailed && out.size() == 6 && out[0] == kStatusTimeout && (out[1] & ~3u) == 0);
     phy.ignore_resume = false;
     phy.abstract_cmderr = 2;
     r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], 2}, out);
-    CHECK(r.detail == kOutcomeFailed && out.size() == 7 && out[0] == kStatusFault);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 6 && out[0] == kStatusFault);
     phy.abstract_cmderr = 0;
     r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], 2}, out);
-    CHECK(ok(r) && out[0] == kStatusOk && out[2] == 1 && (out[1] & reg::target_riscv_dm::kResetFlagsReached));
+    CHECK(ok(r) && out.size() == 6 && out[0] == kStatusOk && out[1] == reg::target_riscv_dm::kResetFlagsReached);
+    // run (oep-if-debug §4.4, Q1): a preparation that fails - the register writes' abstract command answers cmderr -
+    // is not run: stopped 3, status fault, dpc 0, nvals 0, the hart still halted; DATA0 / DATA1 as the target left them
+    phy.data0 = 0x12345678u;
+    phy.data1 = 0x9abcdef0u;
+    phy.abstract_cmderr = 2;
+    r = call(riscv, TargetRiscvDm::kOpRun, {conn[0], conn[1], 0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 1, 0x0a, 0x10, 7, 0, 0, 0, 0}, out);
+    CHECK(r.detail == kOutcomeFailed && out.size() == 11 && out[0] == kStatusFault &&
+          out[1] == reg::target_riscv_dm::kRunStoppedNotRun && getU32(&out[2]) == 0 && out[10] == 0 && phy.halted);
+    phy.abstract_cmderr = 0;
+    CHECK(phy.data0 == 0x12345678u && phy.data1 == 0x9abcdef0u);
+    // timeout_ms 0 is taken (no longer malformed): the run times out at once with the hart halted again
+    r = call(riscv, TargetRiscvDm::kOpRun, {conn[0], conn[1], 0, 0, 0, 0x20, 0, 0, 0, 0, 0, 0}, out);
+    CHECK(r.resolution == kResolutionCompleted && out.size() == 11 && phy.halted);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     phy.halted = false;
@@ -1027,20 +1038,15 @@ int main() {
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0, 0}, out);   // the unknown critical tag alone: unsupported
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0xbf}));
-    // riscv-dm reset: a method TLV shorter than its form is malformed before a mode of 3 is unsupported; one longer
-    // than its form (a request TLV never grows, core §2.3), critical: unsupported with the tag as received
+    // riscv-dm reset: the method TLV (0x01) is gone - an unknown tag now: critical, unsupported with the tag as received
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(ok(r) && fixed.connected);
-    r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3,
-                                              uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical), 0, 0}, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
-    r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 2,
-                                              uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical), 2, 0, 0, 0}, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported &&
-          out == Bytes({uint8_t(reg::target_riscv_dm::kTlvResetMethod | kTagCritical)}));
+    r = call(riscv, TargetRiscvDm::kOpReset, Bytes{uint8_t(fixed.number), uint8_t(fixed.number >> 8), 2, 0x81, 1, 0, 1}, out);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0x81}));
     r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 3}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0}));
-    // a connection it does not know is the last refusal (core §4.3 order 8; it answered no_connection first)
+    // a connection it does not know: the request's own form is checked first (core §4.3: any one reason; this probe
+    // checks the form before the number)
     const uint16_t gone = uint16_t(fixed.number + 100);
     r = call(riscv, TargetRiscvDm::kOpDmi, {uint8_t(gone), uint8_t(gone >> 8), 1, 0, 0x07}, out);   // unknown step kind
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
@@ -1062,7 +1068,7 @@ int main() {
     const uint32_t before = millis();
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(r.resolution == kResolutionCompleted && r.detail != kOutcomeSuccess && out.size() >= 1 && out[0] == kStatusLine);
-    CHECK(phy.attaches == 2 && millis() - before <= reg::kLimitAttachBudgetMs);   // a third would start at 800 ms
+    CHECK(phy.attaches == 2 && millis() - before <= limits::kAttachBudgetMs);   // a third would start at 800 ms
     phy.fail_attaches = 0;
     phy.attach_ms = 0;
   }
@@ -1096,8 +1102,8 @@ int main() {
     const uint32_t before = millis();
     r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);
     CHECK(r.resolution == kResolutionCompleted && out.size() >= 3 && out[2] == kStatusLine);
-    CHECK(phy.retry_reads == reg::kLimitWireRetryMs && millis() - before >= reg::kLimitWireRetryMs &&
-          millis() - before < reg::kLimitWireRetryMs + 20);
+    CHECK(phy.retry_reads == limits::kWireRetryMs && millis() - before >= limits::kWireRetryMs &&
+          millis() - before < limits::kWireRetryMs + 20);
     // one request that got nothing back is not wire loss: status line, the connection kept (0.0.28: closed)
     CHECK(fixed.connected);
     // ... nor are failures for less than wire_lost_ms: still kept 900 ms after the first failure
@@ -1111,7 +1117,7 @@ int main() {
     phy.flaky = true;
     r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);   // the clock starts again here
     CHECK(out[2] == kStatusLine && fixed.connected);
-    g_millis += reg::kLimitWireLostMs - 200;               // with this request's 200: 1000 ms since this run's first failure
+    g_millis += limits::kWireLostMs - 200;               // with this request's 200: 1000 ms since this run's first failure
     r = call(riscv, TargetRiscvDm::kOpDmi, reads, out);
     CHECK(out.size() >= 3 && out[2] == kStatusLine);
     CHECK(!fixed.connected && fixed.lost);                 // wire_lost_ms of failures: the answer, then closed
@@ -1159,7 +1165,7 @@ int main() {
     phy.halted = false;
     r = call(riscv, TargetRiscvDm::kOpHalt, halt, out);
     CHECK(out.size() == 1 && out[0] == kStatusLine && fixed.connected);
-    g_millis += reg::kLimitWireLostMs;
+    g_millis += limits::kWireLostMs;
     r = call(riscv, TargetRiscvDm::kOpHalt, halt, out);
     CHECK(out.size() == 1 && out[0] == kStatusLine && !fixed.connected);
     phy.stuck = false;
@@ -1194,7 +1200,7 @@ int main() {
     r = call(riscv, TargetRiscvDm::kOpReadBlock, block, out);
     CHECK(out.size() >= 3 && out[2] == kStatusLine && fixed.connected);
     // wire_lost_ms after the first: the request that sees it answers line and the connection closes after it
-    g_millis += reg::kLimitWireLostMs;
+    g_millis += limits::kWireLostMs;
     r = call(riscv, TargetRiscvDm::kOpDmi, read, out);
     CHECK(out.size() == 5 && out[2] == kStatusLine && !fixed.connected && fixed.lost);
 
@@ -1224,7 +1230,7 @@ int main() {
     CHECK(ok(r) && fixed.connected);
     phy.stuck = true;
     r = call(riscv, TargetRiscvDm::kOpDmi, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x02, 0x11}, out);
-    g_millis += reg::kLimitWireLostMs;
+    g_millis += limits::kWireLostMs;
     r = call(riscv, TargetRiscvDm::kOpDmi, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 1, 0, 0x04, 0, 0, 0, 0}, out);
     CHECK(r.detail == kOutcomeFailed && out.size() == 5 && out[2] == kStatusLine && !fixed.connected);   // a delay alone
     phy.stuck = false;
@@ -1235,7 +1241,7 @@ int main() {
     CHECK(ok(r) && fixed.connected);
     phy.stuck = true;
     CHECK(checkConnection(fixed));
-    g_millis += reg::kLimitWireLostMs;
+    g_millis += limits::kWireLostMs;
     r = call(wire_fixed, WireRvswd::kOpScan, {0}, out);
     CHECK(ok(r) && out.size() >= 2 && out[1] == 0 && !fixed.connected && fixed.lost);
     phy.stuck = false;
@@ -1254,7 +1260,7 @@ int main() {
     phy.havereset = true;
     if (lost) {   // the clock ran out with no request to see it (idle connections are not watched)
       CHECK(checkConnection(fixed));   // the clock starts
-      g_millis += reg::kLimitWireLostMs + 500;
+      g_millis += limits::kWireLostMs + 500;
     }
     const int attaches = phy.attaches;
     for (uint8_t method : {uint8_t(0), uint8_t(1)}) {
@@ -1281,7 +1287,7 @@ int main() {
     phy.present = false;
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(r.detail == kOutcomeFailed && out.size() >= 1 && out[0] == kStatusLine && fixed.connected);
-    g_millis += reg::kLimitWireLostMs;
+    g_millis += limits::kWireLostMs;
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(r.detail == kOutcomeFailed && out[0] == kStatusLine && !fixed.connected && fixed.lost);
     phy.present = true;
@@ -1344,7 +1350,7 @@ int main() {
     CHECK(!clock.lost());                                  // 1200 ms of failures, all but 300 inside the excuse
     g_millis += 100;
     CHECK(!clock.lost());
-    g_millis += reg::kLimitWireLostMs;
+    g_millis += limits::kWireLostMs;
     CHECK(clock.lost());
     clock.answered();
     CHECK(!clock.lost());

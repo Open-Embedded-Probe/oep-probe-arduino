@@ -7,8 +7,8 @@
 //   open or waiting (and noted for the sampler's turn unless asked not to);
 // - no frame and no window at once, under a stress of both sides;
 // - a request's frames (DmiPhy::read / write) wait out a window and never run inside one;
-// - the console's turn (backgroundTurn): read on through a window as before; with OEP_SWIO_PAUSE_CONSOLE refused while
-//   a window is open, and given once it has closed.
+// - the console's turn (backgroundTurn): refused while a window is open (the console pauses, oep-if-console §3 allows
+//   it; docs/implementation-limits §4.1), and given once it has closed.
 #include <stdio.h>
 
 #include <atomic>
@@ -166,27 +166,17 @@ int main() {
     const int overlaps = g_overlaps.load();
     gWireGate.takeWanted();                      // the notes the requests above left
     const bool turn = phy.backgroundTurn();
-#if OEP_SWIO_PAUSE_CONSOLE
     CHECK(!turn);                                // paused: nothing read inside the window
     CHECK(gWireGate.takeWanted());               // and a turn asked for between bursts
-#else
-    CHECK(turn);                                 // reads on (oep-if-console §3): its frames do not wait
-    uint32_t inside = 0;
-    CHECK(phy.read(0x04, inside));
-    CHECK(g_overlaps.load() == overlaps + 1);    // that read met the window, as before the gate
-    CHECK(!gWireGate.takeWanted());              // no turn asked for: it did not wait
-    phy.backgroundDone();
-#endif
     close = true;
     sampler.join();
     CHECK(phy.backgroundTurn());                 // the window closed: the turn is the console's
     uint32_t v = 0;
-    CHECK(phy.read(0x04, v) && g_overlaps.load() == overlaps + (OEP_SWIO_PAUSE_CONSOLE ? 0 : 1));
+    CHECK(phy.read(0x04, v) && g_overlaps.load() == overlaps);
     phy.backgroundDone();
     gWireGate.release();
   }
 
-  printf("wire-gate%s: %d checks, %d failures\n", OEP_SWIO_PAUSE_CONSOLE ? " (pause console)" : "", checks.load(),
-         failures.load());
+  printf("wire-gate: %d checks, %d failures\n", checks.load(), failures.load());
   return failures.load() ? 1 : 0;
 }

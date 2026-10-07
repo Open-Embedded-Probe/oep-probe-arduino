@@ -111,28 +111,17 @@ static Bytes openPayload(uint32_t id, uint32_t lease, const char *owner = nullpt
   return p;
 }
 
-// A bindable stream (a console): bytes the target says, the host resets counted, what the port sent it.
+// A bindable stream (a console): bytes the target says, what the port sent it.
 class FakeSource final : public BindSource {
  public:
   uint8_t buffer[256];
   PositionStream::Mark marks[4];
   PositionStream stream{buffer, sizeof buffer, marks, 4};
-  uint32_t resets = 0;
   Bytes input;
   void say(const char *text) { for (const char *p = text; *p; ++p) stream.put(static_cast<uint8_t>(*p)); }
   const PositionStream *bindStream() const override { return &stream; }
   uint16_t bindStreamNumber() const override { return 1; }
   size_t bindInput(const uint8_t *d, size_t n) override { input.insert(input.end(), d, d + n); return n; }
-  uint32_t hostResets() const override { return resets; }
-  bool marked = false;   // a reset mark placed (as the console does on its own poll): for which count, where
-  uint32_t mark_resets = 0;
-  uint64_t mark_at = 0;
-  bool hostResetMark(uint32_t r, uint64_t &position) const override {
-    if (!marked || mark_resets != r) return false;
-    position = mark_at;
-    return true;
-  }
-  void markReset() { marked = true; mark_resets = resets; mark_at = stream.end(); stream.mark(reg::common::kMarkKindReset, 1); }
 };
 
 static std::string text(const Bytes &b) { return std::string(b.begin(), b.end()); }
@@ -202,9 +191,7 @@ static void testEndpointSerialPort() {
   FakeSource console;
   Binds::Spec spec;
   spec.set = true;
-  spec.mode = Binds::kLastReset;
-  spec.count = 1;
-  spec.sources[0] = {Binds::kSlotConsole, 0, &console};
+  spec.source = {Binds::kSlotConsole, 0, &console};
   binds.set(1, spec);
 
   console.say("boot\n");
@@ -238,14 +225,12 @@ static void testEndpointSerialPort() {
   const std::string lsr = text(bulk.tx);
   CHECK(lsr.find("test owner") != std::string::npos);
 
-  console.resets = 1;   // a host reset during the session (riscv-dm reset)
-  ep.poll();
-  console.say("after reset\n");
+  console.say("later\n");
   usj.send(frame(request(3, 0, 0x11, {}, true, 0x51)));   // end
   ep.poll();
   split(usj.tx, frames, raw);
   CHECK(frames.size() == 1 && !ep.held(1));
-  CHECK(text(raw) == "after reset\n");   // from the reset, not "held"
+  CHECK(text(raw) == "held\nlater\n");   // where it stopped (probe.config §1.2)
 
   // the transport list in oep.core's describe
   usj.tx.clear();
@@ -259,76 +244,17 @@ static void testEndpointSerialPort() {
     if (d[i] == 0x49 && d[i + 1] == 3 && d[i + 2] == 0) { vendor |= d[i + 3] == 0 && d[i + 4] == 4 && d[i + 5] == 1; usjSeen |= d[i + 3] == 1 && d[i + 4] == 3; }
   CHECK(vendor && usjSeen);
 
-  // a console resumes from its reset's mark (probe.config §1.2): the target's first bytes after the reset that came in
-  // before the binds saw it are carried (the mark placed first), and so are those after a mark placed later
-  for (int later = 0; later < 2; ++later) {
-    usj.tx.clear();
-    usj.send(frame(request(uint16_t(5 + 2 * later), 0, 0x10, openPayload(0x52, 3000))));
-    ep.poll();
-    CHECK(ep.held(1));
-    console.say("held\n");
-    ++console.resets;
-    if (!later) console.markReset();
-    console.say("banner\n");   // in before the binds' poll
-    ep.poll();
-    if (later) {
-      console.mark_resets = console.resets;   // the mark at the reset, placed after the binds' poll saw the count
-      console.marked = true;
-      console.mark_at = console.stream.end() - 7;
-      ep.poll();
-    }
-    console.say("more\n");
-    usj.tx.clear();
-    usj.send(frame(request(uint16_t(6 + 2 * later), 0, 0x11, {}, true, 0x52)));   // end
-    ep.poll();
-    split(usj.tx, frames, raw);
-    CHECK(!ep.held(1) && text(raw) == "banner\nmore\n");
-  }
-}
-
-// ---- mixed ------------------------------------------------------------------------------------------------------------------
-
-static size_t namer(void *, uint8_t, uint16_t id, char *out, size_t room) {
-  return static_cast<size_t>(snprintf(out, room, "s%u", id));
-}
-
-static void testMixed() {
-  MemStream cdc;
-  static uint8_t rx[1100], tx[1100];
-  Endpoint ep(cdc, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kUsbCdc, 0);
-  Binds binds;
-  binds.setNamer(namer, nullptr);
-  ep.setRawPorts(&binds);
-  FakeSource a, b;
-  Binds::Spec spec;
-  spec.set = true;
-  spec.mode = Binds::kMixed;
-  spec.count = 2;
-  spec.sources[0] = {Binds::kSlotConsole, 0, &a};
-  spec.sources[1] = {Binds::kSlotConsole, 1, &b};
-  binds.set(0, spec);
-  a.say("one\ntw");
-  b.say("two\n");
+  // the stream overflowing during a session: the port goes on from the oldest byte left (probe.config §1.2)
+  usj.tx.clear();
+  usj.send(frame(request(5, 0, 0x10, openPayload(0x52, 3000))));
   ep.poll();
+  CHECK(ep.held(1));
+  for (int i = 0; i < 40; ++i) console.say("0123456789");   // 400 bytes into a 256-byte stream
+  usj.tx.clear();
+  usj.send(frame(request(6, 0, 0x11, {}, true, 0x52)));   // end
   ep.poll();
-  CHECK(text(cdc.tx) == "[s0] one\n[s1] two\n");
-  cdc.tx.clear();
-  g_millis += 150;
-  ep.poll();
-  CHECK(text(cdc.tx) == "[s0] tw\n");   // closed by quiet
-  cdc.send({'n', 'o'});
-  ep.poll();
-  CHECK(a.input.empty() && b.input.empty());   // mixed takes no input
-
-  // a port that takes nothing holds its position
-  cdc.tx.clear();
-  cdc.room = 0;
-  a.say("later\n");
-  ep.poll();
-  CHECK(cdc.tx.empty());
-  cdc.room = 4096;
-  ep.poll();
-  CHECK(text(cdc.tx) == "[s0] later\n");
+  split(usj.tx, frames, raw);
+  CHECK(!ep.held(1) && raw.size() == 256 && text(raw).substr(0, 4) == "4567");
 }
 
 // An interface that takes any plan (for the plan rules).
@@ -383,24 +309,35 @@ static void testTlvForm() {
   CHECK(v && len == 254);
   const uint8_t past[] = {0x02, 11, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};   // 11 bytes said, 10 there: malformed
   CHECK(tail.parse(past, sizeof past, kKnown, out, sizeof out).detail == kRejectMalformed);
-  for (uint8_t t : {0x00, 0x80, 0x7F, 0xFF}) {                           // never a request tag
+  for (uint8_t t : {0x00, 0x7F}) {                                      // never a tag: unknown, ignored
     const uint8_t never[] = {t, 1, 0, 1};
-    CHECK(tail.parse(never, sizeof never, kKnown, out, sizeof out).detail == kRejectMalformed);
+    CHECK(tail.parse(never, sizeof never, kKnown, out, sizeof out).resolution == kResolutionCompleted);
   }
+  for (uint8_t t : {0x80, 0xFF}) {                                      // the same, critical: unsupported
+    const uint8_t never[] = {t, 1, 0, 1};
+    const Result u = tail.parse(never, sizeof never, kKnown, out, sizeof out);
+    CHECK(u.detail == kRejectUnsupported && out[0] == t);
+  }
+  const uint8_t twice[] = {0x01, 1, 0, 5, 0x81, 1, 0, 6};                // a repeated tag: the first is used
+  CHECK(tail.parse(twice, sizeof twice, kKnown, out, sizeof out).resolution == kResolutionCompleted);
+  v = tail.find(0x01, len);
+  CHECK(v && len == 1 && v[0] == 5);
   const uint8_t unknown[] = {0x85, 1, 0, 1};                              // an unknown critical tag
   const Result r = tail.parse(unknown, sizeof unknown, kKnown, out, sizeof out);
   CHECK(r.detail == kRejectUnsupported && r.length == 1 && out[0] == 0x85);
-  // fixed(): 0x01 of 1 byte - shorter malformed, longer critical unsupported (the tag as received), longer ignored
+  // fixed(): 0x01 of 1 byte - another length is malformed, critical or not (core §2.3)
   const uint8_t shorter[] = {0x01, 0, 0};
   CHECK(tail.parse(shorter, sizeof shorter, kKnown, out, sizeof out).resolution == kResolutionCompleted);
   CHECK(tail.fixed(0x01, 1, v, out, sizeof out).detail == kRejectMalformed && !v);
   const uint8_t longer[] = {0x81, 2, 0, 7, 8};
   CHECK(tail.parse(longer, sizeof longer, kKnown, out, sizeof out).resolution == kResolutionCompleted);
   const Result l = tail.fixed(0x01, 1, v, out, sizeof out);
-  CHECK(l.detail == kRejectUnsupported && l.length == 1 && out[0] == 0x81 && !v);
-  const uint8_t ignored[] = {0x01, 2, 0, 7, 8};
-  CHECK(tail.parse(ignored, sizeof ignored, kKnown, out, sizeof out).resolution == kResolutionCompleted);
-  CHECK(tail.fixed(0x01, 1, v, out, sizeof out).resolution == kResolutionCompleted && !v && tail.room() == 4);
+  CHECK(l.detail == kRejectMalformed && !v);
+  const uint8_t plain[] = {0x01, 2, 0, 7, 8};
+  CHECK(tail.parse(plain, sizeof plain, kKnown, out, sizeof out).resolution == kResolutionCompleted);
+  CHECK(tail.fixed(0x01, 1, v, out, sizeof out).detail == kRejectMalformed && !v);
+  const Result u = Tail::refuse(0x01, false, out, sizeof out);   // a value not handled: unsupported, critical or not
+  CHECK(u.detail == kRejectUnsupported && u.length == 1 && out[0] == 0x01);
   const uint8_t exact[] = {0x01, 1, 0, 7};
   CHECK(tail.parse(exact, sizeof exact, kKnown, out, sizeof out).resolution == kResolutionCompleted);
   CHECK(tail.fixed(0x01, 1, v, out, sizeof out).resolution == kResolutionCompleted && v && v[0] == 7);
@@ -423,40 +360,36 @@ struct Bulk {
   }
 };
 
-// core §2.3: ignored (0x7F) goes on every completed answer, a failed status too - the endpoint appends what the
-// request's tail ignored when the handler returned without finish; one entry per TLV ignored. core §7.3: no TLV in a
-// describe request (malformed), so ignored never appears in its answer.
+// core §2.3: no ignored list - a completed answer carries only its payload, whatever the request's unknown TLVs; a
+// describe request's TLVs follow the same rule (unknown non-critical: ignored).
 class FailsEarly final : public Interface {
  public:
   const char *name() const override { return "io.github.test.fails"; }
   uint16_t instance() const override { return 0; }
   bool lockFree(uint8_t) const override { return true; }
-  bool offers(uint8_t op) const override { return op == 1 || op == 2; }
-  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override {
+  bool offers(uint8_t op) const override { return op == 1; }
+  Result handle(uint8_t, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override {
     Tail tail;
     const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
     if (refused(parsed)) return parsed;
     out[0] = 0x05;   // a status
-    if (op == 1) return failed(1);                            // returns before finish
-    return tail.finish(failed(1), out, capacity);             // finish itself: not listed twice
+    return failed(1);
   }
 };
 
-static void testIgnoredOnEveryCompletedAnswer() {
+static void testNoIgnoredList() {
   Bulk b;
   FailsEarly fails;
   b.ep.add(fails);   // fn 1
-  for (uint8_t op = 1; op <= 2; ++op) {
-    Bytes r = b.send(request(1, 1, op, {0x30, 1, 0, 9, 0x31, 0, 0, 0x30, 0, 0}));
-    CHECK(r.size() == 2 + 1 + 6 && r[0] == kResolutionCompleted && r[1] == kOutcomeFailed && r[2] == 0x05 &&
-          r[3] == kTagIgnored && getU16(&r[4]) == 3 && r[6] == 0x30 && r[7] == 0x31 && r[8] == 0x30);
-  }
-  Bytes r = b.send(request(2, 1, 1, {}));                     // the next request starts without the last one's list
-  CHECK(r.size() == 3 && r[1] == kOutcomeFailed);
+  Bytes r = b.send(request(1, 1, 1, {0x30, 1, 0, 9, 0x31, 0, 0, 0x30, 0, 0}));
+  CHECK(r.size() == 3 && r[0] == kResolutionCompleted && r[1] == kOutcomeFailed && r[2] == 0x05);
   r = b.send(request(3, 0, reg::core::kOpDescribe, {1, 0, 0, 0}));   // describe fn 1: fine
   CHECK(!r.empty() && r[0] == kResolutionCompleted);
-  r = b.send(request(4, 0, reg::core::kOpDescribe, {1, 0, 0, 0, 0x30, 0, 0}));   // with a TLV: malformed, not ignored
-  CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectMalformed);
+  const Bytes plain = r;
+  r = b.send(request(4, 0, reg::core::kOpDescribe, {1, 0, 0, 0, 0x30, 0, 0}));   // with an unknown TLV: ignored
+  CHECK(r == plain);
+  r = b.send(request(5, 0, reg::core::kOpDescribe, {1, 0, 0, 0, 0xb0, 0, 0}));   // critical: unsupported
+  CHECK(r.size() == 3 && r[0] == kResolutionRejected && r[1] == kRejectUnsupported && r[2] == 0xb0);
 }
 
 // core §6.2 / §6.4 / §9: no resume - end releases the session (its id is then no_session, a resent end is answered
@@ -570,7 +503,7 @@ static void testSubscriptions() {
   CHECK(Bytes(d.begin() + 3, d.end()) == plan);
 }
 
-// core §9: one space of numbers, 1 upwards, recently closed ones not reused, a live number of another kind refused
+// core §9: one space of numbers, each the previous plus 1, a live number of another kind refused
 // unavailable cause 6, an unknown one no_connection.
 static void testResourceNumbers() {
   const uint16_t a = ResourceNumbers::take(ResourceNumbers::kConnection);
@@ -585,7 +518,7 @@ static void testResourceNumbers() {
   CHECK(r.detail == kRejectNoConnection);
   bool reused = false;
   for (int i = 0; i < 10; ++i) reused |= ResourceNumbers::take(ResourceNumbers::kConnection) == a;
-  CHECK(!reused);   // a number just closed is not given out again
+  CHECK(!reused);   // the count goes on past it (+1 each time)
   CHECK(ResourceNumbers::reopen(a, ResourceNumbers::kConnection) && ResourceNumbers::kindOf(a) == ResourceNumbers::kConnection);
   ResourceNumbers::close(a);
   ResourceNumbers::close(s);
@@ -807,9 +740,9 @@ static void testDisabledChannel() {
   send(request(1, 0, 0x10, openPayload(7, 3000)));
   ep.setDisabled(uint64_t{1} << 12);
   const Bytes r = send(request(2, ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 1, 12, 0}, true, 7));
-  const Bytes cause5 = {0x01, 1, 0, 5, 0x02, 2, 0, 12, 0, 0x04, 1, 0, 6};   // cause 5, channel 12, holder_kind 6 disabled
-  CHECK(r.size() >= 7 && r[5] == 0 && r[6] == kRejectUnavailable);
-  CHECK(std::search(r.begin(), r.end(), cause5.begin(), cause5.end()) != r.end());
+  const Bytes cause5 = {0x01, 1, 0, 5, 0x02, 2, 0, 12, 0};   // cause 5, channel 12 (no holder_kind, core §4.3)
+  CHECK(r.size() == 2 + 5 + cause5.size() && r[5] == 0 && r[6] == kRejectUnavailable);
+  CHECK(Bytes(r.begin() + 7, r.end()) == cause5);
   CHECK(send(request(3, ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 1, 13, 0}, true, 7))[5] == 1);   // another channel: as before
   ep.setDisabled(0);
   CHECK(send(request(4, ep.planFn(), kOpPlanApply, {0x90, 5, 0, 1, 0, 1, 12, 0}, true, 7))[5] == 1);   // enabled again
@@ -872,14 +805,12 @@ class SlowSink final : public Interface {
   bool offers(uint8_t op) const override { return op == 1; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { g_millis += takes_ms; return completed(); }
 };
-static Bytes speedReq(uint8_t port, uint32_t baud, uint8_t step, uint16_t verify_ms, uint32_t idle_ms) {
-  Bytes p = {port};
-  const Bytes b = u32(baud), i = u32(idle_ms);
-  p.insert(p.end(), b.begin(), b.end());
+// port_speed's request (oep-if-link §3): baud(u32) step(u8) verify_ms(u16) - the port is the one it comes on
+static Bytes speedReq(uint32_t baud, uint8_t step, uint16_t verify_ms) {
+  Bytes p = u32(baud);
   p.push_back(step);
   p.push_back(uint8_t(verify_ms));
   p.push_back(uint8_t(verify_ms >> 8));
-  p.insert(p.end(), i.begin(), i.end());
   return p;
 }
 // oep.probe.link (fn 1) declares port_speed (op 0x03) in its ops tag (core §1.2, §7.4)
@@ -895,71 +826,88 @@ static void testPortSpeed() {
     Uart u(false);
     CHECK(!describesPortSpeed(u));
     u.send(request(1, 0, 0x10, openPayload(5, 5000)));
-    const Bytes r = u.send(request(2, 1, 0x03, speedReq(0, 1500000, 0, 2000, 0), true, 5));
+    const Bytes r = u.send(request(2, 1, 0x03, speedReq(1500000, 0, 2000), true, 5));
     CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectUnknownOperation);
   }
   Uart u;
   SlowSink slow;
   CHECK(u.ep.add(slow));   // fn 2, before the first poll (core §7.2: the list is fixed for a boot)
   CHECK(describesPortSpeed(u));
-  Bytes r = u.send(request(1, 1, 0x03, speedReq(0, 1500000, 0, 2000, 0)));   // the lock is needed
+  Bytes r = u.send(request(1, 1, 0x03, speedReq(1500000, 0, 2000)));   // the lock is needed
   CHECK(r.size() >= 2 && r[0] == 0 && r[1] == kRejectSessionRequired);
   u.send(request(2, 0, 0x10, openPayload(5, 60000)));
-  r = u.send(request(3, 1, 0x03, speedReq(1, 1500000, 0, 2000, 0), true, 5));   // not the port it came in on
-  CHECK(r.size() >= 6 && r[0] == 0 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
-  r = u.sendBulk(request(4, 1, 0x03, speedReq(1, 1500000, 0, 2000, 0), true, 5));   // the bulk is no UART bridge
+  r = u.sendBulk(request(4, 1, 0x03, speedReq(1500000, 0, 2000), true, 5));   // the bulk is no UART bridge: cause 6
   CHECK(r.size() >= 6 && r[0] == 0 && r[1] == kRejectUnavailable && r[5] == 6);
-  r = u.send(request(5, 1, 0x03, speedReq(0, 9000000, 0, 2000, 0), true, 5));   // a baud the UART cannot make
+  r = u.send(request(5, 1, 0x03, speedReq(9000000, 0, 2000), true, 5));   // a baud the UART cannot make
   CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
-  r = u.send(request(6, 1, 0x03, speedReq(0, 1500000, 1, 2000, 0), true, 5));   // commit at the boot speed: cause 6
+  r = u.send(request(6, 1, 0x03, speedReq(1500000, 1, 2000), true, 5));   // commit at the boot speed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
-  r = u.send(request(7, 1, 0x03, speedReq(0, 0, 2, 0, 0), true, 5));   // revert at the boot speed: cause 6
+  r = u.send(request(7, 1, 0x03, speedReq(0, 2, 0), true, 5));   // revert at the boot speed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
   // step 3 and up: a value a later revision may define - unsupported, tag 0x00 (core §2.5, oep-if-link §3)
-  r = u.send(request(8, 1, 0x03, speedReq(0, 1500000, 3, 2000, 0), true, 5));
+  r = u.send(request(8, 1, 0x03, speedReq(1500000, 3, 2000), true, 5));
   CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
-  r = u.send(request(9, 1, 0x03, speedReq(0, 1500000, 0, 0, 0), true, 5));   // try with verify_ms 0: malformed
+  r = u.send(request(9, 1, 0x03, speedReq(1500000, 0, 0), true, 5));   // try with verify_ms 0: malformed
   CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);
+  r = u.send(request(10, 1, 0x03, Bytes{0x60, 0xe3, 0x16, 0, 0, 0xd0, 0x07, 0, 0, 0, 0}, true, 5));   // the old form
+  CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);   // its tail is no TLV
   CHECK(g_switches == 0);
+  {   // port_speed_tolerance_pct: a UART whose nearest rate is more than 2 % off is unsupported
+    Uart v;
+    v.ep.setPortSpeed([](uint8_t, uint32_t baud, bool) { return baud + baud / 40; }, 115200);   // 2.5 % fast
+    v.send(request(1, 0, 0x10, openPayload(5, 5000)));
+    r = v.send(request(2, 1, 0x03, speedReq(1000000, 0, 2000), true, 5));
+    CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
+    v.ep.setPortSpeed([](uint8_t, uint32_t baud, bool) { return baud + baud / 50; }, 115200);   // 2 %: taken
+    r = v.send(request(3, 1, 0x03, speedReq(1000000, 0, 2000), true, 5));
+    CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1020000);
+  }
+  u.stream.tx.clear();
+  g_speed_stream = &u.stream;
+  g_baud = 115200;
+  g_switches = 0;
 
   // try -> commit: answered at the old speed (the hook not yet called when the answer was written), then switched
-  r = u.send(request(10, 1, 0x03, speedReq(0, 1500000, 0, 2000, 0), true, 5));
+  r = u.send(request(11, 1, 0x03, speedReq(1500000, 0, 2000), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000);
   CHECK(g_tx_at_switch == u.stream.tx.size());   // the whole answer was out before the switch
   CHECK(g_baud == 1500000 && !u.ep.portSpeedCommitted() && u.ep.portSpeedNow() == 1500000);
-  r = u.send(request(11, 1, 0x03, speedReq(0, 1000000, 1, 0, 0), true, 5));   // commit of another baud: cause 6
+  r = u.send(request(12, 1, 0x03, speedReq(1000000, 1, 0), true, 5));   // commit of another baud: cause 6
   CHECK(r.size() >= 6 && r[1] == kRejectUnavailable && r[5] == 6);
-  r = u.send(request(12, 1, 0x03, speedReq(0, 2000000, 0, 2000, 0), true, 5));   // try while trying: cause 6, no switch
+  r = u.send(request(13, 1, 0x03, speedReq(2000000, 0, 2000), true, 5));   // try while trying: cause 6, no switch
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
+  r = u.sendBulk(request(14, 1, 0x03, speedReq(2000000, 0, 2000), true, 5));   // another port meanwhile: cause 6
+  CHECK(r.size() >= 6 && r[1] == kRejectUnavailable && r[5] == 6);
   CHECK(g_baud == 1500000 && g_switches == 1 && !u.ep.portSpeedCommitted());
+  // broken candidates change nothing (no revert on them, oep-if-link §3)
+  u.noise();
+  u.noise();
+  u.noise();
+  CHECK(g_baud == 1500000);
   g_millis += 500;
-  r = u.send(request(13, 1, 0x03, speedReq(0, 1500000, 1, 0, 0), true, 5));
+  r = u.send(request(15, 1, 0x03, speedReq(1500000, 1, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000 && u.ep.portSpeedCommitted());
-  r = u.send(request(14, 1, 0x03, speedReq(0, 1500000, 1, 0, 0), true, 5));   // commit while committed: cause 6
+  r = u.send(request(16, 1, 0x03, speedReq(1500000, 1, 0), true, 5));   // commit while committed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
-  r = u.send(request(15, 1, 0x03, speedReq(0, 2000000, 0, 2000, 0), true, 5));   // try while committed: cause 6
+  r = u.send(request(17, 1, 0x03, speedReq(2000000, 0, 2000), true, 5));   // try while committed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
   CHECK(g_baud == 1500000 && g_switches == 1 && u.ep.portSpeedCommitted());
-  g_millis += 2999;   // idle_ms 0: the maximum (port_speed_idle_max_ms), not never
+  for (int i = 0; i < 5; ++i) u.noise();
+  CHECK(g_baud == 1500000);
+  // committed: port_speed_idle_ms with no good frame reverts; a good frame restarts the count
+  g_millis += reg::kPortSpeedIdleMs - 1;
   u.ep.poll();
   CHECK(g_baud == 1500000);
-  u.send(request(16, 0, 0x12, {}, true, 5));   // a good frame restarts the count
+  u.send(request(18, 0, 0x13, {}));   // any good frame (lock_state, no session)
+  g_millis += reg::kPortSpeedIdleMs - 1;
+  u.ep.poll();
   CHECK(g_baud == 1500000);
-  // condition 4: three broken candidates in a row revert, with no time window; a good frame between them ends the run
-  u.noise();
-  u.noise();
-  CHECK(g_baud == 1500000);
-  u.send(request(17, 0, 0x12, {}, true, 5));   // a good frame: the two do not count any more
-  u.noise();
-  g_millis += 1200;
-  u.noise();
-  CHECK(g_baud == 1500000);   // four broken in all, never three in a row
-  g_millis += 1200;
-  u.noise();   // the third in a row, 2.4 s after the first (no 1 s window)
+  g_millis += 1;
+  u.ep.poll();
   CHECK(g_baud == 115200 && u.ep.portSpeedNow() == 0);
 
   // try timeout: no commit within verify_ms
-  r = u.send(request(18, 1, 0x03, speedReq(0, 750000, 0, 1000, 0), true, 5));
+  r = u.send(request(19, 1, 0x03, speedReq(750000, 0, 1000), true, 5));
   CHECK(r[0] == 1 && g_baud == 750000);
   g_millis += 999;
   u.ep.poll();
@@ -967,96 +915,53 @@ static void testPortSpeed() {
   g_millis += 1;
   u.ep.poll();
   CHECK(g_baud == 115200);
-  r = u.send(request(19, 1, 0x03, speedReq(0, 750000, 1, 0, 0), true, 5));   // too late to commit
+  r = u.send(request(20, 1, 0x03, speedReq(750000, 1, 0), true, 5));   // too late to commit
   CHECK(r.size() >= 6 && r[5] == 6);
 
-  // a broken candidate while trying: the switch-over's own (before any good frame) is ignored; one after a good frame
-  // at the new speed takes it back at once
-  r = u.send(request(20, 1, 0x03, speedReq(0, 230400, 0, 5000, 0), true, 5));
-  CHECK(r[0] == 1 && g_baud == 230400);
-  u.noise();
-  CHECK(g_baud == 230400);
-  u.send(request(16, 0, 0x01, std::vector<uint8_t>{'O', 'E', 'P', '?', 1, 1}, false, 1));   // a good frame at 230400
-  u.noise();
-  CHECK(g_baud == 115200);
-
-  // committed, idle_ms: no good frame for that long reverts; a good frame restarts the count
-  u.send(request(21, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(22, 1, 0x03, speedReq(0, 500000, 1, 0, 1500), true, 5));
-  CHECK(u.ep.portSpeedCommitted());
-  g_millis += 1000;
-  u.send(request(16, 0, 0x13, {}));   // any good frame (lock_state, no session)
-  g_millis += 1000;
-  u.ep.poll();
-  CHECK(g_baud == 500000);
-  g_millis += 600;
-  u.ep.poll();
-  CHECK(g_baud == 115200);
-
   // step 2: answered (the boot speed) at the speed now, then back
-  u.send(request(23, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(24, 1, 0x03, speedReq(0, 500000, 1, 0, 0), true, 5));
+  u.send(request(23, 1, 0x03, speedReq(500000, 0, 2000), true, 5));
+  u.send(request(24, 1, 0x03, speedReq(500000, 1, 0), true, 5));
   const int before = g_switches;
   u.stream.tx.clear();
-  r = u.send(request(25, 1, 0x03, speedReq(0, 0, 2, 0, 0), true, 5));
+  r = u.send(request(25, 1, 0x03, speedReq(0, 2, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 115200 && g_baud == 115200 && g_switches == before + 1);
   CHECK(g_tx_at_switch == u.stream.tx.size());
 
   // the session's end: its answer at the fast speed, then back; a lapse too
-  u.send(request(26, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(27, 1, 0x03, speedReq(0, 500000, 1, 0, 0), true, 5));
+  u.send(request(26, 1, 0x03, speedReq(500000, 0, 2000), true, 5));
+  u.send(request(27, 1, 0x03, speedReq(500000, 1, 0), true, 5));
   r = u.send(request(28, 0, 0x11, {}, true, 5));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200 && g_tx_at_switch == u.stream.tx.size());
   u.send(request(29, 0, 0x10, openPayload(5, 1000)));
-  u.send(request(30, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 5));
-  u.send(request(31, 1, 0x03, speedReq(0, 500000, 1, 0, 0), true, 5));
+  u.send(request(30, 1, 0x03, speedReq(500000, 0, 2000), true, 5));
+  u.send(request(31, 1, 0x03, speedReq(500000, 1, 0), true, 5));
   CHECK(g_baud == 500000);
   g_millis += 1100;   // the lease lapses
   u.ep.poll();
   CHECK(!u.ep.locked() && g_baud == 115200);
   // taken by force from the other transport
   u.send(request(32, 0, 0x10, openPayload(6, 5000)));
-  u.send(request(33, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 6));
+  u.send(request(33, 1, 0x03, speedReq(500000, 0, 2000), true, 6));
   CHECK(g_baud == 500000);
   Bytes force = openPayload(7, 5000);
   force[8] = 1;
   r = u.sendBulk(request(34, 0, 0x10, force));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200);
-  // taken back by force on the UART for the idle limit's cases
+  // taken back by force on the UART
   force = openPayload(8, 60000);
   force[8] = 1;
   r = u.send(request(40, 0, 0x10, force));
   CHECK(r.size() >= 1 && r[0] == 1);
-  // committed, idle_ms 0: reverts after port_speed_idle_max_ms with no good frame
-  u.send(request(41, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 8));
-  u.send(request(42, 1, 0x03, speedReq(0, 500000, 1, 0, 0), true, 8));
+  // condition 2: port_speed_idle_ms is not counted while a request runs (like the lease, it runs from the answer). A
+  // request that takes longer than that leaves the port at the raised speed, and the count starts over after it.
+  u.send(request(45, 1, 0x03, speedReq(500000, 0, 2000), true, 8));
+  u.send(request(46, 1, 0x03, speedReq(500000, 1, 0), true, 8));
   CHECK(u.ep.portSpeedCommitted());
-  g_millis += reg::kPortSpeedIdleMaxMs - 1;
-  u.ep.poll();
-  CHECK(g_baud == 500000);
-  g_millis += 1;
-  u.ep.poll();
-  CHECK(g_baud == 115200);
-  // committed, an idle_ms longer than the maximum is clamped to it (a host that died is not waited for)
-  u.send(request(43, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 8));
-  u.send(request(44, 1, 0x03, speedReq(0, 500000, 1, 0, 600000), true, 8));
-  CHECK(u.ep.portSpeedCommitted());
-  g_millis += reg::kPortSpeedIdleMaxMs - 1;
-  u.ep.poll();
-  CHECK(g_baud == 500000);
-  g_millis += 1;
-  u.ep.poll();
-  CHECK(g_baud == 115200);
-  // condition 3: idle_ms is not counted while a request runs (like the lease, it runs from the answer). A request
-  // that takes longer than idle_ms itself leaves the port at the raised speed, and the count starts over after it.
-  u.send(request(45, 1, 0x03, speedReq(0, 500000, 0, 2000, 0), true, 8));
-  u.send(request(46, 1, 0x03, speedReq(0, 500000, 1, 0, 1000), true, 8));
-  CHECK(u.ep.portSpeedCommitted());
-  g_millis += 900;
-  slow.takes_ms = 2500;   // longer than idle_ms
+  g_millis += 2900;
+  slow.takes_ms = 3500;   // longer than port_speed_idle_ms
   r = u.send(request(47, 2, 0x01, {}, true, 8));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 500000 && u.ep.portSpeedCommitted());
-  g_millis += 999;   // the count runs from the answer
+  g_millis += reg::kPortSpeedIdleMs - 1;   // the count runs from the answer
   u.ep.poll();
   CHECK(g_baud == 500000);
   g_millis += 1;
@@ -1183,7 +1088,7 @@ static void testPlanApplyOrder() {
   none.ep.add(other);
   CHECK(none.ep.planFn() == 0);
   CHECK(reject(none.send(request(1, 2, 0x01, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectUnknownFunction);
-  r = none.send(request(2, 0, reg::core::kOpList, {0, 0, 0, 0}));
+  r = none.send(request(2, 0, reg::core::kOpList, {0, 0}));
   CHECK(r.size() >= 5 && r[0] == kResolutionCompleted && getU16(&r[2]) == 1);   // fn 1 only
 }
 
@@ -1238,7 +1143,7 @@ int main() {
   testDisabledChannel();
   testTlvForm();
   testSessionTable();
-  testIgnoredOnEveryCompletedAnswer();
+  testNoIgnoredList();
   testSubscriptions();
   testResourceNumbers();
   testGroupSecondRun();
@@ -1249,7 +1154,6 @@ int main() {
   testLastMarkMissing();
   testReader();
   testEndpointSerialPort();
-  testMixed();
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

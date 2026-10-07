@@ -58,9 +58,7 @@ works (the GPIO matrix).
 | classic ESP32 | the bridge's | the bridge's | the bridge's |
 
 `1209:4F45` is the project's own VID:PID: hosts identify a probe by it and tell probes apart by the serial number (the unit
-id). iProduct is only a name for people. Who may ship firmware with the VID:PID: [PID-USE.md](../../PID-USE.md). describe's
-`discoverable` is 1 when the probe enumerates with it (`endpoint.setDiscoverable(true)`): always on an RP2, on the ESP32-P4
-once its HS port has enumerated (a board with only USB-Serial/JTAG wired says 0), never on the classic ESP32. A port with a
+id). iProduct is only a name for people. Who may ship firmware with the VID:PID: [PID-USE.md](../../PID-USE.md). A port with a
 fixed ID (a USB-UART bridge, USB-Serial/JTAG) is chosen by the user. On Linux, the udev rule shipped in oep-client-python,
 [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules), lets an ordinary user open `1209:4F45`'s
 vendor bulk, DFU and HID interfaces; installing it needs administrator rights.
@@ -89,11 +87,12 @@ minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
    builds.
 3. **Pick the transport** by what `Serial` is: USB-Serial/JTAG (`USBMode=hwcdc`: `kUsbSerialJtag`), TinyUSB CDC
    (`USBMode=default`: `kUsbCdc`; `USB.VID(oep::reg::kUsbProjectVid)`, `USB.PID(oep::reg::kUsbProjectPid)`, the unit id
-   as `USB.serialNumber(...)` and `endpoint.setDiscoverable(true)` when the firmware may carry the project's VID:PID,
-   [PID-USE.md](../../PID-USE.md)), or a USB-UART bridge (`kUartBridge`, a classic ESP32 or an ESP32-C3 on its UART0).
-   USB-Serial/JTAG and a bridge keep their fixed ID: leave discoverable 0.
+   as `USB.serialNumber(...)` when the firmware may carry the project's VID:PID, [PID-USE.md](../../PID-USE.md)), or a
+   USB-UART bridge (`kUartBridge`, a classic ESP32 or an ESP32-C3 on its UART0). USB-Serial/JTAG and a bridge keep their
+   fixed ID: a host reaches them by the port the user chooses.
 4. **Choose the pins.** Leave out the flash / PSRAM pins, the USB pins, the boot straps and anything the board wires to a
-   part; reserve them in `describeCore`, offer the rest (the pin table's mask, `pin_choice` for host-chosen pins).
+   part (keep them out of the pin table and out of the start-up parking), offer the rest (the pin table's mask,
+   `pin_choice` for host-chosen pins).
 5. **Build and flash**: `arduino-cli compile --profile esp32s3 <dir>`, then `arduino-cli upload -p <port> --profile esp32s3
    <dir>`.
 6. **Check** with `oep dump --port <port>`, then attach a target from Python ([Getting started](getting-started.md)).

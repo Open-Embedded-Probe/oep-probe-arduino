@@ -2,9 +2,10 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host tests: oep.fixture.i2c-target (oep-spec oep-if-fixture §3) with a fake controller (OEP_HOST_FAKE_I2C_SLAVE:
-// hostTransaction runs a transaction through the same judging code the interrupt handler calls at STOP) - the plan's
-// roles, configure / reset / plan release, mode 1's wait and write lengths, mode 2's one-transaction frame, mode 3's
-// slots, an address-only write, queue overflow, stretch's limit, read_rx in state 0.
+// hostTransaction runs a transaction through the same code the interrupt handler calls at STOP) - the plan's roles,
+// configure / plan release, a write with data one frame (past max_length cut, an error), the preload slots answering
+// reads in order (0xFF without one), an address-only write, queue overflow, stretch's limit, read_rx / preload_tx in
+// state 0, ops 0x02 / 0x06 (gone) unknown.
 #include <stdio.h>
 
 #include <vector>
@@ -25,7 +26,7 @@ static int failures = 0, checks = 0;
   } while (0)
 
 struct Status {
-  uint8_t state, mode, armed, queued;
+  uint8_t state, queued;
   uint32_t rx_frames;
   uint8_t tx_slots;
   uint32_t errors;
@@ -48,18 +49,13 @@ static Status status(P4I2cTarget &t) {
   Bytes out;
   const Result r = call(t, P4I2cTarget::kOpStatus, {}, out);
   Status s = {};
-  if (!ok(r) || out.size() < 13) { CHECK(false); return s; }
-  s = {out[0], out[1], out[2], out[3], getU32(out.data() + 4), out[8], getU32(out.data() + 9)};
+  if (!ok(r) || out.size() != 11) { CHECK(false); return s; }
+  s = {out[0], out[1], getU32(out.data() + 2), out[6], getU32(out.data() + 7)};
   return s;
 }
-static Result configure(P4I2cTarget &t, uint8_t address, uint8_t mode) {
+static Result configure(P4I2cTarget &t, uint8_t address) {
   Bytes out;
-  return call(t, P4I2cTarget::kOpConfigure, {address, mode}, out);
-}
-static Result armRx(P4I2cTarget &t, uint16_t length) {
-  Bytes p(2), out;
-  putU16(p.data(), length);
-  return call(t, P4I2cTarget::kOpArmRx, p, out);
+  return call(t, P4I2cTarget::kOpConfigure, {address}, out);
 }
 static Result preload(P4I2cTarget &t, const Bytes &data, Bytes &out) {
   Bytes p(2);
@@ -123,7 +119,7 @@ int main() {
     pins.release(99);
   }
   // no plan: configure is unavailable cause 6; stretch is taken in any state
-  CHECK(unavailableCause(call(t, P4I2cTarget::kOpConfigure, {0x42, 1}, out), out, 6));
+  CHECK(unavailableCause(call(t, P4I2cTarget::kOpConfigure, {0x42}, out), out, 6));
   CHECK(ok(stretch(t, 50)));
   CHECK(t.hostStretchUs() == 50);
   const RoleAssignment roles[] = {{0, P4I2cTarget::kRoleSda, 4}, {0, P4I2cTarget::kRoleScl, 5}};
@@ -140,19 +136,19 @@ int main() {
         found = getU32(d + i + 3) == P4I2cTarget::kMaxStretchUs;
     CHECK(found && P4I2cTarget::kMaxStretchUs >= 30000);
     CHECK(t.offers(P4I2cTarget::kOpStretch) && t.offers(P4I2cTarget::kOpPreloadTx));
-    // features: bit0 mode 3, bit1 reserved (0), and the internal pull-ups start() enables: bit2 and pullup_ohms (0x42,
-    // u32) (fixture §3)
-    bool bit2 = false, ohms = false;
+    // ops 0x02 (arm_rx) and 0x06 (reset) are gone: not offered, unknown_operation
+    CHECK(!t.offers(0x02) && !t.offers(0x06));
+    CHECK(rejectedAs(call(t, 0x02, {0, 1}, out), kRejectUnknownOperation));
+    CHECK(rejectedAs(call(t, 0x06, {}, out), kRejectUnknownOperation));
+    // features: only bit2, the internal pull-ups start() enables (fixture §3); no other tag past queue_depth (0x40) and
+    // max_stretch_us (0x41)
     uint32_t features = 0xffffffff;
+    bool other = false;
     for (size_t i = 0; i + kTlvHeader <= n; i += kTlvHeader + getU16(d + i + 1)) {
-      if (d[i] == reg::kDescribeFeatures && getU16(d + i + 1) == 4) {
-        features = getU32(d + i + 3);
-        bit2 = (features & reg::fixture_i2c_target::kFeaturesInternalPullups) != 0;
-      }
-      if (d[i] == reg::fixture_i2c_target::kTlvDescribePullupOhms && getU16(d + i + 1) == 4) ohms = getU32(d + i + 3) == 45000;
+      if (d[i] == reg::kDescribeFeatures && getU16(d + i + 1) == 4) features = getU32(d + i + 3);
+      if (d[i] > reg::fixture_i2c_target::kTlvDescribeMaxStretchUs) other = true;
     }
-    CHECK(bit2 && ohms);
-    CHECK(features == (reg::fixture_i2c_target::kFeaturesPreloadedTx | reg::fixture_i2c_target::kFeaturesInternalPullups));
+    CHECK(features == reg::fixture_i2c_target::kFeaturesInternalPullups && !other);
     CHECK(P4I2cTarget::kQueueDepth >= 2);
   }
 
@@ -194,113 +190,70 @@ int main() {
     CHECK(t3.planCheck(on3435, 2) == kRejectUnsupported);
   }
 
-  // state 0: read_rx and reset are unavailable cause 6
+  // state 0: read_rx and preload_tx are unavailable cause 6
   CHECK(unavailableCause(call(t, P4I2cTarget::kOpReadRx, {}, out), out, 6));
-  CHECK(unavailableCause(call(t, P4I2cTarget::kOpReset, {}, out), out, 6));
-  CHECK(rejectedAs(configure(t, 0x80, 1), kRejectMalformed));
-  // an undefined mode (0, 4+): unsupported, payload 0x00 (fixture §3, C-02)
-  CHECK(rejectedAs(configure(t, 0x42, 0), kRejectUnsupported));
-  CHECK(rejectedAs(configure(t, 0x42, 4), kRejectUnsupported));
-  // the reserved addresses 0x00 - 0x07 and 0x78 - 0x7F: unsupported, payload 0x00 (fixture §3, △5); 0x08 / 0x77 taken
+  CHECK(unavailableCause(preload(t, {1}, out), out, 6));
+  CHECK(rejectedAs(configure(t, 0x80), kRejectMalformed));
+  CHECK(rejectedAs(call(t, P4I2cTarget::kOpConfigure, {}, out), kRejectMalformed));   // no address
+  // the reserved addresses 0x00 - 0x07 and 0x78 - 0x7F: unsupported, payload 0x00 (fixture §3); 0x08 / 0x77 taken
   for (const uint8_t a : {0x00, 0x01, 0x07, 0x78, 0x7C, 0x7F}) {
-    CHECK(rejectedAs(call(t, P4I2cTarget::kOpConfigure, {a, P4I2cTarget::kModeFixedRx}, out), kRejectUnsupported) &&
-          out.size() == 1 && out[0] == 0);
+    CHECK(rejectedAs(call(t, P4I2cTarget::kOpConfigure, {a}, out), kRejectUnsupported) && out.size() == 1 && out[0] == 0);
   }
-  CHECK(ok(configure(t, 0x08, P4I2cTarget::kModeFixedRx)));
-  CHECK(ok(configure(t, 0x77, P4I2cTarget::kModeFixedRx)));
+  CHECK(ok(configure(t, 0x08)));
+  CHECK(ok(configure(t, 0x77)));
 
-  // ---- mode 1
-  CHECK(ok(configure(t, 0x42, P4I2cTarget::kModeFixedRx)));
+  // ---- writes: one with data is one frame
+  CHECK(ok(configure(t, 0x42)));
   Status s = status(t);
-  CHECK(s.state == 1 && s.mode == 1 && !s.armed && s.queued == 0 && s.rx_frames == 0 && s.tx_slots == 0 && s.errors == 0);
-  write(t, {1, 2, 3});   // not armed: dropped, an error
-  s = status(t);
-  CHECK(s.queued == 0 && s.rx_frames == 0 && s.errors == 1);
+  CHECK(s.state == 1 && s.queued == 0 && s.rx_frames == 0 && s.tx_slots == 0 && s.errors == 0);
+  write(t, {1, 2, 3});
   write(t, {});   // the address alone: nothing
-  CHECK(status(t).errors == 1);
-  CHECK(rejectedAs(armRx(t, 0), kRejectMalformed));
-  CHECK(rejectedAs(armRx(t, 129), kRejectUnsupported));
-  CHECK(ok(armRx(t, 3)));
-  CHECK(status(t).armed == 1);
-  write(t, {0x11, 0x22, 0x33});
+  write(t, {0x44});
   s = status(t);
-  CHECK(s.armed && s.queued == 1 && s.rx_frames == 1 && s.errors == 1);   // the wait goes on after a frame
-  write(t, {0x44, 0x55});   // another length: dropped, an error, still armed
-  write(t, {0x44, 0x55, 0x66, 0x77});
-  s = status(t);
-  CHECK(s.armed && s.queued == 1 && s.rx_frames == 1 && s.errors == 3);
-  write(t, {});   // address only, armed: nothing
-  CHECK(status(t).errors == 3);
-  write(t, {0xa1, 0xa2, 0xa3});
+  CHECK(s.queued == 2 && s.rx_frames == 2 && s.errors == 0);
   uint8_t pending = 0xEE;
-  CHECK(readRx(t, &pending) == Bytes({0x11, 0x22, 0x33}) && pending == 1);
-  CHECK(readRx(t, &pending) == Bytes({0xa1, 0xa2, 0xa3}) && pending == 0);
+  CHECK(readRx(t, &pending) == Bytes({1, 2, 3}) && pending == 1);
+  CHECK(readRx(t, &pending) == Bytes({0x44}) && pending == 0);
   CHECK(readRx(t, &pending).empty() && pending == 0);
-  // a new arm_rx replaces the wait
-  CHECK(ok(armRx(t, 2)));
-  write(t, {0x01, 0x02, 0x03});
-  write(t, {0x05, 0x06});
-  s = status(t);
-  CHECK(s.queued == 1 && s.rx_frames == 3 && s.errors == 4);
-  // overflow: the frame past queue_depth is dropped, an error, not in rx_frames
+  {   // max_length bytes: a frame; past it: the first max_length bytes, an error
+    Bytes full(P4I2cTarget::kMaxFrame);
+    for (size_t i = 0; i < full.size(); ++i) full[i] = static_cast<uint8_t>(i);
+    write(t, full);
+    Bytes over(P4I2cTarget::kMaxFrame + 72);
+    for (size_t i = 0; i < over.size(); ++i) over[i] = static_cast<uint8_t>(0x80 + i);
+    write(t, over);
+    s = status(t);
+    CHECK(s.queued == 2 && s.rx_frames == 4 && s.errors == 1);
+    CHECK(readRx(t) == full);
+    CHECK(readRx(t) == Bytes(over.begin(), over.begin() + P4I2cTarget::kMaxFrame));
+  }
+  // overflow: the frame past queue_depth is dropped, an error, not in rx_frames; one too long as well: one error
   for (int i = 0; i < 4; ++i) write(t, {static_cast<uint8_t>(i), 0});
+  write(t, {0x55});
   s = status(t);
-  CHECK(s.queued == 4 && s.rx_frames == 6 && s.errors == 5);
-  CHECK(readRx(t) == Bytes({0x05, 0x06}));
-  // a read in mode 1 sends 0xFF and counts nothing
+  CHECK(s.queued == 4 && s.rx_frames == 8 && s.errors == 2);
+  write(t, Bytes(P4I2cTarget::kMaxFrame + 1, 0x66));
+  s = status(t);
+  CHECK(s.queued == 4 && s.rx_frames == 8 && s.errors == 3);
+  CHECK(readRx(t) == Bytes({0, 0}));
+  // a read with no slot sends 0xFF and counts nothing
   CHECK(read(t, 3) == Bytes({0xFF, 0xFF, 0xFF}));
   s = status(t);
-  CHECK(s.queued == 3 && s.errors == 5);
-  // reset: as right after configure (mode and address stay, the wait goes)
-  CHECK(ok(call(t, P4I2cTarget::kOpReset, {}, out)));
-  s = status(t);
-  CHECK(s.state == 1 && s.mode == 1 && !s.armed && s.queued == 0 && s.rx_frames == 0 && s.errors == 0);
-  // configure clears frames, the wait and the counts, and keeps stretch
-  CHECK(ok(armRx(t, 1)));
-  write(t, {9});
-  write(t, {9, 9});
+  CHECK(s.queued == 3 && s.errors == 3 && s.tx_slots == 0);
+  // configure clears frames, slots and the counts, and keeps stretch
+  CHECK(ok(preload(t, {7}, out)));
   CHECK(ok(stretch(t, 30000)));
-  CHECK(ok(configure(t, 0x42, P4I2cTarget::kModeFixedRx)));
+  CHECK(ok(configure(t, 0x42)));
   s = status(t);
-  CHECK(s.state == 1 && !s.armed && s.queued == 0 && s.rx_frames == 0 && s.errors == 0);
+  CHECK(s.state == 1 && s.queued == 0 && s.rx_frames == 0 && s.tx_slots == 0 && s.errors == 0);
   CHECK(t.hostStretchUs() == 30000);
+  CHECK(read(t, 1) == Bytes({0xFF}));
 
-  // ---- mode 2: the length byte and the body in one write
-  CHECK(ok(configure(t, 0x42, P4I2cTarget::kModeFramedRx)));
-  CHECK(rejectedAs(armRx(t, 4), kRejectUnavailable));
-  write(t, {3, 0xb1, 0xb2, 0xb3});
-  s = status(t);
-  CHECK(!s.armed && s.queued == 1 && s.rx_frames == 1 && s.errors == 0);
-  write(t, {3, 0xb1, 0xb2});   // body short
-  write(t, {2, 0xb1, 0xb2, 0xb3});   // body long
-  write(t, {0});   // L = 0
-  {
-    Bytes big(1 + 129, 0x5a);
-    big[0] = 129;   // over max_length (the byte can say up to 255)
-    write(t, big);
-    Bytes over(1 + 200, 0x5a);
-    over[0] = 200;
-    write(t, over);
-  }
-  write(t, {});   // address only
-  s = status(t);
-  CHECK(s.queued == 1 && s.rx_frames == 1 && s.errors == 5);
-  {
-    Bytes full(1 + 128);
-    for (size_t i = 0; i < full.size(); ++i) full[i] = static_cast<uint8_t>(i);
-    full[0] = 128;
-    write(t, full);
-    CHECK(readRx(t) == Bytes({0xb1, 0xb2, 0xb3}));
-    CHECK(readRx(t) == Bytes(full.begin() + 1, full.end()));
-  }
-
-  // ---- mode 3: slots
-  CHECK(ok(configure(t, 0x42, P4I2cTarget::kModePreloadedTx)));
-  CHECK(read(t, 2) == Bytes({0xFF, 0xFF}));   // no slot: 0xFF
+  // ---- reads: the slots in order
   CHECK(rejectedAs(preload(t, {}, out), kRejectMalformed));
-  CHECK(rejectedAs(preload(t, Bytes(129, 1), out), kRejectUnsupported));
+  CHECK(rejectedAs(preload(t, Bytes(P4I2cTarget::kMaxFrame + 1, 1), out), kRejectUnsupported));
   for (uint8_t i = 1; i <= P4I2cTarget::kQueueDepth; ++i) {
-    CHECK(ok(preload(t, {static_cast<uint8_t>(0xA0 + i), i}, out)) && out.size() == 1 && out[0] == i);   // serial
+    CHECK(ok(preload(t, {static_cast<uint8_t>(0xA0 + i), i}, out)) && out.empty());   // no payload
     CHECK(status(t).tx_slots == i);
   }
   CHECK(unavailableCause(preload(t, {0x99}, out), out, 2));   // queue_depth unread slots: nothing placed
@@ -310,27 +263,16 @@ int main() {
   CHECK(read(t, 1) == Bytes({0xA1}));
   CHECK(read(t, 4) == Bytes({0xA2, 0x02, 0xFF, 0xFF}));
   CHECK(status(t).tx_slots == 2);
-  CHECK(ok(preload(t, {0xC5}, out)) && out[0] == 5);
-  // write-then-read (repeated START): the write is dropped with an error, the read is answered
+  CHECK(ok(preload(t, {0xC5}, out)));
+  // write-then-read (repeated START): the write is a frame, the read is answered from the next slot
   CHECK(read(t, 2, {0x10}) == Bytes({0xA3, 0x03}));
   s = status(t);
-  CHECK(s.tx_slots == 2 && s.errors == 1 && s.queued == 0 && s.rx_frames == 0);
-  write(t, {0x20, 0x21});   // a write alone: dropped, an error
-  write(t, {});   // address only: nothing
-  CHECK(status(t).errors == 2);
+  CHECK(s.tx_slots == 2 && s.errors == 0 && s.queued == 1 && s.rx_frames == 1);
+  CHECK(readRx(t) == Bytes({0x10}));
   CHECK(read(t, 2) == Bytes({0xA4, 0x04}));
   CHECK(read(t, 1) == Bytes({0xC5}));
   CHECK(read(t, 1) == Bytes({0xFF}));
   CHECK(status(t).tx_slots == 0);
-  // reset clears the slots and their serial
-  CHECK(ok(preload(t, {1}, out)));
-  CHECK(ok(call(t, P4I2cTarget::kOpReset, {}, out)));
-  s = status(t);
-  CHECK(s.mode == 3 && s.tx_slots == 0 && s.errors == 0);
-  CHECK(ok(preload(t, {1}, out)) && out[0] == 1);
-  // preload_tx is mode 3's only
-  CHECK(ok(configure(t, 0x42, P4I2cTarget::kModeFixedRx)));
-  CHECK(rejectedAs(preload(t, {1}, out), kRejectUnavailable));
 
   // ---- stretch: up to max_stretch_us, in any state
   CHECK(ok(stretch(t, 0)));
@@ -338,13 +280,13 @@ int main() {
   CHECK(rejectedAs(stretch(t, P4I2cTarget::kMaxStretchUs + 1), kRejectUnsupported));
   CHECK(t.hostStretchUs() == P4I2cTarget::kMaxStretchUs);
 
-  // ---- releasing the plan, then a new one: describe's state (state 0, mode 0, nothing kept, stretch 0)
-  CHECK(ok(armRx(t, 2)));
+  // ---- releasing the plan, then a new one: describe's state (state 0, nothing kept, stretch 0)
   write(t, {1, 2});
+  CHECK(ok(preload(t, {3}, out)));
   t.planRelease();
   CHECK(t.planApply(roles, 2));
   s = status(t);
-  CHECK(s.state == 0 && s.mode == 0 && !s.armed && s.queued == 0 && s.rx_frames == 0 && s.tx_slots == 0 && s.errors == 0);
+  CHECK(s.state == 0 && s.queued == 0 && s.rx_frames == 0 && s.tx_slots == 0 && s.errors == 0);
   CHECK(t.hostStretchUs() == 0);
   CHECK(!t.hostTransaction(nullptr, 0));
   CHECK(unavailableCause(call(t, P4I2cTarget::kOpReadRx, {}, out), out, 6));

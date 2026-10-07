@@ -5,11 +5,10 @@
 //
 //   oep.fixture.gpio   plan role 1 = a line (any number of them). Only planned channels may be set or read.
 //     0x01 set(n u8, n x (channel u16, mode u8)) [TLV]      modes 0 input, 1 pull-up, 2 pull-down, 3 output low,
-//                                                          4 output high, 5 open-drain low, 6 open-drain release,
-//                                                          7 input with pull-up and pull-down
-//          TLV 0x01 drive(index u8, kind u8, value u16), one per mode 3 / 4 element: its output strength (§1.1)
-//     0x02 read(n u8, n x channel u16) [TLV] -> n(u8) n x level [TLV 0x01 drive: n x level, 0xFF not mode 3 / 4]
-//                                                          no lock
+//                                                          4 output high, 5 open-drain low, 6 open-drain release
+//          TLV 0x01 drive(index u8, level u8), one per mode 3 / 4 element: its output strength (§1.1, level 0xFF the
+//          default level)
+//     0x02 read(n u8, n x channel u16) [TLV] -> n(u8) n x level [TLV]                       no lock
 //     The output strength (oep-if-fixture §1.1) where the chip switches it (platformDriveLevels: describe drive_levels,
 //     the classic ESP32 / ESP32-P4 and the RP2040 / RP2350): a set's drive, else the channel's idle drive, else the
 //     default level, kept until the channel is set again; a channel taken or released is at its idle state's (PinTable).
@@ -19,11 +18,10 @@
 //                      serials never go back within a boot (a plan made again goes on from where the last left off).
 //                      TX idles high while planned (before configure too); released, it goes to its idle state
 //                      (PinTable, default Hi-Z).
-//     0x01 configure(baud u32) [TLV 0x01 format, critical] -> baud (actual) [TLV]
+//     0x01 configure(baud u32) [TLV 0x01 format] -> baud (actual) [TLV]
 //     0x02 read(from, arg, max) -> start flags len data [TLV] (no lock)   0x03 marks(from_serial) (no lock)
 //     0x04 clear   0x05 mark(value)   0x06 write(count u16, data) -> accepted
-//     0x07 status -> configured(u8: 0 default, 1 session configure, 2 settings item, 3 item whose baud could not be made,
-//                    the default applied) baud format (no lock)
+//     0x07 status -> baud format (no lock): the running ones (a settings item whose baud could not be made: the default)
 //
 // The ESP32 I2C / SPI targets are in OepP4I2cTarget.h / OepP4SpiTarget.h.
 #pragma once
@@ -38,12 +36,11 @@ namespace oep {
 // The plan roles and extra describe TLVs of the fixtures every probe offers the same way.
 constexpr uint8_t kGpioRoles[] = {reg::fixture_gpio::kRoleLine};                               // line
 constexpr uint8_t kUartRoles[] = {reg::fixture_uart::kRoleRx, reg::fixture_uart::kRoleTx};    // RX, TX
-constexpr uint8_t kImplementationPeripheral[] = {kTagImplementation, 1, 2};                     // implementation: peripheral
 
 class FixtureGpio final : public Interface {
  public:
   enum : uint8_t { kOpSet = reg::fixture_gpio::kOpSet, kOpRead = reg::fixture_gpio::kOpRead };
-  static constexpr uint32_t kModes = 0xff;   // modes 0-7, all of them (describe modes, u32 bit set)
+  static constexpr uint32_t kModes = 0x7f;   // modes 0-6, all of them (describe modes, u32 bit set)
   // owner: this instance's PinTable owner id (keeps it off the channels other fixtures hold).
   FixtureGpio(PinTable &pins, uint16_t instance, uint8_t owner = 1) : pins_(pins), instance_(instance), owner_(owner) {}
   const char *name() const override { return reg::fixture_gpio::kName; }
@@ -133,7 +130,6 @@ class FixtureUart final : public Interface, public BindSource {
   int rx_ = -1, tx_ = -1;
   bool running_ = false;            // the UART runs (planned and begun)
   bool session_configured_ = false; // configure since the plan: it wins over the item until the plan is released
-  uint8_t configured_ = reg::fixture_uart::kUartConfiguredDefault;   // what the running settings came from (status)
   bool item_set_ = false;
   uint32_t item_baud_ = kDefaultBaud;
   uint8_t item_format_ = 0;

@@ -15,8 +15,8 @@
 //   0x08 release(generation, serial) (repeat)   0x09 query(TLV) -> TLV, no lock
 // Every start makes a new generation; read and release name it (another one is rejected unavailable cause 6), the
 // segment records and the streaming data frames (TLV 0x01) carry it.
-// Every request takes a TLV tail after its fixed part (core §2.3); configure / query answer unhandled non-critical
-// TLVs in ignored (0x7F) and refuse unhandled critical ones (rejected unsupported, the tag).
+// Every request takes a TLV tail after its fixed part (core §2.3); configure / query refuse a value they cannot honour,
+// critical or not, and an unknown critical tag (rejected unsupported, the tag as received).
 //
 // Channel k is plan role k (0..15), taken in role order. Unused bits of a sample are left as captured (undefined).
 #pragma once
@@ -59,7 +59,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint8_t kMaxChannels = 16;
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
   static constexpr uint32_t kSourceHz = 160000000, kMinHz = 627451;   // PLL_F160M / 255 (256 silently fails)
-  // one-shot's rate_limit (describe, applied by configure): up to 8 lines 100 MHz, up to 16 lines 48 MHz
+  // one-shot's ceiling by channel count (configure takes the nearest it allows): up to 8 lines 100 MHz, 16 lines 48 MHz
   static constexpr uint8_t kLimitLines8 = 8;
   static constexpr uint32_t kLimitHz8 = 100000000, kLimitHz16 = 48000000;
   static constexpr size_t kRingBytes = 128 * 1024;                    // repeat / streaming: the DMA ring (internal)
@@ -87,6 +87,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
+  // read returns at most this much (capture §3.2: the probe's choice, within max and max_frame)
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }

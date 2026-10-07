@@ -13,7 +13,7 @@
 //   op 0x03 state  -                         ->  level(u8), left(u8)   (no lock: it changes nothing)
 //
 // Every request may end with TLVs (core §2.3): an unknown critical one refuses the request, an unknown other one is
-// listed as ignored in the result - Tail does both. Which pin it drives is planned by the host (role 1), like the
+// ignored - Tail does both. Which pin it drives is planned by the host (role 1), like the
 // standard fixtures, so it never takes a pin something else holds. From Python:
 //
 //   from oep_client import core, link
@@ -95,7 +95,7 @@ class Blink final : public oep::Interface {
         left_ = 0;
         level_ = payload[0];
         drive();
-        return tail.finish(oep::completed(), out, capacity);
+        return oep::completed();
       }
       case kOpBlink: {   // count(u8) half_ms(u16) [TLV]
         const oep::Result parsed = oep::plainTail(tail, payload, length, 3, out, capacity);
@@ -106,7 +106,7 @@ class Blink final : public oep::Interface {
         left_ = static_cast<uint16_t>(payload[0]) * 2;   // edges to go
         half_ms_ = half;
         last_ms_ = millis();
-        return tail.finish(oep::completed(), out, capacity);
+        return oep::completed();
       }
       case kOpState: {   // [TLV] -> level(u8) left(u8: blinks to go)
         const oep::Result parsed = oep::plainTail(tail, payload, length, 0, out, capacity);
@@ -114,7 +114,7 @@ class Blink final : public oep::Interface {
         if (capacity < 2) return oep::failed();
         out[0] = level_;
         out[1] = static_cast<uint8_t>((left_ + 1) / 2);
-        return tail.finish(oep::completed(2), out, capacity);
+        return oep::completed(2);
       }
       default:
         return oep::rejected(oep::kRejectUnknownOperation);
@@ -154,8 +154,7 @@ static uint8_t probeTlv[64];
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "custom-interface", id, oep::platformUnitId(id, sizeof id), kChannelCount,
-                    ((1ull << kChannelCount) - 1) & ~kChannels);
+  oep::describeCore(w, "custom-interface", id, oep::platformUnitId(id, sizeof id), kChannelCount);
   return w.ok() ? w.length() : 0;
 }
 

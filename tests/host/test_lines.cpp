@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Host tests: the label convention (oep-spec oep-if-probe-config §1.3) - a slot's line is the label "S.N", else, with at
+// Host tests: the label convention (oep-spec oep-if-probe-config §1.3: the host's way to find a line; the probe drives
+// none of them itself) - a slot's line is the label "S.N", else, with at
 // most one slot item, "N", else, likewise, the firmware label "N"; ASCII case ignored; two channels at the step that
 // matches name none.
 #include <stdio.h>

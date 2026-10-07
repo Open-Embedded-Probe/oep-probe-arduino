@@ -168,7 +168,7 @@ one of them against this endpoint).
 | Path | Contents |
 |---|---|
 | `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core, oep-transports): frames, interfaces by name and their ops, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (transports §4), notifications (subscribe on the emitting fn), fn 0's clock; `oep::ProbePlan` / `oep::ProbeRestart` are `oep.probe.plan` / `oep.probe.restart`, which the endpoint lists itself after the sketch's interfaces; `oep::Link` is `oep.probe.link` (the link test, port_speed) |
-| `src/OepBind.*` | what each serial port carries (binds: last-reset / manual / mixed, held during a session and resumed from its last reset) |
+| `src/OepBind.*` | what each serial port carries (a bind: one stream per port, held during a session and resumed where it stopped) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1) on the ESP-IDF I2C / SPI slaves (custom `io.github.ch32-riscv-ug.esp32.*` until 2026-09-30) |
@@ -234,7 +234,7 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
    ```sh
    oep config slot <probe> --name l103 --wire rvswd --pins 2,54 --attach at-boot --retry 1 --mechanism dmseq \
        --max-speed 1000000 --idle-clock low
-   oep config bind <probe> --port 1 --mode last-reset --stream slot:l103 --save
+   oep config bind <probe> --port 1 --stream slot:l103 --save
    oep config show <probe>
    ```
 

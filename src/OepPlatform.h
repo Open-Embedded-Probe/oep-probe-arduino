@@ -32,7 +32,7 @@ namespace oep {
 
 // Wire values of fixture.gpio's mode byte.
 enum FixtureGpioMode : uint8_t {
-  kGpioInputFloating = 0, kGpioInputPullUp = 1, kGpioInputPullDown = 2, kGpioInputPullUpDown = 3,
+  kGpioInputFloating = 0, kGpioInputPullUp = 1, kGpioInputPullDown = 2,
   kGpioOutputLow = 4, kGpioOutputHigh = 5, kGpioOpenDrainLow = 6, kGpioOpenDrainRelease = 7,
 };
 
@@ -65,7 +65,6 @@ inline void platformGpio(int pin, uint8_t mode) {
     case kGpioInputFloating: pinMode(pin, INPUT); break;
     case kGpioInputPullUp: pinMode(pin, INPUT_PULLUP); break;
     case kGpioInputPullDown: pinMode(pin, INPUT_PULLDOWN); break;
-    case kGpioInputPullUpDown: pinMode(pin, INPUT); gpio_set_pulls(pin, true, true); break;
     // The level goes into the output latch before the output is enabled: the other order drives whatever the
     // latch held last, which on a reset line can be a brief high. gpio_put, not digitalWrite: after pinMode
     // INPUT_PULLUP / INPUT_PULLDOWN arduino-pico's digitalWrite only turns the output on or off and leaves the latch
@@ -82,7 +81,6 @@ inline void platformGpio(int pin, uint8_t mode) {
     case kGpioInputFloating: pinMode(pin, INPUT); break;
     case kGpioInputPullUp: pinMode(pin, INPUT_PULLUP); break;
     case kGpioInputPullDown: pinMode(pin, INPUT_PULLDOWN); break;
-    case kGpioInputPullUpDown: pinMode(pin, INPUT_PULLUP | INPUT_PULLDOWN); break;
     // The level into the output register first (gpio_set_level: digitalWrite refuses a pin not yet set up as a GPIO),
     // then the output on: an output idle (probe.config §1) on a power switch comes up at its level, no pulse.
     case kGpioOutputLow: platformPresetLevel(pin, LOW); pinMode(pin, OUTPUT); digitalWrite(pin, LOW); break;

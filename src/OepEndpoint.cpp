@@ -23,15 +23,6 @@ Result lockedFor(uint32_t remaining_ms, const uint8_t *owner, size_t owner_lengt
   return {kResolutionRejected, kRejectLocked, n};
 }
 
-// Label-boundary prefix match: "oep.fixture.uart" matches "oep.fixture.uart" and "oep.fixture.uart.stream",
-// not "oep.fixture.uart2". An empty prefix matches everything.
-bool nameMatches(const char *name, const uint8_t *prefix, size_t n, bool exact) {
-  const size_t len = strlen(name);
-  if (exact) return len == n && memcmp(name, prefix, n) == 0;
-  if (n == 0) return true;
-  return len >= n && memcmp(name, prefix, n) == 0 && (len == n || name[n] == '.');
-}
-
 // Page a TLV stream by whole TLVs: skip `first`, then copy while they fit. Returns bytes, sets more.
 size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, size_t capacity, bool &more) {
   size_t at = 0, used = 0;
@@ -56,11 +47,11 @@ size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, 
 }  // namespace
 
 bool Endpoint::add(Interface &interface) {
-  // a name outside core §13 rule 1 is refused: list would show what no host may rely on; so is an interface with no op,
-  // whose ops has no valid encoding (core §7.4: a host does not use such a fn). Two places stay for the endpoint's own.
+  // a name outside core §13 rule 1 is refused: list would show what no host may rely on; so is an interface with no op
+  // (its describe's ops would declare nothing, core §7.4). Two places stay for the endpoint's own.
   if (count_ + 2 >= kMaxInterfaces + 1 || polled_ || !interfaceName(interface.name())) return false;
   bool any = interface.notifies();
-  for (int op = 1; op < kExperimentalOps && !any; ++op) any = interface.offers(static_cast<uint8_t>(op));
+  for (int op = 1; op < kReservedOps && !any; ++op) any = interface.offers(static_cast<uint8_t>(op));
   if (!any) return false;
   interfaces_[count_++] = &interface;
   interface.setFrameLimit(limits_.max_frame);
@@ -267,7 +258,7 @@ Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, s
   if (!sub) {
     if (subscribed_[i]) interfaces_[i]->subscribe(false);
     subscribed_[i] = false;
-    return tail.finish(completed(), out, capacity);
+    return completed();
   }
   const uint16_t min_bytes = getU16(payload);
   const uint32_t max_delay = getU32(payload + 2);
@@ -278,7 +269,7 @@ Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, s
   min_bytes_[i] = min_bytes;
   max_delay_ms_[i] = max_delay;
   waiting_[i] = false;
-  return tail.finish(completed(), out, capacity);
+  return completed();
 }
 
 void Endpoint::poll() {
@@ -296,12 +287,9 @@ void Endpoint::poll() {
         if (!n) break;
         const uint8_t *p = chunk;
         while (n) {
-          const uint32_t bad = t.serial.badCandidates();
           const bool message = t.serial.feed(p, n, rawSink, &t);
-          if (i == speed_port_ && speed_state_ != kSpeedBase) {   // the sped-up port's line (oep-if-link §3)
-            if (t.serial.badCandidates() != bad) speedBad();
-            if (message) { speed_good_ms_ = millis(); speed_heard_ = true; speed_bad_run_ = 0; }   // a good frame: the run ends
-          }
+          // the sped-up port's good frame: port_speed_idle_ms runs from it again (oep-if-link §3)
+          if (message && i == speed_port_ && speed_state_ != kSpeedBase) speed_good_ms_ = millis();
           if (message) handleMessage(t.serial.message(), t.serial.length());
           if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
         }
@@ -408,22 +396,20 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   OEP_LOGF("req corr %u fn %u op 0x%02x sid %08lx len %u", corr, fn, op, static_cast<unsigned long>(session),
            static_cast<unsigned>(payload_length));
   // core §4.3 order 1, the header: a fn this probe does not have, an op that fn does not offer (its ops, core §1.2), an
-  // op that needs the lock with session_id 0 (open's own id 0 is malformed: open checks it) - before the resend table,
-  // so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
+  // op that needs the lock with session_id 0 (open's own id 0 is malformed: open checks it) - before the resend table
+  // (order 2), so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
   const bool is_open = fn == 0 && op == kOpOpen;
   if (fn != 0 && fn > count_) { sendReject(corr, kRejectUnknownFunction); return; }
   if (!offersOp(fn, op)) { sendReject(corr, kRejectUnknownOperation); return; }
   if (session == 0 && !is_open && !lockFreeOp(fn, op)) { sendReject(corr, kRejectSessionRequired); return; }
-  // The last session's request sent again (the host lost the result): answer from what was kept, never run it twice,
-  // and before the session is judged (core §5.2) - a resent end is answered from here and does not take the lock back.
-  // The host numbers its requests in order (core §4.1): a corr no newer than the newest seen and not in the table was
-  // dropped from it. An open is never looked up (a resent open is decided by §6.2).
+  // Order 2: the last session's request sent again (the host lost the result) - the corr alone says which (core §4.1,
+  // §5.2): answer from what was kept, never run it twice, and before the session is judged - a resent end is answered
+  // from here and does not take the lock back. The host numbers its requests in order: a corr no newer than the newest
+  // seen and not in the table was dropped from it. An open is never looked up (a resent open is decided by §6.2).
   const bool mine = session != 0 && have_last_ && session == last_ && !is_open;
-  const uint32_t crc = mine ? crc32(payload, payload_length) : 0;
   if (mine) {
     for (Dedup &d : dedup_) {
       if (!d.used || d.corr != corr) continue;
-      if (d.fn != fn || d.op != op || d.crc != crc) { sendReject(corr, kRejectCorrReused); return; }
       if (!d.kept) { sendReject(corr, kRejectResultLost); return; }
       memcpy(tx_, d.result, d.length);
       send(d.length);
@@ -433,7 +419,6 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   }
   Result result;
   restart_taken_ = false;
-  g_request_ignored.reset();   // this request's ignored tags (core §2.3), from its tail's parse
   // core §6.2 (order 3): every request with a session_id but open - lock-free ones too (core §4.1) - goes through it
   if (session != 0 && !is_open) result = checkSession(session, out, capacity);
   else result = completed();
@@ -443,8 +428,6 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     else result = interfaces_[fn - 1]->handle(op, payload, payload_length, out, capacity);
   }
   if (result.length > capacity) result = failed(0);
-  // core §2.3: every completed answer carries ignored, a failed status too - for a handler that returned without finish
-  result = g_request_ignored.append(result, out, capacity);
   // transports §4: a serial port the lock holder's requests come in on (its open too) stops its raw transfer
   if (serialKind(transports_[current_].kind) && locked_ && session == holder_ &&
       (!is_open || result.resolution == kResolutionCompleted))
@@ -452,8 +435,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   // The lease runs from when the holder's request completed (a long verify must not lapse its own lock); every answer
   // to the holder that passed order 3, rejected ones too (core §6.1).
   if (session != 0 && locked_ && session == holder_) expires_ms_ = millis() + lease_ms_;
-  // oep-if-link §3 condition 3: idle_ms is not counted while a request runs (the same rule as the lease) - it runs
-  // from the answer.
+  // oep-if-link §3 condition 2: port_speed_idle_ms is not counted while a request runs (the same rule as the lease) -
+  // it runs from the answer.
   if (speed_state_ == kSpeedCommitted) speed_good_ms_ = millis();
   tx_[0] = kRoleResult;
   putU16(tx_ + 1, corr);
@@ -467,9 +450,6 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     dedup_next_ = (dedup_next_ + 1) % kDedupEntries;
     d.used = true;
     d.corr = corr;
-    d.fn = fn;
-    d.op = op;
-    d.crc = crc;
     d.kept = total <= kDedupBytes;
     d.length = d.kept ? static_cast<uint16_t>(total) : 0;
     if (d.kept) memcpy(d.result, tx_, total);
@@ -507,7 +487,7 @@ void Endpoint::restartNow() {
   for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->sessionOverFirst()) interfaces_[i]->probeRestart();
   for (size_t i = 0; i < count_; ++i) if (!interfaces_[i]->sessionOverFirst()) interfaces_[i]->probeRestart();
   planRelease(nullptr, 0);
-  // The host's USB stack takes the last packet meanwhile; the restart still starts well within restart_after_answer_ms.
+  // The host's USB stack takes the last packet meanwhile; the restart starts soon after (about 100 ms at most).
   while (static_cast<uint32_t>(millis() - out) < kRestartSettleMs) delay(1);
   OEP_LOGF("restart");
   if (restart_) restart_();   // does not return on a chip
@@ -521,15 +501,6 @@ void Endpoint::sendReject(uint16_t corr, uint8_t reason) {
   send(kResultHeader);
 }
 
-uint32_t Endpoint::crc32(const uint8_t *data, size_t length) {   // IEEE, reflected (the key of a kept result)
-  uint32_t c = 0xFFFFFFFFu;
-  for (size_t i = 0; i < length; ++i) {
-    c ^= data[i];
-    for (int b = 0; b < 8; ++b) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
-  }
-  return ~c;
-}
-
 // The ops fn 0 offers (core §12): every one of them required, none optional - no plan, restart or subscription there.
 bool Endpoint::coreOffers(uint8_t op) const {
   switch (op) {
@@ -541,7 +512,7 @@ bool Endpoint::coreOffers(uint8_t op) const {
 }
 
 bool Endpoint::offersOp(uint16_t fn, uint8_t op) const {
-  if (op == 0 || op >= kExperimentalOps) return false;   // never declared (core §1.2)
+  if (op == 0 || op >= kReservedOps) return false;   // reserved in every interface's space (core §2.5)
   if (fn == 0) return coreOffers(op);
   const Interface *it = interfaces_[fn - 1];
   // subscribe / unsubscribe both, in every interface that sends notifications and in no other (core §11.3)
@@ -549,12 +520,12 @@ bool Endpoint::offersOp(uint16_t fn, uint8_t op) const {
   return it->offers(op);
 }
 
-// The describe's ops tag (core §1.2, §7.4) in its one encoding: base = the lowest op offered (bit 0 set), then the bitmap
-// up to the highest one (its last byte non-zero) - 2 to 31 bytes, base + 8 x bytes within 256 since no op past 0xEF is
-// offered. Written first in every fn's describe, fn 0 included; every fn offers at least one op (add).
+// The describe's ops tag (core §1.2, §7.4): base = the lowest op offered, then the bitmap up to the highest one - base +
+// 8 x bytes within 256 since no op past 0xEF is offered. Written first in every fn's describe, fn 0 included; every fn
+// offers at least one op (add).
 size_t Endpoint::opsTlv(uint16_t fn, uint8_t *out, size_t capacity) const {
   int lo = -1, hi = -1;
-  for (int op = 1; op < kExperimentalOps; ++op)
+  for (int op = 1; op < kReservedOps; ++op)
     if (offersOp(fn, static_cast<uint8_t>(op))) { if (lo < 0) lo = op; hi = op; }
   const size_t bytes = lo < 0 ? 0 : static_cast<size_t>((hi - lo) / 8 + 1);
   if (capacity < kTlvHeader + 1 + bytes) return 0;
@@ -575,6 +546,7 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       //   ->  "OEP!" revision(u8) flags(u8) max_frame(u16) window(u32) max_inflight(u8) boot_id(u32) [TLV]  (core §7.1)
       // TLV 0x01 transport (u8): the index (§7.5) of the transport this confirm came on, always attached. A range
       // with min_rev > max_rev is malformed; one without this probe's revision is unsupported with the supported range.
+      // Request and answer fit 64 bytes (core §7.1).
       if (length < 6 || memcmp(payload, reg::kConfirmRequestMagic, 4) != 0) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 6, length - 6, out, capacity);
       if (refused(parsed)) return parsed;
@@ -597,7 +569,7 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       putU32(out + 13, bootId());                     // a host without the lock learns of a restart here (core §6.5)
       putTlvHeader(out + 17, reg::core::kTlvConfirmAnswerTransport, 1);
       out[20] = transports_[current_].index;          // the entry of describe's transport list it came on
-      return tail.finish(completed(21), out, capacity);
+      return completed(21);
     }
     case kOpList: return list(payload, length, out, capacity);
     case kOpDescribe: return describe(payload, length, out, capacity);
@@ -610,7 +582,7 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       if (capacity < 12) return failed();
       putU32(out, bootId());
       putU64(out + 4, nowNs());
-      return tail.finish(completed(12), out, capacity);
+      return completed(12);
     }
     case kOpOpen: return open(session, payload, length, out, capacity);
     case kOpLockState: {
@@ -620,14 +592,14 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       out[0] = locked_;   // any session holds it (who asked is not known: lock_state goes without one)
       putU32(out + 1, remaining());
       const size_t owner = locked_ ? appendOwner(out + 5, capacity - 5, reg::core::kTlvLockStateAnswerOwner) : 0;
-      return tail.finish(completed(5 + owner), out, capacity);
+      return completed(5 + owner);
     }
     case kOpEnd:
     case kOpKeepalive: {   // the holder's (handleMessage checked the session)
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (op == kOpEnd) releaseLock();   // the lock and everything the session created (core §6.4, §9); no resume
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     default: return rejected(kRejectUnknownOperation);
   }
@@ -652,9 +624,9 @@ Result Endpoint::planReleaseRequest(const uint8_t *payload, size_t length, uint8
   }
   for (size_t k = 0; k < m; ++k)   // a track bound into a capture-group: the group's (oep-if-capture §4.1)
     if (const uint16_t group = interfaces_[fns[k] - 1]->boundTo())
-      return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup, 0xFFFF, group);
+      return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup);
   if (m) planRelease(fns, m);   // m == 0 must not reach it: there an empty list means every fn
-  return tail.finish(completed(), out, capacity);
+  return completed();
 }
 
 // oep.probe.plan (oep-if-plan): plan_apply / plan_release, both needing the lock (handleMessage checked the session).
@@ -680,46 +652,46 @@ Result ProbeRestart::handle(uint8_t op, const uint8_t *payload, size_t length, u
   const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
   if (refused(parsed)) return parsed;
   endpoint_.restart_taken_ = true;
-  return tail.finish(completed(), out, capacity);
+  return completed();
 }
 
-// describe restart_max_ms (0x40, oep-if-restart §1, required): at least restart_after_answer_ms (setRestart).
+// describe restart_max_ms (0x40, oep-if-restart §1, required).
 size_t ProbeRestart::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.u32(reg::probe_restart::kTlvDescribeRestartMaxMs, endpoint_.restart_max_ms_);
   return w.ok() ? w.length() : 0;
 }
 
-// oep.probe.link port_speed (oep-if-link §3): port(u8) baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) idle_ms(u32) [TLV]
-//   ->  baud(u32: the rate that applies). A step over 2 is unsupported. Only the UART bridge the request came in on
-// (else unavailable cause 6); a baud this UART cannot make is unsupported. The port is in one of three states - boot,
-// trying, committed - and a step that does not fit its state is unavailable cause 6 too (the same refusal as the wrong
-// port): try is taken at the boot speed only, commit while trying (that baud, that port), revert while trying or
-// committed. try: answered at the old speed, then switched; verify_ms later the probe goes back unless a commit came
-// (on the new speed), and a broken candidate after the first good frame at the new speed sends it back at once.
-// commit: then idle_ms (this request's, at most kPortSpeedIdleMaxMs: 0 and anything longer count as that maximum, so a
-// host that died leaves the port at its boot speed soon) with no good frame, or kSpeedBadRun broken candidates in a row
-// with no good frame between, revert. revert: answered (the boot speed) at the speed now, then back.
+// oep.probe.link port_speed (oep-if-link §3): baud(u32) step(u8: 0 try, 1 commit, 2 revert) verify_ms(u16) [TLV]  ->
+// baud(u32: the rate that applies). The port is the one the request came on: a UART bridge only (any other transport,
+// unavailable cause 6). A baud this UART makes no closer than port_speed_tolerance_pct is unsupported; a step over 2 is
+// unsupported. The port is in one of three states - boot, trying, committed - and a step that does not fit its state is
+// unavailable cause 6: try is taken at the boot speed only (and while no other port is off its boot speed), commit while
+// trying (that baud, at the new speed), revert while trying or committed. try: answered at the old speed, then
+// switched; verify_ms later the probe goes back unless a commit came. commit: port_speed_idle_ms with no good frame on
+// the port (counted from the last good frame and the last answer), revert. revert: answered (the boot speed) at the
+// speed now, then back. The session's end goes back too (sessionEnded).
 Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   if (!port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.probe.link's ops (Link::offers)
   Tail tail;
-  const Result parsed = plainTail(tail, payload, length, 12, out, capacity);
+  const Result parsed = plainTail(tail, payload, length, 7, out, capacity);
   if (refused(parsed)) return parsed;
   if (capacity < 4) return failed();
-  const uint8_t port = payload[0], step = payload[5];
-  const uint32_t baud = getU32(payload + 1), idle = getU32(payload + 8);
-  const uint16_t verify = getU16(payload + 6);
-  // verify_ms 0 in a try is malformed (order 5); a step of 3 or more is a value a later revision may define:
-  // unsupported, tag 0x00 (core §2.5, oep-if-link §3, order 6)
+  const uint32_t baud = getU32(payload);
+  const uint8_t step = payload[4];
+  const uint16_t verify = getU16(payload + 5);
+  const uint8_t port = static_cast<uint8_t>(current_);
+  // verify_ms 0 in a try is malformed; a step of 3 or more is a value a later revision may define: unsupported, tag
+  // 0x00 (core §2.5)
   if (step == reg::probe_link::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
   if (step > reg::probe_link::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
-  if (port != current_ || transports_[port].kind != kUartBridge) return wrongState(out, capacity);
+  if (transports_[port].kind != kUartBridge) return wrongState(out, capacity);
   const bool this_port = speed_state_ != kSpeedBase && speed_port_ == port;   // this port is off its boot speed
   uint32_t answer = 0;
   if (step == reg::probe_link::kPortSpeedStepTry) {
-    if (this_port) return wrongState(out, capacity);   // trying or committed already: revert first
+    if (speed_state_ != kSpeedBase) return wrongState(out, capacity);   // this port or another one off its boot speed
     answer = port_speed_(port, baud, false);
-    if (!answer) return unsupportedValue(out, capacity);
+    if (!answer || !speedWithin(answer, baud)) return unsupportedValue(out, capacity);
     speed_pending_ = kSpeedSwitch;
     speed_pending_port_ = port;
     speed_pending_baud_ = baud;
@@ -728,9 +700,7 @@ Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, 
     // at the boot speed, or committed already, or another baud than the one trying: not the state for it
     if (!this_port || speed_state_ != kSpeedTry || baud != speed_asked_) return wrongState(out, capacity);
     speed_state_ = kSpeedCommitted;
-    speed_idle_ms_ = (idle == 0 || idle > reg::kPortSpeedIdleMaxMs) ? reg::kPortSpeedIdleMaxMs : idle;
     speed_good_ms_ = millis();
-    speed_bad_run_ = 0;
     answer = speed_rate_;
   } else {
     if (!this_port) return wrongState(out, capacity);   // at the boot speed already: nothing to go back from
@@ -738,7 +708,13 @@ Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, 
     answer = speed_base_;
   }
   putU32(out, answer);
-  return tail.finish(completed(4), out, capacity);
+  return completed(4);
+}
+
+// The rate a UART makes for `baud` is within port_speed_tolerance_pct of it (oep-if-link §3).
+bool Endpoint::speedWithin(uint32_t rate, uint32_t baud) {
+  const uint64_t diff = rate > baud ? rate - baud : baud - rate;
+  return diff * 100u <= static_cast<uint64_t>(baud) * reg::kLimitPortSpeedTolerancePct;
 }
 
 void Endpoint::speedApply() {
@@ -746,7 +722,6 @@ void Endpoint::speedApply() {
   speed_pending_ = kSpeedNone;
   if (pending == kSpeedRevert) { speedRevert(); return; }
   if (pending != kSpeedSwitch || !port_speed_) return;
-  if (speed_state_ != kSpeedBase && speed_port_ != speed_pending_port_) speedRevert();   // one port at a time
   Transport &t = transports_[speed_pending_port_];
   t.stream->flush();   // the answer out at the old speed first
   speed_rate_ = port_speed_(speed_pending_port_, speed_pending_baud_, true);
@@ -755,8 +730,6 @@ void Endpoint::speedApply() {
   speed_state_ = kSpeedTry;
   speed_until_ = millis() + speed_pending_verify_;
   speed_good_ms_ = millis();
-  speed_heard_ = false;
-  speed_bad_run_ = 0;
 }
 
 void Endpoint::speedRevert() {
@@ -766,26 +739,13 @@ void Endpoint::speedRevert() {
   speed_state_ = kSpeedBase;
   speed_port_ = 0xff;
   speed_rate_ = speed_asked_ = 0;
-  speed_bad_run_ = 0;
 }
 
 void Endpoint::speedPoll() {
   if (speed_pending_ == kSpeedRevert) { speed_pending_ = kSpeedNone; speedRevert(); }
   const uint32_t now = millis();
   if (speed_state_ == kSpeedTry && static_cast<int32_t>(now - speed_until_) >= 0) speedRevert();   // no commit in time
-  else if (speed_state_ == kSpeedCommitted && now - speed_good_ms_ >= speed_idle_ms_) speedRevert();
-}
-
-void Endpoint::speedBad() {
-  // The bytes in flight while both ends switch (the host's last write at the old speed, the line settling) close as a
-  // broken candidate: the ATOM's FTDI gave one on every switch, and reverting on it threw away rates that verified
-  // cleanly (2026-10-01). So in the try state only a broken candidate after a good frame at the new speed counts; a
-  // rate that never carries a good frame runs out its verify_ms instead.
-  if (speed_state_ == kSpeedTry) { if (speed_heard_) speedRevert(); return; }   // the new speed breaks frames: not this one
-  // committed (condition 4): kSpeedBadRun broken candidates in a row, no good frame between them (poll() resets the
-  // run on each good frame). No time window: a host back at the boot speed sends confirms that arrive as broken
-  // candidates, and the third takes the port back whatever their spacing (host duty 5).
-  if (++speed_bad_run_ >= kSpeedBadRun) speedRevert();
+  else if (speed_state_ == kSpeedCommitted && now - speed_good_ms_ >= reg::kPortSpeedIdleMs) speedRevert();
 }
 
 // open (core §6.4): lease_ms(u32) force(u8) [TLV 0x01 owner], the session's id in the header  ->  lease_ms(u32)
@@ -800,16 +760,15 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
   const uint32_t lease = getU32(payload);
   const uint8_t force = payload[4];
   // The open's own form first (it decides nothing about the lock until it is whole): its TLVs, session_id 0 (core §4.1),
-  // force a boolean (core §2.1), owner text of 1 to 32 bytes (core §6.4: another length, or text that is not valid,
-  // is a value the definition excludes - malformed, critical or not, core §2.1, §2.3).
+  // owner text of 1 to 32 bytes (core §6.4: another length is malformed, critical or not, core §2.3). force: any
+  // value other than 0 is true (core §2.1).
   Tail tail;
   const Result parsed = tail.parse(payload + 5, length - 5, kKnown, out, capacity);
   if (refused(parsed)) return parsed;
-  if (session == 0 || force > 1) return rejected(kRejectMalformed);
+  if (session == 0) return rejected(kRejectMalformed);
   size_t owner_len = 0;
   const uint8_t *owner = tail.find(reg::core::kTlvOpenOwner, owner_len);
-  if (owner && (owner_len == 0 || owner_len > sizeof owner_ || !requestText(owner, owner_len)))
-    return rejected(kRejectMalformed);
+  if (owner && (owner_len == 0 || owner_len > sizeof owner_)) return rejected(kRejectMalformed);
   if (capacity < 8) return failed();
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
   if (locked_ && holder_ != session) releaseLock();   // force: the old session is released first (core §6.4, §9)
@@ -828,22 +787,19 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
   expires_ms_ = millis() + lease_ms_;
   putU32(out, lease_ms_);
   putU32(out + 4, bootId());
-  return tail.finish(completed(8), out, capacity);
+  return completed(8);
 }
 
-// oep.probe.plan plan_apply (oep-if-plan §2.1): role assignments as TLVs 0x10 (sent critical, 0x90) = fn(u16) role(u8)
-// channel(u16). The plan is per fn: the fns
-// the request names are replaced, every other fn keeps its plan. An unknown critical TLV refuses the plan (unsupported),
-// an unknown non-critical one is ignored and listed. A session's plan goes when its lock ends (end, a lapse, a
+// oep.probe.plan plan_apply (oep-if-plan §2.1): role assignments as TLVs 0x10 = fn(u16) role(u8) channel(u16). The plan
+// is per fn: the fns the request names are replaced, every other fn keeps its plan. An unknown critical TLV refuses the
+// plan (unsupported), an unknown non-critical one is ignored. A session's plan goes when its lock ends (end, a lapse, a
 // takeover); a plan set through oep.probe.config (replacePlan, persistent) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // core §4.3's order over the whole request (oep-if-plan §2.5): its form (order 5: every role_assignment 5 bytes, fn 0
-  // malformed, at least one), then at the end of order 5 the fns named inside it (unknown_function), then an unknown
-  // critical tag and a fn with no plan role (unsupported, order 6), then the count against plan_roles (unavailable
-  // cause 2).
+  // Every check before anything changes (core §4.3, oep-if-plan §2.5): its form (every role_assignment 5 bytes, fn 0
+  // malformed, at least one), the fns named inside it (unknown_function), an unknown critical tag and a fn with no plan
+  // role (unsupported, the role_assignment's tag as received), then the count against plan_roles (unavailable cause 2).
   static const uint8_t kKnown[] = {kTagRoleAssignment};
   Tail tail;
-  tail.repeats(kKnown);   // role_assignment repeats (oep-if-plan §2.1)
   Result unknown_critical;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
@@ -864,7 +820,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   // a fn whose interface has no plan role (oep.probe.plan itself, a wire, ...): no role of it is a plan role
   for (at = 0; tail.next(at, raw, v, len);)
     if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical) && !interfaces_[getU16(v) - 1]->planRoles())
-      return unsupportedTag(out, capacity, kTagRoleAssignment | kTagCritical);
+      return unsupportedTag(out, capacity, raw);
   if (total > kMaxRoles) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // over plan_roles (oep-if-plan §2.1)
   RoleAssignment roles[kMaxRoles];
   size_t count = 0;
@@ -880,20 +836,22 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   // a fn whose plan the settings put in is the settings' to change (oep-if-plan §2.3)
   for (size_t k = 0; k < nfns; ++k)
     if (persistent_[fns[k] - 1])
-      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, 0xFFFF, fns[k],
-                         reg::core::kHolderKindSettingsPlan);
+      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings);
   for (size_t r = 0; r < count; ++r)   // a channel the settings disable (probe.config §1)
     if (disabled(roles[r].channel))
-      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, roles[r].channel, 0xFFFF,
-                                           reg::core::kHolderKindDisabled);
+      return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, roles[r].channel);
   const uint16_t reason = replaceFns(roles, count, fns, nfns, false);
   if (reason > 0xff) return failed();
   // another plan's channel, a wire connection's, the interface's own state: what it met (core §4.3)
   if (reason == kRejectUnavailable) return planUnavailable(out, capacity);
-  // a role, channel or combination the interface does not declare: unsupported, tag 0x90 (oep-if-plan §2.5)
-  if (reason == kRejectUnsupported) return unsupportedTag(out, capacity, kTagRoleAssignment | kTagCritical);
+  // a role, channel or combination the interface does not declare: unsupported, the first role_assignment's tag as
+  // received (oep-if-plan §2.5)
+  if (reason == kRejectUnsupported) {
+    for (at = 0; tail.next(at, raw, v, len);)
+      if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical)) return unsupportedTag(out, capacity, raw);
+  }
   if (reason) return rejected(static_cast<uint8_t>(reason));
-  return tail.finish(completed(), out, capacity);
+  return completed();
 }
 
 // Replaces the plan of the fns listed (a listed fn with no role is released). All or nothing: the old plans of those
@@ -908,7 +866,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
   for (size_t k = 0; k < nfns; ++k) {   // a track bound into a capture-group: the group's (oep-if-capture §4.1)
     const uint16_t group = fns[k] >= 1 && fns[k] <= count_ ? interfaces_[fns[k] - 1]->boundTo() : 0;
     if (group) {
-      plan_refusal_ = {reg::core::kUnavailableCauseBoundInGroup, 0xffff, group, 0};
+      plan_refusal_ = {reg::core::kUnavailableCauseBoundInGroup, 0xffff};
       return kRejectUnavailable;
     }
   }
@@ -934,7 +892,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
     old_persistent[i] = persistent_[i];
     if (planned_[i]) { interfaces_[i]->planRelease(); planned_[i] = false; }
   }
-  plan_refusal_ = {reg::core::kUnavailableCausePinInUse, 0xffff, 0xffff, 0};
+  plan_refusal_ = {reg::core::kUnavailableCausePinInUse, 0xffff};
   auto applyAll = [this, &listed](const RoleAssignment *set, size_t n, bool check) -> uint16_t {
     for (size_t i = 0; i < count_; ++i) {
       if (!listed[i]) continue;
@@ -945,20 +903,12 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
       if (check) {
         if (const uint8_t reason = interfaces_[i]->planCheck(mine, m)) {
           if (reason == kRejectUnavailable) {   // a channel held now (a wire's connection, a resource), else its state
-            plan_refusal_ = {interfaces_[i]->planRefusalCause(), 0xffff, 0xffff, 0};
-            interfaces_[i]->planRefusalDetail(plan_refusal_.channel, plan_refusal_.holder_kind);
+            plan_refusal_ = {interfaces_[i]->planRefusalCause(), 0xffff};
+            interfaces_[i]->planRefusalDetail(plan_refusal_.channel);
             for (size_t r = 0; r < m && pins_; ++r) {
               const uint16_t ch = mine[r].channel;
               if (!pins_->owner(ch) || pins_->owner(ch) == 0xff) continue;
-              plan_refusal_ = {reg::core::kUnavailableCausePinInUse, ch, 0xffff, pins_->holderKind(ch)};
-              for (size_t k = 0; k < plan_count_; ++k)   // another fn's plan: which, and whether the settings put it in
-                if (plan_roles_[k].channel == ch) {
-                  const uint16_t g = plan_roles_[k].function;
-                  plan_refusal_.holder_fn = g;
-                  plan_refusal_.holder_kind =
-                      persistent_[g - 1] ? reg::core::kHolderKindSettingsPlan : reg::core::kHolderKindPlan;
-                  break;
-                }
+              plan_refusal_ = {reg::core::kUnavailableCausePinInUse, ch};
               break;
             }
           }
@@ -979,7 +929,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
     for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = old_persistent[i];
   };
   if (plan_count_ + count > kMaxRoles) {   // over plan_roles (core §8)
-    plan_refusal_ = {reg::core::kUnavailableCauseLimit, 0xffff, 0xffff, 0};
+    plan_refusal_ = {reg::core::kUnavailableCauseLimit, 0xffff};
     undo();
     return kRejectUnavailable;
   }
@@ -993,17 +943,14 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
              (!shares || (o.function >= 1 && o.function <= count_ && !interfaces_[o.function - 1]->planShares()));
     };
     for (size_t k = 0; k < plan_count_; ++k)
-      if (clash(plan_roles_[k])) {   // another fn's plan: a session's (1), or one the settings put in (5)
-        const uint16_t g = plan_roles_[k].function;
-        plan_refusal_ = {reg::core::kUnavailableCausePinInUse, roles[r].channel, g,
-                         persistent_[g - 1] ? reg::core::kHolderKindSettingsPlan : reg::core::kHolderKindPlan};
+      if (clash(plan_roles_[k])) {   // another fn's plan
+        plan_refusal_ = {reg::core::kUnavailableCausePinInUse, roles[r].channel};
         undo();
         return kRejectUnavailable;
       }
     for (size_t k = 0; k < count; ++k)
       if (clash(roles[k])) {   // two fns of this very replacement
-        plan_refusal_ = {reg::core::kUnavailableCausePinInUse, roles[r].channel, roles[k].function,
-                         reg::core::kHolderKindPlan};
+        plan_refusal_ = {reg::core::kUnavailableCausePinInUse, roles[r].channel};
         undo();
         return kRejectUnavailable;
       }
@@ -1043,53 +990,41 @@ uint8_t Endpoint::replacePlan(const RoleAssignment *roles, size_t count, const u
 }
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // flags(u8, bit0 exact) first(u16) prefix_len(u8) prefix [TLV]  ->  total(u16) count(u8) count x entry (core §2.3)
+  // first(u16) [TLV]  ->  total(u16) count(u8) count x entry (core §7.2)
   // entry: fn(u16) instance(u16) revision(u8) flags(u8) name_len(u8) name; fn 0 (the core) has no name and is never
-  // an entry (core §7.2) - a probe with no interface lists nothing
-  if (length < 4 || length < 4u + payload[3] || capacity < 3) return rejected(kRejectMalformed);
+  // an entry - a probe with no interface lists nothing. total: the interfaces; first past them: count 0.
   Tail tail;
-  const Result parsed = tail.parse(payload + 4 + payload[3], length - 4 - payload[3], out, capacity);
+  const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
   if (refused(parsed)) return parsed;
-  if (!requestText(payload + 4, payload[3])) return rejected(kRejectMalformed);   // the prefix is text (core §2.1)
-  if (payload[0] & ~1u) return unsupportedValue(out, capacity);   // flags bits 1 to 7 are reserved (core §7.2)
-  const bool exact = payload[0] & 1;
-  const uint16_t first = getU16(payload + 1);
-  const uint8_t n = payload[3];
-  const uint8_t *prefix = payload + 4;
-  uint16_t total = 0;
+  if (capacity < 3) return failed();
+  const uint16_t first = getU16(payload);
   uint8_t count = 0;
   size_t used = 3;
-  bool full = false;
-  // room for the ignored TLV after the entries, if there is one to report
-  const size_t room = capacity > tail.room() ? capacity - tail.room() : 0;
-  auto consider = [&](uint16_t fn, uint16_t instance, uint8_t revision, uint8_t flags, const char *name) {
-    if (!nameMatches(name, prefix, n, exact)) return;
-    if (total++ < first || full) return;
-    const size_t name_len = strlen(name);
-    if (used + 7 + name_len > room || count == 255) { full = true; return; }
+  for (size_t i = first; i < count_; ++i) {
+    Interface &it = *interfaces_[i];
+    const size_t name_len = strlen(it.name());
+    if (used + 7 + name_len > capacity || count == 255) break;
     uint8_t *e = out + used;
-    putU16(e, fn);
-    putU16(e + 2, instance);
-    e[4] = revision;
-    e[5] = flags;
+    putU16(e, static_cast<uint16_t>(i + 1));
+    putU16(e + 2, instanceOf(static_cast<uint16_t>(i + 1)));
+    e[4] = it.revision();
+    e[5] = it.flags();
     e[6] = static_cast<uint8_t>(name_len);
-    memcpy(e + 7, name, name_len);
+    memcpy(e + 7, it.name(), name_len);
     used += 7 + name_len;
     ++count;
-  };
-  for (size_t i = 0; i < count_; ++i) {
-    Interface &it = *interfaces_[i];
-    consider(static_cast<uint16_t>(i + 1), instanceOf(static_cast<uint16_t>(i + 1)), it.revision(), it.flags(), it.name());
   }
-  putU16(out, total);
+  putU16(out, static_cast<uint16_t>(count_));
   out[2] = count;
-  return tail.finish(completed(used), out, capacity);
+  return completed(used);
 }
 
 Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // fn(u16) first(u16)  ->  more(u8) TLVs (first = the index of the first TLV). No TLV in the request (core §7.3: the
-  // answer is a TLV list itself, so ignored never appears in it): anything after the fixed part is malformed.
-  if (length != 4 || capacity < 1) return rejected(kRejectMalformed);
+  // fn(u16) first(u16)  ->  more(u8) TLVs (first = the index of the first TLV); the request's TLVs as core §2.3 says.
+  Tail tail;
+  const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
+  if (refused(parsed)) return parsed;
+  if (capacity < 1) return failed();
   const uint16_t fn = getU16(payload);
   const uint16_t first = getU16(payload + 2);
   const uint8_t *tlv = nullptr;
@@ -1097,7 +1032,7 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   if (fn > count_) return rejected(kRejectUnknownFunction);
   // every fn's describe starts with its ops (core §1.2, §7.4)
   const size_t ops = opsTlv(fn, scratch_, sizeof scratch_);
-  if (fn == 0) {   // the ops, the sketch's part, then the transports, discoverable, max_op_ms (core §7.5)
+  if (fn == 0) {   // the ops, the sketch's part, then the transports and max_op_ms (core §7.5)
     const size_t sketch = probe_tlv_length_ <= sizeof scratch_ - ops ? probe_tlv_length_ : 0;
     if (sketch) memcpy(scratch_ + ops, probe_tlv_, sketch);
     TlvWriter w(scratch_ + ops + sketch, sizeof scratch_ - ops - sketch);
@@ -1105,7 +1040,6 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
       const uint8_t v[3] = {static_cast<uint8_t>(i), transports_[i].kind, transports_[i].usb_interface};
       w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
     }
-    w.u8(reg::core::kTlvDescribeDiscoverable, discoverable_ ? 1 : 0);   // always: 0 without the project's VID:PID
     w.u32(reg::core::kTlvDescribeMaxOpMs, max_op_ms_);
     tlv = scratch_;
     tlv_length = ops + sketch + w.length();
@@ -1126,21 +1060,20 @@ Result Link::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *
     case reg::probe_link::kOpSource: {   // length(u32) [TLV]  ->  len(u16) data [TLV]
       const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      // at most max_frame - 26 (header 5, len 2, the room for ignored 19 - kept even when nothing is ignored, so len
-      // does not depend on the request's TLVs)
-      const size_t most = endpoint_.maxFrameIn() - reg::kLimitLinkSourceOverheadBytes;
+      // at most max_frame - 7 (the answer's header 5 and len 2)
+      const size_t most = endpoint_.maxFrameIn() - kResultHeader - 2;
       size_t n = getU32(payload);
       if (n > most) n = most;
       if (capacity < 2 + n) return failed();
       putU16(out, static_cast<uint16_t>(n));
       for (size_t k = 0; k < n; ++k) out[2 + k] = static_cast<uint8_t>(k);
-      return tail.finish(completed(2 + n), out, capacity);
+      return completed(2 + n);
     }
     case reg::probe_link::kOpSink: {   // count(u16) data [TLV]  ->  (empty); a count past the bytes that follow is malformed
       if (length < 2) return rejected(kRejectMalformed);
       const Result parsed = plainTail(tail, payload, length, 2u + getU16(payload), out, capacity);
       if (refused(parsed)) return parsed;
-      return tail.finish(completed(), out, capacity);
+      return completed();
     }
     case reg::probe_link::kOpPortSpeed: return endpoint_.portSpeed(payload, length, out, capacity);
     default: return rejected(kRejectUnknownOperation);

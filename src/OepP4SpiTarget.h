@@ -5,7 +5,8 @@
 // spi_slave driver, SPI2_HOST, no DMA: 64-byte FIFO transactions).
 //   0x01 configure(mode u8 0-3, bit_order u8: 0 MSB first, 1 LSB first)   0x02 arm(length u16, count u16, tx)
 //   0x03 read_rx -> pending(u8) bits(u32) count(u16) data
-//   0x04 status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) (no lock)   0x05 reset.   Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
+//   0x04 status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) (no lock)
+// Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
 // One CS-framed transaction is armed at a time with the MISO bytes to send;
 // after the master raises CS the result (MOSI bytes, length in bits) is queued
 // for read_rx. The driver's interrupt loads transactions (below); service() in loop() does the accounting.
@@ -61,14 +62,17 @@ class P4SpiTarget final : public Interface {
   static constexpr size_t kMaxFrame = 64;
   static constexpr size_t kQueueDepth = 4;
 
-  enum : uint8_t { kOpConfigure = 0x01, kOpArm = 0x02, kOpReadRx = 0x03, kOpStatus = 0x04, kOpReset = 0x05 };
+  enum : uint8_t {
+    kOpConfigure = reg::fixture_spi_target::kOpConfigure, kOpArm = reg::fixture_spi_target::kOpArm,
+    kOpReadRx = reg::fixture_spi_target::kOpReadRx, kOpStatus = reg::fixture_spi_target::kOpStatus,
+  };
 
   P4SpiTarget(PinTable &pins, uint16_t instance = 0) : pins_(pins), instance_(instance) {}
   const char *name() const override { return reg::fixture_spi_target::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_spi_target::kRevision; }
   bool lockFree(uint8_t op) const override { return op == kOpStatus; }
-  bool offers(uint8_t op) const override { return opIn(op, reg::fixture_spi_target::kOpConfigure, reg::fixture_spi_target::kOpReset); }
+  bool offers(uint8_t op) const override { return opIn(op, kOpConfigure, kOpStatus); }
   Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   size_t describe(uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
@@ -124,7 +128,7 @@ class P4SpiTarget final : public Interface {
   // SPI modes this target offers (bit n: mode n). Modes 1 and 3 sample on the second SCK edge: there the classic's
   // slave puts 0 on MISO from CS falling to the first SCK edge, whatever the first bit (bench, 2026-10) - neither
   // undriven nor the first bit (fixture §4), and the gate only switches the output enable. They are refused
-  // unsupported (core §4.3 order 6, payload tag 0x00).
+  // unsupported (payload tag 0x00).
   static constexpr uint8_t kModes = 0x05;
 
  private:

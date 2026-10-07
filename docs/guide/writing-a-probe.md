@@ -39,8 +39,9 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
 - **Limits** `{max_frame, window, max_inflight}` are what confirm promises the host. A serial port's rx buffer holds an
   encoded frame: a little more than max_frame (`cobsFrameMax`).
 - fn 0's **describe** is yours to fill: `describeCore(w, model, unit_id, ...)` writes the firmware version, the model,
-  a unit id that is the same on every transport (`platformUnitId`), the channel count and the reserved channels. Hand it
-  over with `setProbeDescription`. The transports, `discoverable` and `max_op_ms` are added by the endpoint.
+  a unit id that is the same on every transport (`platformUnitId`) and the channel count (the chip, with
+  `describeChip`, after it). Hand it over with `setProbeDescription`. The transports and `max_op_ms` are added by the
+  endpoint.
   describe is declarations only (core §7.3): nothing that changes while the probe runs goes in it.
   unit_id is mandatory (core §7.5): on a chip the library has no unique number for, the build stops until you give
   `-DOEP_UNIT_ID='"..."'` (1 to 16 of `a-z 0-9 -`, a different value per unit).
@@ -84,13 +85,10 @@ class Blink final : public oep::Interface {
   `kTlvHeader`). Sequences are `count, count x element` with no element length.
 - **TLV tails**: any request may end with TLVs. `plainTail(tail, payload, length, fixed, out, capacity)` parses what
   follows the fixed part: an unknown critical TLV refuses the request (`refused()` tells), an unknown other one is
-  recorded, and `tail.finish(result, out, capacity)` lists it as ignored. With known tags: `tail.parse(...)`,
-  `tail.find(tag, len, &critical)`, `tail.fixed(tag, size, value, ...)` for a TLV of one fixed size (shorter:
-  malformed; longer - a request TLV never grows - unsupported when critical, else ignored), and
-  `tail.refuse(tag, critical, ...)` for a value you cannot honour. Size variable data (a page, a read) with
-  `tail.room()` left for the ignored list. Every
-  completed answer carries ignored, a failed status too (core §2.3); the list lives for the request, so the endpoint
-  appends it when a handler returns `failed(n)` early without `finish` - leave room for it after the payload.
+  ignored and nothing in the answer says so (core §2.3). With the tags you implement: `tail.parse(...)`,
+  `tail.find(tag, len, &critical)` (the first one when a tag repeats), `tail.fixed(tag, size, value, ...)` for a TLV
+  of one fixed size (any other length: malformed, critical or not), and `Tail::refuse(tag, critical, ...)` for a value
+  you do not handle - unsupported with the tag as received, critical or not: a TLV you implement is never ignored.
 - **The lock** is the endpoint's: every request carries a session_id in its header (0 = none); an op not `lockFree`
   only runs for the session holding the lock (session_id 0: `session_required`). `sessionOver()` is called whenever
   that session's lock ends - end, its lease running out, another host's force, all alike (core §6.4, §9): drop
@@ -170,8 +168,9 @@ Each source file starts with the spec sections it follows.
 ## 7. Serial ports, binds and settings
 
 - A serial port carries OEP frames and, between them, raw bytes: what its **bind** says (a slot's console, a fixture
-  UART, several marked by name). `endpoint.setRawPorts(&binds)` turns it on; while a session holds the lock the raw
-  transfer on the port it uses waits, and resumes afterwards from the target's last reset (transports §4).
+  UART: one stream per port). `endpoint.setRawPorts(&binds)` turns it on; while a session holds the lock the raw
+  transfer on the port it uses waits, and resumes afterwards where it stopped - from the oldest byte left if the stream
+  overflowed meanwhile (transports §4, probe.config §1.2).
 - `ProbeConfig` keeps slots, binds, plans, labels, idle states, the fixture UARTs' settings (the uart item) and the
   disabled channels (the disable item), saves them (NVS on ESP32, the flash's last sector on RP2) and applies them at
   boot; `state` (op 0x06) tells how the slots and binds are doing, `unset` (0x05) removes items by key. Add it last
@@ -210,8 +209,9 @@ Each source file starts with the spec sections it follows.
   move the SWIO pulses of the other core enough to garble frames, and SWIO has no parity. `OepWireGate.h` keeps them
   apart: a request's frames wait out a sampler window and then hold the wire until `loop()` comes round; a window waits
   for the holder. `SamplerCapture::poll()` lets the wire go, so a sketch with both calls it every `loop()` (or no window
-  opens). The console's poll does not wait (oep-if-console §3 lets it stop only for a riscv-dm request or a halted
-  hart); `-DOEP_SWIO_PAUSE_CONSOLE=1` is a test hook that pauses it during windows instead.
+  opens). The console's poll pauses while a window is open (its turn is refused; the next poll reads): oep-if-console
+  §3 sets no reading interval, only that DMSTATUS is read before DATA0 after the connection's request and that DATA0 /
+  DATA1 are left alone while the hart is halted (docs/implementation-limits.ja.md §4.1).
 
 ## 8. Pushes and events
 
@@ -231,10 +231,8 @@ probes apart and finds a probe named by it). iProduct is free text for people (`
 host identifies a probe by it. Interfaces outside OEP on the same device, such as the ESP32-P4's in-app DFU, are part of it.
 The vendor bulk interface carries bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45 and a vendor HID says usage page
 0xFF4F, usage 0x45 (transports §3; `Firmware/OepProbe/Esp32P4.h` patches EspUsbDevice's descriptors for that).
-A probe calls `endpoint.setDiscoverable(true)` (describe discoverable, core §7.5) once it actually enumerates with the
-project's VID:PID, so a host that opened it another way (its USB-Serial/JTAG port) knows: `Firmware/OepProbe` does so on an
-RP2 at start-up and on the ESP32-P4 when its HS port has enumerated (`usbDevice.ready()`). A probe reached only through a
-port with a fixed ID (a USB-UART bridge, USB-Serial/JTAG) leaves it 0.
+describe declares nothing about the VID:PID (the old discoverable is gone, core §7.5): a host finds a probe by the
+project's VID:PID, by the unit id it was given, or by the port the user chose (transports §3).
 
 ## 10. Testing
 

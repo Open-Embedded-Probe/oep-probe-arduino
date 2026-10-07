@@ -7,8 +7,7 @@
 別の値を選んでよく、host はここの値に頼らない（仕様の待ちと宣言だけに頼る）。
 
 2026-10-07 の仕様の規則の見直し（oep-spec の `docs/v1-rule-review-2026-10-07.ja.md` §2、§4）で、仕様から外れて実装の値になったものを
-ここに移した。値は main の 5ad85ce（0.0.28 の後）のもの。firmware がその見直しに追いつくまで、見直しで外れた規則（スロットの錠、
-boot_reset、bind の mode、応答の ignored など）に沿った動きが残る（§2.6）。
+ここに移した。firmware は oep-spec 0f455a0 の規則に沿う（0.0.29 の開発版から）。見直しで外した動き（boot_reset など）の記録は §2.6。
 
 ## 1. どの platform にも共通
 
@@ -43,9 +42,23 @@ boot_reset、bind の mode、応答の ignored など）に沿った動きが残
 | SWD の WAIT | 100 回まで再試行、その後 status wait | |
 | arm-adi の TAR の書き直し | 1 KiB の境界ごと | ADI が自動の増加を保証する範囲 |
 | read_block / write_block の max_length | max_frame − 24 以下 | 要求と応答が max_frame に収まる |
-| コンソールの DMSTATUS の確かめ | 20 ms 以下ごと | 仕様（console §3、2026-10-07）は、要求に答えた後、次のコンソールの読みの前に DMSTATUS を読むことを求める |
+| コンソールの DMSTATUS | その connection の riscv-dm の要求（と線の attach）に答えた後、次の DATA0 の読みの前。ほかに 20 ms ごと | 仕様（console §3）が求めるのは前者だけ。20 ms ごとの読みは、止まった hart が走り出したことと target の自分の再起動（havereset）を見るためのこの実装の間隔 |
 
-この実装の attach の応答の待ちの上限は、1000 ms + hold_ms + 700 ms（max_op_ms の 10000 ms より短い）。
+この実装の attach の応答の待ちの上限は、1000 ms + hold_ms + 700 ms（max_op_ms の 10000 ms より短い）。値はライブラリの
+`src/OepLimits.h`（`oep::limits`）にまとめてある。
+
+**target の状態を変えない再試行（仕様 oep-if-debug §2）**: connection がある間、線の立て直しは設定の組（RVSWD は DMI 0x7E / 0x7D、SWIO は
+同じ組と、DMCONTROL が dmactive を 0 と読むときの dmactive）だけを送る。target そのものをリセットしうる RVSWD の wake のパターンは、
+connection の上では attach（新しい connection の立ち上げと、答えない既存の connection の立て直し、reset TLV）と riscv-dm の reset の op の
+中でだけ送る（`DmiPhy::holdWakes` / `DmiPhy::WakeScope`）。コンソールの読みの中の立て直しは wake を送らないので、wake でしか戻らない線は
+線切れ（1000 ms）で閉じ、host の attach で戻る。SWD の line reset と dormant からの wake は target の状態を変えないので、この制限の外。
+
+**書き込みを繰り返さない（仕様 oep-if-debug §2）**: DMI の書き込みは PHY が一度だけ送る（線の再試行は読み出しだけ）。host の dmi の手順は
+やり直さず、失敗したら done をそれより前の手順の数にして答える。write_block の語の書き込み（target の記憶への store）は一度だけ。
+SWD の書き込みの転送をやり直すのは、ACK が無かったとき（target は書き込みを受けていない）と WAIT のときだけ。高水準の op の中で、
+線の落ちを見たまとまり（§1.4）をやり直すのは、probe が選んだ値をレジスタに置く設定（a0 / a1、program buffer、DATA1 の番地、dcsr、
+run の host のレジスタと dpc、abstractauto と DATA0 / DATA1 の書き戻し）だけで、同じ値をもう一度置く。target の記憶への書き込みと、
+一度で意味が変わる書き込み（resumereq、ndmreset）はやり直さない。
 
 ### 1.3 search_retries の数え方
 
@@ -65,7 +78,14 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 （block、run、step、reset）は手順をまとまりに分け、まとまりごとに線を確かめる（DMCONTROL の dmactive と hart 0 も見る）。仕様が求めるのは、
 線の失敗を見つけた要求を success で返さないことと、書き込みを繰り返さないことだけ（oep-if-debug §2）。
 
-### 1.5 そのほか
+### 1.5 DATA0 / DATA1 の書き戻し
+
+コンソールの方式は DATA0 / DATA1 を target との郵便受けに使う。probe は、自分の高水準の op の抽象コマンドで使った DATA0 / DATA1 を
+応答の前に戻す（仕様 oep-if-debug §4）: read_block / write_block、step、reset の確認、attach の dpc の読み。run は、準備（dcsr、host の
+レジスタ、dpc）の前に DATA0 / DATA1 を覚え、hart を走らせる前に書き戻し、止まった後の dpc と値の読みの後にもう一度戻す。準備が
+失敗したら書き戻してから stopped 3（走らせなかった）で答える。
+
+### 1.6 そのほか
 
 - **生のバイトの遅れ**: シリアルの口の受け方（transports §4）により、0x00 の後に来た生のバイトは、次の 0x00 が来るか入力が 200 ms 途切れた
   ときに初めて結んだ流れに届く。0x00 を含む二進の流れは、0x00 ごとに最長 200 ms 遅れる。
@@ -90,7 +110,7 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 - **USB の門**: 自分の USB の device を transport にする probe は、host が device を 1000 ms 構成したままになってから、host が居なければ
   起動から 5000 ms 後に、at boot の attach を始める。
 
-### 2.2 前の起動の終わり方（firmware の文字列）
+### 2.2 前の起動の終わり方（firmware の文字列、この実装の動き）
 
 fn 0 の describe の firmware は、版の後ろに、前の起動を何が終わらせたかを括弧で付ける: `<version> (<note>)`。note は
 `<reset> at <n> s`（reset は panic、task-wdt、int-wdt、wdt、brownout、usb、jtag、reset-pin、cpu-lockup、software（probe がしていないもの）、
@@ -98,8 +118,8 @@ other。RP2 は wdt）か、`update to <slot> did not reach setup: <reset>`（�
 した再起動の後は何も付けない。
 
 - 版を完全一致で比べる道具は、最初の空白から後ろを外して比べる。
-- describe は宣言だけで、起動ごとに変わる情報を入れる所ではない（core §7.3）。2026-10-07 の仕様の見直し（Q4）で、この印は firmware の
-  文字列から外し、見方をこの文書に置くことにした（firmware の変更はこれから）。
+- describe は宣言だけで（core §7.3）、仕様はこの印を定めない（見直しの Q4）。この実装は利用者の判断で印を firmware の文字列に
+  残す（実装の動きで、仕様の規則ではない）。host は firmware を自由な文字列として扱い、印に頼らない。
 
 ### 2.3 DFU で更新した image（ESP32-P4）
 
@@ -118,22 +138,26 @@ restart の応答の後、probe は応答を送り終えてから再起動する
 
 設定は ESP32 / ESP32-P4 では NVS、RP2040 / RP2350 では flash の最後の sector に、丸ごと置き換えで保存する。
 
-### 2.6 見直しに追いつくまでの動き（2026-10-07 の時点）
+### 2.6 見直しで外した動きの記録（0.0.28 まで）
 
-firmware はまだ次のものを持つ（仕様からは外れた。次の版で外す）:
+oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。どれも今の firmware には無い。
 
 - **boot_reset**（スロットのリセットでのやり直し）: at boot のスロットの自動の attach が線の応答をまったく得られなかったら、ロックが一度も
-  取られていない起動の間だけ、スロットごとに 1 回、label `nrst` の channel を 20 ms 引いて attach をやり直す。
-- スロットの錠、bind の mode（last-reset、manual、mixed。mixed の行は 128 byte か 100 ms の静けさで閉じる）、応答の ignored、corr_reused、
-  list の prefix、port_speed の port と idle_ms、i2c-target の mode と arm_rx / reset、spi-target の reset、gpio の drive の kind と mode 7。
+  取られていない起動の間だけ、スロットごとに 1 回、label `nrst` の channel を 20 ms 引いて attach をやり直した。
+- スロットの錠（target_id の mask / value）と slot_state 2 / 3、bind の mode（last-reset、manual、mixed。mixed の行は 128 byte か 100 ms の
+  静けさで閉じた）と、セッションの後に最後の host の reset から再開すること、応答の ignored、corr_reused（送り直しの表の CRC-32）、
+  list の prefix、describe の reserved / profile / resets_on_open / discoverable / implementation、port_speed の port と idle_ms と壊れの数え、
+  i2c-target の mode と arm_rx / reset、spi-target の reset、gpio の drive の kind と mode 7、uart の status の configured、コンソールの
+  send_queue の宣言、捕捉の timing / rate_accuracy と宣言（rate_list など）、riscv-dm の reset の method と attempts、
+  OEP_SWIO_PAUSE_CONSOLE の試験用の仕掛け（今は窓の間いつも止める、§4.1）。
 
 ## 3. 線の PHY ごと
 
 ### 3.1 RVSWD / SWIO
 
 - **立て直し**: 線が 300 µs 以上休んだ後の最初のフレームの前に DMSTATUS を読む。失敗したか、authenticated の立った「見つかった」で
-  なければ、設定の組（DMI 0x7E、0x7D に 0x5AA50400）を 2 回送り（wake のパターンは無し）、DMSTATUS をもう一度読む。connection の上では
-  wake のパターンを送らない（target そのものをリセットしうる。仕様 oep-if-debug §2 の、target の状態を変えない再試行）。
+  なければ、設定の組（DMI 0x7E、0x7D に 0x5AA50400）を 2 回送り（wake のパターンは無し）、DMSTATUS をもう一度読む。それでも戻らない
+  線に wake のパターンを送るのは、connection が無いときと、attach と reset の op の中だけ（§1.2 の「target の状態を変えない再試行」）。
 - **dmactive の後**: dmactive を書いた直後に、同じ速さで設定の組をもう 2 回書く。
 - **受け入れ**: 速さは DMSTATUS を続けて 1000 回読んで同じ値とパリティが得られたら受け入れ、書き込みは scratch のレジスタ（PROGBUF0）への
   書き込みと読み戻しを 256 回往復して一致したら受け入れる。速さの探索は最も遅い速さの読みから始め、速い方へ進める。
@@ -162,9 +186,9 @@ firmware はまだ次のものを持つ（仕様からは外れた。次の版�
   割り込みを止めて GPIO を読み続ける。同じ周辺のバスを使う SWIO のフレームは、その間ずれうる（SWIO にはパリティが無く、DMI の書き込みは
   読み戻されないので、線の上で分からない）。この実装は、要求の SWIO のフレームを窓の後に回す（要求のフレームは窓で分けない。トリガの
   探索の区切りの間に待っている要求があれば 5 ms の番を譲る）。止めるのは窓の長さ以下。
-- **コンソールの読み**: 今の firmware は、窓の間もコンソールの DMSTATUS と DATA0 を読む（試験用の OEP_SWIO_PAUSE_CONSOLE=1 で
-  ビルドしたときだけ止める）。2026-10-07 の仕様（console §3）は、読みを止めてもどの規則にも反しない形になったので、窓の間は止める
-  方へ直す（dmseq の target は長い待ち（1 s 以上）のうちに戻る）。
+- **コンソールの読み**: 窓の間、コンソールは DMSTATUS も DATA0 も読まない（線の番を断られ、窓が閉じた後の poll で読む）。止めるのは
+  窓の長さ以下（即時で最大 164 ms、トリガの探索は 1 回の区切りが最大 250 ms）。仕様（console §3）は読む間隔を決めないので、どの規則にも
+  反しない。target の側では、SDI / DMDATA はその間書き込みを待ち、dmseq の target は長い待ち（1 s 以上）のうちに戻る。
 - fixture UART の受信の割り込みは loop() の core（sampler と別）で、FIFO の閾値は 32 byte。速さは 2000000 bps まで。
 
 ### 4.2 ESP32-P4

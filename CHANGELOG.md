@@ -1,6 +1,69 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Follows oep-spec 0f455a0 (the rule review of 2026-10-07, §2 and §7; the registry header and the test vectors synced
+  from it). Core: no ignored TLV - an unknown non-critical TLV is ignored with nothing in the answer, an unknown critical
+  one is unsupported; a TLV this probe implements is checked the same with or without bit 7 (another length: malformed;
+  a value it does not handle: unsupported with the tag as received; `Tail::refuse`, no `finish` / `room` / `ignore`);
+  a repeated tag: the first is used; the refusals keep header, resend table and session first, then every check before
+  any change and any one reason; the resend table is (corr, answer) - no corr_reused, no CRC-32; list takes first(u16)
+  only; fn 0's describe loses implementation, reserved, profile, resets_on_open and discoverable (`describeCore` has no
+  reserved bitmap, model is free text; `setDiscoverable` removed); unavailable loses holder_fn / holder_kind; resource
+  numbers go +1, skipping live ones; booleans read non-zero as true; request text no longer checked. Debug: the times
+  and counts are this implementation's (`src/OepLimits.h`, docs/implementation-limits §1.2); P1 - on a connection the
+  RVSWD wake goes out only inside attach and reset (`DmiPhy::holdWakes` / `WakeScope`), a link only a wake brings back
+  closes on wire loss; P2 - no write that may have reached the target is repeated (documented per wire); Q1 - run whose
+  preparation fails answers stopped 3 not_run with the hart still halted; run puts DATA0 / DATA1 back before the hart
+  runs; reset answers status, flags (bit0 / bit1), pc - no method TLV, no attempts; timeout_ms 0 taken; a count > 0 scan
+  ignores skip; a scan without max_speed runs at the wire's slowest speed; `wch_dmi_7f` is `dmi_7f`; arm-adi's TAR
+  rewrite at `limits::kTarRewriteBytes`. Console: DMSTATUS is read before the next DATA0 read after a riscv-dm request
+  (or attach) of the connection is answered (`Ch32Dm::noteRequest`), DATA0 / DATA1 untouched while halted, the 20 ms
+  status read kept as this implementation's interval; no send_queue declaration; dmseq host rule 1's answer after three
+  invalid words removed; the classic ESP32 pauses the console's reads during a sampler window (the old
+  OEP_SWIO_PAUSE_CONSOLE behaviour, now always; the hook removed). Common: read from 3 with arg > 0xFF reads from now,
+  write count 0 is success. Capture: no timing / rate_accuracy in the configure answer, no rate_list / rate_limit /
+  max_read / segment_ring / frontend_shared / background / layout candidates / max_tracks / budget / start_skew; no
+  always-critical TLVs. Fixture: gpio drive is a u8 level (0xFF default; past drive_levels or without them:
+  unsupported), no read drive, no mode 7; uart status is baud and format; i2c-target has one form (address only, a
+  write with data is one frame, reads from preload_tx slots else 0xFF, stretch kept as an optional op), no arm_rx /
+  reset / modes / pullup_ohms; spi-target loses reset and counts errors once per transfer. probe.config: no slot lock,
+  no boot_reset, bind is port(u8) kind(u8) id(u16) and resumes where it stopped; slot_state / bind_state shorter; idle
+  is 4 bytes; the hash is the probe's own u32 (no canonical form); disable and idle applied before every other item at
+  start-up; saved-settings format items6 / OEP6 (an older save reads as unreadable). port_speed is the handshake only:
+  baud(u32) step(u8) verify_ms(u16) on the port it came on, idle fixed at port_speed_idle_ms, a rate further than
+  port_speed_tolerance_pct refused unsupported, no revert on broken candidates. Kept as implementation behaviour: the
+  reset note in the firmware text (Q4) and the safe boot. Host tests (tests/host/run.sh) all pass; one spec vector
+  ("rvswd scan: count > 0 with skip", still malformed at 0f455a0) contradicts debug §1 and is checked against the text;
+  docs/implementation-limits (EN / JA), guides and README follow; not run on hardware yet
+- (JA) oep-spec 0f455a0（2026-10-07 の規則の見直し §2、§7。registry のヘッダと試験のベクタもそこから同期）に合わせました。本体:
+  ignored の TLV は無くなり、知らない非 critical の TLV は応答に何も付けずに無視、知らない critical の TLV は unsupported。この probe が
+  実装する TLV は bit 7 によらず同じに確かめます（長さ違いは malformed、扱わない値は受け取ったままの tag で unsupported。
+  `Tail::refuse`。`finish` / `room` / `ignore` は廃止）。繰り返された tag は最初を使います。断りは見出し、送り直しの表、セッションの後、
+  何も変える前にすべてを確かめ、当たった理由のどれか 1 つで断ります。送り直しの表は (corr、応答) で、corr_reused と CRC-32 は
+  ありません。list は first(u16) だけ。fn 0 の describe から implementation、reserved、profile、resets_on_open、discoverable を外しました
+  （`describeCore` は予約の bitmap を取らず、model は自由な文字列。`setDiscoverable` は削除）。unavailable から holder_fn / holder_kind を
+  外しました。資源の番号は +1 で進み使用中を飛ばします。真偽値は 0 でなければ真、要求の text は確かめません。debug: 時間と回数はこの
+  実装のもの（`src/OepLimits.h`、implementation-limits §1.2）。P1: connection の上で RVSWD の wake を送るのは attach と reset の中だけ
+  （`DmiPhy::holdWakes` / `WakeScope`）。wake でしか戻らない線は線切れで閉じます。P2: target に届いたかもしれない書き込みは繰り返しません
+  （線ごとに文書に記載）。Q1: 準備が失敗した run は stopped 3 not_run で、hart は止まったまま。run は hart を走らせる前に DATA0 / DATA1
+  を書き戻します。reset の応答は status、flags（bit0 / bit1）、pc（method の TLV と attempts は無し）。timeout_ms 0 を受けます。count > 0
+  の scan は skip を見ません。max_speed の無い scan は線の最も遅い速さ。`wch_dmi_7f` は `dmi_7f` に。arm-adi の TAR の書き直しは
+  `limits::kTarRewriteBytes`。コンソール: その connection の riscv-dm の要求（と attach）に答えた後、次の DATA0 の前に DMSTATUS を
+  読み（`Ch32Dm::noteRequest`）、止まっている間は DATA0 / DATA1 に触れません。20 ms ごとの DMSTATUS はこの実装の間隔として残しました。
+  send_queue の宣言と、dmseq の host 規則 1 の「無効な語が 3 回で答える」を外しました。classic ESP32 は sampler の窓の間コンソールの
+  読みを止めます（前の OEP_SWIO_PAUSE_CONSOLE の動きを常に。試験用の仕掛けは削除）。common: from 3 で arg > 0xFF は今から読み、
+  write の count 0 は success。捕捉: configure の応答の timing / rate_accuracy、宣言の rate_list / rate_limit / max_read / segment_ring /
+  frontend_shared / background / layout の候補 / max_tracks / budget / start_skew、常に critical の TLV を外しました。fixture: gpio の
+  drive は u8 の段（0xFF は既定。drive_levels を越えるか宣言が無ければ unsupported）、read の drive と mode 7 は無し。uart の status は
+  baud と format。i2c-target は 1 つの形（configure は address だけ、データのある書き込み 1 回 = 1 フレーム、読み出しは preload_tx の
+  置き場か 0xFF、stretch は任意の op で残す）で、arm_rx / reset / mode / pullup_ohms は無し。spi-target は reset を外し、errors は転送 1 回に
+  1 まで。probe.config: スロットの錠と boot_reset は無し。bind は port(u8) kind(u8) id(u16) で、止めた位置から再開。slot_state /
+  bind_state は短く、idle は 4 byte。hash は probe が決める u32（正規形は無し）。起動時は disable と idle をほかのどの項目より先に。
+  保存の形は items6 / OEP6（前の保存は読めないものになります）。port_speed は握手だけ: 来た口で baud(u32) step(u8) verify_ms(u16)、
+  決めた後は port_speed_idle_ms 固定、port_speed_tolerance_pct を越えてずれる速さは unsupported、壊れたフレームでは戻りません。
+  実装の動きとして残したもの: firmware の文字列のリセットの印（Q4）と safe boot。host の試験（tests/host/run.sh）はすべて通ります。
+  仕様のベクタの 1 つ（「rvswd scan: count > 0 with skip」、0f455a0 でもまだ malformed）は debug §1 の本文と食い違うので、本文の
+  とおりに確かめています。implementation-limits（EN / JA）、ガイド、README も合わせました。実機ではまだ動かしていません
 - (EN) docs/implementation-limits.ja.md (new; docs/implementation-limits.md an English stub): the values the OEP
   specification leaves to the probe and this implementation's limits, by platform - gathered after oep-spec's rule review
   of 2026-10-07 moved them out of the specification (the wire's times and counts, max_op_ms 10000, restart_max_ms,

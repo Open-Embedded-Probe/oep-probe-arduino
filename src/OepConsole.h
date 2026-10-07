@@ -78,12 +78,6 @@ class TargetConsoleStream final : public Interface, public BindSource {
   const PositionStream *bindStream() const override { return exists_ ? &stream_ : nullptr; }
   uint16_t bindStreamNumber() const override { return stream_number_; }
   size_t bindInput(const uint8_t *data, size_t length) override;
-  uint32_t hostResets() const override { return port_.resets; }
-  bool hostResetMark(uint32_t resets, uint64_t &position) const override {
-    if (!reset_marked_ || reset_mark_resets_ != resets) return false;
-    position = reset_mark_position_;
-    return true;
-  }
 
  private:
   static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
@@ -102,10 +96,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   PositionStream::Mark marks_[kMarks];
   PositionStream stream_;
   uint32_t seen_resets_ = 0, seen_resyncs_ = 0, seen_restarts_ = 0, seen_closes_ = 0;
-  bool reset_marked_ = false;          // the last reset mark placed: the resets count it was for, its position
-  uint32_t reset_mark_resets_ = 0;
-  uint64_t reset_mark_position_ = 0;
-  bool checking_ = false;   // streamOp only checks the request's form and values (handle: core §4.3 order 8 last)
+  bool checking_ = false;   // streamOp only checks the request's form and values (handle: the number after)
   Result streamOp(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
   bool openStream(uint8_t mechanism, uint8_t user, bool &existing);
   void closeStream(uint8_t detail, bool link_lost = false, bool detached = false);

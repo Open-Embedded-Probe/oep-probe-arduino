@@ -38,8 +38,8 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
 - **上限** `{max_frame, window, max_inflight}` は、confirm で host に約束する値です。シリアルの口の rx は、符号化したフレームを
   入れるので max_frame より少し大きくします（`cobsFrameMax`）。
 - fn 0 の **describe** は自分で書きます。`describeCore(w, model, unit_id, ...)` が、firmware の版、model、どの経路でも同じ
-  unit id（`platformUnitId`）、channel の数、予約の channel を書きます。`setProbeDescription` で渡します。経路の一覧と
-  transport、`discoverable`、`max_op_ms` は endpoint が足します。describe は宣言だけです（core §7.3）:
+  unit id（`platformUnitId`）、channel の数を書きます（チップはその後に `describeChip`）。`setProbeDescription` で渡します。
+  経路の一覧の transport と `max_op_ms` は endpoint が足します。describe は宣言だけです（core §7.3）:
   動いている間に変わるものは入れません。
   unit_id は必須です（core §7.5）。ライブラリが固有の番号を知らないチップでは、`-DOEP_UNIT_ID='"..."'`
   （`a-z 0-9 -` で 1〜16 文字、個体ごとに違う値）を与えるまでビルドが止まります。
@@ -80,13 +80,10 @@ class Blink final : public oep::Interface {
 - **TLV** は `tag(u8) len(u16) value` で、長さによらず形は一つです（core §2.2。`TlvWriter`、`tlvAt`、`kTlvHeader`）。
   並びは `count、count × 要素` で、要素の長さは置きません。
 - **TLV の後ろの部分**: どの要求も最後に TLV を付けられます。`plainTail(tail, payload, length, fixed, out, capacity)` が固定部分の
-  後ろを読みます。知らない critical の TLV は要求を断り（`refused()` で分かる）、それ以外の知らない TLV は覚えておき、
-  `tail.finish(result, out, capacity)` が ignored として返します。知っている tag があるときは `tail.parse(...)`、
-  `tail.find(tag, len, &critical)`、決まった長さの TLV には `tail.fixed(tag, size, value, ...)`（短ければ malformed。長ければ、
-  要求の TLV は伸ばさないので、critical なら unsupported、そうでなければ ignored）、守れない値には `tail.refuse(tag, critical, ...)`。
-  可変の量（ページ、読み）は `tail.room()` を ignored のために残して決めます。ignored は、status が failed のものも含めて
-  completed の応答すべてに付きます（core §2.3）。一覧は要求ごとに持つので、handler が `finish` を通さずに早めに `failed(n)` を返しても
-  endpoint が付けます。payload の後ろに場所を残しておきます。
+  後ろを読みます。知らない critical の TLV は要求を断り（`refused()` で分かる）、それ以外の知らない TLV は無視し、応答には何も
+  付けません（core §2.3）。実装する tag があるときは `tail.parse(...)`、`tail.find(tag, len, &critical)`（繰り返されたら最初のもの）、
+  決まった長さの TLV には `tail.fixed(tag, size, value, ...)`（ほかの長さは critical によらず malformed）、扱わない値には
+  `Tail::refuse(tag, critical, ...)`（critical によらず、受け取ったままの tag で unsupported。実装する TLV は無視しません）。
 - **ロック**は endpoint が見ます。どの要求も見出しに session_id を持ちます（0 = なし）。`lockFree` でない op は、ロックを持つ
   セッションにだけ実行されます（session_id 0 は `session_required`）。そのセッションのロックが終わるたびに（end、リースの
   期限切れ、ほかの host の force、どれも同じ。core §6.4、§9）`sessionOver()` が呼ばれるので、作ったものと共有の分（線の接続の
@@ -162,8 +159,9 @@ class Blink final : public oep::Interface {
 ## 7. シリアルの口、bind、設定
 
 - シリアルの口は OEP のフレームと、その間の生のバイトを運びます。生のバイトは **bind** のとおり（スロットのコンソール、fixture の
-  UART、名前の印つきの複数）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
-  生の流れは止まり、終わった後に target の最後の reset から続きます（transports §4）。
+  UART。口ごとに 1 本）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
+  生の流れは止まり、終わった後に止めた位置から続きます（その間にあふれていれば残っている一番古いバイトから。transports §4、
+  probe.config §1.2）。
 - `ProbeConfig` はスロット、bind、plan、label、空きのときの状態、fixture UART の設定（uart の項目）、無効にした channel
   （disable の項目）を持ち、保存し（ESP32 は NVS、RP2 は flash の最後の領域）、起動時に行います。`state`（op 0x06）がスロットと
   bind の状態を、`unset`（0x05）がキーでの削除です。最後に `add(config)` し、`addPlace(wire, console)`、`addUart(uart)`、
@@ -199,8 +197,9 @@ class Blink final : public oep::Interface {
   core の SWIO のパルスをフレームが乱れるほど動かし、SWIO にはパリティがありません。`OepWireGate.h` が両者を分けます: 要求の
   フレームは sampler の窓が終わるのを待ち、その後 `loop()` が一回りするまで線を持ちます。窓は持ち主を待ちます。
   `SamplerCapture::poll()` が線を手放すので、両方を持つスケッチは毎回の `loop()` でそれを呼びます（呼ばないと窓が開きません）。
-  コンソールの poll は待ちません（oep-if-console §3 が読みを止めてよいとするのは riscv-dm の要求と止まった hart だけ）。
-  `-DOEP_SWIO_PAUSE_CONSOLE=1` は、代わりに窓の間それを止めるテスト用の仕掛けです。
+  コンソールの poll は、窓が開いている間は止まります（番を断られ、次の poll で読む）。oep-if-console §3 は読む間隔を決めず、
+  その connection の要求の後は DATA0 の前に DMSTATUS を読むことと、hart が止まっている間 DATA0 / DATA1 に触れないことだけを
+  求めます（docs/implementation-limits.ja.md §4.1）。
 
 ## 8. push と出来事
 
@@ -219,10 +218,8 @@ USB の probe は、プロジェクトの VID:PID `1209:4F45`（`oep::reg::kUsbP
 これで probe を見分けません。同じ device の OEP の外のインターフェース（ESP32-P4 のアプリの中の DFU など）も、その device の一部です。
 vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /
 usage 0x45 を持ちます（transports §3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
-probe は、プロジェクトの VID:PID で実際に列挙したら `endpoint.setDiscoverable(true)`（describe の discoverable、core §7.5）を
-呼びます。別の口（USB-Serial/JTAG）から開いた host にもそれが分かります。`Firmware/OepProbe` は、RP2 では起動時に、ESP32-P4 では
-HS の口が列挙したとき（`usbDevice.ready()`）に呼びます。決まった ID の口（USB-UART bridge、USB-Serial/JTAG）でしか届かない probe
-は 0 のままにします。
+describe は VID:PID について何も宣言しません（前の discoverable は無くなりました、core §7.5）。host は、プロジェクトの VID:PID、
+名指された unit id、利用者が選んだ口で probe を見つけます（transports §3）。
 
 ## 10. 試す
 
