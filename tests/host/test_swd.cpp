@@ -91,6 +91,9 @@ int main() {
     t.insert(t.end(), {1, 0, 0x06});   // one DP read of CTRL/STAT (A = 1)
     r = call(adi, TargetArmAdi::kOpTransfer, t, out);
     CHECK(ok(r) && out.size() >= 10 && out[2] == kStatusOk);
+    // n = 0 (oep-spec vector "arm-adi transfer: n = 0", debug §6): success, done 0, status ok, ack 0, nvals 0
+    r = call(adi, TargetArmAdi::kOpTransfer, {uint8_t(fixed.number), uint8_t(fixed.number >> 8), 0, 0}, out);
+    CHECK(ok(r) && out == (Bytes{0, 0, kStatusOk, 0, 0, 0}));
   }
   r = call(wire, WireSwd::kOpDetach, u16(fixed.number), out);
   CHECK(ok(r) && !fixed.connected);

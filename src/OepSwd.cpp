@@ -548,7 +548,7 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       if (checking_) return completed();
       size_t o = 6;
       uint16_t done = 0, nvals = 0;
-      uint8_t status = kStatusOk, ack = swd::kOk;
+      uint8_t status = kStatusOk, ack = 0;   // n = 0: success, ack 0 - no transfer, no ACK (oep-if-debug §6)
       at = 2;
       for (uint16_t i = 0; i < count; ++i) {
         const uint8_t req = p[at++];

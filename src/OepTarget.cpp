@@ -865,8 +865,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
     }
     case kOpStep: {
       // [TLV] -> status(u8) moved(u8) dpc_before(u32) dpc_after(u32) [TLV 0x01 step_left]; one resume only, prv kept.
-      // Not back in debug mode within limits::kDmWaitMs: status state - with dpc_after when the probe's haltreq stopped it,
-      // with step_left (length 0) when it still runs (oep-if-debug §4.2).
+      // Not back in debug mode within limits::kDmWaitMs: status state, moved and both dpc 0 - with step_left (length 0)
+      // when it still runs (oep-if-debug §4.2).
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (!target) return completed();
@@ -885,10 +885,12 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       } else {
         status = failure(kStatusState);   // not halted (the module answers), or no answer at all: line
       }
+      // moved, dpc_before and dpc_after mean something with status ok only: 0 otherwise (oep-if-debug §4.2)
+      const bool stepped = status == kStatusOk;
       out[0] = status;
-      out[1] = moved;
-      putU32(out + 2, before);
-      putU32(out + 6, after);
+      out[1] = stepped && moved;
+      putU32(out + 2, stepped ? before : 0);
+      putU32(out + 6, stepped ? after : 0);
       size_t length = 10;
       if (left) {
         putTlvHeader(out + 10, reg::target_riscv_dm::kTlvStepAnswerStepLeft, 0);

@@ -912,6 +912,8 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     // it was and answered it stopped
     if ((status & (1u << 9)) && statusConfirms([](uint32_t s) { return (s & (1u << 9)) != 0; })) { halted = true; break; }
   }
+  // elapsed_us (oep-if-debug §4.4): from the resumereq to the halt seen (stopped 1), made (0) or given up (2)
+  report.elapsed_us = micros() - started;
   OEP_LOGF("dm run: %s after %lu us, %lu looks (%lu no module), DMSTATUS %08lx", halted ? "stopped" : "timeout",
            static_cast<unsigned long>(micros() - started), static_cast<unsigned long>(looks),
            static_cast<unsigned long>(unanswered), static_cast<unsigned long>(last_status));
@@ -920,14 +922,15 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
   (void)last_status;
   phy_.write(kDmControl, 0x80000001);   // back to haltreq | dmactive, stopped or not
   phy_.write(kAbstractCs, 0x700);
-  report.elapsed_us = micros() - started;
   report.stopped = halted;
   if (halted) {
     steady();                           // the stop changed the hart's state: the link up again, and staying up
     halted_ = true;
   } else {
     halted_ = false;
-    if (!halt()) return false;          // the timeout: the hart could not be stopped (stopped 2)
+    const bool stopped = halt();
+    report.elapsed_us = micros() - started;   // the halt made, or given up
+    if (!stopped) return false;          // the timeout: the hart could not be stopped (stopped 2)
   }
   report.halted = true;
   // The caller judges success from dpc (its ebreak) and the registers it asked for; a stop somewhere else is a fault.
