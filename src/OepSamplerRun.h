@@ -5,7 +5,7 @@
 // same code: an `Io` gives the cycle counter, one sample's read, interrupts off / on, the clock in ns and a yield
 // (SamplerCapture: esp_cpu_get_cycle_count, GPIO.in, portDISABLE_INTERRUPTS, esp_timer, vTaskDelay(1)).
 //
-// Immediate: one exclusive window (OepWireGate.h), interrupts off throughout (<= 164 ms at the 400 kHz floor, inside the
+// Immediate: one exclusive window (OepWireGate.h), interrupts off throughout (<= 200 ms: below 327 kHz samples round down to 200 ms, inside the
 // 300 ms interrupt watchdog). Triggered: bursts, each with interrupts off for at most `burst` samples of search and
 // then the rest of the segment after the trigger, and on between them (a gap of one tick: the search starts over; the
 // wire is not taken in a gap - a take waits for the next burst's turn, at its first sample).
@@ -84,7 +84,6 @@ struct Outcome {
   uint32_t trigger_index = 0;     // its samples before the trigger's (immediate: 0xFFFFFFFF)
   uint64_t start_ns = 0;          // its first sample's time
   bool slipped = false;           // one of its samples taken a period or more late
-  uint32_t late_cycles = 0;       // the most a sample of the window was behind
 };
 
 template <class Io>
@@ -92,16 +91,15 @@ struct Pace {
   Io &io;
   uint8_t *out;
   uint32_t size, at, step, next, n, late_n;   // n: samples taken in this window; late_n: the last late one's n
-  int32_t late;
 };
 
+// One sample at its time. The same few operations in an immediate window and in a trigger search: a look at the gate,
+// the clock against the sample's time (a late one noted - a branch not taken), the wait, the read, the store.
 template <bool kRing, class Io>
 OEP_SAMPLER_INLINE uint8_t take(Pace<Io> &p) {
   gWireGate.yieldFrame();   // a SWIO frame announced has the bus first
-  const int32_t behind = static_cast<int32_t>(p.io.cycles() - p.next);
   ++p.n;
-  if (behind > p.late) p.late = behind;
-  if (behind >= static_cast<int32_t>(p.step)) p.late_n = p.n;
+  if (static_cast<int32_t>(p.io.cycles() - p.next) >= static_cast<int32_t>(p.step)) p.late_n = p.n;
   while (static_cast<int32_t>(p.io.cycles() - p.next) < 0) {}
   p.next += p.step;
   const uint8_t byte = p.io.read();
@@ -115,7 +113,7 @@ OEP_SAMPLER_INLINE uint8_t take(Pace<Io> &p) {
 template <class Io, class OnTrigger>
 OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t &control, OnTrigger onTrigger) {
   Outcome r;
-  Pace<Io> p{io, plan.out, plan.size, 0, plan.step, 0, 0, 0, 0};
+  Pace<Io> p{io, plan.out, plan.size, 0, plan.step, 0, 0, 0};
   if (plan.trig_type == kImmediate) {
     gWireGate.beginWindow([&] { io.yield(); });
     io.interruptsOff();
@@ -135,13 +133,13 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
     r.samples = i;
     r.trigger_index = 0xFFFFFFFFu;
     r.slipped = p.late_n != 0 || cut;
-    r.late_cycles = static_cast<uint32_t>(p.late);
     return r;
   }
   const uint32_t pre = plan.pre, post = p.size - pre - 1;   // samples after the trigger's one
   const bool edge = plan.trig_type == kEdge;
-  const uint8_t role = plan.trig_role, value = plan.trig_value;
-  const uint32_t arm = edge ? 1 : 0;                         // an edge needs the sample before it
+  const uint8_t mask = static_cast<uint8_t>(1u << plan.trig_role), value = plan.trig_value;
+  const uint8_t level = value ? mask : 0;                    // a level trigger's
+  const bool rise = value != 1, fall = value != 0;           // an edge trigger's directions
   // the search's part of a span: what the segment's rest leaves of it at its nominal pace (at least one check's worth)
   const uint64_t rest = static_cast<uint64_t>(post) * plan.step;
   const uint32_t search_end = !plan.span ? 0
@@ -149,7 +147,6 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
                                                                                                     : kSpanCheck * plan.step;
   for (;;) {
     p.at = p.n = p.late_n = 0;
-    p.late = 0;
     if (control & kControlAbort) { gWireGate.endWindow(); r.aborted = true; return r; }
     bool turned = gWireGate.beginBurst();                     // the wire held or asked for: a turn at once
     uint32_t turn_left = turned ? plan.turn : 0;
@@ -158,22 +155,44 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
     const uint64_t burst_ns = io.nowNs();
     p.next = io.cycles();
     const uint32_t span_start = p.next;
-    uint8_t last = 0, stop = 0;
+    uint8_t stop = 0;
     bool hit = false;
+    // The burst's first sample: a level there is the trigger; an edge needs the sample before it, so it is only its level.
+    uint8_t last = take<true>(p) & mask;
     uint32_t c = 0;
-    for (; c < plan.burst; ++c) {
-      if ((c & (kSpanCheck - 1)) == 0 && search_end && io.cycles() - span_start >= search_end) break;
+    if (!edge && last == level) hit = true;
+    else c = 1;
+    // Blocks of up to kSpanCheck samples, each sample a take and the trigger's test alone (as lean as an immediate
+    // window's); between blocks the clock against the span, the wire's turns and the control word (force, abort): a
+    // turn or a force waits at most a block (32 us at 2 MHz, 64 at 1 MHz). Looking at those every sample took several
+    // loads of shared words (each behind a memory barrier) and spilled the loop's state to the stack: the search ran
+    // late where an immediate window kept pace (bench, 87f6d40: forced captures slipped 64 / 64 at 500 kHz to 2 MHz,
+    // immediate ones from 750 kHz).
+    while (!hit && c < plan.burst) {
+      if (search_end && io.cycles() - span_start >= search_end) break;
       if (turn_left) {
-        if (--turn_left == 0 || gWireGate.turnDone()) { turn_left = 0; gWireGate.closeTurn(); }
+        turn_left = turn_left > kSpanCheck ? turn_left - kSpanCheck : 0;
+        if (turn_left == 0 || gWireGate.turnDone()) { turn_left = 0; gWireGate.closeTurn(); }
       } else if (const uint32_t want = gWireGate.turnWanted()) {
         if (want == 2 || !turned) { gWireGate.openTurn(); turned = true; turn_left = plan.turn; }
       }
-      const uint8_t bit = (take<true>(p) >> role) & 1;
-      if (c >= arm) {
-        hit = edge ? bit != last && (value == 2 || bit == (value == 0 ? 1 : 0)) : bit == value;
-        if (hit || (stop = control) != 0) break;
+      if ((stop = control) != 0) {   // force: the trigger is the next sample; abort: no more
+        if (stop & kControlForce) take<true>(p);
+        break;
       }
-      last = bit;
+      const uint32_t end = plan.burst - c < kSpanCheck ? plan.burst : c + kSpanCheck;
+      if (edge) {
+        for (; c < end; ++c) {
+          const uint8_t now = take<true>(p) & mask;
+          if (now != last && (now ? rise : fall)) { hit = true; break; }
+          last = now;
+        }
+      } else {
+        for (; c < end; ++c) {
+          if ((take<true>(p) & mask) == level) { hit = true; break; }
+        }
+      }
+      if (hit) break;
     }
     if (hit || (stop & kControlForce)) {
       gWireGate.closeTurn();                                  // the segment's rest: no new frame
@@ -196,7 +215,6 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
       r.trigger_index = kept;
       r.start_ns = burst_ns + static_cast<uint64_t>(first) * p.step * 1000000000ull / plan.cpu_hz;
       r.slipped = p.late_n > first || cut;                               // late_n counts from 1: index late_n - 1
-      r.late_cycles = static_cast<uint32_t>(p.late);
       return r;
     }
     gWireGate.endReading();

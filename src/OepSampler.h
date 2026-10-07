@@ -35,9 +35,12 @@ class SamplerCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 8;
   static constexpr size_t kBufferBytes = 65408;
-  // one sample per 120 cycles at 240 MHz is the tested ceiling; the floor keeps a full window under the 300 ms
-  // interrupt watchdog while interrupts are off on the sampling core
-  static constexpr uint32_t kMaxHz = 2000000, kMinHz = 400000;
+  // one sample per 120 cycles at 240 MHz is the tested ceiling. The floor is the pacing's alone: below 327 kHz a
+  // window's samples are rounded down to kWindowNs (configure), so a lower rate gives the loop margin, not a window
+  // past the interrupt watchdog (it was 400 kHz, which kept a full 65408-sample window under the watchdog before
+  // every interrupts-off span ended by the clock).
+  static constexpr uint32_t kMaxHz = 2000000, kMinHz = 1000;
+  static constexpr uint64_t kWindowNs = 200000000;   // a window's samples at most this long (kOffNs less a search)
   static constexpr uint32_t kMaxHzHighBank = 1000000;   // with any channel on GPIO32..39
 
   // pins: the probe's channels (any allowed one may be a line: the capture only listens, and claims none)
@@ -110,7 +113,6 @@ class SamplerCapture final : public Interface, public GroupTrack {
   TaskHandle_t sampler_ = nullptr;
   volatile bool done_ = false, reported_ = true;
   volatile bool slipped_ = false;         // the last window took a sample one period or more late
-  volatile uint32_t late_cycles_ = 0;     // the most it was behind, in CPU cycles
   // the trigger, as configured; what the search found (written by the sampler task, read by poll)
   // The longest an interrupts-off span lasts, by the clock (OepSamplerRun.h; the interrupt watchdog: 300 ms)
   static constexpr uint64_t kOffNs = 250000000;

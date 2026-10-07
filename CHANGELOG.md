@@ -1,6 +1,28 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32 sampler: a trigger search does per sample what an immediate window does - the gate's look, the
+  clock against the sample's time, the wait, the read, the store - and the trigger's test alone (an edge against the
+  last level, a level against the wanted one, by mask); the span's clock, the SWIO wire's turns and the control word
+  (force, abort) are looked at every 64 samples (a force or a turn waits a block at most: 32 us at 2 MHz). It looked at
+  them every sample: two more shared words and the control byte, each behind a memory barrier, a variable shift, and
+  the loop's state spilled to the stack - about 25 more instructions and 10 more memory accesses a sample than the
+  immediate window (87f6d40's runLow), and the bench's forced captures slipped 64 / 64 from 500 kHz up where immediate
+  ones did from 750 kHz. The most a sample was late (never reported) is no longer kept. rate_range's floor is 1 kHz (it
+  was 400 kHz, which kept a full 65408-sample window under the interrupt watchdog before every interrupts-off span
+  ended by the clock); below 327 kHz samples are rounded down to 200 ms of them (actual_samples), so a window is never
+  cut by the 250 ms span at its pace and a search keeps 50 ms or more a burst. The declared maximum is to be set from
+  the bench's sweep of this build (all paths slip-free with the radio on, with margin); rate_range stays 1 kHz - 2 MHz
+  until then. Host tests (test_wire_gate); docs/implementation-limits §4.1. Not run on hardware
+- (JA) classic ESP32 の sampler: トリガの探索は、1 サンプルに即時の窓と同じこと（ゲートを見る、時計とサンプルの時刻を比べる、待つ、
+  読む、置く）とトリガの判定だけ（エッジは前のレベルとの比較、レベルは望むレベルとの比較、mask で）をします。区切りの時計、SWIO の線の番、
+  control（force、中止）は 64 サンプルごとに見る（force と番は最大 1 塊待つ: 2 MHz で 32 µs）。以前は毎サンプル見ていて、共有の語 2 つと
+  control の byte（それぞれメモリの壁つき）、可変のシフト、スタックへの退避で、即時の窓より 1 サンプルに約 25 命令とメモリの読み書き約
+  10 回多く（87f6d40 の runLow）、ベンチの force は 500 kHz 以上で 64 / 64 slipped（即時は 750 kHz から）。最も遅れた量（報告していない）は
+  もう持たない。rate_range の下限は 1 kHz（以前の 400 kHz は、割り込みを止める 1 回が時計で区切られる前に、いっぱいの窓を watchdog の内に
+  収めるためだった）。327 kHz より下では samples を 200 ms 分に切り下げる（actual_samples）。宣言する上限は、この build でのベンチの
+  測定（radio が点いた状態で全ての道が slipped 無し、余裕をとる）で決める。それまで rate_range は 1 kHz〜2 MHz。host test
+  （test_wire_gate）、docs/implementation-limits §4.1。実機では未確認
 - (EN) Capture-group followers keep, beyond their segment, what comes in while the trigger is on its way (capture §4.1):
   the trigger track says how late it may hear of its trigger (GroupTrack::trackLatencyNs: the ESP32-P4 logic a DMA chunk
   - a descriptor, 4032 bytes at most: 32 ms at 1 MHz on one line, 51 ms at its lowest rate - the analog a conversion

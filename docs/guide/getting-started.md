@@ -157,7 +157,7 @@ immediate capture's window and the SWIO wire never run together: while it sample
 progress to end. A trigger search gives the wire turns inside its bursts and samples on through them (a waiting request
 at once, the console up to 5 ms a burst), so what a command or a reset sent during the search makes the target do is
 sampled; a trigger before the pretrigger has filled gives a shorter segment (a smaller trigger_index). An immediate capture's window lasts samples / rate (a
-full 65408 samples: 33 ms at 2 MHz, 164 ms at 400 kHz), so a console command or a debug reset sent after its start
+full 65408 samples: 33 ms at 2 MHz, 164 ms at 400 kHz, 200 ms at most at lower rates), so a console command or a debug reset sent after its start
 reaches the target only after it and is not in it. To capture what the target does after something you send, use a
 trigger: arm, then send the command or the reset - it goes out in a turn of the search, and the event it causes
 fires the trigger (docs/implementation-limits.ja.md §4.1). Each interrupts-off span ends by the clock: a segment whose
