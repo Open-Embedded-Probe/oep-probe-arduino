@@ -144,6 +144,23 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         if (chosen[k] != trigger && (t.trackTriggered() || (triggered && !t.trackCanFollow())))
           return refuseAt(reg::core::kUnavailableCauseWrongState, k);
       }
+      // the group's pretrigger (capture §4.1): the trigger track's P as a time, P_k samples on each follower; one that
+      // cannot keep it is refused cause 2 (the resources) with its fn
+      uint32_t keep[kMaxTracks] = {};
+      if (triggered) {
+        const GroupTrack &t = *tracks_[trigger].track;
+        uint32_t num_t = 0, den_t = 0;
+        const uint32_t p = t.trackPretrigger();
+        t.trackRate(num_t, den_t);
+        for (uint8_t k = 0; k < n; ++k) {
+          if (chosen[k] == trigger) continue;
+          const GroupTrack &f = *tracks_[chosen[k]].track;
+          uint32_t num_k = 0, den_k = 0;
+          f.trackRate(num_k, den_k);
+          if (p && (!groupPretrigger(p, num_t, den_t, num_k, den_k, keep[k]) || !f.trackCanKeep(keep[k])))
+            return refuseAt(reg::core::kUnavailableCauseLimit, k);
+        }
+      }
       // short of the resources to capture together (a budget the tracks share): cause 2, the track whose load goes over
       for (size_t b = 0; b < budget_count_; ++b) {
         uint64_t load = 0;
@@ -159,6 +176,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         bound_[k] = chosen[k];
         tracks_[chosen[k]].track->setBound(true, me);
         tracks_[chosen[k]].track->following_ = triggered && chosen[k] != trigger;
+        if (tracks_[chosen[k]].track->following_) tracks_[chosen[k]].track->trackKeep(keep[k]);
       }
       bound_count_ = n;
       trigger_ = triggered ? trigger : -1;

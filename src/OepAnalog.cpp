@@ -266,8 +266,8 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
       chosen[v[0]] = v[1];
     }
   }
-  // no plan, or the trigger's role not in it: unavailable cause 6 (capture §3.2, §3.3)
-  if (!channels_ || (trigger_tlv.v && trig_role >= channels_)) return wrongState(out, capacity);
+  // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
+  if (!channels_ || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return wrongState(out, capacity);
   // the actual rate
@@ -434,7 +434,7 @@ bool AnalogCapture::startNow() {
   adc_continuous_handle_cfg_t hc = {};
   hc.max_store_buf_size = 32 * kFrameBytes;   // 8 KiB: tens of ms of conversions between two polls
   hc.conv_frame_size = kFrameBytes;
-  if (adc_continuous_new_handle(&hc, &handle_) != ESP_OK) { handle_ = nullptr; state_ = ana::kStateError; return false; }
+  if (adc_continuous_new_handle(&hc, &handle_) != ESP_OK) { handle_ = nullptr; fail(ana::kErrorPeripheral); return false; }
   adc_digi_pattern_config_t pattern[kMaxChannels] = {};
   for (uint8_t m = 0; m < channels_; ++m) {
     adc_unit_t unit;
@@ -442,7 +442,7 @@ bool AnalogCapture::startNow() {
     if (adc_continuous_io_to_channel(pins_[order_[m]], &unit, &channel) != ESP_OK || unit != ADC_UNIT_1) {
       adc_continuous_deinit(handle_);
       handle_ = nullptr;
-      state_ = ana::kStateError;
+      fail(ana::kErrorPeripheral);
       return false;
     }
     pattern[m].atten = frontend_[order_[m]];
@@ -465,7 +465,7 @@ bool AnalogCapture::startNow() {
       adc_continuous_register_event_callbacks(handle_, &callbacks, this) != ESP_OK) {
     adc_continuous_deinit(handle_);
     handle_ = nullptr;
-    state_ = ana::kStateError;
+    fail(ana::kErrorPeripheral);
     return false;
   }
   const uint64_t frame_ns = static_cast<uint64_t>(kFrameConversions) * 1000000000u / total_hz_;
@@ -473,7 +473,7 @@ bool AnalogCapture::startNow() {
   if (adc_continuous_start(handle_) != ESP_OK) {
     adc_continuous_deinit(handle_);
     handle_ = nullptr;
-    state_ = ana::kStateError;
+    fail(ana::kErrorPeripheral);
     return false;
   }
   // The P4's driver leaves out the first conversion frame: its first value is one frame after the start. Corrected,
@@ -495,7 +495,7 @@ bool AnalogCapture::startNow() {
   if (!gAdcReady) { adc_init(); gAdcReady = true; }
   for (uint8_t k = 0; k < channels_; ++k) adc_gpio_init(pins_[k]);
   if (dma_ < 0) dma_ = dma_claim_unused_channel(false);
-  if (dma_ < 0) { state_ = ana::kStateError; return false; }
+  if (dma_ < 0) { fail(ana::kErrorPeripheral); return false; }
   if (ringMode()) armDma(ring_, kRingCount, true);
   else armDma(buffer_, samples_ * channels_, false);
 #endif
@@ -690,13 +690,17 @@ void AnalogCapture::search() {
 
 void AnalogCapture::hitAt(uint32_t t) {
   trig_frame_ = t;
-  seg_first_ = t > pretrigger_ ? t - pretrigger_ : 0;
+  seg_first_ = t > pre() ? t - pre() : 0;
   end_frame_ = seg_first_ + samples_;
 #if defined(ARDUINO_ARCH_ESP32)
   // the ring is the segment: frames already come past its end have taken the slots of its first ones
   if (static_cast<uint64_t>(got_) + kPretriggerRoom > end_frame_) trig_slipped_ = true;
 #endif
   phase_ = 1;
+}
+
+bool AnalogCapture::trackCanKeep(uint32_t p) const {
+  return p == 0 || (p <= maxPretrigger() && static_cast<uint64_t>(p) + kPretriggerRoom <= samples_);
 }
 
 bool AnalogCapture::trackCanFollow() const {
@@ -809,11 +813,18 @@ void AnalogCapture::failHole() {
   frames_ = 0;
   short_ = false;
   lost_ = true;
-  state_ = ana::kStateError;
-  error_ = ana::kErrorStorage;
   reported_ = true;
-  if (subscribed_) {
-    uint8_t stopped[6] = {ana::kStoppedReasonError, ana::kErrorStorage};   // reason(u8) error(u8) generation(u32)
+  fail(ana::kErrorStorage);
+}
+
+// State 6 (capture §3.2): every entry sends stopped reason 3 with the error status answers (1 the ADC driver or its
+// DMA, 2 a segment with a hole).
+void AnalogCapture::fail(uint8_t error) {
+  const bool entering = state_ != ana::kStateError;
+  state_ = ana::kStateError;
+  error_ = error;
+  if (entering && subscribed_) {
+    uint8_t stopped[6] = {ana::kStoppedReasonError, error};   // reason(u8) error(u8) generation(u32)
     putU32(stopped + 2, generation_);
     endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
   }

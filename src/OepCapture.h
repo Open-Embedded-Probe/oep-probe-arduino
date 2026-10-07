@@ -107,7 +107,14 @@ class LogicCapture final : public Interface, public GroupTrack {
   void trackTriggerAt(uint64_t ns) override;
   bool trackTriggerNs(uint64_t &ns) const override;
   void trackForce() override { groupOp(kOpForce); }
-  bool trackArmed() const override { return static_cast<uint64_t>(produced_) * 8 / (width_ ? width_ : 1) >= pretrigger_; }
+  bool trackArmed() const override { return static_cast<uint64_t>(produced_) * 8 / (width_ ? width_ : 1) >= pre(); }
+  bool trackRate(uint32_t &num, uint32_t &den) const override { num = rate_num_; den = rate_den_; return rate_num_ != 0; }
+  uint32_t trackPretrigger() const override { return pretrigger_; }
+  // a follower's P_k: what the ring gives back at this width, below the segment's samples (capture §4.1)
+  bool trackCanKeep(uint32_t p) const override {
+    return p == 0 || (p < samples_ && p <= static_cast<uint32_t>(kPretriggerBytes * 8 / (width_ ? width_ : 1)));
+  }
+  void trackKeep(uint32_t p) override { follow_pre_ = p; }
   uint32_t trackLoad() const override { return rate_den_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * rate_num_ / rate_den_) : 0; }
   bool trackStart() override { return groupOp(kOpStart); }
   void trackStop() override { groupOp(kOpStop); }
@@ -191,6 +198,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
+  uint32_t follow_pre_ = 0;          // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
+  uint32_t pre() const { return follow_ ? follow_pre_ : pretrigger_; }
   volatile uint8_t trig_phase_ = 0;  // 0 waiting, 1 filling, 2 done
   volatile bool force_ = false;      // force: the trigger is now
   bool have_level_ = false;
@@ -244,6 +253,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t error_ = reg::fixture_logic::kErrorPeripheral;   // status's error TLV in state 6
   void loseSegment();          // harvest task: the segment being filled (or the stage) goes, nothing more is taken
   void failLost();             // loop: the track stops on it (state 6, stopped reason 3 error 2)
+  void fail(uint8_t error);    // state 6 with stopped reason 3 and `error` (capture §3.2)
   uint32_t reported_ = 0;
   // streaming: the next byte to push is sent_off_ into segment sent_seg_
   volatile uint32_t sent_seg_ = 0;

@@ -53,6 +53,14 @@ class GroupTrack {
   virtual bool trackTriggerNs(uint64_t &ns) const { (void)ns; return false; }
   virtual void trackForce() {}
   virtual bool trackArmed() const { return true; }   // following: it holds its pretrigger's worth of samples
+  // The group's pretrigger (capture §4.1): the trigger track's own P samples (trackPretrigger) at its actual rate
+  // (trackRate), kept by every follower k as the same time, P_k samples at its rate (groupPretrigger). trackCanKeep: a
+  // follower can keep p samples before the trigger (within its max_pretrigger and, mode 1 / 2, below its samples);
+  // trackKeep(p) sets what its following keeps.
+  virtual bool trackRate(uint32_t &num, uint32_t &den) const { num = den = 0; return false; }
+  virtual uint32_t trackPretrigger() const { return 0; }
+  virtual bool trackCanKeep(uint32_t p) const { return p == 0; }
+  virtual void trackKeep(uint32_t p) { (void)p; }
   void setBound(bool on, uint16_t group_fn = 0) { bound_ = on; group_fn_ = on ? group_fn : 0; if (!on) following_ = false; }
   bool bound() const { return bound_; }
   uint16_t groupFn() const { return group_fn_; }   // the group's fn while bound (0: not bound)
@@ -105,6 +113,32 @@ inline Result captureMisplaced(uint8_t mode, CaptureAsk samples, CaptureAsk segm
   if (pretrigger.v && (!trigger.v || trigger.v[0] == reg::fixture_logic::kTriggerImmediate))
     return Tail::refuse(capture_tag::kPretrigger, pretrigger.critical, out, capacity);
   return completed();
+}
+
+// capture §4.1: P_k = ceil(p x num_k x den_t / (den_k x num_t)) - the products may pass 64 bits (96 at most), so a
+// long division of the 128-bit product. false: no rate known, or more than a u32.
+inline bool groupPretrigger(uint32_t p, uint32_t num_t, uint32_t den_t, uint32_t num_k, uint32_t den_k, uint32_t &out) {
+  if (!num_t || !den_t || !num_k || !den_k) return false;
+  const uint64_t a = static_cast<uint64_t>(num_k) * den_t, b = static_cast<uint64_t>(den_k) * num_t;
+  // p x a as hi:lo (u64 each) from 32-bit halves
+  const uint64_t a_lo = a & 0xFFFFFFFFu, a_hi = a >> 32;
+  const uint64_t x = p * a_lo, y = p * a_hi;   // p < 2^32: each fits u64
+  uint64_t lo = x + (y << 32), hi = (y >> 32) + (lo < x ? 1 : 0);
+  uint64_t q_hi = 0, q_lo = 0, r = 0;
+  for (int i = 127; i >= 0; --i) {   // restoring division by b; r < b < 2^64, r << 1 checked for the carry
+    const uint64_t bit = i >= 64 ? (hi >> (i - 64)) & 1 : (lo >> i) & 1;
+    const bool carry = r >> 63;
+    r = (r << 1) | bit;
+    if (carry || r >= b) {
+      r -= b;
+      if (i >= 64) q_hi |= uint64_t{1} << (i - 64);
+      else q_lo |= uint64_t{1} << i;
+    }
+  }
+  if (r) { if (++q_lo == 0) ++q_hi; }   // ceil
+  if (q_hi || q_lo > 0xFFFFFFFFu) return false;
+  out = static_cast<uint32_t>(q_lo);
+  return true;
 }
 
 // The sample (of a rate num / den a second) nearest to dns ns after the first one.

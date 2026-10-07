@@ -92,7 +92,11 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool trackStartFollowing() override;
   void trackTriggerAt(uint64_t ns) override;
   bool trackTriggerNs(uint64_t &ns) const override;
-  bool trackArmed() const override { return got_ >= pretrigger_; }
+  bool trackArmed() const override { return got_ >= pre(); }
+  bool trackRate(uint32_t &num, uint32_t &den) const override { num = rate_num_; den = rate_den_; return rate_num_ != 0; }
+  uint32_t trackPretrigger() const override { return pretrigger_; }
+  bool trackCanKeep(uint32_t p) const override;   // a follower's P_k within its pretrigger limits (capture §4.1)
+  void trackKeep(uint32_t p) override { follow_pre_ = p; }
   void trackForce() override { if (state_ == reg::fixture_analog::kStateWaiting) force_ = true; }
   uint32_t trackLoad() const override { return total_hz_; }
   bool trackStart() override { follow_ = false; return startNow(); }
@@ -107,6 +111,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool lost_ = false;          // the segment had a hole and was not handed out (capture §2.2)
   bool hole() const;           // the segment just finished has values lost or overwritten inside it
   void failHole();             // not handed out: state 6, stopped reason 3, error 2
+  void fail(uint8_t error);    // state 6 with stopped reason 3 and `error` (capture §3.2)
   Endpoint &endpoint_;
   uint32_t generation_ = 0;   // one up at every start (nextGeneration); 0 before the first
   uint64_t adc_pins_;
@@ -134,6 +139,8 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint8_t trig_type_ = 0, trig_slot_ = 0;
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0, arm_ = 0;
+  uint32_t follow_pre_ = 0;   // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
+  uint32_t pre() const { return follow_ ? follow_pre_ : pretrigger_; }
   uint32_t ring_len_ = 0;                                 // values
   uint32_t got_ = 0, searched_ = 0;                       // complete frames so far; frames looked at
   uint32_t trig_frame_ = 0, end_frame_ = 0;               // the crossing; the segment's end (the stream's frames)

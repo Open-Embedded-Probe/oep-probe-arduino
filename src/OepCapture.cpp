@@ -300,7 +300,7 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
       if (t >= (base + chunk.length) * 8 / width_) return;
     } else if (force_) force_ = false;
     else if (!findTrigger(chunk.data, chunk.length, first, t, pretrigger_)) return;   // once the pretrigger is in
-    uint64_t s0 = t > pretrigger_ ? t - pretrigger_ : 0;
+    uint64_t s0 = t > pre() ? t - pre() : 0;
     // not before the oldest byte the ring still holds (with a margin for the DMA running on)
     const uint64_t newest = base + ahead;
     const uint64_t oldest = newest > kRingBytes - 8192 ? newest - (kRingBytes - 8192) : 0;
@@ -349,7 +349,7 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   done_ = false;
   produced_ = queue_overflow_ = overruns_ = 0;
   captured_ = 0;
-  if (!reopenUnit()) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+  if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
   if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
@@ -359,9 +359,9 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   parlio_receive_config_t rc = {};
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
-  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   state_ = kStateWaiting;
   generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
   putU32(out, 0);
@@ -412,10 +412,17 @@ void LogicCapture::failLost() {
     stopRepeat();        // nothing more to finish: the segment being filled went (loseSegment)
   }
   if (unit_ && delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
+  fail(cap::kErrorStorage);
+}
+
+// State 6 (capture §3.2): every entry - from state 1, 2, 3 or 5 - sends stopped reason 3 with the error status answers
+// (1 the PARLIO or its DMA, 2 a segment lost to the queue or the ring).
+void LogicCapture::fail(uint8_t error) {
+  const bool entering = state_ != kStateError;
   state_ = kStateError;
-  error_ = cap::kErrorStorage;
-  if (subscribed_) {
-    uint8_t stopped[6] = {cap::kStoppedReasonError, cap::kErrorStorage};   // reason(u8) error(u8) generation(u32)
+  error_ = error;
+  if (entering && subscribed_) {
+    uint8_t stopped[6] = {cap::kStoppedReasonError, error};   // reason(u8) error(u8) generation(u32)
     putU32(stopped + 2, generation_);
     endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
   }
@@ -767,8 +774,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   const uint32_t max_pretrigger = static_cast<uint32_t>(kPretriggerBytes * 8 / width);
   if (pretrigger && (pretrigger >= samples || pretrigger > max_pretrigger))
     return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
-  // no plan, or the trigger's role not in it: unavailable cause 6 (capture §3.2, §3.3)
-  if (channels_ == 0 || (trigger_tlv.v && trig_role >= channels_)) return wrongState(out, capacity);
+  // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
+  if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == kStateCapturing || state_ == kStatePaused || state_ == kStateWaiting) && !query) return wrongState(out, capacity);
   // Not even two segments of store, or no DMA ring for a mode that runs through it: refused unavailable cause 3
@@ -801,7 +808,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (opened == Open::kNoMemory) return noStorage(out, capacity);
     if (opened != Open::kOk) {
       close();
-      state_ = kStateError; error_ = cap::kErrorPeripheral;
+      fail(cap::kErrorPeripheral);
       return failed();
     }
     samples = got_samples;
@@ -812,7 +819,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (opened == Open::kNoMemory) return noStorage(out, capacity);
     if (opened != Open::kOk) {
       close();
-      state_ = kStateError; error_ = cap::kErrorPeripheral;
+      fail(cap::kErrorPeripheral);
       return failed();
     }
   } else {
@@ -832,7 +839,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (!buffer_) return noStorage(out, capacity);
     if (!openUnit(rate, width, false, bytes, num, den)) {
       close();
-      state_ = kStateError; error_ = cap::kErrorPeripheral;
+      fail(cap::kErrorPeripheral);
       return failed();
     }
   }
@@ -920,7 +927,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   captured_ = dropped_ = 0;
   gap_pending_ = paused_ = false;
   reported_ = 0;
-  if (!reopenUnit()) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+  if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
   if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
@@ -930,9 +937,9 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   parlio_receive_config_t rc = {};
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
-  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   state_ = kStateCapturing;
   generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
   putU32(out, 0);
@@ -960,7 +967,7 @@ bool LogicCapture::trackStartFollowing() {
   if (!triggered_) {
     uint32_t num = 0, den = 1;
     close();
-    if (openTriggered(rate_hz_, width_, bytes_, num, den) != Open::kOk) { close(); state_ = kStateError; error_ = cap::kErrorPeripheral; return false; }
+    if (openTriggered(rate_hz_, width_, bytes_, num, den) != Open::kOk) { close(); fail(cap::kErrorPeripheral); return false; }
     triggered_ = true;
   }
   follow_ = true;
@@ -1084,8 +1091,11 @@ void LogicCapture::poll() {
 
 // Streaming: bytes of segment `serial` that may be sent (a finished segment's length; the one being filled so far).
 uint32_t LogicCapture::segmentLength(uint32_t serial) const {
-  // only a finished segment: the one being filled may yet lose bytes, and is then never handed out (capture §2.2)
-  if (serialBefore(serial, completed_)) return infos_[serial % kInfos].samples * width_ / 8;
+  // the one being filled too (capture §2.2 lets its data out before it ends: a later loss in it stops the track with
+  // write_pos at its start, and the host drops what it got from there)
+  const uint32_t done = completed_;
+  if (serialBefore(serial, done)) return infos_[serial % kInfos].samples * width_ / 8;
+  if (serial == done && !lost_) return fill_;
   return 0;
 }
 
@@ -1096,7 +1106,7 @@ bool LogicCapture::findSegment(uint64_t position, uint32_t &serial, uint32_t &of
   if (back > segment_count_ - 1) back = segment_count_ - 1;
   for (uint32_t i = 0; i <= back; ++i) {   // newest first, from the one being filled
     const uint32_t k = done - i;
-    const uint32_t length = segmentLength(k);   // 0 for the one being filled
+    const uint32_t length = segmentLength(k);
     const uint64_t begin = infos_[k % kInfos].position;
     if (position >= begin && position - begin < length) { serial = k; offset = static_cast<uint32_t>(position - begin); return true; }
   }
@@ -1108,7 +1118,8 @@ size_t LogicCapture::pending() {
   if (mode_ != 3 || direct_ || !(state_ == kStateCapturing || state_ == kStateConfigured || state_ == kStateError)) return 0;
   const uint32_t done = completed_;
   uint64_t n = 0;
-  for (uint32_t k = sent_seg_; k != done; ++k) n += infos_[k % kInfos].samples * width_ / 8;   // finished ones only
+  for (uint32_t k = sent_seg_; k != done; ++k) n += infos_[k % kInfos].samples * width_ / 8;
+  if (!lost_) n += fill_;
   return n > sent_off_ ? static_cast<size_t>(n - sent_off_) : 0;
 }
 
@@ -1158,7 +1169,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       follow_ = false;
       if (triggered_) return startTriggered(out, capacity);
       if (capacity < 8) return failed();
-      if (!reopenUnit()) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }   // a unit made for this start
+      if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }   // a unit made for this start
       done_ = false;
       produced_ = 0;
       kept_samples_ = 0;   // the last generation's segment goes
@@ -1167,9 +1178,9 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
       parlio_receive_config_t rc = {};
       rc.delimiter = delimiter_;
-      if (parlio_rx_unit_receive(unit_, buffer_, bytes_, &rc) != ESP_OK) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+      if (parlio_rx_unit_receive(unit_, buffer_, bytes_, &rc) != ESP_OK) { fail(cap::kErrorPeripheral); return failed(); }
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-      if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
+      if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { fail(cap::kErrorPeripheral); return failed(); }
       state_ = kStateCapturing;
       generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
       putU32(out, 0);              // blocking_ms: DMA, the probe keeps answering
@@ -1221,11 +1232,12 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
           return completed();
         }
         const uint32_t got_bytes = produced_ < bytes_ ? produced_ : bytes_;
-        if (parlio_rx_unit_enable(unit_, true) != ESP_OK) { state_ = kStateError; error_ = cap::kErrorPeripheral; }
+        // the unit enabled again for its next use; a failure here loses nothing (the next start makes a unit anew)
+        parlio_rx_unit_enable(unit_, true);
         esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
         uint32_t got = static_cast<uint32_t>(static_cast<uint64_t>(got_bytes) * 8 / width_);
         if (got > samples_) got = samples_;
-        if (state_ != kStateError) state_ = kStateConfigured;
+        state_ = kStateConfigured;
         kept_samples_ = got;
         kept_short_ = got != 0;
         if (subscribed_) {

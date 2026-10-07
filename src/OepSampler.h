@@ -83,6 +83,8 @@ class SamplerCapture final : public Interface, public GroupTrack {
   void trackStop() override { groupOp(reg::fixture_logic::kOpStop); }
   uint8_t trackState() const override { return state_; }
   uint32_t trackGeneration() const override { return generation_; }
+  bool trackRate(uint32_t &num, uint32_t &den) const override { num = cpu_hz_; den = cycles_; return cycles_ != 0; }
+  uint32_t trackPretrigger() const override { return pretrigger_; }
 
  private:
   bool group_op_ = false;

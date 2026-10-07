@@ -231,8 +231,8 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     pretrigger = getU32(v);
     if (pretrigger >= samples) return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   }
-  // no plan, or the trigger's role not in it: unavailable cause 6 (capture §3.2, §3.3)
-  if (channels_ == 0 || (trigger_tlv.v && trig_role >= channels_)) return wrongState(out, capacity);
+  // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
+  if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   // Paced in software, the loop keeps up to kMaxHz only while every channel is on GPIO0..31 (one register read per
@@ -341,7 +341,12 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
       if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, kTaskPriority, &sampler_, 0) != pdPASS) {
         sampler_ = nullptr;
-        state_ = cap::kStateError;
+        state_ = cap::kStateError;   // every entry to state 6 sends stopped reason 3 (capture §3.2)
+        if (subscribed_) {
+          uint8_t stopped[6] = {cap::kStoppedReasonError, cap::kErrorPeripheral};
+          putU32(stopped + 2, generation_);
+          endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
+        }
         return failed();
       }
       state_ = trig_type_ ? cap::kStateWaiting : cap::kStateCapturing;

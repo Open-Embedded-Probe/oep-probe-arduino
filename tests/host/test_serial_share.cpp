@@ -702,6 +702,15 @@ static void testGroupSecondRun() {
   CHECK(group.handle(0x02, nullptr, 0, out, sizeof out).resolution == kResolutionCompleted);
   CHECK(getU32(out + 12) == 3 && getU16(out + 17) == 1 && getU32(out + 19) == 1);
   CHECK(nextGeneration(0) == 1 && nextGeneration(1) == 2 && nextGeneration(0xFFFFFFFFu) == 1);
+  // capture §4.1's P_k = ceil(P x num_k x den_t / (den_k x num_t)): the spec's example (20 MHz, P 1000 -> 48 kHz: 3),
+  // exact multiples, products past 64 bits, and more than a u32
+  uint32_t pk = 0;
+  CHECK(groupPretrigger(1000, 20000000, 1, 48000, 1, pk) && pk == 3);
+  CHECK(groupPretrigger(1000, 20000000, 1, 10000000, 1, pk) && pk == 500);
+  CHECK(groupPretrigger(0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, pk) && pk == 0xFFFFFFFFu);
+  CHECK(groupPretrigger(3, 0xFFFFFFFFu, 7, 0xFFFFFFFEu, 5, pk) && pk == 5);   // 3 x 7 x (2^32 - 2) / (5 x (2^32 - 1)) = 4.199..
+  CHECK(!groupPretrigger(0xFFFFFFFFu, 1, 1, 2, 1, pk));                        // 2^33 - 2: no u32
+  CHECK(!groupPretrigger(10, 0, 1, 1, 1, pk));
 }
 
 static void testPlanCapacity() {

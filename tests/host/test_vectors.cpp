@@ -850,7 +850,7 @@ static void testOps(const char *file, const char *list) {
     }
     if (names(c["fns"], "oep.probe.restart"))   // the restart follows its success answer only (oep-if-restart §2)
       CHECK(OpsProbe::restarts == (name.find("completed success") != std::string::npos ? 1 : 0));
-    if (name.find("the required answer set") != std::string::npos && got.size() == want.size()) {
+    if (c["state"].string.find("roles 0 and 1") != std::string::npos && got.size() == want.size()) {
       // actual_samples (0x52) is the probe's own: 200000 asked at w = 2 is whole 128-byte cache lines (200192)
       for (size_t at = 5; at + kTlvHeader + 4 <= want.size(); at += kTlvHeader + getU16(&want[at + 1]))
         if (want[at] == reg::fixture_logic::kTlvConfigureAnswerActualSamples && got[at] == want[at]) {
@@ -917,10 +917,14 @@ class VecTrack final : public Interface, public GroupTrack {
   uint32_t trackGeneration() const override { return generation; }
   void trackStop() override { state = 1; }
   uint8_t trackState() const override { return state; }
+  bool trackRate(uint32_t &n, uint32_t &d) const override { n = num; d = den; return true; }
+  uint32_t trackPretrigger() const override { return pretrigger; }
+  bool trackCanKeep(uint32_t p) const override { return p <= max_pretrigger && p < samples; }
   uint8_t state = 1;
   bool trigger = false, fired = false;
   uint64_t fired_ns = 0;
   uint32_t generation = 0;
+  uint32_t num = 1000000, den = 1, pretrigger = 0, max_pretrigger = 0, samples = 1000;
 
  private:
   const char *name_;
@@ -1034,6 +1038,18 @@ static void testWideCases() {
       const uint8_t wire_bits[] = {0xc0, 0xb0};
       CHECK(fakeSpiTransfer(12, wire_bits));
       p.spi.service();
+      p.corr = static_cast<uint16_t>(getU16(&req[1]) - 1);
+      got = p.send(req);
+    } else if (name.find("cannot keep the group's pretrigger") != std::string::npos) {
+      // fn 9: 20 MHz, an edge trigger, pretrigger 100000 (5 ms); fn 13: 48 kHz, 4800 samples, max_pretrigger 128
+      WideProbe p;
+      p.logic.trigger = true;
+      p.logic.num = 20000000;
+      p.logic.pretrigger = 100000;
+      p.analog.num = 48000;
+      p.analog.samples = 4800;
+      p.analog.max_pretrigger = 128;
+      CHECK(p.open());
       p.corr = static_cast<uint16_t>(getU16(&req[1]) - 1);
       got = p.send(req);
     } else if (names(c["fns"], "oep.fixture.capture-group")) {

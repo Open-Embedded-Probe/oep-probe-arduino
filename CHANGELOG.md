@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Follow oep-spec d801f02 / 13d37cb / a7f938e / c6ab5d9 (OEP_SPEC_REF=c6ab5d9): a type 0 trigger's role is not
+  looked at; a capture-group's pretrigger is the trigger track's P as a time, every follower keeps P_k = ceil(P x rate_k
+  / rate_t) in its ring (`groupPretrigger`, GroupTrack::trackRate / trackPretrigger / trackCanKeep / trackKeep) and bind
+  refuses unavailable cause 2 with the fn of one that cannot; every entry to state 6 (from state 2 too, a peripheral
+  failure too) sends stopped reason 3 with its error; the P4's copied streaming sends the segment being filled again
+  (a loss in it stops the track, write_pos back at its start); an immediate one-shot's stop no longer goes to state 6
+  when re-enabling the unit fails (the next start makes a unit anew). Host tests: P_k, a follower's trigger_index, the new
+  vectors; docs/implementation-limits §1.7; not run on hardware
+- (JA) oep-spec d801f02 / 13d37cb / a7f938e / c6ab5d9 に合わせました: type 0 のトリガの role を見ない。capture-group の pretrigger は
+  trigger_track の P を時間として、追従するトラックが P_k をリングに残し、持てなければ bind が unavailable cause 2（fn）。state 6 に入る
+  ときは必ず stopped reason 3。P4 の写して送るストリーミングは埋めている区画も送る（落としたら write_pos を区画の先頭に戻して止まる）。
+  docs/implementation-limits §1.7。実機では未確認
 - (EN) Follow oep-spec 0098b56 .. 78fb561 (registry and vectors synced, OEP_SPEC_REF=78fb561). Capture: configure /
   query follow §3.3's contract (mode and rate required, samples in modes 1 / 2, none 0: malformed; samples in streaming,
   segments outside repeat, a pretrigger without a non-immediate trigger: unsupported with the tag whatever the value; a

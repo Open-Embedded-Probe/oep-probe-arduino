@@ -14,6 +14,8 @@
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
 
+#include <esp_timer.h>
+
 #include "OepCapture.h"
 #include "OepEndpoint.h"
 
@@ -606,6 +608,35 @@ static void testImmediateAfterFollowing() {
   CHECK(getU32(out.data() + 2 + 28) == 0xFFFFFFFFu);
 }
 
+// A follower keeps the group's pretrigger P_k (capture §4.1): its segment starts P_k samples before the group's trigger
+// (trigger_index P_k), and trackCanKeep bounds it by the ring at this width and the segment's samples.
+static void testFollowerKeeps() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);   // w = 2: 4 samples a byte
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.rate = 1000000;
+  c.samples = 4096;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(rig.cap.trackCanKeep(0) && rig.cap.trackCanKeep(4095) && !rig.cap.trackCanKeep(4096));
+  rig.cap.trackKeep(400);
+  const uint64_t start_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;   // the fake clock does not move
+  CHECK(rig.cap.trackStartFollowing());
+  dma.deliver(50, 0x55);    // samples 0 - 199: not yet the pretrigger
+  dma.run();
+  CHECK(!rig.cap.trackArmed());
+  dma.deliver(200, 0x55);   // to sample 999
+  dma.run();
+  CHECK(rig.cap.trackArmed());
+  rig.cap.trackTriggerAt(start_ns + 2000000);   // 2 ms at 1 MHz: sample 2000
+  dma.deliver(2048, 0x55);
+  dma.run();
+  rig.cap.poll();
+  CHECK(rig.cap.trackState() == cap::kStateDone);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1 && getU32(out.data() + 2 + 28) == 400);
+}
+
 // stop (capture §3.2) of an immediate one-shot while capturing: state 1 with the segment cut short (flags bit1) holding
 // the DMA nodes finished before the stop, readable (it went to state 1 with done 0, write_pos 0); the next start is a
 // whole capture again.
@@ -921,6 +952,7 @@ static void testTriggeredHole() {
 }
 
 int main() {
+  testFollowerKeeps();
   testSerialsWrap();
   testTriggeredHole();
   testRingKept();
