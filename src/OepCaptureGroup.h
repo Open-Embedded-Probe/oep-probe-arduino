@@ -7,9 +7,10 @@
 // track's offset is its first segment's start_ns minus the group's.
 //
 //   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn]) -> -
-//   0x02 start -> blocking_ms u32, start_ns u64, [TLV 0x01 generations: n x (fn u16, generation u32)]
-//   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16 (no lock)
-//   events: 0x03 triggered (trigger_fn u16, trigger_ns u64), 0x02 stopped (reason u8, error u8)
+//   0x02 start -> blocking_ms u32, start_ns u64, generation u32, n u8, n x (fn u16, generation u32) (bind order)
+//   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16, generation u32 (no lock)
+//   events: 0x03 triggered (trigger_fn u16, trigger_ns u64, generation u32), 0x02 stopped (reason u8, error u8,
+//   generation u32) - the group's generation, one up at every start of the group (capture §4.1, §4.2)
 //
 // With trigger_track, that track waits for its own trigger and the others follow: they run into their rings from the
 // start (the trigger track starts once each holds its pretrigger), and when the trigger's time is known (trackTriggerNs)
@@ -39,7 +40,9 @@ class GroupTrack {
   virtual bool trackStart() = 0;              // start now; false: it could not
   virtual void trackStop() = 0;
   virtual uint8_t trackState() const = 0;     // the capture state (oep-if-capture §3.2)
-  virtual uint32_t trackGeneration() const { return 0; }   // the generation the last start made (the start answer's TLV)
+  // in state 6, why (status's error): 1 the peripheral, 2 a segment lost to the queue or the ring (capture §2.2)
+  virtual uint8_t trackError() const { return reg::fixture_logic::kErrorPeripheral; }
+  virtual uint32_t trackGeneration() const { return 0; }   // the generation the last start made (the group's start answer)
   // Following another track's trigger (the group's trigger_track): trackCanFollow at bind (no side effects; false:
   // this track cannot, as configured), trackStartFollowing at start (running into its ring, waiting for
   // trackTriggerAt), trackTriggerAt(ns) with the trigger's time on the probe's clock. The trigger track:
@@ -66,6 +69,42 @@ class GroupTrack {
 inline Result boundInGroup(const GroupTrack &track, uint8_t *out, size_t capacity) {
   (void)track;
   return unavailable(out, capacity, reg::core::kUnavailableCauseBoundInGroup);
+}
+
+// A capture's next generation (capture §3.2 / §4.1): one up at every start, 1 after 0xFFFFFFFF - 0 is only before the
+// first start of the boot, and generations are compared for equality only.
+constexpr uint32_t nextGeneration(uint32_t generation) { return generation == 0xFFFFFFFFu ? 1u : generation + 1u; }
+
+// capture §3.3's contract, the same for configure and query and for the logic and analog tracks (one tag space), on
+// the TLVs as parsed (value or nullptr after their lengths were checked, and whether bit 7 was set).
+struct CaptureAsk { const uint8_t *v; bool critical; };
+namespace capture_tag {
+constexpr uint8_t kMode = reg::fixture_logic::kTlvConfigureMode, kRate = reg::fixture_logic::kTlvConfigureRate,
+                  kSamples = reg::fixture_logic::kTlvConfigureSamples, kSegments = reg::fixture_logic::kTlvConfigureSegments,
+                  kTrigger = reg::fixture_logic::kTlvConfigureTrigger, kPretrigger = reg::fixture_logic::kTlvConfigurePretrigger;
+static_assert(kMode == reg::fixture_analog::kTlvConfigureMode && kRate == reg::fixture_analog::kTlvConfigureRate &&
+              kSamples == reg::fixture_analog::kTlvConfigureSamples && kSegments == reg::fixture_analog::kTlvConfigureSegments &&
+              kTrigger == reg::fixture_analog::kTlvConfigureTrigger && kPretrigger == reg::fixture_analog::kTlvConfigurePretrigger,
+              "logic and analog share the configure tags");
+}  // namespace capture_tag
+// Malformed (core §2.3): mode or rate missing, a value the definition excludes (rate 0, samples or segments 0), samples
+// missing in mode 1 / 2.
+inline bool captureMalformed(CaptureAsk mode, CaptureAsk rate, CaptureAsk samples, CaptureAsk segments) {
+  if (!mode.v || !rate.v || getU32(rate.v) == 0) return true;
+  if ((samples.v && getU32(samples.v) == 0) || (segments.v && getU32(segments.v) == 0)) return true;
+  return (mode.v[0] == reg::fixture_logic::kModeOneShot || mode.v[0] == reg::fixture_logic::kModeRepeat) && !samples.v;
+}
+// Unsupported whatever the value, the tag as received: samples in mode 3, segments outside mode 2, pretrigger without a
+// trigger or with an immediate one. `mode` is a mode the probe takes (refused before this otherwise). Completed: none.
+inline Result captureMisplaced(uint8_t mode, CaptureAsk samples, CaptureAsk segments, CaptureAsk trigger,
+                               CaptureAsk pretrigger, uint8_t *out, size_t capacity) {
+  if (samples.v && mode == reg::fixture_logic::kModeStreaming)
+    return Tail::refuse(capture_tag::kSamples, samples.critical, out, capacity);
+  if (segments.v && mode != reg::fixture_logic::kModeRepeat)
+    return Tail::refuse(capture_tag::kSegments, segments.critical, out, capacity);
+  if (pretrigger.v && (!trigger.v || trigger.v[0] == reg::fixture_logic::kTriggerImmediate))
+    return Tail::refuse(capture_tag::kPretrigger, pretrigger.critical, out, capacity);
+  return completed();
 }
 
 // The sample (of a rate num / den a second) nearest to dns ns after the first one.
@@ -110,6 +149,7 @@ class CaptureGroup final : public Interface {
   uint8_t bound_[kMaxTracks] = {};   // indexes into tracks_
   size_t bound_count_ = 0;
   uint64_t start_ns_ = ~uint64_t{0};
+  uint32_t generation_ = 0;   // the group's (capture §4.1): one up at every start, kept across binds
   bool subscribed_ = false;
   bool started_ = false;   // started since the bind: the state is the tracks' (done once all are)
   bool running_ = false;   // the stopped event is still to come

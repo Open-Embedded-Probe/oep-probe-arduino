@@ -112,11 +112,15 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool trackStart() override { return groupOp(kOpStart); }
   void trackStop() override { groupOp(kOpStop); }
   uint8_t trackState() const override { return state_; }
+  uint8_t trackError() const override { return error_; }
   uint32_t trackGeneration() const override { return generation_; }
 
  private:
+#if defined(OEP_HOST_FAKE_PARLIO)
+  friend struct LogicCaptureSerials;   // the host test moves the serials near their wrap
+#endif
   bool group_op_ = false;
-  uint32_t generation_ = 0;   // one up at every start
+  uint32_t generation_ = 0;   // one up at every start (nextGeneration); 0 before the first
   bool groupOp(uint8_t op) {
     uint8_t out[8];
     group_op_ = true;
@@ -207,7 +211,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   Result startTriggered(uint8_t *out, size_t capacity);
   Open openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
   void pollTriggered();
-  struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_ns; uint8_t flags; };
+  // slot: the store slot holding it (the serial wraps at 2^32, capture §2.2: not a multiple of segment_count_)
+  struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_ns; uint8_t flags; uint32_t slot; };
   // serial u32, position u64, samples u32, start_ns u64, start_uncertainty_ns u32, trigger_index u32, flags u8, generation u32
   static constexpr size_t kInfoBytes = 37;
   size_t storeMax() const;   // the most bytes the segment store can ever take (describe mode: the maximum, not the free)
@@ -223,11 +228,22 @@ class LogicCapture final : public Interface, public GroupTrack {
   QueueHandle_t queue_ = nullptr;
   TaskHandle_t task_ = nullptr;
   volatile bool harvesting_ = false;
+  // completed_: the next serial to finish (serial_done), released_: the oldest not released; both wrap (core §2.6)
   volatile uint32_t completed_ = 0, released_ = 0, fill_ = 0, queue_overflow_ = 0;
+  uint32_t fill_slot_ = 0;                // the store slot being filled (harvest task)
+  volatile uint32_t kept_infos_ = 0;      // finished segments whose info is kept: up to kInfos - 1 (one is being filled)
   volatile uint64_t captured_ = 0, dropped_ = 0;   // bytes the DMA delivered / bytes not stored (no free segment)
   volatile uint32_t produced_ = 0;                  // bytes the ISR has seen finished (the DMA write position, wraps)
   volatile uint32_t overruns_ = 0;                  // chunks the DMA rewrote before the harvest had copied them
   volatile bool gap_pending_ = false, paused_ = false;
+  // capture §2.2: a segment that could not be kept seamless (a chunk lost to the queue, the DMA ring come round over
+  // bytes not yet copied) is never handed out: the harvest drops it and stops taking data (lost_), poll() stops the
+  // track in state 6 (stopped reason 3, error 2). lost_pos_: where that segment began (status write_pos stays there).
+  volatile bool lost_ = false;
+  uint64_t lost_pos_ = 0;
+  uint8_t error_ = reg::fixture_logic::kErrorPeripheral;   // status's error TLV in state 6
+  void loseSegment();          // harvest task: the segment being filled (or the stage) goes, nothing more is taken
+  void failLost();             // loop: the track stops on it (state 6, stopped reason 3 error 2)
   uint32_t reported_ = 0;
   // streaming: the next byte to push is sent_off_ into segment sent_seg_
   volatile uint32_t sent_seg_ = 0;

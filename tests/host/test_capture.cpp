@@ -54,7 +54,7 @@ static constexpr uint8_t kCrit = 0x80;
 struct Config {
   uint8_t mode = 1;
   uint32_t rate = LogicCapture::kMinHz;
-  uint32_t samples = 0;   // 0: not sent
+  uint32_t samples = 1000;   // 0: not sent; never sent in streaming (capture §3.3)
   uint32_t segments = 0;
   bool trigger = false;
   uint32_t pretrigger = 0;
@@ -64,7 +64,7 @@ static Bytes request(const Config &c) {
   Bytes p;
   tlv(p, kCrit | cap::kTlvConfigureMode, {c.mode});
   tlv(p, kCrit | cap::kTlvConfigureRate, u32(c.rate));
-  if (c.samples) tlv(p, cap::kTlvConfigureSamples, u32(c.samples));
+  if (c.samples && c.mode != 3) tlv(p, cap::kTlvConfigureSamples, u32(c.samples));
   if (c.segments) tlv(p, cap::kTlvConfigureSegments, u32(c.segments));
   if (c.trigger) {   // an edge on role 0, falling
     Bytes t = {cap::kTriggerEdge, 0};
@@ -176,6 +176,12 @@ static void testEveryModeAtTheLowestRate() {
   }
 }
 
+static bool hasTag(const Bytes &a, uint8_t tag) {
+  for (size_t at = 0; at + kTlvHeader <= a.size(); at += kTlvHeader + getU16(a.data() + at + 1))
+    if (a[at] == tag) return true;
+  return false;
+}
+
 class FakeDirect final : public DirectTransport {
  public:
   bool queueData(const uint8_t *, size_t, Done, void *) override { return true; }
@@ -198,15 +204,20 @@ static void testStreamingWithoutStages() {
     const Result r = configure(rig.cap, c, out);
     CHECK(ok(r));
     if (!ok(r)) printf("  streaming internal=%zu: resolution %u detail %u\n", internal, r.resolution, r.detail);
-    uint32_t segments = 0;
-    CHECK(findU32(out, cap::kTlvConfigureAnswerActualSegments, segments) && segments >= 2);
+    // streaming's answer rows (capture §3.3): no actual_samples, no actual_segments
+    CHECK(hasTag(out, cap::kTlvConfigureAnswerActualRate) && hasTag(out, cap::kTlvConfigureAnswerLayout) &&
+          hasTag(out, cap::kTlvConfigureAnswerBlockingMs) && !hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
+          !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
   }
 }
 
-static bool hasTag(const Bytes &a, uint8_t tag) {
-  for (size_t at = 0; at + kTlvHeader <= a.size(); at += kTlvHeader + getU16(a.data() + at + 1))
-    if (a[at] == tag) return true;
-  return false;
+// The TLVs of a valid one-shot request (mode 1, the lowest rate, 1000 samples) but `skip`, bit 7 as `bit`.
+static Bytes base(uint8_t bit, uint8_t skip = 0) {
+  Bytes p;
+  if (skip != cap::kTlvConfigureMode) tlv(p, bit | cap::kTlvConfigureMode, {1});
+  if (skip != cap::kTlvConfigureRate) tlv(p, bit | cap::kTlvConfigureRate, u32(LogicCapture::kMinHz));
+  if (skip != cap::kTlvConfigureSamples) tlv(p, bit | cap::kTlvConfigureSamples, u32(1000));
+  return p;
 }
 
 // core §2.3 (capture §3.3): every configure TLV is checked the same with or without bit 7. A value the probe cannot
@@ -216,22 +227,24 @@ static void testValuesRefused() {
   board(512 * 1024, size_t(32) << 20);
   Rig rig(2);
   Bytes out;
+  const Bytes edge = {cap::kTriggerEdge, 0, 0, 0, 0, 0};
   for (const uint8_t bit : {uint8_t(0), kCrit}) {
     for (const uint8_t op : {LogicCapture::kOpConfigure, LogicCapture::kOpQuery}) {
-      Bytes p;
+      Bytes p = base(bit, cap::kTlvConfigureMode);
       tlv(p, bit | cap::kTlvConfigureMode, {7});                                  // a mode it does not have
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureMode)});
-      p.clear();
+      p = base(bit, cap::kTlvConfigureRate);
       tlv(p, bit | cap::kTlvConfigureRate, u32(1000));                            // below rate_range
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureRate)});
-      p.clear();
+      p = base(bit, cap::kTlvConfigureMode);
       tlv(p, kCrit | cap::kTlvConfigureMode, {2});
-      tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerEdge, 0, 0, 0, 0, 0}); // an edge in repeat
+      tlv(p, bit | cap::kTlvConfigureTrigger, edge);                              // an edge in repeat
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureTrigger)});
-      p.clear();
-      tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerLevel, 5, 1, 0, 0, 0}); // a role not in the plan
+      p = base(bit);
+      tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerLevel, 0, 2, 0, 0, 0}); // a level of 2
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureTrigger)});
-      p.clear();
+      p = base(bit);
+      tlv(p, bit | cap::kTlvConfigureTrigger, edge);
       tlv(p, bit | cap::kTlvConfigurePretrigger, u32(0x7FFFFFFF));                // more than the ring holds
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigurePretrigger)});
       // a length other than the definition: malformed, longer or shorter, any tag (none is ignored)
@@ -239,7 +252,7 @@ static void testValuesRefused() {
                                 cap::kTlvConfigureSegments, cap::kTlvConfigureTrigger, cap::kTlvConfigurePretrigger}) {
         const size_t size = tag == cap::kTlvConfigureMode ? 1 : tag == cap::kTlvConfigureTrigger ? 6 : 4;
         for (const size_t len : {size - 1, size + 1}) {
-          p.clear();
+          p = base(bit, tag);
           tlv(p, bit | tag, Bytes(len, 1));
           CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectMalformed));
         }
@@ -247,15 +260,77 @@ static void testValuesRefused() {
     }
   }
   // an unknown non-critical tag is passed over; the answer has no ignored (0x7F), timing (0x54) or rate_accuracy (0x5A)
-  Bytes p;
-  tlv(p, cap::kTlvConfigureSamples, u32(1000));
+  Bytes p = base(kCrit);
   tlv(p, 0x61, {1, 2, 3});
   tlv(p, 0x7F, {cap::kTlvConfigureSamples});   // no longer a special tag: unknown, non-critical
   CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)));
   CHECK(hasTag(out, cap::kTlvConfigureAnswerActualRate) && hasTag(out, cap::kTlvConfigureAnswerLayout) &&
-        hasTag(out, cap::kTlvConfigureAnswerActualSamples) && hasTag(out, cap::kTlvConfigureAnswerActualSegments) &&
-        hasTag(out, cap::kTlvConfigureAnswerBlockingMs));
+        hasTag(out, cap::kTlvConfigureAnswerActualSamples) && hasTag(out, cap::kTlvConfigureAnswerBlockingMs));
   CHECK(!hasTag(out, 0x7F) && !hasTag(out, 0x54) && !hasTag(out, 0x5A));
+}
+
+// capture §3.3's contract, configure and query alike: mode and rate required, samples in modes 1 / 2, none of them 0
+// (malformed); samples in streaming, segments outside repeat, a pretrigger without a trigger or with an immediate one
+// unsupported whatever the value (the tag as received); a trigger role outside the plan unavailable cause 6; a
+// pretrigger at or above samples (as rounded) unsupported, just below it taken; success answers every row of the mode.
+static void testContract() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Bytes out;
+  const Bytes edge = {cap::kTriggerEdge, 0, 0, 0, 0, 0}, immediate = {cap::kTriggerImmediate, 0, 0, 0, 0, 0};
+  for (const uint8_t op : {LogicCapture::kOpConfigure, LogicCapture::kOpQuery}) {
+    for (const uint8_t tag : {cap::kTlvConfigureMode, cap::kTlvConfigureRate, cap::kTlvConfigureSamples})
+      CHECK(rejectedAs(raw(rig.cap, op, base(kCrit, tag), out), kRejectMalformed));   // a required one missing
+    for (const uint8_t mode : {2, 3}) {   // samples required in repeat; in streaming only mode and rate
+      Bytes p;
+      tlv(p, cap::kTlvConfigureMode, {mode});
+      tlv(p, cap::kTlvConfigureRate, u32(LogicCapture::kMinHz));
+      CHECK(mode == 3 ? ok(raw(rig.cap, op, p, out)) : rejectedAs(raw(rig.cap, op, p, out), kRejectMalformed));
+    }
+    for (const uint8_t tag : {cap::kTlvConfigureSamples, cap::kTlvConfigureSegments}) {   // 0 is excluded
+      Bytes p = base(0, cap::kTlvConfigureMode);
+      tlv(p, cap::kTlvConfigureMode, {2});
+      if (tag == cap::kTlvConfigureSamples) p = base(0, tag), tlv(p, tag, u32(0));
+      else tlv(p, tag, u32(0));
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectMalformed));
+    }
+    for (const uint8_t bit : {uint8_t(0), kCrit}) {
+      Bytes p;   // samples in streaming
+      tlv(p, cap::kTlvConfigureMode, {3});
+      tlv(p, cap::kTlvConfigureRate, u32(LogicCapture::kMinHz));
+      tlv(p, bit | cap::kTlvConfigureSamples, u32(1000));
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureSamples)});
+      p = base(0);   // segments in one-shot
+      tlv(p, bit | cap::kTlvConfigureSegments, u32(4));
+      CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureSegments)});
+      for (const bool with_immediate : {false, true}) {   // a pretrigger without a trigger, with an immediate one
+        p = base(0);
+        if (with_immediate) tlv(p, cap::kTlvConfigureTrigger, immediate);
+        tlv(p, bit | cap::kTlvConfigurePretrigger, u32(10));
+        CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigurePretrigger)});
+      }
+    }
+    Bytes p = base(0);   // a trigger role outside the plan (roles 0, 1): unavailable cause 6
+    tlv(p, cap::kTlvConfigureTrigger, {cap::kTriggerLevel, 2, 1, 0, 0, 0});
+    CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1, 0, 6}));
+    // the pretrigger against samples as rounded: 1000 samples at w = 2 is 1024 (whole cache lines)
+    for (const uint32_t pre : {1023u, 1024u}) {
+      p = base(0);
+      tlv(p, cap::kTlvConfigureTrigger, edge);
+      tlv(p, cap::kTlvConfigurePretrigger, u32(pre));
+      const Result r = raw(rig.cap, op, p, out);
+      CHECK(pre == 1023 ? ok(r) : rejectedAs(r, kRejectUnsupported) && out == Bytes{cap::kTlvConfigurePretrigger});
+    }
+    // every row of the mode: one-shot rate, layout, actual_samples, blocking_ms; repeat also actual_segments
+    CHECK(ok(raw(rig.cap, op, base(0), out)) && hasTag(out, cap::kTlvConfigureAnswerActualRate) &&
+          hasTag(out, cap::kTlvConfigureAnswerLayout) && hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
+          hasTag(out, cap::kTlvConfigureAnswerBlockingMs) && !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
+    p = base(0, cap::kTlvConfigureMode);
+    tlv(p, cap::kTlvConfigureMode, {2});
+    tlv(p, cap::kTlvConfigureSegments, u32(3));
+    CHECK(ok(raw(rig.cap, op, p, out)) && hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
+          hasTag(out, cap::kTlvConfigureAnswerActualSegments));
+  }
 }
 
 // capture §3.5: mode is mode(u8) max_samples(u32) max_segments(u32), one per mode; channels is max(u8); rate_list,
@@ -271,6 +346,7 @@ static void testDescribe() {
   for (size_t at = 0; at + kTlvHeader <= d.size(); at += kTlvHeader + getU16(d.data() + at + 1)) {
     const uint8_t tag = d[at];
     const uint16_t len = getU16(d.data() + at + 1);
+    CHECK(len <= 512 - 9);   // core §7.3: fits the smallest max_frame (512) with the header 5, more 1, TLV 3
     if (tag == cap::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == modes); }
     if (tag == cap::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == LogicCapture::kMaxChannels); }
     CHECK(tag != 0x42 && tag != 0x43 && tag != 0x47 && tag != 0x48);
@@ -286,8 +362,7 @@ static void testConfigureOrder() {
   Endpoint ep{stream, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kVendorBulk, 0};
   PinTable pins{0xFFFFull};
   LogicCapture c{ep, pins};   // no plan
-  Bytes out, p;
-  tlv(p, kCrit | cap::kTlvConfigureRate, u32(1000000));
+  Bytes out, p = base(kCrit);
   CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectUnavailable));
   tlv(p, kCrit | cap::kTlvConfigureTrigger, {cap::kTriggerEdge, 15, 0, 0, 0, 0});   // a role it has: the plan decides
   CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectUnavailable));
@@ -295,7 +370,7 @@ static void testConfigureOrder() {
   CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectUnsupported) && out == Bytes{kCrit | 0x60});
   tlv(p, cap::kTlvConfigureSegments, {1});                                            // and a short segments
   CHECK(rejectedAs(raw(c, LogicCapture::kOpConfigure, p, out), kRejectMalformed));
-  p.clear();
+  p = base(kCrit, cap::kTlvConfigureRate);
   tlv(p, kCrit | cap::kTlvConfigureRate, u32(0));                                     // 0 Hz: excluded (1 Hz or more)
   CHECK(rejectedAs(raw(c, LogicCapture::kOpQuery, p, out), kRejectMalformed));
 }
@@ -518,8 +593,7 @@ static void testImmediateAfterFollowing() {
   Dma dma;
   Bytes out;
   Config c;
-  c.samples = 4096;
-  c.pretrigger = 100;   // kept for following
+  c.samples = 4096;     // immediate: no pretrigger (capture §3.3)
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(rig.cap.trackStartFollowing());
   rig.cap.trackStop();
@@ -700,12 +774,41 @@ static void testLostChunk() {
     dma.deliver(64, 0x22, 32);     // 2 lost
     dma.run();
     for (int k = 0; k < 4; ++k) { dma.deliver(1024, 0x33, 32); dma.run(); }
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 2);
+    // capture §2.2: serial 0 (finished before the loss) handed out; serial 1 had the hole: not handed out, the track
+    // stopped in state 6 with error 2, write_pos at serial 1's start, status flags bit0
+    rig.cap.poll();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
     CHECK(getU64(out.data() + 2 + 4) == 0 && !(out[2 + 32] & cap::kSegmentFlagGap));
-    CHECK(getU64(out.data() + 2 + 37 + 4) == 4160 && (out[2 + 37 + 32] & cap::kSegmentFlagGap));
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4160, 10), out)) && getU64(out.data()) == 4160 &&
-          out[13] == 0x33);
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && (out[13] & cap::kStatusFlagDropped));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU32(out.data() + 9) == 0);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() == 22 && out[0] == cap::kStateError &&
+          getU32(out.data() + 1) == 1 && getU64(out.data() + 5) == 4096 && (out[13] & cap::kStatusFlagDropped) &&
+          out[21] == cap::kErrorStorage);
+  }
+  {   // the loss inside a segment: the bytes of it so far are never read
+    board(512 * 1024, size_t(32) << 20);
+    Rig rig(2);
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.mode = 2;
+    c.samples = 16384;
+    c.segments = 4;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint32_t generation = getU32(out.data() + 4);
+    dma.deliver(4096 + 1024, 0x11);   // serial 0 and a quarter of serial 1
+    dma.run();
+    dma.deliver(1024, 0x22, 8);       // 128 chunks: the queue full
+    dma.deliver(16, 0x22, 8);         // 2 lost, inside serial 1
+    dma.run();
+    dma.deliver(1024, 0x33);
+    dma.run();
+    rig.cap.poll();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU32(out.data() + 9) == 0);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateError && getU64(out.data() + 5) == 4096);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));   // state 6 starts again: a new generation, no error
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && out.size() == 18);
   }
   {
     board(512 * 1024, size_t(32) << 20);
@@ -736,7 +839,90 @@ static void testLostChunk() {
   }
 }
 
+namespace oep {
+struct LogicCaptureSerials {
+  static void set(LogicCapture &c, uint32_t serial) { c.completed_ = c.released_ = serial; }
+};
+}  // namespace oep
+
+// A repeat's serials wrap (capture §2.2): serial_done, segments (common §1.3's paging: from_serial inclusive, = next
+// empty, one not kept from the oldest kept), read and release across 0xFFFFFFFF -> 0; release frees finished segments
+// only, a future serial every finished one.
+static void testSerialsWrap() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.mode = 2;
+  c.samples = 16384;   // 4096 bytes at w = 2
+  c.segments = 4;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  const uint32_t generation = getU32(out.data() + 4);
+  LogicCaptureSerials::set(rig.cap, 0xFFFFFFFEu);
+  dma.deliver(4096, 0x11);
+  dma.deliver(4096, 0x22);
+  dma.deliver(4096, 0x33);
+  dma.deliver(1000, 0x44);   // the fourth, filling
+  dma.run();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && getU32(out.data() + 1) == 1);   // serial_done: next
+  auto segments = [&](uint32_t from) { Bytes p(4); putU32(p.data(), from); return raw(rig.cap, LogicCapture::kOpSegments, p, out); };
+  CHECK(ok(segments(0xFFFFFFFEu)) && out[0] == 0 && out[1] == 3 && getU32(out.data() + 2) == 0xFFFFFFFEu &&
+        getU32(out.data() + 2 + 37) == 0xFFFFFFFFu && getU32(out.data() + 2 + 74) == 0);
+  CHECK(ok(segments(0)) && out[0] == 0 && out[1] == 1 && getU32(out.data() + 2) == 0 && getU64(out.data() + 2 + 4) == 8192);
+  CHECK(ok(segments(1)) && out.size() == 2 && out[0] == 0 && out[1] == 0);                     // = next: none, more 0
+  CHECK(ok(segments(7)) && out[1] == 3 && getU32(out.data() + 2) == 0xFFFFFFFEu);              // not given: the oldest
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 8192, 10), out)) && getU64(out.data()) == 8192 &&
+        out[13] == 0x33);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && out[13] == 0x22 &&
+        (out[8] & reg::common::kReadFlagsMore));
+  Bytes rel(8);
+  putU32(rel.data(), generation);
+  putU32(rel.data() + 4, 0xFFFFFFFFu);   // the first two
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRelease, rel, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 10), out)) && getU64(out.data()) == 8192 &&
+        (out[8] & reg::common::kReadFlagsGap) && out[13] == 0x33);
+  putU32(rel.data() + 4, 0xFFFFFFFEu);   // already released: nothing
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRelease, rel, out)));
+  putU32(rel.data() + 4, 100);           // ahead of serial_done: every finished one, not the one filling
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRelease, rel, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 8192, 10), out)) && getU64(out.data()) == 12288 &&
+        getU32(out.data() + 9) == 0);
+  dma.deliver(3096, 0x44);   // the fourth finishes: readable (not released by the earlier serial 100)
+  dma.run();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 12288, 10), out)) && getU32(out.data() + 9) == 10 &&
+        out[13] == 0x44);
+}
+
+// A triggered one-shot whose ring came round over its segment before the harvest copied it (capture §2.2): no
+// segment, state 6, error 2, write_pos 0, stopped reason 3.
+static void testTriggeredHole() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.samples = 200000;   // 50000 bytes
+  c.trigger = true;
+  c.pretrigger = 100;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  dma.deliver(1000, 0xFF);
+  dma.deliver(2000, 0x00);   // the edge: filling
+  dma.run();
+  dma.deliver(LogicCapture::kRingBytes + 8192, 0x00, 1024);   // over the ring before the harvest runs again
+  dma.run();
+  rig.cap.poll();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() == 22 && out[0] == cap::kStateError &&
+        getU32(out.data() + 1) == 0 && getU64(out.data() + 5) == 0 && (out[13] & cap::kStatusFlagDropped) &&
+        out[21] == cap::kErrorStorage);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
+}
+
 int main() {
+  testSerialsWrap();
+  testTriggeredHole();
   testRingKept();
   testImmediateStop();
   testEveryStartFresh();
@@ -748,6 +934,7 @@ int main() {
   testBound();
   testRateLimit();
   testValuesRefused();
+  testContract();
   testDescribe();
   testConfigureOrder();
   testStreamingWithoutStages();

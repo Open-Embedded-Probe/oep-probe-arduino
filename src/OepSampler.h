@@ -86,7 +86,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
 
  private:
   bool group_op_ = false;
-  uint32_t generation_ = 0;   // one up at every start (oep-if-capture: generation)
+  uint32_t generation_ = 0;   // one up at every start (nextGeneration); 0 before the first
   bool groupOp(uint8_t op) {
     uint8_t out[8];
     group_op_ = true;

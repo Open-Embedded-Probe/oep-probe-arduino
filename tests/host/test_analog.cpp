@@ -77,11 +77,12 @@ struct Rig {
   }
 };
 
-static Bytes configureRequest(uint32_t rate, uint32_t samples = 0) {
+// mode 1, rate and samples: the TLVs a one-shot requires (capture §3.3); `skip` left out
+static Bytes configureRequest(uint32_t rate, uint32_t samples = 1024, uint8_t skip = 0) {
   Bytes p;
-  tlv(p, kCrit | ana::kTlvConfigureMode, {ana::kModeOneShot});
-  tlv(p, kCrit | ana::kTlvConfigureRate, u32(rate));
-  if (samples) tlv(p, ana::kTlvConfigureSamples, u32(samples));
+  if (skip != ana::kTlvConfigureMode) tlv(p, kCrit | ana::kTlvConfigureMode, {ana::kModeOneShot});
+  if (skip != ana::kTlvConfigureRate) tlv(p, kCrit | ana::kTlvConfigureRate, u32(rate));
+  if (skip != ana::kTlvConfigureSamples) tlv(p, ana::kTlvConfigureSamples, u32(samples));
   return p;
 }
 
@@ -98,32 +99,45 @@ static void testValuesRefused() {
   Rig rig;
   CHECK(rig.plan({26}) == 0);
   for (const uint8_t bit : {uint8_t(0), kCrit}) {
-    Bytes p;
+    Bytes p = configureRequest(10000, 1024, ana::kTlvConfigureMode);
     tlv(p, bit | ana::kTlvConfigureMode, {ana::kModeRepeat});
-    tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
     Result r = rig.op(ana::kOpConfigure, p);
     CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureMode));
-    p.clear();
-    tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
+    p = configureRequest(10000);
     tlv(p, bit | ana::kTlvConfigureTrigger, {1, 0, 0, 0, 0, 0});   // a logic type
     r = rig.op(ana::kOpQuery, p);
     CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureTrigger));
-    p.clear();
-    tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
-    tlv(p, ana::kTlvConfigureSamples, u32(100));
+    p = configureRequest(10000, 100);
+    tlv(p, ana::kTlvConfigureTrigger, {3, 0, 0, 8, 0, 0});
     tlv(p, bit | ana::kTlvConfigurePretrigger, u32(100));         // no room left in the segment
     r = rig.op(ana::kOpConfigure, p);
     CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigurePretrigger));
-    p.clear();
-    tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
+    p = configureRequest(10000, 100);
+    tlv(p, ana::kTlvConfigureTrigger, {3, 0, 0, 8, 0, 0});
+    tlv(p, bit | ana::kTlvConfigurePretrigger, u32(99));          // just inside it (the RP2's room is 1)
+    CHECK(ok(rig.op(ana::kOpQuery, p)));
+    p = configureRequest(10000, 100);
+    tlv(p, bit | ana::kTlvConfigurePretrigger, u32(10));          // without a trigger: whatever the value
+    r = rig.op(ana::kOpConfigure, p);
+    CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigurePretrigger));
+    p = configureRequest(10000);
+    tlv(p, bit | ana::kTlvConfigureSegments, u32(2));             // segments in one-shot: whatever the value
+    r = rig.op(ana::kOpQuery, p);
+    CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureSegments));
+    p = configureRequest(10000);
     tlv(p, bit | ana::kTlvConfigureFrontend, {0, 9});              // a frontend it does not declare
     r = rig.op(ana::kOpConfigure, p);
     CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureFrontend));
-    p.clear();
-    tlv(p, bit | ana::kTlvConfigureRate, u32(10000));
+    p = configureRequest(10000);
     tlv(p, bit | ana::kTlvConfigureFrontend, {1, 0});              // a role not in the plan
     r = rig.op(ana::kOpConfigure, p);
     CHECK(rejectedAs(r, kRejectUnsupported) && rig.out.size() == 1 && rig.out[0] == (bit | ana::kTlvConfigureFrontend));
+    // a required TLV missing, samples 0: malformed (capture §3.3)
+    for (const uint8_t tag : {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples})
+      CHECK(rejectedAs(rig.op(ana::kOpQuery, configureRequest(10000, 1024, tag)), kRejectMalformed));
+    p = configureRequest(10000, 1024, ana::kTlvConfigureSamples);
+    tlv(p, bit | ana::kTlvConfigureSamples, u32(0));
+    CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
     // a length other than the definition: malformed, longer or shorter, any tag (none is ignored)
     for (const uint8_t tag : {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
                               ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
@@ -131,9 +145,7 @@ static void testValuesRefused() {
       const size_t size = tag == ana::kTlvConfigureMode ? 1 : tag == ana::kTlvConfigureTrigger ? 6
                         : tag == ana::kTlvConfigureFrontend ? 2 : 4;
       for (const size_t len : {size - 1, size + 1}) {
-        p = configureRequest(10000);
-        if (tag == ana::kTlvConfigureMode || tag == ana::kTlvConfigureRate) p.clear();
-        if (tag == ana::kTlvConfigureMode) tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
+        p = configureRequest(10000, 1024, tag);
         tlv(p, bit | tag, Bytes(len, 1));
         CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
       }
@@ -146,6 +158,7 @@ static void testValuesRefused() {
   tlv(p, 0x7F, {ana::kTlvConfigureSamples});   // no longer a special tag: unknown, non-critical
   CHECK(ok(rig.op(ana::kOpConfigure, p)));
   CHECK(!hasTag(rig.out, 0x7F) && !hasTag(rig.out, 0x54) && !hasTag(rig.out, 0x5A));
+  CHECK(hasTag(rig.out, ana::kTlvConfigureAnswerActualSamples) && !hasTag(rig.out, ana::kTlvConfigureAnswerActualSegments));
   CHECK(hasTag(rig.out, ana::kTlvConfigureAnswerSkew) && hasTag(rig.out, ana::kTlvConfigureAnswerScale) &&
         hasTag(rig.out, ana::kTlvConfigureAnswerBlockingMs) && hasTag(rig.out, ana::kTlvConfigureAnswerFrontendUsed) &&
         hasTag(rig.out, ana::kTlvConfigureAnswerReference));
@@ -163,6 +176,7 @@ static void testDescribe() {
   for (size_t at = 0; at + kTlvHeader <= d.size(); at += kTlvHeader + getU16(d.data() + at + 1)) {
     const uint8_t tag = d[at];
     const uint16_t len = getU16(d.data() + at + 1);
+    CHECK(len <= 512 - 9);   // core §7.3: fits the smallest max_frame (512) with the header 5, more 1, TLV 3
     if (tag == ana::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == ana::kModeOneShot); }
     if (tag == ana::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == AnalogCapture::kMaxChannels); }
     if (tag == ana::kTlvDescribeFrontend) ++frontends;
@@ -178,17 +192,16 @@ static void testConfigureOrder() {
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnavailable));   // no plan: cause 6
   tlv(p, kCrit | 0x60, {1});                                              // an unknown critical tag
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnsupported) && rig.out[0] == (kCrit | 0x60));
-  tlv(p, ana::kTlvConfigureSamples, {1, 0});                              // and a short samples
+  tlv(p, ana::kTlvConfigureSegments, {1, 0});                             // and a short segments
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
   p = configureRequest(10000);
   tlv(p, kCrit | ana::kTlvConfigureMode, {});                             // mode twice: the first is used (core §2.3)
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnavailable));
-  p.clear();
-  tlv(p, kCrit | ana::kTlvConfigureRate, u32(10000));
+  p = configureRequest(10000);
   tlv(p, kCrit | ana::kTlvConfigureTrigger, {3, 3, 0, 8, 0, 0});          // role 3 without a plan: the plan's refusal
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnavailable));
-  CHECK(rig.plan({26}) == 0);
-  CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnsupported) && rig.out[0] == (kCrit | ana::kTlvConfigureTrigger));
+  CHECK(rig.plan({26}) == 0);   // and with a plan without role 3: unavailable cause 6 (capture §3.3)
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnavailable) && rig.out == (Bytes{0x01, 1, 0, 6}));
 }
 
 static bool findTlv(const Bytes &a, uint8_t tag, Bytes &v) {
@@ -207,7 +220,7 @@ static void testRateRange() {
   CHECK(rig.plan({26, 27}) == 0);
   for (const uint32_t rate : {uint32_t(1), uint32_t(48000000 / 65536), uint32_t(500001), uint32_t(10000000)}) {
     for (const uint8_t bit : {uint8_t(0), kCrit}) {
-      Bytes p;
+      Bytes p = configureRequest(rate, 1024, ana::kTlvConfigureRate);
       tlv(p, bit | ana::kTlvConfigureRate, u32(rate));
       CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnsupported) && rig.out == Bytes{uint8_t(bit | ana::kTlvConfigureRate)});
     }
@@ -257,7 +270,33 @@ static Bytes readReq(uint32_t generation, uint64_t position, uint32_t max) {
 }
 // The DMA writes `count` values of `value` (of the transfer the capture set up).
 static void convert(uint32_t count, uint16_t value) {
-  for (uint32_t i = 0; i < count && g_fake_dma.written < g_fake_dma.count; ++i) g_fake_dma.to[g_fake_dma.written++] = value;
+  for (uint32_t i = 0; i < count && g_fake_dma.written < g_fake_dma.count; ++i, ++g_fake_dma.written)   // a ring wraps
+    g_fake_dma.to[g_fake_dma.ring ? g_fake_dma.written % (32768 / 2) : g_fake_dma.written] = value;
+}
+
+// capture §2.2: a triggered segment the DMA ring came round over before it was taken out (poll late) has a hole: not
+// handed out - no segment, read empty, write_pos 0 - and the track stops in state 6 with error 2, status flags bit0.
+static void testHole() {
+  Rig rig;
+  CHECK(rig.plan({26}) == 0);
+  Bytes p = configureRequest(10000, 100);
+  tlv(p, kCrit | ana::kTlvConfigureTrigger, {ana::kTriggerCrossUp, 0, 0xD0, 0x07, 0, 0});   // 2000
+  tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(10));
+  CHECK(ok(rig.op(ana::kOpConfigure, p)));
+  CHECK(ok(rig.op(ana::kOpStart)));
+  const uint32_t generation = getU32(rig.out.data() + 4);
+  convert(20, 100);
+  convert(30, 4000);
+  rig.cap.poll();                 // the crossing at frame 20: the segment runs 10 - 109
+  convert(20000, 4000);           // the ring (16384 values) came round over it before the next look
+  rig.cap.poll();
+  CHECK(ok(rig.op(ana::kOpStatus)) && rig.out.size() == 22 && rig.out[0] == ana::kStateError &&
+        getU32(rig.out.data() + 1) == 0 && getU64(rig.out.data() + 5) == 0 && (rig.out[13] & ana::kStatusFlagDropped) &&
+        rig.out[21] == ana::kErrorStorage);
+  CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out[1] == 0);
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 0);
+  CHECK(ok(rig.op(ana::kOpStart)));   // from state 6: a new generation
+  CHECK(ok(rig.op(ana::kOpStatus)) && rig.out.size() == 18);
 }
 
 // The plan released or replaced (capture §3.2): state 0, the data and the segment gone - read is empty (it read past
@@ -344,6 +383,7 @@ static void testStop() {
 
 int main() {
   testStop();
+  testHole();
   testPlanReleaseForgets();
   testOutputIdle();
   testRateRange();

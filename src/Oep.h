@@ -108,6 +108,16 @@ inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> 
 // op among first .. last (an interface's op table, for Interface::offers)
 constexpr bool opIn(uint8_t op, uint8_t first, uint8_t last) { return op >= first && op <= last; }
 
+// Serial paging (common §1.3: marks, and capture's segments). The kept serials run from `oldest` to next - 1, u32 and
+// wrapping (core §2.6: fewer than 2^30 kept); `next` is the serial the next element gets. The first serial to answer
+// for from_serial: from itself when kept (inclusive); next - no elements, more 0 - when from is next or nothing is kept;
+// otherwise (pushed out, not given yet, from another boot) the oldest kept.
+constexpr uint32_t serialPageStart(uint32_t from, uint32_t oldest, uint32_t next) {
+  return from == next || oldest == next ? next : static_cast<uint32_t>(from - oldest) < static_cast<uint32_t>(next - oldest) ? from : oldest;
+}
+// a is before b in a wrapping u32 serial space (core §2.6)
+constexpr bool serialBefore(uint32_t a, uint32_t b) { return static_cast<int32_t>(a - b) < 0; }
+
 // One TLV (core §2.2): tag(u8) len(u16) value - one form whatever the value's length (0 to 65535 bytes).
 constexpr size_t kTlvHeader = 3;
 inline void putTlvHeader(uint8_t *p, uint8_t tag, uint16_t length) { p[0] = tag; putU16(p + 1, length); }

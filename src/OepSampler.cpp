@@ -193,44 +193,46 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   struct Item { uint8_t tag; size_t size; const uint8_t *v; bool critical; };
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
                   {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false}};
-  Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &trigger_tlv = items[4],
-       &pretrigger_tlv = items[5];
+  Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
   }
-  if (rate_tlv.v && getU32(rate_tlv.v) == 0) return rejected(kRejectMalformed);   // 1 Hz or more (capture §3.3)
+  // capture §3.3's contract: mode and rate required, samples in mode 1 / 2; none of them 0 (malformed)
+  auto ask = [](const Item &it) { return CaptureAsk{it.v, it.critical}; };
+  if (captureMalformed(ask(mode_tlv), ask(rate_tlv), ask(samples_tlv), ask(segments_tlv))) return rejected(kRejectMalformed);
   if (refused(unknown_critical)) return unknown_critical;
-  uint32_t rate = 1000000, samples = 0;
-  if (mode_tlv.v && mode_tlv.v[0] != cap::kModeOneShot)   // one-shot only
+  if (mode_tlv.v[0] != cap::kModeOneShot)   // one-shot only
     return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
-  if (const uint8_t *v = rate_tlv.v) {   // outside rate_range (capture §3.3)
-    if (getU32(v) < kMinHz || getU32(v) > kMaxHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
-    rate = getU32(v);
-  }
-  if (samples_tlv.v) samples = getU32(samples_tlv.v);
-  // the trigger's role against the plan; without one against the roles this capture has (the plan's refusal follows)
-  const uint8_t planned = channels_ ? channels_ : kMaxChannels;
+  uint32_t rate = getU32(rate_tlv.v);   // outside rate_range (capture §3.3)
+  if (rate < kMinHz || rate > kMaxHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  // segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
+  const Result misplaced = captureMisplaced(mode_tlv.v[0], ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv),
+                                            ask(pretrigger_tlv), out, capacity);
+  if (refused(misplaced)) return misplaced;
+  uint32_t samples = getU32(samples_tlv.v);
+  // a role outside the plan is refused unavailable cause 6 below, after every unsupported value (core §4.3)
   uint8_t trig_type = cap::kTriggerImmediate, trig_role = 0;
   uint32_t trig_value = 0;
   if (const uint8_t *v = trigger_tlv.v) {   // type(u8) role(u8) value(u32)
     const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == cap::kTriggerImmediate ||
-                    (v[1] < planned && ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2)));
+                    (v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2);
     if (!ok) return Tail::refuse(kTagTrigger, trigger_tlv.critical, out, capacity);
     trig_type = v[0];
     trig_role = v[1];
     trig_value = value;
   }
-  if (samples == 0 || samples > kBufferBytes) samples = kBufferBytes;
+  if (samples > kBufferBytes) samples = kBufferBytes;
   // the radio on: a segment of kSegmentNsRadio at most at the rate paced (below), rounded down - see after the rate
   uint32_t pretrigger = 0;
-  if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger, inside the segment
+  if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger (above), inside the segment: less than samples
     pretrigger = getU32(v);
-    if (pretrigger && (trig_type == cap::kTriggerImmediate || pretrigger >= samples))
-      return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
+    if (pretrigger >= samples) return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   }
-  if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
+  // no plan, or the trigger's role not in it: unavailable cause 6 (capture §3.2, §3.3)
+  if (channels_ == 0 || (trigger_tlv.v && trig_role >= channels_)) return wrongState(out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   // Paced in software, the loop keeps up to kMaxHz only while every channel is on GPIO0..31 (one register read per
@@ -275,8 +277,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   uint8_t layout[2 + kMaxChannels] = {8, channels_};
   for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
   w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + channels_);
-  w.u32(cap::kTlvConfigureAnswerActualSamples, samples);
-  w.u32(cap::kTlvConfigureAnswerActualSegments, 1);
+  w.u32(cap::kTlvConfigureAnswerActualSamples, samples);   // one-shot: no actual_segments (capture §3.3)
   w.u32(cap::kTlvConfigureAnswerBlockingMs, 0);    // core 1 keeps answering
   return w.ok() ? completed(w.length()) : failed();
 }
@@ -297,11 +298,12 @@ void SamplerCapture::poll() {
   gWireGate.release();   // loop() came round: the SWIO wire's request has ended, a window may open (OepWireGate.h)
   if (state_ == cap::kStateWaiting && trig_seen_) {
     state_ = cap::kStateCapturing;
-    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64)
-      uint8_t e[16];
+    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64) generation(u32)
+      uint8_t e[20];
       putU32(e, 0);
       putU32(e + 4, trig_kept_);
       putU64(e + 8, trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_);
+      putU32(e + 16, generation_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
   }
@@ -310,7 +312,8 @@ void SamplerCapture::poll() {
   if (subscribed_) {
     uint8_t seg[37];
     endpoint_.event(*this, cap::kEventSegment, seg, segmentInfo(seg));
-    const uint8_t stopped[2] = {cap::kStoppedReasonComplete, 0};
+    uint8_t stopped[6] = {cap::kStoppedReasonComplete, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+    putU32(stopped + 2, generation_);
     endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
   }
 }
@@ -342,7 +345,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
         return failed();
       }
       state_ = trig_type_ ? cap::kStateWaiting : cap::kStateCapturing;
-      ++generation_;
+      generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
       putU32(out, 0);              // blocking_ms: the probe keeps answering
       putU32(out + 4, generation_);
       return completed(8);
@@ -356,7 +359,8 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
         waitIdle();
         poll();                             // it may have come while the search ended
       }
-      const uint8_t stopped[2] = {cap::kStoppedReasonHost, 0};
+      uint8_t stopped[6] = {cap::kStoppedReasonHost, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+      putU32(stopped + 2, generation_);
       if (state_ == cap::kStateWaiting) {
         state_ = cap::kStateConfigured;
         if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
@@ -414,7 +418,8 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (refused(parsed)) return parsed;
       if (capacity < 3 + 37) return failed();
       poll();
-      const bool one = state_ == cap::kStateDone && getU32(p) == 0;
+      // common §1.3's serial paging over the one segment (serial 0, once there): every from_serial but next (1) gets it
+      const bool one = state_ == cap::kStateDone && serialPageStart(getU32(p), 0, 1) == 0;
       out[0] = 0;
       out[1] = one ? 1 : 0;
       const size_t info = one ? segmentInfo(out + 2) : 0;   // no element length (core §2.3)

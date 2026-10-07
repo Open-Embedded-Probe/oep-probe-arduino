@@ -81,8 +81,9 @@ uint8_t CaptureGroup::state() const {
 void CaptureGroup::stopAll(uint8_t reason, uint8_t error) {
   trigger_pending_ = false;
   for (size_t k = 0; k < bound_count_; ++k) tracks_[bound_[k]].track->trackStop();
-  if (running_ && subscribed_) {
-    const uint8_t e[2] = {reason, error};
+  if (running_ && subscribed_) {   // reason(u8) error(u8) generation(u32: the group's)
+    uint8_t e[6] = {reason, error};
+    putU32(e + 2, generation_);
     endpoint_.event(*this, grp::kEventStopped, e, sizeof e);
   }
   running_ = false;
@@ -163,7 +164,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       trigger_ = triggered ? trigger : -1;
       return completed();
     }
-    case grp::kOpStart: {   // -> blocking_ms(u32) start_ns(u64) [TLV 0x01 generations: n x (fn(u16) generation(u32))]
+    case grp::kOpStart: {   // -> blocking_ms(u32) start_ns(u64) generation(u32) n(u8) n x (fn(u16) generation(u32)) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (!bound_count_) return wrongState(out, capacity);
@@ -173,8 +174,9 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         if (!(t.following_ ? t.trackCanFollow() : t.trackCanStart()))
           return refuseTrack(reg::core::kUnavailableCauseWrongState, endpoint_.fnOf(*tracks_[bound_[k]].interface), out, capacity);
       }
-      if (capacity < 12 + kTlvHeader + 6 * bound_count_) return failed();
+      if (capacity < 17 + 6 * bound_count_) return failed();
       failed_ = false;
+      generation_ = nextGeneration(generation_);   // the group's: one up at every start, never 0 (§4.1)
       start_ns_ = nowNs();
       trigger_ns_ = ~uint64_t{0};
       forced_ = false;
@@ -193,13 +195,14 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       running_ = started_ = true;
       putU32(out, 0);   // blocking_ms: every track keeps the probe answering
       putU64(out + 4, start_ns_);
-      putTlvHeader(out + 12, grp::kTlvStartAnswerGenerations, static_cast<uint16_t>(6 * bound_count_));
-      for (size_t k = 0; k < bound_count_; ++k) {   // the trigger track's is the one its start will make: one more
-        putU16(out + 15 + 6 * k, endpoint_.fnOf(*tracks_[bound_[k]].interface));
+      putU32(out + 12, generation_);
+      out[16] = static_cast<uint8_t>(bound_count_);
+      for (size_t k = 0; k < bound_count_; ++k) {   // in bind order; the trigger track's is the one its start will make
+        putU16(out + 17 + 6 * k, endpoint_.fnOf(*tracks_[bound_[k]].interface));
         const uint32_t gen = tracks_[bound_[k]].track->trackGeneration();
-        putU32(out + 17 + 6 * k, static_cast<int>(bound_[k]) == trigger_ ? gen + 1 : gen);
+        putU32(out + 19 + 6 * k, static_cast<int>(bound_[k]) == trigger_ ? nextGeneration(gen) : gen);
       }
-      return completed(15 + 6 * bound_count_);
+      return completed(17 + 6 * bound_count_);
     }
     case grp::kOpStop: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -217,16 +220,17 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       }
       return completed();
     }
-    case grp::kOpStatus: {   // -> state(u8) start_ns(u64) trigger_ns(u64) trigger_fn(u16) [TLV]
+    case grp::kOpStatus: {   // -> state(u8) start_ns(u64) trigger_ns(u64) trigger_fn(u16) generation(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 19) return failed();
+      if (capacity < 23) return failed();
       poll();
       out[0] = state();
       putU64(out + 1, start_ns_);
       putU64(out + 9, trigger_ns_);   // not (yet) triggered, or immediate: all ones
       putU16(out + 17, trigger_ns_ != ~uint64_t{0} && !forced_ ? endpoint_.fnOf(*tracks_[trigger_].interface) : 0);
-      return completed(19);
+      putU32(out + 19, generation_);   // the group's (0 before its first start)
+      return completed(23);
     }
     default:
       return rejected(kRejectUnknownOperation);
@@ -258,10 +262,11 @@ void CaptureGroup::poll() {
     trigger_ns_ = ns;
     for (size_t k = 0; k < bound_count_; ++k)
       if (tracks_[bound_[k]].track->following_) tracks_[bound_[k]].track->trackTriggerAt(ns);
-    if (subscribed_) {   // trigger_fn(u16: 0 when forced) trigger_ns(u64)
-      uint8_t e[10];
+    if (subscribed_) {   // trigger_fn(u16: 0 when forced) trigger_ns(u64) generation(u32: the group's)
+      uint8_t e[14];
       putU16(e, forced_ ? 0 : endpoint_.fnOf(*tracks_[trigger_].interface));
       putU64(e + 2, ns);
+      putU32(e + 10, generation_);
       endpoint_.event(*this, grp::kEventTriggered, e, sizeof e);
     }
   }
@@ -269,13 +274,14 @@ void CaptureGroup::poll() {
   for (size_t k = 0; k < bound_count_; ++k)   // a track failed after the start: the group fails, the rest stop
     if (tracks_[bound_[k]].track->trackState() == cap::kStateError) {
       failed_ = true;
-      stopAll(cap::kStoppedReasonError, cap::kErrorPeripheral);
+      stopAll(cap::kStoppedReasonError, tracks_[bound_[k]].track->trackError());   // the track's own reason
       return;
     }
   if (state() != cap::kStateDone) return;
   running_ = false;
   if (subscribed_) {
-    const uint8_t e[2] = {cap::kStoppedReasonComplete, 0};
+    uint8_t e[6] = {cap::kStoppedReasonComplete, 0};
+    putU32(e + 2, generation_);
     endpoint_.event(*this, grp::kEventStopped, e, sizeof e);
   }
 }

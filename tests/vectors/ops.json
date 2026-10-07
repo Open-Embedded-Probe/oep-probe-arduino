@@ -1,5 +1,5 @@
 {
-  "about": "Per-op byte vectors. `fns` says which interface each fn number is in the example; `state` is the probe state the answer assumes. Requests with session_id 0x11223344 come from the session that holds the lock; lock-free requests carry 0.",
+  "about": "Per-op byte vectors. `fns` says which interface each fn number is in the example; `state` is the probe state the answer assumes. Requests with session_id 0x11223344 come from the session that holds the lock; lock-free requests carry 0. `events` are notification frames (core §11.2) with the generation each carries.",
   "cases": [
     {
       "name": "restart: completed success, sent before the probe restarts",
@@ -328,6 +328,26 @@
       "answer_hex": "0255000003"
     },
     {
+      "name": "riscv-dm step on a running hart: status state, moved and both dpc 0",
+      "spec": "debug §4.2",
+      "fns": {
+        "6": "oep.target.riscv-dm"
+      },
+      "state": "session S; connection 1; step offered in ops; the hart is running",
+      "request_hex": "015700060008443322110100",
+      "answer_hex": "025700010105000000000000000000"
+    },
+    {
+      "name": "arm-adi transfer: n = 0",
+      "spec": "debug §6",
+      "fns": {
+        "15": "oep.target.arm-adi"
+      },
+      "state": "session S; connection 1 (swd) open",
+      "request_hex": "0158000f00014433221101000000",
+      "answer_hex": "0258000100000000000000"
+    },
+    {
       "name": "console marks: one attach mark",
       "spec": "common §1.3, console §1",
       "fns": {
@@ -338,14 +358,64 @@
       "answer_hex": "026000010000010000000000000000000000000340420f000000000000"
     },
     {
+      "name": "console marks: from_serial included, more 1",
+      "spec": "common §1.3 paging 1, 4",
+      "fns": {
+        "7": "oep.target.console"
+      },
+      "state": "stream 2; marks 5 to 8 kept (1 to 4 pushed out), the next mark gets serial 9; max_frame 64 (2 marks per answer)",
+      "request_hex": "01640007000300000000020005000000",
+      "answer_hex": "0264000100010205000000320000000000000007404b4c000000000005060000003c0000000000000007808d5b000000000006"
+    },
+    {
+      "name": "console marks: the next page from the last serial + 1",
+      "spec": "common §1.3 paging 4",
+      "fns": {
+        "7": "oep.target.console"
+      },
+      "state": "stream 2; marks 5 to 8 kept (1 to 4 pushed out), the next mark gets serial 9; max_frame 64 (2 marks per answer)",
+      "request_hex": "01650007000300000000020007000000",
+      "answer_hex": "0265000100000207000000460000000000000007c0cf6a0000000000070800000050000000000000000700127a000000000008"
+    },
+    {
+      "name": "console marks: a pushed-out from_serial starts at the oldest kept",
+      "spec": "common §1.3 paging 3",
+      "fns": {
+        "7": "oep.target.console"
+      },
+      "state": "stream 2; marks 5 to 8 kept (1 to 4 pushed out), the next mark gets serial 9; max_frame 64 (2 marks per answer)",
+      "request_hex": "01660007000300000000020003000000",
+      "answer_hex": "0266000100010205000000320000000000000007404b4c000000000005060000003c0000000000000007808d5b000000000006"
+    },
+    {
+      "name": "console marks: from_serial = next, no marks and more 0",
+      "spec": "common §1.3 paging 2",
+      "fns": {
+        "7": "oep.target.console"
+      },
+      "state": "stream 2; marks 5 to 8 kept (1 to 4 pushed out), the next mark gets serial 9; max_frame 64 (2 marks per answer)",
+      "request_hex": "01670007000300000000020009000000",
+      "answer_hex": "02670001000000"
+    },
+    {
       "name": "console streams: one open stream",
       "spec": "console §1, core §9",
       "fns": {
         "7": "oep.target.console"
       },
       "state": "stream 2 on connection 1 (one number space: connection 1, then stream 2), dmseq, opened by the session",
-      "request_hex": "0161000700080000000000",
+      "request_hex": "016100070008000000000000",
       "answer_hex": "0261000100000102000100020100"
+    },
+    {
+      "name": "console streams: first(u16) beyond the count, the last page",
+      "spec": "console §1, core §7.3 end of paging",
+      "fns": {
+        "7": "oep.target.console"
+      },
+      "state": "as above (one stream)",
+      "request_hex": "016800070008000000000100",
+      "answer_hex": "02680001000000"
     },
     {
       "name": "console read: empty at the write position",
@@ -566,6 +636,336 @@
       "state": "generation 1",
       "request_hex": "0181000900060000000002000000000000000000000040000000",
       "answer_hex": "028100000401010006"
+    },
+    {
+      "name": "logic segments: from_serial = serial_done, no segments and more 0",
+      "spec": "capture §3.2, common §1.3 paging 2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "one-shot done, generation 1, serial_done 1",
+      "request_hex": "0187000900070000000001000000",
+      "answer_hex": "02870001000000"
+    },
+    {
+      "name": "logic configure: one-shot, the required answer set",
+      "spec": "capture §3.3",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "session S holds the lock; roles 0 and 1 in fn 9's plan; 20 MHz exact, 200000 samples fit; the probe packs 2 bits per sample",
+      "request_hex": "0188000900014433221140010001420400002d3101430400400d0300",
+      "answer_hex": "0288000100500800002d31010100000051040002020001520400400d030056040000000000"
+    },
+    {
+      "name": "logic configure without rate: malformed",
+      "spec": "capture §3.3 contract",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "session S; as above",
+      "request_hex": "0189000900014433221140010001430400400d0300",
+      "answer_hex": "0289000003"
+    },
+    {
+      "name": "logic query: streaming with samples, refused with the tag",
+      "spec": "capture §3.3 contract, core §2.3",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "as above (query needs no lock)",
+      "request_hex": "018a00090009000000004001000342040040420f00430400e8030000",
+      "answer_hex": "028a00000b43"
+    },
+    {
+      "name": "logic status: data dropped inside a segment, state 6 and error 2",
+      "spec": "capture §2.2, §3.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "repeat, 1 channel w 1, samples 8000 (1000 bytes a segment), generation 1: serials 0 and 1 done, then the capture ring overflowed inside serial 2",
+      "request_hex": "01900009000500000000",
+      "answer_hex": "02900001000602000000d007000000000000010100000001010002"
+    },
+    {
+      "name": "logic segments: the dropped segment is not handed out",
+      "spec": "capture §2.2, common §1.3",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "repeat, 1 channel w 1, samples 8000 (1000 bytes a segment), generation 1: serials 0 and 1 done, then the capture ring overflowed inside serial 2",
+      "request_hex": "0191000900070000000000000000",
+      "answer_hex": "02910001000002000000000000000000000000401f0000404b4c000000000032000000ffffffff000100000001000000e803000000000000401f0000405dc6000000000032000000ffffffff0001000000"
+    },
+    {
+      "name": "logic read: nothing of the dropped segment",
+      "spec": "capture §2.2, §3.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "repeat, 1 channel w 1, samples 8000 (1000 bytes a segment), generation 1: serials 0 and 1 done, then the capture ring overflowed inside serial 2; write_pos 2000",
+      "request_hex": "0192000900060000000001000000d00700000000000040000000",
+      "answer_hex": "0292000100d0070000000000000000000000"
+    },
+    {
+      "name": "logic describe: multirate declared",
+      "spec": "capture §3.5, §5.1; core §7.3",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32",
+      "request_hex": "0193000000030000000009000000",
+      "answer_hex": "02930001000009080001ff0100000080024009000140420f00010000004009000240420f0008000000410900e803000000e1f50501440100044508000700000040420f00600d0007000000010000008000000001"
+    },
+    {
+      "name": "logic configure multirate: the capture §5.7 example",
+      "spec": "capture §5.2, §5.3, §5.7",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S holds the lock",
+      "request_hex": "019400090001443322114001000142040000e1f50543040060000000e00a0000012000000000000000e00a0003000400000001000000",
+      "answer_hex": "029400010050080000e1f5050100000051040002020001600400200000005204006000000056040000000000"
+    },
+    {
+      "name": "logic query multirate: the same answer, nothing changed",
+      "spec": "capture §3.3, §5.3",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; configured as the configure vector",
+      "request_hex": "019500090009000000004001000142040000e1f50543040060000000e00a0000012000000000000000e00a0003000400000001000000",
+      "answer_hex": "029500010050080000e1f5050100000051040002020001600400200000005204006000000056040000000000"
+    },
+    {
+      "name": "logic configure multirate: samples 72 rounded up to a multiple of L",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019600090001443322114001000142040000e1f50543040048000000e00a0000012000000000000000e00a0003000400000001000000",
+      "answer_hex": "029600010050080000e1f5050100000051040002020001600400200000005204006000000056040000000000"
+    },
+    {
+      "name": "logic query multirate: rate = max_hz on a heavy combination answers the highest rate kept",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32",
+      "request_hex": "019700090009000000004001000142040000e1f50543040060000000e00a0000020200000001000000e00a0001020200000001000000e00a0002020200000001000000e00a0003020200000001000000",
+      "answer_hex": "0297000100500800005a6202010000005102000100600400200000005204006000000056040000000000"
+    },
+    {
+      "name": "logic configure multirate: d 0, malformed",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019800090001443322114001000142040000e1f50543040060000000e00a0000000000000000000000",
+      "answer_hex": "0298000003"
+    },
+    {
+      "name": "logic configure multirate: sample with phase = d, malformed",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019900090001443322114001000142040000e1f50543040060000000e00a0003000400000004000000",
+      "answer_hex": "0299000003"
+    },
+    {
+      "name": "logic configure multirate: any_active with param 2, malformed",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019a00090001443322114001000142040000e1f50543040060000000e00a0000012000000002000000",
+      "answer_hex": "029a000003"
+    },
+    {
+      "name": "logic configure multirate: edge_latch with d 1, malformed",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019b00090001443322114001000142040000e1f50543040060000000e00a0000020100000001000000",
+      "answer_hex": "029b000003"
+    },
+    {
+      "name": "logic configure multirate: the same role twice, malformed",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019c00090001443322114001000142040000e1f50543040060000000e00a0003000400000001000000e00a0003000800000000000000",
+      "answer_hex": "029c000003"
+    },
+    {
+      "name": "logic configure multirate: a reserved policy (3), unsupported",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019d00090001443322114001000142040000e1f50543040060000000e00a0000030400000000000000",
+      "answer_hex": "029d00000be0"
+    },
+    {
+      "name": "logic configure multirate: d 3 where only powers of 2 are declared, unsupported",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019e00090001443322114001000142040000e1f50543040060000000e00a0003000300000000000000",
+      "answer_hex": "029e00000be0"
+    },
+    {
+      "name": "logic configure multirate: d 256 above max_d, unsupported",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "019f00090001443322114001000142040000e1f50543040060000000e00a0003000001000000000000",
+      "answer_hex": "029f00000be0"
+    },
+    {
+      "name": "logic configure multirate: a role not in the plan, unavailable",
+      "spec": "capture §5.2",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; session S",
+      "request_hex": "01a000090001443322114001000142040000e1f50543040060000000e00a0004000400000000000000",
+      "answer_hex": "02a000000401010006"
+    },
+    {
+      "name": "logic configure multirate on a fn that does not declare it: unsupported with the critical tag",
+      "spec": "capture §5.2, core §2.3",
+      "fns": {
+        "16": "oep.fixture.logic"
+      },
+      "state": "session S; fn 16 is a logic fn whose describe has no multirate; plan roles 0-3",
+      "request_hex": "01a100100001443322114001000142040000e1f50543040060000000e00a0000012000000000000000e00a0003000400000001000000",
+      "answer_hex": "02a100000be0"
+    },
+    {
+      "name": "logic segments multirate: a stopped segment, trigger_index in base samples on the any_active role",
+      "spec": "capture §2.2, §5, §5.7",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9: plan roles 0-3; describe as the describe vector (rate_range 1 kHz-100 MHz exact, max_samples 1000000, multirate policies 7, d 1-128, powers of 2 only); the fake keeps 100 MHz unless every role is edge_latch (then 40 MHz) and always answers L 32; configured as the configure vector plus trigger (edge, role 0, falling) and pretrigger 13; generation 1; role 0 fell at base sample 13 of the segment, the host stopped at base sample 72 (the §5.7 input)",
+      "request_hex": "01a2000900070000000000000000",
+      "answer_hex": "02a2000100000100000000000000000000000048000000404b4c00000000000a0000000d0000000201000000"
+    },
+    {
+      "name": "capture-group bind: a multirate logic and an analog, the logic as trigger_track",
+      "spec": "capture §4.1, §5.6",
+      "fns": {
+        "12": "oep.fixture.capture-group",
+        "9": "oep.fixture.logic",
+        "13": "oep.fixture.analog"
+      },
+      "state": "session S; fn 9 configured multirate one-shot (the configure vector plus the TLVs 4506000200010000004604000d000000: edge, role 0, falling, pretrigger 13 base samples); fn 13 configured one-shot with an immediate trigger; fn 12's tracks list both",
+      "request_hex": "01a3000c0001443322110209000d000102000900",
+      "answer_hex": "02a3000100"
+    },
+    {
+      "name": "capture-group start: the group's and each track's new generation",
+      "spec": "capture §4.1",
+      "fns": {
+        "12": "oep.fixture.capture-group",
+        "9": "oep.fixture.logic",
+        "13": "oep.fixture.analog"
+      },
+      "state": "session S; fn 12 bound to fn 9 then fn 13, both one-shot with immediate triggers; generations before: group 4, fn 9 3, fn 13 1; acquisition starts at 7 ms",
+      "request_hex": "018b000c000244332211",
+      "answer_hex": "028b00010000000000c0cf6a000000000005000000020900040000000d0002000000"
+    },
+    {
+      "name": "spi-target read_rx: 12 bits, MSB first, a partial last byte",
+      "spec": "fixture §4",
+      "fns": {
+        "14": "oep.fixture.spi-target"
+      },
+      "state": "session S; configured with bit_order 0; one transaction queued: CS ended after 12 MOSI bits 1 1 0 0 0 0 0 0 1 0 1 1 (in wire order); no ns TLV",
+      "request_hex": "018c000e000344332211",
+      "answer_hex": "028c000100000c0000000200c0b0"
+    },
+    {
+      "name": "spi-target read_rx: 12 bits, LSB first, a partial last byte",
+      "spec": "fixture §4",
+      "fns": {
+        "14": "oep.fixture.spi-target"
+      },
+      "state": "session S; configured with bit_order 1; one transaction queued: CS ended after 12 MOSI bits 1 1 0 0 0 0 0 0 1 0 1 1 (in wire order); no ns TLV",
+      "request_hex": "018d000e000344332211",
+      "answer_hex": "028d000100000c0000000200030d"
+    }
+  ],
+  "events": [
+    {
+      "name": "logic stopped of the previous generation, after the start answer",
+      "spec": "capture §3.4, core §11.4",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9 subscribed; start answered generation 4 while generation 3's stop was still queued",
+      "generation": 3,
+      "event_hex": "050900070002010003000000"
+    },
+    {
+      "name": "logic triggered of the new generation",
+      "spec": "capture §3.4",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9 subscribed; start answered generation 4 while generation 3's stop was still queued; the edge at sample 1000 of serial 0, at 7.05 ms",
+      "generation": 4,
+      "event_hex": "05090008000300000000e803000010936b000000000004000000"
+    },
+    {
+      "name": "logic stopped: data dropped inside a segment, error 2",
+      "spec": "capture §2.2, §3.4",
+      "fns": {
+        "9": "oep.fixture.logic"
+      },
+      "state": "fn 9 subscribed; generation 1; the capture ring overflowed inside serial 2",
+      "generation": 1,
+      "event_hex": "050900090002030201000000"
+    },
+    {
+      "name": "capture-group triggered: the group's generation",
+      "spec": "capture §4.2",
+      "fns": {
+        "12": "oep.fixture.capture-group",
+        "9": "oep.fixture.logic",
+        "13": "oep.fixture.analog"
+      },
+      "state": "fn 12 subscribed; group generation 5; fn 9's trigger at 7.05 ms",
+      "generation": 5,
+      "event_hex": "050c00000003090010936b000000000005000000"
+    },
+    {
+      "name": "capture-group stopped: the group's generation",
+      "spec": "capture §4.2",
+      "fns": {
+        "12": "oep.fixture.capture-group",
+        "9": "oep.fixture.logic",
+        "13": "oep.fixture.analog"
+      },
+      "state": "as above; every track done",
+      "generation": 5,
+      "event_hex": "050c00010002000005000000"
     }
   ]
 }

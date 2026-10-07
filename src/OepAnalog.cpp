@@ -70,6 +70,16 @@ bool gAdcReady = false;
 
 }  // namespace
 
+// describe's max_pretrigger: a triggered segment of one channel less kPretriggerRoom (configure also keeps it that far
+// below the segment's samples)
+uint32_t AnalogCapture::maxPretrigger() {
+#if defined(OEP_ANALOG_RP2)
+  return kRingBytes / 4 - kPretriggerRoom;   // a triggered segment is at most half the ring (one channel)
+#else
+  return static_cast<uint32_t>(kMaxBytes / 2) - kPretriggerRoom;
+#endif
+}
+
 size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   static const uint8_t kRoles[] = {0, 1, 2, 3};
@@ -86,11 +96,7 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   w.u8(ana::kTlvDescribeChannels, kMaxChannels);             // max(u8)
   uint8_t trig[8];   // types(u32) max_pretrigger(u32)
   putU32(trig, (1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown));
-#if defined(OEP_ANALOG_RP2)
-  putU32(trig + 4, kRingBytes / 4 - kPretriggerRoom);   // a triggered segment is at most half the ring (one channel)
-#else
-  putU32(trig + 4, static_cast<uint32_t>(kMaxBytes / 2) - kPretriggerRoom);
-#endif
+  putU32(trig + 4, maxPretrigger());
   w.put(ana::kTlvDescribeTrigger, trig, sizeof trig);
   for (const Frontend &f : kFrontends) {
     uint8_t v[13];
@@ -157,7 +163,7 @@ void AnalogCapture::planRelease() {
 void AnalogCapture::forget() {
   state_ = ana::kStateUnconfigured;
   frames_ = samples_ = 0;
-  short_ = trig_slipped_ = follow_ = segment_ = false;
+  short_ = trig_slipped_ = follow_ = segment_ = lost_ = false;
   trig_type_ = 0;
   pretrigger_ = 0;
   phase_ = 0;
@@ -185,14 +191,15 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   Item items[] = {{ana::kTlvConfigureMode, 1, nullptr, false},     {ana::kTlvConfigureRate, 4, nullptr, false},
                   {ana::kTlvConfigureSamples, 4, nullptr, false},  {ana::kTlvConfigureSegments, 4, nullptr, false},
                   {ana::kTlvConfigureTrigger, 6, nullptr, false},  {ana::kTlvConfigurePretrigger, 4, nullptr, false}};
-  Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &trigger_tlv = items[4],
-       &pretrigger_tlv = items[5];
+  Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
   }
-  if (!rate_tlv.v || getU32(rate_tlv.v) == 0) return rejected(kRejectMalformed);   // 1 Hz or more (capture §3.3)
-  if (samples_tlv.v && getU32(samples_tlv.v) == 0) return rejected(kRejectMalformed);
+  // capture §3.3's contract: mode and rate required, samples in mode 1 / 2; none of them 0 (malformed)
+  auto ask = [](const Item &it) { return CaptureAsk{it.v, it.critical}; };
+  if (captureMalformed(ask(mode_tlv), ask(rate_tlv), ask(samples_tlv), ask(segments_tlv))) return rejected(kRejectMalformed);
   {   // frontend(role u8, frontend u8), repeated: one per role (capture §3.3)
     size_t at = 0, vlen = 0;
     uint8_t raw = 0;
@@ -209,7 +216,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   // a channel count for what follows; without a plan, one (the plan's refusal follows)
   const uint8_t count = channels_ ? channels_ : 1;
   const uint8_t planned = channels_ ? channels_ : kMaxChannels;
-  if (mode_tlv.v && mode_tlv.v[0] != ana::kModeOneShot)
+  if (mode_tlv.v[0] != ana::kModeOneShot)
     return Tail::refuse(ana::kTlvConfigureMode, mode_tlv.critical, out, capacity);
   // a rate outside rate_range is refused (capture §3.3); inside it, more channels share the ADC: the nearest its
   // conversions a second allow for the channel count
@@ -218,14 +225,19 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     return Tail::refuse(ana::kTlvConfigureRate, rate_tlv.critical, out, capacity);
   uint64_t total = static_cast<uint64_t>(asked) * count;
   if (total > kMaxTotalHz) total = kMaxTotalHz;
-  uint32_t samples = samples_tlv.v ? getU32(samples_tlv.v) : 1024;
-  // type(u8) role(u8) value(u32): the ADC value crossed up (from below to at or above) or down (above to at or below)
+  // segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
+  const Result misplaced = captureMisplaced(mode_tlv.v[0], ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv),
+                                            ask(pretrigger_tlv), out, capacity);
+  if (refused(misplaced)) return misplaced;
+  uint32_t samples = getU32(samples_tlv.v);
+  // type(u8) role(u8) value(u32): the ADC value crossed up (from below to at or above) or down (above to at or below).
+  // A role outside the plan is refused unavailable cause 6 below, after every unsupported value (core §4.3).
   uint8_t trig_type = ana::kTriggerImmediate, trig_role = 0;
   uint32_t trig_value = 0;
   if (const uint8_t *v = trigger_tlv.v) {
     const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == ana::kTriggerImmediate ||
-                    ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && v[1] < planned && value <= kFull);
+                    ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && value <= kFull);
     if (!ok) return Tail::refuse(ana::kTlvConfigureTrigger, trigger_tlv.critical, out, capacity);
     trig_type = v[0];
     trig_role = v[1];
@@ -237,10 +249,9 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
 #endif
   if (samples > most) samples = most;
   uint32_t pretrigger = 0;
-  if (const uint8_t *v = pretrigger_tlv.v) {   // with a trigger, in the segment
-    pretrigger = getU32(v);
-    // with an immediate trigger it is kept for a group that makes this track follow another's trigger
-    if (pretrigger && pretrigger + kPretriggerRoom > samples)
+  if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger (above), in the segment: less than samples and
+    pretrigger = getU32(v);                    // max_pretrigger, and (ESP32) kPretriggerRoom short of the segment's end
+    if (pretrigger > maxPretrigger() || pretrigger + kPretriggerRoom > samples)
       return Tail::refuse(ana::kTlvConfigurePretrigger, pretrigger_tlv.critical, out, capacity);
   }
   uint8_t chosen[kMaxChannels];
@@ -255,7 +266,8 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
       chosen[v[0]] = v[1];
     }
   }
-  if (!channels_) return wrongState(out, capacity);   // plan the channels first (cause 6)
+  // no plan, or the trigger's role not in it: unavailable cause 6 (capture §3.2, §3.3)
+  if (!channels_ || (trigger_tlv.v && trig_role >= channels_)) return wrongState(out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return wrongState(out, capacity);
   // the actual rate
@@ -319,8 +331,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   uint8_t layout[4 + kMaxChannels] = {16, 0, 12, channels_};
   for (uint8_t m = 0; m < channels_; ++m) layout[4 + m] = order[m];
   w.put(ana::kTlvConfigureAnswerLayout, layout, 4u + channels_);
-  w.u32(ana::kTlvConfigureAnswerActualSamples, samples);
-  w.u32(ana::kTlvConfigureAnswerActualSegments, 1);
+  w.u32(ana::kTlvConfigureAnswerActualSamples, samples);   // one-shot: no actual_segments (capture §3.3)
   w.u32(ana::kTlvConfigureAnswerBlockingMs, 0);
   for (uint8_t k = 0; k < channels_; ++k) {
     const Frontend &f = *frontendOf(chosen[k]);
@@ -404,10 +415,11 @@ bool AnalogCapture::trackReady() const {
 
 bool AnalogCapture::startNow() {
   if (!(trackReady() || state_ == ana::kStateError) || !buffer_) return false;
-  ++generation_;
+  generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
   segment_ = false;   // the last generation's segment goes
   frames_ = got_ = searched_ = 0;
-  short_ = have_prev_ = force_ = trig_slipped_ = false;
+  short_ = have_prev_ = force_ = trig_slipped_ = lost_ = false;
+  error_ = ana::kErrorPeripheral;
   reported_ = false;
   trig_reported_ = trig_type_ == 0 || follow_;   // a follower's trigger is the group's event
   ext_ready_ = false;
@@ -569,6 +581,7 @@ void AnalogCapture::stopNow() {
     finish();
     segment_ = frames_ > 0;
   }
+  if (segment_ && hole()) { failHole(); return; }   // stopped on a hole: not handed out (capture §2.2)
   short_ = segment_;
   state_ = ana::kStateConfigured;
   reported_ = true;
@@ -577,7 +590,8 @@ void AnalogCapture::stopNow() {
       uint8_t seg[37];
       endpoint_.event(*this, ana::kEventSegment, seg, segmentInfo(seg));
     }
-    const uint8_t stopped[2] = {ana::kStoppedReasonHost, 0};
+    uint8_t stopped[6] = {ana::kStoppedReasonHost, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+    putU32(stopped + 2, generation_);
     endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
   }
 }
@@ -736,11 +750,12 @@ void AnalogCapture::pollTriggered() {
   if (phase_ >= 1 && state_ == ana::kStateWaiting) state_ = ana::kStateCapturing;
   if (phase_ >= 1 && !trig_reported_) {
     trig_reported_ = true;
-    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64)
-      uint8_t e[16];
+    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64) generation(u32)
+      uint8_t e[20];
       putU32(e, 0);
       putU32(e + 4, trig_frame_ - seg_first_);
       putU64(e + 8, start_ns_ + framesNs(trig_frame_));
+      putU32(e + 16, generation_);
       endpoint_.event(*this, ana::kEventTriggered, e, sizeof e);
     }
   }
@@ -776,6 +791,34 @@ void AnalogCapture::finishTriggered(bool cut) {
   seg_start_ns_ = start_ns_ + framesNs(s0);
 }
 
+// capture §2.2: values lost (the driver's overflow) or overwritten (the ring come round over the segment) inside the
+// segment - the bits that marked it slipped (bit2) before.
+bool AnalogCapture::hole() const {
+  if (ringMode()) return trig_slipped_;
+#if defined(ARDUINO_ARCH_ESP32)
+  return overflow_;
+#else
+  return false;   // the RP2's immediate segment: the DMA writes it in place
+#endif
+}
+
+// The segment with a hole is not handed out (no segment, read empty, write_pos 0 - its start); the track stops in
+// state 6 with stopped reason 3, error 2 (the conversions' queue or the ring overflowed).
+void AnalogCapture::failHole() {
+  segment_ = false;
+  frames_ = 0;
+  short_ = false;
+  lost_ = true;
+  state_ = ana::kStateError;
+  error_ = ana::kErrorStorage;
+  reported_ = true;
+  if (subscribed_) {
+    uint8_t stopped[6] = {ana::kStoppedReasonError, ana::kErrorStorage};   // reason(u8) error(u8) generation(u32)
+    putU32(stopped + 2, generation_);
+    endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
+  }
+}
+
 void AnalogCapture::poll() {
   if (ringMode() && (state_ == ana::kStateWaiting || state_ == ana::kStateCapturing)) pollTriggered();
   else if (state_ == ana::kStateCapturing) {
@@ -789,12 +832,14 @@ void AnalogCapture::poll() {
     }
 #endif
   }
+  if (state_ == ana::kStateDone && !reported_ && hole()) failHole();
   if (state_ == ana::kStateDone && !reported_) {
     reported_ = true;
     if (subscribed_) {
       uint8_t seg[37];
       endpoint_.event(*this, ana::kEventSegment, seg, segmentInfo(seg));
-      const uint8_t stopped[2] = {ana::kStoppedReasonComplete, 0};
+      uint8_t stopped[6] = {ana::kStoppedReasonComplete, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+      putU32(stopped + 2, generation_);
       endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
     }
   }
@@ -854,15 +899,15 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       putU32(out + 1, segment_ ? 1 : 0);   // the segment, complete or cut short by stop
       putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
 #if defined(ARDUINO_ARCH_ESP32)
-      out[13] = (overflow_ || overflow_seen_ || trig_slipped_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions were lost
+      out[13] = (overflow_ || overflow_seen_ || trig_slipped_ || lost_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions were lost
 #else
-      out[13] = trig_slipped_ ? ana::kStatusFlagDropped : 0;
+      out[13] = (trig_slipped_ || lost_) ? ana::kStatusFlagDropped : 0;
 #endif
       putU32(out + 14, generation_);
       size_t used = 18;
       if (state_ == ana::kStateError) {   // why (TLV 0x01 error): the driver would not start
         putTlvHeader(out + 18, ana::kTlvStatusAnswerError, 1);
-        out[21] = ana::kErrorPeripheral;
+        out[21] = error_;   // 1 the driver would not start / run, 2 a segment with a hole (§2.2)
         used = 22;
       }
       return completed(used);
@@ -892,7 +937,8 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (refused(parsed)) return parsed;
       if (capacity < 3 + 37) return failed();
       poll();
-      const bool one = segment_ && getU32(p) == 0;
+      // common §1.3's serial paging over the one segment (serial 0, once there): every from_serial but next (1) gets it
+      const bool one = segment_ && serialPageStart(getU32(p), 0, 1) == 0;
       out[0] = 0;
       out[1] = one ? 1 : 0;
       const size_t info = one ? segmentInfo(out + 2) : 0;   // no element length (core §2.3)

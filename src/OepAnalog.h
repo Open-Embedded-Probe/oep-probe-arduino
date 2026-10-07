@@ -98,11 +98,17 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool trackStart() override { follow_ = false; return startNow(); }
   void trackStop() override { stopNow(); }
   uint8_t trackState() const override { return state_; }
+  uint8_t trackError() const override { return error_; }
   uint32_t trackGeneration() const override { return generation_; }
 
  private:
+  static uint32_t maxPretrigger();
+  uint8_t error_ = reg::fixture_analog::kErrorPeripheral;   // status's error TLV in state 6
+  bool lost_ = false;          // the segment had a hole and was not handed out (capture §2.2)
+  bool hole() const;           // the segment just finished has values lost or overwritten inside it
+  void failHole();             // not handed out: state 6, stopped reason 3, error 2
   Endpoint &endpoint_;
-  uint32_t generation_ = 0;   // one up at every start
+  uint32_t generation_ = 0;   // one up at every start (nextGeneration); 0 before the first
   uint64_t adc_pins_;
   uint16_t instance_;
   int pins_[kMaxChannels] = {-1, -1, -1, -1};   // by role

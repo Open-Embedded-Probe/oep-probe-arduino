@@ -69,12 +69,8 @@ bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parli
 // Copy one finished DMA chunk into the segment being filled; without a free segment the bytes are dropped and the
 // next segment starts with a gap mark. Runs on the harvest task only.
 void LogicCapture::harvest(const Chunk &chunk) {
-  if (const uint32_t skip = missed(chunk)) {   // chunks lost before this one: a gap there, as an overrun
-    dropped_ += skip;
-    captured_ += skip;
-    if (fill_) finishSegment(fill_, infos_[completed_ % kInfos].flags | 2);   // a segment is contiguous inside
-    gap_pending_ = true;
-  }
+  if (lost_) return;                           // stopped taking data (capture §2.2): poll() ends the track
+  if (missed(chunk)) { loseSegment(); return; }   // chunks lost before this one: the segment has a hole
   size_t at = 0;
   while (at < chunk.length) {
     if (completed_ - released_ >= segment_count_) {   // every segment is waiting for the host
@@ -86,7 +82,7 @@ void LogicCapture::harvest(const Chunk &chunk) {
       return;
     }
     if (paused_ && fill_ == 0) paused_ = false;
-    const uint32_t slot = completed_ % segment_count_;
+    const uint32_t slot = fill_slot_;
     const size_t n = min(static_cast<size_t>(segment_bytes_ - fill_), chunk.length - at);
     if (fill_ == 0) {   // a new segment: remember where in time it starts
       Info &info = infos_[completed_ % kInfos];
@@ -95,19 +91,16 @@ void LogicCapture::harvest(const Chunk &chunk) {
       const uint64_t first_sample = captured_ * 8 / width_;
       info.start_ns = start_ns_ + nsOf(first_sample);
       info.flags = gap_pending_ ? 1 : 0;
+      info.slot = slot;
       gap_pending_ = false;
     }
     memcpy(store_ + static_cast<size_t>(slot) * segment_bytes_ + fill_, chunk.data + at, n);
     if (produced_ - static_cast<uint32_t>(captured_) > kRingBytes) {   // the DMA came round and rewrote these bytes while (or before) we copied
-      const size_t rest = chunk.length - at;
-      dropped_ += rest;
-      captured_ += rest;
       ++overruns_;
-      if (fill_) finishSegment(fill_, infos_[completed_ % kInfos].flags | 2);   // a segment is contiguous inside
-      gap_pending_ = true;
+      loseSegment();   // a hole in the segment (capture §2.2)
       return;
     }
-    __atomic_thread_fence(__ATOMIC_RELEASE);   // streaming reads the segment being filled from the other core
+    __atomic_thread_fence(__ATOMIC_RELEASE);
     fill_ += n;
     at += n;
     captured_ += n;
@@ -118,12 +111,8 @@ void LogicCapture::harvest(const Chunk &chunk) {
 // Streaming, zero-copy transport: copy one finished DMA chunk into the current stage; with no stage free the bytes are
 // dropped and the stream position skips them. Harvest task only.
 void LogicCapture::harvestDirect(const Chunk &chunk) {
-  if (const uint32_t skip = missed(chunk)) {   // chunks lost before this one: the next frame's position jumps them
-    if (stage_fill_) sendStage();
-    carry_ = false;   // the held byte goes with the drop (the position jump covers it)
-    dropped_ += skip;
-    captured_ += skip;
-  }
+  if (lost_) return;
+  if (missed(chunk)) { loseSegment(); return; }   // chunks lost to the queue: not data to send (capture §2.2)
   size_t at = 0;
   while (at < chunk.length) {
     if (stage_cur_ < 0 && !takeStage()) {
@@ -136,12 +125,9 @@ void LogicCapture::harvestDirect(const Chunk &chunk) {
     }
     const size_t n = min(static_cast<size_t>(stage_data_ - stage_fill_), chunk.length - at);
     memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, chunk.data + at, n);
-    if (produced_ - static_cast<uint32_t>(captured_) > kRingBytes) {   // the DMA rewrote these bytes: drop them
-      const size_t rest = chunk.length - at;
-      dropped_ += rest;
-      captured_ += rest;
+    if (produced_ - static_cast<uint32_t>(captured_) > kRingBytes) {   // the DMA rewrote these bytes
       ++overruns_;
-      if (stage_fill_) sendStage();   // a frame is contiguous; the next one starts after the gap
+      loseSegment();
       return;
     }
     stage_fill_ += n;
@@ -319,7 +305,10 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
     const uint64_t newest = base + ahead;
     const uint64_t oldest = newest > kRingBytes - 8192 ? newest - (kRingBytes - 8192) : 0;
     if (s0 * width_ / 8 < oldest) s0 = (oldest * 8 + width_ - 1) / width_;
-    if (width_ < 8) s0 -= s0 % (8 / width_);         // a whole byte
+    if (width_ < 8) {                                // a whole byte: up to 8 / w - 1 samples earlier, or later when
+      s0 -= s0 % (8 / width_);                       // that would leave the trigger past the segment's last sample
+      if (t >= s0 && t - s0 >= samples_) s0 += 8 / width_;   // (a pretrigger close to samples: one fewer byte before it)
+    }
     seg_first_sample_ = s0;
     trigger_index_ = t >= s0 ? static_cast<uint32_t>(t - s0) : 0xFFFFFFFFu;   // before the ring's oldest: gone
     if (t < s0) trig_overrun_ = true;
@@ -349,6 +338,9 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   kept_short_ = false;
   trig_phase_ = 0;
   have_level_ = trig_overrun_ = ext_ready_ = false;
+  lost_ = false;
+  lost_pos_ = 0;
+  error_ = cap::kErrorPeripheral;
   force_ = trig_type_ == cap::kTriggerImmediate && !follow_;   // a ring left by following: start at once
   filled_ = fill_ = 0;
   trigger_index_ = 0xFFFFFFFFu;
@@ -357,7 +349,7 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   done_ = false;
   produced_ = queue_overflow_ = overruns_ = 0;
   captured_ = 0;
-  if (!reopenUnit()) { state_ = kStateError; return failed(); }
+  if (!reopenUnit()) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
   if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
@@ -367,11 +359,11 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   parlio_receive_config_t rc = {};
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
-  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
+  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
   start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
+  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
   state_ = kStateWaiting;
-  ++generation_;
+  generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
   putU32(out, 0);
   putU32(out + 4, generation_);
   return completed(8);
@@ -383,7 +375,50 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
   info.flags = flags;
   __atomic_thread_fence(__ATOMIC_RELEASE);
   fill_ = 0;
-  ++completed_;
+  if (segment_count_) fill_slot_ = (fill_slot_ + 1) % segment_count_;
+  ++completed_;   // wraps after 0xFFFFFFFF (capture §2.2)
+  __atomic_thread_fence(__ATOMIC_RELEASE);
+  if (kept_infos_ < kInfos - 1) ++kept_infos_;   // after completed_: a reader takes this first (keptSerials)
+}
+
+// Harvest task: the data being gathered has a hole (capture §2.2). The segment being filled - in zero-copy streaming the
+// stage not yet sent, and the byte held back for the next one - is dropped, never handed out; nothing more is taken.
+// write_pos stays at its start. poll() (failLost) stops the track.
+void LogicCapture::loseSegment() {
+  if (direct_) {
+    lost_pos_ = stage_cur_ >= 0 ? stage_pos_ : captured_ - (carry_ ? 1 : 0);
+    if (stage_cur_ >= 0) __atomic_fetch_or(&stage_free_, 1u << stage_cur_, __ATOMIC_ACQ_REL);
+    stage_cur_ = -1;
+    stage_fill_ = 0;
+    carry_ = false;
+  } else {
+    lost_pos_ = fill_ ? infos_[completed_ % kInfos].position : captured_;
+    fill_ = 0;
+  }
+  __atomic_thread_fence(__ATOMIC_RELEASE);
+  lost_ = true;
+}
+
+// Loop: a segment was lost (lost_), or a triggered one-shot's segment has a hole (trig_overrun_): the track stops in
+// state 6 with stopped reason 3, error 2 (the queue or the ring overflowed; capture §2.2) - no segment handed out.
+void LogicCapture::failLost() {
+  if (triggered_) {
+    harvesting_ = false;
+    for (int i = 0; i < 100 && task_; ++i) delay(2);
+    kept_samples_ = 0;   // the segment is not handed out; write_pos stays at its start (0)
+    kept_short_ = false;
+    lost_pos_ = 0;
+  } else {
+    stopRepeat();        // nothing more to finish: the segment being filled went (loseSegment)
+  }
+  if (unit_ && delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
+  state_ = kStateError;
+  error_ = cap::kErrorStorage;
+  if (subscribed_) {
+    uint8_t stopped[6] = {cap::kStoppedReasonError, cap::kErrorStorage};   // reason(u8) error(u8) generation(u32)
+    putU32(stopped + 2, generation_);
+    endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
+  }
 }
 
 void LogicCapture::harvestTask(void *context) {
@@ -456,10 +491,10 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   range[8] = 1;                                    // any value in range (fractional divider)
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);   // max(u8)
-  // immediate, level, edge (one-shot); the pretrigger the ring can give back at the widest sample (16 bits)
+  // immediate, level, edge (one-shot); the most pretrigger the ring can give back (the narrowest sample)
   uint8_t trig[8];                                 // types(u32) max_pretrigger(u32)
   putU32(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge));
-  putU32(trig + 4, kPretriggerBytes * 8 / 16);
+  putU32(trig + 4, kSegmentBytes * 8 - 1);         // at w = 1 (below the segment); a wider sample's is less (configure)
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
   return w.ok() ? w.length() : 0;
 }
@@ -658,36 +693,33 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
   }
-  if (rate_tlv.v && getU32(rate_tlv.v) == 0) return rejected(kRejectMalformed);   // 1 Hz or more (capture §3.3)
+  // capture §3.3's contract: mode and rate required, samples in mode 1 / 2; none of them 0 (malformed)
+  auto ask = [](const Item &it) { return CaptureAsk{it.v, it.critical}; };
+  if (captureMalformed(ask(mode_tlv), ask(rate_tlv), ask(samples_tlv), ask(segments_tlv))) return rejected(kRejectMalformed);
   if (refused(unknown_critical)) return unknown_critical;
-  uint8_t mode = cap::kModeOneShot;
-  uint32_t rate = 1000000, samples = 0, segments = 0;
-  if (const uint8_t *v = mode_tlv.v) {
-    if (v[0] != cap::kModeOneShot && v[0] != cap::kModeRepeat && v[0] != cap::kModeStreaming)
-      return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
-    mode = v[0];
-  }
-  if (const uint8_t *v = rate_tlv.v) {   // outside rate_range (capture §3.3); the driver would silently run at 160 MHz
-    if (getU32(v) < kMinHz || getU32(v) > kSourceHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
-    rate = getU32(v);
-  }
+  const uint8_t mode = mode_tlv.v[0];
+  if (mode != cap::kModeOneShot && mode != cap::kModeRepeat && mode != cap::kModeStreaming)
+    return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
+  uint32_t rate = getU32(rate_tlv.v);   // outside rate_range (capture §3.3); the driver would silently run at 160 MHz
+  if (rate < kMinHz || rate > kSourceHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  // samples in streaming, segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
+  const Result misplaced = captureMisplaced(mode, ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv), ask(pretrigger_tlv), out, capacity);
+  if (refused(misplaced)) return misplaced;
   // inside the range, one-shot's ceiling for the channel count: above it, the nearest it allows (capture §3.3)
   if (mode == cap::kModeOneShot) {
     const uint32_t limit = channels_ <= kLimitLines8 ? kLimitHz8 : kLimitHz16;
     if (rate > limit) rate = limit;
   }
-  if (samples_tlv.v) samples = getU32(samples_tlv.v);
-  if (segments_tlv.v) segments = getU32(segments_tlv.v);
+  uint32_t samples = samples_tlv.v ? getU32(samples_tlv.v) : 0, segments = segments_tlv.v ? getU32(segments_tlv.v) : 0;
   // type(u8) role(u8) value(u32): level and edge in a one-shot (repeat and streaming start at once: immediate only).
-  // The role against the plan; without one against the roles this capture has (the plan's refusal follows).
-  const uint8_t planned = channels_ ? channels_ : kMaxChannels;
+  // A role outside the plan is refused unavailable cause 6 below, after every unsupported value (core §4.3).
   uint8_t trig_type = 0, trig_role = 0;
   uint32_t trig_value = 0;
   uint32_t pretrigger = 0;
   if (const uint8_t *v = trigger_tlv.v) {
     const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == cap::kTriggerImmediate ||
-                    (mode == cap::kModeOneShot && v[1] < planned &&
+                    (mode == cap::kModeOneShot &&
                      ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2)));
     if (!ok) return Tail::refuse(kTagTrigger, trigger_tlv.critical, out, capacity);
     trig_type = v[0];
@@ -699,7 +731,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   uint32_t actual_segments = 1;
   uint32_t store_caps = 0;
   const size_t budget = storeBudget(store_caps);
-  if (mode == 3) {   // streaming: the store in at most kInfos segments (the host's samples / segments are hints)
+  if (mode == 3) {   // streaming: the store in at most kInfos segments, of the probe's size
     uint32_t seg = static_cast<uint32_t>(budget / kInfos) / kSegmentMin * kSegmentMin;
     if (seg < 64 * 1024) seg = 64 * 1024;
     if (seg > kSegmentMaxRepeat) seg = kSegmentMaxRepeat;
@@ -710,7 +742,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   } else if (mode == 2) {   // repeat: segments of whole 4 KiB, as many as fit the PSRAM budget (or as asked)
     // in 64 bits: a samples above the limit is rounded down to it (capture §3.3), never wrapped (samples x width
     // overflowed u32 from 2^28 samples at w = 16: a segment of 0 bytes, and configure failed)
-    const uint64_t asked = samples ? (static_cast<uint64_t>(samples) * width + 7) / 8 : 65536;
+    const uint64_t asked = (static_cast<uint64_t>(samples) * width + 7) / 8;
     uint32_t seg = asked > kSegmentMaxRepeat ? kSegmentMaxRepeat : static_cast<uint32_t>(asked);
     seg = (seg + kSegmentMin - 1) / kSegmentMin * kSegmentMin;
     if (seg > kSegmentMaxRepeat) seg = kSegmentMaxRepeat;
@@ -724,19 +756,19 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   uint32_t bytes = 0;
   if (mode == 1) {
     const uint32_t max_samples = static_cast<uint32_t>(kSegmentBytes * 8 / width);
-    if (samples == 0 || samples > max_samples) samples = max_samples;
+    if (samples > max_samples) samples = max_samples;
     bytes = (samples * width + 7) / 8;
     bytes = (bytes + 127) & ~127u;                                   // whole cache lines for the DMA
     if (bytes > kSegmentBytes) bytes = kSegmentBytes;
     samples = bytes * 8 / width;
   }
-  // the pretrigger is what the ring can give back, before the trigger inside the segment; only with a trigger. The
-  // segment starts on a whole byte, up to 7 samples earlier (w < 8): the trigger stays inside it.
+  // the pretrigger is what the ring can give back at this sample width (describe declares the most, at w = 1), less
+  // than the segment's samples as rounded (capture §3.3); only with a trigger (above), so a one-shot
   const uint32_t max_pretrigger = static_cast<uint32_t>(kPretriggerBytes * 8 / width);
-  // with an immediate trigger it is kept for a group that makes this track follow another's trigger
-  if (pretrigger && (mode != cap::kModeOneShot || pretrigger + 8 > samples || pretrigger > max_pretrigger))
+  if (pretrigger && (pretrigger >= samples || pretrigger > max_pretrigger))
     return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
-  if (channels_ == 0) return wrongState(out, capacity);   // plan first (unavailable cause 6)
+  // no plan, or the trigger's role not in it: unavailable cause 6 (capture §3.2, §3.3)
+  if (channels_ == 0 || (trigger_tlv.v && trig_role >= channels_)) return wrongState(out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == kStateCapturing || state_ == kStatePaused || state_ == kStateWaiting) && !query) return wrongState(out, capacity);
   // Not even two segments of store, or no DMA ring for a mode that runs through it: refused unavailable cause 3
@@ -769,7 +801,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (opened == Open::kNoMemory) return noStorage(out, capacity);
     if (opened != Open::kOk) {
       close();
-      state_ = kStateError;
+      state_ = kStateError; error_ = cap::kErrorPeripheral;
       return failed();
     }
     samples = got_samples;
@@ -780,7 +812,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (opened == Open::kNoMemory) return noStorage(out, capacity);
     if (opened != Open::kOk) {
       close();
-      state_ = kStateError;
+      state_ = kStateError; error_ = cap::kErrorPeripheral;
       return failed();
     }
   } else {
@@ -800,7 +832,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (!buffer_) return noStorage(out, capacity);
     if (!openUnit(rate, width, false, bytes, num, den)) {
       close();
-      state_ = kStateError;
+      state_ = kStateError; error_ = cap::kErrorPeripheral;
       return failed();
     }
   }
@@ -829,8 +861,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   uint8_t layout[2 + kMaxChannels] = {width, channels_};
   for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
   w.put(kTagLayout, layout, 2 + channels_);
-  w.u32(kTagActualSamples, samples);
-  w.u32(kTagActualSegments, actual_segments);
+  // every answer row of the mode (capture §3.3): actual_samples in modes 1 / 2, actual_segments in mode 2 only
+  if (mode != cap::kModeStreaming) w.u32(kTagActualSamples, samples);
+  if (mode == cap::kModeRepeat) w.u32(kTagActualSegments, actual_segments);
   w.u32(kTagBlocking, 0);
   return w.ok() ? completed(w.length()) : failed();
 }
@@ -875,6 +908,10 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (capacity < 8) return failed();
   completed_ = released_ = fill_ = queue_overflow_ = overruns_ = stage_drops_ = 0;
+  fill_slot_ = kept_infos_ = 0;
+  lost_ = false;
+  lost_pos_ = 0;
+  error_ = cap::kErrorPeripheral;
   carry_ = false;
   produced_ = 0;
   sent_seg_ = 0;
@@ -882,7 +919,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   captured_ = dropped_ = 0;
   gap_pending_ = paused_ = false;
   reported_ = 0;
-  if (!reopenUnit()) { state_ = kStateError; return failed(); }
+  if (!reopenUnit()) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
   if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
@@ -892,11 +929,11 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   parlio_receive_config_t rc = {};
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
-  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
+  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
   start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; return failed(); }
+  if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
   state_ = kStateCapturing;
-  ++generation_;
+  generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
   putU32(out, 0);
   putU32(out + 4, generation_);
   return completed(8);
@@ -922,7 +959,7 @@ bool LogicCapture::trackStartFollowing() {
   if (!triggered_) {
     uint32_t num = 0, den = 1;
     close();
-    if (openTriggered(rate_hz_, width_, bytes_, num, den) != Open::kOk) { close(); state_ = kStateError; return false; }
+    if (openTriggered(rate_hz_, width_, bytes_, num, den) != Open::kOk) { close(); state_ = kStateError; error_ = cap::kErrorPeripheral; return false; }
     triggered_ = true;
   }
   follow_ = true;
@@ -980,30 +1017,46 @@ void LogicCapture::pollTriggered() {
   if (trig_phase_ >= 1 && state_ == kStateWaiting) state_ = kStateCapturing;
   if (trig_phase_ >= 1 && !reported_trigger_) {
     reported_trigger_ = true;
-    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64)
-      uint8_t e[16];
+    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64) generation(u32)
+      uint8_t e[20];
       putU32(e, 0);
       putU32(e + 4, trigger_index_);
       putU64(e + 8, start_ns_ + nsOf(seg_first_sample_ + trigger_index_));
+      putU32(e + 16, generation_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
   }
+  if (trig_overrun_ && (state_ == kStateCapturing || state_ == kStateWaiting)) { failLost(); return; }   // a hole (§2.2)
   if (trig_phase_ != 2 || state_ != kStateCapturing) return;
   stopRepeat();
+  if (trig_overrun_) { failLost(); return; }
   state_ = kStateDone;
   kept_samples_ = samples_;
   if (subscribed_) {
     uint8_t seg[kInfoBytes];
     endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
-    const uint8_t stopped[2] = {kStoppedComplete, 0};
+    uint8_t stopped[6] = {kStoppedComplete, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+    putU32(stopped + 2, generation_);
     endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
   }
 }
 
 void LogicCapture::poll() {
+  if ((mode_ == 2 || mode_ == 3) && lost_ && (state_ == kStateCapturing || state_ == kStatePaused)) {
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    while (reported_ != completed_) {   // the segments finished before the hole are handed out as usual
+      if (subscribed_ && mode_ == 2) {
+        uint8_t seg[kInfoBytes];
+        endpoint_.event(*this, kEventSegment, seg, infoBytes(infos_[reported_ % kInfos], seg));
+      }
+      ++reported_;
+    }
+    failLost();
+    return;
+  }
   if (mode_ == 2 || mode_ == 3) {
     if (mode_ == 2 && (state_ == kStateCapturing || state_ == kStatePaused)) state_ = paused_ ? kStatePaused : kStateCapturing;
-    while (reported_ < completed_) {
+    while (reported_ != completed_) {
       if (subscribed_ && mode_ == 2) {   // streaming sends no segment events (its data frames carry the positions)
         uint8_t seg[kInfoBytes];
         endpoint_.event(*this, kEventSegment, seg, infoBytes(infos_[reported_ % kInfos], seg));
@@ -1022,26 +1075,27 @@ void LogicCapture::poll() {
   if (subscribed_) {
     uint8_t seg[kInfoBytes];
     endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
-    const uint8_t stopped[2] = {kStoppedComplete, 0};
+    uint8_t stopped[6] = {kStoppedComplete, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+    putU32(stopped + 2, generation_);
     endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
   }
 }
 
 // Streaming: bytes of segment `serial` that may be sent (a finished segment's length; the one being filled so far).
 uint32_t LogicCapture::segmentLength(uint32_t serial) const {
-  const uint32_t done = completed_;
-  if (serial < done) return infos_[serial % kInfos].samples * width_ / 8;
-  if (serial == done) return fill_;
+  // only a finished segment: the one being filled may yet lose bytes, and is then never handed out (capture §2.2)
+  if (serialBefore(serial, completed_)) return infos_[serial % kInfos].samples * width_ / 8;
   return 0;
 }
 
 // Streaming: the stored segment holding stream `position` (not yet reused), and the offset in it.
 bool LogicCapture::findSegment(uint64_t position, uint32_t &serial, uint32_t &offset) const {
+  uint32_t back = kept_infos_;   // finished segments still in the store: segment_count_ - 1 at most (one is filling)
   const uint32_t done = completed_;
-  const uint32_t oldest = done >= segment_count_ ? done - segment_count_ + 1 : 0;
-  for (uint32_t k = done + 1; k-- > oldest;) {
-    const uint32_t length = segmentLength(k);
-    if (k == done && fill_ == 0) continue;   // not started
+  if (back > segment_count_ - 1) back = segment_count_ - 1;
+  for (uint32_t i = 0; i <= back; ++i) {   // newest first, from the one being filled
+    const uint32_t k = done - i;
+    const uint32_t length = segmentLength(k);   // 0 for the one being filled
     const uint64_t begin = infos_[k % kInfos].position;
     if (position >= begin && position - begin < length) { serial = k; offset = static_cast<uint32_t>(position - begin); return true; }
   }
@@ -1049,11 +1103,11 @@ bool LogicCapture::findSegment(uint64_t position, uint32_t &serial, uint32_t &of
 }
 
 size_t LogicCapture::pending() {
-  if (mode_ != 3 || direct_ || !(state_ == kStateCapturing || state_ == kStateConfigured)) return 0;
-  const uint32_t done = completed_, fill = fill_;
+  // the segments finished before a hole still go out after the track stopped on it (state 6)
+  if (mode_ != 3 || direct_ || !(state_ == kStateCapturing || state_ == kStateConfigured || state_ == kStateError)) return 0;
+  const uint32_t done = completed_;
   uint64_t n = 0;
-  for (uint32_t k = sent_seg_; k < done; ++k) n += infos_[k % kInfos].samples * width_ / 8;
-  n += fill;
+  for (uint32_t k = sent_seg_; k != done; ++k) n += infos_[k % kInfos].samples * width_ / 8;   // finished ones only
   return n > sent_off_ ? static_cast<size_t>(n - sent_off_) : 0;
 }
 
@@ -1063,7 +1117,7 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
   constexpr size_t kHead = 10, kTail = kTlvHeader + 4;   // the generation TLV after the data
   if (mode_ != 3 || direct_ || !store_ || capacity <= kHead + kTail) return 0;
   const uint32_t serial = sent_seg_;
-  const bool finished = serial < completed_;
+  const bool finished = serialBefore(serial, completed_);
   const uint32_t length = segmentLength(serial);
   __atomic_thread_fence(__ATOMIC_ACQUIRE);   // the bytes below length were written before it was published
   if (length <= sent_off_) {
@@ -1075,7 +1129,7 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
   if (n > 0xFFFF) n = 0xFFFF;
   putU64(out, infos_[serial % kInfos].position + sent_off_);
   putU16(out + 8, static_cast<uint16_t>(n));
-  memcpy(out + kHead, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + sent_off_, n);
+  memcpy(out + kHead, store_ + static_cast<size_t>(infos_[serial % kInfos].slot) * segment_bytes_ + sent_off_, n);
   putTlvHeader(out + kHead + n, cap::kTlvDataGeneration, 4);
   putU32(out + kHead + n + kTlvHeader, generation_);
   sent_off_ += n;
@@ -1103,7 +1157,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       follow_ = false;
       if (triggered_) return startTriggered(out, capacity);
       if (capacity < 8) return failed();
-      if (!reopenUnit()) { state_ = kStateError; return failed(); }   // a unit made for this start
+      if (!reopenUnit()) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }   // a unit made for this start
       done_ = false;
       produced_ = 0;
       kept_samples_ = 0;   // the last generation's segment goes
@@ -1112,23 +1166,24 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
       parlio_receive_config_t rc = {};
       rc.delimiter = delimiter_;
-      if (parlio_rx_unit_receive(unit_, buffer_, bytes_, &rc) != ESP_OK) { state_ = kStateError; return failed(); }
+      if (parlio_rx_unit_receive(unit_, buffer_, bytes_, &rc) != ESP_OK) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-      if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { state_ = kStateError; return failed(); }
+      if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { state_ = kStateError; error_ = cap::kErrorPeripheral; return failed(); }
       state_ = kStateCapturing;
-      ++generation_;
+      generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
       putU32(out, 0);              // blocking_ms: DMA, the probe keeps answering
       putU32(out + 4, generation_);
       return completed(8);
     }
     case kOpStop: {
-      const uint8_t stopped[2] = {kStoppedHost, 0};
+      uint8_t stopped[6] = {kStoppedHost, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+      putU32(stopped + 2, generation_);
       // stop (capture §3.2): waiting (state 2) -> 1 with nothing; capturing (state 3) -> 1 with the segment cut short
       // (flags bit1) holding what the harvest copied; one that filled meanwhile is complete (state 4)
       if (triggered_ && (state_ == kStateWaiting || state_ == kStateCapturing)) {
         stopRepeat();      // the harvest takes what came before the stop
-        pollTriggered();   // a trigger found meanwhile: its event; the segment full: complete
-        if (state_ == kStateDone) return completed();
+        pollTriggered();   // a trigger found meanwhile: its event; the segment full: complete; a hole: state 6
+        if (state_ == kStateDone || state_ == kStateError) return completed();
         const uint32_t got = trig_phase_ >= 1 ? static_cast<uint32_t>(static_cast<uint64_t>(filled_) * 8 / width_) : 0;
         state_ = kStateConfigured;
         kept_samples_ = got;
@@ -1145,6 +1200,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if ((mode_ == 2 || mode_ == 3) && (state_ == kStateCapturing || state_ == kStatePaused)) {
         stopRepeat();
         poll();
+        if (state_ == kStateError) return completed();   // a hole before the stop: stopped on it (§2.2)
         state_ = kStateConfigured;
         if (subscribed_) endpoint_.event(*this, kEventStopped, stopped, sizeof stopped);
         return completed();
@@ -1164,7 +1220,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
           return completed();
         }
         const uint32_t got_bytes = produced_ < bytes_ ? produced_ : bytes_;
-        if (parlio_rx_unit_enable(unit_, true) != ESP_OK) state_ = kStateError;
+        if (parlio_rx_unit_enable(unit_, true) != ESP_OK) { state_ = kStateError; error_ = cap::kErrorPeripheral; }
         esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
         uint32_t got = static_cast<uint32_t>(static_cast<uint64_t>(got_bytes) * 8 / width_);
         if (got > samples_) got = samples_;
@@ -1187,14 +1243,16 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       out[0] = state_;
       if (mode_ == 2 || mode_ == 3) {
         putU32(out + 1, completed_);
-        putU64(out + 5, captured_);   // the next byte to write, the dropped ones counted (oep-if-capture §3.2)
+        // the next byte to write, the dropped ones counted (oep-if-capture §3.2); stopped on a hole, the start of the
+        // segment it was in (§2.2)
+        putU64(out + 5, lost_ ? lost_pos_ : static_cast<uint64_t>(captured_));
         // flags (oep-if-capture §3.2): bit0 the probe dropped data - the chunk queue full, the DMA ring overrun, no free
         // stage, streaming's new data discarded with every segment unsent (§2.1 rule 1; a repeat with no free segment
         // pauses instead, state 5). bit1 (a sample taken a sample period or more late) never: PARLIO keeps its clock.
-        out[13] = (queue_overflow_ || overruns_ || stage_drops_ || (mode_ == 3 && dropped_)) ? cap::kStatusFlagDropped : 0;
+        out[13] = (lost_ || queue_overflow_ || overruns_ || stage_drops_ || (mode_ == 3 && dropped_)) ? cap::kStatusFlagDropped : 0;
       } else if (triggered_) {
         putU32(out + 1, kept_samples_ ? 1 : 0);   // the segment, complete or cut short by stop
-        putU64(out + 5, filled_);
+        putU64(out + 5, state_ == kStateError ? 0 : filled_);   // a segment with a hole: its start (§2.2)
         out[13] = (queue_overflow_ || overruns_ || trig_overrun_) ? cap::kStatusFlagDropped : 0;
       } else {
         putU32(out + 1, kept_samples_ ? 1 : 0);                                    // segments done
@@ -1203,9 +1261,9 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       }
       putU32(out + 14, generation_);
       size_t used = 18;
-      if (state_ == kStateError) {   // why (TLV 0x01 error): the PARLIO or its DMA would not start / run
-        putTlvHeader(out + 18, cap::kTlvStatusAnswerError, 1);
-        out[21] = cap::kErrorPeripheral;
+      if (state_ == kStateError) {   // why (TLV 0x01 error): the PARLIO or its DMA would not start / run (1), a
+        putTlvHeader(out + 18, cap::kTlvStatusAnswerError, 1);   // segment lost to the queue or the ring (2, §2.2)
+        out[21] = error_;
         used = 22;
       }
       return completed(used);
@@ -1236,7 +1294,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         if (direct_ || !findSegment(position, serial, offset)) return answer(position, reg::common::kReadFlagsGap, nullptr, 0);
         uint32_t count = segmentLength(serial) - offset;
         if (count > max) { count = max; flags |= reg::common::kReadFlagsMore; }
-        return answer(position, flags, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + offset, count);
+        return answer(position, flags, store_ + static_cast<size_t>(infos_[serial % kInfos].slot) * segment_bytes_ + offset, count);
       }
       if (mode_ == 2) {   // completed segments the host has not released, by position (u64: no wrap to handle)
         // The positions count the bytes discarded while paused (capture §2.2): a position released, or in such a gap,
@@ -1245,7 +1303,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         auto length = [&](uint32_t serial) { return infos_[serial % kInfos].samples * width_ / 8; };
         const uint64_t end = done ? infos_[(done - 1) % kInfos].position + length(done - 1) : 0;
         uint32_t serial = released_;
-        while (serial < done && infos_[serial % kInfos].position + length(serial) <= position) ++serial;
+        while (serial != done && infos_[serial % kInfos].position + length(serial) <= position) ++serial;
         if (serial == done) return answer(end, position < end ? reg::common::kReadFlagsGap : 0, nullptr, 0);
         uint8_t flags = 0;
         const uint64_t begin = infos_[serial % kInfos].position;
@@ -1253,8 +1311,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         const uint32_t offset = static_cast<uint32_t>(position - begin);
         uint32_t count = length(serial) - offset;   // one segment per answer
         if (count > max) count = max;
-        if (count < length(serial) - offset || serial + 1 < done) flags |= reg::common::kReadFlagsMore;
-        return answer(position, flags, store_ + static_cast<size_t>(serial % segment_count_) * segment_bytes_ + offset, count);
+        if (count < length(serial) - offset || serial + 1 != done) flags |= reg::common::kReadFlagsMore;
+        return answer(position, flags, store_ + static_cast<size_t>(infos_[serial % kInfos].slot) * segment_bytes_ + offset, count);
       }
       const uint64_t have = (static_cast<uint64_t>(kept_samples_) * width_ + 7) / 8;   // the segment's bytes
       if (position > have) position = have;
@@ -1264,32 +1322,35 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       return answer(position, flags, buffer_ + position, count);
     }
     case kOpSegments: {   // from_serial(u32) [TLV]  ->  more(u8) count(u8) count x segment info [TLV] (37 bytes each)
+      // common §1.3's serial paging (capture §3.2): next is serial_done, kept the segments whose info is remembered
       if (capacity < 2 + kInfoBytes) return failed();
       poll();
+      uint32_t next = 0, oldest = 0;
       if (mode_ == 2 || mode_ == 3) {
-        uint32_t from = getU32(p);
-        const uint32_t oldest = completed_ > kInfos ? completed_ - kInfos : 0;
-        if (from < oldest) from = oldest;
-        uint8_t count = 0;
-        size_t used = 2;
-        uint32_t k = from;
-        for (; k < completed_ && used + kInfoBytes <= capacity && count < 255; ++k, ++count)
-          used += infoBytes(infos_[k % kInfos], out + used);   // no element length (core §2.3)
-        out[0] = k < completed_ ? 1 : 0;   // more
-        out[1] = count;
-        return completed(used);
+        const uint32_t kept = kept_infos_;   // before completed_ (finishSegment's order): never more than are there
+        next = completed_;
+        oldest = next - kept;
+      } else {
+        next = kept_samples_ ? 1 : 0;   // one-shot: serial 0 once it is there
       }
-      const bool one = kept_samples_ && getU32(p) == 0;
-      out[0] = 0;
-      out[1] = one ? 1 : 0;
-      const size_t info = one ? segmentInfo(out + 2) : 0;   // no element length (core §2.3)
-      return completed(2u + info);
+      uint32_t k = serialPageStart(getU32(p), oldest, next);
+      uint8_t count = 0;
+      size_t used = 2;
+      for (; k != next && used + kInfoBytes <= capacity && count < 255; ++k, ++count)   // no element length (core §2.3)
+        used += mode_ == 2 || mode_ == 3 ? infoBytes(infos_[k % kInfos], out + used) : segmentInfo(out + used);
+      out[0] = k != next ? 1 : 0;   // more
+      out[1] = count;
+      return completed(used);
     }
-    case kOpRelease:   // generation(u32) serial(u32) [TLV]: that segment and the ones before it may be reused (repeat)
+    case kOpRelease: {   // generation(u32) serial(u32) [TLV]: the finished segments up to serial may be reused (repeat)
       if (getU32(p) != generation_) return wrongState(out, capacity);
       if (mode_ != 2) return completed();   // nothing to release: success
-      if (getU32(p + 4) + 1 > released_ && getU32(p + 4) < completed_) released_ = getU32(p + 4) + 1;
+      // capture §3.2: finished segments at or before serial (core §2.6), never one not finished yet - a serial at or
+      // past serial_done releases every finished one; one already released, nothing
+      const uint32_t serial = getU32(p + 4), done = completed_, released = released_;
+      if (!serialBefore(serial, released)) released_ = serialBefore(serial, done) ? serial + 1 : done;
       return completed();
+    }
     case kOpForce:   // waiting for the trigger: start now (the next chunk); otherwise nothing to do
       if (state_ == kStateWaiting && trig_phase_ == 0) force_ = true;
       return completed();

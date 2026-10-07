@@ -678,8 +678,12 @@ static void testGroupSecondRun() {
     CHECK(group.handle(0x01, bind, sizeof bind, out, sizeof out).resolution == kResolutionCompleted);
     analog.armed = false;                                   // its pretrigger is filling
     const Result started = group.handle(0x02, nullptr, 0, out, sizeof out);
-    CHECK(started.resolution == kResolutionCompleted && started.length == 12 + 3 + 12);
-    CHECK(out[12] == 0x01 && getU16(out + 13) == 12 && getU16(out + 15) == 1 && getU32(out + 17) == run);   // generations: fn 1 = run
+    // blocking_ms start_ns, the group's generation (one up at every start, kept across binds), n = 2, (fn, generation)
+    // in bind order: fn 1 = run (its start comes later, the one it will make), fn 2 as the fake keeps it (0)
+    CHECK(started.resolution == kResolutionCompleted && started.length == 12 + 4 + 1 + 12);
+    CHECK(getU32(out + 12) == run && out[16] == 2 && getU16(out + 17) == 1 && getU32(out + 19) == run &&
+          getU16(out + 23) == 2 && getU32(out + 25) == 0);
+    CHECK(group.handle(0x05, nullptr, 0, out, sizeof out).length == 23 && getU32(out + 19) == run);   // status: the group's
     group.poll();
     CHECK(logic.starts == static_cast<int>(run) - 1);        // not yet: the follower is not armed
     CHECK(triggerNs() == ~uint64_t{0} && analog.told == ~uint64_t{0});   // nothing from the last run
@@ -692,6 +696,12 @@ static void testGroupSecondRun() {
     CHECK(triggerNs() == 1000 * run && analog.told == 1000 * run);
     CHECK(group.handle(0x01, none, sizeof none, out, sizeof out).resolution == kResolutionCompleted);   // unbind
   }
+  // the trigger track's generation after 0xFFFFFFFF is 1, never 0 (capture §3.2: nextGeneration)
+  CHECK(group.handle(0x01, bind, sizeof bind, out, sizeof out).resolution == kResolutionCompleted);
+  logic.generation = 0xFFFFFFFFu;
+  CHECK(group.handle(0x02, nullptr, 0, out, sizeof out).resolution == kResolutionCompleted);
+  CHECK(getU32(out + 12) == 3 && getU16(out + 17) == 1 && getU32(out + 19) == 1);
+  CHECK(nextGeneration(0) == 1 && nextGeneration(1) == 2 && nextGeneration(0xFFFFFFFFu) == 1);
 }
 
 static void testPlanCapacity() {
