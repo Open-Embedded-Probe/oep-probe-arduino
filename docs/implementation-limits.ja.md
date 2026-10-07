@@ -228,6 +228,21 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   台では、コンソールの読みが窓ごとにフレームを入れるため、速く続く信号（pwm、tone、速い切り替え）が slipped で崩れ、ソフトウェアの
   リセットのキャプチャの 5 回に 1 回が空になり、試験の一式が 446 s から 1040 s に延びた。キャプチャの目的（正しいサンプル）を守るため、
   この排他の規則に戻した。
+- **割り込みを止める長さは時計で区切る**: 割り込みを止めている 1 回（即時の窓、探索の区切りとトリガの後の残り）は、サンプルの数では
+  なく時計（cycle counter）で最長 250 ms（`kOffNs`、割り込みの watchdog は 300 ms）に区切る。2 MHz ではサンプルが遅れると取り戻せないので、
+  番の中のフレーム、トリガの時に線を使っていた要求の続くフレーム、もう一方の core や radio の DMA のバスの待ちが、その分だけ 1 回を延ばす。
+  サンプルの数で区切っていたときは、TCP で test_timing を流す間に 300 ms を越え、probe が int-wdt でリセットした（V003 の台、3169721、
+  describe の firmware の文字列 `(int-wdt at 961 s)`。接続が「peer closed」で切れたのはこのリセット）。探索の区切りは「1 回の長さから区画の
+  残りの名目の時間を引いた分」で終わる。区画（即時の窓も）がその長さに達しても読み終えていなければ、そこで終える: **samples は configure の
+  値より少なく、slipped が立つ**（サンプルが遅れていたため）。トリガの位置と trigger_index は正しい。
+- **radio が点いているとき（Wi-Fi の項目に entry があるとき）**: Wi-Fi の driver と TCP/IP の stack は sampler と同じ core 0 で動く。
+  configure はそのとき、**区画を 25 ms まで**に切り下げ（`kSegmentNsRadio`。actual_samples が返す: 2 MHz で 50000、1 MHz で 25000、
+  400 kHz で 10000 サンプル）、割り込みを止める 1 回を **50 ms まで**（`kOffNsRadio`）にする。探索の区切りはその残り（25 ms 以上）。
+  radio が消えている間に configure したキャプチャを、radio が点いた後で start すると unavailable cause 6（configure し直す）。キャプチャ
+  の途中で radio が点いても、その窓は configure のときの長さのまま（250 ms 以下）。
+- **sampler の task の優先度は 17**: TCP/IP の stack（18）と Wi-Fi の driver（23）より下、analog の取り込み（5）より上。区切りと区切りの
+  間では、それらが仕事を終えるまで先に動く（前は最高の優先度で、1 ms のすき間しか回らず、loop() が TCP/IP の lock を待って止まることが
+  あった）。その分、Wi-Fi が忙しいと**探索のすき間（その間の出来事は見逃す）が 1 ms より長くなる**。
 - fixture UART の受信の割り込みは loop() の core（sampler と別）で、FIFO の閾値は 32 byte。速さは 2000000 bps まで。
 
 ### 4.2 ESP32-P4
@@ -271,9 +286,11 @@ TCP は信頼できる手元のネットワークか、認証したトンネル�
   足す（`Endpoint::addTcpListener`。後から足す経路は断られる: シリアルの口の index が describe の index のままであるため）。
 - **同時の接続は 3 つ**（`TcpListener<3>`）。どの接続も別の経路で、confirm の transport TLV は 1 を返す。max_frame / window / max_inflight は
   接続ごとに同じ値（classic ESP32: 512 / 1024 / 2）。4 つ目の接続は受けてすぐ閉じる。
-- 接続ごとに受けの 1 KiB と送りの 2 KiB のバッファ。1 回の poll の応答は flush でまとめて送る（長さと本体が 1 つの segment で出る）。送りの
-  バッファがいっぱいで、socket が 2000 ms（`TcpSlot::kWriteWaitMs`）受け取らなければ、その接続は死んだとして閉じる（読まなくなった host に
-  probe が止められない上限）。TCP keepalive: 10 s 黙ったら 5 s ごとに 3 回、答えが無ければ閉じる。
+- 接続ごとに受けの 1 KiB と送りの 6 KiB のバッファ。1 回の poll の応答は flush でまとめて送る（長さと本体が 1 つの segment で出る）。送りの
+  バッファは、window を守る host がその接続に待たせうるものすべて（max_inflight 個の応答、push の queue 1024 byte と push 1 つ、event の
+  queue）が入る大きさ（firmware の static_assert）: そういう host には、ネットワークがどれだけ止まっても（Wi-Fi の再送で数秒）probe は
+  待たず、接続を閉じない。window を越えて送る host のときだけ、バッファがいっぱいで socket が 2000 ms（`TcpSlot::kWriteWaitMs`）受け取らな
+  ければ、その接続は死んだとして閉じる（読まなくなった host に probe が止められない上限）。2 KiB（b9401fe から）はこの和より小さかった。TCP keepalive: 10 s 黙ったら 5 s ごとに 3 回、答えが無ければ閉じる。
 - max_frame を超える長さを読んだら、その接続を閉じる（transports §1）。フレームの途中の休みでは読み直さない（transports §2）。
 - 接続が閉じても、セッション、ロック、購読、送り直しの表は残る（transports §3）。閉じた接続に送るはずの応答と通知は捨てる。同じ slot に
   来た次の接続は、前の接続の通知を受けない（読みかけのフレームも捨てる）。同じ session id の open が別の接続から来れば、lease を始め直し、
@@ -327,8 +344,17 @@ oep-spec の probe.config §1.4、§3.3、§4（c2b8007 から）。この実装
 
 ### 6.5 限界
 
-- **sampler の窓**: logic の sampler は窓の間（最大 164 ms / 250 ms）core 0 の割り込みを止める。Wi-Fi と lwIP の task も core 0 なので、その
-  間 TCP は止まる（落ちはしない。hardware の試験でキャプチャは TCP でも通った）。
+- **sampler の窓**: logic の sampler は窓の間 core 0 の割り込みを止める。Wi-Fi と lwIP の task も core 0 なので、その間 TCP は止まる。
+  radio が点いている間は、1 回を 50 ms まで、区画を 25 ms までにし、区切りの間は Wi-Fi と lwIP が先に動く（§4.1）。
+- **radio が点いているときの UART0 の損失（classic ESP32、測った値）**: V003 の台（classic ESP32、CH340 を usbipd で WSL に）、
+  `oep.probe.link` の source（probe → host）を 500000 bps で 60 s、ほかに何も動かさずに 3 回ずつ。失いの割合（壊れは 0）:
+  Wi-Fi に接続（rssi -41）1.64 / 0.76 / 0.55 %、同じ image で wifi の entry を unset（radio 切）1.69 %（unset の 3 s 後に始めた回）/ 0.28 /
+  0.17 %、Wi-Fi の無い build 0.47 / 0.08 / 0.17 %。radio が点いていると数倍失い、失った 1 つごとに host の待ち（0.3 s）の分だけ遅くなる
+  （ok の数 2884〜3449 と 3581〜3727）。失うのはフレームまるごと。firmware の側では、UART0 の送りの割り込みは core 1、Wi-Fi と lwIP は core 0
+  で、キャプチャの無いとき loop() が待つ所（Wi-Fi の状態を見る、待ち受けの accept、TCP の受け）はどれも待たない呼び出しで、原因になる待ちは
+  見つかっていない。遅れ（host の待ちを越えた）か、変換器までの間でバイトが壊れた（CRC の合わないフレームは host が雑音として捨て、失いに
+  数える）かは、まだ分けていない。radio の電源や RF が原因なら、この firmware では消せない。シリアルの口を Wi-Fi と一緒に使うときは、
+  host の送り直しで回復する前提にする。
 - build の大きさ: classic ESP32 の firmware は Wi-Fi で 1.07 MB（app の区画 1.31 MB の 81 %）、RAM 107 KB。`-DOEP_WIFI=0` で外せる
   （0.42 MB）。Wi-Fi の無い build に wifi の項目は無い（describe の items に出ない）。
 - **ESP32-P4** は radio を持たない。arduino-esp32 には別のチップ（ESP32-C6 など）を SDIO で使う ESP-Hosted の道があるが、この firmware は

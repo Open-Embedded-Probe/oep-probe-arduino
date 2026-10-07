@@ -18,6 +18,14 @@ these values. §6 covers TCP over Wi-Fi on the classic ESP32: port 7450, up to t
 the listener one describe entry), mDNS `_oep._tcp` with host `oep-<unit_id>.local` and TXT `unit_id`, the probe.config
 wifi item 0x08 (several networks tried in index order, the passphrase write-only), restart_max_ms 15000 with Wi-Fi, the
 measurements on the ATOM, and the limits (sampler windows pause the network, ESP32-P4 and RP2040 / RP2350 without Wi-Fi).
+§4.1 (classic ESP32): every interrupts-off span of the sampler ends by the clock at 250 ms (a search burst counted in
+samples ran past the 300 ms interrupt watchdog and reset the probe; a segment still reading at the limit ends there,
+fewer samples, slipped); with the radio on (a wifi entry set) a configure takes a segment of at most 25 ms and every span
+ends within 50 ms, a start after the radio came on with a capture configured without it is unavailable (cause 6), and
+the sampling task runs below the TCP/IP stack and the Wi-Fi driver (priority 17). §6.1: a TCP slot's send buffer (6 KiB)
+holds all a host within its window can have outstanding, so the probe never waits on or closes such a connection for a
+network stall. §6.5: the measured extra loss on the UART0 link at 500000 bps with the radio on (1.64 / 0.76 / 0.55 %
+against 0.47 / 0.08 / 0.17 % without Wi-Fi in the build), whole frames, no cause found in the firmware.
 The firmware follows oep-spec 0f455a0 (0.0.29 development builds) and, with the external review re-check of 2026-10-07,
 oep-spec 30b2b36 (with the wifi item, TCP discovery and unset's len as the key's length); §2.6 records what 0f455a0 removed (boot_reset and the rest). §1.6 adds: one max_frame for every transport
 (the describe and max_length fit them all) and frames written whole, never paused inside; with oep-spec 9118dc0, a probe

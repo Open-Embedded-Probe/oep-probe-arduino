@@ -30,6 +30,8 @@ static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {kMaxFrame, 4096, 4},
                               oep::Endpoint::kUartBridge);
 static oep::TcpListener<kConnections> tcp;
+// a slot's send buffer holds every answer a host within its window can have outstanding (OepTcp.h; no notifications here)
+static_assert(oep::TcpSlot::kTxBytes >= 4 * (kMaxFrame + 2), "a TCP slot never waits for a host keeping to its window");
 static uint8_t rxTcp[kConnections][kMaxFrame + 2];   // one frame of max_frame per connection
 static oep::WifiStation wifi(tcp, kPort);
 static oep::Binds binds;

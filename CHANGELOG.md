@@ -1,6 +1,47 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32: a capture never resets the probe, and Wi-Fi gets core 0 between the sampler's spans (bench, the
+  V003 jig over TCP with 3169721: the connection "closed" during test_timing was the probe resetting - describe then
+  said "(int-wdt at 961 s)"). Cause: a trigger search's burst and a segment's rest were bounded by their count of
+  samples (250 ms nominal); at the fastest rates the loop cannot catch up on late samples, so the SWIO frames of a turn,
+  a request already on the wire at the trigger, and the bus held by the other core or the radio's DMA stretched a span
+  by their own time, past the 300 ms interrupt watchdog. Now every interrupts-off span ends by the clock
+  (`sampler::Plan::span`, checked every 64 samples): a burst's search ends at the span less the segment's nominal rest; an
+  immediate window or a segment still reading at the span ends there, with fewer samples and slipped set (the trigger
+  and trigger_index unchanged). With the radio on (`SamplerCapture::setRadio`, `WifiStation::radioOn()`: a network in
+  the settings) a configure rounds the segment down to 25 ms (`kSegmentNsRadio`; actual_samples says, 2 MHz 50000,
+  400 kHz 10000) and spans end within 50 ms (`kOffNsRadio`); a start after the radio came on with a capture configured
+  without it is unavailable cause 6. The sampling task runs at priority 17, below the TCP/IP stack (18) and the Wi-Fi
+  driver (23): between spans they run first for as long as they have work (at configMAX_PRIORITIES - 1 they had a
+  1 ms gap a burst, and loop() could wait on the TCP/IP lock their task held). TCP: a slot's send buffer is 6144 bytes
+  (was 2048), all a host within its window can have outstanding (two answers, the push queue and one push, the event
+  queue; static_assert in the firmware and WifiTcp), so such a host never makes the probe wait on, or close, its
+  connection however long the network stalls; the 2000 ms write wait is left for a host beyond its window. Host test
+  test_wire_gate: spans bounded with every sample late (an immediate window 60 ms unbounded, 20 ms bounded; a search's
+  bursts; a segment's rest cut, its trigger in place, the ring turned oldest first). docs/implementation-limits §4.1,
+  §6.1, §6.5 with the bench's measured extra UART0 loss at 500000 with the radio on (1.64 / 0.76 / 0.55 % against
+  0.47 / 0.08 / 0.17 % without Wi-Fi in the build; whole frames; no cause found in the firmware), guide getting-started
+  (EN / JA); not run on hardware yet
+- (JA) classic ESP32: キャプチャで probe がリセットしないように、また sampler の 1 回と 1 回の間に Wi-Fi が core 0 を使えるように
+  しました（V003 の台、TCP で 3169721: test_timing の途中の接続の「切断」は probe のリセットで、その後の describe は
+  「(int-wdt at 961 s)」）。原因: トリガの探索の区切りと区画の残りを、サンプルの数（名目 250 ms）で区切っていた。速い rate では
+  遅れたサンプルを取り戻せないので、番の中の SWIO のフレーム、トリガの時に線を使っていた要求、もう一方の core や radio の DMA の
+  バスの待ちが、その時間だけ 1 回を延ばし、300 ms の割り込みの watchdog を越えた。今は割り込みを止める 1 回をどれも時計で区切る
+  （`sampler::Plan::span`、64 サンプルごとに見る）: 探索は 1 回の長さから区画の残りの名目の時間を引いたところで終わり、即時の窓や
+  区画がその長さで読み終えていなければそこで終える（samples が少なく slipped が立つ。トリガと trigger_index はそのまま）。radio が
+  点いているとき（`SamplerCapture::setRadio`、`WifiStation::radioOn()`: 設定にネットワークがある）は、configure が区画を 25 ms に
+  切り下げ（`kSegmentNsRadio`。actual_samples が返す: 2 MHz で 50000、400 kHz で 10000）、1 回を 50 ms 以内（`kOffNsRadio`）にする。
+  radio が消えている間に configure したキャプチャを radio が点いた後で start すると unavailable cause 6。sampler の task の優先度は
+  17 で、TCP/IP の stack（18）と Wi-Fi の driver（23）より下: 1 回と 1 回の間はそれらが仕事のある限り先に動く（configMAX_PRIORITIES
+  - 1 のときは区切りごとに 1 ms しか無く、loop() がその task の持つ TCP/IP の lock を待つことがあった）。TCP: 接続の送りのバッファを
+  6144 byte に（前は 2048）。window を守る host が待たせうるもの（応答 2 つ、push の queue と push 1 つ、event の queue）がすべて入る
+  （firmware と WifiTcp に static_assert）ので、そういう host にはネットワークがどれだけ止まっても probe は待たず、接続を閉じない。
+  2000 ms の書き込みの待ちは window を越える host のためだけに残す。host のテスト test_wire_gate: どのサンプルも遅れるときの区切り
+  （即時の窓は区切らなければ 60 ms、区切れば 20 ms、探索の区切り、区画の残りを切ってもトリガはその位置、ring は古い順に回す）。
+  docs/implementation-limits §4.1、§6.1、§6.5（台で測った、radio が点いているときの UART0 の 500000 での余分な失い: 1.64 / 0.76 /
+  0.55 %、Wi-Fi の無い build は 0.47 / 0.08 / 0.17 %。フレームまるごと。firmware の側の原因は見つかっていない）、guide
+  getting-started（EN / JA）。hardware ではまだ試していない
 - (EN) Follow oep-spec 2b17990 .. 9118dc0 (registry and vectors synced with OEP_SPEC_REF=9118dc0). probe.config §1.4:
   a probe with the wifi item answers max_frame 112 or more on every transport (`wifi_min_max_frame`: one set of the
   longest wifi item, 10 + 3 + 3 + 32 + 64). Checked: every transport of an `Endpoint` answers its one max_frame; the

@@ -13,7 +13,7 @@
 # simulated target (what is written before the speed is verified, the checks, the budget), of the swio stack on a
 # simulated CH32V003 whose reset goes through its bootloader (the connection kept, a silent bootloader waited out by
 # the reset op and by attach's reset TLV), of the classic ESP32's gate between its sampler's windows and the SWIO frames
-# (two threads; the console paused in an immediate window; the sampler's loop and a trigger search's turns), of the whole rvswd stack's
+# (two threads; the console paused in an immediate window; the sampler's loop and a trigger search's turns; its interrupts-off spans bounded by the clock), of the whole rvswd stack's
 # attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries), and of the ESP32-P4 logic capture's configure on a fake PARLIO RX
 # driver and heap (samples rounded down, streaming without internal RAM for stages), of the analog scale from a frontend's

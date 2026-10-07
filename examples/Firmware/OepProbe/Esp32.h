@@ -62,6 +62,10 @@ static uint8_t rxTcp[kTcpConnections][kMaxFrame + 2];   // one frame of max_fram
 static oep::WifiStation wifi(tcp, kTcpPort);
 // probe.config §1.4: with the wifi item, every transport answers max_frame 112 or more (one set of the longest wifi item)
 static_assert(kMaxFrame >= oep::kWifiMinMaxFrame, "a probe with the wifi item answers max_frame >= wifi_min_max_frame");
+// A slot's send buffer holds all a host within its window can have outstanding (OepTcp.h): two answers in flight, the
+// push queue (1024, the endpoint's default) and one push frame, the event queue (32 x 48 bytes)
+static_assert(oep::TcpSlot::kTxBytes >= 2 * (kMaxFrame + 2) + 1024 + (kMaxFrame + 2) + 32 * 48,
+              "a TCP slot never waits for a host keeping to its window");
 #endif
 
 // port_speed (oep-if-link §3): the host may raise UART0's baud for its session; every revert goes back to 115200, the
@@ -213,6 +217,8 @@ void setup() {
     memcpy(unit, id, n < sizeof unit - 1 ? n : sizeof unit - 1);
     wifi.begin(unit);
     config.setWifi(&wifi);   // the wifi item: the networks to join (applied with the saved settings below)
+    // the radio on core 0 with the sampler: short spans and segments while it is on (OepSampler.h, setRadio)
+    capture.setRadio([] { return wifi.radioOn(); });
   }
 #endif
   endpoint.add(wire);

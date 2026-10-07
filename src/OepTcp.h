@@ -12,8 +12,13 @@
 // Each slot is one oep::Connection: the endpoint frames length(u16) message on it, answers on it and sends its
 // notifications to it; a length over max_frame closes it (Connection::drop). A connection beyond the slots is accepted
 // and closed at once. A slot's writes are buffered (kTxBytes) and sent when the endpoint flushes after a poll, so a
-// frame's length and body leave in one segment; a write that does not fit waits for the socket up to kWriteWaitMs,
-// after which the connection is taken as dead and closed (a peer that stops reading cannot stall the probe longer).
+// frame's length and body leave in one segment. kTxBytes holds everything a host keeping to its window can have
+// outstanding on the connection - the answers of max_inflight requests, the push queue with one push frame, the event
+// queue (pushes and events are only written into free room; answers are not) - so such a host never makes the probe
+// wait, however long the network stalls (a Wi-Fi retransmission: seconds): the probe never closes a connection for a
+// stall of its own or of the radio. Only a write past that (a host beyond its window) waits for the socket, up to
+// kWriteWaitMs, after which the connection is taken as dead and closed (a peer that stops reading cannot stall the
+// probe longer). 2048 bytes (b9401fe) were less than that sum on the classic ESP32 firmware.
 // TCP keepalive (kKeepIdleS, kKeepIntervalS x kKeepCount) closes a connection whose peer vanished without a FIN.
 // Port and discovery are outside the specification (transports §1); the port is the sketch's choice.
 #pragma once
@@ -30,7 +35,7 @@ namespace oep {
 
 class TcpSlot final : public Connection {
  public:
-  static constexpr size_t kRxBytes = 1024, kTxBytes = 2048;
+  static constexpr size_t kRxBytes = 1024, kTxBytes = 6144;
   static constexpr uint32_t kWriteWaitMs = 2000;
 
   uint32_t connection() const override { return fd_ >= 0 ? id_ : 0; }

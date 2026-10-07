@@ -80,9 +80,11 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
   plan.trig_role = trig_role_;
   plan.trig_value = static_cast<uint8_t>(trig_value_);
   plan.pre = pretrigger_;
-  const uint64_t limit = static_cast<uint64_t>(cpu_hz_) / 1000u * (kOffNs / 1000000u) / cycles_;
-  plan.burst = static_cast<uint32_t>(limit - (samples_ - pretrigger_ - 1));   // > pre: samples <= kBufferBytes < limit
+  const uint64_t off_ms = (radio_cfg_ ? kOffNsRadio : kOffNs) / 1000000u;
+  const uint64_t limit = static_cast<uint64_t>(cpu_hz_) / 1000u * off_ms / cycles_;
+  plan.burst = static_cast<uint32_t>(limit - (samples_ - pretrigger_ - 1));   // > pre: samples < limit (configure)
   plan.turn = static_cast<uint32_t>(static_cast<uint64_t>(cpu_hz_) / 1000u * kWireTurnMs / cycles_);
+  plan.span = static_cast<uint32_t>(static_cast<uint64_t>(cpu_hz_) / 1000u * off_ms);   // by the clock (OepSamplerRun.h)
   const sampler::Outcome r = sampler::run(io, plan, control_, [this](uint32_t c, uint32_t kept, uint64_t burst_ns) {
     trig_count_ = c;
     trig_kept_ = kept;
@@ -221,6 +223,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     trig_value = value;
   }
   if (samples == 0 || samples > kBufferBytes) samples = kBufferBytes;
+  // the radio on: a segment of kSegmentNsRadio at most at the rate paced (below), rounded down - see after the rate
   uint32_t pretrigger = 0;
   if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger, inside the segment
     pretrigger = getU32(v);
@@ -240,6 +243,12 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   const uint32_t cycles = cpu_hz / rate;
   const uint32_t g = gcd(cpu_hz, cycles);
   const uint32_t num = cpu_hz / g, den = cycles / g;   // the rate actually paced: whole cycles per sample
+  const bool radio = radio_ && radio_();
+  if (radio) {
+    const uint64_t most = static_cast<uint64_t>(cpu_hz) / 1000u * (kSegmentNsRadio / 1000000u) / cycles;
+    if (samples > most) samples = static_cast<uint32_t>(most);
+    if (pretrigger >= samples) return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);   // inside the segment
+  }
   if (!query) {
     waitIdle();
     if (!buffer_) buffer_ = static_cast<uint8_t *>(heap_caps_malloc(kBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -253,6 +262,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     trig_role_ = trig_role;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
+    radio_cfg_ = radio;
     cycles_ = cycles;
     cpu_hz_ = cpu_hz;
     state_ = cap::kStateConfigured;
@@ -318,13 +328,15 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (boundRefused()) return boundInGroup(*this, out, capacity);
       if (state_ != cap::kStateConfigured && state_ != cap::kStateDone && state_ != cap::kStateError) return wrongState(out, capacity);
       if (capacity < 8) return failed();
+      // the radio came on since configure: its segment and spans are too long for it (configure again)
+      if (!radio_cfg_ && radio_ && radio_()) return wrongState(out, capacity);
       waitIdle();
       listen(pins_, channels_);
       done_ = trig_seen_ = aborted_ = false;
       control_ = 0;
       memset(buffer_, 0, samples_);
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-      if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, configMAX_PRIORITIES - 1, &sampler_, 0) != pdPASS) {
+      if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, kTaskPriority, &sampler_, 0) != pdPASS) {
         sampler_ = nullptr;
         state_ = cap::kStateError;
         return failed();

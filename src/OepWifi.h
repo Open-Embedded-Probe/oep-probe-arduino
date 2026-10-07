@@ -70,6 +70,10 @@ class WifiStation final : public WifiControl {
     pending_at_ = millis();
   }
 
+  // The radio is on, or about to come on: the settings hold a network (an empty list turns it off). True from the set
+  // that gave the list its first entry (apply), before the kApplyDelayMs after which the radio starts.
+  bool radioOn() const { return count_ > 0; }
+
   Status status() const override {
     Status s;
     s.state = state_;

@@ -16,7 +16,10 @@
 //   no frame meets a read, and the segment's rest after the trigger has no new frame (0.0.29-dev 51360ea gave the turn
 //   between two bursts, when nothing sampled: the target acted then and the trigger never fired - the bench's
 //   reset_probe "no capture for the software reset"); a request waiting for the wire gets a turn inside the burst; a
-//   trigger before `pre` samples of a burst gives a shorter segment with the trigger index smaller (capture §3.3).
+//   trigger before `pre` samples of a burst gives a shorter segment with the trigger index smaller (capture §3.3);
+// - every interrupts-off span ends by the clock (Plan::span) with every sample late (a read slower than the period): an
+//   immediate window and a segment's rest end at the span, fewer samples, slipped; a search's bursts end at the span
+//   less the segment's rest (a burst counted in samples ran past the 300 ms interrupt watchdog on the bench: int-wdt).
 #include <stdio.h>
 #include <string.h>
 
@@ -158,6 +161,23 @@ static void spinFor(std::chrono::microseconds us) {
   const auto end = std::chrono::steady_clock::now() + us;
   while (std::chrono::steady_clock::now() < end) {}
 }
+
+// A sampler Io whose every read takes longer than a sample period (the classic's 2 MHz loop held up by frames, the other
+// core and the radio's DMA: it cannot catch up), and which records its interrupts-off spans.
+static std::atomic<uint32_t> g_read_us{0};
+struct SpanIo : HostIo {
+  mutable uint32_t off_at = 0, longest = 0, spans = 0;
+  uint8_t read() const {
+    if (const uint32_t us = g_read_us.load()) spinFor(std::chrono::microseconds(us));
+    return HostIo::read();
+  }
+  void interruptsOff() const { off_at = nowCycles(); }
+  void interruptsOn() const {
+    const uint32_t d = nowCycles() - off_at;
+    if (d > longest) longest = d;
+    ++spans;
+  }
+};
 
 int main() {
   // ---- the rules, one thread ----
@@ -344,7 +364,7 @@ int main() {
                     void (*act)()) {
     static uint8_t buffer[4000];
     memset(buffer, 0xEE, sizeof buffer);
-    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, value, pre, 20000, 500};
+    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, value, pre, 20000, 500, 0};
     volatile uint8_t control = 0;
     std::atomic<bool> triggered{false};
     std::atomic<uint32_t> kept_at{0};
@@ -420,7 +440,7 @@ int main() {
   // ---- a request waiting for the wire gets a turn inside a burst, not only between bursts ----
   {
     static uint8_t buffer[4000];
-    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 100, 100000, 500};
+    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 100, 100000, 500, 0};
     volatile uint8_t control = 0;
     sampler::Outcome outcome;
     std::thread core0([&] {
@@ -443,7 +463,7 @@ int main() {
   // ---- an edge in the first samples of a burst: a shorter segment, the trigger index what came before it ----
   {
     static uint8_t buffer[4000];
-    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 1000, 20000, 500};
+    sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 1000, 20000, 500, 0};
     volatile uint8_t control = 0;
     sampler::Outcome outcome;
     g_marker = 1;
@@ -459,6 +479,75 @@ int main() {
            outcome.samples);
     CHECK(outcome.trigger_index > 50 && outcome.trigger_index < 1000 && outcome.samples == outcome.trigger_index + 3000);
     CHECK((buffer[outcome.trigger_index] & 1) == 0 && (buffer[outcome.trigger_index - 1] & 1) == 1);
+  }
+
+  // ---- every interrupts-off span ends by the clock (Plan::span), even when every sample is late ----
+  // 100 kHz (10 us a sample) read in 15 us: 4000 samples nominally 40 ms take 60 ms. A span of 20 ms bounds them; the
+  // bench's int-wdt reset (3169721, test_timing over TCP) was a search burst counted in samples that ran past 300 ms.
+  {
+    static uint8_t buffer[4000];
+    const uint32_t kSpan = 20000000, kSlack = 3000000;   // ns (the host's cycles), the slack: a check's 64 samples and the host
+    g_read_us = 15;
+    g_marker = 1;
+    gWireGate.release();
+    gWireGate.endWindow();
+    {   // an immediate window: unbounded (span 0) it lasts its samples' time; bounded it ends at the span, slipped
+      sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kImmediate, 0, 0, 0, 0, 0, 0};
+      volatile uint8_t control = 0;
+      SpanIo io;
+      sampler::Outcome o = sampler::run(io, plan, control, [](uint32_t, uint32_t, uint64_t) {});
+      printf("  immediate, unbounded: %u samples, longest span %.1f ms\n", o.samples, io.longest / 1e6);
+      CHECK(o.samples == sizeof buffer && io.longest > 45000000u);
+      plan.span = kSpan;
+      SpanIo io2;
+      o = sampler::run(io2, plan, control, [](uint32_t, uint32_t, uint64_t) {});
+      printf("  immediate, span 20 ms: %u samples, longest span %.1f ms, slipped %d\n", o.samples, io2.longest / 1e6,
+             o.slipped);
+      CHECK(o.samples < sizeof buffer && o.samples > 1000 && o.slipped && io2.longest <= kSpan + kSlack);
+    }
+    {   // a search with no trigger: every burst ends at the span less the segment's rest (500 samples, 5 ms)
+      sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 100, 1000000, 100, kSpan};
+      plan.size = 600;
+      volatile uint8_t control = 0;
+      SpanIo io;
+      std::thread stopper([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        control = sampler::kControlAbort;
+      });
+      const sampler::Outcome o = sampler::run(io, plan, control, [](uint32_t, uint32_t, uint64_t) {});
+      stopper.join();
+      printf("  search, span 20 ms: %u bursts, longest %.1f ms\n", io.spans, io.longest / 1e6);
+      CHECK(o.aborted && io.spans >= 4 && io.longest <= kSpan - 5000000u + kSlack);
+    }
+    {   // a trigger whose segment's rest falls behind: the segment ends at the span, slipped, the trigger in place.
+        // 1500 samples, pretrigger 200: the rest (1299) nominally 13 ms, read in 25 us each it would take 32 ms
+      gWireGate.release();
+      g_read_us = 25;
+      sampler::Plan plan{buffer, 1500, 10000, 1000000000u, sampler::kEdge, 0, 1, 200, 1000000, 100, kSpan};
+      volatile uint8_t control = 0;
+      sampler::Outcome o;
+      SpanIo io;
+      std::atomic<bool> finished{false};
+      std::thread toggler([&] {
+        std::this_thread::sleep_for(std::chrono::microseconds(6500));   // past the pretrigger's 200 samples (5 ms)
+        g_marker = 0;
+        for (int k = 0; k < 500 && !finished.load(); ++k) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        control = sampler::kControlAbort;   // a run that never triggered must not hang the test
+      });
+      o = sampler::run(io, plan, control, [](uint32_t, uint32_t, uint64_t) {});
+      finished = true;
+      toggler.join();
+      g_marker = 1;
+      printf("  a segment past the span: %u samples (of 1500), trigger index %u, longest span %.1f ms, slipped %d\n",
+             o.samples, o.trigger_index, io.longest / 1e6, o.slipped);
+      CHECK(!o.aborted && o.trigger_index == 200 && o.samples > 201 && o.samples < 1500 && o.slipped);
+      CHECK(io.longest <= kSpan + kSlack);
+      if (!o.aborted && o.trigger_index == 200) {
+        CHECK((buffer[o.trigger_index] & 1) == 0 && (buffer[o.trigger_index - 1] & 1) == 1);   // turned: oldest first
+        CHECK((buffer[0] & 1) == 1 && (buffer[o.samples - 1] & 1) == 0);
+      }
+    }
+    g_read_us = 0;
   }
 
   printf("wire-gate: %d checks, %d failures\n", checks.load(), failures.load());
