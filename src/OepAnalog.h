@@ -138,7 +138,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   // ring[(f x channels + m) % ring_len_]
   uint8_t trig_type_ = 0, trig_slot_ = 0;
   uint32_t trig_value_ = 0;
-  uint32_t pretrigger_ = 0, arm_ = 0;
+  uint32_t pretrigger_ = 0;
   uint32_t follow_pre_ = 0;   // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
   uint32_t pre() const { return follow_ ? follow_pre_ : pretrigger_; }
   uint32_t ring_len_ = 0;                                 // values

@@ -307,7 +307,6 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     trig_type_ = trig_type;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
-    arm_ = pretrigger ? pretrigger : 1;   // a crossing needs the value before it
     samples_ = samples;
     total_hz_ = total_hz;
     rate_num_ = num;
@@ -660,9 +659,11 @@ uint64_t AnalogCapture::framesNs(uint64_t frames) const {   // frames x den / nu
   return fd / rate_num_ * 1000000000ull + fd % rate_num_ * 1000000000ull / rate_num_;
 }
 
-// Frames [searched_, got_) are in the ring: the first at or after arm_ where the value crosses (or force) is the
-// trigger - following a group, the frame nearest the group's trigger, once it has come; the segment then runs from
-// pretrigger frames before it (from frame 0 when there are fewer).
+// Frames [searched_, got_) are in the ring: the first from frame 1 (a crossing needs the value before it) where the
+// value crosses (or force) is the trigger - following a group, the frame nearest the group's trigger, once it has
+// come; the segment then runs from pretrigger frames before it to samples - pretrigger - 1 after it. A trigger before
+// the pretrigger has filled is taken too: the segment starts at frame 0 and is that much shorter (capture §3.3).
+// (It was looked for only from frame `pretrigger` on.)
 void AnalogCapture::search() {
   if (follow_) {
     searched_ = got_;
@@ -676,7 +677,7 @@ void AnalogCapture::search() {
     const uint32_t f = searched_;
     const uint16_t v = r[(static_cast<size_t>(f) * channels_ + trig_slot_) % ring_len_];
     bool hit = false;
-    if (f >= arm_)
+    if (f >= 1)
       hit = force_ || (have_prev_ && (up ? prev_ < trig_value_ && v >= trig_value_ : prev_ > trig_value_ && v <= trig_value_));
     prev_ = v;
     have_prev_ = true;
@@ -691,7 +692,7 @@ void AnalogCapture::search() {
 void AnalogCapture::hitAt(uint32_t t) {
   trig_frame_ = t;
   seg_first_ = t > pre() ? t - pre() : 0;
-  end_frame_ = seg_first_ + samples_;
+  end_frame_ = t + (samples_ - pre());   // short when fewer than pre() came before it (pre() < samples_)
 #if defined(ARDUINO_ARCH_ESP32)
   // the ring is the segment: frames already come past its end have taken the slots of its first ones
   if (static_cast<uint64_t>(got_) + kPretriggerRoom > end_frame_) trig_slipped_ = true;
@@ -770,9 +771,9 @@ void AnalogCapture::pollTriggered() {
 // order.
 void AnalogCapture::finishTriggered(bool cut) {
   const uint32_t s0 = seg_first_;
-  uint32_t n = samples_;
+  uint32_t n = end_frame_ - s0;   // the segment's frames (fewer than samples_ after an early trigger)
 #if defined(ARDUINO_ARCH_ESP32)
-  if (cut) n = got_ > s0 ? std::min(got_ - s0, samples_) : 0;   // drained just before (poll)
+  if (cut) n = got_ > s0 ? std::min(got_ - s0, n) : 0;   // drained just before (poll)
   const bool lost = overflow_;
   finish();
   std::rotate(buffer_, buffer_ + static_cast<size_t>(s0 % samples_) * channels_, buffer_ + ring_len_);
@@ -783,7 +784,7 @@ void AnalogCapture::finishTriggered(bool cut) {
   dma_channel_abort(dma_);
   adc_fifo_drain();
   adc_set_round_robin(0);
-  if (cut) n = written / channels_ > s0 ? std::min(written / channels_ - s0, samples_) : 0;
+  if (cut) n = written / channels_ > s0 ? std::min(written / channels_ - s0, n) : 0;
   const size_t first = static_cast<size_t>(s0) * channels_, values = static_cast<size_t>(n) * channels_;
   trig_slipped_ |= written > first + ring_len_;   // the DMA came round over the segment's start before it stopped
   for (size_t i = 0; i < values; ++i) buffer_[i] = ring_[(first + i) % ring_len_];
@@ -967,7 +968,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       const Result r = calibration(out, capacity);
       return refused(r) ? r : r;
     }
-    case ana::kOpForce: {   // waiting for the crossing: take the segment from the next frame on (after the pretrigger)
+    case ana::kOpForce: {   // waiting for the crossing: the trigger is the next frame looked at (capture §3.3)
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (bound()) return boundInGroup(*this, out, capacity);

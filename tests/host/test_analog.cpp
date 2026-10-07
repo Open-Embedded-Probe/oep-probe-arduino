@@ -381,7 +381,38 @@ static void testStop() {
   }
 }
 
+// trigger_index (capture §2, §3.3): the pretrigger when that many frames came before the crossing; a crossing or a force
+// before then is taken (it was not looked for before frame `pretrigger`) and gives a short segment - the frames before
+// it, its own and samples - pretrigger - 1 after it - with trigger_index the frames before it.
+static void testTriggerIndex() {
+  for (const int kind : {0, 1, 2}) {   // a crossing at frame 30; one at frame 5; a force at frame 5
+    Rig rig;
+    CHECK(rig.plan({26}) == 0);
+    Bytes p = configureRequest(10000, 100);
+    tlv(p, kCrit | ana::kTlvConfigureTrigger, {ana::kTriggerCrossUp, 0, 0xD0, 0x07, 0, 0});   // 2000
+    tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(10));
+    CHECK(ok(rig.op(ana::kOpConfigure, p)));
+    CHECK(ok(rig.op(ana::kOpStart)));
+    const uint32_t generation = getU32(rig.out.data() + 4);
+    const uint32_t t = kind == 0 ? 30 : 5;
+    convert(t, 100);
+    rig.cap.poll();
+    if (kind == 2) CHECK(ok(rig.op(ana::kOpForce)));
+    convert(200, kind == 2 ? 100 : 4000);
+    rig.cap.poll();
+    const uint32_t before = kind == 0 ? 10 : 5, n = before + 90;
+    CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateDone);
+    CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 + 37 && rig.out[1] == 1);
+    CHECK(getU32(rig.out.data() + 2 + 12) == n && getU32(rig.out.data() + 2 + 28) == before &&
+          (rig.out[2 + 32] & ana::kSegmentFlagShort) == 0);
+    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 2 * n);
+    if (kind != 2)
+      CHECK(getU16(rig.out.data() + 13 + 2 * (before - 1)) == 100 && getU16(rig.out.data() + 13 + 2 * before) == 4000);
+  }
+}
+
 int main() {
+  testTriggerIndex();
   testStop();
   testHole();
   testPlanReleaseForgets();

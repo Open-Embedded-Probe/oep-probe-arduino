@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Analog capture (all boards), a triggered one-shot (capture §3.3): a crossing or a force before the pretrigger has
+  filled is taken (it was looked for only from frame `pretrigger` on) and gives a short segment - the frames before it,
+  its own and samples - pretrigger - 1 after it, trigger_index the frames before it; with enough before it the segment
+  and trigger_index (= pretrigger) are as before. Host test (RP2 build); not run on hardware
+- (JA) アナログ（全ボード）のトリガ付きワンショット: pretrigger が溜まる前の横切りと force も取り（以前は frame `pretrigger` から
+  探した）、短い区画にします（trigger_index はあった分）。足りるときは今までどおり（trigger_index = pretrigger）。host test（RP2 の
+  build）。実機では未確認
 - (EN) ESP32-P4 logic, a one-shot with a trigger (capture §2, §3.3): the segment starts exactly pretrigger samples before
   the trigger, so trigger_index is the pretrigger, also when the start falls inside a byte (w < 8): it started on the
   byte holding that sample, up to 8 / w - 1 samples earlier (the bench: an edge with a pretrigger of 1000 gave
