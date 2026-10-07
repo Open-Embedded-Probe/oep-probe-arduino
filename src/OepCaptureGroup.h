@@ -59,8 +59,15 @@ class GroupTrack {
   // trackKeep(p) sets what its following keeps.
   virtual bool trackRate(uint32_t &num, uint32_t &den) const { num = den = 0; return false; }
   virtual uint32_t trackPretrigger() const { return 0; }
-  virtual bool trackCanKeep(uint32_t p) const { return p == 0; }
-  virtual void trackKeep(uint32_t p) { (void)p; }
+  // The trigger is known to the group only some time after its sample (trackLatencyNs, the trigger track's most: a
+  // DMA chunk to be searched, a loop round to come by); until then a follower's samples run on into its ring, so it
+  // keeps late_ns more than P_k and its segment - bind refuses one that cannot, cause 2 like a P_k it cannot keep.
+  virtual bool trackCanKeep(uint32_t p, uint64_t late_ns) const { (void)late_ns; return p == 0; }
+  virtual void trackKeep(uint32_t p, uint64_t late_ns) { (void)p; (void)late_ns; }
+  // The longest from the trigger's sample to trackTriggerNs giving it here and the group's poll handing it on: the
+  // track's own search delay plus kLoopNs for loop() to come round (a stop of another track, a long request).
+  static constexpr uint64_t kLoopNs = 100000000;
+  virtual uint64_t trackLatencyNs() const { return kLoopNs; }
   void setBound(bool on, uint16_t group_fn = 0) { bound_ = on; group_fn_ = on ? group_fn : 0; if (!on) following_ = false; }
   bool bound() const { return bound_; }
   uint16_t groupFn() const { return group_fn_; }   // the group's fn while bound (0: not bound)

@@ -683,8 +683,10 @@ static void testFollowerKeeps() {
   c.rate = 1000000;
   c.samples = 4096;
   CHECK(ok(configure(rig.cap, c, out)));
-  CHECK(rig.cap.trackCanKeep(0) && rig.cap.trackCanKeep(4095) && !rig.cap.trackCanKeep(4096));
-  rig.cap.trackKeep(400);
+  CHECK(rig.cap.trackCanKeep(0, 0) && rig.cap.trackCanKeep(4095, 0) && !rig.cap.trackCanKeep(4096, 0));
+  // the ring (128 KiB, w = 2: 524288 samples) less a chunk and the DMA's lead holds P_k and the trigger's latency
+  CHECK(rig.cap.trackCanKeep(4095, 400000000) && !rig.cap.trackCanKeep(4095, 500000000));
+  rig.cap.trackKeep(400, 100000000);
   const uint64_t start_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;   // the fake clock does not move
   CHECK(rig.cap.trackStartFollowing());
   dma.deliver(50, 0x55);    // samples 0 - 199: not yet the pretrigger

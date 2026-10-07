@@ -17,7 +17,7 @@
 # attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries), and of the ESP32-P4 logic capture's configure on a fake PARLIO RX
 # driver and heap (samples rounded down, streaming without internal RAM for stages), of the analog scale from a frontend's
-# range, and of the analog capture's RP2 build on fakes of its ADC and DMA (configure's order and refusals, the plan,
+# range, of a capture-group with the P4's logic leading and the analog (ESP32 build, a fake ADC driver) following, and of the analog capture's RP2 build on fakes of its ADC and DMA (configure's order and refusals, the plan,
 # stop and plan_release): g++ and a shim.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
@@ -106,6 +106,12 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -I"$
   "$here/test_capture.cpp" "$src/OepCapture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
   "$src/OepCaptureGroup.cpp"
 "$out-capture"
+# a capture-group on the ESP32-P4: the logic capture leading (PARLIO fake), the analog following (ADC continuous fake),
+# the trigger heard of a DMA chunk and a loop round late
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOEP_HOST_FAKE_ESP_ADC -I"$here/shim" -I"$src" \
+  -o "$out-group-follow" "$here/test_group_follow.cpp" "$src/OepCapture.cpp" "$src/OepAnalog.cpp" "$src/OepEndpoint.cpp" \
+  "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
+"$out-group-follow"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-analog-scale" "$here/test_analog_scale.cpp"
 "$out-analog-scale"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RP2_ADC -I"$here/shim" -I"$src" -o "$out-analog" \

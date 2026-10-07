@@ -147,17 +147,19 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       // the group's pretrigger (capture §4.1): the trigger track's P as a time, P_k samples on each follower; one that
       // cannot keep it is refused cause 2 (the resources) with its fn
       uint32_t keep[kMaxTracks] = {};
+      uint64_t late = 0;
       if (triggered) {
         const GroupTrack &t = *tracks_[trigger].track;
         uint32_t num_t = 0, den_t = 0;
         const uint32_t p = t.trackPretrigger();
         t.trackRate(num_t, den_t);
+        late = t.trackLatencyNs();   // what each follower runs on for before it hears of the trigger
         for (uint8_t k = 0; k < n; ++k) {
           if (chosen[k] == trigger) continue;
           const GroupTrack &f = *tracks_[chosen[k]].track;
           uint32_t num_k = 0, den_k = 0;
           f.trackRate(num_k, den_k);
-          if (p && (!groupPretrigger(p, num_t, den_t, num_k, den_k, keep[k]) || !f.trackCanKeep(keep[k])))
+          if ((p && !groupPretrigger(p, num_t, den_t, num_k, den_k, keep[k])) || !f.trackCanKeep(keep[k], late))
             return refuseAt(reg::core::kUnavailableCauseLimit, k);
         }
       }
@@ -176,7 +178,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         bound_[k] = chosen[k];
         tracks_[chosen[k]].track->setBound(true, me);
         tracks_[chosen[k]].track->following_ = triggered && chosen[k] != trigger;
-        if (tracks_[chosen[k]].track->following_) tracks_[chosen[k]].track->trackKeep(keep[k]);
+        if (tracks_[chosen[k]].track->following_) tracks_[chosen[k]].track->trackKeep(keep[k], late);
       }
       bound_count_ = n;
       trigger_ = triggered ? trigger : -1;

@@ -7,7 +7,7 @@
 
 #include <algorithm>
 
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
 #include <esp_timer.h>
 #if defined(CONFIG_IDF_TARGET_ESP32)
 #include <esp_efuse.h>
@@ -20,7 +20,7 @@
 #include <hardware/dma.h>
 #endif
 
-#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_ANALOG_RP2)
+#if defined(OEP_ANALOG_ESP) || defined(OEP_ANALOG_RP2)
 
 namespace oep {
 namespace ana = reg::fixture_analog;
@@ -37,7 +37,7 @@ constexpr size_t kRecordBytes = 2;
 constexpr bool kFirstFrameLost = false;                          // the first value is kept (see startNow)
 constexpr uint32_t kStartLagNs = 100000;                         // measured: the first value ~100 us after the start
 constexpr uint32_t kPretriggerRoom = 129;                        // see configure
-#elif defined(ARDUINO_ARCH_ESP32)
+#elif defined(OEP_ANALOG_ESP)
 constexpr Frontend kFrontends[] = {{0, 0, 950, 0}, {1, 0, 1250, 2500}, {2, 0, 1750, 6000}, {3, 0, 3100, 12000}};
 constexpr uint32_t kMinTotalHz = 611, kMaxTotalHz = 46000;       // above 46 kHz the P4 gives each value twice
 constexpr size_t kRecordBytes = 4;
@@ -54,7 +54,7 @@ constexpr uint32_t kPretriggerRoom = 1;
 constexpr size_t kFrontendCount = sizeof kFrontends / sizeof kFrontends[0];
 constexpr uint8_t kWidest = kFrontends[kFrontendCount - 1].number;
 constexpr uint16_t kFull = 4095;
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
 constexpr size_t kFrameBytes = 256;                              // a conversion frame: the time's correction is one
 constexpr uint32_t kFrameConversions = kFrameBytes / kRecordBytes;
 #endif
@@ -167,7 +167,7 @@ void AnalogCapture::forget() {
   trig_type_ = 0;
   pretrigger_ = 0;
   phase_ = 0;
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   overflow_ = overflow_seen_ = false;
 #endif
 }
@@ -348,7 +348,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     const uint8_t used[2] = {k, chosen[k]};
     w.put(ana::kTlvConfigureAnswerFrontendUsed, used, sizeof used);
   }
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   uint8_t ref[6] = {ana::kReferenceSourceInternal};   // the ADC's internal reference, about 1100 mV
   putU32(ref + 1, 1100);
 #else
@@ -427,9 +427,9 @@ bool AnalogCapture::startNow() {
 #if defined(OEP_ANALOG_RP2)
   ring_len_ = ringMode() ? kRingBytes / 2 : samples_ * channels_;
 #else
-  ring_len_ = samples_ * channels_;
+  ring_len_ = (follow_ && follow_frames_ > samples_ ? follow_frames_ : samples_) * channels_;
 #endif
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   adc_continuous_handle_cfg_t hc = {};
   hc.max_store_buf_size = 32 * kFrameBytes;   // 8 KiB: tens of ms of conversions between two polls
   hc.conv_frame_size = kFrameBytes;
@@ -533,7 +533,7 @@ void AnalogCapture::armDma(uint16_t *to, uint32_t count, bool ring) {
 #endif
 
 void AnalogCapture::finish() {
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   if (handle_) {
     adc_continuous_stop(handle_);
     adc_continuous_deinit(handle_);
@@ -561,7 +561,7 @@ void AnalogCapture::stopNow() {
   poll();   // what has come in
   if (state_ != ana::kStateWaiting && state_ != ana::kStateCapturing) return;
   if (state_ == ana::kStateWaiting) {   // no trigger yet: no segment
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
     finish();
 #else
     adc_run(false);
@@ -574,7 +574,7 @@ void AnalogCapture::stopNow() {
   } else if (ringMode()) {
     finishTriggered(true);
   } else {
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
     drain();
 #endif
     finish();
@@ -595,7 +595,7 @@ void AnalogCapture::stopNow() {
   }
 }
 
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
 bool IRAM_ATTR AnalogCapture::onOverflow(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *context) {
   static_cast<AnalogCapture *>(context)->overflow_ = true;
   return false;
@@ -693,15 +693,45 @@ void AnalogCapture::hitAt(uint32_t t) {
   trig_frame_ = t;
   seg_first_ = t > pre() ? t - pre() : 0;
   end_frame_ = t + (samples_ - pre());   // short when fewer than pre() came before it (pre() < samples_)
-#if defined(ARDUINO_ARCH_ESP32)
-  // the ring is the segment: frames already come past its end have taken the slots of its first ones
-  if (static_cast<uint64_t>(got_) + kPretriggerRoom > end_frame_) trig_slipped_ = true;
+#if defined(OEP_ANALOG_ESP)
+  // the buffer is the ring (the segment's frames, a follower's latency's more): frames already come a ring past the
+  // segment's first have taken its slots - a value of another channel up to a driver read (the room) ahead
+  if (static_cast<uint64_t>(got_) + kPretriggerRoom > static_cast<uint64_t>(seg_first_) + ring_len_ / channels_) trig_slipped_ = true;
 #endif
   phase_ = 1;
 }
 
-bool AnalogCapture::trackCanKeep(uint32_t p) const {
-  return p == 0 || (p <= maxPretrigger() && static_cast<uint64_t>(p) + kPretriggerRoom <= samples_);
+// A follower hears of the trigger late_ns after its sample at the most (the trigger track's search and loop()'s round,
+// GroupTrack::trackLatencyNs); its values run on into the ring meanwhile, so the ring holds the segment, those frames
+// and the room a driver read can run ahead. A trigger heard of later than that finds the segment's first frames
+// written over (slipped: state 6, error 2) - a follower whose ring cannot be that long is refused at bind (cause 2).
+uint32_t AnalogCapture::ringFrames(uint64_t late_ns) const {
+  const uint64_t late = samplesIn(late_ns, rate_num_, rate_den_) + 1;
+  const uint64_t frames = samples_ + late + kPretriggerRoom;
+  return frames > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(frames);
+}
+
+uint32_t AnalogCapture::ringCapacity(uint8_t channels) {
+#if defined(OEP_ANALOG_RP2)
+  return static_cast<uint32_t>(kRingBytes / 2 / (channels ? channels : 1));   // the DMA ring's values
+#else
+  return static_cast<uint32_t>(kMaxBytes / 2 / (channels ? channels : 1));    // the most a segment's buffer takes
+#endif
+}
+
+bool AnalogCapture::trackCanKeep(uint32_t p, uint64_t late_ns) const {
+  if (p && (p > maxPretrigger() || static_cast<uint64_t>(p) + kPretriggerRoom > samples_)) return false;
+  return rate_num_ != 0 && ringFrames(late_ns) <= ringCapacity(channels_);
+}
+
+// As the trigger track: a crossing is looked for at every drain of the driver's pool (a conversion frame), and loop()
+// comes round to hand it on.
+uint64_t AnalogCapture::trackLatencyNs() const {
+#if defined(OEP_ANALOG_ESP)
+  return kLoopNs + (total_hz_ ? static_cast<uint64_t>(kFrameConversions) * 1000000000u / total_hz_ : 0);
+#else
+  return kLoopNs;
+#endif
 }
 
 bool AnalogCapture::trackCanFollow() const {
@@ -716,6 +746,15 @@ bool AnalogCapture::trackStartFollowing() {
 #if defined(OEP_ANALOG_RP2)
   if (!ring_) ring_ = static_cast<uint16_t *>(aligned_alloc(kRingBytes, kRingBytes));
   if (!ring_) return false;
+#endif
+#if defined(OEP_ANALOG_ESP)
+  // the segment's buffer is the ring: long enough for the trigger's latency too (trackCanKeep checked it at bind)
+  const uint32_t frames = ringFrames(follow_late_ns_);
+  if (frames > ringCapacity(channels_)) return false;
+  uint16_t *buffer = static_cast<uint16_t *>(realloc(buffer_, static_cast<size_t>(frames) * channels_ * 2u));
+  if (!buffer) return false;
+  buffer_ = buffer;
+  follow_frames_ = frames;
 #endif
   follow_ = true;
   return startNow();
@@ -733,7 +772,7 @@ bool AnalogCapture::trackTriggerNs(uint64_t &ns) const {
 }
 
 void AnalogCapture::pollTriggered() {
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   drain();
 #else
   const bool running = dma_channel_is_busy(dma_);
@@ -772,11 +811,11 @@ void AnalogCapture::pollTriggered() {
 void AnalogCapture::finishTriggered(bool cut) {
   const uint32_t s0 = seg_first_;
   uint32_t n = end_frame_ - s0;   // the segment's frames (fewer than samples_ after an early trigger)
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   if (cut) n = got_ > s0 ? std::min(got_ - s0, n) : 0;   // drained just before (poll)
   const bool lost = overflow_;
   finish();
-  std::rotate(buffer_, buffer_ + static_cast<size_t>(s0 % samples_) * channels_, buffer_ + ring_len_);
+  std::rotate(buffer_, buffer_ + static_cast<size_t>(s0 % (ring_len_ / channels_)) * channels_, buffer_ + ring_len_);
   trig_slipped_ |= lost || (overflow_seen_ && overflow_frame_ >= s0);   // values were lost after the segment began
 #else
   adc_run(false);
@@ -800,7 +839,7 @@ void AnalogCapture::finishTriggered(bool cut) {
 // segment - the bits that marked it slipped (bit2) before.
 bool AnalogCapture::hole() const {
   if (ringMode()) return trig_slipped_;
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   return overflow_;
 #else
   return false;   // the RP2's immediate segment: the DMA writes it in place
@@ -834,7 +873,7 @@ void AnalogCapture::fail(uint8_t error) {
 void AnalogCapture::poll() {
   if (ringMode() && (state_ == ana::kStateWaiting || state_ == ana::kStateCapturing)) pollTriggered();
   else if (state_ == ana::kStateCapturing) {
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
     drain();
     if (frames_ >= samples_) finish();
 #else
@@ -868,7 +907,7 @@ size_t AnalogCapture::segmentInfo(uint8_t *out) const {   // the segment record 
   // bit2 (capture §2.2): a value taken one sample period or more after its time - conversions lost or overwritten
   // inside the segment put the values after them later than their count says
   if (ringMode() && trig_slipped_) flags |= ana::kSegmentFlagSlipped;
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   if (!ringMode() && overflow_) flags |= ana::kSegmentFlagSlipped;   // conversions were lost
 #endif
   out[32] = flags;
@@ -910,7 +949,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       out[0] = state_;
       putU32(out + 1, segment_ ? 1 : 0);   // the segment, complete or cut short by stop
       putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
       out[13] = (overflow_ || overflow_seen_ || trig_slipped_ || lost_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions were lost
 #else
       out[13] = (trig_slipped_ || lost_) ? ana::kStatusFlagDropped : 0;

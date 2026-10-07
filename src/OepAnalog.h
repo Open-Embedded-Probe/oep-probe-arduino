@@ -31,11 +31,14 @@
 #include "OepCaptureGroup.h"
 #include "OepPinTable.h"
 
-#if defined(ARDUINO_ARCH_ESP32)
+// The ESP32s' build (the ADC continuous driver); OEP_HOST_FAKE_ESP_ADC: a host test with a fake of that driver
+// (tests/host/shim), as the ESP32-P4 has it
+#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_ESP_ADC)
+#define OEP_ANALOG_ESP 1
 #include <esp_adc/adc_continuous.h>
 #endif
 // The RP2's build (its ADC round robin and DMA); OEP_HOST_FAKE_RP2_ADC: a host test with fakes of them (tests/host/shim)
-#if defined(ARDUINO_ARCH_RP2040) || (defined(OEP_HOST_FAKE_RP2_ADC) && !defined(ARDUINO_ARCH_ESP32))
+#if defined(ARDUINO_ARCH_RP2040) || (defined(OEP_HOST_FAKE_RP2_ADC) && !defined(OEP_ANALOG_ESP))
 #define OEP_ANALOG_RP2 1
 #endif
 
@@ -95,8 +98,11 @@ class AnalogCapture final : public Interface, public GroupTrack {
   bool trackArmed() const override { return got_ >= pre(); }
   bool trackRate(uint32_t &num, uint32_t &den) const override { num = rate_num_; den = rate_den_; return rate_num_ != 0; }
   uint32_t trackPretrigger() const override { return pretrigger_; }
-  bool trackCanKeep(uint32_t p) const override;   // a follower's P_k within its pretrigger limits (capture §4.1)
-  void trackKeep(uint32_t p) override { follow_pre_ = p; }
+  // a follower's P_k within its pretrigger limits (capture §4.1), and its ring long enough for the segment and what
+  // comes in while the trigger is on its way (late_ns)
+  bool trackCanKeep(uint32_t p, uint64_t late_ns) const override;
+  void trackKeep(uint32_t p, uint64_t late_ns) override { follow_pre_ = p; follow_late_ns_ = late_ns; }
+  uint64_t trackLatencyNs() const override;
   void trackForce() override { if (state_ == reg::fixture_analog::kStateWaiting) force_ = true; }
   uint32_t trackLoad() const override { return total_hz_; }
   bool trackStart() override { follow_ = false; return startNow(); }
@@ -140,6 +146,10 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
   uint32_t follow_pre_ = 0;   // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
+  uint64_t follow_late_ns_ = 0;   // ... and how long its trigger may take to come (the trigger track's latency)
+  uint32_t follow_frames_ = 0;    // ... and the frames of its ring (ESP32: the buffer, grown for it)
+  uint32_t ringFrames(uint64_t late_ns) const;   // a follower's ring: the segment, the latency's frames, the room
+  static uint32_t ringCapacity(uint8_t channels);   // the most frames a ring can hold
   uint32_t pre() const { return follow_ ? follow_pre_ : pretrigger_; }
   uint32_t ring_len_ = 0;                                 // values
   uint32_t got_ = 0, searched_ = 0;                       // complete frames so far; frames looked at
@@ -165,7 +175,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void finish();
   void forget();   // the plan released or replaced: no configuration, data or segment
   size_t segmentInfo(uint8_t *out) const;
-#if defined(ARDUINO_ARCH_ESP32)
+#if defined(OEP_ANALOG_ESP)
   adc_continuous_handle_t handle_ = nullptr;
   volatile bool overflow_ = false;           // the driver's pool overflowed: conversions were lost (flags bit2)
   static bool IRAM_ATTR onOverflow(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *context);

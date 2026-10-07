@@ -111,10 +111,22 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool trackRate(uint32_t &num, uint32_t &den) const override { num = rate_num_; den = rate_den_; return rate_num_ != 0; }
   uint32_t trackPretrigger() const override { return pretrigger_; }
   // a follower's P_k: what the ring gives back at this width, below the segment's samples (capture §4.1)
-  bool trackCanKeep(uint32_t p) const override {
-    return p == 0 || (p < samples_ && p <= static_cast<uint32_t>(kPretriggerBytes * 8 / (width_ ? width_ : 1)));
+  // ... and the ring holds it and what comes in while the trigger is on its way (late_ns), with a DMA chunk and the
+  // DMA's lead (kDmaAhead) to spare
+  bool trackCanKeep(uint32_t p, uint64_t late_ns) const override {
+    const uint8_t w = width_ ? width_ : 1;
+    if (p && (p >= samples_ || p > static_cast<uint32_t>(kPretriggerBytes * 8 / w))) return false;
+    const uint64_t late = samplesIn(late_ns, rate_num_, rate_den_) + 1;
+    return rate_num_ != 0 && (p + late) * w / 8 + kChunkMax + kDmaAhead <= kRingBytes;
   }
-  void trackKeep(uint32_t p) override { follow_pre_ = p; }
+  void trackKeep(uint32_t p, uint64_t late_ns) override { follow_pre_ = p; (void)late_ns; }
+  // As the trigger track: an edge is found when its DMA chunk (a descriptor, at most kChunkMax bytes) is done; a force
+  // is known at once. And loop() comes round.
+  static constexpr uint32_t kChunkMax = 4032;
+  uint64_t trackLatencyNs() const override {
+    const uint64_t samples = static_cast<uint64_t>(kChunkMax) * 8 / (width_ ? width_ : 1);
+    return kLoopNs + (rate_num_ ? samples * rate_den_ * 1000000000ull / rate_num_ : 0);
+  }
   uint32_t trackLoad() const override { return rate_den_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * rate_num_ / rate_den_) : 0; }
   bool trackStart() override { return groupOp(kOpStart); }
   void trackStop() override { groupOp(kOpStop); }

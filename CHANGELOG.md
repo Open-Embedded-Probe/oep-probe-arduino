@@ -1,6 +1,27 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Capture-group followers keep, beyond their segment, what comes in while the trigger is on its way (capture §4.1):
+  the trigger track says how late it may hear of its trigger (GroupTrack::trackLatencyNs: the ESP32-P4 logic a DMA chunk
+  - a descriptor, 4032 bytes at most: 32 ms at 1 MHz on one line, 51 ms at its lowest rate - the analog a conversion
+  frame, plus 100 ms for loop() to come round; a force is known at once), and bind refuses unavailable cause 2 with the
+  fn of a follower that cannot hold P_k, its segment and that much (trackCanKeep(p, late_ns)) - also without a
+  pretrigger. The ESP32 analog follower's ring is its segment's buffer grown to samples + the latency's frames + 129
+  (16384 frames on one channel at most); the ESP32-P4 logic follower's 128 KiB ring must hold P_k and the latency. The
+  bench (P4, 87f6d40: logic 1 MHz P 1000, analog 20 kHz 1024 samples P_k 20, an edge in the logic's first chunk): the
+  analog stopped in state 6, error 2 - its ring was the segment alone, and the trigger came after the frames following
+  it had written over the segment's first ones. The analog's ESP32 build now runs on a host fake of the ADC continuous
+  driver (OEP_HOST_FAKE_ESP_ADC); host test of that case (the follower's segment in order, its trigger frame the
+  group's trigger) and of the bind refusal; docs/implementation-limits §1.7. Not run on hardware
+- (JA) capture-group の追従するトラックは、区画に加えて、トリガが届くまでに入ってくる分も持ちます（capture §4.1）。トリガのトラックが
+  トリガを知るまでの遅れの上限を言い（GroupTrack::trackLatencyNs: ESP32-P4 の logic は DMA の 1 塊 = 記述子 1 つ、最大 4032 byte。
+  1 本 1 MHz で 32 ms、最も低いレートで 51 ms。アナログは変換の 1 フレーム。それに loop() の 1 周の 100 ms。force はすぐ分かる）、
+  P_k と区画とその分を持てない追従するトラックを bind が unavailable cause 2（TLV fn）で断ります（pretrigger が無くても）。ESP32 の
+  アナログは区画のバッファを samples + 遅れのフレーム + 129 に広げてリングにする（1 チャネル 16384 フレームまで）。ESP32-P4 の logic は
+  128 KiB のリングに P_k と遅れの分が入ること。ベンチ（P4、87f6d40: logic 1 MHz P 1000、アナログ 20 kHz 1024 samples P_k 20、logic の
+  最初の塊にエッジ）: アナログが state 6、error 2 で止まった。リングが区画だけで、トリガが届いたときにはその後のフレームが区画の頭を
+  上書きしていた。アナログの ESP32 の build を ADC continuous ドライバの host の fake（OEP_HOST_FAKE_ESP_ADC）で動かし、その場合
+  （追従する区画が順どおり、トリガのフレームが組のトリガ）と bind の断りの host test。docs/implementation-limits §1.7。実機では未確認
 - (EN) ESP32-P4 logic, a one-shot with a trigger: the pretrigger is copied out of the DMA ring through a map of the
   recent chunks, not as if the ring held the stream byte for byte. The driver closes a DMA descriptor early at every
   eof_data_len (65408 bytes of stream) and goes on at the next descriptor's start, so the rest of that descriptor - up

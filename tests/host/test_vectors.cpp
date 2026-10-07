@@ -919,7 +919,7 @@ class VecTrack final : public Interface, public GroupTrack {
   uint8_t trackState() const override { return state; }
   bool trackRate(uint32_t &n, uint32_t &d) const override { n = num; d = den; return true; }
   uint32_t trackPretrigger() const override { return pretrigger; }
-  bool trackCanKeep(uint32_t p) const override { return p <= max_pretrigger && p < samples; }
+  bool trackCanKeep(uint32_t p, uint64_t) const override { return p <= max_pretrigger && p < samples; }
   uint8_t state = 1;
   bool trigger = false, fired = false;
   uint64_t fired_ns = 0;
