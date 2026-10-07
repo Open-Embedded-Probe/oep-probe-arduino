@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #include "OepConfig.h"
@@ -677,6 +678,158 @@ int main() {
     CHECK(cfg6.bootAttachSkipped() && !tried(cfg6));
     CHECK(ok(set(cfg6, slotItem(cfg::kSlotAttachAtBoot, 0, 100), out)));
     CHECK(tried(cfg6));
+  }
+
+  // ---- the wifi item (proposed item 0x08, OepConfig.h): index ssid_len ssid pass_len passphrase, key index ----
+  {
+    struct FakeWifi final : WifiControl {
+      std::vector<WifiEntry> got;
+      int applied = 0;
+      Status st;
+      void apply(const WifiEntry *e, size_t n) override { got.assign(e, e + n); ++applied; }
+      Status status() const override { return st; }
+    };
+    static NullStream s7, s8;
+    static uint8_t rx7[512], tx7[512], rx8[512], tx8[512];
+    static Endpoint ep7(s7, rx7, sizeof rx7, tx7, sizeof tx7, {512, 1024, 2}, Endpoint::kUartBridge);
+    static Endpoint ep8(s8, rx8, sizeof rx8, tx8, sizeof tx8, {512, 1024, 2}, Endpoint::kUartBridge);
+    static Binds binds7, binds8;
+    static ProbeConfig plain(ep7, binds7), cfg7(ep8, binds8);
+    static FakeWifi fake;
+    ep7.add(plain);
+    ep8.add(cfg7);
+    cfg7.setWifi(&fake);
+    const uint8_t wraw = kWifiItemTag;
+    auto wv = [](uint8_t index, const char *ssid, const char *pass) {
+      Bytes v = {index, uint8_t(strlen(ssid))};
+      v.insert(v.end(), ssid, ssid + strlen(ssid));
+      v.push_back(uint8_t(strlen(pass)));
+      v.insert(v.end(), pass, pass + strlen(pass));
+      return v;
+    };
+    const char *secret = "s3cret-pass", *secret2 = "another-pass";
+    auto leaks = [&](const Bytes &b) {
+      for (const char *p : {secret, secret2})
+        if (std::search(b.begin(), b.end(), p, p + strlen(p)) != b.end()) return true;
+      return false;
+    };
+    // not declared without something that joins networks: unsupported with the tag as received
+    CHECK(unsupportedWith(set(plain, item(wraw, wv(0, "lab", secret)), out), out, wraw));
+    {
+      Bytes d(256);
+      const size_t n = plain.describe(d.data(), d.size());
+      bool found = false;
+      describeTlv(Bytes(d.begin(), d.begin() + n), 0, kWifiDescribeMax, &found);
+      CHECK(!found);
+    }
+    // declared: items lists 0x08, wifi_max 4
+    {
+      Bytes d(256);
+      const size_t n = cfg7.describe(d.data(), d.size());
+      const Bytes tl(d.begin(), d.begin() + n);
+      bool found = false;
+      const Bytes items = describeTlv(tl, 0, cfg::kTlvDescribeItems);
+      CHECK(std::find(items.begin(), items.end(), kWifiItemTag) != items.end());
+      const Bytes max = describeTlv(tl, 0, kWifiDescribeMax, &found);
+      CHECK(found && max.size() == 1 && max[0] == ProbeConfig::kMaxWifi);
+    }
+    // the list goes over in index order, whatever order the set had
+    CHECK(ok(set(cfg7, cat(item(wraw, wv(1, "home", secret2)), item(wraw | kTagCritical, wv(0, "lab", secret))), out)));
+    CHECK(fake.applied == 1 && fake.got.size() == 2 && fake.got[0].index == 0 && fake.got[1].index == 1 &&
+          strcmp(fake.got[0].ssid, "lab") == 0 && strcmp(fake.got[0].pass, secret) == 0 &&
+          strcmp(fake.got[1].pass, secret2) == 0);
+    // get: no passphrase (pass_len 0xFF, nothing after it)
+    uint32_t h1 = 0;
+    Bytes items = getItems(cfg7, &h1);
+    CHECK(!leaks(items));
+    {
+      bool found = false;
+      const Bytes v = itemValue(items, kWifiItemTag, {0}, &found);
+      CHECK(found && v.size() == 2 + 3 + 1 && v[1] == 3 && v[5] == kWifiPassHidden);
+    }
+    // the same set again: nothing changes, nothing applied again, the same hash
+    CHECK(ok(set(cfg7, item(wraw, wv(0, "lab", secret)), out)));
+    CHECK(fake.applied == 1 && hashIn(out) == h1);
+    // get's form sent back (pass_len 0xFF) keeps the passphrase: the round trip changes nothing
+    CHECK(ok(set(cfg7, items, out)));
+    CHECK(fake.applied == 1 && hashIn(out) == h1);
+    // ... and a new SSID with the passphrase kept
+    {
+      Bytes v = {0, 4, 'l', 'a', 'b', '2', kWifiPassHidden};
+      CHECK(ok(set(cfg7, item(wraw, v), out)));
+      CHECK(fake.applied == 2 && strcmp(fake.got[0].ssid, "lab2") == 0 && strcmp(fake.got[0].pass, secret) == 0);
+      CHECK(hashIn(out) != h1);
+      v[0] = 2;   // no entry 2: nothing to keep
+      CHECK(malformed(set(cfg7, item(wraw, v), out)));
+    }
+    // a changed passphrase changes the hash, though get shows the same bytes
+    CHECK(ok(set(cfg7, item(wraw, wv(0, "lab", secret)), out)));
+    const uint32_t h2 = hashIn(out);
+    const Bytes shown2 = getItems(cfg7);
+    CHECK(ok(set(cfg7, item(wraw, wv(0, "lab", "s3cret-pass2")), out)));
+    CHECK(hashIn(out) != h2 && getItems(cfg7) == shown2);
+    CHECK(ok(set(cfg7, item(wraw, wv(0, "lab", secret)), out)));
+    // the forms: an open network; 8-63 printable; 64 hex; anything else malformed; an SSID with 0x00 unsupported
+    CHECK(ok(set(cfg7, item(wraw, wv(2, "open", "")), out)));
+    CHECK(malformed(set(cfg7, item(wraw, wv(2, "x", "1234567")), out)));                 // 7 bytes
+    CHECK(malformed(set(cfg7, item(wraw, wv(2, "x", std::string(64, 'g').c_str())), out)));   // 64, not hex
+    CHECK(ok(set(cfg7, item(wraw, wv(2, "x", std::string(64, 'a').c_str())), out)));
+    CHECK(malformed(set(cfg7, item(wraw, wv(2, "x", "pass\tword")), out)));             // a control byte
+    CHECK(malformed(set(cfg7, item(wraw, wv(uint8_t(ProbeConfig::kMaxWifi), "x", "")), out)));   // index past wifi_max
+    CHECK(malformed(set(cfg7, item(wraw, wv(2, std::string(33, 'a').c_str(), "")), out)));      // ssid 33 bytes
+    CHECK(malformed(set(cfg7, item(wraw, wv(2, "", "")), out)));                          // ssid empty
+    {
+      Bytes v = wv(2, "x", "");
+      v.push_back(0);   // a byte past the passphrase
+      CHECK(malformed(set(cfg7, item(wraw, v), out)));
+      v = {2, 3, 'a', 0, 'b', 0};
+      CHECK(unsupportedWith(set(cfg7, item(wraw, v), out), out, wraw));
+    }
+    CHECK(malformed(set(cfg7, cat(item(wraw, wv(3, "a", "")), item(wraw, wv(3, "b", ""))), out)));   // one key twice
+    // the state: TLV 0x01 wifi state entry reason ipv4
+    fake.st.state = WifiControl::kStateConnected;
+    fake.st.entry = 1;
+    fake.st.rssi = -61;
+    const uint8_t ip[4] = {192, 168, 1, 23};
+    memcpy(fake.st.ipv4, ip, 4);
+    {
+      const Bytes st = stateOf(cfg7);
+      CHECK(st.size() == 9 + kTlvHeader + 8);
+      const Bytes w = describeTlv(st, 9, kWifiStateTlv);
+      CHECK(w.size() == 8 && w[0] == WifiControl::kStateConnected && w[1] == 1 && int8_t(w[3]) == -61 && w[4] == 192 &&
+            w[7] == 23);
+    }
+    // unset by index; saved and read back with the passphrases (never shown)
+    const uint8_t unset2[] = {1, 2, kWifiItemTag, 2};
+    out.assign(64, 0);
+    CHECK(ok(cfg7.handle(cfg::kOpUnset, unset2, sizeof unset2, out.data(), out.size())));
+    CHECK(fake.got.size() == 2 && fake.got[1].index == 1);
+    out.assign(64, 0);
+    CHECK(ok(cfg7.handle(cfg::kOpSave, nullptr, 0, out.data(), out.size())));
+    static NullStream s9;
+    static uint8_t rx9[512], tx9[512];
+    static Endpoint ep9(s9, rx9, sizeof rx9, tx9, sizeof tx9, {512, 1024, 2}, Endpoint::kUartBridge);
+    static Binds binds9;
+    static ProbeConfig cfg9(ep9, binds9);
+    static FakeWifi fake9;
+    ep9.add(cfg9);
+    cfg9.setWifi(&fake9);
+    cfg9.load();
+    cfg9.applySaved();
+    CHECK(fake9.applied == 1 && fake9.got.size() == 2 && strcmp(fake9.got[0].pass, secret) == 0 &&
+          strcmp(fake9.got[1].pass, secret2) == 0);
+    {
+      const Bytes st = stateOf(cfg9);
+      CHECK(st.size() >= 2 && st[1] == cfg::kStorageStateApplied);
+      uint32_t h = 0;
+      const Bytes got = getItems(cfg9, &h);
+      CHECK(!leaks(got) && !leaks(st) && hashIn(u32(h)) == uint32_t(st[2] | st[3] << 8 | st[4] << 16 | uint32_t(st[5]) << 24));
+    }
+    // every item unset: the list empty (Wi-Fi off)
+    const uint8_t unset01[] = {2, 2, kWifiItemTag, 0, 2, kWifiItemTag, 1};
+    out.assign(64, 0);
+    CHECK(ok(cfg9.handle(cfg::kOpUnset, unset01, sizeof unset01, out.data(), out.size())));
+    CHECK(fake9.applied == 2 && fake9.got.empty());
   }
 
   printf("config: %d checks, %d failures\n", checks, failures);

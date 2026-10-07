@@ -36,6 +36,11 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   `kUartBridge`) carries `0x00 <COBS> 0x00` frames with a CRC, and may carry raw bytes between them (a bind, §7); a
   message transport (`kVendorBulk`, `kHid`, `kTcp`) carries length-prefixed messages. More transports:
   `endpoint.addTransport(stream, rx, sizeof rx, kind, usb_interface)` (`03.Transports/MultipleTransports`).
+- **TCP**: a listening socket is one transport entry (kind 6) whose connections are each a transport of their own:
+  `endpoint.addTcpListener(tcp.slots(), rx, sizeof rx[0], n)` after every other transport, with `oep::TcpListener<n>`
+  (`OepTcp.h`, lwIP sockets) polled from `loop()` before the endpoint. A connection's answers and notifications stay on
+  it, a length over max_frame closes it, and a closed connection ends nothing (transports §1-§3). `OepWifi.h` joins the
+  networks of the settings' wifi item and announces `_oep._tcp` by mDNS (`03.Transports/WifiTcp`).
 - **Limits** `{max_frame, window, max_inflight}` are what confirm promises the host. A serial port's rx buffer holds an
   encoded frame: a little more than max_frame (`cobsFrameMax`).
 - fn 0's **describe** is yours to fill: `describeCore(w, model, unit_id, ...)` writes the firmware version, the model,

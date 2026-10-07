@@ -8,6 +8,7 @@
 
 2026-10-07 の仕様の規則の見直し（oep-spec の `docs/v1-rule-review-2026-10-07.ja.md` §2、§4）で、仕様から外れて実装の値になったものを
 ここに移した。firmware は oep-spec 0f455a0 の規則に沿う（0.0.29 の開発版から）。見直しで外した動き（boot_reset など）の記録は §2.6。
+TCP と Wi-Fi（port、mDNS、Wi-Fi の設定の提案、測った値）は §6。
 
 ## 1. どの platform にも共通
 
@@ -16,7 +17,7 @@
 | 値 | この実装 | 仕様 |
 |---|---|---|
 | max_op_ms（fn 0 の describe） | 10000 ms | 1〜600000 ms、値は probe が決める（core §7.5） |
-| restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 1500 ms、RP2040 / RP2350 2000 ms | probe が決める（oep-if-restart §1） |
+| restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。`-DOEP_WIFI=0` で 1500 ms）、RP2040 / RP2350 2000 ms | probe が決める（oep-if-restart §1） |
 | lease の既定（open の lease_ms 0） | 3000 ms | 1000〜60000 ms（core §6.4） |
 | 送り直しの表 | 8 件、1 件の応答は 1029 byte まで（それより大きい応答の送り直しは result_lost） | max_inflight 件以上（core §5.2） |
 | コンソールの送りの列 | ストリームごとに 256 byte | 大きさは probe が決める（oep-if-console §2） |
@@ -217,3 +218,79 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
 - **Linux の cdc_acm**: probe → host の burst が約 8 KiB を超えると、エラーなしに黙って失う。oep-client-python は、同時に待つ応答の量を
   6 KiB、購読の min_bytes を 2 KiB に抑える。
 - 変換器ごとに通った port_speed の速さの記録は、oep-spec の記録（`docs/link-measurements.ja.md`、`docs/uart-speed-negotiation.ja.md`）にある。
+
+## 6. TCP と Wi-Fi（classic ESP32）
+
+OEP を TCP で運ぶ（oep-spec transports §1、§2、§3）。待ち受ける port と、host が probe を見つける方法は仕様の外なので、ここに書く。
+TCP は信頼できる手元のネットワークか、認証したトンネルの中でだけ使う（OEP は認証を持たない、transports §1、security §1）。
+
+### 6.1 経路
+
+- **port は 7450**（`examples/Firmware/OepProbe` の `kTcpPort`、`03.Transports/WifiTcp` の `kPort`）。待ち受けの socket 1 つが fn 0 の describe の
+  経路 1 つ（kind 6、interface 0xFF）。classic ESP32 の firmware では UART bridge が 0、TCP が 1。待ち受けは、ほかの経路をすべて足した後に
+  足す（`Endpoint::addTcpListener`。後から足す経路は断られる: シリアルの口の index が describe の index のままであるため）。
+- **同時の接続は 3 つ**（`TcpListener<3>`）。どの接続も別の経路で、confirm の transport TLV は 1 を返す。max_frame / window / max_inflight は
+  接続ごとに同じ値（classic ESP32: 512 / 1024 / 2）。4 つ目の接続は受けてすぐ閉じる。
+- 接続ごとに受けの 1 KiB と送りの 2 KiB のバッファ。1 回の poll の応答は flush でまとめて送る（長さと本体が 1 つの segment で出る）。送りの
+  バッファがいっぱいで、socket が 2000 ms（`TcpSlot::kWriteWaitMs`）受け取らなければ、その接続は死んだとして閉じる（読まなくなった host に
+  probe が止められない上限）。TCP keepalive: 10 s 黙ったら 5 s ごとに 3 回、答えが無ければ閉じる。
+- max_frame を超える長さを読んだら、その接続を閉じる（transports §1）。フレームの途中の休みでは読み直さない（transports §2）。
+- 接続が閉じても、セッション、ロック、購読、送り直しの表は残る（transports §3）。閉じた接続に送るはずの応答と通知は捨てる。同じ slot に
+  来た次の接続は、前の接続の通知を受けない（読みかけのフレームも捨てる）。同じ session id の open が別の接続から来れば、lease を始め直し、
+  通知はその接続に移る（core §6.2）。
+- restart（`oep.probe.restart`）: 応答を送った後、待ち受けを閉じ（再起動する前の probe が新しい接続を受けないように）、送りのバッファを
+  socket に渡し、100 ms 待ってから再起動する。**restart_max_ms は Wi-Fi の build で 15000**: 起動、scan、接続、アドレスまでで、応答から
+  新しい接続の confirm が答えるまで ATOM で 5.5〜6.9 s（10 回、2026-10-07）。その倍。設定の前の方の entry が見えて断られると、1 つあたり
+  最長 15 s 延びる（§6.3）。
+
+### 6.2 見つけ方（mDNS）
+
+- host 名 `oep-<unit_id>.local`、service `_oep._tcp`（port 7450）、instance 名 `OEP <unit_id>`、TXT `unit_id=<unit_id>`。
+  host は名指した unit_id の probe を、ほかの経路と同じく describe の unit_id で確かめる。
+- アドレスは、ほかの経路（シリアルの口）から probe.config の state の wifi の TLV（§6.3）でも分かる。
+
+### 6.3 Wi-Fi の設定（probe.config の wifi の項目、提案）
+
+ビルドに認証情報は入れない。どのネットワークに入るかは probe の設定で、ほかの項目と同じく set / save / unset する。この項目は
+**まだ仕様に無い**（oep-spec に提案中）。この実装は次の形で持ち、仕様に入ったら番号を合わせる（`src/OepConfig.h` の `kWifi*`）。
+
+| 何 | 値 |
+|---|---|
+| 項目 0x08 wifi | index(u8)、ssid_len(u8)、ssid、pass_len(u8)、passphrase。キーは index |
+| describe 0x46 wifi_max | u8: entry の数の上限（この実装は 4） |
+| state の TLV 0x01 wifi | state(u8: 0 切、1 接続中、2 接続、3 どれも失敗して待ち)、entry(u8: 使っている / 試している index、0xFF なし)、reason(u8: 0 なし、1 見つからない、2 認証、3 アドレスが来ない、4 そのほか)、rssi(i8、dBm、接続の間)、ipv4(4 byte、接続の間) |
+
+- ssid は 1〜32 byte（0x00 を含むものは unsupported）。passphrase は無し（pass_len 0、開いたネットワーク）、8〜63 byte の 0x20〜0x7E、
+  または 16 進の 64 文字。ほかは malformed。index は wifi_max 未満。
+- **passphrase は書くだけ**: get は passphrase を返さない（pass_len は、あれば 0xFF、無ければ 0、後ろに何も付けない）。set の pass_len 0xFF は
+  「その index の今の passphrase のまま」（その index が無ければ malformed）: get の形をそのまま送り返しても変わらない。hash は passphrase の
+  byte を含まず、passphrase が変わるたびに変わる乱数を含む（ロックなしの get から passphrase を推せないため）。state にも出ない。
+- 保存は NVS（ほかの設定と同じ、暗号化しない）。flash を読める人には読める。
+- 動き: set か起動時の適用の 300 ms 後（set の応答が先に出る）に、scan（1 channel 120 ms）。scan で見えた entry を index の順に試す
+  （1 つも見えなければ全部を順に。隠した SSID のため）。1 つあたり最長 15 s。最初に IPv4 のアドレスが来たものを使う。全部だめなら 5 s 待って
+  scan からやり直す。つながった後に切れたら、すぐ scan からやり直す。使っている entry が変わらない set では切らない。entry が 0 個なら
+  radio を止める。modem sleep は切る（要求が次の beacon まで待たされないように）。Wi-Fi の driver 自身の保存は使わない。
+- 失敗の reason は driver の理由を丸めたもの。passphrase も SSID もログに出さない（UART は OEP の経路でログを出さない、probe guide §3）。
+
+### 6.4 測った値（M5Stack ATOM、2026-10-07、家庭の AP、host は WSL2 の NAT の後ろ）
+
+- clock の往復: 中央値 8.7 ms、99 % 44 ms、最大 56 ms（20 s で 1558 回）。
+- `oep linktest`（505 byte のフレーム、各 300）: in x1 26〜71 KB/s、in x2 103 KB/s、out 23〜31 KB/s、duplex 22〜28 KB/s。どれも壊れ 0、
+  失い 0。UART の 115200（約 11 KB/s）より速い。
+- 2 つ in flight で max_frame いっぱいの応答を続けると、ときどき 1〜2 s（最長 4 s）答えが止まってから続きが来る（Wi-Fi の再送。Windows から
+  直接でも同じ）。答えは失われない。host の TCP の待ち（oep-client-python は 15 s）はこれを越える。modem sleep を切る前は ping でも 0.5 s
+  を越えた。
+- 2 つの接続: 一方が open、もう一方の open は locked、lock_state で持ち主が見える。接続が閉じてもロックは残り、別の接続から同じ id の
+  open で続けられる。シリアルの口も同時に答える。
+- 起動から接続まで: 約 4〜7 s（scan、接続、DHCP）。
+
+### 6.5 限界
+
+- **sampler の窓**: logic の sampler は窓の間（最大 164 ms / 250 ms）core 0 の割り込みを止める。Wi-Fi と lwIP の task も core 0 なので、その
+  間 TCP は止まる（落ちはしない。hardware の試験でキャプチャは TCP でも通った）。
+- build の大きさ: classic ESP32 の firmware は Wi-Fi で 1.07 MB（app の区画 1.31 MB の 81 %）、RAM 107 KB。`-DOEP_WIFI=0` で外せる
+  （0.42 MB）。Wi-Fi の無い build に wifi の項目は無い（describe の items に出ない）。
+- **ESP32-P4** は radio を持たない。arduino-esp32 には別のチップ（ESP32-C6 など）を SDIO で使う ESP-Hosted の道があるが、この firmware は
+  使わない（`OepWifi.h` は SOC_WIFI_SUPPORTED のチップだけ）。手元の P4 のボードには co-processor が無く、試していない。
+- **RP2040 / RP2350**（Pro Micro RP2350 を含む）: Wi-Fi なし。Pico W / Pico 2 W の CYW43 は使っていない。
+- IPv4 だけ。TLS も認証も無い（OEP の外。要るならトンネルの中で使う）。

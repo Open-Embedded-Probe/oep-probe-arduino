@@ -73,19 +73,39 @@ void Endpoint::freeze() {
 
 bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
                             bool flush_after_burst) {
-  if (transport_count_ >= kMaxTransports) return false;
+  if (transport_count_ >= kMaxTransports || listener_) return false;
   if (serialKind(kind) && limits_.max_frame > kMaxSerialFrame) return false;
   Transport &t = transports_[transport_count_];
   t.stream = &stream;
   t.kind = kind;
   t.usb_interface = usb_interface;
-  t.index = static_cast<uint8_t>(transport_count_);
+  t.index = entries_++;
   t.owner = this;
   if (serialKind(kind)) t.serial.reset(rx_buffer, rx_capacity, decode_, sizeof decode_);
   else t.reader.reset(rx_buffer, rx_capacity, limits_.max_frame);
   t.reader.setTcp(kind == kTcp);   // no restart on a pause inside a frame (transports §2)
   t.flush_after_burst = flush_after_burst;
   ++transport_count_;
+  return true;
+}
+
+bool Endpoint::addTcpListener(Connection *const *slots, uint8_t *const *rx, size_t rx_capacity, size_t count) {
+  if (!count || transport_count_ + count > kMaxTransports || rx_capacity < limits_.max_frame) return false;
+  for (size_t k = 0; k < count; ++k) {
+    Transport &t = transports_[transport_count_++];
+    t.stream = slots[k];
+    t.conn = slots[k];
+    t.seen = 0;
+    t.kind = kTcp;
+    t.usb_interface = 0xff;
+    t.index = entries_;   // every slot: the listener's one entry
+    t.owner = this;
+    t.reader.reset(rx[k], rx_capacity, limits_.max_frame);
+    t.reader.setTcp(true);
+    t.flush_after_burst = true;   // a slot buffers a poll's frames and sends them together when flushed
+  }
+  ++entries_;
+  listener_ = true;
   return true;
 }
 
@@ -200,7 +220,7 @@ bool Endpoint::sendEvents() {
 
 void Endpoint::push() {
   lapse();
-  if (!locked_) return;
+  if (!locked_ || pushGone()) return;   // the subscriber's TCP connection closed: its notifications go nowhere
   if (!sendEvents()) return;
   size_t room = tx_capacity_ - kPushHeader;
   if (room > static_cast<size_t>(limits_.max_frame) - kPushHeader) room = limits_.max_frame - kPushHeader;
@@ -262,7 +282,7 @@ Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, s
   }
   const uint16_t min_bytes = getU16(payload);
   const uint32_t max_delay = getU32(payload + 2);
-  push_ = current_;   // pushes and events go where the subscription came from
+  pushHere();   // pushes and events go where the subscription came from (on TCP: that connection)
   interfaces_[i]->subscribe(true);
   subscribed_[i] = true;
   push_seq_[i] = 0;
@@ -296,6 +316,15 @@ void Endpoint::poll() {
       }
       t.serial.idle(rawSink, &t);
     } else {
+      if (t.conn) {   // a TCP slot: a new connection starts with a fresh reader (and none of the old one's pushes)
+        const uint32_t id = t.conn->connection();
+        if (id != t.seen) {
+          t.seen = id;
+          t.reader.consume();
+          (void)t.reader.overlong();
+        }
+        if (!id) continue;
+      }
       uint8_t chunk[2048];
       for (int avail; (avail = t.stream->available()) > 0;) {
         size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
@@ -307,6 +336,10 @@ void Endpoint::poll() {
           handleMessage(t.reader.message(), t.reader.length());
           if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
           t.reader.consume();
+        }
+        if (t.conn && t.reader.overlong()) {   // a length over max_frame: the connection closes (transports §1)
+          t.conn->drop();
+          break;
         }
       }
     }
@@ -773,7 +806,7 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
   if (locked_ && holder_ != session && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
   if (locked_ && holder_ != session) releaseLock();   // force: the old session is released first (core §6.4, §9)
   if (locked_) {
-    push_ = current_;   // a resent open: the notifications go to this transport (core §6.2)
+    pushHere();   // a resent open: the notifications go to this transport (core §6.2)
   } else {
     if (owner) memcpy(owner_, owner, owner_len);
     owner_length_ = owner ? static_cast<uint8_t>(owner_len) : 0;
@@ -1037,7 +1070,8 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
     if (sketch) memcpy(scratch_ + ops, probe_tlv_, sketch);
     TlvWriter w(scratch_ + ops + sketch, sizeof scratch_ - ops - sketch);
     for (size_t i = 0; i < transport_count_; ++i) {
-      const uint8_t v[3] = {static_cast<uint8_t>(i), transports_[i].kind, transports_[i].usb_interface};
+      if (i && transports_[i].index == transports_[i - 1].index) continue;   // a listener's slots: one entry
+      const uint8_t v[3] = {transports_[i].index, transports_[i].kind, transports_[i].usb_interface};
       w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
     }
     w.u32(reg::core::kTlvDescribeMaxOpMs, max_op_ms_);

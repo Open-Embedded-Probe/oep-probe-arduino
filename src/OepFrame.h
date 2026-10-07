@@ -39,8 +39,11 @@ class FrameReader {
   // the prefix was a stray byte from another program and the reader starts over on the next byte.
   static constexpr uint32_t kIdleResyncMs = 200;
   // TCP (transports §2): a pause inside a frame is normal there and does not restart the read. A length over max_frame is
-  // still discarded up to the next pause (transports §1 asks a TCP probe to close the connection; a Stream cannot).
+  // discarded up to the next pause, and overlong() says so: transports §1 asks a TCP probe to close the connection
+  // instead, which the endpoint does when the transport is a Connection (a plain Stream cannot be closed).
   void setTcp(bool on) { tcp_ = on; }
+  // A length over max_frame was read since the last call (the reader is discarding).
+  bool overlong() { const bool was = overlong_; overlong_ = false; return was; }
 
  private:
   enum class State : uint8_t { LengthLow, LengthHigh, Body, Discard };
@@ -53,7 +56,7 @@ class FrameReader {
   uint32_t dropped_ = 0;
   uint32_t resyncs_ = 0;
   uint32_t last_byte_ms_ = 0;
-  bool tcp_ = false;
+  bool tcp_ = false, overlong_ = false;
   bool gapRestarts() const { return state_ == State::Discard || (state_ != State::LengthLow && !tcp_); }
 };
 

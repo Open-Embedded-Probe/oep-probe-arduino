@@ -27,6 +27,20 @@ class PinTable;
 
 class Endpoint;
 
+// One accepted TCP connection at a time (transports §1): a Stream while it lasts. A listening socket is one transport
+// entry of fn 0's describe (kind 6, interface 0xFF); each connection accepted on it is a transport of its own -
+// confirm's transport TLV names the listener's entry, while the revision, max_frame / window / max_inflight and the
+// notifications' destination are the connection's (core §7.1, §11.4). A slot holds one connection; the endpoint takes
+// a few slots per listener (Endpoint::addTcpListener). OepTcp.h has the ESP32's (lwIP sockets).
+class Connection : public Stream {
+ public:
+  // A number that changes with every connection the slot takes (0: none now). The endpoint starts that connection's
+  // reader afresh, and notifications subscribed on a connection go nowhere once it changes.
+  virtual uint32_t connection() const = 0;
+  // Close the connection now (a length over max_frame, transports §1). What it held is dropped.
+  virtual void drop() = 0;
+};
+
 // oep.probe.plan (oep-if-plan): plan_apply (0x01) and plan_release (0x02), describe plan_roles (0x40). The endpoint lists
 // it itself, after every interface the sketch added, when one of them has plan roles (Interface::planRoles), and not
 // otherwise (oep-if-plan: listed by a probe whose interfaces have plan roles, at most one). A sketch never adds it.
@@ -95,7 +109,8 @@ class Endpoint {
     kHid = reg::core::kTransportKindHid, kTcp = reg::core::kTransportKindTcp,
   };
   static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
-  static constexpr size_t kMaxTransports = 4;
+  // Transports, a TCP listener's connection slots each counted (addTcpListener).
+  static constexpr size_t kMaxTransports = 8;
   // A serial port's frames are decoded here (one at a time): max_frame may not exceed this with a serial port.
   static constexpr size_t kMaxSerialFrame = 2048;
 
@@ -124,8 +139,15 @@ class Endpoint {
   // rx: one whole frame for this transport (a serial port: its encoded candidate, cobsFrameMax(max_frame)). The
   // transport the constructor took is transport 0 (the one a DirectTransport, if any, belongs to). The index is the
   // order of adding, as the describe lists them and the binds name the serial ports.
+  // After a TCP listener (below) no transport is added: the serial ports' indexes are the describe entries' (binds).
   bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface = 0xff,
                     bool flush_after_burst = false);
+  // A TCP listening socket (transports §1): one entry in fn 0's describe (kind 6, interface 0xFF), added after every
+  // other transport, with `count` connection slots - each its own transport here (rx[k]: max_frame + 2 bytes). A
+  // connection's requests are answered on it, its subscriptions' notifications go to it alone, a length over
+  // max_frame closes it, and a pause inside a frame never restarts its read (transports §2). The session and the lock
+  // are the probe's one, shared with every other transport (transports §3).
+  bool addTcpListener(Connection *const *slots, uint8_t *const *rx, size_t rx_capacity, size_t count);
   size_t transportCount() const { return transport_count_; }
   bool isSerialPort(size_t index) const { return index < transport_count_ && serialKind(transports_[index].kind); }
   // The raw side of the serial ports (the binds); nullptr: raw bytes are dropped.
@@ -271,6 +293,8 @@ class Endpoint {
  private:
   struct Transport {
     Stream *stream = nullptr;
+    Connection *conn = nullptr;   // a TCP listener's slot (addTcpListener)
+    uint32_t seen = 0;            // the slot's connection the reader belongs to
     FrameReader reader;
     SerialReader serial;
     uint8_t kind = kVendorBulk, usb_interface = 0xff, index = 0;
@@ -290,8 +314,13 @@ class Endpoint {
   size_t appendOwner(uint8_t *out, size_t room, uint8_t tag) const;
   Transport transports_[kMaxTransports];
   size_t transport_count_ = 0;
+  uint8_t entries_ = 0;   // fn 0's describe transport entries (a listener's slots are one)
+  bool listener_ = false;
   size_t current_ = 0;   // the transport the message being handled came in on (results go back there)
   size_t push_ = 0;      // the transport the push subscriptions came in on
+  uint32_t push_conn_ = 0;   // and its connection, on a TCP slot (another connection there gets none of them)
+  void pushHere() { push_ = current_; push_conn_ = transports_[current_].seen; }
+  bool pushGone() const { return transports_[push_].conn && transports_[push_].conn->connection() != push_conn_; }
   uint8_t *tx_;
   size_t tx_capacity_;
   Limits limits_;

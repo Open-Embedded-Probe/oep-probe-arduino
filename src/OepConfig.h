@@ -24,6 +24,16 @@
 //   0x07 disable channel(u16)                            key channel: never used, driven or configured (not on this
 //                                                        board): every request naming it is unavailable cause 5, and
 //                                                        the pin is never parked; describe still offers it
+//   0x08 wifi  index(u8) ssid_len(u8) ssid pass_len(u8) passphrase   key index (PROPOSED, not yet in oep-spec: the
+//              layout this probe implements until the specification has it, kWifi* below). A network the probe joins
+//              to serve OEP over TCP: entries tried in index order (a scan first: only those seen, unless none is
+//              seen), the first that connects is kept, and the list is tried again after the link goes. ssid 1-32
+//              bytes (no 0x00 here: unsupported); passphrase none (pass_len 0, an open network), 8-63 bytes 0x20-0x7E
+//              or 64 hex digits, else malformed. The passphrase is write-only: get carries pass_len 0xFF and no
+//              passphrase for an entry that has one (0 for none); a set with pass_len 0xFF keeps the passphrase the
+//              entry has (malformed when there is no such entry). The hash never covers the passphrase itself (a
+//              random token that changes when one does). Up to kMaxWifi entries (describe wifi_max 0x46, proposed);
+//              state carries the link (TLV 0x01 wifi, proposed): state(u8) entry(u8) reason(u8) rssi(i8) ipv4(4).
 // Every item has one form (probe.config §1): a value of any other length is malformed, critical or not. The probe
 // keeps every item's bytes as the host sent them (the critical bit cleared), ordered by tag, then by key compared as
 // numbers - the order get pages them in. The hash is the probe's own: CRC-32 of those bytes (a host never computes it).
@@ -52,12 +62,49 @@ namespace oep {
 
 class Endpoint;
 
+// The wifi item (proposed oep.probe.config item 0x08, above): the numbers this probe uses until the registry has them.
+constexpr uint8_t kWifiItemTag = 0x08;        // item: index(u8) ssid_len(u8) ssid pass_len(u8) passphrase
+constexpr uint8_t kWifiDescribeMax = 0x46;    // describe: wifi_max(u8)
+constexpr uint8_t kWifiStateTlv = 0x01;       // state answer TLV: state(u8) entry(u8) reason(u8) rssi(i8) ipv4(4 bytes)
+constexpr uint8_t kWifiPassHidden = 0xFF;     // get's pass_len for an entry with a passphrase; set: keep it
+
+// One network the probe may join (the wifi item, decoded).
+struct WifiEntry {
+  uint8_t index = 0, ssid_length = 0, pass_length = 0;
+  char ssid[33] = {};
+  char pass[65] = {};
+  bool operator==(const WifiEntry &o) const {
+    return index == o.index && ssid_length == o.ssid_length && pass_length == o.pass_length &&
+           memcmp(ssid, o.ssid, ssid_length) == 0 && memcmp(pass, o.pass, pass_length) == 0;
+  }
+  bool operator!=(const WifiEntry &o) const { return !(*this == o); }
+};
+
+// What joins the networks (OepWifi.h on an ESP32): the settings hand it their list, it reports the link.
+class WifiControl {
+ public:
+  enum : uint8_t { kStateOff = 0, kStateConnecting = 1, kStateConnected = 2, kStateFailed = 3 };
+  enum : uint8_t { kReasonNone = 0, kReasonNotFound = 1, kReasonAuth = 2, kReasonNoAddress = 3, kReasonOther = 4 };
+  static constexpr uint8_t kNoEntry = 0xFF;
+  struct Status {
+    uint8_t state = kStateOff, entry = kNoEntry, reason = kReasonNone;
+    int8_t rssi = 0;          // dBm while connected (0: not known)
+    uint8_t ipv4[4] = {};
+  };
+  // The whole list, in index order (count 0: Wi-Fi off). Called when it changes; the change may take effect a moment
+  // later (the answer that set it goes out first).
+  virtual void apply(const WifiEntry *entries, size_t count) = 0;
+  virtual Status status() const = 0;
+};
+
 class ProbeConfig final : public Interface {
  public:
   static constexpr size_t kMaxPlaces = 2, kMaxSlots = 4, kMaxUarts = 4, kMaxName = 32;
   // The items' TLV bytes this probe holds and saves: describe storage max_bytes. The identity table saved with
   // them has its own room (kMaxIds), so a configuration of kMaxItems bytes always fits (probe.config §2).
-  static constexpr size_t kMaxItems = 384, kMaxIds = 320;
+  // (kMaxItems: 384 for the other items, and four wifi entries of the longest form, 102 bytes each with the header)
+  static constexpr size_t kMaxItems = 800, kMaxIds = 320;
+  static constexpr size_t kMaxWifi = 4;   // wifi entries (describe wifi_max)
   static constexpr size_t kMaxLabels = 8;
 
   ProbeConfig(Endpoint &endpoint, Binds &binds) : endpoint_(endpoint), binds_(binds) {
@@ -70,6 +117,8 @@ class ProbeConfig final : public Interface {
   bool addUart(FixtureUart &uart);
   // The pins whose idle state the idle item sets and the disable item takes away (without it, both are refused).
   void setPins(PinTable *pins) { pins_ = pins; endpoint_.setPins(pins); }   // the endpoint's plan replacements too
+  // The networks the wifi item lists go to `wifi` (before load(); without one the item is not declared).
+  void setWifi(WifiControl *wifi) { wifi_ = wifi; }
 
   // Read what was saved, then apply it: both after the sketch's last endpoint.add(). The saved items keep the
   // (name, instance, revision) of every interface they name and are renumbered to where those are now; one gone (or of
@@ -139,7 +188,16 @@ class ProbeConfig final : public Interface {
     UartItem uarts[kMaxUarts];
     Label labels[kMaxLabels];
     uint64_t disabled = 0;         // the disable items' channels (under 64; a higher one names no pin here)
+    WifiEntry wifi[kMaxWifi];      // the wifi items, in index order
+    size_t wifi_count = 0;
   };
+  WifiControl *wifi_ = nullptr;
+  WifiEntry wifi_entries_[kMaxWifi];   // what wifi_ was given
+  size_t wifi_count_ = 0;
+  uint32_t wifi_token_ = 0;            // stands for the passphrases in the hash; new whenever one changes
+  // An item as get shows it: a wifi item without its passphrase (pass_len 0xFF when it has one). Returns its TLV
+  // length; out nullptr: only the length.
+  static size_t shown(uint8_t tag, const uint8_t *v, size_t vlen, uint8_t *out);
   Endpoint &endpoint_;
   Binds &binds_;
   PinTable *pins_ = nullptr;
@@ -178,7 +236,7 @@ class ProbeConfig final : public Interface {
   static bool itemBefore(uint8_t tag_a, const uint8_t *a, size_t alen, uint8_t tag_b, const uint8_t *b, size_t blen);
   static bool insertItem(uint8_t *store, size_t &length, size_t capacity, uint8_t tag, const uint8_t *value, size_t vlen);
   static void removeItems(uint8_t *store, size_t &length, uint8_t tag, const uint8_t *key, size_t key_length);
-  uint32_t hash() const { return crc32Of(items_, items_length_); }   // the probe's own choice (probe.config §2)
+  uint32_t hash() const;   // the probe's own choice (probe.config §2): CRC-32 of the items as get shows them, the token
   DriveLevels driveLevels() const;
   static uint64_t disabledIn(const uint8_t *items, size_t length);
   void setDisabled(uint64_t mask);   // the PinTable's and the endpoint's

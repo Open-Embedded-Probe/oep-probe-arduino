@@ -36,6 +36,7 @@ the fastest it finds. Each kind exists because some probe needs it:
 | **USB CDC** (serial port) | Shows up as a COM port: the Arduino IDE's port and serial monitor work as they are, and the target's console shares the line with OEP | 8.1 MB/s (HS) | 6.7 MB/s (HS) | 0.60 ms | ESP32-P4 (HS port), RP2040 / RP2350 (full speed) |
 | **USB-Serial/JTAG** (ESP32's built-in serial port) | Needs no USB stack in the firmware; the same port flashes the probe (esptool) | about 0.8 MB/s (full speed) | - | - | ESP32-P4 (FS port), ESP32-S3 / C3 / C6 |
 | **UART** through a USB-UART bridge (CP2102, CH340, ...) | Any board with a UART and a bridge chip - most cheap boards - can be a probe; slow, but enough for flashing and debugging small targets | about 11 KB/s (115200 baud) | about 11 KB/s | about 5 ms | classic ESP32 |
+| **TCP** over Wi-Fi | No cable: a probe on the bench network, found by mDNS (`_oep._tcp`), several hosts' connections at once sharing the one lock. Trusted networks only (no authentication) | 26-103 KB/s | 23-31 KB/s | about 9 ms (median) | classic ESP32 |
 
 Figures are what the bench measured (ESP32-P4 through usbipd, 2026-09-25 / 26; classic ESP32 at 115200 baud;
 oep-spec docs/logic-capture.ja.md §2.7, docs/probe-cdc-and-persistence.ja.md §5.3 / §7). The low-speed HID figure is the
@@ -168,6 +169,7 @@ one of them against this endpoint).
 | Path | Contents |
 |---|---|
 | `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core, oep-transports): frames, interfaces by name and their ops, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (transports §4), notifications (subscribe on the emitting fn), fn 0's clock; `oep::ProbePlan` / `oep::ProbeRestart` are `oep.probe.plan` / `oep.probe.restart`, which the endpoint lists itself after the sketch's interfaces; `oep::Link` is `oep.probe.link` (the link test, port_speed) |
+| `src/OepTcp.h`, `src/OepWifi.h` | TCP (a listener whose connections are each a transport; lwIP sockets) and Wi-Fi on an ESP32 (the settings' networks tried in order, mDNS `_oep._tcp`); header-only, so only a sketch that includes them links the network |
 | `src/OepBind.*` | what each serial port carries (a bind: one stream per port, held during a session and resumed where it stopped) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
@@ -193,6 +195,7 @@ uses it.
 | `01.Basics/FixtureProbe` | RP2040 / RP2350, classic ESP32 | a test fixture: GPIO and a UART on pins the host plans (the pin table, owners, the plan) |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350, classic ESP32 | **extending OEP**: your own interface under your own name - describe, the plan, ops, TLV tails |
 | `03.Transports/MultipleTransports` | ESP32-P4 | one endpoint on four USB transports at once (HS vendor bulk, HID, CDC, USB-Serial/JTAG), USB identity |
+| `03.Transports/WifiTcp` | classic ESP32 | OEP over TCP on Wi-Fi: the serial port and a TCP listener (three connections), the networks from the settings' wifi item, mDNS |
 | `04.Debug/RvswdDebugProbe` | RP2040 / RP2350, ESP32-P4 | a CH32 debugger on RVSWD: wire, riscv-dm, console |
 | `04.Debug/SwioDebugProbe` | classic ESP32 | a CH32V00x debugger on the one-wire SWIO |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | an ARM debugger on SWD: wire, arm-adi |

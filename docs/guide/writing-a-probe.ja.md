@@ -35,6 +35,10 @@ static oep::Endpoint endpoint(Serial, rx, sizeof rx, tx, sizeof tx, {1024, 4096,
   `kUartBridge`）は CRC 付きの `0x00 <COBS> 0x00` のフレームを運び、その間に生のバイト（bind、§7）も運べます。メッセージの
   経路（`kVendorBulk`、`kHid`、`kTcp`）は長さを前に付けたメッセージを運びます。経路を足すのは
   `endpoint.addTransport(stream, rx, sizeof rx, kind, usb_interface)`（`03.Transports/MultipleTransports`）。
+- **TCP**: 待ち受けの socket が経路の entry 1 つ（kind 6）で、受けた接続はそれぞれ別の経路です。ほかの経路をすべて足した後に
+  `endpoint.addTcpListener(tcp.slots(), rx, sizeof rx[0], n)`、`oep::TcpListener<n>`（`OepTcp.h`、lwIP の socket）は `loop()` で endpoint より先に
+  poll します。接続の応答と通知はその接続に返り、max_frame を超える長さは接続を閉じ、閉じた接続は何も終わらせません（transports §1〜§3）。
+  `OepWifi.h` は設定の wifi の項目のネットワークに入り、mDNS で `_oep._tcp` を名乗ります（`03.Transports/WifiTcp`）。
 - **上限** `{max_frame, window, max_inflight}` は、confirm で host に約束する値です。シリアルの口の rx は、符号化したフレームを
   入れるので max_frame より少し大きくします（`cobsFrameMax`）。
 - fn 0 の **describe** は自分で書きます。`describeCore(w, model, unit_id, ...)` が、firmware の版、model、どの経路でも同じ

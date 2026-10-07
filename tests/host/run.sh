@@ -32,6 +32,11 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-core" "$here/test_core_conformance.cpp" \
   "$src/OepFrame.cpp" "$src/OepEndpoint.cpp"
 "$out-core"
+# a TCP listener's connection slots: one describe entry, answers on their connection, no gap rule, over-long closes,
+# the one lock and the notifications' connection
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-tcp" "$here/test_tcp.cpp" \
+  "$src/OepFrame.cpp" "$src/OepEndpoint.cpp"
+"$out-tcp"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-bulk" "$here/test_bulk_stream.cpp"
 "$out-bulk"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_SLAVE -I"$here/shim" -I"$src" -o "$out-spi" \

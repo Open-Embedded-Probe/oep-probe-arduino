@@ -191,6 +191,24 @@ oep config show /dev/ttyACM0
 これで、probe のシリアルの口のターミナルに、起動時から target のコンソールが出ます。書き込みの道具は、同じ口で OEP を
 話し続けます。各項目の説明は `06.Settings/ProbeConfig` にあります。
 
+## 6. Wi-Fi で（classic ESP32）
+
+classic ESP32 の firmware は、ネットワークに入ると TCP の port 7450 でも OEP を話します（同時に 3 つの接続まで）。どのネットワークに入るかは
+ビルドではなく設定です: oep.probe.config の wifi の項目（項目 0x08。仕様にはまだ無い提案で、形は [implementation limits §6.3](../implementation-limits.ja.md)）
+に 4 つまでの entry（index、SSID、passphrase）を置き、index の順に試します。シリアルの口から set して save します。passphrase は書くだけで、
+`oep config show` にもどの応答にも出ません。`oep` コマンドはこの項目をまだ知らないので、それまでは oep-client-python の低い層の要求
+（`ProbeConfig(host)._call(ProbeConfig.SET, 項目のバイト)` と save）で送ります。
+
+つながると probe は mDNS（`oep-<unit_id>.local`、service `_oep._tcp`、TXT `unit_id`）で名乗り、設定の state の wifi でもアドレスが分かります:
+
+```sh
+oep dump --port tcp://oep-50029191fe34.local:7450
+oep linktest tcp://192.168.1.128:7450
+```
+
+信頼できるネットワーク（か、認証したトンネルの中）でだけ使ってください。OEP は認証を持ちません。シリアルの口はそのまま使え、どの接続も
+1 つのロックを共有します。いちばん小さな例は `03.Transports/WifiTcp` です。
+
 ## 次に
 
 - [probe を書く](writing-a-probe.ja.md): ライブラリの中身と、自分のインターフェース。

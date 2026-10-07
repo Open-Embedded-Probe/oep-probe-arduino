@@ -10,6 +10,7 @@
 #elif defined(ARDUINO_ARCH_RP2040)
 #include <EEPROM.h>
 #endif
+#include <ctype.h>
 #include <stdio.h>
 
 #include "OepEndpoint.h"
@@ -154,6 +155,7 @@ DriveLevels ProbeConfig::driveLevels() const {
 // slot only on one with slots (slots_max above 0, probe.config §4: 0 does not handle slots).
 bool ProbeConfig::declares(uint8_t tag) const {
   if (tag == cfg::kTlvItemSlot && !place_count_) return false;
+  if (tag == kWifiItemTag && !wifi_) return false;   // the wifi item only with something that joins networks
   return keyLength(tag) &&
          (pins_ || (tag != cfg::kTlvItemLabel && tag != cfg::kTlvItemIdle && tag != cfg::kTlvItemDisable));
 }
@@ -167,6 +169,7 @@ size_t ProbeConfig::keyLength(uint8_t tag) {
     case cfg::kTlvItemBind: return 1;
     case cfg::kTlvItemUart: return 2;
     case cfg::kTlvItemDisable: return 2;
+    case kWifiItemTag: return 1;         // index
     default: return 0;
   }
 }
@@ -220,8 +223,61 @@ bool ProbeConfig::formLength(uint8_t tag, const uint8_t *v, size_t len) {
     case cfg::kTlvItemBind: return len == kBindLength;
     case cfg::kTlvItemUart: return len == 7;
     case cfg::kTlvItemDisable: return len == 2;
+    case kWifiItemTag: {   // index(u8) ssid_len(u8) ssid pass_len(u8) passphrase (pass_len 0xFF: none follows)
+      if (len < 3 || v[1] < 1 || v[1] > 32 || len < 3u + v[1]) return false;
+      const uint8_t pass = v[2 + v[1]];
+      return len == 3u + v[1] + (pass == kWifiPassHidden ? 0 : pass);
+    }
     default: return false;
   }
+}
+
+// An item as get shows it (the wifi item's passphrase never leaves the probe).
+size_t ProbeConfig::shown(uint8_t tag, const uint8_t *v, size_t vlen, uint8_t *out) {
+  if (tag != kWifiItemTag || vlen < 3 || vlen < 3u + v[1]) {
+    if (out) { putTlvHeader(out, tag, static_cast<uint16_t>(vlen)); memcpy(out + kTlvHeader, v, vlen); }
+    return tlvSize(vlen);
+  }
+  const size_t head = 3u + v[1];
+  if (out) {
+    putTlvHeader(out, tag, static_cast<uint16_t>(head));
+    memcpy(out + kTlvHeader, v, head - 1);
+    out[kTlvHeader + head - 1] = v[head - 1] ? kWifiPassHidden : 0;
+  }
+  return tlvSize(head);
+}
+
+namespace {
+uint32_t crc32Step(uint32_t crc, const uint8_t *data, size_t length) {
+  for (size_t i = 0; i < length; ++i) {
+    crc ^= data[i];
+    for (int b = 0; b < 8; ++b) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+  }
+  return crc;
+}
+}  // namespace
+
+uint32_t ProbeConfig::hash() const {
+  uint32_t crc = 0xFFFFFFFFu;
+  size_t at = 0, vlen = 0;
+  uint8_t tag = 0;
+  const uint8_t *v = nullptr;
+  bool wifi = false;
+  while (nextItem(items_, items_length_, at, tag, v, vlen)) {
+    uint8_t one[kTlvHeader + 40];
+    if (tag == kWifiItemTag) {
+      wifi = true;
+      crc = crc32Step(crc, one, shown(tag, v, vlen, one));   // 3 + 3 + 32 at most
+    } else {
+      crc = crc32Step(crc, v - kTlvHeader, tlvSize(vlen));
+    }
+  }
+  if (wifi) {   // the passphrases: a token that changes with them, not their bytes (get answers without a lock)
+    uint8_t token[4];
+    putU32(token, wifi_token_);
+    crc = crc32Step(crc, token, sizeof token);
+  }
+  return ~crc;
 }
 
 // Remove every item of `tag` whose key begins with `key` (key_length bytes: a plan's fn alone takes the fn's whole plan).
@@ -328,6 +384,23 @@ Result ProbeConfig::checkItem(uint8_t raw, const uint8_t *v, size_t len, uint8_t
     case cfg::kTlvItemDisable:
       if (!pins_->allowed(getU16(v))) return unsupportedTag(out, capacity, raw);   // not declared: as idle
       return completed();
+    case kWifiItemTag: {
+      // index below wifi_max; the passphrase none, 8-63 printable ASCII or 64 hex digits (else malformed); an SSID
+      // with a 0x00 byte this probe cannot join (unsupported)
+      const uint8_t index = v[0], ssid_length = v[1], pass_length = v[2 + ssid_length];
+      const uint8_t *pass = v + 3 + ssid_length;
+      if (index >= kMaxWifi) return rejected(kRejectMalformed);
+      if (pass_length == 64) {
+        for (uint8_t k = 0; k < 64; ++k)
+          if (!isxdigit(pass[k])) return rejected(kRejectMalformed);
+      } else if (pass_length != 0 && pass_length != kWifiPassHidden) {
+        if (pass_length < 8 || pass_length > 63) return rejected(kRejectMalformed);
+        for (uint8_t k = 0; k < pass_length; ++k)
+          if (pass[k] < 0x20 || pass[k] > 0x7E) return rejected(kRejectMalformed);
+      }
+      if (memchr(v + 2, 0, ssid_length)) return unsupportedTag(out, capacity, raw);
+      return completed();
+    }
     default:
       return unsupportedTag(out, capacity, raw);
   }
@@ -344,6 +417,7 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
   for (Binds::Spec &b : d.binds) b = Binds::Spec{};
   for (UartItem &u : d.uarts) u = UartItem{};
   for (Label &l : d.labels) l = Label{};
+  d.wifi_count = 0;
   size_t at = 0, vlen = 0;
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
@@ -394,6 +468,17 @@ Result ProbeConfig::derive(const uint8_t *items, size_t length, Derived &d, uint
       case cfg::kTlvItemDisable:
         if (getU16(v) < PinTable::kChannels) d.disabled |= uint64_t{1} << getU16(v);
         break;
+      case kWifiItemTag: {   // in index order (the store's); a store never holds pass_len 0xFF (set resolves it)
+        if (d.wifi_count >= kMaxWifi) return rejected(kRejectMalformed);
+        WifiEntry &e = d.wifi[d.wifi_count++];
+        e = WifiEntry{};
+        e.index = v[0];
+        e.ssid_length = v[1];
+        memcpy(e.ssid, v + 2, e.ssid_length);
+        e.pass_length = v[2 + e.ssid_length];
+        memcpy(e.pass, v + 3 + e.ssid_length, e.pass_length);
+        break;
+      }
       default:
         break;
     }
@@ -539,6 +624,19 @@ Result ProbeConfig::commit(uint8_t *candidate, size_t length, const uint16_t *pl
     if (d.uarts[i].set) uarts_[i].uart->setItem(d.uarts[i].baud, d.uarts[i].format);
     else uarts_[i].uart->clearItem();
   }
+  // the networks: handed over when the list changed (the passphrases' token renewed when one of them did)
+  bool wifi_changed = d.wifi_count != wifi_count_, pass_changed = false;
+  for (size_t i = 0; i < d.wifi_count && i < wifi_count_; ++i) {
+    wifi_changed |= d.wifi[i] != wifi_entries_[i];
+    pass_changed |= d.wifi[i].index != wifi_entries_[i].index || d.wifi[i].pass_length != wifi_entries_[i].pass_length ||
+                    memcmp(d.wifi[i].pass, wifi_entries_[i].pass, d.wifi[i].pass_length) != 0;
+  }
+  if (wifi_changed) {
+    if (pass_changed || d.wifi_count != wifi_count_) wifi_token_ += platformRandom32() | 1;   // always another value
+    for (size_t i = 0; i < d.wifi_count; ++i) wifi_entries_[i] = d.wifi[i];
+    wifi_count_ = d.wifi_count;
+    if (wifi_) wifi_->apply(wifi_entries_, wifi_count_);
+  }
   poll();
   return completed();
 }
@@ -595,6 +693,22 @@ Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, siz
   at = 0;
   while (nextItem(payload, length, at, tag, v, vlen)) {
     tag &= ~kTagCritical;
+    uint8_t kept[3 + 32 + 64];
+    if (tag == kWifiItemTag && v[2 + v[1]] == kWifiPassHidden) {
+      // pass_len 0xFF: the passphrase this entry has now (get's form sent back); no entry with this index: malformed
+      size_t at2 = 0, vlen2 = 0;
+      uint8_t tag2 = 0;
+      const uint8_t *v2 = nullptr, *now = nullptr;
+      size_t now_length = 0;
+      while (nextItem(items_, items_length_, at2, tag2, v2, vlen2))
+        if (tag2 == kWifiItemTag && v2[0] == v[0]) { now = v2; now_length = vlen2; }
+      if (!now) return rejected(kRejectMalformed);
+      const size_t head = 2u + v[1], pass = now_length - (2u + now[1]);   // pass_len and the passphrase
+      memcpy(kept, v, head);
+      memcpy(kept + head, now + 2 + now[1], pass);
+      v = kept;
+      vlen = head + pass;
+    }
     if (tag != cfg::kTlvItemPlan) removeItems(candidate, clen, tag, v, keyLength(tag));
     if (!insertItem(candidate, clen, sizeof candidate, tag, v, vlen)) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
   }
@@ -898,12 +1012,13 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {   // declarations 
   TlvWriter w(out, capacity);
   if (storage_) w.u32(cfg::kTlvDescribeStorage, kMaxItems);   // exactly when save / erase are offered (ops)
   static const uint8_t kItems[] = {cfg::kTlvItemPlan, cfg::kTlvItemLabel, cfg::kTlvItemSlot, cfg::kTlvItemBind,
-                                   cfg::kTlvItemUart, cfg::kTlvItemIdle, cfg::kTlvItemDisable};
+                                   cfg::kTlvItemUart, cfg::kTlvItemIdle, cfg::kTlvItemDisable, kWifiItemTag};
   uint8_t items[sizeof kItems];
   size_t n = 0;
   for (uint8_t tag : kItems) if (declares(tag)) items[n++] = tag;   // label, idle and disable need the pins, slot slots
   w.put(cfg::kTlvDescribeItems, items, n);
   w.u8(cfg::kTlvDescribeSlotsMax, place_count_ ? static_cast<uint8_t>(kMaxSlots) : 0);
+  if (wifi_) w.u8(kWifiDescribeMax, static_cast<uint8_t>(kMaxWifi));   // proposed: wifi_max
   return w.ok() ? w.length() : 0;
 }
 
@@ -928,8 +1043,9 @@ Result ProbeConfig::state(const uint8_t *payload, size_t length, uint8_t *out, s
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
   if (refused(parsed)) return parsed;
-  if (capacity < 9) return failed();
-  const size_t room = capacity;
+  constexpr size_t kWifiTlv = kTlvHeader + 8;   // state entry reason rssi ipv4
+  if (capacity < 9 + (wifi_ ? kWifiTlv : 0)) return failed();
+  const size_t room = capacity - (wifi_ ? kWifiTlv : 0);   // the wifi TLV after the lists, on every page
   out[1] = storage_state_;
   putU32(out + 2, storage_state_ == cfg::kStorageStateApplied ? saved_hash_ : 0);
   out[6] = storage_state_ == cfg::kStorageStateUnreadable ? unreadable_ : 0;
@@ -958,6 +1074,16 @@ Result ProbeConfig::state(const uint8_t *payload, size_t length, uint8_t *out, s
   }
   out[binds_at] = n;
   out[0] = more ? 1 : 0;
+  if (wifi_) {   // proposed state TLV 0x01 wifi: state(u8) entry(u8, 0xFF none) reason(u8) rssi(i8) ipv4(4, 0 without one)
+    const WifiControl::Status st = wifi_->status();
+    putTlvHeader(out + used, kWifiStateTlv, 8);
+    out[used + kTlvHeader] = st.state;
+    out[used + kTlvHeader + 1] = st.entry;
+    out[used + kTlvHeader + 2] = st.reason;
+    out[used + kTlvHeader + 3] = static_cast<uint8_t>(st.rssi);
+    memcpy(out + used + kTlvHeader + 4, st.ipv4, 4);
+    used += kWifiTlv;
+  }
   return completed(used);
 }
 
@@ -976,10 +1102,10 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
         const uint8_t *v = nullptr;
         size_t vlen = 0, next = 0;
         if (!tlvAt(items_, items_length_, at, tag, v, vlen, next)) break;
-        const size_t item = next - at;
+        const size_t item = shown(tag, v, vlen, nullptr);   // a wifi item without its passphrase
         if (index++ >= first) {
           if (put + item > room) { more = true; break; }
-          memcpy(out + put, items_ + at, item);
+          shown(tag, v, vlen, out + put);
           put += item;
         }
         at = next;

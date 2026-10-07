@@ -190,6 +190,26 @@ oep config show /dev/ttyACM0
 Now a terminal on the probe's serial port shows the target's console from boot, and a flash tool still talks OEP on the
 same port. `06.Settings/ProbeConfig` explains each item.
 
+## 6. Over Wi-Fi (classic ESP32)
+
+The classic ESP32 firmware also speaks OEP over TCP on port 7450, up to three connections at once, once it is on a
+network. The networks are a setting, not part of the build: oep.probe.config's wifi item (item 0x08, a proposal not yet in
+the specification; layout in [implementation limits §6.3](../implementation-limits.ja.md)) holds up to four entries
+(index, SSID, passphrase), tried in index order; set them over the serial port and save. The passphrase is write-only:
+`oep config show` and every answer leave it out. The `oep` command does not know this item yet; until it does, send it
+with oep-client-python's low-level request (`ProbeConfig(host)._call(ProbeConfig.SET, item_bytes)` then save).
+
+Then the probe announces itself by mDNS (`oep-<unit_id>.local`, service `_oep._tcp`, TXT `unit_id`), and the config
+state's wifi field gives its address too:
+
+```sh
+oep dump --port tcp://oep-50029191fe34.local:7450
+oep linktest tcp://192.168.1.128:7450
+```
+
+Use it only on a network you trust (or inside an authenticated tunnel): OEP has no authentication. The serial port keeps
+working alongside, and every connection shares the one lock. `03.Transports/WifiTcp` is the smallest sketch that does this.
+
 ## Next
 
 - [Writing a probe](writing-a-probe.md): the library from the inside, your own interfaces.

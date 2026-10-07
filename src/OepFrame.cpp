@@ -58,6 +58,7 @@ bool FrameReader::push(uint8_t byte) {
         // discarded, unanswered; the next frame starts after the pause. (Not skipping the announced length: a stray
         // byte taken as a length wedged the probe for up to 64 KiB, 2026-09-22.)
         ++dropped_;
+        overlong_ = true;
         state_ = State::Discard;
         return false;
       }

@@ -1,6 +1,46 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) OEP over TCP (oep-spec transports §1-§3 as of af3d52b): `Endpoint::addTcpListener` adds a listening socket as one
+  describe entry (kind 6, interface 0xFF) whose connection slots are each a transport of their own - confirm names the
+  listener's entry, answers go back on the connection, notifications go to the subscriber's connection only (none to a
+  later connection in that slot, none after it closed), a length over max_frame closes the connection
+  (`Connection::drop`, `FrameReader::overlong`), no gap rule on TCP; a closed connection ends no session, lock,
+  subscription or resend table, and an open with the same id from another connection moves the notifications there.
+  No transport is added after a listener (the serial ports keep their describe index); kMaxTransports 8.
+  `src/OepTcp.h` (ESP32, lwIP sockets, header-only): `TcpListener<N>` / `TcpSlot` - non-blocking accept, a connection
+  beyond N closed, 2 KiB send buffer flushed per poll, 2000 ms write wait then close, TCP keepalive, `stopListening`
+  before a restart. `src/OepWifi.h` (ESP32 with a radio, header-only): `WifiStation` joins the networks of the settings,
+  announces `_oep._tcp` by mDNS (host `oep-<unit_id>`, instance `OEP <unit_id>`, TXT `unit_id`), modem sleep off.
+  oep.probe.config: the wifi item, a proposal not yet in oep-spec (item 0x08 index ssid_len ssid pass_len passphrase,
+  key index; describe 0x46 wifi_max 4; state TLV 0x01 state entry reason rssi ipv4): up to four networks tried in index
+  order after a scan (those seen; all when none is), each up to 15 s, again after a loss; the passphrase is write-only
+  (get shows pass_len 0xFF, a set with 0xFF keeps it, the hash carries a token instead of it); kMaxItems 800.
+  Firmware/OepProbe classic ESP32: TCP port 7450, three connections, the wifi item (no credentials in the build;
+  `-DOEP_WIFI=0` drops Wi-Fi), restart_max_ms 15000 with Wi-Fi (5.5-6.9 s measured). New example
+  `03.Transports/WifiTcp`. Host tests: test_tcp (26 checks), test_config's wifi item (41 more). Checked on the M5Stack
+  ATOM: settings over the serial port (a non-existent SSID at index 0, the real one at 1: joined index 1), mDNS
+  answered, confirm / list / describe / clock / open / end / gpio / config over TCP, two connections (locked,
+  lock_state), the session kept across a closed connection, serial alongside, `oep linktest` (no loss), oep-client-python
+  tests/hw over TCP and over serial (all passed), restart over TCP. docs/implementation-limits §6 (EN stub), README
+  (EN / JA), guides getting-started §6, writing-a-probe, boards (EN / JA)
+- (JA) TCP で OEP（oep-spec af3d52b の transports §1〜§3）: `Endpoint::addTcpListener` は待ち受けの socket を describe の
+  経路 1 つ（kind 6、interface 0xFF）として足し、その接続の slot はそれぞれ別の経路になります。confirm は待ち受けの index を返し、応答は
+  その接続に、通知は subscribe した接続だけに送ります（同じ slot の次の接続にも、閉じた後にも送らない）。max_frame を超える長さは接続を
+  閉じ（`Connection::drop`、`FrameReader::overlong`）、TCP には途切れの規則がありません。接続が閉じてもセッション、ロック、購読、送り直しの表は
+  残り、別の接続から同じ id の open で通知はそこに移ります。待ち受けの後には経路を足せません（シリアルの口の index を保つ）。kMaxTransports 8。
+  `src/OepTcp.h`（ESP32、lwIP の socket、header だけ）: `TcpListener<N>` / `TcpSlot`。止まらない accept、N を超える接続は閉じる、送りの 2 KiB を
+  poll ごとに flush、2000 ms 書けなければ閉じる、TCP keepalive、再起動の前の `stopListening`。`src/OepWifi.h`（radio のある ESP32、header だけ）:
+  `WifiStation` が設定のネットワークに入り、mDNS で `_oep._tcp`（host `oep-<unit_id>`、instance `OEP <unit_id>`、TXT `unit_id`）を名乗る。modem sleep は切る。
+  oep.probe.config: wifi の項目（oep-spec にまだ無い提案: 項目 0x08 index ssid_len ssid pass_len passphrase、キー index。describe 0x46 wifi_max 4。
+  state の TLV 0x01 state entry reason rssi ipv4）。4 つまでのネットワークを scan の後に index の順に試す（見えたものを。1 つも見えなければ全部）、
+  1 つ最長 15 s、切れたらやり直す。passphrase は書くだけ（get は pass_len 0xFF、0xFF の set はそのまま保つ、hash は passphrase の代わりに乱数）。
+  kMaxItems 800。Firmware/OepProbe の classic ESP32: TCP の port 7450、3 接続、wifi の項目（ビルドに認証情報なし、`-DOEP_WIFI=0` で Wi-Fi を外す）、
+  Wi-Fi の build の restart_max_ms 15000（測って 5.5〜6.9 s）。例 `03.Transports/WifiTcp` を追加。host の試験: test_tcp（26）、test_config の
+  wifi の項目（41 増）。M5Stack ATOM で確認: シリアルの口から設定（index 0 に無い SSID、1 に本物: 1 に接続）、mDNS の応答、TCP で confirm /
+  list / describe / clock / open / end / gpio / config、2 つの接続（locked、lock_state）、閉じた接続を越えてセッションが残る、シリアルの口も同時に、
+  `oep linktest`（失いなし）、oep-client-python の tests/hw を TCP とシリアルで（すべて通過）、TCP での restart。docs/implementation-limits §6
+  （英語は stub）、README（EN / JA）、ガイド getting-started §6、writing-a-probe、boards（EN / JA）
 - (EN) Follows oep-spec 0f455a0 (the rule review of 2026-10-07, §2 and §7; the registry header and the test vectors synced
   from it). Core: no ignored TLV - an unknown non-critical TLV is ignored with nothing in the answer, an unknown critical
   one is unsupported; a TLV this probe implements is checked the same with or without bit 7 (another length: malformed;

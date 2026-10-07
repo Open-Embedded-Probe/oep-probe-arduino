@@ -8,7 +8,8 @@
 //   Rp2.h       RP2040 / RP2350 (profiles rp2040 / rp2350): USB CDC; RVSWD, SWD, gpio, uart
 //   Esp32P4.h   ESP32-P4 (profile esp32p4): HS vendor bulk, HID, CDC, USB-Serial/JTAG; RVSWD, gpio, uart x2, capture,
 //               SPI / I2C devices (build_opt.h: the direct HS vendor build; compile with --clean)
-//   Esp32.h     classic ESP32 (profile esp32): a UART bridge; SWIO, gpio, uart, capture (sampler), SPI / I2C devices
+//   Esp32.h     classic ESP32 (profile esp32): a UART bridge, TCP over Wi-Fi (the settings' networks; -DOEP_WIFI=0 drops
+//               it); SWIO, gpio, uart, capture (sampler), SPI / I2C devices
 #if defined(ARDUINO_ARCH_RP2040)
 #include "Rp2.h"
 #elif defined(CONFIG_IDF_TARGET_ESP32P4)

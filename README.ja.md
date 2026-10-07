@@ -34,6 +34,7 @@ OEP のフレームはどのリンクでも同じで、違うのは包み方だ�
 | **USB CDC**（シリアルの口） | COM ポートとして見える: Arduino IDE のポートとシリアルモニターがそのまま使え、target のコンソールが OEP と 1 本の線を共有する | 8.1 MB/s（HS） | 6.7 MB/s（HS） | 0.60 ms | ESP32-P4（HS の口）、RP2040 / RP2350（full speed） |
 | **USB-Serial/JTAG**（ESP32 の内蔵のシリアルの口） | firmware に USB のスタックが要らない。同じ口で probe 自身を書き込める（esptool） | 約 0.8 MB/s（full speed） | — | — | ESP32-P4（FS の口）、ESP32-S3 / C3 / C6 |
 | **UART**（USB-UART の変換チップ経由: CP2102、CH340 など） | UART と変換チップがあるボード（安いボードのほとんど）なら probe になれる。遅いが、小さな target の書き込みとデバッグには足りる | 約 11 KB/s（115200 baud） | 約 11 KB/s | 約 5 ms | classic ESP32 |
+| **TCP**（Wi-Fi） | ケーブルが要らない: 作業台のネットワークの probe を mDNS（`_oep._tcp`）で見つけ、複数の host の接続が 1 つのロックを共有する。信頼できるネットワークだけ（認証なし） | 26〜103 KB/s | 23〜31 KB/s | 約 9 ms（中央値） | classic ESP32 |
 
 数値は試験台で測ったもの（ESP32-P4 は usbipd 経由、2026-09-25 / 26。classic ESP32 は 115200 baud。oep-spec の
 docs/logic-capture.ja.md §2.7、docs/probe-cdc-and-persistence.ja.md §5.3 / §7）。low speed の HID の値は class そのものの上限
@@ -157,6 +158,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | PATH | 中身 |
 |---|---|
 | `src/Oep.h`、`src/OepEndpoint.*`、`src/OepRegistry.h` | v1 の本体（oep-core、oep-transports）: フレーム、名前で探すインターフェースとその ops、ロック、複数の経路（describe の transport）、シリアルの口の共用（transports §4）、通知（送り出す fn への subscribe）、fn 0 の clock。`oep::ProbePlan` / `oep::ProbeRestart` が `oep.probe.plan` / `oep.probe.restart` で、endpoint がスケッチのインターフェースの後に自分で出す。`oep::Link` が `oep.probe.link`（線の試験、port_speed） |
+| `src/OepTcp.h`、`src/OepWifi.h` | TCP（受けた接続がそれぞれ経路になる待ち受け。lwIP の socket）と ESP32 の Wi-Fi（設定のネットワークを順に試す、mDNS `_oep._tcp`）。header だけなので、include したスケッチだけがネットワークを持つ |
 | `src/OepBind.*` | シリアルの口に流すもの（bind: 口ごとに 1 本のストリーム、セッション中の停止と止めた位置からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind。ESP32 は NVS、RP2040 / RP2350 は flash に保存）。各ファイルの冒頭に対応する仕様の節がある |
@@ -181,6 +183,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | `01.Basics/FixtureProbe` | RP2040 / RP2350、classic ESP32 | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350、classic ESP32 | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
 | `03.Transports/MultipleTransports` | ESP32-P4 | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
+| `03.Transports/WifiTcp` | classic ESP32 | Wi-Fi の TCP で OEP: シリアルの口と TCP の待ち受け（3 接続）、ネットワークは設定の wifi の項目から、mDNS |
 | `04.Debug/RvswdDebugProbe` | RP2040 / RP2350、ESP32-P4 | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |
 | `04.Debug/SwioDebugProbe` | classic ESP32 | 1 本線の SWIO の CH32V00x のデバッガ |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | SWD の ARM のデバッガ: wire、arm-adi |

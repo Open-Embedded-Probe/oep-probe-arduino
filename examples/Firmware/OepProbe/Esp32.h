@@ -4,7 +4,10 @@
 // Classic ESP32 (profile esp32), on a board with a USB-UART bridge (DevKitC and the like).
 //
 // Transport: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
-// below) - the probe's one transport, serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-transports §4). The bridge's auto-reset
+// below) - serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-transports §4).
+// With Wi-Fi (OEP_WIFI, on unless built with -DOEP_WIFI=0): TCP, transport 1 - port kTcpPort, up to three connections
+// at once, each a transport of its own (oep-transports §1); the networks come from oep.probe.config's wifi item (no
+// network until one is set; no credentials in the build), announced by mDNS as _oep._tcp (OepWifi.h). The bridge's auto-reset
 // circuit resets the ESP32 when the port is opened with DTR / RTS in the wrong order: a host opens it with both on
 // (host guide §1). The bridge's USB ID is not the project's VID:PID: a host reaches this probe by the user choosing its
 // port, then asking (confirm).
@@ -44,6 +47,19 @@ static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeo
                               oep::Endpoint::kUartBridge);
 static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 
+#ifndef OEP_WIFI
+#define OEP_WIFI 1
+#endif
+#if OEP_WIFI
+#include <OepWifi.h>
+// TCP (oep-transports §1): the port and the discovery are this implementation's (docs/implementation-limits).
+static constexpr uint16_t kTcpPort = 7450;
+static constexpr size_t kTcpConnections = 3;
+static oep::TcpListener<kTcpConnections> tcp;
+static uint8_t rxTcp[kTcpConnections][512 + 2];   // one frame of max_frame each
+static oep::WifiStation wifi(tcp, kTcpPort);
+#endif
+
 // port_speed (oep-if-link §3): the host may raise UART0's baud for its session; every revert goes back to 115200, the
 // boot speed. On unless built with -DOEP_PORT_SPEED=0 (then no describe port_speed, the op unknown_operation).
 #ifndef OEP_PORT_SPEED
@@ -81,7 +97,24 @@ static uint32_t portSpeed(uint8_t, uint32_t baud, bool apply) {   // port 0, UAR
 // the ROM (its banner goes out on UART0 as raw bytes), the bootloader checking the app image (about 0.4 MB), setup()
 // reading the settings; the host's reopen and its confirms at 115200 add little. 1500 ms
 // is about three times that (an estimate from the boot path, to be measured on the bench).
+// With Wi-Fi the TCP transport is back once the probe has booted, scanned, joined and has its address again: 5.5-6.9 s
+// from the answer to the first confirm answered on a new connection, ten restarts on the ATOM (2026-10-07); 15000 is
+// twice that. A list whose earlier entries are seen but refuse the probe takes longer (WifiStation::kTryMs each,
+// docs/implementation-limits).
+#if OEP_WIFI
+static constexpr uint32_t kRestartMaxMs = 15000;
+// The answer to restart out on a TCP connection before the reset: the slots' buffers into the socket, then a moment
+// for the network stack to send them (esp_restart closes nothing).
+static void restartProbe() {
+  tcp.stopListening();   // a host reconnecting now is refused, not accepted by this boot (OepTcp.h)
+  for (size_t k = 0; k < kTcpConnections; ++k) tcp.slot(k).flushAll();
+  delay(100);
+  oep::platformRestart();
+}
+#else
 static constexpr uint32_t kRestartMaxMs = 1500;
+static void restartProbe() { oep::platformRestart(); }
+#endif
 
 // The GPIOs a DevKitC brings out, less UART0 (1, 3: the transport), the SPI flash (6-11) and the boot straps (0, 2, 12,
 // 15). 34-39 are inputs only.
@@ -164,7 +197,20 @@ void setup() {
 #if OEP_PORT_SPEED
   endpoint.setPortSpeed(portSpeed, kBootBaud);
 #endif
-  endpoint.setRestart(oep::platformRestart, kRestartMaxMs);
+  endpoint.setRestart(restartProbe, kRestartMaxMs);
+#if OEP_WIFI
+  {   // after the UART: the listener's entry is the last (its connections are transports 1..3, describe entry 1)
+    uint8_t *rx[kTcpConnections];
+    for (size_t k = 0; k < kTcpConnections; ++k) rx[k] = rxTcp[k];
+    endpoint.addTcpListener(tcp.slots(), rx, sizeof rxTcp[0], kTcpConnections);
+    uint8_t id[17];
+    const size_t n = oep::platformUnitId(id, sizeof id);
+    char unit[18] = {};
+    memcpy(unit, id, n < sizeof unit - 1 ? n : sizeof unit - 1);
+    wifi.begin(unit);
+    config.setWifi(&wifi);   // the wifi item: the networks to join (applied with the saved settings below)
+  }
+#endif
   endpoint.add(wire);
   endpoint.add(riscvDm);
   console.setMaxRead(480);   // 512-byte frames
@@ -196,6 +242,10 @@ void setup() {
 
 void loop() {
   oep::BootGuard::poll();
+#if OEP_WIFI
+  wifi.poll();
+  tcp.poll();
+#endif
   endpoint.poll();
   console.poll();
   config.poll();

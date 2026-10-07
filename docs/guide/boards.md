@@ -11,7 +11,7 @@ no released firmware.
 |---|---|---|---|---|
 | Released firmware | `OepProbe-rp2040` / `-rp2350` / `-promicrorp2350` | `OepProbe-esp32p4` | `OepProbe-esp32` | none: build it (below) |
 | Checked on a bench | starting, on a Pro Micro RP2350 (CH32L103) | yes (CH32X035 jig) | yes (CH32V003 jig) | no |
-| Transports | USB CDC | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200) | USB-Serial/JTAG or USB CDC |
+| Transports | USB CDC | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB-Serial/JTAG or USB CDC |
 | RVSWD (CH32 2-wire) | yes (SIO) | yes (dedicated GPIO) | no | yes (dedicated GPIO; built, not checked) |
 | SWIO (CH32V00x 1-wire) | no | no | yes | no |
 | SWD (ARM) | yes | no | no | no |
