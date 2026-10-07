@@ -362,6 +362,19 @@ int main() {
   CHECK(s.state == 0 && s.mode == 0 && s.bit_order == 0 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
   CHECK(unavailableCause(call(t, P4SpiTarget::kOpReadRx, {}, out), out, 6));
 
+  // fixture §4's bit placement (the oep-spec vectors "spi-target read_rx: 12 bits, ... a partial last byte"): wire
+  // bits 1 1 0 0 0 0 0 0 1 0 1 1 are c0 b0 MSB first, 03 0d LSB first; the last byte's missing bits 0 though the
+  // armed tx (ff ff) was in the work registers there
+  for (const uint8_t order : {0, 1}) {
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, order}, out)));
+    CHECK(ok(arm(t, 4, {0xff, 0xff})));
+    const uint8_t wire[] = {0xc0, 0xb0};
+    CHECK(fakeSpiTransfer(12, wire));
+    t.service();
+    CHECK(ok(call(t, P4SpiTarget::kOpReadRx, {}, out)));
+    CHECK(out == (order ? Bytes{0, 12, 0, 0, 0, 2, 0, 0x03, 0x0d} : Bytes{0, 12, 0, 0, 0, 2, 0, 0xc0, 0xb0}));
+  }
+
   t.planRelease();
   printf("spi-target: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

@@ -181,7 +181,7 @@ inline void fakeClock(size_t bits, const uint8_t *mosi = nullptr) {
     int mi = 0;
     if (pos < sizeof f.buf * 8) {
       uint8_t &b = f.buf[pos / 8];
-      const uint8_t m = static_cast<uint8_t>(0x80u >> (pos % 8));
+      const uint8_t m = static_cast<uint8_t>(f.flags & SPI_SLAVE_BIT_LSBFIRST ? 1u << (pos % 8) : 0x80u >> (pos % 8));
       mi = (b & m) ? 1 : 0;
       b = static_cast<uint8_t>(mo ? (b | m) : (b & ~m));
     }

@@ -263,8 +263,15 @@ void P4SpiTarget::service() {
     if (queue_count_ < kQueueDepth) {
       const size_t bytes = (armed_bits + 7) / 8 > armed_length_ ? armed_length_ : (armed_bits + 7) / 8;
       memcpy(queue_[queue_count_], rx_buffer_, bytes);
+      // fixture §4: wire bit k is in byte k / 8 at bit 7 - k mod 8 (MSB first) or k mod 8 (LSB first) - where the
+      // slave shifts it in, bit_order_ given to it as SPI_SLAVE_BIT_LSBFIRST - and the last byte's bits that did not
+      // come are 0 (the work registers still held the armed tx there)
+      if (armed_bits < bytes * 8) {
+        const uint32_t got = armed_bits % 8;
+        queue_[queue_count_][bytes - 1] &= static_cast<uint8_t>(bit_order_ ? (1u << got) - 1 : 0xFFu << (8 - got));
+      }
       queue_length_[queue_count_] = static_cast<uint8_t>(bytes);
-      queue_bits_[queue_count_] = armed_bits;
+      queue_bits_[queue_count_] = armed_bits;   // u32: the driver counts no further than length x 8 (never 0xFFFFFFFF)
       ++queue_count_;
     }
   }
