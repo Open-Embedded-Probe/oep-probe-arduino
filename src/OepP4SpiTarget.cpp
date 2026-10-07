@@ -86,6 +86,7 @@ bool P4SpiTarget::begin() {
   cfg.queue_size = 1;   // never more than one waits: the one post_trans_cb or arm puts in, loaded at once
   cfg.mode = mode_;
   cfg.post_trans_cb = onDone;
+  cfg.post_setup_cb = onSetup;
   isr_armed_done_ = false; isr_armed_bits_ = 0; isr_unarmed_ = 0; isr_load_failed_ = false;
   // The discard: MISO 0, whatever the master sends.
   idle_trans_ = {};
@@ -114,6 +115,10 @@ void IRAM_ATTR P4SpiTarget::onDone(spi_slave_transaction_t *done) {
   }
   portEXIT_CRITICAL_ISR(&self->lock_);
   if (spi_slave_queue_trans_isr(SPI2_HOST, next) != ESP_OK) self->isr_load_failed_ = true;
+}
+
+void IRAM_ATTR P4SpiTarget::onSetup(spi_slave_transaction_t *loaded) {
+  static_cast<P4SpiTarget *>(loaded->user)->loaded_ = loaded;
 }
 
 #if defined(OEP_SPI_MISO_GATE)
@@ -238,9 +243,21 @@ bool P4SpiTarget::arm(const uint8_t *tx, size_t tx_length, size_t length) {
   // place, loaded at once. A transfer under way right now is cut: it was not armed.
   spi_slave_queue_reset(SPI2_HOST);
   isr_load_failed_ = false;
+  loaded_ = nullptr;
   if (spi_slave_queue_trans(SPI2_HOST, &trans_, 0) != ESP_OK) {
     if (spi_slave_queue_trans(SPI2_HOST, &idle_trans_, 0) != ESP_OK) isr_load_failed_ = true;
     return false;
+  }
+  // arm answers once the slave holds the armed transaction (fixture §4: it waits for the next transfer): the driver's
+  // interrupt loads it (post_setup_cb), normally before queue_trans returns - on loop()'s core, so a load is not left
+  // to come after the answer. Not loaded within kLoadWaitUs: taken back, the discard in its place, and arm fails.
+  for (uint32_t us = 0; loaded_ != &trans_; ++us) {
+    if (us >= kLoadWaitUs) {
+      spi_slave_queue_reset(SPI2_HOST);
+      if (spi_slave_queue_trans(SPI2_HOST, &idle_trans_, 0) != ESP_OK) isr_load_failed_ = true;
+      return false;
+    }
+    delayMicroseconds(1);
   }
   armed_ = true; armed_length_ = length;
   return true;

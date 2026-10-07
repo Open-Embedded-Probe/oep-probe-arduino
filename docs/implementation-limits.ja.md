@@ -150,6 +150,15 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 - **spi-target の bits**: ESP-IDF の SPI slave は、arm した length × 8 を超えて数えないので、bits は length × 8 を超えない
   （0xFFFFFFFF に届かない）。read_rx は ns の TLV を返さない（i2c-target も同じ）。部分の byte の、来なかったビットは 0 にする
   （SPI の work register には arm した tx が残っている）。
+- **arm の答えの意味**（fixture §4: arm は次の 1 回の転送を待つ）: arm は、slave が arm した転送を持った（ドライバの割り込みが載せ、
+  post_setup_cb で分かる）後に success を答える。その後に CS が有効になった転送は arm したもの。ドライバの割り込みは loop() の core で、
+  そこが割り込みを止めている間（SWIO のフレーム）は待つ。2 ms 以内に載らなければ arm は failed（何も arm しない）。i2c-target の preload_tx
+  も、置き場が TX FIFO に載ってから答える（バスが使用中なら、その転送の STOP で載せる: その後に始まる読み出しがその置き場で答える）。
+- **classic ESP32 の spi-target と cs_setup_ns**（15000 ns）: MISO は CS が有効になってから CS の割り込み（ソフトウェア）で駆動し始めるので、
+  その前に SCK を始める master は最初のビットを当てにできない（fixture §4）。線にプルアップがあれば、そのビットは 1 に読める。ベンチ
+  （87f6d40、V003 の master が CS を下げてすぐ SCK を始める、4 byte の転送を続けて 5 回）: 3 MHz で 0 / 5、1 MHz で 4 / 5。DUT が受けたのは
+  3C96C30F のはずが BC / FC（最初の 1〜2 ビットが 1）で、arm は関係しない（どれも arm の後に載っていた）。ESP32-P4 は MISO を自分で
+  駆動しない間を持たない（cs_setup_ns を宣言しない、ベンチ: 4 MHz の 5 回が 5 / 5）。
 
 ## 2. 起動と更新
 

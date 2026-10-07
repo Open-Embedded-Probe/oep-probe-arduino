@@ -375,6 +375,29 @@ int main() {
     CHECK(out == (order ? Bytes{0, 12, 0, 0, 0, 2, 0, 0x03, 0x0d} : Bytes{0, 12, 0, 0, 0, 2, 0, 0xc0, 0xb0}));
   }
 
+  // arm answers once the slave holds the armed transaction (fixture §4: ready for the next frame) - the driver's
+  // interrupt loads it, and that core may have its interrupts off a while (a SWIO frame): arm waits for the load
+  // (post_setup_cb), and the very next frame is the armed one's; not loaded within 2 ms, arm fails, nothing armed.
+  {
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
+    g_fake_spi.masked = true;
+    static int waited = 0;
+    waited = 0;
+    g_on_wait = [] { if (++waited == 300) fakeSpiUnmask(); };   // the interrupt comes 300 us on
+    CHECK(ok(arm(t, 4, {0x3c, 0x96, 0xc3, 0x0f})));
+    CHECK(waited >= 300 && status(t).armed);
+    g_on_wait = nullptr;
+    const uint8_t wire[] = {0xa5, 0x5a, 0x0f, 0x01};
+    CHECK(fakeSpiTransfer(32, wire) && g_fake_spi.miso == (Bytes{0x3c, 0x96, 0xc3, 0x0f}));   // right after: the armed one
+    t.service();
+    CHECK(ok(call(t, P4SpiTarget::kOpReadRx, {}, out)) && out == (Bytes{0, 32, 0, 0, 0, 4, 0, 0xa5, 0x5a, 0x0f, 0x01}));
+    g_fake_spi.masked = true;   // never loaded: arm fails, nothing armed
+    const Result r = arm(t, 4, {0x01});
+    CHECK(r.resolution == kResolutionCompleted && r.detail != kOutcomeSuccess && !status(t).armed);
+    fakeSpiUnmask();
+    CHECK(ok(arm(t, 4, {0x01})) && status(t).armed);
+  }
+
   t.planRelease();
   printf("spi-target: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;

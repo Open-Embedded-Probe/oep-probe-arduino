@@ -112,6 +112,10 @@ class P4SpiTarget final : public Interface {
   volatile uint32_t isr_unarmed_ = 0;
   volatile bool isr_load_failed_ = false;
   static void onDone(spi_slave_transaction_t *done);   // post_trans_cb, in the driver's interrupt
+  // post_setup_cb, in the driver's interrupt: the transaction it has just loaded (the slave takes the next frame with it)
+  static void onSetup(spi_slave_transaction_t *loaded);
+  const spi_slave_transaction_t *volatile loaded_ = nullptr;
+  static constexpr uint32_t kLoadWaitUs = 2000;   // arm waits this long at most for the driver to load it
   bool begin();        // the driver alone
 #endif
 #if defined(OEP_SPI_MISO_GATE)

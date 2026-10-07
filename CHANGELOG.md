@@ -1,6 +1,24 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) SPI target (classic ESP32, ESP32-P4), arm (fixture §4: it waits for the next transfer): success only once the
+  slave holds the armed transaction - the driver's interrupt loads it and says so in post_setup_cb; arm waits for that
+  (normally already done inside queue_trans, on loop()'s core, but that core may have its interrupts off for a SWIO
+  frame), 2 ms at most, else the discard goes back and arm answers failed with nothing armed. The bench's burst (V003
+  master, 4-byte frames right after each arm: 0 / 5 at 3 MHz, 4 / 5 at 1 MHz) is the classic's cs_setup_ns, not the arm:
+  the DUT read BC / FC where 3C was sent - the first one or two bits high, MISO not yet driven by the CS gate when the
+  master's SCK began (the gate's software CS interrupt; declared 15000 ns, fixture §4: a master clocking sooner cannot
+  rely on the first bit). Checked the same elsewhere: the ESP32-P4's slave has no gate (bench burst 5 / 5 at 4 MHz);
+  the I2C targets' preload_tx is in the TX FIFO when answered, or at the STOP of the transfer under way. Host test (a
+  load held 300 us and one never made); docs/implementation-limits §1.7. Not run on hardware
+- (JA) SPI target（classic ESP32、ESP32-P4）の arm（fixture §4: 次の 1 回の転送を待つ）: slave が arm した転送を持ってから success を
+  答えます。ドライバの割り込みが載せて post_setup_cb で知らせるのを待つ（普通は loop() の core の queue_trans の中で済むが、その core は
+  SWIO のフレームで割り込みを止めることがある）。2 ms 以内に載らなければ discard を戻し、何も arm せず failed。ベンチの連続（V003 の
+  master、arm の直後の 4 byte の転送: 3 MHz で 0 / 5、1 MHz で 4 / 5）は arm ではなく classic の cs_setup_ns: DUT は 3C の代わりに BC / FC を
+  受けた（最初の 1〜2 ビットが high）。master の SCK が始まったとき、CS の gate（ソフトウェアの CS の割り込み）がまだ MISO を駆動して
+  いなかった（宣言は 15000 ns。fixture §4: それより早く SCK を始める master は最初のビットを当てにできない）。他も確認: ESP32-P4 の slave は
+  gate を持たない（ベンチの連続 4 MHz で 5 / 5）。I2C target の preload_tx は答えたとき TX FIFO にある（バスが使用中ならその転送の STOP で
+  載る）。host test（300 us 遅れる載せと、載らないもの）。docs/implementation-limits §1.7。実機では未確認
 - (EN) Classic ESP32 sampler: a trigger search does per sample what an immediate window does - the gate's look, the
   clock against the sample's time, the wait, the read, the store - and the trigger's test alone (an edge against the
   last level, a level against the wanted one, by mask); the span's clock, the SWIO wire's turns and the control word

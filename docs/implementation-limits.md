@@ -42,4 +42,7 @@ data inside never handed out (the track stops in state 6, stopped reason 3, erro
 follower's ring that holds its segment plus what comes in while the trigger is on its way (the trigger track's latency:
 the P4 logic's DMA chunk - 4032 bytes at most - plus 100 ms for loop(), refused cause 2 at bind when it cannot), the
 P4's force at the sample of its instant, copied
-streaming sending finished segments only, and spi-target's bits at most length x 8 with no ns TLV.
+streaming sending finished segments only, spi-target's bits at most length x 8 with no ns TLV, arm answering success once the slave holds the armed
+transaction (post_setup_cb; 2 ms at most, else failed) and preload_tx once the slot is in the TX FIFO (or at the STOP
+of the transfer under way), and the classic's cs_setup_ns (15 us: a master clocking sooner after CS falls cannot rely on
+the first bit - the bench's back-to-back 4-byte frames read BC / FC for 3C, 0 / 5 at 3 MHz).

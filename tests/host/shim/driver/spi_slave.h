@@ -63,7 +63,9 @@ struct FakeSpiSlave {
   int inits = 0;
   int cs_pin = -1, miso_pin = -1;
   uint32_t flags = 0;
-  slave_transaction_cb_t post_trans_cb = nullptr;
+  slave_transaction_cb_t post_trans_cb = nullptr, post_setup_cb = nullptr;
+  // the driver's core has its interrupts off (a frame of the SWIO wire on it): queue_trans loads nothing until unmask
+  bool masked = false;
   std::deque<spi_slave_transaction_t *> queued, done;
   spi_slave_transaction_t *cur = nullptr;   // the loaded one
   bool trans_done = false, intr_on = false;
@@ -84,11 +86,12 @@ inline void fakeSpiLoad() {
   f.bit = 0;
   f.trans_done = false;
   if (f.cs_low) ++f.loads_in_frame;
+  if (f.post_setup_cb) f.post_setup_cb(f.cur);
 }
 // The driver's interrupt (spi_intr): runs while trans_done is set and the interrupt is on.
 inline void fakeSpiIsr() {
   FakeSpiSlave &f = g_fake_spi;
-  if (!f.up || !f.trans_done || !f.intr_on) return;
+  if (!f.up || !f.trans_done || !f.intr_on || f.masked) return;
   if (f.cur) {
     spi_slave_transaction_t *t = f.cur;
     const size_t keep = f.bit < t->length ? f.bit : t->length;
@@ -112,7 +115,7 @@ inline esp_err_t spi_slave_initialize(spi_host_device_t, const spi_bus_config_t 
   f.cs_pin = c->spics_io_num; f.miso_pin = b->miso_io_num;
   if (f.cs_pin >= 0) g_fake_gpio.level[f.cs_pin] = f.cs_low ? 0 : 1;
   if (f.miso_pin >= 0) g_fake_gpio.oe_by_gpio[f.miso_pin] = false;   // routed to the slave: its output enable
-  f.up = true; f.queue_size = c->queue_size; f.flags = c->flags; f.post_trans_cb = c->post_trans_cb; ++f.inits;
+  f.up = true; f.queue_size = c->queue_size; f.flags = c->flags; f.post_trans_cb = c->post_trans_cb; f.post_setup_cb = c->post_setup_cb; ++f.inits;
   f.queued.clear(); f.done.clear(); f.cur = nullptr;
   f.trans_done = true; f.intr_on = false;   // forced: the first queue_trans loads at once
   memset(f.buf, 0, sizeof f.buf); f.bit = 0;
@@ -133,6 +136,8 @@ inline esp_err_t spi_slave_queue_trans(spi_host_device_t, const spi_slave_transa
   fakeSpiIsr();
   return ESP_OK;
 }
+// The driver's core takes interrupts again: a load waiting runs.
+inline void fakeSpiUnmask() { g_fake_spi.masked = false; fakeSpiIsr(); }
 // From an interrupt (post_trans_cb): only queued; the interrupt under way loads it after the callback.
 inline esp_err_t spi_slave_queue_trans_isr(spi_host_device_t, const spi_slave_transaction_t *t) {
   FakeSpiSlave &f = g_fake_spi;
