@@ -149,6 +149,12 @@ class DmiPhy {
   virtual void backgroundDone() {}
   // The background reader handed the target the last byte it had to send (a sampler's turn for the wire may end).
   virtual void backgroundSent() {}
+  // The wire paused now for another user of the probe's bus (SwioPhy on the classic ESP32: a logic sampler's window, an
+  // immediate one or a trigger search, OepWireGate.h). The probe's own work on the wire that no request waits for - an
+  // at-boot slot's attach retries and liveness checks (ProbeConfig) - waits while it is, without asking for a turn: a
+  // frame inside a trigger search holds the sampler up (slipped), and an attach started in a turn goes on into the
+  // segment.
+  virtual bool wirePaused() const { return false; }
   // Retries inside one request (oep-if-debug §2; this implementation's limits::kWireRetryMs): a request starts with the
   // whole allowance, and read() retries no more once it is spent (the request then ends with status line).
   void beginRequest() { retry_us_ = 0; }

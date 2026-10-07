@@ -1,6 +1,22 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32: an at-boot slot's attach, its retries and its liveness checks (a DMSTATUS read every retry_ms,
+  probe.config §3), and the console's re-attach after the target reset itself, wait while a logic sampler's window is
+  open (DmiPhy::wirePaused; SwioPhy: the gate's window, immediate or a trigger search) and run at the first poll after;
+  they ask for no turn. The liveness check waited for the wire like a request, and a trigger search gave it a turn at
+  once: its frames (a read about 60 us) held the sampler up. The bench's forced captures on the V003 jig (slot retry
+  1 s) slipped 0 - 11 / 64 at every rate from 400 kHz down to 100 kHz, about once a second (every fourth capture in a
+  row), the same at force +5 ms and +20 ms, serial and TCP, where immediate windows (the check waits them out) never
+  did; the -DOEP_WIFI=0 run had no slot set and none slipped. Only host requests and the console's reads get turns
+  now. Host test (test_config); docs/implementation-limits §4.1. Not run on hardware
+- (JA) classic ESP32: at-boot の slot の attach、その再試行、生存確認（retry_ms ごとの DMSTATUS の読み、probe.config §3）と、target が
+  自分でリセットした後のコンソールの attach のやり直しは、logic の sampler の窓（即時の窓とトリガの探索）が開いている間は待ち、窓が
+  閉じた後の最初の poll で行います（DmiPhy::wirePaused。SwioPhy はゲートの窓）。番は求めません。生存確認は要求と同じに線を待ち、
+  探索はそれにすぐ番を譲っていた: そのフレーム（読み 1 つ約 60 µs）が sampler を止めた。V003 の台（slot の retry 1 s）の force の区画は
+  400 kHz〜100 kHz のどの rate でも 64 回に 0〜11 回 slipped（約 1 s ごと、続くキャプチャの 4 回に 1 回。force +5 ms と +20 ms、シリアルと
+  TCP で同じ）、即時の窓（生存確認が終わりを待つ）は 0。-DOEP_WIFI=0 の測定は slot を設定しておらず、滑らなかった。探索の番を取るのは
+  host の要求とコンソールの読みだけになった。host test（test_config）。docs/implementation-limits §4.1。実機では未確認
 - (EN) Classic ESP32 sampler: rate_range is 1 kHz - 300 kHz (it was up to 2 MHz). The bench's sweep of 873c8f0 (V003
   jig, 64 captures a row, 1 and 4 lines, serial and TCP, with and without Wi-Fi): immediate windows slipped 64 / 64 at
   750 kHz, 1 - 4 / 64 at 500 kHz and never from 400 kHz down to 100 kHz; forced captures without SWIO traffic 64 / 64,

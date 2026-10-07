@@ -24,7 +24,9 @@ changes none of the sampler's limits (radio traffic may still make a sample late
 300 kHz, from the bench (873c8f0: 400 kHz the fastest rate at which no immediate window and no forced capture without
 SWIO traffic slipped, 500 kHz slipped; the table is in §4.1), samples round down to 200 ms of them (60000 at 300 kHz,
 the most a segment holds; the 400 kHz floor kept a full window under the watchdog before spans ended by the clock), a trigger search does per sample what an immediate window does plus the trigger's test
-(the clock, the wire's turns and force every 64 samples); every interrupts-off span
+(the clock, the wire's turns and force every 64 samples), and only host requests and the console's reads get turns in
+a search - an at-boot slot's attach, retries and liveness checks and the console's re-attach wait while a sampler window
+is open (the liveness check's frames, every retry_ms, slipped the bench's forced captures at every rate); every interrupts-off span
 of the sampler ends by the clock at 250 ms (a search burst counted in samples ran past the 300 ms interrupt watchdog and
 reset the probe; a segment still reading at the limit ends there, fewer samples, slipped). §6.1: a TCP slot's send buffer (6 KiB)
 holds all a host within its window can have outstanding, so the probe never waits on or closes such a connection for a

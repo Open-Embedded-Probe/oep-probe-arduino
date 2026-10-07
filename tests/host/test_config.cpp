@@ -5,7 +5,8 @@
 // past drive_levels, or anything but 0xFF without them, unsupported), the label's length rule. The state answer
 // (§3.3): slot_state slot state connection last_try_at_ns, bind_state port flow; storage_hash; the hash changing with
 // the settings; setStorage(false) leaving save / erase out of the ops and the storage tag out (§2, §4); disable's
-// cause 5; the saved settings renumbered; the at-boot attach's gate and a boot that skips it.
+// cause 5; the saved settings renumbered; the at-boot attach's gate and a boot that skips it; the at-boot attach and
+// its retries waiting while the wire is paused (a sampler's window).
 #include <stdio.h>
 #include <string.h>
 
@@ -678,6 +679,59 @@ int main() {
     CHECK(cfg6.bootAttachSkipped() && !tried(cfg6));
     CHECK(ok(set(cfg6, slotItem(cfg::kSlotAttachAtBoot, 0, 100), out)));
     CHECK(tried(cfg6));
+  }
+
+  {   // an at-boot slot's attach (and retries) wait while the wire is paused (DmiPhy::wirePaused: a sampler's window on
+      // the classic ESP32) and run at the first poll after; a check inside a trigger search held its samples up
+    struct PausablePhy final : DmiPhy {
+      bool paused = false;
+      int attaches = 0;
+      bool attach() override { ++attaches; return false; }
+      void release() override {}
+      bool attached() const override { return false; }
+      void write(uint8_t, uint32_t) override {}
+      bool setIdleClockLow(bool) override { return true; }
+      bool canIdleClockLow() const override { return true; }
+      bool setMaxHz(uint32_t) override { return true; }
+      bool keepsMaxHz(uint32_t) const override { return true; }
+      uint32_t dmiNs() const override { return 0; }
+      uint32_t clockHz() const override { return 0; }
+      uint32_t retries() const override { return 0; }
+      uint32_t transactions() const override { return 0; }
+      bool wirePaused() const override { return paused; }
+
+     protected:
+      bool readWire(uint8_t, uint32_t &) override { return false; }
+    };
+    static NullStream sp;
+    static uint8_t rxp[512], txp[512];
+    static Endpoint epp(sp, rxp, sizeof rxp, txp, sizeof txp, {512, 1024, 2}, Endpoint::kUartBridge);
+    static PausablePhy pphy;
+    static Ch32Dm pdm(pphy);
+    static DebugPort pport{pdm, 0, 1};
+    static WireRvswd pwire(pport, 0);
+    static DmConsole pdriver(pdm, pphy);
+    static TargetConsoleStream pconsole(pport, pdriver, 0);
+    static Binds pbinds;
+    static ProbeConfig pcfg(epp, pbinds);
+    epp.add(pwire);
+    epp.add(pconsole);
+    epp.add(pcfg);
+    pcfg.addPlace(pwire, pconsole);
+    pphy.paused = true;
+    CHECK(ok(set(pcfg, slotItem(cfg::kSlotAttachAtBoot, 0, 100), out)));
+    for (int i = 0; i < 5; ++i) { g_millis += 150; pcfg.poll(); }
+    CHECK(pphy.attaches == 0);   // set, and retry_ms passed three times over: nothing on the wire
+    pphy.paused = false;
+    pcfg.poll();
+    const int first = pphy.attaches;
+    CHECK(first > 0);            // the first poll after the window: the attach
+    pphy.paused = true;
+    for (int i = 0; i < 5; ++i) { g_millis += 150; pcfg.poll(); }
+    CHECK(pphy.attaches == first);   // its retries wait too
+    pphy.paused = false;
+    pcfg.poll();
+    CHECK(pphy.attaches > first);
   }
 
   // ---- the wifi item (item 0x08, probe.config §1.4): index ssid_len ssid pass_len passphrase, key index ----

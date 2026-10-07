@@ -66,6 +66,7 @@ class SwioPhy final : public DmiPhy {
   bool backgroundTurn() override;
   void backgroundDone() override;
   void backgroundSent() override;
+  bool wirePaused() const override { return gWireGate.windowOpen(); }   // a sampler's window (none but on the classic)
 
  protected:
   bool readWire(uint8_t address, uint32_t &value) override;   // with bounded retry (DmiPhy::read)

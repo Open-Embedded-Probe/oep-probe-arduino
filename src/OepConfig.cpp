@@ -794,9 +794,15 @@ void ProbeConfig::runSlot(uint8_t i) {
   const Place &p = places_[s.place];
   DebugPort &port = *p.port;
   const bool at_boot = s.attach == cfg::kSlotAttachAtBoot;
+  // The attach and the liveness check wait while the wire is paused (DmiPhy::wirePaused: a logic sampler's window on
+  // the classic ESP32) and run at the first poll after: a request for the wire inside a trigger search gets a turn at
+  // once, and the check's frames, every retry_ms, held the sampler up - the bench's forced captures slipped in 4 to 17 %
+  // at every rate from 400 kHz down to 100 kHz, about once a second (retry 1 s), where immediate windows never did.
+  const bool paused = port.dm.phy().wirePaused();
   if (!port.connected && at_boot) {
     const bool retry = s.retry_ms && r.tried && static_cast<uint32_t>(millis() - r.last_try_ms) >= s.retry_ms;
-    if ((r.due || retry) && (!attach_gate_ || attach_gate_())) {   // held back while the gate is closed (setAttachGate)
+    // held back while the gate is closed (setAttachGate) or the wire paused
+    if ((r.due || retry) && (!attach_gate_ || attach_gate_()) && !paused) {
       r.due = false;
       r.tried = true;
       r.last_try_ms = millis();
@@ -808,7 +814,7 @@ void ProbeConfig::runSlot(uint8_t i) {
     }
   }
   if (!port.connected || !onPair(s)) return;   // no link, or the link is on another pair (another slot, the host)
-  if (at_boot && s.retry_ms && static_cast<uint32_t>(millis() - r.last_check_ms) >= s.retry_ms) {   // liveness
+  if (at_boot && s.retry_ms && !paused && static_cast<uint32_t>(millis() - r.last_check_ms) >= s.retry_ms) {   // liveness
     r.last_check_ms = millis();
     if (!checkConnection(port)) { r.last_try_ms = millis(); return; }   // gone: the retries begin after retry_ms
   }

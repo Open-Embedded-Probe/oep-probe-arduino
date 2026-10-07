@@ -74,8 +74,9 @@ void DmConsole::poll() {
   if (!phy_.attached()) {
     // A reset detaches, and the console has to outlive that: the point of it is to watch
     // a target through its own restarts. Retry at a slow rate so a target that is simply
-    // gone does not turn every loop into a full attach.
-    if (millis() - last_attach_ms_ < 250) return;
+    // gone does not turn every loop into a full attach. Not while the wire is paused (DmiPhy::wirePaused): an attach
+    // started in a sampler's turn would go on, frame by frame, into the segment.
+    if (millis() - last_attach_ms_ < 250 || phy_.wirePaused()) return;
     last_attach_ms_ = millis();
     AttachDeadline budget(phy_);   // as any attach (oep-if-debug §1)
     if (!dm_.attach()) {

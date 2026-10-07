@@ -22,7 +22,9 @@
 //   are exclusive, and the immediate window first waits for the holder to let go (beginWindow). A trigger search runs
 //   exclusive too, but gives the wire turns inside its bursts (kShared): one when a take was refused (wanted_; the
 //   console's polls, at most one turn a burst), and one whenever a request waits for the wire (needed_) - the search
-//   samples on through a turn, so what a command or a reset sent in it makes the target do is seen. The console ends a
+//   samples on through a turn, so what a command or a reset sent in it makes the target do is seen. The probe's own
+//   background work on the wire (an at-boot slot's attach and liveness checks, the console's re-attach) asks for no turn:
+//   it waits while a window is open (SwioPhy::wirePaused, ProbeConfig, DmConsole) - a frame in a turn holds samples up. The console ends a
 //   turn early once it has handed the target the last byte it had to send (endTurn): the target then acts with the
 //   sampler alone on the bus.
 // Each side sets its own flag before it looks at the other's (Dekker's order), so neither misses the other. One gate on
