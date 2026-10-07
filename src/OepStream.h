@@ -110,14 +110,16 @@ class PositionStream {
     return completed(kReadHeader + count);
   }
 
-  // Marks from serial `from` on (serial arithmetic; an older one starts at the oldest kept). -> bytes written.
+  // Marks from serial `from` on, by common §1.3's serial paging: from included when kept; from = the next serial (or
+  // nothing kept) no marks and more 0; any other (pushed out, not given yet, another boot's) from the oldest kept.
+  // The host goes on from the last serial + 1. -> bytes written.
   size_t marks(uint32_t from, uint8_t *out, size_t capacity) const {
     const uint32_t first = serial_ - kept_;   // serial number arithmetic (core §2.6)
-    if (static_cast<int32_t>(from - first) < 0) from = first;
+    from = serialPageStart(from, first, serial_);
     uint8_t count = 0;
     size_t used = 2;
     bool more = false;
-    for (uint32_t s = from; static_cast<int32_t>(s - serial_) < 0; ++s) {
+    for (uint32_t s = from; s != serial_; ++s) {
       if (used + kMarkBytes > capacity || count == 255) { more = true; break; }
       const Mark &mk = marks_[slotBack(serial_ - s)];
       putU32(out + used, mk.serial);

@@ -684,7 +684,7 @@ int main() {
     CHECK(answeredOk(a));
     a = send(2, TargetConsoleStream::kOpMarks, cat(le16(s4), {0, 0, 0, 0}), 7);   // the ended session's id: no resume
     CHECK(answered(a, kResolutionRejected, kRejectNoSession));
-    a = send(2, TargetConsoleStream::kOpStreams, {0}, 0);   // listed closed, nobody using it
+    a = send(2, TargetConsoleStream::kOpStreams, {0, 0}, 0);   // first(u16) 0: listed closed, nobody using it
     CHECK(answeredOk(a) && a.size() == kResultHeader + 9 && uint16_t(a[7] | a[8] << 8) == s4 && a[12] == 0 &&
           a[13] == con::kStreamStateClosed);
 

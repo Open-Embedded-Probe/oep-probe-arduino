@@ -138,12 +138,12 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     out[2] = existing ? con::kOpenFlagsExisting : 0;
     return completed(3);
   }
-  if (op == kOpStreams) {   // first(u8) [TLV] -> more(u8) count(u8) count x (stream(u16) connection(u16) mechanism(u8) users(u8) state(u8))
-    const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
+  if (op == kOpStreams) {   // first(u16) [TLV] -> more(u8) count(u8) count x (stream(u16) connection(u16) mechanism(u8) users(u8) state(u8))
+    const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
     if (refused(parsed)) return parsed;
     if (capacity < 9) return failed();
-    out[0] = 0;   // more: never (one stream at most)
-    out[1] = exists_ && payload[0] == 0 ? 1 : 0;
+    out[0] = 0;   // more: never (one stream at most); first at or past the count: none, more 0 (core §7.3)
+    out[1] = exists_ && getU16(payload) == 0 ? 1 : 0;
     if (!out[1]) return completed(2);
     putU16(out + 2, stream_number_);   // no element length (core §2.3)
     putU16(out + 4, connection_);

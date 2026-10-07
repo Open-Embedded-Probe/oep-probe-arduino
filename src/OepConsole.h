@@ -10,7 +10,7 @@
 //   0x03 marks(stream, from_serial u32)            -> more u8, count u8, count x (serial u32, position u64,
 //                                                     kind u8, time_ns u64, detail u8)                   no lock
 //   0x04 clear(stream)   0x05 mark(stream, value u8)   0x06 write(stream, count u16, data) -> accepted u16
-//   0x07 close(stream)   0x08 streams(first u8) -> more u8, count u8, count x (stream u16, connection u16,
+//   0x07 close(stream)   0x08 streams(first u16) -> more u8, count u8, count x (stream u16, connection u16,
 //                                                                      mechanism u8, users u8, state u8)   no lock
 //
 // One live stream on the one connection; its number is from the probe's one space (core §9). Opening the same mechanism
