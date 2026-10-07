@@ -150,7 +150,7 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   list の prefix、describe の reserved / profile / resets_on_open / discoverable / implementation、port_speed の port と idle_ms と壊れの数え、
   i2c-target の mode と arm_rx / reset、spi-target の reset、gpio の drive の kind と mode 7、uart の status の configured、コンソールの
   send_queue の宣言、捕捉の timing / rate_accuracy と宣言（rate_list など）、riscv-dm の reset の method と attempts、
-  OEP_SWIO_PAUSE_CONSOLE の試験用の仕掛け（今は窓の間いつも止める、§4.1）。
+  OEP_SWIO_PAUSE_CONSOLE の試験用の仕掛け（窓ごとの止め方は無くなり、今はフレームごとに分ける、§4.1）。
 
 ## 3. 線の PHY ごと
 
@@ -185,11 +185,14 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
 
 - **キャプチャの窓とデバッグの線**: logic の sampler は、窓の間（即時で最大 164 ms、トリガの探索は 1 回の区切りが最大 250 ms）、core 0 で
   割り込みを止めて GPIO を読み続ける。同じ周辺のバスを使う SWIO のフレームは、その間ずれうる（SWIO にはパリティが無く、DMI の書き込みは
-  読み戻されないので、線の上で分からない）。この実装は、要求の SWIO のフレームを窓の後に回す（要求のフレームは窓で分けない。トリガの
-  探索の区切りの間に待っている要求があれば 5 ms の番を譲る）。止めるのは窓の長さ以下。
-- **コンソールの読み**: 窓の間、コンソールは DMSTATUS も DATA0 も読まない（線の番を断られ、窓が閉じた後の poll で読む）。止めるのは
-  窓の長さ以下（即時で最大 164 ms、トリガの探索は 1 回の区切りが最大 250 ms）。仕様（console §3）は読む間隔を決めないので、どの規則にも
-  反しない。target の側では、SDI / DMDATA はその間書き込みを待ち、dmseq の target は長い待ち（1 s 以上）のうちに戻る。
+  読み戻されないので、線の上で分からない）。この実装は、フレームごとに分ける: 窓の中では、SWIO のフレームは sampler が GPIO を読むのを
+  止めるまで待ち（多くてサンプル 1 つ）、sampler はフレームが終わるまで読まない（1 フレーム数十 µs）。その間に取るはずだったサンプルは
+  フレームの後に遅れて取り、セグメントと status に slipped を立てる。フレームの間に線で起きたことは、フレームの後の値でしか見えない
+  （その間の短いパルスは見えない）。
+- **要求とコンソールの読み**: どちらも窓の間も進む（窓を待たない）。キャプチャを始めた後に送ったコンソールのコマンドやデバッグの
+  リセットは、キャプチャの中に入る。0.0.29 の開発版 f32a3ef は、窓の間コンソールの読みを止め、要求のフレームを窓の後に回していた
+  ため、キャプチャの開始の後に送ったコマンドやリセットはキャプチャが終わってから target に届き、classic ESP32 のキャプチャには何も
+  写らなかった。
 - fixture UART の受信の割り込みは loop() の core（sampler と別）で、FIFO の閾値は 32 byte。速さは 2000000 bps まで。
 
 ### 4.2 ESP32-P4

@@ -10,12 +10,16 @@
 // zero, a pulse lost, a frame the target parses as another register or another value. SWIO has no parity and a DMI
 // write is not read back, so nothing on the wire tells.
 //
-// The gate: the sampler opens a window (window_) before it turns interrupts off and waits for the wire to be let go of
-// (held_); loop()'s core takes the wire (held_) before a frame and keeps it until loop() comes round
-// (release(), SamplerCapture::poll) - a request's frames are never split by a window, and a window never starts while
-// a frame is on the line. Each side sets its own flag before it looks at the other's (Dekker's order), so they cannot
-// both go on. One gate on a probe (one sampler, one SWIO wire): gWireGate. Elsewhere nothing opens a window and every
-// take succeeds at once.
+// The gate works frame by frame: while the sampler has a window open (window_), a SWIO frame announces itself (frame_
+// odd) and starts only once the sampler has stopped reading for it (ack_ = that frame); the sampler, between two
+// samples, sees the frame, stops, and reads again once the frame has ended (frame_ even) - the samples due meanwhile are
+// taken late (the slipped flag), the frame meets no GPIO.in read. Neither side waits for more than one frame or one
+// sample: a request and the console's reading go on during a window (a console command sent during a capture reaches
+// the target inside it; waiting out whole windows kept every command and reset sent after a capture's start out of it,
+// 0.0.29-dev f32a3ef), and a window opens at once. The frame announces itself before it looks at window_, and the
+// sampler opens window_ before it looks at frame_ (Dekker's order): a frame that saw no window is waited out by the
+// window's start. One gate on a probe (one sampler, one SWIO wire): gWireGate. Elsewhere nothing opens a window and every
+// frame goes at once.
 #pragma once
 
 #include <stdint.h>
@@ -24,53 +28,44 @@
 
 namespace oep {
 
-// inlined where they are used: the SWIO frames' callers are IRAM code on the classic
+// inlined where they are used: the SWIO frames and the sampling loop are IRAM code on the classic
 #define OEP_GATE_INLINE inline __attribute__((always_inline))
 
 class WireGate {
  public:
-  // ---- loop()'s core (the wire's user) ----
-  // Take the wire if no window is open or waiting; true also when this core holds it already. A refusal is noted for
-  // the sampler when `note` (wanted): between the bursts of a trigger search it then leaves the wire a turn
-  // (SamplerCapture) - a reader that goes on through the window anyway does not ask for one.
-  OEP_GATE_INLINE bool tryHold(bool note = true) {
-    if (held_.load()) return true;
-    held_.store(1);
-    if (!window_.load()) return true;
-    held_.store(0);
-    if (note) wanted_.store(1);
-    return false;
+  // ---- loop()'s core (the SWIO wire): around each frame, nothing between them touching the GPIO registers ----
+  // Announced; with a window open, the sampler's stop for this frame waited for (one sample at most).
+  OEP_GATE_INLINE void frameBegin() {
+    const uint32_t v = frame_.load(std::memory_order_relaxed) + 1;   // odd: this frame (only this core writes frame_)
+    frame_.store(v);
+    while (window_.load() && ack_.load() != v) {}
   }
-  // Take the wire, waiting out a window (one burst at most: a waiting window lets the holder go on, see beginWindow).
-  template <class Spin> OEP_GATE_INLINE void hold(Spin spin) {
-    while (!tryHold()) {
-      while (window_.load()) spin();
-    }
-  }
-  OEP_GATE_INLINE void hold() { hold([] {}); }
-  // loop() came round (or the wire's user waits for the sampler, SamplerCapture::waitIdle): a window may open now.
-  OEP_GATE_INLINE void release() { held_.store(0); }
-  bool held() const { return held_.load() != 0; }
+  // The frame is off the line (its writes done first: a sequentially consistent store): the sampler reads again.
+  OEP_GATE_INLINE void frameEnd() { frame_.store(frame_.load(std::memory_order_relaxed) + 1); }
+  bool framing() const { return (frame_.load() & 1) != 0; }
 
   // ---- the sampler's core ----
-  // Before interrupts go off: the window is announced, then the wire's current holder is waited for (`wait` yields,
-  // so the core's idle task and watchdog run). From here until endWindow() loop()'s core starts no frame.
-  template <class Wait> OEP_GATE_INLINE void beginWindow(Wait wait) {
+  // Interrupts off first: from here until endWindow() the sampler calls yieldFrame() before each GPIO read. A frame
+  // already on the line (it saw no window) is waited out here.
+  OEP_GATE_INLINE void beginWindow() {
     window_.store(1);
-    while (held_.load()) wait();
+    yieldFrame();
   }
   OEP_GATE_INLINE void endWindow() { window_.store(0); }
   bool windowOpen() const { return window_.load() != 0; }
-  // A take was refused since the last call (and the note cleared).
-  OEP_GATE_INLINE bool takeWanted() {
-    if (!wanted_.load()) return false;
-    wanted_.store(0);
+  // Between two samples: a frame announced has the bus to itself until it ends. true: the sampler stopped for one.
+  OEP_GATE_INLINE bool yieldFrame() {
+    const uint32_t v = frame_.load(std::memory_order_relaxed);   // the cheap look, every sample
+    if (!(v & 1)) return false;
+    ack_.store(v);
+    while (frame_.load() == v) {}
     return true;
   }
 
  private:
-  // words, sequentially consistent loads and stores only (no read-modify-write: nothing the Xtensa core lacks)
-  std::atomic<uint32_t> window_{0}, held_{0}, wanted_{0};
+  // words, loads and stores only (no read-modify-write: nothing the Xtensa core lacks); frame_ and ack_ count frames
+  // (frame_ odd while one is on the line), so an old frame's ack never lets a new one go
+  std::atomic<uint32_t> window_{0}, frame_{0}, ack_{0};
 };
 
 #undef OEP_GATE_INLINE

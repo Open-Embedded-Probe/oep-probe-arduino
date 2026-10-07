@@ -198,12 +198,11 @@ class Blink final : public oep::Interface {
   ちょうどに付きます。RP2 は arduino-pico の受信の列のあふれが抜けた所ちょうど、PL011 の overrun と break（`poll()` で印として
   読みます）は一つ前に見たときに数えたバイトの所です。
 - classic ESP32 の sampler と SWIO の線は GPIO のレジスタのバスを分け合います: sampler が続けて読む GPIO.in は、もう一方の
-  core の SWIO のパルスをフレームが乱れるほど動かし、SWIO にはパリティがありません。`OepWireGate.h` が両者を分けます: 要求の
-  フレームは sampler の窓が終わるのを待ち、その後 `loop()` が一回りするまで線を持ちます。窓は持ち主を待ちます。
-  `SamplerCapture::poll()` が線を手放すので、両方を持つスケッチは毎回の `loop()` でそれを呼びます（呼ばないと窓が開きません）。
-  コンソールの poll は、窓が開いている間は止まります（番を断られ、次の poll で読む）。oep-if-console §3 は読む間隔を決めず、
-  その connection の要求の後は DATA0 の前に DMSTATUS を読むことと、hart が止まっている間 DATA0 / DATA1 に触れないことだけを
-  求めます（docs/implementation-limits.ja.md §4.1）。
+  core の SWIO のパルスをフレームが乱れるほど動かし、SWIO にはパリティがありません。`OepWireGate.h` がフレームごとに両者を
+  分けます: sampler の窓の中では、SWIO のフレームは sampler が読むのを止めるのを待ち（多くてサンプル 1 つ）、sampler は
+  フレームが終わるのを待ってから追いつきます（その間のサンプルは遅れる: slipped）。要求とコンソールの読みはキャプチャの間も
+  進むので、開始の後に送ったコマンドやリセットはキャプチャの中に入ります（docs/implementation-limits.ja.md §4.1）。そのために
+  `loop()` から呼ぶものはありません。
 
 ## 8. push と出来事
 

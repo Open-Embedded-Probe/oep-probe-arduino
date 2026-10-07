@@ -1,6 +1,7 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+<<<<<<< HEAD
 - (EN) OEP over TCP (oep-spec transports §1-§3 as of af3d52b): `Endpoint::addTcpListener` adds a listening socket as one
   describe entry (kind 6, interface 0xFF) whose connection slots are each a transport of their own - confirm names the
   listener's entry, answers go back on the connection, notifications go to the subscriber's connection only (none to a
@@ -41,6 +42,38 @@
   list / describe / clock / open / end / gpio / config、2 つの接続（locked、lock_state）、閉じた接続を越えてセッションが残る、シリアルの口も同時に、
   `oep linktest`（失いなし）、oep-client-python の tests/hw を TCP とシリアルで（すべて通過）、TCP での restart。docs/implementation-limits §6
   （英語は stub）、README（EN / JA）、ガイド getting-started §6、writing-a-probe、boards（EN / JA）
+=======
+- (EN) Classic ESP32: a logic capture records again what a console command or a debug reset sent after its start does
+  (bench, the V003 jig, f32a3ef: test_timing 0 rising edges in all 6 captures, reset_probe no low run in any of 10;
+  5ad85ce / ff847a4 passed; the ESP32-P4 passed with f32a3ef). Cause: f32a3ef paused the console's reading for the whole
+  sampler window (up to 164 ms immediate) and requests' SWIO frames already waited windows out, so the host's command
+  (13-26 ms after the start) and the reset reached the target only after the capture had ended - the captured data was
+  the line's constant level (all high / all low), not a sampler fault (the debug resets' READY came 177-227 ms after
+  the start). The gate between the core-0 sampler and the SWIO frames (`OepWireGate.h`) now works frame by frame:
+  inside a window a frame waits for the sampler to stop reading GPIO.in (one sample at most), the sampler waits for the
+  frame's end and catches up - those samples late, the slipped flag - so no frame meets a GPIO.in read and neither
+  requests nor the console wait for a window. `DmiPhy::backgroundTurn` / `backgroundDone`, the wire holder, its release
+  in `SamplerCapture::poll()` / `waitIdle()` and the trigger search's `kWireTurnMs` turn are gone; a trigger search's
+  slipped flag is its last burst's. Host test test_wire_gate: the gate's rules, a two-thread stress (no frame during a
+  sample), 3000 request frames inside one window, and a console line (DmConsole dmseq on Ch32Dm and SwioPhy against a
+  simulated target) delivered while one window stays open - with f32a3ef's pause the line never arrived; test_console's
+  paused-wire case removed. Guides getting-started / writing-a-probe and docs/implementation-limits §4.1 (EN / JA);
+  not run on hardware yet
+- (JA) classic ESP32: ロジックのキャプチャが、開始の後に送ったコンソールのコマンドやデバッグのリセットの結果を再び写すように
+  しました（ベンチ、V003 の治具、f32a3ef: test_timing は 6 つのキャプチャすべてで立ち上がり 0、reset_probe は 10 回すべてで low
+  が無い。5ad85ce / ff847a4 は通り、ESP32-P4 は f32a3ef で通った）。原因: f32a3ef はコンソールの読みを sampler の窓の間ずっと
+  止め（即時で 164 ms まで）、要求の SWIO のフレームはもともと窓の後に回していたので、host のコマンド（開始の 13-26 ms 後）と
+  リセットはキャプチャが終わってから target に届いた。取れたデータは線の一定のレベル（すべて high / すべて low）で、sampler の
+  故障ではない（デバッグのリセットの READY は開始の 177-227 ms 後）。core 0 の sampler と SWIO のフレームの間の門（`OepWireGate.h`）
+  をフレームごとにしました: 窓の中では、フレームは sampler が GPIO.in を読むのを止めるのを待ち（多くてサンプル 1 つ）、sampler は
+  フレームの終わりを待ってから追いつく（その間のサンプルは遅れ、slipped を立てる）。どのフレームも GPIO.in の読みと重ならず、
+  要求もコンソールも窓を待たない。`DmiPhy::backgroundTurn` / `backgroundDone`、線の持ち主とその `SamplerCapture::poll()` /
+  `waitIdle()` での手放し、トリガの探索の `kWireTurnMs` の番は無くなり、トリガの探索の slipped は最後の区切りのもの。ホストの試験
+  test_wire_gate: 門の規則、2 スレッドの負荷（サンプル中にフレームが無い）、1 つの窓の中の要求のフレーム 3000、1 つの窓が開いた
+  ままの間のコンソールの行の配達（模擬の target に対する Ch32Dm と SwioPhy の上の DmConsole dmseq。f32a3ef の止め方では届かない）。
+  test_console の止まった線の場合は削除。ガイド getting-started / writing-a-probe と docs/implementation-limits §4.1（EN / JA）。
+  実機ではまだ動かしていない
+>>>>>>> 589acd5 (Classic ESP32: a logic capture records again what a console command or a debug reset sent after its start does (bench, the V003 jig, f32a3ef: test_timing 0 rising edges in all 6 captures, reset_probe no low run in any of 10; 5ad85ce / ff847a4 passed; the P4 passed with f32a3ef). Cause: f32a3ef paused the console's reading for a whole sampler window (up to 164 ms immediate) and requests' SWIO frames already waited windows out, so the command (13-26 ms after the start) and the reset reached the target after the capture had ended; the data was the line's constant level, not a sampler fault (debug resets' READY 177-227 ms after the start). OepWireGate.h now gates frame by frame: inside a window a SWIO frame waits for the sampler to stop reading GPIO.in (one sample at most), the sampler waits for the frame's end and catches up (those samples late: slipped) - no frame meets a GPIO.in read, and neither requests nor the console wait for a window. DmiPhy::backgroundTurn / backgroundDone, the wire holder and its release in SamplerCapture::poll() / waitIdle(), and kWireTurnMs are gone; a trigger search's slipped flag is its last burst's. Host test test_wire_gate: the rules, a two-thread stress, 3000 request frames in one window, a console line (DmConsole dmseq on Ch32Dm / SwioPhy, simulated target) delivered while one window stays open (fails with f32a3ef's pause); test_console's paused-wire case removed. Guides getting-started / writing-a-probe, docs/implementation-limits §4.1 (EN / JA); CHANGELOG (EN / JA); not run on hardware yet)
 - (EN) Follows oep-spec 0f455a0 (the rule review of 2026-10-07, §2 and §7; the registry header and the test vectors synced
   from it). Core: no ignored TLV - an unknown non-critical TLV is ignored with nothing in the answer, an unknown critical
   one is unsupported; a TLV this probe implements is checked the same with or without bit 7 (another length: malformed;

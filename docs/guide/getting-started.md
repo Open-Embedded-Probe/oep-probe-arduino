@@ -151,11 +151,11 @@ data = lc.read_segment(segment)              # the trigger is sample segment.tri
 ```
 
 The classic ESP32's sampler takes triggers too (8 channels, up to 2 MHz). It samples with interrupts off, so it
-searches in bursts of up to 250 ms: an edge that falls in the gap between two bursts (about 1 ms; 5 ms after a burst
-that kept a request on the SWIO wire waiting) is missed. While it samples, the probe starts no SWIO frame for a request
-(riscv-dm, the wire's ops): such a request waits for the window to end (up to 164 ms, or one burst), and a window waits
-for a request in progress to end. The console's reading still goes on during a window (oep-if-console §3); on this
-probe its frames there can be garbled, so leave the console alone while a capture samples where you can.
+searches in bursts of up to 250 ms: an edge that falls in the gap between two bursts (about 1 ms) is missed. Requests
+on the SWIO wire (riscv-dm, the wire's ops) and the console go on while it samples: before each SWIO frame the sampler
+stops reading the pins until the frame has ended (some tens of microseconds), so no frame is garbled, and the samples due
+meanwhile are taken late - the segment says so (slipped). A console command or a debug reset sent after the capture's
+start lands inside it; what happens on the lines during one of those frames is seen only after it.
 
 Logic and analog together, on the logic's trigger (the capture-group): the analog follows it, and each track's segment
 marks the same instant.

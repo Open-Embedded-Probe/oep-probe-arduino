@@ -212,11 +212,10 @@ Each source file starts with the spec sections it follows.
   at the gap; the PL011's overrun and a break, read in `poll()` as flags, at the bytes counted at the look before.
 - The classic ESP32's sampler and a SWIO wire share the GPIO registers' bus: the sampler's back-to-back GPIO.in reads
   move the SWIO pulses of the other core enough to garble frames, and SWIO has no parity. `OepWireGate.h` keeps them
-  apart: a request's frames wait out a sampler window and then hold the wire until `loop()` comes round; a window waits
-  for the holder. `SamplerCapture::poll()` lets the wire go, so a sketch with both calls it every `loop()` (or no window
-  opens). The console's poll pauses while a window is open (its turn is refused; the next poll reads): oep-if-console
-  §3 sets no reading interval, only that DMSTATUS is read before DATA0 after the connection's request and that DATA0 /
-  DATA1 are left alone while the hart is halted (docs/implementation-limits.ja.md §4.1).
+  apart frame by frame: inside a sampler window each SWIO frame waits for the sampler to stop reading (one sample at
+  most), and the sampler waits for the frame's end, then catches up (those samples late: the slipped flag). Requests
+  and the console's reading go on during a capture, so a command or a reset sent after its start is inside it
+  (docs/implementation-limits.ja.md §4.1). Nothing to call from `loop()` for it.
 
 ## 8. Pushes and events
 
