@@ -450,6 +450,18 @@ struct Dma {
       n -= k;
     }
   }
+  void put(const Bytes &bytes) {   // these bytes, as one chunk (or two at the ring's end)
+    size_t done = 0;
+    while (done < bytes.size()) {
+      size_t k = g_fake_parlio_size - at;
+      if (k > bytes.size() - done) k = bytes.size() - done;
+      memcpy(g_fake_parlio_buffer + at, bytes.data() + done, k);
+      parlio_rx_event_data_t e = {g_fake_parlio_buffer + at, k};
+      g_fake_parlio_callbacks.on_partial_receive(nullptr, &e, g_fake_parlio_context);
+      at = (at + k) % g_fake_parlio_size;
+      done += k;
+    }
+  }
   void run() {
     if (!g_fake_task_fn) return;
     g_fake_queue_empty = [] { throw Idle{}; };
@@ -951,7 +963,121 @@ static void testTriggeredHole() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
 }
 
+// trigger_index is the pretrigger exactly (capture §2, §3.3: pretrigger samples kept before the trigger's), wherever in
+// a byte the trigger falls: at w = 2 an edge on the second sample of a byte gave trigger_index 101 for a pretrigger of
+// 100 (the segment started on the byte holding sample t - P; bench, P4, 1001 for 1000). The segment's data starts
+// at the sample P before the edge.
+static void testTriggerIndexMidByte() {
+  board(512 * 1024, size_t(32) << 20);
+  Bytes out;
+  Config c;
+  c.samples = 4096;
+  c.trigger = true;   // falling edge on role 0
+  c.pretrigger = 100;
+  {
+  Rig rig(2);   // w = 2: 4 samples a byte
+  Dma dma;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  const uint32_t generation = getU32(out.data() + 4);
+  dma.deliver(1000, 0xFF);   // samples 0..3999 high
+  dma.put({0x03});           // sample 4000 high, 4001 low: the edge at 4001; the segment from 3901
+  dma.deliver(2000, 0x00);
+  dma.run();
+  rig.cap.poll();
+  CHECK(rig.cap.trackState() == cap::kStateDone);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
+  CHECK(getU32(out.data() + 2 + 12) == 4096 && getU32(out.data() + 2 + 28) == 100);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 40), out)) && getU32(out.data() + 9) == 40);
+  CHECK(out[13] == 0xFF && out[13 + 24] == 0xFF && out[13 + 25] == 0x00);   // samples 0..99 high, 100 (the edge) low
+  }
+  {   // stopped while filling: the short segment (flags bit1) starts at the same sample
+  Rig rig(2);
+  Dma dma;
+  c.samples = 40000;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  const uint32_t generation = getU32(out.data() + 4);
+  dma.deliver(1000, 0xFF);
+  dma.put({0x03});
+  dma.deliver(999, 0x00);   // stream bytes 975 (holding sample 3901) .. 1999 copied: 1025 bytes less 2 bits
+  dma.run();
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
+  CHECK(getU32(out.data() + 2 + 12) == 4099 && getU32(out.data() + 2 + 28) == 100 && (out[2 + 32] & cap::kSegmentFlagShort));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 40), out)) && getU32(out.data() + 9) == 40);
+  CHECK(out[13] == 0xFF && out[13 + 24] == 0xFF && out[13 + 25] == 0x00);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && getU64(out.data() + 5) == 1025);   // (4099 x 2 + 7) / 8
+  c.samples = 4096;
+  }
+  for (const uint8_t w : {uint8_t(1), uint8_t(4)}) {   // the other widths below a byte: 8 and 2 samples a byte
+    Rig other(w);
+    Dma d;
+    c.pretrigger = 1000;
+    CHECK(ok(configure(other.cap, c, out)));
+    CHECK(ok(raw(other.cap, LogicCapture::kOpStart, {}, out)));
+    d.deliver(2000, 0xFF);
+    d.put({static_cast<uint8_t>(w == 1 ? 0x01 : 0x0F)});   // the edge on the byte's second sample
+    d.deliver(4096, 0x00);
+    d.run();
+    other.cap.poll();
+    CHECK(ok(raw(other.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
+    CHECK(getU32(out.data() + 2 + 12) == 4096 && getU32(out.data() + 2 + 28) == 1000);
+  }
+}
+
+// force (capture §3.3): triggered at the sample of that instant, trigger_index = the pretrigger when that many are in;
+// a force (or an edge) before then: the segment is short - the samples there are, the trigger's and samples - pretrigger -
+// 1 after it - with trigger_index the samples before it.
+static void testForcedAndEarly() {
+  board(512 * 1024, size_t(32) << 20);
+  {
+    Rig rig(1);   // w = 1
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.samples = 8192;
+    c.trigger = true;
+    c.pretrigger = 1000;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    dma.deliver(4096, 0xFF);   // no edge
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpForce, {}, out)));
+    dma.deliver(4096, 0xFF);
+    dma.run();
+    rig.cap.poll();
+    CHECK(rig.cap.trackState() == cap::kStateDone);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
+    CHECK(getU32(out.data() + 2 + 12) == 8192 && getU32(out.data() + 2 + 28) == 1000);
+  }
+  {
+    Rig rig(2);
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.samples = 8192;
+    c.trigger = true;
+    c.pretrigger = 1000;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint32_t generation = getU32(out.data() + 4);
+    dma.deliver(100, 0xFF);   // samples 0..399 high
+    dma.put({0x03});          // the edge at 401, before 1000 samples are in
+    dma.deliver(4096, 0x00);
+    dma.run();
+    rig.cap.poll();
+    CHECK(rig.cap.trackState() == cap::kStateDone);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
+    CHECK(getU32(out.data() + 2 + 12) == 401 + 8192 - 1000 && getU32(out.data() + 2 + 28) == 401);
+    CHECK((out[2 + 32] & cap::kSegmentFlagShort) == 0);   // bit1 is a stop's
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 1890, 100), out)) && getU32(out.data() + 9) == 9);   // (7593 x 2 + 7) / 8 bytes
+  }
+}
+
 int main() {
+  testTriggerIndexMidByte();
+  testForcedAndEarly();
   testFollowerKeeps();
   testSerialsWrap();
   testTriggeredHole();

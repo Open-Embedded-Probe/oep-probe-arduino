@@ -229,11 +229,11 @@ void LogicCapture::freeStages() {   // the stages stay allocated (openStages); w
   for (int i = 0; i < 500 && (stage_free_ & all) != all; ++i) delay(2);
 }
 
-// The first sample of `data` (the stream's sample first_sample on), at or after min_at, where the trigger holds: at,
-// its index (the ones before min_at, before the pretrigger has filled, only move the last level on). A byte whose
+// The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. One before
+// the pretrigger has filled counts too (capture §3.3: the segment is then short, trigger_index smaller). A byte whose
 // samples cannot trigger (the channel's bits masked: all at the known level for an edge, none at the level wanted for
 // a level) is skipped whole; the rest is looked at sample by sample. The last level carries over for edges.
-bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at, uint64_t min_at) {
+bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at) {
   const uint8_t w = width_, k = trig_role_;
   const bool edge = trig_type_ == cap::kTriggerEdge;
   const uint8_t want = trig_value_ & 1;
@@ -252,7 +252,7 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
       const uint8_t v = data[b] & mask;
       if (edge ? have_level_ && v == (last_level_ ? mask : 0) : v == (want ? 0 : mask)) continue;
       for (uint8_t s = 0; s < per; ++s)
-        if (hits((data[b] >> (s * w + k)) & 1) && first_sample + static_cast<uint64_t>(b) * per + s >= min_at) {
+        if (hits((data[b] >> (s * w + k)) & 1)) {
           at = first_sample + static_cast<uint64_t>(b) * per + s;
           return true;
         }
@@ -261,13 +261,14 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
   }
   for (size_t i = 0; i + 1 < length; i += 2) {   // 16-bit samples
     const uint16_t v = static_cast<uint16_t>(data[i] | data[i + 1] << 8);
-    if (hits((v >> k) & 1) && first_sample + i / 2 >= min_at) { at = first_sample + i / 2; return true; }
+    if (hits((v >> k) & 1)) { at = first_sample + i / 2; return true; }
   }
   return false;
 }
 
-// A one-shot with a trigger: look for it in each chunk; once found, the segment starts pretrigger samples before it
-// (from what the ring still has) and takes the chunks after it until full. Harvest task only.
+// A one-shot with a trigger: look for it in each chunk; once found, the segment starts exactly pretrigger samples
+// before it (trigger_index = pretrigger, capture §2 / §3.3) - or at the oldest the ring still has, the segment then
+// that much shorter - and takes the chunks after it until full. Harvest task only.
 void LogicCapture::harvestTriggered(const Chunk &chunk) {
   if (const uint32_t skip = missed(chunk)) {           // chunks lost before this one: not searched; still in the ring
     captured_ += skip;
@@ -299,37 +300,56 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
       t = ext_sample_;
       if (t >= (base + chunk.length) * 8 / width_) return;
     } else if (force_) force_ = false;
-    else if (!findTrigger(chunk.data, chunk.length, first, t, pretrigger_)) return;   // once the pretrigger is in
-    uint64_t s0 = t > pre() ? t - pre() : 0;
+    else if (!findTrigger(chunk.data, chunk.length, first, t)) return;
+    uint64_t s0 = t > pre() ? t - pre() : 0;   // fewer before it than the pretrigger: the segment is short (§3.3)
     // not before the oldest byte the ring still holds (with a margin for the DMA running on)
     const uint64_t newest = base + ahead;
     const uint64_t oldest = newest > kRingBytes - 8192 ? newest - (kRingBytes - 8192) : 0;
     if (s0 * width_ / 8 < oldest) s0 = (oldest * 8 + width_ - 1) / width_;
-    if (width_ < 8) {                                // a whole byte: up to 8 / w - 1 samples earlier, or later when
-      s0 -= s0 % (8 / width_);                       // that would leave the trigger past the segment's last sample
-      if (t >= s0 && t - s0 >= samples_) s0 += 8 / width_;   // (a pretrigger close to samples: one fewer byte before it)
-    }
     seg_first_sample_ = s0;
     trigger_index_ = t >= s0 ? static_cast<uint32_t>(t - s0) : 0xFFFFFFFFu;   // before the ring's oldest: gone
     if (t < s0) trig_overrun_ = true;
+    // the samples before the trigger, the trigger's and the pretrigger's complement after it (pre() < samples_)
+    seg_samples_ = static_cast<uint32_t>((t >= s0 ? t - s0 : 0) + (samples_ - pre()));
+    seg_shift_ = static_cast<uint8_t>(width_ < 8 ? s0 % (8 / width_) * width_ : 0);
+    seg_raw_ = static_cast<uint32_t>((seg_shift_ + static_cast<uint64_t>(seg_samples_) * width_ + 7) / 8);
+    seg_aligned_ = false;
     from = s0 * width_ / 8;
     filled_ = 0;
     trig_phase_ = 1;
   }
-  for (uint64_t g = from; g < base + chunk.length && filled_ < bytes_; ) {   // copy in runs up to the ring's end
+  for (uint64_t g = from; g < base + chunk.length && filled_ < seg_raw_; ) {   // copy in runs up to the ring's end
     const size_t r = ringByte(g);
     size_t n = kRingBytes - r;
     if (n > base + chunk.length - g) n = static_cast<size_t>(base + chunk.length - g);
-    if (n > bytes_ - filled_) n = bytes_ - filled_;
+    if (n > seg_raw_ - filled_) n = seg_raw_ - filled_;
     memcpy(buffer_ + filled_, ring_ + r, n);
     filled_ += n;
     g += n;
   }
   if (produced_ - static_cast<uint32_t>(from) > kRingBytes) trig_overrun_ = true;   // rewritten while we copied
-  if (filled_ >= bytes_) {
+  if (filled_ >= seg_raw_) {
+    alignSegment(filled_);
     trig_phase_ = 2;
     done_ = true;
   }
+}
+
+// The segment's first `raw` bytes copied from the ring moved down by seg_shift_ bits, so that its first sample is at bit
+// 0 of byte 0 (once: the harvest's completion or a stop, whichever comes first).
+void LogicCapture::alignSegment(uint32_t raw) {
+  if (seg_aligned_) return;
+  seg_aligned_ = true;
+  if (!seg_shift_ || !raw) return;
+  const uint8_t up = static_cast<uint8_t>(8 - seg_shift_);
+  for (uint32_t i = 0; i + 1 < raw; ++i) buffer_[i] = static_cast<uint8_t>(buffer_[i] >> seg_shift_ | buffer_[i + 1] << up);
+  buffer_[raw - 1] = static_cast<uint8_t>(buffer_[raw - 1] >> seg_shift_);
+}
+
+uint32_t LogicCapture::filledSamples() const {
+  const uint64_t bits = static_cast<uint64_t>(filled_) * 8;
+  const uint64_t n = bits > seg_shift_ ? (bits - seg_shift_) / width_ : 0;
+  return static_cast<uint32_t>(n < seg_samples_ ? n : seg_samples_);
 }
 
 Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
@@ -343,6 +363,9 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   error_ = cap::kErrorPeripheral;
   force_ = trig_type_ == cap::kTriggerImmediate && !follow_;   // a ring left by following: start at once
   filled_ = fill_ = 0;
+  seg_shift_ = 0;
+  seg_samples_ = seg_raw_ = 0;
+  seg_aligned_ = false;
   trigger_index_ = 0xFFFFFFFFu;
   // a follower's trigger is the group's event; an immediate start (the ring a group's following left) sends none
   reported_trigger_ = follow_ || trig_type_ == cap::kTriggerImmediate;
@@ -907,7 +930,7 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
   queue_ = xQueueCreate(128, sizeof(Chunk));
   uint32_t caps = 0;
   storeBudget(caps);                         // PSRAM when there is some: the segment is filled by the CPU, not the DMA
-  buffer_ = static_cast<uint8_t *>(heap_caps_malloc(bytes, caps));
+  buffer_ = static_cast<uint8_t *>(heap_caps_malloc(bytes + 1, caps));   // + the byte a mid-byte start reaches into
   if (!takeRing() || !queue_ || !buffer_) return Open::kNoMemory;
   return openUnit(rate_hz, width, true, 0, num, den) ? Open::kOk : Open::kFailed;
 }
@@ -1039,7 +1062,7 @@ void LogicCapture::pollTriggered() {
   stopRepeat();
   if (trig_overrun_) { failLost(); return; }
   state_ = kStateDone;
-  kept_samples_ = samples_;
+  kept_samples_ = seg_samples_;
   if (subscribed_) {
     uint8_t seg[kInfoBytes];
     endpoint_.event(*this, kEventSegment, seg, segmentInfo(seg));
@@ -1196,7 +1219,11 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         stopRepeat();      // the harvest takes what came before the stop
         pollTriggered();   // a trigger found meanwhile: its event; the segment full: complete; a hole: state 6
         if (state_ == kStateDone || state_ == kStateError) return completed();
-        const uint32_t got = trig_phase_ >= 1 ? static_cast<uint32_t>(static_cast<uint64_t>(filled_) * 8 / width_) : 0;
+        uint32_t got = 0;
+        if (trig_phase_ >= 1) {   // the harvest has stopped: what it copied, its first sample moved to bit 0
+          got = filledSamples();
+          alignSegment(filled_);
+        }
         state_ = kStateConfigured;
         kept_samples_ = got;
         kept_short_ = got != 0;
@@ -1265,7 +1292,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         out[13] = (lost_ || queue_overflow_ || overruns_ || stage_drops_ || (mode_ == 3 && dropped_)) ? cap::kStatusFlagDropped : 0;
       } else if (triggered_) {
         putU32(out + 1, kept_samples_ ? 1 : 0);   // the segment, complete or cut short by stop
-        putU64(out + 5, state_ == kStateError ? 0 : filled_);   // a segment with a hole: its start (§2.2)
+        // the segment's bytes so far (a hole: its start, §2.2)
+        putU64(out + 5, state_ == kStateError ? 0 : (static_cast<uint64_t>(filledSamples()) * width_ + 7) / 8);
         out[13] = (queue_overflow_ || overruns_ || trig_overrun_) ? cap::kStatusFlagDropped : 0;
       } else {
         putU32(out + 1, kept_samples_ ? 1 : 0);                                    // segments done

@@ -111,8 +111,8 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   - ESP32-P4 の logic: describe の max_pretrigger は w = 1 のときの値 523263（1 区画の最大 523264 サンプル − 1）。リングが返せるのは
     64 KiB なので、w が広いと少ない（w = 2 で 262144、w = 16 で 32768）。それを超える pretrigger は configure / query が unsupported
     （pretrigger の tag）で断る（宣言は目安で、configure の応答が正、capture §3.5）。samples − 1 までの pretrigger を受ける。区画は
-    byte の境目から始まるので、pretrigger が samples に近いときは、トリガの前のサンプルが最大 8 / w − 1 少なくなる（trigger_index が
-    そのぶん小さい）。
+    トリガの pretrigger サンプル前から始まる（w < 8 で byte の途中からでも。trigger_index = pretrigger）。pretrigger が溜まる前の
+    トリガと force は短い区画になる（capture §3.3: trigger_index はあった分、samples はそのぶん少ない）。
   - classic ESP32 の logic: samples − 1 まで（describe は 65407）。
   - アナログ: RP2040 / RP2350 は samples − 1 まで（describe は 1 チャネルで 8191）。ESP32 / ESP32-P4 は区画がリングそのものなので、
     pretrigger + 129 が samples を超えるものは unsupported で断る（ドライバの 1 回の読み 128 レコードがリングの古い区画のサンプルに

@@ -204,8 +204,16 @@ class LogicCapture final : public Interface, public GroupTrack {
   volatile bool force_ = false;      // force: the trigger is now
   bool have_level_ = false;
   uint8_t last_level_ = 0;
-  uint32_t filled_ = 0;              // bytes in buffer_
+  uint32_t filled_ = 0;              // bytes in buffer_ (from the byte holding the segment's first sample)
   uint64_t seg_first_sample_ = 0;
+  // The segment's first sample need not start a byte (w < 8): it is copied from the byte holding it, seg_shift_ bits
+  // in, seg_raw_ bytes in all, and shifted down to bit 0 once it is in (alignSegment). seg_samples_: the segment's
+  // samples - fewer than samples_ when the trigger came before pretrigger samples were in (capture §3.3).
+  uint8_t seg_shift_ = 0;
+  bool seg_aligned_ = false;
+  uint32_t seg_samples_ = 0, seg_raw_ = 0;
+  void alignSegment(uint32_t raw);
+  uint32_t filledSamples() const;    // the segment's samples in buffer_ so far
   uint32_t trigger_index_ = 0xFFFFFFFFu;
   volatile bool trig_overrun_ = false;   // the DMA came round while filling: the segment is not contiguous
   bool reported_trigger_ = true;
@@ -216,7 +224,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   void harvestTriggered(const Chunk &chunk);
   // What an open could not get: storage (refused unavailable cause 3) or the peripheral (failed, state 6).
   enum class Open : uint8_t { kOk, kNoMemory, kFailed };
-  bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at, uint64_t min_at);
+  bool findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at);
   Result startTriggered(uint8_t *out, size_t capacity);
   Open openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
   void pollTriggered();

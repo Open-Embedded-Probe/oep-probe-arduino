@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 logic, a one-shot with a trigger (capture §2, §3.3): the segment starts exactly pretrigger samples before
+  the trigger, so trigger_index is the pretrigger, also when the start falls inside a byte (w < 8): it started on the
+  byte holding that sample, up to 8 / w - 1 samples earlier (the bench: an edge with a pretrigger of 1000 gave
+  trigger_index 1001); the segment is copied from that byte and moved down to bit 0 once in (or at a stop). A trigger or
+  a force before the pretrigger has filled is taken (it was not looked for until then) and gives a short segment: the
+  samples before it, its own and samples - pretrigger - 1 after it (as the classic ESP32's sampler). Host tests: an edge
+  on a byte's second sample at w = 1 / 2 / 4, a stop while filling, force, an early edge; docs/implementation-limits §1.7;
+  not run on hardware
+- (JA) ESP32-P4 の logic のトリガ付きワンショット: 区画はトリガのちょうど pretrigger サンプル前から始まり、trigger_index は
+  pretrigger です（w < 8 で byte の途中から始まるときも。以前はそのサンプルを含む byte から始まり、最大 8 / w − 1 多かった。ベンチ:
+  pretrigger 1000 で 1001）。pretrigger が溜まる前のトリガと force も取り（以前はそれまで探さなかった）、短い区画にします（classic
+  ESP32 の sampler と同じ）。host test、docs/implementation-limits §1.7。実機では未確認
 - (EN) Classic ESP32: the logic sampler has core 1 to itself; loop() (OEP, the SWIO wire, UART0, the fixture UART, the
   SPI / I2C devices, the ADC) and the Arduino events run on core 0 with the Wi-Fi driver and the TCP/IP stack (which the
   core's build pins there). The profile esp32 builds with LoopCore=0,EventsCore=0, and a Wi-Fi build of
