@@ -15,6 +15,10 @@
 //     name it: the restart handler set), on a UART bridge (transport 0, the port a bind names) and a vendor bulk
 //     (transport 1, where the requests go), max_frame 1024; each case starts from boot (resource numbers from 1) in the
 //     state its `state` says, with the session 0x11223344 open when the request carries it.
+// ops.json's cases of other probes run on their own: fns 12 - 14 (capture-group with two tracks, spi-target) on
+// WideProbe, the console marks of a ring of 4 on a PositionStream, arm-adi in test_swd, the dropped segment of a
+// 1000-byte segment in test_capture (this probe's are 4 KiB); multirate (capture §5) is not offered here. ops.json's
+// events: the group's on WideProbe, fn 9's from the logic capture (testLogicEvents), seq aside.
 // clock's uptime_ns (sessions.json) is the example probe's in the vector: here it is checked to be this probe's clock as
 // it reads it for the answer (the fake clock, which the test moves on before each clock), the rest byte for byte.
 // Two fields are the probe's own and not the vector's, both in the logic segment record: start_uncertainty_ns is this
@@ -42,6 +46,7 @@
 #include "OepFixture.h"
 #include "OepFrame.h"
 #include "OepP4I2cTarget.h"
+#include "OepP4SpiTarget.h"
 #include "OepPinTable.h"
 #include "OepTarget.h"
 
@@ -685,6 +690,17 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
   if (has("rvswd connections") || has("riscv-dm halt: halted") || has("riscv-dm dmi: one read") || has("riscv-dm dmi: n = 0")) {
     return p.open() && p.attach();
   }
+  if (has("the hart is running")) {   // connection 1, the hart let run
+    if (!p.open() || !p.attach()) return false;
+    p.phy.halted = false;
+    return true;
+  }
+  if (has("roles 0 and 1 in fn 9's plan")) {   // one plan_apply with both roles, nothing configured
+    g_fake_heap = FakeHeap{};
+    g_fake_heap.internal_free = 512 * 1024;
+    g_fake_heap.psram_total = g_fake_heap.psram_free = size_t(32) << 20;
+    return p.open() && p.ok(p.request(p.ep.planFn(), kOpPlanApply, {0x90, 5, 0, 9, 0, 0, 0, 0, 0x90, 5, 0, 9, 0, 1, 1, 0}));
+  }
   if (has("console")) {
     if (has("read from 4")) return true;
     if (!p.open() || !p.attach()) return false;
@@ -774,14 +790,36 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
   return true;   // the refusals that come before any state (core §4.3 orders 1, 5, 6), oep.probe.link
 }
 
+// A case of capture §5 (multirate, the second definition on TLVs 0x60): this probe does not offer it (its describe has
+// no 0x60), so only the case of a fn without it applies - run on fn 9.
+static bool multirate(const Json &c) {
+  const std::string &name = c["name"].string;
+  return name.find("multirate") != std::string::npos && name.find("does not declare") == std::string::npos;
+}
+// A case whose answer depends on the example probe's segment of 1000 bytes (this one's repeat segments are whole 4 KiB):
+// the dropped segment of capture §2.2, checked with this probe's sizes in tests/host/test_capture.cpp (testLostChunk).
+static bool ownSegments(const Json &c) { return c["state"].string.find("overflowed inside serial 2") != std::string::npos; }
+// Cases of a probe other than OpsProbe's fns 1 to 11 (their own small probes below, or a host test of their own).
+static bool elsewhere(const Json &c) {
+  if (c["name"].string.find("does not declare") != std::string::npos) return false;   // fn 16: run as fn 9
+  for (const auto &m : c["fns"].members) if (atoi(m.first.c_str()) >= 12) return true;
+  return c["state"].string.find("marks 5 to 8 kept") != std::string::npos;
+}
+
 static void testOps(const char *file, const char *list) {
   const Json v = load(file);
   for (const Json &c : v[list].items) {
+    if (elsewhere(c)) continue;
+    if (multirate(c) || ownSegments(c)) {
+      printf("  %s \"%s\": %s\n", file, c["name"].string.c_str(), multirate(c) ? "multirate, not offered" : "in test_capture");
+      continue;
+    }
     ++cases;
     boot();
     OpsProbe p;
     const std::string name = c["name"].string;
-    const Bytes req = hex(c["request_hex"].string);
+    Bytes req = hex(c["request_hex"].string);
+    if (name.find("does not declare") != std::string::npos && req.size() > 5) req[3] = 9, req[4] = 0;   // fn 16 -> fn 9
     p.corr = static_cast<uint16_t>(getU16(&req[1]) - 40);
     if (p.corr == 0 || p.corr > 0xffd0) p.corr = static_cast<uint16_t>(p.corr - 48);   // never 0 on the way (core §4.1)
     if (!setUp(p, name, c["state"].string, c["fns"])) {
@@ -812,11 +850,353 @@ static void testOps(const char *file, const char *list) {
     }
     if (names(c["fns"], "oep.probe.restart"))   // the restart follows its success answer only (oep-if-restart §2)
       CHECK(OpsProbe::restarts == (name.find("completed success") != std::string::npos ? 1 : 0));
+    if (name.find("the required answer set") != std::string::npos && got.size() == want.size()) {
+      // actual_samples (0x52) is the probe's own: 200000 asked at w = 2 is whole 128-byte cache lines (200192)
+      for (size_t at = 5; at + kTlvHeader + 4 <= want.size(); at += kTlvHeader + getU16(&want[at + 1]))
+        if (want[at] == reg::fixture_logic::kTlvConfigureAnswerActualSamples && got[at] == want[at]) {
+          CHECK(getU32(&got[at + kTlvHeader]) >= getU32(&want[at + kTlvHeader]));
+          putU32(&want[at + kTlvHeader], getU32(&got[at + kTlvHeader]));
+        }
+    }
     if (name.find("logic segments") != std::string::npos && want.size() == 5 + 2 + 37 && got.size() == want.size()) {
       putU32(&want[5 + 2 + 12], p.actual_samples);                   // the probe's own values (see the top)
       putU32(&want[5 + 2 + 24], LogicCapture::kStartUncertaintyNs);
     }
     CHECK(same(file, name, got, want));
+  }
+}
+
+// core §7.3: every describe TLV fits the smallest max_frame of the firmware's transports (512, the classic ESP32's)
+// with the answer's header 5 and more 1: its value at most 512 - 9. `page(first)` answers describe from TLV `first`.
+template <typename Page>
+static bool describeFits(Page page) {
+  constexpr size_t kSmallestMaxFrame = 512;
+  bool fits = true;
+  for (uint16_t first = 0;;) {
+    const Bytes d = page(first);
+    if (d.size() < 6 || d[3] != kResolutionCompleted) return false;
+    uint16_t n = 0;
+    for (size_t at = 6; at + kTlvHeader <= d.size(); at += kTlvHeader + getU16(&d[at + 1]), ++n)
+      if (getU16(&d[at + 1]) > kSmallestMaxFrame - 9) {
+        printf("  describe TLV 0x%02x of %u bytes\n", d[at], getU16(&d[at + 1]));
+        fits = false;
+      }
+    if (!d[5] || n == 0) return fits;
+    first = static_cast<uint16_t>(first + n);
+  }
+}
+
+// ---- the cases of other probes (`fns` 12 to 15, a small mark ring) -----------------------------------------------
+
+// An interface that only fills a fn number (the vectors' probe has other interfaces there).
+class Filler final : public Interface {
+ public:
+  const char *name() const override { return "io.github.test.filler"; }
+  uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+};
+
+// A capture track for the group's vectors: it starts at once (one-shot, immediate), its generation one up per start
+// (as the captures', nextGeneration), and is told / tells the trigger's time.
+class VecTrack final : public Interface, public GroupTrack {
+ public:
+  explicit VecTrack(const char *name) : name_(name) {}
+  const char *name() const override { return name_; }
+  uint16_t instance() const override { return 0; }
+  bool offers(uint8_t op) const override { return op == 1; }
+  Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
+  bool trackReady() const override { return state != 2 && state != 3; }
+  uint8_t trackMode() const override { return 1; }
+  bool trackTriggered() const override { return trigger; }
+  uint32_t trackLoad() const override { return 0; }
+  bool trackStart() override { state = 3; fired = false; generation = nextGeneration(generation); return true; }
+  bool trackCanFollow() const override { return trackReady(); }
+  bool trackStartFollowing() override { return trackStart(); }
+  bool trackTriggerNs(uint64_t &ns) const override { if (fired) ns = fired_ns; return fired; }
+  uint32_t trackGeneration() const override { return generation; }
+  void trackStop() override { state = 1; }
+  uint8_t trackState() const override { return state; }
+  uint8_t state = 1;
+  bool trigger = false, fired = false;
+  uint64_t fired_ns = 0;
+  uint32_t generation = 0;
+
+ private:
+  const char *name_;
+};
+
+// fn 9 logic and fn 13 analog (VecTrack), fn 12 oep.fixture.capture-group, fn 14 oep.fixture.spi-target, on a vendor
+// bulk with max_frame 1024; the session 0x11223344 open.
+struct WideProbe {
+  MemStream bulk;
+  uint8_t rx[2200], tx[1100];
+  Endpoint ep{bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0};
+  Filler fill[11];
+  VecTrack logic{reg::fixture_logic::kName}, analog{reg::fixture_analog::kName};
+  CaptureGroup group{ep};
+  PinTable pins{(1ull << 4) | (1ull << 5) | (1ull << 6) | (1ull << 7)};
+  P4SpiTarget spi{pins};
+  uint16_t corr = 1;
+  WideProbe() {
+    for (int k = 0; k < 8; ++k) ep.add(fill[k]);   // fns 1 - 8
+    ep.add(logic);                                 // fn 9
+    ep.add(fill[8]);
+    ep.add(fill[9]);                               // fns 10, 11
+    ep.add(group);                                 // fn 12
+    ep.add(analog);                                // fn 13
+    ep.add(spi);                                   // fn 14
+    group.addTrack(logic, logic);
+    group.addTrack(analog, analog);
+    const RoleAssignment roles[] = {{14, P4SpiTarget::kRoleSck, 4}, {14, P4SpiTarget::kRoleMosi, 5},
+                                    {14, P4SpiTarget::kRoleMiso, 6}, {14, P4SpiTarget::kRoleCs, 7}};
+    spi.planApply(roles, 4);
+  }
+  ~WideProbe() { spi.planRelease(); }
+  Bytes send(const Bytes &m) { return bulkMessage(ep, bulk, m); }
+  Bytes request(uint16_t fn, uint8_t op, const Bytes &payload, uint32_t session = kS) {
+    Bytes m = {kRoleRequest, uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op,
+               uint8_t(session), uint8_t(session >> 8), uint8_t(session >> 16), uint8_t(session >> 24)};
+    ++corr;
+    m.insert(m.end(), payload.begin(), payload.end());
+    return send(m);
+  }
+  static bool ok(const Bytes &a) { return a.size() >= 5 && a[3] == kResolutionCompleted && a[4] == kOutcomeSuccess; }
+  bool open() { return ok(request(0, kOpOpen, {0xd0, 0x07, 0, 0, 0})); }
+  // The frames the endpoint sends at its next poll (length-prefixed messages).
+  std::vector<Bytes> frames() {
+    const Bytes t = wire(ep, bulk, {});
+    std::vector<Bytes> out;
+    for (size_t at = 0; at + 2 <= t.size();) {
+      const size_t n = getU16(&t[at]);
+      if (at + 2 + n > t.size()) break;
+      out.emplace_back(t.begin() + at + 2, t.begin() + at + 2 + n);
+      at += 2 + n;
+    }
+    return out;
+  }
+};
+
+// The group's generations "before" (the vector's state: group 4, fn 9 3, fn 13 1): fn 13 started alone once, fn 9
+// alone three times - every start of the group one up for it and for each track it binds.
+static bool groupBefore(WideProbe &p) {
+  const Bytes alone13 = {1, 13, 0}, alone9 = {1, 9, 0}, none = {0};
+  for (int run = 0; run < 4; ++run) {
+    if (!p.ok(p.request(12, reg::fixture_capture_group::kOpBind, run == 0 ? alone13 : alone9))) return false;
+    if (!p.ok(p.request(12, reg::fixture_capture_group::kOpStart, {}))) return false;
+    if (!p.ok(p.request(12, reg::fixture_capture_group::kOpStop, {}))) return false;
+    if (!p.ok(p.request(12, reg::fixture_capture_group::kOpBind, none))) return false;
+  }
+  return p.logic.generation == 3 && p.analog.generation == 1;
+}
+
+static void testWideCases() {
+  const Json v = load("ops.json");
+  for (const Json &c : v["cases"].items) {
+    if (!elsewhere(c)) continue;
+    const std::string name = c["name"].string;
+    if (multirate(c)) {
+      printf("  ops.json \"%s\": multirate, not offered\n", name.c_str());
+      continue;
+    }
+    if (names(c["fns"], "oep.target.arm-adi")) {   // a simulated SWD target: tests/host/test_swd.cpp runs it
+      printf("  ops \"%s\": in test_swd\n", name.c_str());
+      continue;
+    }
+    ++cases;
+    boot();
+    const Bytes req = hex(c["request_hex"].string);
+    Bytes want = hex(c["answer_hex"].string), got;
+    if (names(c["fns"], "oep.target.console")) {
+      // the console's marks (common §1.3) from its PositionStream: a ring of 4 marks with serials 0 - 8 made (5 - 8
+      // kept), mark k at position 10 k (k >= 5), time k ms, kind 7 (reset) detail k; max_frame 64: 59 bytes of payload
+      uint8_t buffer[1024];
+      PositionStream::Mark marks[4];
+      PositionStream st(buffer, sizeof buffer, marks, 4);
+      for (uint32_t k = 0; k <= 8; ++k) {
+        while (st.end() < 10 * k) st.put(0);
+        g_millis = k;
+        g_micros_part = 0;
+        st.mark(7, static_cast<uint8_t>(k));
+      }
+      uint8_t out[64 - kResultHeader];
+      got = {kRoleResult, req[1], req[2], kResolutionCompleted, kOutcomeSuccess};
+      const size_t n = st.marks(getU32(&req[12]), out, sizeof out);
+      got.insert(got.end(), out, out + n);
+    } else if (names(c["fns"], "oep.fixture.spi-target")) {
+      // configured with the case's bit order, armed for 4 bytes (tx ff ff: the work registers' stale bits), then 12
+      // MOSI bits 1 1 0 0 0 0 0 0 1 0 1 1 and CS high
+      WideProbe p;
+      const uint8_t order = c["state"].string.find("bit_order 1") != std::string::npos ? 1 : 0;
+      CHECK(p.open());
+      CHECK(p.ok(p.request(14, P4SpiTarget::kOpConfigure, {0, order})));
+      CHECK(p.ok(p.request(14, P4SpiTarget::kOpArm, {4, 0, 2, 0, 0xff, 0xff})));
+      const uint8_t wire_bits[] = {0xc0, 0xb0};
+      CHECK(fakeSpiTransfer(12, wire_bits));
+      p.spi.service();
+      p.corr = static_cast<uint16_t>(getU16(&req[1]) - 1);
+      got = p.send(req);
+    } else if (names(c["fns"], "oep.fixture.capture-group")) {
+      WideProbe p;
+      CHECK(p.open() && groupBefore(p));
+      CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpBind, {2, 9, 0, 13, 0})));
+      g_millis = 7;   // acquisition starts at 7 ms
+      g_micros_part = 0;
+      p.corr = static_cast<uint16_t>(getU16(&req[1]) - 1);
+      got = p.send(req);
+    } else {
+      printf("  ops \"%s\": no probe for it here\n", name.c_str());
+      CHECK(false);
+      continue;
+    }
+    CHECK(same("ops.json", name, got, want));
+  }
+  {   // core §7.3: fn 12 (capture-group) and fn 14 (spi-target) describe TLVs fit the smallest max_frame
+    boot();
+    WideProbe w;
+    for (const uint16_t fn : {uint16_t(12), uint16_t(14)})
+      CHECK(describeFits([&](uint16_t first) { return w.request(0, kOpDescribe, {uint8_t(fn), 0, uint8_t(first), uint8_t(first >> 8)}, 0); }));
+  }
+  // The notification frames (core §11.2) with the generation each carries: the group's from WideProbe (fn 12
+  // subscribed, group generation 5, fn 9's trigger at 7.05 ms, then every track done); fn 9's own in testLogicEvents.
+  boot();
+  WideProbe p;
+  CHECK(p.open() && groupBefore(p));
+  CHECK(p.ok(p.request(12, kOpSubscribe, {0, 0, 0, 0, 0, 0})));
+  p.logic.trigger = true;   // fn 9 configured with a trigger: the trigger track
+  CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpBind, {2, 9, 0, 13, 0, 0x01, 2, 0, 9, 0})));
+  CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpStart, {})));
+  p.group.poll();   // the trigger track starts once the follower is armed
+  p.frames();
+  p.logic.fired = true;
+  p.logic.fired_ns = 7050000;
+  p.logic.state = 4;
+  p.analog.state = 4;
+  p.group.poll();   // triggered, then stopped (every track done)
+  std::vector<Bytes> sent = p.frames();
+  for (const Json &e : v["events"].items) {
+    if (!names(e["fns"], "oep.fixture.capture-group")) {
+      continue;   // fn 9's own: testLogicEvents
+    }
+    ++cases;
+    const Bytes want = hex(e["event_hex"].string);
+    bool found = false;
+    for (const Bytes &f : sent) found |= f == want;
+    if (!found) for (const Bytes &f : sent) printf("    sent %s\n", toHex(f).c_str());
+    CHECK(same("events", e["name"].string, found ? want : Bytes{}, want));
+  }
+}
+
+// ops.json's events of fn 9: the logic capture's own stopped and triggered, each with the generation it was born in
+// (capture §3.4), and the stopped of a segment lost to the queue (§2.2). Generation 3 stopped by the host, then generation 4 - one-shot, 20 MHz on one line, a falling edge
+// on role 0 with pretrigger 1000, started at 7 ms - with the edge at sample 1000 (7.05 ms). The frames' seq is this
+// run's own (the vector's probe sent other events before); the rest byte for byte.
+static void testLogicEvents() {
+  const Json v = load("ops.json");
+  boot();
+  OpsProbe p;
+  p.corr = 1;
+  g_fake_heap = FakeHeap{};
+  g_fake_heap.internal_free = 512 * 1024;
+  g_fake_heap.psram_total = g_fake_heap.psram_free = size_t(32) << 20;
+  CHECK(p.open() && p.plan(9, 0, 0) && p.ok(p.request(9, kOpSubscribe, {0, 0, 0, 0, 0, 0})));
+  const Bytes immediate = {uint8_t(reg::fixture_logic::kTlvConfigureMode | kTagCritical), 1, 0, reg::fixture_logic::kModeOneShot,
+                           uint8_t(reg::fixture_logic::kTlvConfigureRate | kTagCritical), 4, 0, 0x00, 0x2d, 0x31, 0x01,
+                           reg::fixture_logic::kTlvConfigureSamples, 4, 0, 0x00, 0x10, 0, 0};   // 20 MHz, 4096 samples
+  CHECK(p.ok(p.request(9, reg::fixture_logic::kOpConfigure, immediate)));
+  for (int k = 0; k < 3; ++k) {   // generations 1 to 3, each stopped before any data: stopped reason 1 only
+    CHECK(p.ok(p.request(9, reg::fixture_logic::kOpStart, {})));
+    CHECK(p.ok(p.request(9, reg::fixture_logic::kOpStop, {})));
+  }
+  auto frames = [&](const Bytes &t) {
+    std::vector<Bytes> out;
+    for (size_t at = 0; at + 2 <= t.size();) {
+      const size_t n = getU16(&t[at]);
+      if (at + 2 + n > t.size()) break;
+      out.emplace_back(t.begin() + at + 2, t.begin() + at + 2 + n);
+      at += 2 + n;
+    }
+    return out;
+  };
+  std::vector<Bytes> sent = frames(p.bulk.tx);
+  Bytes edge = immediate;
+  edge.insert(edge.end(), {uint8_t(reg::fixture_logic::kTlvConfigureTrigger | kTagCritical), 6, 0,
+                           reg::fixture_logic::kTriggerEdge, 0, 1, 0, 0, 0,
+                           uint8_t(reg::fixture_logic::kTlvConfigurePretrigger | kTagCritical), 4, 0, 0xe8, 0x03, 0, 0});
+  CHECK(p.ok(p.request(9, reg::fixture_logic::kOpConfigure, edge)));
+  g_millis = 7;
+  g_micros_part = 0;
+  g_fake_tasks_deferred = true;
+  g_fake_task_fn = nullptr;
+  CHECK(p.ok(p.request(9, reg::fixture_logic::kOpStart, {})));
+  for (const uint8_t value : {uint8_t(0xff), uint8_t(0x00)}) {   // samples 0 - 999 high, then low from 1000 on
+    memset(g_fake_parlio_buffer + (value ? 0 : 125), value, 125);
+    parlio_rx_event_data_t e = {g_fake_parlio_buffer + (value ? 0 : 125), 125};
+    g_fake_parlio_callbacks.on_partial_receive(nullptr, &e, g_fake_parlio_context);
+  }
+  struct Idle {};
+  g_fake_queue_empty = [] { throw Idle{}; };
+  try { if (g_fake_task_fn) g_fake_task_fn(g_fake_task_arg); } catch (const Idle &) {}
+  g_fake_queue_empty = nullptr;
+  g_fake_tasks_deferred = false;
+  p.logic.poll();
+  const std::vector<Bytes> later = frames(wire(p.ep, p.bulk, {}));
+  sent.insert(sent.end(), later.begin(), later.end());
+  p.logic.planRelease();   // the one PARLIO RX unit back
+  {   // generation 1 of a repeat (4096-byte segments) whose queue overflowed inside serial 2: stopped reason 3, error 2
+    boot();
+    OpsProbe q;
+    q.corr = 1;
+    g_fake_heap = FakeHeap{};
+    g_fake_heap.internal_free = 512 * 1024;
+    g_fake_heap.psram_total = g_fake_heap.psram_free = size_t(32) << 20;
+    CHECK(q.open() && q.plan(9, 0, 0) && q.ok(q.request(9, kOpSubscribe, {0, 0, 0, 0, 0, 0})));
+    const Bytes repeat = {uint8_t(reg::fixture_logic::kTlvConfigureMode | kTagCritical), 1, 0, reg::fixture_logic::kModeRepeat,
+                          uint8_t(reg::fixture_logic::kTlvConfigureRate | kTagCritical), 4, 0, 0x00, 0x2d, 0x31, 0x01,
+                          reg::fixture_logic::kTlvConfigureSamples, 4, 0, 0x00, 0x80, 0, 0};   // 32768 samples: 4096 bytes
+    CHECK(q.ok(q.request(9, reg::fixture_logic::kOpConfigure, repeat)));
+    g_fake_tasks_deferred = true;
+    g_fake_task_fn = nullptr;
+    CHECK(q.ok(q.request(9, reg::fixture_logic::kOpStart, {})));
+    size_t at = 0;
+    auto deliver = [&](size_t n, size_t chunk) {   // the DMA ring, in chunks the queue (128) takes
+      for (; n; n -= chunk, at = (at + chunk) % g_fake_parlio_size) {
+        parlio_rx_event_data_t e = {g_fake_parlio_buffer + at, chunk};
+        g_fake_parlio_callbacks.on_partial_receive(nullptr, &e, g_fake_parlio_context);
+      }
+    };
+    auto harvest = [] {
+      struct Idle {};
+      g_fake_queue_empty = [] { throw Idle{}; };
+      try { if (g_fake_task_fn) g_fake_task_fn(g_fake_task_arg); } catch (const Idle &) {}
+      g_fake_queue_empty = nullptr;
+    };
+    deliver(2 * 4096 + 1024, 1024);   // serials 0 and 1, a quarter of 2
+    harvest();
+    deliver(128 * 8 + 16, 8);         // the queue full: 2 chunks lost inside serial 2
+    harvest();
+    deliver(1024, 1024);              // seen at the next one
+    harvest();
+    g_fake_tasks_deferred = false;
+    q.logic.poll();
+    const std::vector<Bytes> more = frames(wire(q.ep, q.bulk, {}));
+    sent.insert(sent.end(), more.begin(), more.end());
+    q.logic.planRelease();
+  }
+  for (const Json &e : v["events"].items) {
+    if (!names(e["fns"], "oep.fixture.logic") || names(e["fns"], "oep.fixture.capture-group")) continue;
+    ++cases;
+    const Bytes want = hex(e["event_hex"].string);
+    bool found = false;
+    for (const Bytes &f : sent)
+      if (f.size() == want.size() && f.size() >= kEventHeader) {
+        Bytes g = f;
+        g[3] = want[3];   // seq: this run's own
+        g[4] = want[4];
+        found |= g == want;
+      }
+    if (!found) for (const Bytes &f : sent) printf("    sent %s\n", toHex(f).c_str());
+    CHECK(same("events", e["name"].string, found ? want : Bytes{}, want));
   }
 }
 
@@ -865,6 +1245,7 @@ static void testEveryOpsCanonical() {
     std::vector<int> ops;
     const bool tagged = d.size() >= 6 + 3 && d[6] == kTagOps && d.size() >= 9u + getU16(&d[7]);
     CHECK(tagged && opsDecode(Bytes(d.begin() + 9, d.begin() + 9 + getU16(&d[7])), ops) && !ops.empty());
+    CHECK(describeFits([&](uint16_t first) { return p.request(0, kOpDescribe, {uint8_t(fn), 0, uint8_t(first), uint8_t(first >> 8)}, 0); }));
   }
   const Bytes l = p.request(0, kOpList, {0, 0}, 0);
   CHECK(l.size() >= 8 && getU16(&l[5]) == 11 && getU16(&l[8]) == 1);
@@ -883,6 +1264,8 @@ int main() {
   testOpsEncoding();
   testOps("refusals.json", "cases");
   testOps("ops.json", "cases");
+  testWideCases();
+  testLogicEvents();
   testRestartLetsGo();
   testEveryOpsCanonical();
   printf("vectors: %d cases, %d checks, %d failures\n", cases, checks, failures);

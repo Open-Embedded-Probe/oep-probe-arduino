@@ -113,10 +113,10 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RP2_ADC -I"
   "$src/OepCaptureGroup.cpp"
 "$out-analog"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOEP_HOST_FAKE_I2C_SLAVE -DOEP_HOST_FAKE_CONFIG \
-  -DOEP_VECTORS_DIR="\"$here/../vectors\"" -I"$here/shim" -I"$src" -o "$out-vectors" "$here/test_vectors.cpp" \
+  -DOEP_HOST_FAKE_SPI_SLAVE -DOEP_VECTORS_DIR="\"$here/../vectors\"" -I"$here/shim" -I"$src" -o "$out-vectors" "$here/test_vectors.cpp" \
   "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" "$src/OepCapture.cpp" \
   "$src/OepConfig.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" \
-  "$src/OepFixture.cpp" "$src/OepP4I2cTarget.cpp"
+  "$src/OepFixture.cpp" "$src/OepP4I2cTarget.cpp" "$src/OepP4SpiTarget.cpp"
 "$out-vectors"
 # A platform without a chip number does not build without OEP_UNIT_ID, nor with one outside a-z 0-9 - (core §7.5).
 for bad in -DOEP_HOST_NO_UNIT_ID "-DOEP_UNIT_ID=\"Host\"" "-DOEP_UNIT_ID=\"\""; do
