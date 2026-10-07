@@ -1,6 +1,55 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Follows oep-spec 0e0e4e3 / 30b2b36 (probe.config wifi, the user's change: no entry skipped because a scan did not
+  see its SSID - a hidden SSID never shows in one): `WifiStation` no longer scans first; it tries every entry in index
+  order (each up to kTryMs 15 s, less when the driver reports not found or an authentication failure), keeps the first
+  that gets an address, waits kRetryMs 5 s after all failed and starts over, and starts over at once after a lost link.
+  The times are this implementation's (docs/implementation-limits §6.3, JA); restart_max_ms 15000 kept (measured with
+  the scan, 5.5-6.9 s). Vectors synced (OEP_SPEC_REF=30b2b36, unchanged). OepWifi.h's three warnings with --warnings all (enum and
+  integer in a conditional, a reason compared past a byte's range; there since b9401fe) fixed. Not run on hardware yet
+- (JA) oep-spec 0e0e4e3 / 30b2b36 に合わせました（probe.config の wifi、利用者の変更: scan で SSID が見えなかった entry を飛ばさない。
+  隠した SSID は scan に出ない）。`WifiStation` は先に scan せず、entry をすべて index の順に試し（1 つあたり最長 kTryMs 15 s、driver が
+  見つからない・認証の失敗を知らせればそこで次へ）、最初にアドレスを得たものを使い、全部だめなら kRetryMs 5 s 待ってやり直し、
+  つながりを失ったらすぐやり直す。時間はこの実装の選び方（docs/implementation-limits §6.3、JA）。restart_max_ms 15000 はそのまま
+  （scan があったときの測りで 5.5〜6.9 s）。ベクタを同期（OEP_SPEC_REF=30b2b36、変更なし）。--warnings all での OepWifi.h の 3 つの警告（条件式の enum と整数、
+  byte の範囲を越える比較。b9401fe から）を直した。実機ではまだ動かしていない
+- (EN) Follows oep-spec 22f695e (probe.config unset: an element's len counts the key's bytes only, not the tag - the
+  reading eb81e75 already implements and the vector "probe.config unset: wifi entry 0" checks); the registry header is
+  unchanged, tests/vectors/SPEC_COMMIT and docs/implementation-limits (EN / JA) name 22f695e
+- (JA) oep-spec 22f695e に合わせました（probe.config の unset: 要素の len は tag を含まずキーの byte 数だけ。eb81e75 がすでにそう
+  実装し、ベクタ「probe.config unset: wifi entry 0」が確かめる）。registry のヘッダは変わらず、tests/vectors/SPEC_COMMIT と
+  docs/implementation-limits（EN / JA）が 22f695e を指す
+- (EN) Classic ESP32: an immediate capture's window and the SWIO wire are mutually exclusive again (the user's decision
+  after the bench, the V003 jig with 589acd5: the per-frame gate let the console's background polling put SWIO frames
+  into every window, so fast steady signals - pwm, tone, fast toggles - slipped and broke, one in 5 software-reset
+  captures was empty, and the suite took 1040 s against 446 s). Back to f32a3ef's gate (`OepWireGate.h` hold / release
+  / tryHold, `DmiPhy::backgroundTurn` / `backgroundDone`, `SamplerCapture::poll()` letting the wire go, `waitIdle()`
+  releasing it first): while a window samples no SWIO frame goes out - requests wait for its end, the console reads
+  nothing - and a window waits for a request in progress; between the bursts of a trigger search the wire gets
+  kWireTurnMs (5 ms) when a request or the console asked, so a command sent after arm reaches the target and the event
+  it causes fires the trigger. slipped reports real slips only. Declared in docs/implementation-limits §4.1 (JA): the
+  rule, the immediate window's length (samples / rate: a full 65408 samples is 33 ms at 2 MHz, 65 ms at 1 MHz, 164 ms
+  at 400 kHz; a burst up to 250 ms), that a command or reset sent after an immediate capture's start is not in it, and
+  that a host which must make the target act after arm uses a trigger. Host tests: test_wire_gate keeps f32a3ef's
+  rules, stress and requests-wait-out-a-window cases and the console's refused turn, and runs the console (dmseq on
+  Ch32Dm / SwioPhy, simulated target, from 589acd5's test) against both modes - an immediate window delivers no console
+  traffic (no frame at all; the line after it), a trigger search delivers the line between bursts with no frame inside
+  one; test_console's paused-wire case back. Guides getting-started §5 and writing-a-probe (EN / JA). Not run on
+  hardware; the suite time is to be measured on the bench again
+- (JA) classic ESP32: 即時のキャプチャの窓と SWIO の線を、また互いに排他にしました（台の結果を受けた利用者の決定。V003 の台で
+  589acd5: フレームごとの門ではコンソールの裏の読みが窓ごとに SWIO のフレームを入れ、速く続く信号（pwm、tone、速い切り替え）が
+  slipped で崩れ、ソフトウェアのリセットのキャプチャの 5 回に 1 回が空になり、試験の一式が 446 s から 1040 s に延びた）。f32a3ef の門に
+  戻す（`OepWireGate.h` の hold / release / tryHold、`DmiPhy::backgroundTurn` / `backgroundDone`、線を手放す `SamplerCapture::poll()`、
+  先に手放す `waitIdle()`）: 窓がサンプルしている間は SWIO のフレームを 1 つも出さない（要求は窓の終わりを待ち、コンソールは読まない）。
+  窓は進行中の要求を待つ。トリガの探索の区切りの間は、要求かコンソールが求めていれば線に kWireTurnMs（5 ms）を譲るので、arm の後に
+  送ったコマンドは target に届き、それが起こす出来事でトリガが立つ。slipped は本当の遅れだけを示す。docs/implementation-limits §4.1
+  （JA）に宣言: 規則、即時の窓の長さ（samples ÷ rate。いっぱいの 65408 サンプルで 2 MHz 33 ms、1 MHz 65 ms、400 kHz 164 ms。区切りは最大
+  250 ms）、即時のキャプチャの開始の後に送ったコマンドやリセットは写らないこと、arm の後に target を動かしたい host はトリガを使うこと。
+  host の試験: test_wire_gate は f32a3ef の規則、負荷、要求が窓を待つ場合とコンソールの断られる番を残し、コンソール（Ch32Dm / SwioPhy の
+  上の dmseq、模擬の target。589acd5 の試験から）を両方の形で試す - 即時の窓はコンソールの行き来を通さない（フレームが 1 つも無く、
+  行は窓の後に届く）、トリガの探索は区切りの間に行を届け、区切りの中にはフレームが無い。test_console の止まった線の場合を戻した。
+  ガイド getting-started §5 と writing-a-probe（EN / JA）。実機ではまだ動かしていない。試験の一式の時間は台でもう一度測る
 - (EN) Follows oep-spec 62c1988: the probe.config wifi item (c2b8007, probe.config §1.4, §3.3, §4) and TCP discovery
   (62c1988, transports §3); the registry header and the test vectors synced (tools/sync_registry.sh, OEP_SPEC_REF=62c1988).
   The wifi item is no longer this implementation's proposal: `kWifi*` and `WifiControl`'s states / reasons are the

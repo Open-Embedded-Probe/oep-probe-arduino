@@ -97,9 +97,9 @@ static uint32_t portSpeed(uint8_t, uint32_t baud, bool apply) {   // port 0, UAR
 // the ROM (its banner goes out on UART0 as raw bytes), the bootloader checking the app image (about 0.4 MB), setup()
 // reading the settings; the host's reopen and its confirms at 115200 add little. 1500 ms
 // is about three times that (an estimate from the boot path, to be measured on the bench).
-// With Wi-Fi the TCP transport is back once the probe has booted, scanned, joined and has its address again: 5.5-6.9 s
-// from the answer to the first confirm answered on a new connection, ten restarts on the ATOM (2026-10-07); 15000 is
-// twice that. A list whose earlier entries are seen but refuse the probe takes longer (WifiStation::kTryMs each,
+// With Wi-Fi the TCP transport is back once the probe has booted, joined and has its address again: 5.5-6.9 s
+// from the answer to the first confirm answered on a new connection, ten restarts on the ATOM (2026-10-07, with a scan
+// before joining then); 15000 is twice that. A list whose earlier entries do not connect takes longer (WifiStation::kTryMs each,
 // docs/implementation-limits).
 #if OEP_WIFI
 static constexpr uint32_t kRestartMaxMs = 15000;

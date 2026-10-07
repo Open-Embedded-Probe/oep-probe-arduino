@@ -25,8 +25,8 @@
 //                                                        board): every request naming it is unavailable cause 5, and
 //                                                        the pin is never parked; describe still offers it
 //   0x08 wifi  index(u8) ssid_len(u8) ssid pass_len(u8) passphrase   key index (probe.config §1.4). A network the
-//              probe joins to serve OEP over TCP: entries tried in index order (a scan first: only those seen, unless
-//              none is seen), the first that connects is kept, and the list is tried again after the link goes. index
+//              probe joins to serve OEP over TCP: entries tried in index order, every one (a hidden SSID shows in
+//              no scan), the first that connects is kept, and the list is tried again after the link goes. index
 //              below wifi_max (else unsupported with the tag as received); ssid 1-32 bytes (no 0x00 here:
 //              unsupported); passphrase none (pass_len 0, an open network), 8-63 bytes 0x20-0x7E or 64 hex digits,
 //              else malformed. The passphrase is write-only: get carries pass_len 0xFF and no passphrase for an entry

@@ -11,12 +11,12 @@
 //   wifi.begin(unitId);                    // mDNS names from the unit_id
 //   loop(): wifi.poll(); tcp.poll(); endpoint.poll(); ...
 //
-// The list (index order) is tried after a scan: the entries whose SSID the scan saw, in index order (every entry when
-// it saw none of them - a hidden network), each for up to kTryMs; the first that gets an IPv4 address is kept. After
-// every entry failed the probe waits kRetryMs and scans again; after the link goes it starts over at once. A list
-// changed while connected keeps the link when the entry in use is still there unchanged; otherwise the change takes
-// effect kApplyDelayMs later (the answer to the set that changed it goes out first, also on that link). An empty list
-// turns the radio off.
+// The list is tried in index order (probe.config §1.4: no entry skipped - a hidden SSID never shows in a scan), each
+// entry for up to kTryMs (less when the driver reports a failure: network not found, authentication); the first that
+// gets an IPv4 address is kept. After every entry failed the probe waits kRetryMs and starts over; after the link goes
+// it starts over at once. A list changed while connected keeps the link when the entry in use is still there
+// unchanged; otherwise the change takes effect kApplyDelayMs later (the answer to the set that changed it goes out
+// first, also on that link). An empty list turns the radio off.
 //
 // Discovery (transports §3): DNS-SD over mDNS, host name "oep-<unit_id>", service _oep._tcp on the
 // listener's port, instance name "OEP <unit_id>", TXT unit_id=<unit_id>. Nothing about the networks is logged: the
@@ -37,9 +37,7 @@ namespace oep {
 
 class WifiStation final : public WifiControl {
  public:
-  // An active scan's time on each channel (the driver's default 300 ms makes a scan of every channel about 4 s).
-  static constexpr uint32_t kScanChannelMs = 120;
-  static constexpr uint32_t kTryMs = 15000, kRetryMs = 5000, kApplyDelayMs = 300, kScanMs = 8000, kScanStartMs = 2000;
+  static constexpr uint32_t kTryMs = 15000, kRetryMs = 5000, kApplyDelayMs = 300;
   // A disconnect reported this soon after an attempt began is the previous attempt's (the driver reports a
   // disconnect it was asked for a moment later): not this entry's failure.
   static constexpr uint32_t kSettleMs = 300;
@@ -95,22 +93,8 @@ class WifiStation final : public WifiControl {
     switch (phase_) {
       case kOff: return;
       case kWaiting:
-        if (static_cast<uint32_t>(now - since_) >= kRetryMs) scan();
+        if (static_cast<uint32_t>(now - since_) >= kRetryMs) startOver();
         return;
-      case kScanning: {
-        if (!scan_started_) {   // the radio not ready for a scan yet (just started): again, for up to kScanStartMs
-          scan_started_ = WiFi.scanNetworks(true, true, false, kScanChannelMs) != WIFI_SCAN_FAILED;
-          if (!scan_started_ && static_cast<uint32_t>(now - since_) < kScanStartMs) return;
-          if (!scan_started_) { order(-1); next(); return; }
-          return;
-        }
-        const int16_t n = WiFi.scanComplete();
-        if (n == WIFI_SCAN_RUNNING && static_cast<uint32_t>(now - since_) < kScanMs) return;
-        order(n);
-        WiFi.scanDelete();
-        next();
-        return;
-      }
       case kTrying:
         if (lost_ && static_cast<uint32_t>(now - since_) < kSettleMs) lost_ = false;
         if (WiFi.status() == WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP()) != 0) {
@@ -122,23 +106,24 @@ class WifiStation final : public WifiControl {
         }
         if (lost_ || static_cast<uint32_t>(now - since_) >= kTryMs) {
           // this entry failed: why (a timeout with the association made is a missing address)
-          reason_ = lost_ ? reason(lost_reason_) : WiFi.status() == WL_CONNECTED ? kReasonNoAddress : kReasonNotFound;
+          reason_ = lost_ ? reason(lost_reason_)
+                         : static_cast<uint8_t>(WiFi.status() == WL_CONNECTED ? kReasonNoAddress : kReasonNotFound);
           WiFi.disconnect(false, false);
           next();
         }
         return;
       case kConnected:
-        if (lost_ || WiFi.status() != WL_CONNECTED) {   // the link went: the list again, from a scan
-          reason_ = lost_ ? reason(lost_reason_) : kReasonOther;
+        if (lost_ || WiFi.status() != WL_CONNECTED) {   // the link went: the list again, from its first entry
+          reason_ = lost_ ? reason(lost_reason_) : static_cast<uint8_t>(kReasonOther);
           WiFi.disconnect(false, false);
-          scan();
+          startOver();
         }
         return;
     }
   }
 
  private:
-  enum : uint8_t { kOff, kWaiting, kScanning, kTrying, kConnected };
+  enum : uint8_t { kOff, kWaiting, kTrying, kConnected };
   uint16_t port_;
   bool (*begin_)(void *, uint16_t);
   void (*end_)(void *);
@@ -146,11 +131,10 @@ class WifiStation final : public WifiControl {
   char unit_[40] = {};
   WifiEntry list_[ProbeConfig::kMaxWifi];
   size_t count_ = 0, current_ = 0;
-  uint8_t try_[ProbeConfig::kMaxWifi] = {};   // the positions in list_ to try, in order
-  size_t tries_ = 0, tried_ = 0;
+  size_t tried_ = 0;   // the entries of list_ tried since the start over
   uint8_t phase_ = kOff, state_ = kStateOff, reason_ = kReasonNone;
   uint32_t since_ = 0, pending_at_ = 0;
-  bool pending_ = false, listening_ = false, mdns_ = false, scan_started_ = false;
+  bool pending_ = false, listening_ = false, mdns_ = false;
   volatile bool lost_ = false;
   char trying_[33] = {};            // the SSID of the attempt under way (the disconnect events are matched to it)
   volatile uint8_t trying_length_ = 0;
@@ -165,7 +149,7 @@ class WifiStation final : public WifiControl {
     // only the network being tried or used (a disconnect of another one, asked for before, says nothing about it)
     const auto &d = info.wifi_sta_disconnected;
     if (d.ssid_len != self_->trying_length_ || memcmp(d.ssid, self_->trying_, d.ssid_len) != 0) return;
-    self_->lost_reason_ = info.wifi_sta_disconnected.reason > 0xFF ? 0xFF : info.wifi_sta_disconnected.reason;
+    self_->lost_reason_ = static_cast<uint8_t>(info.wifi_sta_disconnected.reason);   // wifi_err_reason_t's values fit a byte
     self_->lost_ = true;
   }
   // The driver's reason (wifi_err_reason_t) as the state's.
@@ -211,41 +195,23 @@ class WifiStation final : public WifiControl {
         }
       }
     }
-    scan();
+    startOver();
   }
-  void scan() {
+  void startOver() {   // the list from its first entry
     lost_ = false;
     state_ = kStateConnecting;
-    WiFi.scanDelete();
-    scan_started_ = WiFi.scanNetworks(true, true, false, kScanChannelMs) != WIFI_SCAN_FAILED;
-    phase_ = kScanning;
-    since_ = millis();
-  }
-  // What to try: the entries the scan saw, in index order; every entry when it saw none (or failed).
-  void order(int16_t found) {
-    tries_ = tried_ = 0;
-    for (size_t i = 0; i < count_; ++i) {
-      bool seen = false;
-      for (int16_t k = 0; k < found && !seen; ++k) {
-        const String ssid = WiFi.SSID(k);
-        seen = ssid.length() == list_[i].ssid_length && memcmp(ssid.c_str(), list_[i].ssid, list_[i].ssid_length) == 0;
-      }
-      if (seen) try_[tries_++] = static_cast<uint8_t>(i);
-    }
-    if (tries_ == 0) {
-      for (size_t i = 0; i < count_; ++i) try_[tries_++] = static_cast<uint8_t>(i);
-      if (found >= 0) reason_ = kReasonNotFound;
-    }
+    tried_ = 0;
+    next();
   }
   void next() {
     lost_ = false;
-    if (tried_ >= tries_) {   // every entry failed: wait, then scan again
+    if (tried_ >= count_) {   // every entry failed: wait, then start over
       phase_ = kWaiting;
       state_ = kStateWaiting;
       since_ = millis();
       return;
     }
-    current_ = try_[tried_++];
+    current_ = tried_++;
     const WifiEntry &e = list_[current_];
     phase_ = kTrying;
     since_ = millis();
