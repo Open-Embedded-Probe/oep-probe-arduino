@@ -20,6 +20,7 @@
 #include "Oep.h"
 #include "OepCaptureGroup.h"
 #include "OepPinTable.h"
+#include "OepSamplerRun.h"
 #include "OepWireGate.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
@@ -105,6 +106,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   uint64_t start_ns_ = 0;   // the probe's clock (esp_timer x 1000)
   uint8_t *buffer_ = nullptr;
   uint32_t masks0_[kMaxChannels] = {}, masks1_[kMaxChannels] = {};
+  sampler::Packer packer_;               // the lines' bits out of GPIO.in / in1 (configure builds it)
   TaskHandle_t sampler_ = nullptr;
   volatile bool done_ = false, reported_ = true;
   volatile bool slipped_ = false;         // the last window took a sample one period or more late

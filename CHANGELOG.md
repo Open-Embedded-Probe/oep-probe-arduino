@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32 sampler: a sample's byte is packed from GPIO.in (and GPIO.in1) through a table per register byte
+  (sampler::Packer, built at configure), a fixed few loads and ors whatever the line count. The loop over the lines it
+  replaces compiled to about a dozen instructions and two jumps a line (d520847's runLow) inside the 120 cycles a
+  sample has at 2 MHz: with a few lines the loop kept no margin to catch up on a sample the other core's bus traffic
+  held up, and every later sample fell late too (slipped). The same bytes (host test against the loop's result for
+  random pin sets, GPIO.in1 included); not run on hardware
+- (JA) classic ESP32 の sampler: 1 サンプルの byte を GPIO.in（と GPIO.in1）の byte ごとの表で詰めます（sampler::Packer、configure で
+  作る。線の数によらず数回の load と or）。置き換えた線ごとのループは 1 本あたり約 12 命令と 2 回のジャンプで（d520847 の runLow）、
+  2 MHz の 1 サンプル 120 cycle の中で、線が数本あると遅れを取り戻す余裕が無かった。結果は同じ（host test）。実機では未確認
 - (EN) Analog capture (all boards), a triggered one-shot (capture §3.3): a crossing or a force before the pretrigger has
   filled is taken (it was looked for only from frame `pretrigger` on) and gives a short segment - the frames before it,
   its own and samples - pretrigger - 1 after it, trigger_index the frames before it; with enough before it the segment

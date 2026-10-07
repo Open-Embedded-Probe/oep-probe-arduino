@@ -179,7 +179,35 @@ struct SpanIo : HostIo {
   }
 };
 
+// sampler::Packer: the table per register byte gives the byte the loop over the lines gave (bit l: line l's pin), for
+// pins in every byte of GPIO.in and of GPIO.in1, on any line count, with lines of no pin (bit 0).
+static void testPacker() {
+  uint32_t seed = 12345;
+  auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return seed; };
+  static sampler::Packer packer;
+  for (int round = 0; round < 200; ++round) {
+    const uint8_t lines = static_cast<uint8_t>(1 + rnd() % 8);
+    int pins[8];
+    for (uint8_t l = 0; l < 8; ++l) pins[l] = l < lines ? static_cast<int>(rnd() % 41) - 1 : -1;   // -1: no pin
+    packer.build(pins, lines);
+    for (int k = 0; k < 64; ++k) {
+      const uint32_t in0 = rnd(), in1 = rnd();
+      uint8_t want = 0;
+      for (uint8_t l = 0; l < lines; ++l) {
+        if (pins[l] < 0) continue;
+        const uint32_t bit = pins[l] < 32 ? (in0 >> pins[l]) & 1 : (in1 >> (pins[l] - 32)) & 1;
+        want |= static_cast<uint8_t>(bit << l);
+      }
+      bool low = true;   // no pin in GPIO32..39: the one-register form gives the same
+      for (uint8_t l = 0; l < lines; ++l) low &= pins[l] < 32;
+      CHECK(packer.pack(in0, in1) == want);
+      if (low) CHECK(packer.pack(in0) == want);
+    }
+  }
+}
+
 int main() {
+  testPacker();
   // ---- the rules, one thread ----
   {
     WireGate g;

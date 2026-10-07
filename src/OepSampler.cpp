@@ -37,18 +37,13 @@ namespace {
 
 // The chip's side of the sampling loop (OepSamplerRun.h). GPIO0..31 only (kHigh false): one register read per sample.
 // Reading GPIO.in1 as well cost enough that 2 MHz fell behind (1.92 MHz actually sampled, periods spread +-5 %,
-// 2026-09-29); 1 MHz and below kept pace either way. A sample is channel l on bit l.
+// 2026-09-29); 1 MHz and below kept pace either way. A sample is channel l on bit l, packed by table (sampler::Packer).
 template <bool kHigh>
 struct EspIo {
-  uint32_t lines;
-  uint32_t m0[SamplerCapture::kMaxChannels], m1[SamplerCapture::kMaxChannels];
+  const sampler::Packer *packer;
   inline __attribute__((always_inline)) uint32_t cycles() const { return esp_cpu_get_cycle_count(); }
   inline __attribute__((always_inline)) uint8_t read() const {
-    const uint32_t in0 = GPIO.in, in1 = kHigh ? GPIO.in1.val : 0;
-    uint8_t byte = 0;
-    for (uint32_t l = 0; l < lines; ++l)
-      byte |= static_cast<uint8_t>(((in0 & m0[l]) | (kHigh ? in1 & m1[l] : 0)) != 0) << l;
-    return byte;
+    return kHigh ? packer->pack(GPIO.in, GPIO.in1.val) : packer->pack(GPIO.in);
   }
   inline __attribute__((always_inline)) void interruptsOff() const { portDISABLE_INTERRUPTS(); }
   inline __attribute__((always_inline)) void interruptsOn() const { portENABLE_INTERRUPTS(); }
@@ -69,8 +64,7 @@ static_assert(sampler::kImmediate == reg::fixture_logic::kTriggerImmediate && sa
 template <bool kHigh>
 inline __attribute__((always_inline)) void SamplerCapture::run() {
   EspIo<kHigh> io;
-  io.lines = channels_;
-  for (uint32_t l = 0; l < io.lines; ++l) { io.m0[l] = masks0_[l]; io.m1[l] = masks1_[l]; }
+  io.packer = &packer_;
   sampler::Plan plan;
   plan.out = buffer_;
   plan.size = samples_;
@@ -252,6 +246,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
       masks0_[l] = pins_[l] < 32 ? 1u << pins_[l] : 0;
       masks1_[l] = pins_[l] >= 32 ? 1u << (pins_[l] - 32) : 0;
     }
+    packer_.build(pins_, channels_);
     samples_ = samples;
     trig_type_ = trig_type;
     trig_role_ = trig_role;

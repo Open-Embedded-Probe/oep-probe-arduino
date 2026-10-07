@@ -43,6 +43,29 @@ constexpr uint8_t kControlForce = 1, kControlAbort = 2;
 constexpr uint8_t kImmediate = 0, kLevel = 1, kEdge = 2;   // capture §3.3's trigger types
 constexpr uint32_t kSpanCheck = 64;   // samples between two looks at the clock against the span (a power of two)
 
+// One sample's byte from the GPIO input registers (bit l: line l's pin, GPIO0..31 in `in0`, GPIO32..39 in bits 0..7 of
+// `in1`), through a table per register byte: a few loads and ors whatever the line count. The loop over the lines it
+// replaces compiled to about a dozen instructions and two jumps a line (0.0.29-dev d520847, runLow) inside the 120
+// cycles a sample has at 2 MHz and 240 MHz; with the register read and the loop's own work, a few lines left the pace no
+// margin, and a sample held up by the other core's bus traffic was not caught up on before the next one fell late too.
+struct Packer {
+  uint8_t lut[5][256];   // [register byte][its value] -> the lines' bits it holds
+  // pins[l] of line l (0..39; another value: no pin, the bit stays 0)
+  void build(const int *pins, uint8_t lines) {
+    for (int j = 0; j < 5; ++j)
+      for (int v = 0; v < 256; ++v) {
+        uint8_t b = 0;
+        for (uint8_t l = 0; l < lines && l < 8; ++l)
+          if (pins[l] >= 0 && pins[l] < 40 && pins[l] / 8 == j && ((v >> (pins[l] % 8)) & 1)) b |= static_cast<uint8_t>(1u << l);
+        lut[j][v] = b;
+      }
+  }
+  OEP_SAMPLER_INLINE uint8_t pack(uint32_t in0) const {
+    return static_cast<uint8_t>(lut[0][in0 & 0xff] | lut[1][(in0 >> 8) & 0xff] | lut[2][(in0 >> 16) & 0xff] | lut[3][in0 >> 24]);
+  }
+  OEP_SAMPLER_INLINE uint8_t pack(uint32_t in0, uint32_t in1) const { return static_cast<uint8_t>(pack(in0) | lut[4][in1 & 0xff]); }
+};
+
 struct Plan {
   uint8_t *out;
   uint32_t size;        // the segment's samples at most (the buffer)
