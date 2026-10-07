@@ -142,6 +142,11 @@ class DmiPhy {
   void clearDeadline() { has_deadline_ = false; }
   bool pastDeadline() const { return has_deadline_ && static_cast<int32_t>(millis() - deadline_ms_) >= 0; }
   bool pastBudget() const { return has_deadline_ && static_cast<int32_t>(millis() - end_ms_) >= 0; }
+  // A background reader's turn on the wire (DmConsole::poll, from loop() between requests): taken without waiting.
+  // false: the wire is paused now - read at the next poll; true: go on, and backgroundDone() once the poll ends. A
+  // backend whose wire never pauses leaves both alone (SwioPhy on the classic ESP32: the sampler's windows, OepWireGate.h).
+  virtual bool backgroundTurn() { return true; }
+  virtual void backgroundDone() {}
   // Retries inside one request (oep-if-debug §2; this implementation's limits::kWireRetryMs): a request starts with the
   // whole allowance, and read() retries no more once it is spent (the request then ends with status line).
   void beginRequest() { retry_us_ = 0; }

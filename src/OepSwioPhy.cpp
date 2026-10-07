@@ -19,8 +19,8 @@ constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
 constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
 portMUX_TYPE gMux = portMUX_INITIALIZER_UNLOCKED;
 constexpr int kRisePolls = 1000;   // a read frame's polls of GPIO.in for the line to come back high, all bits together
-// Each frame goes through the sampler's gate (OepWireGate.h): announced before its first GPIO access, ended after its
-// last one (before the gap after it), so that no GPIO.in read of the core-0 sampler meets it.
+// Before a frame: no sampler window open, and the wire held until loop() comes round (OepWireGate.h).
+inline void IRAM_ATTR waitWire() { gWireGate.hold(); }
 
 inline void IRAM_ATTR waitCycles(int count) {
   asm volatile("1: addi %[n], %[n], -1\n   bbci %[n], 31, 1b\n" : [n] "+r"(count));
@@ -63,7 +63,7 @@ inline int IRAM_ATTR readBit(uint32_t m, int &rise_polls) {
 
 // free_after: the wire does not answer (oep-if-debug §2, §3.2) - the line released to its pull-up once the frame is out.
 void IRAM_ATTR writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
-  gWireGate.frameBegin();
+  waitWire();
   const uint32_t m = gMask;
   high(m);
   outputOn(m);
@@ -74,7 +74,6 @@ void IRAM_ATTR writeRaw(uint8_t address, uint32_t value, bool free_after = false
   for (uint32_t mask = 0x80000000u; mask; mask >>= 1) (value & mask) ? sendOne(m) : sendZero(m);
   if (free_after) outputOff(m);
   portEXIT_CRITICAL(&gMux);
-  gWireGate.frameEnd();
   delayMicroseconds(8);   // E135: LinkE frame gap median 6.7 us
 }
 
@@ -117,7 +116,7 @@ bool SwioPhy::usePins(int swdio, int swclk) {
 
 // IRAM like the E123-E137 originals: the coefficient-8 bit timing cannot afford flash-cache misses.
 bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
-  gWireGate.frameBegin();
+  waitWire();
   const uint32_t m = gMask;
   high(m);
   outputOn(m);
@@ -133,7 +132,6 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
     if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
       outputOff(m);
       portEXIT_CRITICAL(&gMux);
-      gWireGate.frameEnd();
       rest_free_ = true;
       delayMicroseconds(8);
       return false;
@@ -145,7 +143,6 @@ bool IRAM_ATTR SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;   // a DMSTATUS of all ones: the line, no module
   if (rest_free_) outputOff(m);
   portEXIT_CRITICAL(&gMux);
-  gWireGate.frameEnd();
   delayMicroseconds(8);
   value = result;
   return true;
@@ -183,6 +180,11 @@ void SwioPhy::free() {
   attached_ = rest_free_ = false;
   if (gPin >= 0) pinMode(gPin, INPUT);
 }
+
+// The console's turn (DmiPhy::backgroundTurn): the wire taken when no window is open; otherwise refused - the console
+// reads nothing until the window has closed (the next poll), and the sampler is told a take was wanted.
+bool SwioPhy::backgroundTurn() { return gWireGate.tryHold(); }
+void SwioPhy::backgroundDone() {}
 
 }  // namespace oep
 
@@ -437,6 +439,10 @@ void SwioPhy::free() {
   if (gPin >= 0) pinMode(gPin, INPUT);
 }
 
+// The P4's capture is PARLIO's DMA (no sampler, no window): the wire never pauses.
+bool SwioPhy::backgroundTurn() { return true; }
+void SwioPhy::backgroundDone() {}
+
 }  // namespace oep
 
 #elif defined(OEP_HOST_FAKE_SWIO)
@@ -449,13 +455,16 @@ namespace {
 int gPin = -1;
 constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
 constexpr uint32_t kCfgr = 0x5aa50400;
-// as the classic's: each frame goes through the sampler's gate (OepWireGate.h)
+// as the classic's: the frames go through the sampler's gate (OepWireGate.h)
+void waitWire() { gWireGate.hold(); }
 void writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
-  gWireGate.frameBegin();
+  waitWire();
   fakeSwioWrite(address, value, free_after);
-  gWireGate.frameEnd();
 }
 }  // namespace
+
+bool SwioPhy::backgroundTurn() { return gWireGate.tryHold(); }
+void SwioPhy::backgroundDone() {}
 
 bool SwioPhy::begin(int swio) {
   gPin = swio;
@@ -464,11 +473,9 @@ bool SwioPhy::begin(int swio) {
 }
 bool SwioPhy::usePins(int swdio, int) { return begin(swdio); }
 bool SwioPhy::readRaw(uint8_t address, uint32_t &value) {
-  gWireGate.frameBegin();
+  waitWire();
   uint32_t result = 0;
-  const bool back = fakeSwioRead(address, result);
-  gWireGate.frameEnd();
-  if (!back) { rest_free_ = true; return false; }
+  if (!fakeSwioRead(address, result)) { rest_free_ = true; return false; }
   const DmiPhy::Outcome outcome = DmiPhy::outcomeOf(address, true, result);
   if (outcome == DmiPhy::kAnswered) rest_free_ = false;
   else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;
@@ -636,6 +643,8 @@ void SwioPhy::release() { attached_ = false; }
 void SwioPhy::reinit() {}
 void SwioPhy::free() { attached_ = false; }
 bool SwioPhy::bringUp(uint32_t &) { return false; }
+bool SwioPhy::backgroundTurn() { return true; }
+void SwioPhy::backgroundDone() {}
 }  // namespace oep
 
 #endif

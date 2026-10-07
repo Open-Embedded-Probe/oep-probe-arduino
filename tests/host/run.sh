@@ -13,7 +13,7 @@
 # simulated target (what is written before the speed is verified, the checks, the budget), of the swio stack on a
 # simulated CH32V003 whose reset goes through its bootloader (the connection kept, a silent bootloader waited out by
 # the reset op and by attach's reset TLV), of the classic ESP32's gate between its sampler's windows and the SWIO frames
-# (two threads, frame by frame: a request and a console line go on while a window stays open), of the whole rvswd stack's
+# (two threads; the console paused in a window), of the whole rvswd stack's
 # attach / detach on it (the attach budget as a hard bound, min_clock_hz), and of the SWD wire on a
 # simulated SWD target (idle items, wire loss, retries), and of the ESP32-P4 logic capture's configure on a fake PARLIO RX
 # driver and heap (samples rounded down, streaming without internal RAM for stages), of the analog scale from a frontend's
@@ -88,7 +88,8 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWIO -I"$he
   "$here/test_swio.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepSwioPhy.cpp" "$src/OepFrame.cpp" \
   "$src/OepDmConsole.cpp"
 "$out-swio"
-# the classic's gate between the sampler and the SWIO frames (frame by frame: requests and the console go on in a window)
+# the classic's gate between the sampler and the SWIO frames (exclusive: no frame in a window; the console between
+# a trigger search's bursts)
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -pthread -DOEP_HOST_FAKE_SWIO \
   -I"$here/shim" -I"$src" -o "$out-wire-gate" "$here/test_wire_gate.cpp" "$src/OepSwioPhy.cpp" "$src/OepCh32Dm.cpp" \
   "$src/OepDmConsole.cpp"

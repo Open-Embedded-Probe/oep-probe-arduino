@@ -1,6 +1,35 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Follows oep-spec 62c1988: the probe.config wifi item (c2b8007, probe.config §1.4, §3.3, §4) and TCP discovery
+  (62c1988, transports §3); the registry header and the test vectors synced (tools/sync_registry.sh, OEP_SPEC_REF=62c1988).
+  The wifi item is no longer this implementation's proposal: `kWifi*` and `WifiControl`'s states / reasons are the
+  registry's numbers (`kStateFailed` is now `kStateWaiting`). Changed: a wifi index at or past wifi_max is refused
+  unsupported with the item's tag as received (it was malformed); the state's wifi TLV carries rssi and ipv4 only in
+  state 2 (connected), 0 otherwise, whatever the radio reports. **unset's len is the key's length** (`n, n x (len, tag,
+  key)`: the spec's vector "probe.config unset: wifi entry 0" sends len 1 for the index, as oep-client-python does;
+  this firmware counted the tag too, so an unset from oep-client-python was refused malformed; oep-client-js still
+  counts the tag). Checked without change: a set with pass_len 0xFF on an index without an entry is malformed; the hash
+  is not made from passphrase bytes (a token that changes when a passphrase does); a set / unset that changes or
+  removes the entry in use drops the link after its answer and starts over, other changes keep it; describe 0x46
+  wifi_max 4; DNS-SD `_oep._tcp` with TXT `unit_id`. Host tests: test_vectors runs the eight wifi vectors (a fake radio;
+  the vectors' placeholder hashes 0x5A5A0001 / 0x5A5A0002 replaced by this probe's own for the same settings, so the
+  sent-back set and the unset check the hash is unchanged / back to the empty one); test_config: index at wifi_max
+  unsupported (critical or not), the state TLV zeroed when not connected, its unset keys in the new form.
+  docs/implementation-limits §6 (EN / JA), getting-started §6 (EN / JA), WifiTcp's comment
+- (JA) oep-spec 62c1988 に合わせました: probe.config の wifi の項目（c2b8007、probe.config §1.4、§3.3、§4）と TCP の見つけ方
+  （62c1988、transports §3）。registry のヘッダと試験のベクタを同期（tools/sync_registry.sh、OEP_SPEC_REF=62c1988）。wifi の項目は
+  もうこの実装の提案ではない: `kWifi*` と `WifiControl` の state / reason は registry の番号（`kStateFailed` は `kStateWaiting` に）。
+  変えたもの: wifi_max 以上の index は、受け取ったままの項目の tag で rejected unsupported（malformed だった）。state の wifi の TLV の
+  rssi と ipv4 は state 2（つながっている）のときだけで、ほかは radio が何を返しても 0。**unset の len はキーの長さ**（`n、n × (len、
+  tag、key)`: 仕様のベクタ「probe.config unset: wifi entry 0」は index に len 1 を送り、oep-client-python も同じ。この firmware は tag も
+  数えていたので、oep-client-python の unset は malformed で断られていた。oep-client-js はまだ tag を数える）。確かめて変更の要らなかった
+  もの: その index の entry が無い set の pass_len 0xFF は malformed。hash は passphrase の byte から作らない（passphrase が変わると変わる
+  token）。使っている entry を変えるか消す set / unset は、応答の後につながりを切ってやり直し、ほかの変更ではつながりを保つ。describe
+  0x46 wifi_max 4。DNS-SD の `_oep._tcp` と TXT `unit_id`。host の試験: test_vectors が wifi の 8 つのベクタを試す（偽の radio。ベクタの
+  仮の hash 0x5A5A0001 / 0x5A5A0002 は、同じ設定でこの probe が答えた hash に置き換えるので、送り返した set と unset は hash が変わらない /
+  空の設定のものに戻ることを確かめる）。test_config: wifi_max の index は unsupported（critical でもそうでなくても）、つながっていない
+  ときの state の TLV は 0、unset のキーは新しい形。docs/implementation-limits §6（EN / JA）、getting-started §6（EN / JA）、WifiTcp の説明
 - (EN) Follows oep-spec f8bb2de (the external review re-check of 2026-10-07 and what followed it: 0f455a0..f8bb2de; the
   registry header and the test vectors synced, tools/sync_registry.sh with OEP_SPEC_REF=f8bb2de). Interface names are
   1 to 48 bytes (registry interface_name_max_bytes 48; `interfaceName` refuses a 49-byte name); resend_max is gone from
@@ -28,7 +57,6 @@
   link の sink は max_frame − 12 byte まで、source は max_frame − 7 byte まで。host の試験 test_core_conformance: 48 byte の名前が
   通り 49 byte が断られること、source の max_frame − 7 と、sink の max_frame − 12（ちょうど max_frame の要求）。
   docs/implementation-limits §1.6（EN / JA）
->>>>>>> 34708e8 (Follow oep-spec f8bb2de (external review re-check of 2026-10-07, 0f455a0..f8bb2de): registry and vectors synced (tools/sync_registry.sh, OEP_SPEC_REF=f8bb2de). Interface names 1 to 48 bytes (interface_name_max_bytes 48); resend_max gone from the registry (unused here); the vector "rvswd scan: count > 0 ignores skip" answers the listed scan, so test_vectors runs it as written (the local exception removed). Checked without change: one max_frame / window / max_inflight for every transport of an Endpoint (serial, USB, each TCP connection), so describe TLVs and max_length fit every transport's max_frame (core §7.3, §7.4); channels always in fn 0's describe and channel numbers 0 .. channels - 1 in the firmware; frames written whole within one poll(), never paused inside (transports §2); a closed transport ends no session, lock, subscription or resend table (transports §3); i2c-target errors +1 per failed write; link sink up to max_frame - 12, source max_frame - 7. Host test test_core_conformance: 48-byte name accepted, 49 refused; source at max_frame - 7, sink of max_frame - 12. docs/implementation-limits §1.6 (EN / JA); CHANGELOG (EN / JA))
 - (EN) OEP over TCP (oep-spec transports §1-§3 as of af3d52b): `Endpoint::addTcpListener` adds a listening socket as one
   describe entry (kind 6, interface 0xFF) whose connection slots are each a transport of their own - confirm names the
   listener's entry, answers go back on the connection, notifications go to the subscriber's connection only (none to a
@@ -69,7 +97,6 @@
   list / describe / clock / open / end / gpio / config、2 つの接続（locked、lock_state）、閉じた接続を越えてセッションが残る、シリアルの口も同時に、
   `oep linktest`（失いなし）、oep-client-python の tests/hw を TCP とシリアルで（すべて通過）、TCP での restart。docs/implementation-limits §6
   （英語は stub）、README（EN / JA）、ガイド getting-started §6、writing-a-probe、boards（EN / JA）
-=======
 - (EN) Classic ESP32: a logic capture records again what a console command or a debug reset sent after its start does
   (bench, the V003 jig, f32a3ef: test_timing 0 rising edges in all 6 captures, reset_probe no low run in any of 10;
   5ad85ce / ff847a4 passed; the ESP32-P4 passed with f32a3ef). Cause: f32a3ef paused the console's reading for the whole
@@ -100,7 +127,6 @@
   ままの間のコンソールの行の配達（模擬の target に対する Ch32Dm と SwioPhy の上の DmConsole dmseq。f32a3ef の止め方では届かない）。
   test_console の止まった線の場合は削除。ガイド getting-started / writing-a-probe と docs/implementation-limits §4.1（EN / JA）。
   実機ではまだ動かしていない
->>>>>>> 589acd5 (Classic ESP32: a logic capture records again what a console command or a debug reset sent after its start does (bench, the V003 jig, f32a3ef: test_timing 0 rising edges in all 6 captures, reset_probe no low run in any of 10; 5ad85ce / ff847a4 passed; the P4 passed with f32a3ef). Cause: f32a3ef paused the console's reading for a whole sampler window (up to 164 ms immediate) and requests' SWIO frames already waited windows out, so the command (13-26 ms after the start) and the reset reached the target after the capture had ended; the data was the line's constant level, not a sampler fault (debug resets' READY 177-227 ms after the start). OepWireGate.h now gates frame by frame: inside a window a SWIO frame waits for the sampler to stop reading GPIO.in (one sample at most), the sampler waits for the frame's end and catches up (those samples late: slipped) - no frame meets a GPIO.in read, and neither requests nor the console wait for a window. DmiPhy::backgroundTurn / backgroundDone, the wire holder and its release in SamplerCapture::poll() / waitIdle(), and kWireTurnMs are gone; a trigger search's slipped flag is its last burst's. Host test test_wire_gate: the rules, a two-thread stress, 3000 request frames in one window, a console line (DmConsole dmseq on Ch32Dm / SwioPhy, simulated target) delivered while one window stays open (fails with f32a3ef's pause); test_console's paused-wire case removed. Guides getting-started / writing-a-probe, docs/implementation-limits §4.1 (EN / JA); CHANGELOG (EN / JA); not run on hardware yet)
 - (EN) Follows oep-spec 0f455a0 (the rule review of 2026-10-07, §2 and §7; the registry header and the test vectors synced
   from it). Core: no ignored TLV - an unknown non-critical TLV is ignored with nothing in the answer, an unknown critical
   one is unsupported; a TLV this probe implements is checked the same with or without bit 7 (another length: malformed;

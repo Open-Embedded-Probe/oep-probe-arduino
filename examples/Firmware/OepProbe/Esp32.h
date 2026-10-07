@@ -147,9 +147,8 @@ static oep::FixtureUart uart(pins, Serial2, 0, 2);
 static_assert((oep::kUartRxFifo - oep::kUartRxFifoFull) * 10ull * 1000000ull / oep::FixtureUart::kMaxBaud >=
                   2 * oep::SwioPhy::kIrqOffMaxUs,
               "the fixture UART's RX FIFO must outlast an interrupt-off SWIO frame twice over");
-// The sampler and the SWIO wire never on the GPIO registers' bus at once (OepWireGate.h): each SWIO frame waits for the
-// sampler to stop reading (one sample), and the sampler for the frame's end - requests and the console go on during a
-// capture.
+// The sampler and the SWIO wire never on the GPIO registers' bus at once (OepWireGate.h): a request's frames wait out a
+// sampler window; capture.poll() in loop() lets the wire go so that the next window can open.
 static oep::SamplerCapture capture(endpoint, pins);
 static oep::P4I2cTarget i2c(pins);
 static oep::P4SpiTarget spi(pins);

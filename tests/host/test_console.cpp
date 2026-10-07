@@ -65,6 +65,11 @@ class FakePhy final : public DmiPhy {
       if (value & (1u << 28)) havereset = false;
     }
   }
+  // the wire's turn for the console (DmiPhy::backgroundTurn): refused while `paused`; turns given and ended counted
+  bool paused = false;
+  int turns = 0, turns_done = 0;
+  bool backgroundTurn() override { if (paused) return false; ++turns; return true; }
+  void backgroundDone() override { ++turns_done; }
   bool setIdleClockLow(bool) override { return true; }
   bool canIdleClockLow() const override { return true; }
   bool setMaxHz(uint32_t) override { return true; }
@@ -736,6 +741,36 @@ int main() {
         CHECK(ms <= 3 * period + 3 * rtt + 2);
       }
     }
+  }
+
+  // ---- a paused wire (DmiPhy::backgroundTurn false: the classic ESP32's sampler window): the console's poll reads
+  // nothing and writes nothing, the write op still fills the queue, and once the wire is back the line reaches the target whole; every turn given is ended ----
+  {
+    static FakePhy phy5;
+    static Ch32Dm dm5(phy5);
+    static DebugPort port5{dm5, 4, 5};
+    static WireRvswd wire5(port5, 2);
+    static DmConsole driver5(dm5, phy5);
+    static TargetConsoleStream console5(port5, driver5, 2);
+    CHECK(ok(call(wire5, WireRvswd::kOpAttach, attachRequest(), out)));
+    CHECK(ok(call(console5, TargetConsoleStream::kOpOpen, cat(le16(port5.number), {con::kMechanismDmseq}), out)));
+    const uint16_t s5 = uint16_t(out[0] | out[1] << 8);
+    SeqTarget target(phy5.data0);
+    for (int i = 0; i < 200; ++i) { advanceMicros(500); console5.poll(); target.available(); }   // synced
+    phy5.paused = true;
+    const int reads = phy5.reads;
+    const size_t answers = phy5.data0_writes.size();
+    const uint8_t line[] = {'B', 'U', 'R', 'S', 'T', ' ', '2', '0', '6', '\n'};
+    Bytes req = cat(le16(s5), {uint8_t(sizeof line), 0});
+    req.insert(req.end(), line, line + sizeof line);
+    r = call(console5, TargetConsoleStream::kOpWrite, req, out);
+    CHECK(ok(r) && out == le16(sizeof line));                     // queued whole while the wire is paused
+    for (int i = 0; i < 400; ++i) { advanceMicros(500); console5.poll(); target.available(); }   // 200 ms paused
+    CHECK(phy5.reads == reads && phy5.data0_writes.size() == answers && target.rx.empty());
+    phy5.paused = false;
+    for (int i = 0; i < 200 && target.rx.size() < sizeof line; ++i) { advanceMicros(500); console5.poll(); target.available(); }
+    CHECK(target.rx == Bytes(line, line + sizeof line));
+    CHECK(phy5.turns > 0 && phy5.turns == phy5.turns_done);
   }
 
   printf("console: %d checks, %d failures\n", checks, failures);
