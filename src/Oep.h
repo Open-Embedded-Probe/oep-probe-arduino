@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// OEP v1 core (oep-spec docs/oep-core.ja.md, 0f455a0): interfaces found by name, the probe described by fn 0 (the core,
+// OEP v1 core (oep-spec docs/oep-core.ja.md, f8bb2de): interfaces found by name, the probe described by fn 0 (the core,
 // which has no name and is not listed), a lock held by a host-chosen session id, one clock (ns since boot, u64) and one
 // space of resource numbers. The interfaces' shared parts are in OepStream.h (position streams) and OepDebug.h (wire /
 // target status, pin pairs). Every number comes from the registry (OepRegistry.h, generated from oep-spec
@@ -217,7 +217,7 @@ inline bool lowerToken(const uint8_t *p, size_t n, size_t max) {
     if (!((p[i] >= 'a' && p[i] <= 'z') || (p[i] >= '0' && p[i] <= '9') || p[i] == '-')) return false;
   return true;
 }
-// An interface name (core §13 rule 1): 1 to 64 bytes, at least two labels separated by `.`, each label 1 or more of
+// An interface name (core §13 rule 1): 1 to 48 bytes, at least two labels separated by `.`, each label 1 or more of
 // `a-z 0-9 -` that does not start or end with `-`.
 inline bool interfaceName(const char *name) {
   const size_t n = name ? strlen(name) : 0;

@@ -2,6 +2,36 @@
 
 ## Unreleased
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+- (EN) Follows oep-spec f8bb2de (the external review re-check of 2026-10-07 and what followed it: 0f455a0..f8bb2de; the
+  registry header and the test vectors synced, tools/sync_registry.sh with OEP_SPEC_REF=f8bb2de). Interface names are
+  1 to 48 bytes (registry interface_name_max_bytes 48; `interfaceName` refuses a 49-byte name); resend_max is gone from
+  the registry (nothing here used it). The vector "rvswd scan: count > 0 ignores skip" now answers the listed scan, and
+  test_vectors runs it as written (the local exception for the stale vector removed). Checked, no change needed: one
+  max_frame / window / max_inflight for every transport of an `Endpoint` (serial ports, USB, each TCP connection), so
+  every describe TLV and max_length fit each transport's max_frame (core §7.3, §7.4); fn 0's describe always carries
+  channels, and the firmware's channel numbers are 0 .. channels - 1 (40 classic ESP32, 55 ESP32-P4, 30 RP2040 /
+  RP2350; a probe without channels writes 0); a frame is written whole within one poll() and never paused inside (the
+  ESP32-P4's vendor bulk puts a frame in one buffer or drops it whole; transports §2); a closed transport ends nothing
+  (only end, lease expiry and force do; transports §3); i2c-target's errors grows by 1 per failed write (a write both
+  too long and dropped for a full queue counts 1); link sink takes up to max_frame - 12 bytes and source answers up to
+  max_frame - 7. Host test test_core_conformance: a 48-byte name added and a 49-byte one refused, source at max_frame -
+  7 and a sink of max_frame - 12 (a request of exactly max_frame). docs/implementation-limits §1.6 (EN / JA)
+- (JA) oep-spec f8bb2de（2026-10-07 の外部の見直しの再確認と、その後: 0f455a0..f8bb2de。registry のヘッダと試験のベクタを
+  tools/sync_registry.sh、OEP_SPEC_REF=f8bb2de で同期）に合わせました。インターフェースの名前は 1〜48 byte（registry の
+  interface_name_max_bytes 48。`interfaceName` は 49 byte の名前を断る）。registry から resend_max が無くなった（ここでは使って
+  いなかった）。ベクタ「rvswd scan: count > 0 ignores skip」が並べた scan の答えになったので、test_vectors はそのとおりに試す（古い
+  ベクタのための例外を削除）。確かめて変更の要らなかったもの: 1 つの `Endpoint` の max_frame / window / max_inflight はどの経路
+  （シリアルの口、USB、TCP の各接続）でも同じなので、describe の TLV と max_length はどの経路の max_frame にも収まる（core §7.3、
+  §7.4）。fn 0 の describe は channels を必ず付け、firmware の channel の番号は 0〜channels − 1（classic ESP32 40、ESP32-P4 55、
+  RP2040 / RP2350 30。channel の無い probe は 0）。フレームは 1 回の poll() の中で丸ごと書き、途中で止めない（ESP32-P4 の vendor
+  bulk はフレームを 1 つのバッファに入れるか丸ごと捨てる。transports §2）。経路が閉じても何も終わらない（終わるのは end、lease
+  切れ、force だけ。transports §3）。i2c-target の errors は失敗した書き込み 1 回につき 1（長すぎ、かつ列があふれた書き込みも 1）。
+  link の sink は max_frame − 12 byte まで、source は max_frame − 7 byte まで。host の試験 test_core_conformance: 48 byte の名前が
+  通り 49 byte が断られること、source の max_frame − 7 と、sink の max_frame − 12（ちょうど max_frame の要求）。
+  docs/implementation-limits §1.6（EN / JA）
+>>>>>>> 34708e8 (Follow oep-spec f8bb2de (external review re-check of 2026-10-07, 0f455a0..f8bb2de): registry and vectors synced (tools/sync_registry.sh, OEP_SPEC_REF=f8bb2de). Interface names 1 to 48 bytes (interface_name_max_bytes 48); resend_max gone from the registry (unused here); the vector "rvswd scan: count > 0 ignores skip" answers the listed scan, so test_vectors runs it as written (the local exception removed). Checked without change: one max_frame / window / max_inflight for every transport of an Endpoint (serial, USB, each TCP connection), so describe TLVs and max_length fit every transport's max_frame (core §7.3, §7.4); channels always in fn 0's describe and channel numbers 0 .. channels - 1 in the firmware; frames written whole within one poll(), never paused inside (transports §2); a closed transport ends no session, lock, subscription or resend table (transports §3); i2c-target errors +1 per failed write; link sink up to max_frame - 12, source max_frame - 7. Host test test_core_conformance: 48-byte name accepted, 49 refused; source at max_frame - 7, sink of max_frame - 12. docs/implementation-limits §1.6 (EN / JA); CHANGELOG (EN / JA))
 - (EN) OEP over TCP (oep-spec transports §1-§3 as of af3d52b): `Endpoint::addTcpListener` adds a listening socket as one
   describe entry (kind 6, interface 0xFF) whose connection slots are each a transport of their own - confirm names the
   listener's entry, answers go back on the connection, notifications go to the subscriber's connection only (none to a

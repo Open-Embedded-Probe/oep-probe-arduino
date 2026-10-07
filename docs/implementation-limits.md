@@ -18,5 +18,6 @@ these values. §6 covers TCP over Wi-Fi on the classic ESP32: port 7450, up to t
 the listener one describe entry), mDNS `_oep._tcp` with host `oep-<unit_id>.local` and TXT `unit_id`, the proposed probe.config
 wifi item 0x08 (several networks tried in index order, the passphrase write-only), restart_max_ms 15000 with Wi-Fi, the
 measurements on the ATOM, and the limits (sampler windows pause the network, ESP32-P4 and RP2040 / RP2350 without Wi-Fi).
-The firmware follows oep-spec 0f455a0 (0.0.29 development builds); §2.6 records what that removed (boot_reset and the
-rest).
+The firmware follows oep-spec 0f455a0 (0.0.29 development builds) and, with the external review re-check of 2026-10-07,
+oep-spec f8bb2de; §2.6 records what 0f455a0 removed (boot_reset and the rest). §1.6 adds: one max_frame for every transport
+(the describe and max_length fit them all) and frames written whole, never paused inside.

@@ -13,6 +13,7 @@
 // oep-spec tests/vectors are test_vectors.cpp's.
 #include <stdio.h>
 #include <string.h>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -212,6 +213,15 @@ static void testOps() {
   ep.setPortSpeed([](uint8_t, uint32_t b, bool) { return b; }, 115200);
   r = exchange(ep, s, false, request(7, 0, 0x03, {2, 0, 0, 0}));
   CHECK(r.size() == 6 + 3 + 2 && Bytes(r.begin() + 6, r.end()) == hex("0902000107"));
+  // oep-if-link §2: source answers at most max_frame - 7 bytes; the largest sink that fits is max_frame - 12 (the
+  // request's header 10 and count 2): a request of max_frame bytes, completed
+  r = exchange(ep, s, false, request(20, 2, reg::probe_link::kOpSource, u32(5000)));
+  CHECK(r.size() == 1024 && r[3] == kResolutionCompleted && r[5] == uint8_t(1024 - 7) && r[6] == uint8_t((1024 - 7) >> 8));
+  Bytes sink = {uint8_t(1024 - 12), uint8_t((1024 - 12) >> 8)};
+  sink.resize(2 + 1024 - 12, 0x5a);
+  CHECK(request(21, 2, reg::probe_link::kOpSink, sink).size() == 1024);
+  r = exchange(ep, s, false, request(21, 2, reg::probe_link::kOpSink, sink));
+  CHECK(r.size() == 5 && r[3] == kResolutionCompleted);
   CHECK(reason(exchange(ep, s, false, request(8, 3, 0x03, {0, 0, 0, 0}))) == kRejectUnknownFunction);   // no plan, no restart
   for (uint8_t op : {0x05, 0x14, 0x30, 0x32})   // fn 0: the old plan_release / restart, subscribe / unsubscribe
     CHECK(reason(exchange(ep, s, false, request(9, 0, op, {}, true, 7))) == kRejectUnknownOperation);
@@ -449,6 +459,11 @@ static void testNamesAndTokens() {
   Named bad1("single"), bad2("io.Github.x"), bad3("io..x"), bad4("io.-x"), bad5("io.x-"), good("io.github.a-b.c9");
   CHECK(!ep.add(bad1) && !ep.add(bad2) && !ep.add(bad3) && !ep.add(bad4) && !ep.add(bad5));
   CHECK(ep.add(good));
+  // core §7.2 / §13 rule 1: 1 to 48 bytes (a list answer with one entry fits the smallest max_frame)
+  static const std::string n48 = "io.github." + std::string(38, 'a'), n49 = n48 + "b";
+  Named long48(n48.c_str()), long49(n49.c_str());
+  CHECK(n48.size() == 48 && ep.add(long48));
+  CHECK(!ep.add(long49));
   uint8_t buf[200];
   const uint8_t id[] = {'a', '1'}, bad_id[] = {'A', '1'};
   TlvWriter w1(buf, sizeof buf);

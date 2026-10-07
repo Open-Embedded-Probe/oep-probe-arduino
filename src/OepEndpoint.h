@@ -435,9 +435,9 @@ class Endpoint {
 };
 
 // oep.probe.link (oep-if-link): the link test - source (length(u32) -> len(u16) data, byte k = k & 0xFF, at most
-// max_frame - 7: the answer's header and len) and sink
-// (count(u16) data -> nothing) - and, when the endpoint has a port_speed handler (setPortSpeed), port_speed on a UART
-// bridge. An optional interface: a probe lists at most one; add it like any other (endpoint.add(link)).
+// max_frame - 7: the answer's header and len) and sink (count(u16) data -> nothing; at most max_frame - 12: the
+// request's header 10 and count 2) - and, when the endpoint has a port_speed handler (setPortSpeed), port_speed on a
+// UART bridge. An optional interface: a probe lists at most one; add it like any other (endpoint.add(link)).
 class Link final : public Interface {
  public:
   explicit Link(Endpoint &endpoint) : endpoint_(endpoint) {}

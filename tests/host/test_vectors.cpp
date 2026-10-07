@@ -753,13 +753,6 @@ static void testOps(const char *file, const char *list) {
     }
     if (sessionOf(req) == kS && !p.ep.locked() && !p.no_open) CHECK(p.open());
     Bytes want = hex(c["answer_hex"].string);
-    if (name == "rvswd scan: count > 0 with skip") {
-      // A stale vector at oep-spec 0f455a0: it still answers malformed, but oep-if-debug §1 (b9b30ad, item 25) says a
-      // count > 0 scan does not look at skip. This probe follows the text: the scan runs.
-      const Bytes got = p.send(req);
-      CHECK(got.size() >= 5 && got[3] == kResolutionCompleted);
-      continue;
-    }
     OpsProbe::restarts = 0;
     Bytes got = p.send(req);
     if (names(c["fns"], "oep.probe.restart"))   // the restart follows its success answer only (oep-if-restart §2)

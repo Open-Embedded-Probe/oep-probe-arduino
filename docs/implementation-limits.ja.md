@@ -7,7 +7,7 @@
 別の値を選んでよく、host はここの値に頼らない（仕様の待ちと宣言だけに頼る）。
 
 2026-10-07 の仕様の規則の見直し（oep-spec の `docs/v1-rule-review-2026-10-07.ja.md` §2、§4）で、仕様から外れて実装の値になったものを
-ここに移した。firmware は oep-spec 0f455a0 の規則に沿う（0.0.29 の開発版から）。見直しで外した動き（boot_reset など）の記録は §2.6。
+ここに移した。firmware は oep-spec 0f455a0 の規則に沿う（0.0.29 の開発版から）。その後の外部の見直しの再確認（2026-10-07）の変更も含めて、今は oep-spec f8bb2de に沿う。見直しで外した動き（boot_reset など）の記録は §2.6。
 TCP と Wi-Fi（port、mDNS、Wi-Fi の設定の提案、測った値）は §6。
 
 ## 1. どの platform にも共通
@@ -93,6 +93,12 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 - **SDI と DMDATA の限界**: この 2 つのコンソールの方式は枠に番号を持たないので、線の書き込みが失われたこと（DATA0 の「受け取った」の
   0 が届かない、答えが届かない）を、probe も target も見分けられない。同じ枠が 2 回届くこと、DMDATA では答えに載せた入力の byte が
   失われることがある。重複も欠落も許されないなら dmseq を使う。
+- **max_frame はどの経路も同じ**: 1 つの `Endpoint` の max_frame / window / max_inflight は、シリアルの口、USB、TCP の接続のすべてで同じ値
+  （`Limits`）。describe の TLV と max_length はその値から決めるので、どの経路の max_frame にも収まる（core §7.3、§7.4）。経路ごとに
+  違う max_frame は持たない。
+- **フレームは途中で止めずに書く**: 応答と通知は 1 つの `poll()` の中で 1 フレームずつ丸ごと書き、フレームの途中でほかの仕事をしない
+  （transports §2）。ESP32-P4 の vendor bulk はフレームを丸ごと 1 つのバッファに入れ、入らなければ丸ごと捨てる。止まりうるのは、host が
+  読まなくなって経路のバッファが埋まったときだけである。
 - **開いても再起動しない**: どの transport でも、開閉と DTR / RTS で probe は再起動しない（USB-Serial/JTAG の DTR / RTS のリセットは
   切ってある）。
 
