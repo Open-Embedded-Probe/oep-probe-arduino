@@ -13,12 +13,25 @@
 // port, then asking (confirm).
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
-// oep.fixture.gpio / uart / capture (the core-0 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C
+// oep.fixture.gpio / uart / capture (the core-1 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
 // (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below.
+//
+// Cores: loop() (all of OEP, the SWIO wire, every interrupt the sketch sets up: UART0, the fixture UART, the SPI / I2C
+// devices, the ADC) and the Arduino events run on core 0, with the Wi-Fi driver and the TCP/IP stack (pinned to core 0
+// by the core's build); core 1 is the logic sampler's alone (its windows mask that core for up to 250 ms). The profile
+// esp32 builds with LoopCore=0 and EventsCore=0 (sketch.yaml); a build with Wi-Fi refuses another arrangement (with the
+// sampler on the radio's core, a window held the Wi-Fi driver up: 0.0.29-dev 028554d had to cut spans to 50 ms and
+// segments to 25 ms, and a trigger search was blind while the radio had the core).
 #pragma once
+#if !defined(ARDUINO_RUNNING_CORE) || !defined(ARDUINO_EVENT_RUNNING_CORE) || ARDUINO_RUNNING_CORE != 0 || \
+    ARDUINO_EVENT_RUNNING_CORE != 0
+#if !defined(OEP_WIFI) || OEP_WIFI
+#error "OepProbe (classic ESP32): build with LoopCore=0 and EventsCore=0 (the sketch.yaml profile esp32): core 1 is the sampler's"
+#endif
+#endif
 #include <OepAnalog.h>
 #include <OepBind.h>
 #include <OepBootGuard.h>
@@ -148,8 +161,8 @@ static oep::PinTable pins(kChannels);
 // PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0, the analog 7)
 static oep::FixtureGpio gpio(pins, 0, 1);
 static oep::FixtureUart uart(pins, Serial2, 0, 2);
-// The fixture UART's interrupt stays on loop()'s core (core 1): core 0 is the sampler's, with interrupts off for up to
-// SamplerCapture's 250 ms bursts. On core 1 the SWIO frames hold it off; its RX FIFO threshold (oep::kUartRxFifoFull,
+// The fixture UART's interrupt stays on loop()'s core (core 0): core 1 is the sampler's, with interrupts off for up to
+// SamplerCapture's 250 ms bursts. On core 0 the SWIO frames hold it off; its RX FIFO threshold (oep::kUartRxFifoFull,
 // set by platformUartBegin; arduino-esp32's 120 left 8 bytes, 40 us at 2000000) leaves room for one twice over at the
 // fastest rate configure takes.
 static_assert((oep::kUartRxFifo - oep::kUartRxFifoFull) * 10ull * 1000000ull / oep::FixtureUart::kMaxBaud >=
@@ -217,8 +230,6 @@ void setup() {
     memcpy(unit, id, n < sizeof unit - 1 ? n : sizeof unit - 1);
     wifi.begin(unit);
     config.setWifi(&wifi);   // the wifi item: the networks to join (applied with the saved settings below)
-    // the radio on core 0 with the sampler: short spans and segments while it is on (OepSampler.h, setRadio)
-    capture.setRadio([] { return wifi.radioOn(); });
   }
 #endif
   endpoint.add(wire);
@@ -251,6 +262,14 @@ void setup() {
 }
 
 void loop() {
+  // loop() on core 0 runs without blocking: core 0's idle task (which the task watchdog watches, and which frees the
+  // stacks of tasks deleted on core 0) gets a tick every 50 ms; the Wi-Fi driver and the TCP/IP stack, above loop()'s
+  // priority, take the core whenever they have work
+  static uint32_t yielded = 0;
+  if (millis() - yielded >= 50) {
+    vTaskDelay(1);
+    yielded = millis();
+  }
   oep::BootGuard::poll();
 #if OEP_WIFI
   wifi.poll();

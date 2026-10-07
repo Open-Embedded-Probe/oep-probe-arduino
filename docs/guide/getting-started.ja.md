@@ -161,8 +161,8 @@ classic ESP32 の sampler もトリガを取れます（8 チャネル、2 MHz �
 後に target に届き、キャプチャには写りません。送ったものの後に target がすることを写すにはトリガを使います: arm してからコマンドか
 リセットを送ると、探索の番の中で届き、それが起こす出来事でトリガが立ちます（docs/implementation-limits.ja.md §4.1）。
 割り込みを止める 1 回は時計で区切ります: サンプルが遅れた区画（トリガの時に動いていた要求のフレーム）は早く終わり、samples が
-少なく slipped が立ちます。Wi-Fi が点いている（設定にネットワークがある）と radio が core 0 を分け合うので、区画は 25 ms まで
-（何サンプルかは actual_samples）、1 回は 50 ms まで。radio が点く前に configure したキャプチャは configure し直します。
+少なく slipped が立ちます。sampler は core 1 を 1 人で使う（firmware は LoopCore=0、EventsCore=0 でビルドし、OEP と Wi-Fi の driver と
+TCP/IP の stack は core 0）ので、Wi-Fi が点いていてもこれらの限界は変わりません。radio の行き来でサンプルが遅れることはあります（slipped）。
 
 ロジックとアナログを一緒に、ロジックのトリガで取るには capture-group を使います。アナログはロジックのトリガに従い、どちらの
 区画も同じ瞬間に印を付けます。

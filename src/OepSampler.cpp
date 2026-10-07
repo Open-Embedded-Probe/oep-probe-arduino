@@ -80,7 +80,7 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
   plan.trig_role = trig_role_;
   plan.trig_value = static_cast<uint8_t>(trig_value_);
   plan.pre = pretrigger_;
-  const uint64_t off_ms = (radio_cfg_ ? kOffNsRadio : kOffNs) / 1000000u;
+  const uint64_t off_ms = kOffNs / 1000000u;
   const uint64_t limit = static_cast<uint64_t>(cpu_hz_) / 1000u * off_ms / cycles_;
   plan.burst = static_cast<uint32_t>(limit - (samples_ - pretrigger_ - 1));   // > pre: samples < limit (configure)
   plan.turn = static_cast<uint32_t>(static_cast<uint64_t>(cpu_hz_) / 1000u * kWireTurnMs / cycles_);
@@ -114,7 +114,7 @@ void IRAM_ATTR SamplerCapture::samplerTask(void *context) {
 }
 
 void SamplerCapture::waitIdle() {
-  // a search for the trigger ends at its next sample; a window cannot be cut short (interrupts are off on core 0).
+  // a search for the trigger ends at its next sample; a window cannot be cut short (interrupts are off on the sampler's core).
   // The wire is let go of first: a window waiting for it would otherwise wait for this loop, which waits for it.
   gWireGate.release();
   if (sampler_) control_ = sampler::kControlAbort;
@@ -129,7 +129,7 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   w.roleChannels(roles, kMaxChannels, table_.allowedMask());
   // no features: revision 1 defines no bit (query, force, subscribe and unsubscribe are in the ops tag)
   uint8_t mode[9] = {cap::kModeOneShot};           // mode(u8) max_samples(u32) max_segments(u32): one-shot
-  putU32(mode + 1, kBufferBytes);                  // one byte per sample (core 0 samples, OEP answers on core 1)
+  putU32(mode + 1, kBufferBytes);                  // one byte per sample (one core samples, OEP answers on the other)
   putU32(mode + 5, 1);
   w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   uint8_t range[9];
@@ -225,7 +225,6 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     trig_value = value;
   }
   if (samples > kBufferBytes) samples = kBufferBytes;
-  // the radio on: a segment of kSegmentNsRadio at most at the rate paced (below), rounded down - see after the rate
   uint32_t pretrigger = 0;
   if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger (above), inside the segment: less than samples
     pretrigger = getU32(v);
@@ -245,12 +244,6 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   const uint32_t cycles = cpu_hz / rate;
   const uint32_t g = gcd(cpu_hz, cycles);
   const uint32_t num = cpu_hz / g, den = cycles / g;   // the rate actually paced: whole cycles per sample
-  const bool radio = radio_ && radio_();
-  if (radio) {
-    const uint64_t most = static_cast<uint64_t>(cpu_hz) / 1000u * (kSegmentNsRadio / 1000000u) / cycles;
-    if (samples > most) samples = static_cast<uint32_t>(most);
-    if (pretrigger >= samples) return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);   // inside the segment
-  }
   if (!query) {
     waitIdle();
     if (!buffer_) buffer_ = static_cast<uint8_t *>(heap_caps_malloc(kBufferBytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
@@ -264,7 +257,6 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     trig_role_ = trig_role;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
-    radio_cfg_ = radio;
     cycles_ = cycles;
     cpu_hz_ = cpu_hz;
     state_ = cap::kStateConfigured;
@@ -278,7 +270,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
   w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + channels_);
   w.u32(cap::kTlvConfigureAnswerActualSamples, samples);   // one-shot: no actual_segments (capture §3.3)
-  w.u32(cap::kTlvConfigureAnswerBlockingMs, 0);    // core 1 keeps answering
+  w.u32(cap::kTlvConfigureAnswerBlockingMs, 0);    // loop()'s core keeps answering
   return w.ok() ? completed(w.length()) : failed();
 }
 
@@ -331,15 +323,15 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (boundRefused()) return boundInGroup(*this, out, capacity);
       if (state_ != cap::kStateConfigured && state_ != cap::kStateDone && state_ != cap::kStateError) return wrongState(out, capacity);
       if (capacity < 8) return failed();
-      // the radio came on since configure: its segment and spans are too long for it (configure again)
-      if (!radio_cfg_ && radio_ && radio_()) return wrongState(out, capacity);
       waitIdle();
       listen(pins_, channels_);
       done_ = trig_seen_ = aborted_ = false;
       control_ = 0;
       memset(buffer_, 0, samples_);
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-      if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, kTaskPriority, &sampler_, 0) != pdPASS) {
+      // on the core loop() is not on (this call's): its windows mask that core, and loop()'s keeps answering
+      if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, kTaskPriority, &sampler_,
+                                  static_cast<BaseType_t>(xPortGetCoreID() ^ 1)) != pdPASS) {
         sampler_ = nullptr;
         state_ = cap::kStateError;   // every entry to state 6 sends stopped reason 3 (capture §3.2)
         if (subscribed_) {
@@ -370,7 +362,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
         state_ = cap::kStateConfigured;
         if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
       } else if (state_ == cap::kStateCapturing) {
-        // the window cannot be cut short (interrupts are off on core 0) and ends by itself: the capture completes
+        // the window cannot be cut short (interrupts are off on the sampler's core) and ends by itself: the capture completes
         // (state 4, its segment and stopped 0 - capture §3.2's "complete -> 4"), not a short segment in state 1
         waitIdle();
         poll();

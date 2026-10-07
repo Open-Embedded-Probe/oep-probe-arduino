@@ -37,9 +37,9 @@
 // from the slave and follows CS (a CS edge interrupt): on while CS is low, off while it is high. The fake spi_slave
 // models the classic, so the host tests run with the gate.
 // The gate only switches the pad's output enable; the pad's value stays the slave's MISO signal throughout, so once
-// enabled after CS fell it carries what the slave shifts - nothing the gate holds of its own. Its handler runs on core 0
-// (kGateCore): the SWIO wire's frames run in loop() on core 1 with that core's interrupts masked for up to about 45 us
-// each, and a handler there waited them out. The delay from CS falling to MISO driven - the time of one level-3 GPIO
+// enabled after CS fell it carries what the slave shifts - nothing the gate holds of its own. Its handler runs on the
+// core loop() is not on (kGateCore): the SWIO wire's frames run in loop() with that core's interrupts masked for up to
+// about 45 us each, and a handler there waited them out. The delay from CS falling to MISO driven - the time of one level-3 GPIO
 // interrupt on a core that is not masked - is declared as describe cs_setup_ns (kCsSetupNs): during it MISO is
 // undriven. Not reachable in software below about 1 us on this chip: the level-5 vector is ESP-IDF's own (xt_highint5,
 // the interrupt watchdog and the cache-lock fix) and the level-4 one the Bluetooth controller's dispatcher, whose C
@@ -121,9 +121,13 @@ class P4SpiTarget final : public Interface {
   // MISO undriven (fixture §4: one value for both). Measured on the bench (classic ESP32, a CH32V003 master, the
   // console of an attached debug wire running, 2026-10): the first bit right from 2.0 us after CS fell at 1 MHz and
   // from 3.1 us at 3 MHz; MISO still driven up to 11.9 us after CS rose. 15 us is the longest of those with margin.
-  // Not covered: a logic capture of the core-0 sampler running at the same time (it masks core 0 for its whole window,
-  // up to 164 ms).
+  // Not covered: a logic capture of the sampler running at the same time (it masks the same core, the one loop() is
+  // not on, for its whole window, up to 250 ms).
+#if defined(ARDUINO_RUNNING_CORE)
+  static constexpr uint32_t kGateCore = ARDUINO_RUNNING_CORE ^ 1;
+#else
   static constexpr uint32_t kGateCore = 0;
+#endif
   static constexpr uint32_t kCsSetupNs = 15000;
   // SPI modes this target offers (bit n: mode n). Modes 1 and 3 sample on the second SCK edge: there the classic's
   // slave puts 0 on MISO from CS falling to the first SCK edge, whatever the first bit (bench, 2026-10) - neither

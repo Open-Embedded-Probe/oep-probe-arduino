@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32: the logic sampler has core 1 to itself; loop() (OEP, the SWIO wire, UART0, the fixture UART, the
+  SPI / I2C devices, the ADC) and the Arduino events run on core 0 with the Wi-Fi driver and the TCP/IP stack (which the
+  core's build pins there). The profile esp32 builds with LoopCore=0,EventsCore=0, and a Wi-Fi build of
+  examples/Firmware/OepProbe refuses another arrangement (#error). SamplerCapture starts its task on the core its start
+  is not called on; the SPI target's CS gate runs on the core loop() is not on (kGateCore from ARDUINO_RUNNING_CORE);
+  loop() rests one tick every 50 ms for core 0's idle task (task watchdog). The radio-specific limits of 028554d are gone
+  (segments of 25 ms, spans of 50 ms, unavailable cause 6 for a start after the radio came on): the bench (V003 jig,
+  Wi-Fi connected, TCP and UART) found segments too short for test_timing, events missed while the radio held the
+  sampler's core between spans (no capture: toggle 1000 us, TOGGLE0, millis) and slips in test_pwm. A window no longer
+  holds the radio up, so TCP keeps going during it. docs/implementation-limits §4.1 / §6.5 (with the console's delays from
+  Wi-Fi stalls and the UART0 loss), guide getting-started (EN / JA); not run on hardware
+- (JA) classic ESP32: logic の sampler が core 1 を 1 人で使い、loop()（OEP、SWIO、UART0、fixture UART、SPI / I2C、ADC）と Arduino の
+  events を Wi-Fi の driver と TCP/IP の stack と同じ core 0 に置きました（profile esp32 は LoopCore=0,EventsCore=0。Wi-Fi の build は
+  ほかの割り当てを #error で断る）。028554d の radio 用の制限（区画 25 ms、1 回 50 ms、radio が点いた後の start の cause 6）を外しました。
+  docs/implementation-limits §4.1 / §6.5、guide。実機では未確認
 - (EN) Follow oep-spec d801f02 / 13d37cb / a7f938e / c6ab5d9 (OEP_SPEC_REF=c6ab5d9): a type 0 trigger's role is not
   looked at; a capture-group's pretrigger is the trigger track's P as a time, every follower keeps P_k = ceil(P x rate_k
   / rate_t) in its ring (`groupPretrigger`, GroupTrack::trackRate / trackPretrigger / trackCanKeep / trackKeep) and bind

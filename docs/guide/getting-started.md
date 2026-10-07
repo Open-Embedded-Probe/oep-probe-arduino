@@ -162,8 +162,8 @@ reaches the target only after it and is not in it. To capture what the target do
 trigger: arm, then send the command or the reset - it goes out in a turn of the search, and the event it causes
 fires the trigger (docs/implementation-limits.ja.md §4.1). Each interrupts-off span ends by the clock: a segment whose
 samples fell behind (frames of a request already running at the trigger) ends early, with fewer samples and slipped
-set. With Wi-Fi on (a network in the settings) the radio shares core 0: a segment is at most 25 ms (actual_samples
-says how many), a span at most 50 ms, and a capture configured before the radio came on must be configured again.
+set. The sampler has core 1 to itself (the firmware builds with LoopCore=0 and EventsCore=0; OEP, the Wi-Fi driver and
+the TCP/IP stack run on core 0), so Wi-Fi changes none of these limits; radio traffic may still make a sample late (slipped).
 
 Logic and analog together, on the logic's trigger (the capture-group): the analog follows it, and each track's segment
 marks the same instant.

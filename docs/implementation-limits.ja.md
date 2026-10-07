@@ -232,7 +232,12 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
 
 ### 4.1 classic ESP32
 
-- **キャプチャの窓とデバッグの線**: logic の sampler は、窓の間（即時で最大 164 ms、トリガの探索は 1 回の区切りが最大 250 ms）、core 0 で
+- **core の割り当て**: loop()（OEP のすべて、SWIO の線、sketch が付ける割り込み: UART0、fixture UART、SPI / I2C の device、ADC）と
+  Arduino の events は core 0 で、Wi-Fi の driver と TCP/IP の stack（core の build が core 0 に固定）と同じ core。core 1 は logic の
+  sampler だけが使う（`examples/Firmware/OepProbe` の profile esp32 は `LoopCore=0,EventsCore=0`。Wi-Fi の build は、ほかの割り当てを
+  `#error` で断る）。sampler は start を呼んだ core（loop() の core）と違う core で動く。loop() は 50 ms ごとに 1 tick 休み、core 0 の
+  idle task（task の watchdog が見る）を回す。
+- **キャプチャの窓とデバッグの線**: logic の sampler は、窓の間（即時で最大 164 ms、トリガの探索は 1 回の区切りが最大 250 ms）、core 1 で
   割り込みを止めて GPIO を読み続ける。同じ周辺のバスを使う SWIO のフレームは、その間ずれうる（SWIO にはパリティが無く、DMI の書き込みは
   読み戻されないので、線の上で分からない）。
 - **規則: 即時のキャプチャの窓と、SWIO の線の行き来（要求もコンソールも）は同時に起きない。** 即時（trigger type 0）の窓がサンプルして
@@ -244,7 +249,7 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   （区切りごとに何度でも）、コンソールの読みが断られれば区切りごとに 1 回、最大 5 ms（`kWireTurnMs`）。番の間も sampler は読み続け、
   フレームはそれと 1 つずつ交互に通る（フレームの間は読まず、その後で遅れを取り戻す: そのサンプルは遅れ、区画に入れば slipped）。
   コンソールは送るものを target に渡し終えたら番を早く終える（target はその後、線の行き来の無いところで動く）。区切りと区切りの間の
-  すき間（約 1 ms、割り込みを戻して core 0 のタスクを回す）には線を取らせない（そこで送ったコマンドで target が動くと、誰もサンプル
+  すき間（約 1 ms、割り込みを戻して core 1 のタスクを回す）には線を取らせない（そこで送ったコマンドで target が動くと、誰もサンプル
   していない）。トリガが立った後の区画の残りは排他（番の中で始まっていた要求はフレームごとに続く）。arm の後で target に何かをさせて、
   それを写したい host は、トリガを使う: arm してからコマンドかリセットを送ると、それは番の中で target に届き、それが起こす出来事で
   トリガが立ち、キャプチャに写る。区切りの最初のサンプルからトリガを見る（エッジは 2 つ目から）: プリトリガの分がまだ溜まっていない
@@ -270,14 +275,15 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   describe の firmware の文字列 `(int-wdt at 961 s)`。接続が「peer closed」で切れたのはこのリセット）。探索の区切りは「1 回の長さから区画の
   残りの名目の時間を引いた分」で終わる。区画（即時の窓も）がその長さに達しても読み終えていなければ、そこで終える: **samples は configure の
   値より少なく、slipped が立つ**（サンプルが遅れていたため）。トリガの位置と trigger_index は正しい。
-- **radio が点いているとき（Wi-Fi の項目に entry があるとき）**: Wi-Fi の driver と TCP/IP の stack は sampler と同じ core 0 で動く。
-  configure はそのとき、**区画を 25 ms まで**に切り下げ（`kSegmentNsRadio`。actual_samples が返す: 2 MHz で 50000、1 MHz で 25000、
-  400 kHz で 10000 サンプル）、割り込みを止める 1 回を **50 ms まで**（`kOffNsRadio`）にする。探索の区切りはその残り（25 ms 以上）。
-  radio が消えている間に configure したキャプチャを、radio が点いた後で start すると unavailable cause 6（configure し直す）。キャプチャ
-  の途中で radio が点いても、その窓は configure のときの長さのまま（250 ms 以下）。
-- **sampler の task の優先度は 17**: TCP/IP の stack（18）と Wi-Fi の driver（23）より下、analog の取り込み（5）より上。区切りと区切りの
-  間では、それらが仕事を終えるまで先に動く（前は最高の優先度で、1 ms のすき間しか回らず、loop() が TCP/IP の lock を待って止まることが
-  あった）。その分、Wi-Fi が忙しいと**探索のすき間（その間の出来事は見逃す）が 1 ms より長くなる**。
+- **radio が点いていても限界は同じ**: sampler の窓は radio の core（core 0）を止めないので、radio のための区画や 1 回の長さの制限は
+  無い（区画は最大 65408 サンプル、1 回は最長 250 ms、探索のすき間は約 1 ms。Wi-Fi の有無で変わらない）。radio の行き来（Wi-Fi の
+  driver が core 0 で動き、周辺のバスを使う）でサンプルが遅れることはあり、そのときは slipped が立つ（データは正しいと言わない）。
+  - 経緯: 0.0.29 の開発版 028554d までは sampler が core 0（radio と同じ）だった。窓の間は Wi-Fi の driver が止まるので、radio が点いて
+    いる間は区画を 25 ms、1 回を 50 ms に切り、区切りの間は Wi-Fi が先に動いた。V003 の台（Wi-Fi に接続、TCP とシリアルの両方）では、
+    int-wdt は消えたが、test_timing で区画が 25 ms に足りず（1000 µs の toggle 20 回の 40 ms が入らない）、探索のすき間に Wi-Fi が
+    core を長く使う間に出来事を見逃して何も取れない区画があり（toggle delay=1000us、TOGGLE0、millis）、test_pwm で slipped が出た。
+- **sampler の task の優先度は 17**（core 1 にはほかに重い task が無い。sketch が sampler と同じ core で TCP/IP の stack（18）や Wi-Fi の
+  driver（23）を動かすときに、それらを先にするため）。
 - fixture UART の受信の割り込みは loop() の core（sampler と別）で、FIFO の閾値は 32 byte。速さは 2000000 bps まで。
 
 ### 4.2 ESP32-P4
@@ -379,13 +385,16 @@ oep-spec の probe.config §1.4、§3.3、§4（c2b8007 から）。この実装
 
 ### 6.5 限界
 
-- **sampler の窓**: logic の sampler は窓の間 core 0 の割り込みを止める。Wi-Fi と lwIP の task も core 0 なので、その間 TCP は止まる。
-  radio が点いている間は、1 回を 50 ms まで、区画を 25 ms までにし、区切りの間は Wi-Fi と lwIP が先に動く（§4.1）。
+- **sampler の窓**: logic の sampler は core 1 で窓の間その core の割り込みを止める。Wi-Fi と lwIP の task は core 0 なので、TCP は
+  窓の間も止まらない（§4.1）。
+- **コンソールの返事の遅れ**: Wi-Fi のネットワークの止まり（再送で 1〜4 s、§6.4）と、radio が点いているときの UART0 の損失（下）は、
+  コンソールの返事（console の通知）も同じだけ遅らせ、または落とす。host はコンソールを待つ時間をそれより長くし（4 s を越える）、
+  通知の seq の飛びは read で読み直す（console の read は消費しない）。firmware の側で消せる原因は見つかっていない。
 - **radio が点いているときの UART0 の損失（classic ESP32、測った値）**: V003 の台（classic ESP32、CH340 を usbipd で WSL に）、
   `oep.probe.link` の source（probe → host）を 500000 bps で 60 s、ほかに何も動かさずに 3 回ずつ。失いの割合（壊れは 0）:
   Wi-Fi に接続（rssi -41）1.64 / 0.76 / 0.55 %、同じ image で wifi の entry を unset（radio 切）1.69 %（unset の 3 s 後に始めた回）/ 0.28 /
   0.17 %、Wi-Fi の無い build 0.47 / 0.08 / 0.17 %。radio が点いていると数倍失い、失った 1 つごとに host の待ち（0.3 s）の分だけ遅くなる
-  （ok の数 2884〜3449 と 3581〜3727）。失うのはフレームまるごと。firmware の側では、UART0 の送りの割り込みは core 1、Wi-Fi と lwIP は core 0
+  （ok の数 2884〜3449 と 3581〜3727）。失うのはフレームまるごと。firmware の側では（028554d のとき）、UART0 の送りの割り込みは core 1、Wi-Fi と lwIP は core 0
   で、キャプチャの無いとき loop() が待つ所（Wi-Fi の状態を見る、待ち受けの accept、TCP の受け）はどれも待たない呼び出しで、原因になる待ちは
   見つかっていない。遅れ（host の待ちを越えた）か、変換器までの間でバイトが壊れた（CRC の合わないフレームは host が雑音として捨て、失いに
   数える）かは、まだ分けていない。radio の電源や RF が原因なら、この firmware では消せない。シリアルの口を Wi-Fi と一緒に使うときは、

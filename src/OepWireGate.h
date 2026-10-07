@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// The classic ESP32's two users of the GPIO registers kept apart: the core-0 sampler (SamplerCapture), which reads
+// The classic ESP32's two users of the GPIO registers kept apart: the sampler (SamplerCapture, on the core loop() is not
+// on), which reads
 // GPIO.in back to back with interrupts off, and the SWIO frames of loop()'s core (SwioPhy), whose bit times are made of
 // GPIO register writes and a GPIO.in read. Both cores reach those registers over the same peripheral bus: an access of
 // one core waits for the access of the other in flight. The sampler sees it as samples taken late (its slipped flag,

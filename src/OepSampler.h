@@ -2,8 +2,11 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // OEP v1 logic capture (oep.fixture.logic revision 1, oep-spec logic-capture.ja.md §5) on the classic ESP32: the
-// software GPIO sampler of the v0 FixtureCapture, one-shot only. Core 0 does nothing else on this probe, so it samples
-// with interrupts off, paced by the cycle counter (one register read per sample); OEP keeps answering on core 1.
+// software GPIO sampler of the v0 FixtureCapture, one-shot only. It samples on the core that loop() is not on (the one
+// start is called from), with interrupts off, paced by the cycle counter (one register read per sample); OEP keeps
+// answering on loop()'s core. The firmware with Wi-Fi puts loop(), the Arduino events, the Wi-Fi driver and the TCP/IP
+// stack on core 0 (LoopCore=0, EventsCore=0; the driver and the stack are pinned there by the core's build) and leaves
+// core 1 to the sampler: a window never holds up the radio, so it needs no radio-specific limit.
 // A sample is one byte (w = 8), channel k on bit k (logic-capture §3.0), up to 8 channels; bits of unused channels are 0.
 // Triggers: immediate, level and edge on one channel, with a pretrigger inside the segment; the search runs in bursts
 // with interrupts on between them, and gives the SWIO wire turns inside them (OepSamplerRun.h).
@@ -57,12 +60,6 @@ class SamplerCapture final : public Interface, public GroupTrack {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
-  // A probe with its own radio on core 0 (OepWifi.h): `on` tells whether the radio is on (a network in the settings). With
-  // it on, a configure takes a segment of at most kSegmentNsRadio (samples rounded down, actual_samples says) and every
-  // interrupts-off span ends within kOffNsRadio, so the Wi-Fi driver and the TCP/IP stack on core 0 are served at least
-  // that often; a start after the radio came on with a capture configured while it was off is unavailable (cause 6:
-  // configure again).
-  void setRadio(bool (*on)()) { radio_ = on; }
   // From loop(), every time round: a finished window becomes the segment and stopped events; and the SWIO wire is let
   // go of (OepWireGate.h) - a sketch with this sampler and a SwioPhy calls it each loop(), or no window opens.
   void poll();
@@ -109,28 +106,24 @@ class SamplerCapture final : public Interface, public GroupTrack {
   uint8_t *buffer_ = nullptr;
   uint32_t masks0_[kMaxChannels] = {}, masks1_[kMaxChannels] = {};
   TaskHandle_t sampler_ = nullptr;
-  bool (*radio_)() = nullptr;
-  bool radio_cfg_ = false;               // configured with the radio on: the short spans
   volatile bool done_ = false, reported_ = true;
   volatile bool slipped_ = false;         // the last window took a sample one period or more late
   volatile uint32_t late_cycles_ = 0;     // the most it was behind, in CPU cycles
   // the trigger, as configured; what the search found (written by the sampler task, read by poll)
-  // The longest an interrupts-off span lasts, by the clock (OepSamplerRun.h; the interrupt watchdog: 300 ms), and with
-  // the radio on (setRadio): the span and the segment it leaves room for (half of it: the search gets the other half)
-  static constexpr uint64_t kOffNs = 250000000, kOffNsRadio = 50000000, kSegmentNsRadio = 25000000;
+  // The longest an interrupts-off span lasts, by the clock (OepSamplerRun.h; the interrupt watchdog: 300 ms)
+  static constexpr uint64_t kOffNs = 250000000;
   // A trigger search's turn for the SWIO wire inside a burst (OepWireGate.h, OepSamplerRun.h): a few console polls, or
   // the start of a request, which then holds the wire frame by frame until it ends. The console ends it early once it
   // has sent what it had.
   static constexpr uint32_t kWireTurnMs = 5;
-  // The sampling task's priority: below the TCP/IP stack's (18) and the Wi-Fi driver's (23) on core 0, so that between
-  // two spans they run first, as long as they have work; above the analog harvest (5). It was the highest
-  // (configMAX_PRIORITIES - 1): a span's 1 ms gap was then all the radio and the stack got, and loop() waited on the
-  // TCP/IP stack's lock their task held while the sampler ran.
+  // The sampling task's priority: below the TCP/IP stack's (18) and the Wi-Fi driver's (23) should a sketch run them on
+  // the sampler's core, above the analog harvest (5). (The highest, configMAX_PRIORITIES - 1, gave them only the 1 ms
+  // gaps between spans when they shared its core.)
   static constexpr UBaseType_t kTaskPriority = 17;
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
-  volatile uint8_t control_ = 0;          // from core 1: force, abort the search
+  volatile uint8_t control_ = 0;          // from loop()'s core: force, abort the search
   volatile bool trig_seen_ = false, aborted_ = false;
   volatile uint32_t trig_count_ = 0;      // the trigger's sample in its burst
   volatile uint32_t trig_kept_ = 0;       // the samples before it in the segment (< pretrigger_ when it came early)

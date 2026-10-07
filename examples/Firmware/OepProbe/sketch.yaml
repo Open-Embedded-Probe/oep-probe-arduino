@@ -29,7 +29,7 @@ profiles:
       - dir: ../../..
       - EspUsbDevice (2.5.1)
   esp32:
-    fqbn: esp32:esp32:esp32
+    fqbn: esp32:esp32:esp32:LoopCore=0,EventsCore=0
     platforms:
       - platform: esp32:esp32 (3.3.12)
         platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
