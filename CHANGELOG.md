@@ -1,6 +1,36 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Follow oep-spec 0098b56 .. 78fb561 (registry and vectors synced, OEP_SPEC_REF=78fb561). Capture: configure /
+  query follow §3.3's contract (mode and rate required, samples in modes 1 / 2, none 0: malformed; samples in streaming,
+  segments outside repeat, a pretrigger without a non-immediate trigger: unsupported with the tag whatever the value; a
+  trigger role outside the plan: unavailable cause 6; pretrigger above max_pretrigger or at / above samples:
+  unsupported) and answer every row of the mode (no actual_segments in one-shot, neither actual_samples nor
+  actual_segments in streaming); generations start at 1 and skip 0 when they wrap (`nextGeneration`); segment serials
+  wrap (u32; the P4's store slot kept in the info), segments pages by common §1.3, release frees finished segments only
+  (a serial at or past serial_done every finished one); stopped and triggered end with generation(u32). A segment that
+  lost data inside (the P4 logic's queue or DMA ring, the analog's overflow or ring) is never handed out: the track stops
+  in state 6, stopped reason 3, error 2, write_pos at its start, flags bit0 (oep-spec 0b9a058); the P4's copied streaming
+  sends finished segments only. The P4 logic takes a pretrigger up to samples - 1 (max_pretrigger 523263 at w = 1) and
+  the classic ESP32 / RP2 analog up to samples - 1. capture-group: start answers blocking_ms, start_ns, the group's
+  generation, n, n x (fn, generation) (TLV 0x01 gone); status and the group's events end with the group's generation; a
+  track's error goes to the group's stopped. Console and fixture UART marks page by common §1.3 (from_serial included,
+  = next empty, any other from the oldest kept); console streams' first is u16. spi-target: the last byte's missing bits
+  0 (MSB / LSB first as configured). riscv-dm step: moved and both dpc 0 unless status ok; run's elapsed_us from the
+  resumereq to the halt seen, made or given up. arm-adi transfer n = 0: success, ack 0. Checked, no change: resource
+  numbers from 1 (0 never), every describe TLV within the smallest max_frame (512) - 9 (host tests now check both).
+  Host tests: the contract, serial wrap, dropped segments, the new vectors (cases of fns 12 - 14 on their own probe,
+  events); docs/implementation-limits §1.7 (EN / JA); not run on hardware
+- (JA) oep-spec 0098b56 .. 78fb561 に合わせました（registry とベクタを同期、OEP_SPEC_REF=78fb561）。キャプチャ: configure / query は
+  §3.3 の契約どおり（mode と rate は必須、mode 1 / 2 は samples も、0 は malformed。ストリーミングの samples、リピート以外の segments、
+  即時でないトリガの無い pretrigger は値によらず unsupported（tag）。plan に無いトリガの role は unavailable 6。max_pretrigger を超えるか
+  samples 以上の pretrigger は unsupported）、応答はモードの行をすべて返す。世代は 1 から、一周で 0 を飛ばす。区画の serial は u32 で
+  一周し、segments は共通部品 §1.3 でページング、release は終わった区画だけを解放。stopped と triggered の末尾に generation。中のデータを
+  落とした区画は出さず、トラックは state 6、stopped reason 3、error 2 で止まる（oep-spec 0b9a058）。P4 の写して送るストリーミングは
+  終わった区画だけを送る。capture-group の start の応答の固定部分（組の世代、n × (fn、世代)）、status と組の出来事に組の世代。console と
+  fixture UART の marks を §1.3 でページング、console の streams の first は u16。spi-target の部分の byte の来なかったビットは 0。riscv-dm の
+  step は ok 以外で moved と dpc を 0、run の elapsed_us は resumereq から。arm-adi の transfer の n = 0 は success、ack 0。資源の番号（1 から）と
+  describe の TLV の大きさは確かめて変更なし（host test で確かめる）。docs/implementation-limits §1.7。実機では未確認
 - (EN) Classic ESP32: a capture never resets the probe, and Wi-Fi gets core 0 between the sampler's spans (bench, the
   V003 jig over TCP with 3169721: the connection "closed" during test_timing was the probe resetting - describe then
   said "(int-wdt at 961 s)"). Cause: a trigger search's burst and a segment's rest were bounded by their count of

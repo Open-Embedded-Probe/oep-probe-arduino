@@ -105,6 +105,35 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 - **開いても再起動しない**: どの transport でも、開閉と DTR / RTS で probe は再起動しない（USB-Serial/JTAG の DTR / RTS のリセットは
   切ってある）。
 
+### 1.7 キャプチャ（capture）と fixture（oep-spec 0098b56..78fb561 に合わせたもの）
+
+- **pretrigger の上限**（capture §3.3: max_pretrigger を超えるか samples 以上なら unsupported）:
+  - ESP32-P4 の logic: describe の max_pretrigger は w = 1 のときの値 523263（1 区画の最大 523264 サンプル − 1）。リングが返せるのは
+    64 KiB なので、w が広いと少ない（w = 2 で 262144、w = 16 で 32768）。それを超える pretrigger は configure / query が unsupported
+    （pretrigger の tag）で断る（宣言は目安で、configure の応答が正、capture §3.5）。samples − 1 までの pretrigger を受ける。区画は
+    byte の境目から始まるので、pretrigger が samples に近いときは、トリガの前のサンプルが最大 8 / w − 1 少なくなる（trigger_index が
+    そのぶん小さい）。
+  - classic ESP32 の logic: samples − 1 まで（describe は 65407）。
+  - アナログ: RP2040 / RP2350 は samples − 1 まで（describe は 1 チャネルで 8191）。ESP32 / ESP32-P4 は区画がリングそのものなので、
+    pretrigger + 129 が samples を超えるものは unsupported で断る（ドライバの 1 回の読み 128 レコードがリングの古い区画のサンプルに
+    先回りする）。
+- **capture-group の追従するトラック**: pretrigger は trigger の type が 0 でないときだけ送れる（capture §3.3）ので、即時のトラック
+  （追従する側）は pretrigger を持たない。組のトリガの時刻のサンプルから区画が始まる。
+- **区画の serial**（capture §2.2）: u32 で一周する。ESP32-P4 のリピートとストリーミングは、区画の情報を 255 個まで覚え（1 つは埋めて
+  いる区画）、segments はその範囲で共通部品 §1.3 のとおり答える。
+- **連続でない区画は出さない**（capture §2.2）: ESP32-P4 の logic で取り込みのキュー（128 個）があふれたか、DMA のリング（128 KiB）が
+  まだ写していないバイトの上を回ったときは、埋めていた区画を捨て（segments に載せず、read でもストリーミングでも返さない）、トラックを
+  state 6、stopped reason 3、error 2 で止める。status の write_pos はその区画の先頭、flags bit0 が立つ。それより前に終わった区画は
+  そのまま読める。トリガ付きのワンショットでは、区画を写し終える前にリングが回ったとき（トリガがリングの最も古いバイトより前だった
+  ときも）同じく止まる（write_pos 0）。アナログ（ESP32 の変換のあふれ、ESP32 / RP2 のリングが区画の上を回ったとき）も同じ。classic
+  ESP32 の sampler はサンプルを落とさない（遅れたサンプルは slipped で示す）。
+- **ESP32-P4 のストリーミング（vendor bulk でない経路、写して送る方）**: 終わった区画だけを送る（埋めている区画のバイトは、後で穴が
+  あけば出せないため）。遅れは 1 区画ぶん（64 KiB 以上、遅い rate では 1 秒近く）。vendor bulk の zero-copy の経路はフレームごとに送り、
+  穴が空いたら送っていないフレームを捨てて止まる。
+- **spi-target の bits**: ESP-IDF の SPI slave は、arm した length × 8 を超えて数えないので、bits は length × 8 を超えない
+  （0xFFFFFFFF に届かない）。read_rx は ns の TLV を返さない（i2c-target も同じ）。部分の byte の、来なかったビットは 0 にする
+  （SPI の work register には arm した tx が残っている）。
+
 ## 2. 起動と更新
 
 ### 2.1 boot guard（止まったままにしない）
