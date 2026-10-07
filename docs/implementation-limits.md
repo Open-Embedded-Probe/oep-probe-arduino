@@ -21,8 +21,9 @@ measurements on the ATOM, and the limits (sampler windows pause the network, ESP
 §4.1 (classic ESP32): loop(), its interrupts, the Arduino events, the Wi-Fi driver and the TCP/IP stack run on core 0
 and the logic sampler alone on core 1 (LoopCore=0, EventsCore=0; a Wi-Fi build refuses another arrangement), so the radio
 changes none of the sampler's limits (radio traffic may still make a sample late: slipped); rate_range is 1 kHz to
-2 MHz (the 400 kHz floor kept a full window under the watchdog before spans ended by the clock; below 327 kHz samples
-round down to 200 ms of them), a trigger search does per sample what an immediate window does plus the trigger's test
+300 kHz, from the bench (873c8f0: 400 kHz the fastest rate at which no immediate window and no forced capture without
+SWIO traffic slipped, 500 kHz slipped; the table is in §4.1), samples round down to 200 ms of them (60000 at 300 kHz,
+the most a segment holds; the 400 kHz floor kept a full window under the watchdog before spans ended by the clock), a trigger search does per sample what an immediate window does plus the trigger's test
 (the clock, the wire's turns and force every 64 samples); every interrupts-off span
 of the sampler ends by the clock at 250 ms (a search burst counted in samples ran past the 300 ms interrupt watchdog and
 reset the probe; a segment still reading at the limit ends there, fewer samples, slipped). §6.1: a TCP slot's send buffer (6 KiB)

@@ -17,7 +17,7 @@ no released firmware.
 | SWD (ARM) | yes | no | no | no |
 | Target console (through the debug module) | yes | yes | yes | yes |
 | GPIO, UART fixtures | yes | yes (2 UARTs) | yes | yes |
-| Logic capture | no | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 0.4-2 MHz, one-shot; level / edge trigger searched in bursts | no |
+| Logic capture | no | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 1-300 kHz, one-shot; level / edge trigger searched in bursts | no |
 | Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | no (not built) |
 | Tracks started together (capture-group) | no | logic + analog | logic (sampler) + analog | no |
 | SPI / I2C device (the target's peer) | no | yes | yes | yes (not checked) |

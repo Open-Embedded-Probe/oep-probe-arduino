@@ -5,7 +5,7 @@
 // same code: an `Io` gives the cycle counter, one sample's read, interrupts off / on, the clock in ns and a yield
 // (SamplerCapture: esp_cpu_get_cycle_count, GPIO.in, portDISABLE_INTERRUPTS, esp_timer, vTaskDelay(1)).
 //
-// Immediate: one exclusive window (OepWireGate.h), interrupts off throughout (<= 200 ms: below 327 kHz samples round down to 200 ms, inside the
+// Immediate: one exclusive window (OepWireGate.h), interrupts off throughout (<= 200 ms: samples round down to 200 ms of them, inside the
 // 300 ms interrupt watchdog). Triggered: bursts, each with interrupts off for at most `burst` samples of search and
 // then the rest of the segment after the trigger, and on between them (a gap of one tick: the search starts over; the
 // wire is not taken in a gap - a take waits for the next burst's turn, at its first sample).

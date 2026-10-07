@@ -37,7 +37,8 @@ namespace {
 
 // The chip's side of the sampling loop (OepSamplerRun.h). GPIO0..31 only (kHigh false): one register read per sample.
 // Reading GPIO.in1 as well cost enough that 2 MHz fell behind (1.92 MHz actually sampled, periods spread +-5 %,
-// 2026-09-29); 1 MHz and below kept pace either way. A sample is channel l on bit l, packed by table (sampler::Packer).
+// 2026-09-29); 1 MHz and below kept pace either way (rate_range ends at 300 kHz: SamplerCapture::kMaxHz). A sample is
+// channel l on bit l, packed by table (sampler::Packer).
 template <bool kHigh>
 struct EspIo {
   const sampler::Packer *packer;
@@ -217,19 +218,15 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     trig_role = v[1];
     trig_value = value;
   }
-  // Paced in software, the loop keeps up to kMaxHz only while every channel is on GPIO0..31 (one register read per
-  // sample); with GPIO32..39 in the plan it keeps 1 MHz, not 2 (1.52 MHz actually sampled, 2026-09-29). The answer
-  // carries the rate that is really paced.
-  bool high = false;
-  for (uint8_t l = 0; l < channels_; ++l) high |= pins_[l] >= 32;
-  if (high && rate > kMaxHzHighBank) rate = kMaxHzHighBank;
+  // The answer carries the rate that is really paced (whole cycles a sample). GPIO32..39 in the plan add a register read
+  // a sample: it kept 1 MHz (1.52 MHz actually sampled at 2 MHz, 2026-09-29), far above kMaxHz.
   const uint32_t cpu_hz = getCpuFrequencyMhz() * 1000000u;
   const uint32_t cycles = cpu_hz / rate;
   if (samples > kBufferBytes) samples = kBufferBytes;
   // A window lasts samples x the period with interrupts off on the sampling core, and every such span ends by the
   // clock at kOffNs: samples are rounded down to what kWindowNs holds at this rate (actual_samples, capture §3.3), so a
   // window is never cut short by the clock at its nominal pace and a search keeps kOffNs - kWindowNs or more of a
-  // burst. Above kWindowNs's rate (327 kHz) the buffer is the limit.
+  // burst. At kMaxHz that is the whole buffer.
   const uint64_t window = static_cast<uint64_t>(cpu_hz) / 1000u * (kWindowNs / 1000000u) / cycles;
   if (samples > window) samples = static_cast<uint32_t>(window);
   uint32_t pretrigger = 0;

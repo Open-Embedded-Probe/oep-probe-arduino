@@ -34,14 +34,17 @@ class Endpoint;
 class SamplerCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 8;
-  static constexpr size_t kBufferBytes = 65408;
-  // one sample per 120 cycles at 240 MHz is the tested ceiling. The floor is the pacing's alone: below 327 kHz a
-  // window's samples are rounded down to kWindowNs (configure), so a lower rate gives the loop margin, not a window
-  // past the interrupt watchdog (it was 400 kHz, which kept a full 65408-sample window under the watchdog before
-  // every interrupts-off span ended by the clock).
-  static constexpr uint32_t kMaxHz = 2000000, kMinHz = 1000;
+  // The declared ceiling, from the bench (0.0.29-dev 873c8f0, V003 jig, 64 captures a row, 1 and 4 lines, serial and
+  // TCP, with and without Wi-Fi): 400 kHz was the fastest rate at which no immediate window and no forced capture
+  // without SWIO traffic slipped; 500 kHz slipped (immediate 1 - 4 / 64, forced 10 - 15 / 64), 750 kHz always. 300 kHz
+  // keeps a margin under it (800 cycles a sample at 240 MHz). The floor is the pacing's alone: a window's samples are
+  // rounded down to kWindowNs (configure), so a lower rate gives the loop margin, not a window past the interrupt
+  // watchdog (it was 400 kHz, which kept a full 65408-sample window under the watchdog before every interrupts-off
+  // span ended by the clock).
+  static constexpr uint32_t kMaxHz = 300000, kMinHz = 1000;
   static constexpr uint64_t kWindowNs = 200000000;   // a window's samples at most this long (kOffNs less a search)
-  static constexpr uint32_t kMaxHzHighBank = 1000000;   // with any channel on GPIO32..39
+  // One byte per sample: kWindowNs at kMaxHz, the most a window holds at any rate it takes.
+  static constexpr size_t kBufferBytes = static_cast<size_t>(kMaxHz / 1000u * (kWindowNs / 1000000u));
 
   // pins: the probe's channels (any allowed one may be a line: the capture only listens, and claims none)
   SamplerCapture(Endpoint &endpoint, const PinTable &pins, uint16_t instance = 0)

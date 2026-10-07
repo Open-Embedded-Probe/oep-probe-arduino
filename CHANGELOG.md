@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32 sampler: rate_range is 1 kHz - 300 kHz (it was up to 2 MHz). The bench's sweep of 873c8f0 (V003
+  jig, 64 captures a row, 1 and 4 lines, serial and TCP, with and without Wi-Fi): immediate windows slipped 64 / 64 at
+  750 kHz, 1 - 4 / 64 at 500 kHz and never from 400 kHz down to 100 kHz; forced captures without SWIO traffic 64 / 64,
+  10 - 11 / 64 and never likewise. 400 kHz was the fastest clean rate on every such path; 300 kHz keeps a margin. A
+  segment holds 60000 samples at most (describe max_samples, max_pretrigger 59999): samples round down to 200 ms of
+  them, 60000 at 300 kHz (the buffer was 65408). The 1 MHz cap for plans with GPIO32..39 is gone (above the range).
+  docs/implementation-limits §4.1 (the measured table), guide getting-started / boards (EN / JA)
+- (JA) classic ESP32 の sampler: rate_range は 1 kHz〜300 kHz（以前は 2 MHz まで）。873c8f0 のベンチの測定（V003 の台、64 回ずつ、
+  1 本と 4 本、シリアルと TCP、Wi-Fi の有無）: 即時の窓は 750 kHz で 64 / 64、500 kHz で 1〜4 / 64、400 kHz〜100 kHz で 0。SWIO の行き来の
+  無い force も 64 / 64、10〜11 / 64、0。400 kHz がどの道でも滑らない最も速いレートで、300 kHz は余裕をとった値。区画は最大 60000
+  サンプル（describe の max_samples、max_pretrigger は 59999）: samples は 200 ms 分に切り下げ、300 kHz で 60000（buffer は 65408 だった）。
+  GPIO32..39 を含む plan の 1 MHz の上限は無くなった（範囲の外）。docs/implementation-limits §4.1（測った表）、guide getting-started /
+  boards（EN / JA）
 - (EN) SPI target (classic ESP32, ESP32-P4), arm (fixture §4: it waits for the next transfer): success only once the
   slave holds the armed transaction - the driver's interrupt loads it and says so in post_setup_cb; arm waits for that
   (normally already done inside queue_trans, on loop()'s core, but that core may have its interrupts off for a SWIO

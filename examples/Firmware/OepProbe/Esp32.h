@@ -13,7 +13,7 @@
 // port, then asking (confirm).
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
-// oep.fixture.gpio / uart / capture (the core-1 GPIO sampler: up to 8 lines, 0.4-2 MHz, one-shot); the ESP-IDF SPI / I2C
+// oep.fixture.gpio / uart / capture (the core-1 GPIO sampler: up to 8 lines, 1-300 kHz, one-shot); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
 // (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
