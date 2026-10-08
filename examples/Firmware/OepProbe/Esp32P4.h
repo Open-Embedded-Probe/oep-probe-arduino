@@ -211,7 +211,12 @@ void setup() {
   oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3)
   // USB-Serial/JTAG: opening and closing the port must not reset the probe (probe guide §7)
+#if defined(USB_DEVICE_CHIP_RST_REG)
+  // P4 revision >= 3 headers rename this register; the reset-disable bit is unchanged.
+  REG_SET_BIT(USB_DEVICE_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
+#else
   REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
+#endif
   Serial.setRxBufferSize(8192);
   Serial.setTxBufferSize(8192);
   Serial.setTxTimeoutMs(0);   // a port nobody reads never stops loop()
