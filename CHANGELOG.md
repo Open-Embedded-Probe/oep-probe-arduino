@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.29
 - (EN) Classic ESP32, SWIO frames: interrupts go off a few instructions after the sampler acknowledges a frame's
   announcement and come back on after frameEnd() (it came after portEXIT_CRITICAL, and the GPIO set-up before
   portENTER_CRITICAL): a sampler stopped for a frame waits for the frame alone (a read about 60 us), not also for an
