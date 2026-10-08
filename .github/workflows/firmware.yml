@@ -77,10 +77,12 @@ jobs:
                   if not head:
                       continue
                   platforms = re.findall(r"(?m)^\s+- platform:\s*(.+?)\s*$", block)
+                  index_urls = re.findall(r"(?m)^\s+platform_index_url:\s*(\S+)\s*$", block)
                   sketch = yaml.parent
                   builds.append({
                       "sketch": str(sketch), "name": sketch.name, "profile": head.group(1), "fqbn": head.group(2),
                       "release": sketch.parts[1] == "Firmware",
+                      "index_urls": ",".join(sorted(set(index_urls))),
                       "id": re.sub(r"[^A-Za-z0-9]+", "-", f"{sketch.relative_to('examples')}-{head.group(1)}"),
                       # the cache holds the platforms this profile installs, so it is keyed by them
                       "cache": re.sub(r"[^A-Za-z0-9.]+", "-", "_".join(sorted(platforms))),
@@ -113,6 +115,11 @@ jobs:
             ~/.arduino15
             !~/.arduino15/staging
           key: arduino15-${{ runner.os }}-${{ matrix.cache }}
+
+      - name: Update board and library indexes
+        env:
+          BOARD_INDEX_URLS: ${{ matrix.index_urls }}
+        run: arduino-cli update --additional-urls "$BOARD_INDEX_URLS"
 
       - name: Build
         env:

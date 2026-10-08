@@ -40,6 +40,8 @@ class BuildProfilesTest(unittest.TestCase):
                 self.assertIn("ChipVariant=prev3", a["fqbn"])
                 self.assertEqual(a["fqbn"].replace("ChipVariant=prev3", "ChipVariant=postv3"), b["fqbn"])
                 self.assertEqual(a["cache"], b["cache"])
+                self.assertEqual(a["index_urls"], "https://espressif.github.io/arduino-esp32/package_esp32_index.json")
+                self.assertEqual(a["index_urls"], b["index_urls"])
                 self.assertNotEqual(a["id"], b["id"])
                 self.assertEqual(a["release"], b["release"])
         self.assertTrue(p4x["examples/Firmware/OepProbe"]["release"])

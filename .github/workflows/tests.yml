@@ -46,6 +46,10 @@ jobs:
             ~/.arduino15
             !~/.arduino15/staging
           key: arduino15-${{ runner.os }}-${{ matrix.cache }}
+      - name: Update board and library indexes
+        env:
+          BOARD_INDEX_URLS: ${{ matrix.index_urls }}
+        run: arduino-cli update --additional-urls "$BOARD_INDEX_URLS"
       - name: Build
         env:
           SKETCH: ${{ matrix.sketch }}
