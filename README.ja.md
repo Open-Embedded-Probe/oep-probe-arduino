@@ -166,6 +166,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
 | `examples/` | ボードの firmware と学ぶための example: [Example](#example) を参照 |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
+| `tests/compile/`, `.github/workflows/tests.yml` | P4 / P4X の profile と Release の model の回帰テスト、各 P4 対応 example を両 profile でビルド。`python3 tests/compile/test_profiles.py`、firmware の識別情報は `tools/check_p4_firmware.py` で検証 |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に、`tests/vectors/*.json` を `tests/vectors/` に写す（`OEP_SPEC_REF` で commit を選ぶ） |
 | `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
 | `docs/guide/` | 手引き（英語と日本語）: 使い始める、probe を書く、ボード |
@@ -178,16 +179,16 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 
 | Example | ボード（profile） | 示すこと |
 |---|---|---|
-| `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）、classic ESP32（esp32） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
+| `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、classic ESP32（esp32） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
 | `01.Basics/MinimalProbe` | RP2040 / RP2350、classic ESP32 | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
 | `01.Basics/FixtureProbe` | RP2040 / RP2350、classic ESP32 | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350、classic ESP32 | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
-| `03.Transports/MultipleTransports` | ESP32-P4 | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
+| `03.Transports/MultipleTransports` | ESP32-P4 / P4X | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
 | `03.Transports/WifiTcp` | classic ESP32 | Wi-Fi の TCP で OEP: シリアルの口と TCP の待ち受け（3 接続）、ネットワークは設定の wifi の項目から、mDNS |
-| `04.Debug/RvswdDebugProbe` | RP2040 / RP2350、ESP32-P4 | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |
+| `04.Debug/RvswdDebugProbe` | RP2040 / RP2350、ESP32-P4 / P4X | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |
 | `04.Debug/SwioDebugProbe` | classic ESP32 | 1 本線の SWIO の CH32V00x のデバッガ |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | SWD の ARM のデバッガ: wire、arm-adi |
-| `05.Capture/LogicCapture` | ESP32-P4 | 全速のロジアナ（16 ch まで、2 ch で 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
+| `05.Capture/LogicCapture` | ESP32-P4 / P4X | 全速のロジアナ（16 ch まで、2 ch で 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
 | `06.Settings/ProbeConfig` | RP2040 / RP2350 | 起動時に自分で準備する治具: スロット、bind（target のコンソールを probe の口に）、plan、空きのときの状態。flash に保存 |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | 立ち上げの道具（Serial に文字で出す。OEP ではない）: どのピンが debug port か |
 
@@ -206,6 +207,9 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
    arduino-cli compile --clean --profile esp32p4 examples/Firmware/OepProbe
    arduino-cli upload -p <port> --profile esp32p4 examples/Firmware/OepProbe
    ```
+
+   ESP32-P4X は profile `esp32p4x` と `OepProbe-esp32p4x-<version>.merged.bin` を使う。P4 と P4X の
+   識別と DFU 更新時のリビジョン検証は[手引き](docs/guide/getting-started.ja.md#1-firmware-を焼く)を参照。
 
    firmware は**使う前に転送する**（ボードに何が入っているかは分からない）。
 2. **host**: `pip install oep-client-python` の後、probe が何を持つかを見る:
@@ -259,7 +263,7 @@ tag から各 example の各 profile をビルドし、`<Example>-<profile>-<ver
 |---|---|
 | `schema` | 1。読む側は違う番号を断る。フィールドは足すだけ |
 | `kind` | `merged`（ESP32、`flash_offset` 0 から書く全体）、`app`（ESP32、app の image。もう片方の app の区画への更新、P4 の DFU）、`uf2`（RP2040 / RP2350） |
-| `model` | この image が describe の model で返す値（`esp32p4`、`esp32`、`rp2040`、`rp2350`）。ビルドの対象のチップ。describe の chip の TLV は別もので、動いている部品の `<model> v<rev>` |
+| `model` | この image が describe の model で返す値（`esp32p4`、`esp32p4x`、`esp32`、`rp2040`、`rp2350`）。ビルドの対象のチップ。describe の chip の TLV は動いている部品の `<part> v<rev>`（P4X でも例 `esp32p4 v3.2`） |
 | `fqbn`、`flash_offset` | ビルドに使ったもの。`merged` を書く位置（ほかは `null`） |
 | `sha256` | ファイルの sha256 |
 

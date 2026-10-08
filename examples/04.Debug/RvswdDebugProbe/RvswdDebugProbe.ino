@@ -36,7 +36,7 @@ static constexpr uint8_t kInterface = 0;   // the CDC communication interface's 
 static constexpr uint8_t kSwdio = 2, kSwclk = 3;                  // GP2 -> SWDIO, GP3 -> SWCLK
 #else
 #include <soc/usb_serial_jtag_reg.h>
-// an ESP32 with dedicated GPIO (the P4; an S3, C3 or C6 builds too): its USB-Serial/JTAG is the Serial port
+// an ESP32 with dedicated GPIO (the P4 / P4X; an S3, C3 or C6 builds too): its USB-Serial/JTAG is the Serial port
 static constexpr uint8_t kTransport = oep::Endpoint::kUsbSerialJtag;
 static constexpr uint8_t kInterface = 0xff;   // built-in USB serial: the number is not the probe's to know (core §7.5)
 static constexpr uint8_t kSwdio = 2, kSwclk = 3;   // GPIO2 -> SWDIO, GPIO3 -> SWCLK
@@ -75,7 +75,9 @@ void setup() {
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
 #else
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3)
-#if defined(USB_SERIAL_JTAG_CHIP_RST_REG)   // the P4: opening the port must not reset the chip (an S3 has no such bit)
+#if defined(USB_DEVICE_CHIP_RST_REG)   // P4X: opening the port must not reset the chip
+  REG_SET_BIT(USB_DEVICE_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
+#elif defined(USB_SERIAL_JTAG_CHIP_RST_REG)   // P4 (an S3 has no such bit)
   REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
 #endif
   Serial.setTxTimeoutMs(0);

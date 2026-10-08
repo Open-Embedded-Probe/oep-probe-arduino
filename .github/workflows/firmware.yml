@@ -10,7 +10,7 @@
 # yet). Files: <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool),
 # <Example>-<profile>-<version>.bin (ESP32: the app image alone, for an update into the other app partition - the P4's
 # `dfu-util -D`), <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), and firmware-<version>.json ("schema": 1)
-# listing them with their kind (merged / app / uf2), model (the describe model: esp32p4, esp32, rp2040, rp2350) and
+# listing them with their kind (merged / app / uf2), model (the describe model: esp32p4, esp32p4x, esp32, rp2040, rp2350) and
 # sha256 (the fields: README "Release assets").
 #
 # One job per (example, profile), all at once: `plan` lists them, `build` compiles one each (the platform's
@@ -141,8 +141,15 @@ jobs:
           # the chip the profile builds for (RP2: build.chip, ESP32: build.mcu): the Firmware sketches' describe model
           props = subprocess.run(["arduino-cli", "compile", "--profile", profile, "--show-properties", str(sketch)],
                                  check=True, capture_output=True, text=True).stdout
-          found = dict(re.findall(r"(?m)^build\.(chip|mcu)=(\S+)$", props))
+          found = dict(re.findall(r"(?m)^build\.(chip|mcu|chip_variant)=(\S+)$", props))
           chip = found.get("chip") or found.get("mcu") or profile
+          # P4X has the same build.mcu as P4; distinguish the SDK selected by ChipVariant.
+          if chip == "esp32p4" and found.get("chip_variant") == "esp32p4":
+              chip = "esp32p4x"
+          # New tags verify the identity used to refuse a P4/P4X DFU mix-up; older tags predate this tool.
+          checker = pathlib.Path("tools/check_p4_firmware.py")
+          if chip in ("esp32p4", "esp32p4x") and checker.exists():
+              subprocess.run(["python3", str(checker), str(build), chip], check=True)
           out = pathlib.Path("firmware")
           out.mkdir()
           files = []

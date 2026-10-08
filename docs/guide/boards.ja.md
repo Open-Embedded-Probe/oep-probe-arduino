@@ -7,10 +7,10 @@
 
 ## チップごとにできること
 
-| | RP2040 / RP2350 | ESP32-P4 | classic ESP32 | ほかの ESP32（S3、C3、C6 など） |
+| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | ほかの ESP32（S3、C3、C6 など） |
 |---|---|---|---|---|
-| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` / `-promicrorp2350` | `OepProbe-esp32p4` | `OepProbe-esp32` | 無し: 自分でビルド（下） |
-| ベンチでの確認 | Pro Micro RP2350 で始めたところ（CH32L103） | 済み（CH32X035 の治具） | 済み（CH32V003 の治具） | 無し |
+| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` / `-promicrorp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | 無し: 自分でビルド（下） |
+| ベンチでの確認 | Pro Micro RP2350 で始めたところ（CH32L103） | P4: 済み（CH32X035 の治具）。P4X: ビルドのみ | 済み（CH32V003 の治具） | 無し |
 | 経路 | USB CDC | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB-Serial/JTAG か USB CDC |
 | RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | 無し | あり（dedicated GPIO。ビルドのみ、未確認） |
 | SWIO（CH32V00x の 1 線） | 無し | 無し | あり | 無し |
@@ -32,6 +32,10 @@ ESP32 のサイクル数でビットの時間を数え、SWD の bit-bang は RP
 
 どれも 3.3 V 系です。ライブラリはレベルを変換しません（README の電気的な注意を参照）。
 
+P4 の各 example は `esp32p4`（`ChipVariant=prev3`）と `esp32p4x`（`ChipVariant=postv3`）の
+profile を持ちます。P4X 向けのビルド例: `arduino-cli compile --clean --profile esp32p4x examples/Firmware/OepProbe`。
+firmware の選択と DFU の互換性チェックは[使い始める](getting-started.ja.md#1-firmware-を焼く)を参照。
+
 ## リリースされた firmware のピン
 
 一覧のピンは、host の plan のとおり何にでもなります（RVSWD / SWD の組、reset の線、GPIO、UART、キャプチャのチャネル）。
@@ -41,7 +45,7 @@ ESP32 のサイクル数でビットの時間を数え、SWD の bit-bang は RP
 |---|---|---|
 | RP2040 / RP2350 | GP0〜GP22、GP26〜GP28 | GP23〜GP25、GP29（Pico の SMPS、VBUS の検出、LED、VSYS）。ほかのボードで、出すピンにつながった部品（LED、PSRAM の chip select）は、host が触らないようにする |
 | SparkFun Pro Micro RP2350（`promicrorp2350`） | GP0〜GP18、GP20〜GP29 | GP19（PSRAM の chip select） |
-| ESP32-P4 | GPIO0〜GPIO54（24、25 以外） | GPIO24 / 25（USB-Serial/JTAG） |
+| ESP32-P4 / P4X | GPIO0〜GPIO54（24、25 以外） | GPIO24 / 25（USB-Serial/JTAG） |
 | classic ESP32 | GPIO4、5、13、14、16〜19（16 / 17 は PICO-D4 / PICO-V3 / D2WD と、ビルドで PSRAM を有効にしたときは起動時に外す）、21〜23、25〜27、32、33、34〜36、39（34〜39 は入力だけ）。SWIO は 32 未満の出力のピン | 1、3（UART0: 経路）、6〜11（flash）、0、2、12、15（起動のストラップ） |
 
 RP2 の UART の fixture は UART0 で、RX / TX は GP1/0、GP13/12、GP17/16、GP29/28 のどれかです。ESP32 はどのピンでも使えます
@@ -53,7 +57,8 @@ RP2 の UART の fixture は UART0 で、RX / TX は GP1/0、GP13/12、GP17/16�
 |---|---|---|---|
 | RP2040 / RP2350 | `1209:4F45` | `OEP probe (RP2040)` / `(RP2350)` | unit id（flash の unique id） |
 | ESP32-P4（HS の口） | `1209:4F45` | `OEP probe (ESP32-P4)` | unit id（MAC の小文字の 16 進） |
-| ESP32-P4（USB-Serial/JTAG） | チップの決まった ID | チップのもの | チップのもの |
+| ESP32-P4X（HS の口） | `1209:4F45` | `OEP probe (ESP32-P4X)` | 同じ |
+| ESP32-P4 / P4X（USB-Serial/JTAG） | チップの決まった ID | チップのもの | チップのもの |
 | classic ESP32 | bridge のもの | bridge のもの | bridge のもの |
 
 `1209:4F45` はプロジェクト自身の VID:PID です。host はこれで probe を見分け、serial number（unit id）で個体を区別します。iProduct

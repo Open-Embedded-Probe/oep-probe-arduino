@@ -7,10 +7,10 @@ no released firmware.
 
 ## What each chip does
 
-| | RP2040 / RP2350 | ESP32-P4 | classic ESP32 | other ESP32 (S3, C3, C6, ...) |
+| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | other ESP32 (S3, C3, C6, ...) |
 |---|---|---|---|---|
-| Released firmware | `OepProbe-rp2040` / `-rp2350` / `-promicrorp2350` | `OepProbe-esp32p4` | `OepProbe-esp32` | none: build it (below) |
-| Checked on a bench | starting, on a Pro Micro RP2350 (CH32L103) | yes (CH32X035 jig) | yes (CH32V003 jig) | no |
+| Released firmware | `OepProbe-rp2040` / `-rp2350` / `-promicrorp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | none: build it (below) |
+| Checked on a bench | starting, on a Pro Micro RP2350 (CH32L103) | P4: yes (CH32X035 jig); P4X: built only | yes (CH32V003 jig) | no |
 | Transports | USB CDC | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB-Serial/JTAG or USB CDC |
 | RVSWD (CH32 2-wire) | yes (SIO) | yes (dedicated GPIO) | no | yes (dedicated GPIO; built, not checked) |
 | SWIO (CH32V00x 1-wire) | no | no | yes | no |
@@ -33,6 +33,10 @@ their pin) is refused. Watch one signal as logic and analog on two pads.
 
 All of them are 3.3 V parts. The library does not shift levels: see the README's electrical notes.
 
+Every P4 example has both `esp32p4` (`ChipVariant=prev3`) and `esp32p4x` (`ChipVariant=postv3`) profiles.
+For P4X, build with `arduino-cli compile --clean --profile esp32p4x examples/Firmware/OepProbe`. See
+[Getting started](getting-started.md#1-flash-the-firmware) for firmware selection and DFU compatibility checks.
+
 ## Pins of the released firmware
 
 Every listed pin can be anything - an RVSWD / SWD pair, a reset line, a GPIO, a UART, a capture channel - as the host
@@ -42,7 +46,7 @@ plans it; a pin one interface holds is refused to another. The others are the bo
 |---|---|---|
 | RP2040 / RP2350 | GP0-GP22, GP26-GP28 | GP23-GP25, GP29 (a Pico's SMPS, VBUS sense, LED, VSYS). On other boards, parts on offered pins (an LED, a PSRAM chip select) are for the host to leave alone |
 | SparkFun Pro Micro RP2350 (`promicrorp2350`) | GP0-GP18, GP20-GP29 | GP19 (the PSRAM's chip select) |
-| ESP32-P4 | GPIO0-GPIO54 but 24, 25 | GPIO24 / 25 (USB-Serial/JTAG) |
+| ESP32-P4 / P4X | GPIO0-GPIO54 but 24, 25 | GPIO24 / 25 (USB-Serial/JTAG) |
 | classic ESP32 | GPIO4, 5, 13, 14, 16-19 (16 / 17 dropped at start-up on a PICO-D4 / PICO-V3 / D2WD, or with a PSRAM the build enabled), 21-23, 25-27, 32, 33, 34-36, 39 (34-39 input only); SWIO on the outputs below 32 | 1, 3 (UART0: the transport), 6-11 (flash), 0, 2, 12, 15 (boot straps) |
 
 The UART fixture on an RP2 uses UART0, whose RX / TX may be GP1/0, GP13/12, GP17/16 or GP29/28. On the ESP32s any pin
@@ -54,7 +58,8 @@ works (the GPIO matrix).
 |---|---|---|---|
 | RP2040 / RP2350 | `1209:4F45` | `OEP probe (RP2040)` / `(RP2350)` | the unit id (the flash's unique id) |
 | ESP32-P4 (HS port) | `1209:4F45` | `OEP probe (ESP32-P4)` | the unit id (the MAC, lowercase hex) |
-| ESP32-P4 (USB-Serial/JTAG) | the chip's fixed ID | the chip's | the chip's |
+| ESP32-P4X (HS port) | `1209:4F45` | `OEP probe (ESP32-P4X)` | the same |
+| ESP32-P4 / P4X (USB-Serial/JTAG) | the chip's fixed ID | the chip's | the chip's |
 | classic ESP32 | the bridge's | the bridge's | the bridge's |
 
 `1209:4F45` is the project's own VID:PID: hosts identify a probe by it and tell probes apart by the serial number (the unit

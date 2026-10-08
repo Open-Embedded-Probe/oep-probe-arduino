@@ -177,6 +177,7 @@ one of them against this endpoint).
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
 | `examples/` | the board firmware and examples to learn from: see [Examples](#examples) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
+| `tests/compile/`, `.github/workflows/tests.yml` | regression tests for P4/P4X profiles and release models; builds every P4 example with both profiles. Run `python3 tests/compile/test_profiles.py`; `tools/check_p4_firmware.py` checks firmware identity |
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` and its `tests/vectors/*.json` to `tests/vectors/` (`OEP_SPEC_REF` picks the commit) |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
 | `docs/guide/` | the guides (English and Japanese): getting started, writing a probe, boards |
@@ -190,16 +191,16 @@ uses it.
 
 | Example | Boards (profiles) | What it shows |
 |---|---|---|
-| `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4), classic ESP32 (esp32) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host, a jig = its settings |
+| `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4) / P4X (esp32p4x), classic ESP32 (esp32) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host, a jig = its settings |
 | `01.Basics/MinimalProbe` | RP2040 / RP2350, classic ESP32 | the smallest probe: fn 0 (the core) alone, no interface - the endpoint, a transport, the describe |
 | `01.Basics/FixtureProbe` | RP2040 / RP2350, classic ESP32 | a test fixture: GPIO and a UART on pins the host plans (the pin table, owners, the plan) |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350, classic ESP32 | **extending OEP**: your own interface under your own name - describe, the plan, ops, TLV tails |
-| `03.Transports/MultipleTransports` | ESP32-P4 | one endpoint on four USB transports at once (HS vendor bulk, HID, CDC, USB-Serial/JTAG), USB identity |
+| `03.Transports/MultipleTransports` | ESP32-P4 / P4X | one endpoint on four USB transports at once (HS vendor bulk, HID, CDC, USB-Serial/JTAG), USB identity |
 | `03.Transports/WifiTcp` | classic ESP32 | OEP over TCP on Wi-Fi: the serial port and a TCP listener (three connections), the networks from the settings' wifi item, mDNS |
-| `04.Debug/RvswdDebugProbe` | RP2040 / RP2350, ESP32-P4 | a CH32 debugger on RVSWD: wire, riscv-dm, console |
+| `04.Debug/RvswdDebugProbe` | RP2040 / RP2350, ESP32-P4 / P4X | a CH32 debugger on RVSWD: wire, riscv-dm, console |
 | `04.Debug/SwioDebugProbe` | classic ESP32 | a CH32V00x debugger on the one-wire SWIO |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | an ARM debugger on SWD: wire, arm-adi |
-| `05.Capture/LogicCapture` | ESP32-P4 | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2), streaming over HS; `host/stream_test.py` |
+| `05.Capture/LogicCapture` | ESP32-P4 / P4X | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2), streaming over HS; `host/stream_test.py` |
 | `06.Settings/ProbeConfig` | RP2040 / RP2350 | a jig that sets itself up at boot: slots, binds (the target's console on the probe's port), plans, idle states, saved in flash |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | a bring-up tool (text on Serial, not OEP): which pins are a debug port |
 
@@ -219,6 +220,9 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
    arduino-cli compile --clean --profile esp32p4 examples/Firmware/OepProbe
    arduino-cli upload -p <port> --profile esp32p4 examples/Firmware/OepProbe
    ```
+
+   For ESP32-P4X, use profile `esp32p4x` and `OepProbe-esp32p4x-<version>.merged.bin`. See the
+   [guide](docs/guide/getting-started.md#1-flash-the-firmware) for identification and DFU revision checks.
 
    Flash the firmware before using a probe: you cannot tell what is on a board.
 2. **Host.** `pip install oep-client-python`, then see what the probe offers:
@@ -278,7 +282,7 @@ string.
 |---|---|
 | `schema` | 1. A reader refuses another number; fields are only added |
 | `kind` | `merged` (ESP32, the whole flash from `flash_offset` 0), `app` (ESP32, the app image: an update into the other app partition, the P4's DFU), `uf2` (RP2040 / RP2350) |
-| `model` | the probe's describe model this image reports (`esp32p4`, `esp32`, `rp2040`, `rp2350`): the chip built for. The describe chip TLV is another thing: `<model> v<rev>` of the running part |
+| `model` | the probe's describe model this image reports (`esp32p4`, `esp32p4x`, `esp32`, `rp2040`, `rp2350`): the chip built for. The describe chip TLV reports `<part> v<rev>` of the running part (e.g. `esp32p4 v3.2` even for P4X) |
 | `fqbn`, `flash_offset` | what it was built with; where a `merged` image goes (`null` for the others) |
 | `sha256` | of the file |
 

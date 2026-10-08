@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// A logic analyzer: oep.fixture.logic alone on an ESP32-P4, at the P4's full speed (oep-spec docs/oep-if-capture.ja.md).
+// A logic analyzer: oep.fixture.logic alone on an ESP32-P4 / P4X, at full speed (oep-spec docs/oep-if-capture.ja.md).
 // Up to 16 channels on any pins the host plans, one-shot / repeat / streaming: 2 ch at 160 Msps, 8 ch at 40 Msps, 16 ch
 // at 20 Msps.
 //
@@ -58,7 +58,11 @@ void setup() {
   config.vid = oep::reg::kUsbProjectVid;   // the project's VID:PID (registry usb, PID-USE.md)
   config.pid = oep::reg::kUsbProjectPid;
   config.manufacturer = "Open Embedded Probe";
-  config.product = "OEP capture (ESP32-P4)";   // a name for people; no host identifies the probe by it
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+  config.product = "OEP capture (ESP32-P4X)";
+#else
+  config.product = "OEP capture (ESP32-P4)";
+#endif
   config.serialNumber = serial_;
   config.controller = EspUsbController::HighSpeed;
   const bool ok = usbDevice.begin(config);

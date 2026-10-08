@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- (EN) Add ESP32-P4X (`esp32p4x`, `ChipVariant=postv3`) profiles to every P4 example, with explicit `prev3` profiles
+  for P4. Fix USB-Serial/JTAG reset-disable register selection for P4X. OepProbe reports a distinct model and USB product;
+  DFU checks an embedded variant/revision descriptor and refuses incompatible or older images without that descriptor.
+  CI builds all four P4 examples for both variants; release builds verify firmware identity before packaging.
+- (JA) P4 の各 example に P4X 用 `esp32p4x`（`ChipVariant=postv3`）profile を追加し、P4 は `prev3` を明示。
+  P4X の USB-Serial/JTAG のリセット禁止レジスタを修正。OepProbe の model と USB 製品名を区別し、DFU は埋め込んだ
+  モデル・リビジョン情報を照合して不適合・識別情報のない旧 image を拒否。CI は 4 example を両方でビルドし、
+  Release でも firmware の識別情報を検証してから添付します。
+
 ## 0.0.29
 - (EN) Classic ESP32, SWIO frames: interrupts go off a few instructions after the sampler acknowledges a frame's
   announcement and come back on after frameEnd() (it came after portEXIT_CRITICAL, and the GPIO set-up before

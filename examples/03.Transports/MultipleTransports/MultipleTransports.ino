@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// One probe, four ways in: an ESP32-P4 answering the same endpoint on four USB transports at once (oep-spec
+// One probe, four ways in: an ESP32-P4 / P4X answering the same endpoint on four USB transports at once (oep-spec
 // docs/oep-core.ja.md §3, §7.5; probe-development-guide §8). A host uses whichever it can open:
 //
 //   0 vendor bulk      the HS port, the fastest (libusb)                     OEP only        (the endpoint's own)
@@ -62,7 +62,12 @@ static size_t describeProbe() {
 
 void setup() {
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3)
-  REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);   // opening the port must not reset
+  // Opening the port must not reset the probe; P4X headers rename this register.
+#if defined(USB_DEVICE_CHIP_RST_REG)
+  REG_SET_BIT(USB_DEVICE_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
+#else
+  REG_SET_BIT(USB_SERIAL_JTAG_CHIP_RST_REG, USB_SERIAL_JTAG_USB_UART_CHIP_RST_DIS);
+#endif
   Serial.setTxTimeoutMs(0);   // a port nobody reads never stops loop()
   Serial.begin(115200);
   oep::platformParkMask(kChannels);   // every channel Hi-Z, no pull, before the first answer (core §8)

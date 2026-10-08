@@ -16,6 +16,7 @@ Take the firmware for your chip from the [Releases](https://github.com/Open-Embe
 | RP2350 (Pico 2, ...) | `OepProbe-rp2350-<version>.uf2` | the same |
 | SparkFun Pro Micro RP2350 | `OepProbe-promicrorp2350-<version>.uf2` | the same (every GPIO but GP19, its PSRAM select) |
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
+| ESP32-P4X (v3.x) | `OepProbe-esp32p4x-<version>.merged.bin` | the same (esptool's chip name remains `esp32p4`) |
 | classic ESP32 (DevKitC, ...) | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |
 
 The firmware has nothing wired in: every pin is chosen by the host when it uses the probe. The same file serves every
@@ -30,6 +31,17 @@ later reset goes back to the one before. If the bootloader did not start it, the
 after the version, e.g. `0.0.29 (update to app1 did not reach setup: software)`; any reset that was not a power-on or
 a restart the probe made shows there the same way (`brownout at 3 s`). A chip that was never flashed, or one that does
 not start, is flashed with esptool on USB-Serial/JTAG as above.
+
+P4 and P4X use separate firmware. Build P4X with the `esp32p4x` profile and update it over DFU with
+`OepProbe-esp32p4x-<version>.bin`. In `oep dump --port <port>`, model is `esp32p4` or `esp32p4x`, while chip reports
+the actual revision read from eFuse (e.g. `esp32p4 v3.2`). The HS USB product names are
+`OEP probe (ESP32-P4)` and `OEP probe (ESP32-P4X)` respectively.
+The pinned Arduino core 3.3.12 builds app images for v0.1–v1.99 (P4) and v3.1–v3.99 (P4X; v3.0 is excluded).
+Arduino's generated image header does not include these bounds, so the firmware embeds its variant and revision
+range in a [custom app descriptor](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32p4/api-reference/system/app_image_format.html#adding-a-custom-structure-to-an-application).
+Firmware with this check refuses a DFU image with the wrong variant, an unsupported revision, or no descriptor
+(including older images), restores the running boot partition and does not restart. Older firmware lacks this
+protection: check the file carefully on the first update. To return to an older image, use esptool on USB-Serial/JTAG.
 
 ## 2. Install the host library
 

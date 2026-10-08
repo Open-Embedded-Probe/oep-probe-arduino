@@ -1,0 +1,58 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check build profiles and release models
+        run: python3 tests/compile/test_profiles.py
+      - name: Run host tests
+        run: sh tests/host/run.sh
+
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      builds: ${{ steps.matrix.outputs.builds }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: List P4 and P4X builds
+        id: matrix
+        run: python3 tests/compile/test_profiles.py --matrix >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.builds) }}
+    name: ${{ matrix.name }} (${{ matrix.profile }})
+    steps:
+      - uses: actions/checkout@v5
+      - uses: arduino/setup-arduino-cli@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            !~/.arduino15/staging
+          key: arduino15-${{ runner.os }}-${{ matrix.cache }}
+      - name: Build
+        env:
+          SKETCH: ${{ matrix.sketch }}
+          PROFILE: ${{ matrix.profile }}
+        run: arduino-cli compile --clean --warnings all --profile "$PROFILE" --output-dir build "$SKETCH"
+      - name: Verify firmware identity
+        if: matrix.release
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: python3 tools/check_p4_firmware.py build "$PROFILE"

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// ESP32-P4 (profile esp32p4). One endpoint, four transports (the describe lists them in this order):
+// ESP32-P4 / P4X (profiles esp32p4 / esp32p4x). One endpoint, four transports (the describe lists them in this order):
 //
 //   0 vendor bulk      HS port (direct build: build_opt.h, compile with --clean)            OEP only
 //   1 USB-Serial/JTAG  the P4's USJ (HWCDC Serial)                                           serial port: OEP + raw
@@ -10,7 +10,8 @@
 //
 //   (and a DFU interface on the HS port: the probe's own firmware update, outside OEP, part of the same USB device)
 //
-// Updating the firmware over the HS port alone: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the release's app image)
+// Updating the firmware over the HS port alone: `dfu-util -D OepProbe-<model>-<version>.bin` (the release's app image;
+// model = esp32p4 or esp32p4x). The custom app descriptor is checked against the actual chip before accepting DFU.
 // writes the other app partition, checks it and restarts into it; settings (NVS) stay. The new firmware is confirmed as
 // it starts (see verifyRollbackLater): no trial, and no later reset takes the probe back to the one before. The DFU
 // interface takes no endpoint (EP0 only). A first flash of an empty chip, or a recovery, is esptool on USB-Serial/JTAG
@@ -18,7 +19,7 @@
 //
 // A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
 // a slot's console, a fixture UART). The HS device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial =
-// the unit id (the MAC, lowercase hex); its iProduct "OEP probe (ESP32-P4)" is a name for people. USB-Serial/JTAG keeps the
+// the unit id (the MAC, lowercase hex); its iProduct "OEP probe (ESP32-P4)" / "OEP probe (ESP32-P4X)" is a name for people. USB-Serial/JTAG keeps the
 // chip's fixed ID: a host reaches it by the user choosing its port.
 // How a host tells the ports apart inside a device known to be OEP (transports §3, registry usb): the vendor bulk interface is class 0xFF, subclass 0x4F
 // ('O'), protocol 0x45 ('E'); the HID's report descriptor says usage page 0xFF4F, usage 0x45. EspUsbDevice writes 0 / 0
@@ -34,6 +35,9 @@
 // USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the SWIO pin, the reset line, or any fixture's pin - the host chooses.
 #pragma once
 #include <esp_mac.h>
+#include <esp_app_desc.h>
+#include <esp_app_format.h>
+#include <esp_ota_ops.h>
 #include <soc/usb_serial_jtag_reg.h>
 #include <EspUsbDevice.h>
 #include <device/usbd.h>   // tud_disconnect (EspUsbDevice's TinyUSB)
@@ -57,8 +61,29 @@
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
 #include "UsbStreams.h"
+#include "P4FirmwareIdentity.h"
 
 static constexpr uint16_t kUnset = 0xfffe;                        // no pair chosen yet
+
+// The SDK selected by ChipVariant: pre-v3 silicon and v3+ silicon need different firmware.
+// describeChip additionally reports the actual silicon revision read from eFuse.
+#if CONFIG_ESP32P4_REV_MIN_FULL >= 300
+static constexpr char kProbeModel[] = "esp32p4x";
+static constexpr char kUsbProduct[] = "OEP probe (ESP32-P4X)";
+static constexpr uint16_t kFirmwareVariant = P4FirmwareIdentity::kP4X;
+#else
+static constexpr char kProbeModel[] = "esp32p4";
+static constexpr char kUsbProduct[] = "OEP probe (ESP32-P4)";
+static constexpr uint16_t kFirmwareVariant = P4FirmwareIdentity::kP4;
+#endif
+
+// Arduino's elf2image recipe does not put the SDK's revision bounds in the image header.
+// Keep our descriptor in the final image even when compiler constant folding removes references to it.
+static const P4FirmwareIdentity kFirmwareIdentity
+    __attribute__((section(".rodata_custom_desc"), used, retain, aligned(4))) = {
+      P4FirmwareIdentity::kMagic, P4FirmwareIdentity::kVersion, kFirmwareVariant,
+      CONFIG_ESP32P4_REV_MIN_FULL, CONFIG_ESP32P4_REV_MAX_FULL, 0
+    };
 
 // The vendor bulk function with OEP's subclass / protocol in its interface descriptor (transports §3).
 class OepVendor final : public EspUsbDeviceVendor {
@@ -186,6 +211,16 @@ static void restartProbe() {
 static constexpr uint32_t kDfuStatusMs = 500, kDfuDetachMs = 100;
 static volatile bool dfuDone = false;
 static volatile uint32_t dfuDoneMs = 0;
+static bool compatibleDfuImage() {
+  // EspUsbDevice has verified the image and selected its partition before calling onComplete.
+  // Returning false makes it restore the running partition and report DFU_STATUS_ERR_FIRMWARE.
+  const esp_partition_t *candidate = esp_ota_get_boot_partition();
+  if (!candidate || candidate == esp_ota_get_running_partition()) return false;
+  P4FirmwareIdentity identity = {};
+  constexpr size_t offset = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t);
+  if (esp_partition_read(candidate, offset, &identity, sizeof identity) != ESP_OK) return false;
+  return identity.compatible(kFirmwareVariant, ESP.getChipRevision());
+}
 static void restartAfterDfu() {
   if (!dfuDone || millis() - dfuDoneMs < kDfuStatusMs) return;
   oep::BootGuard::planned();
@@ -201,7 +236,7 @@ static bool autoAttachReady() { return oep::BootGuard::attachReady(usbDevice.rea
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "esp32p4", id, oep::platformUnitId(id, sizeof id), 55,
+  oep::describeCore(w, kProbeModel, id, oep::platformUnitId(id, sizeof id), 55,
                     oep::BootGuard::lastBoot());   // the firmware text: the version (and what ended the boot before)
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
@@ -227,11 +262,12 @@ void setup() {
   usb.vid = oep::reg::kUsbProjectVid;   // the project's VID:PID (registry usb, PID-USE.md)
   usb.pid = oep::reg::kUsbProjectPid;
   usb.manufacturer = "Open Embedded Probe";
-  usb.product = "OEP probe (ESP32-P4)";   // a name for people; no host identifies the probe by it
+  usb.product = kUsbProduct;   // a name for people; no host identifies the probe by it
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
   dfu.restartWhenComplete(false);   // restartAfterDfu, from loop()
   dfu.onComplete([]() {             // the usbd task: the image verified, the host's last GETSTATUS still to answer
+    if (!compatibleDfuImage()) return false;
     dfuDoneMs = millis();
     dfuDone = true;
     return true;

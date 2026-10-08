@@ -16,6 +16,7 @@
 | RP2350（Pico 2 など） | `OepProbe-rp2350-<version>.uf2` | 同じ |
 | SparkFun Pro Micro RP2350 | `OepProbe-promicrorp2350-<version>.uf2` | 同じ（GP19（PSRAM の選択）以外のすべての GPIO） |
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
+| ESP32-P4X（v3.x） | `OepProbe-esp32p4x-<version>.merged.bin` | 同じ（esptool のチップ名は `esp32p4`） |
 | classic ESP32（DevKitC など） | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |
 
 firmware には配線を焼き込んでいません。どのピンを使うかは、host が probe を使うときに決めます。同じファイルで、どの治具にも
@@ -30,6 +31,17 @@ bootloader が新しい firmware を起動しなかったときは、describe �
 `0.0.29 (update to app1 did not reach setup: software)`）。電源の投入でも probe 自身の再起動でもないリセットも、同じように
 そこに出ます（`brownout at 3 s`）。一度も焼いていないチップや、起動しないチップは、上のとおり USB-Serial/JTAG で esptool
 を使って焼きます。
+
+P4 と P4X の firmware は別です。P4X は `esp32p4x` profile でビルドし、DFU には
+`OepProbe-esp32p4x-<version>.bin` を使います。`oep dump --port <port>` の model は `esp32p4` / `esp32p4x`、
+chip は eFuse から読んだ実際のリビジョン（例 `esp32p4 v3.2`）です。HS USB の製品名も
+`OEP probe (ESP32-P4)` / `OEP probe (ESP32-P4X)` に分かれます。
+現在固定している Arduino core 3.3.12 の app image の対応範囲は、P4 が v0.1–v1.99、P4X が v3.1–v3.99
+（v3.0 は対象外）です。Arduino の生成する image ヘッダーにはこの制限が入らないため、firmware に
+[カスタム app descriptor](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32p4/api-reference/system/app_image_format.html#adding-a-custom-structure-to-an-application)
+としてモデルと対応リビジョンを埋め込みます。このチェックを持つ firmware の DFU は、不一致・範囲外・識別情報のない旧 image を
+拒否して起動先を元に戻し、再起動しません。旧 firmware にはこの保護がないので、最初の更新はファイルを確認して行ってください。
+旧 image に戻す場合は USB-Serial/JTAG から esptool を使います。
 
 ## 2. host のライブラリを入れる
 
