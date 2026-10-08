@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+## 0.0.31
 - (EN) Add ESP32-P4X (`esp32p4x`, `ChipVariant=postv3`) profiles to every P4 example, with explicit `prev3` profiles
   for P4. Fix USB-Serial/JTAG reset-disable register selection for P4X. OepProbe reports a distinct model and USB product;
   DFU checks an embedded variant/revision descriptor and refuses incompatible or older images without that descriptor.
