@@ -2,14 +2,14 @@ profiles:
   rp2040:
     fqbn: rp2040:rp2040:rpipico:usbstack=picosdk
     platforms:
-      - platform: rp2040:rp2040 (6.1.1)
+      - platform: rp2040:rp2040 (6.2.0)
         platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
     libraries:
       - dir: ../../..
   rp2350:
     fqbn: rp2040:rp2040:rpipico2:usbstack=picosdk
     platforms:
-      - platform: rp2040:rp2040 (6.1.1)
+      - platform: rp2040:rp2040 (6.2.0)
         platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
     libraries:
       - dir: ../../..
