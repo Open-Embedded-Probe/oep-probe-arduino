@@ -68,7 +68,7 @@ bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parli
   self->ring_end_ = ring + static_cast<uint32_t>(e->recv_bytes);
   const Chunk chunk = {static_cast<const uint8_t *>(e->data), e->recv_bytes, self->produced_, ring};
   BaseType_t woken = pdFALSE;
-  if (xQueueSendFromISR(self->queue_, &chunk, &woken) != pdTRUE) ++self->queue_overflow_;
+  if (xQueueSendFromISR(self->queue_, &chunk, &woken) != pdTRUE) self->queue_overflow_ = self->queue_overflow_ + 1;
   return woken == pdTRUE;
 }
 
@@ -102,7 +102,7 @@ void LogicCapture::harvest(const Chunk &chunk) {
     }
     memcpy(store_ + static_cast<size_t>(slot) * segment_bytes_ + fill_, chunk.data + at, n);
     if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA came round and rewrote these bytes while (or before) we copied
-      ++overruns_;
+      overruns_ = overruns_ + 1;
       loseSegment();   // a hole in the segment (capture §2.2)
       return;
     }
@@ -132,7 +132,7 @@ void LogicCapture::harvestDirect(const Chunk &chunk) {
     const size_t n = min(static_cast<size_t>(stage_data_ - stage_fill_), chunk.length - at);
     memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, chunk.data + at, n);
     if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA rewrote these bytes
-      ++overruns_;
+      overruns_ = overruns_ + 1;
       loseSegment();
       return;
     }
@@ -292,7 +292,7 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
   if (!ringIntact(chunk.ring)) {                       // rewritten before it was looked at
     if (trig_phase_ == 1) trig_overrun_ = true;
     have_level_ = false;
-    ++overruns_;
+    overruns_ = overruns_ + 1;
     return;
   }
   if (trig_phase_ == 0) {
@@ -452,13 +452,16 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   kept_samples_ = 0;   // the last generation's segment goes
   kept_short_ = false;
   trig_phase_ = 0;
-  have_level_ = trig_overrun_ = ext_ready_ = false;
+  ext_ready_ = false;
+  trig_overrun_ = false;
+  have_level_ = false;
   lost_ = false;
   lost_pos_ = 0;
   error_ = cap::kErrorPeripheral;
   force_sample_ = 0;
   force_ = trig_type_ == cap::kTriggerImmediate && !follow_;   // a ring left by following: start at once
-  filled_ = fill_ = 0;
+  fill_ = 0;
+  filled_ = 0;
   seg_shift_ = 0;
   seg_samples_ = seg_raw_ = 0;
   seg_aligned_ = false;
@@ -466,7 +469,9 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   // a follower's trigger is the group's event; an immediate start (the ring a group's following left) sends none
   reported_trigger_ = follow_ || trig_type_ == cap::kTriggerImmediate;
   done_ = false;
-  produced_ = queue_overflow_ = overruns_ = 0;
+  overruns_ = 0;
+  queue_overflow_ = 0;
+  produced_ = 0;
   ring_end_ = 0;
   span_count_ = 0;
   captured_ = 0;
@@ -497,7 +502,7 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
   __atomic_thread_fence(__ATOMIC_RELEASE);
   fill_ = 0;
   if (segment_count_) fill_slot_ = (fill_slot_ + 1) % segment_count_;
-  ++completed_;   // wraps after 0xFFFFFFFF (capture §2.2)
+  completed_ = completed_ + 1;   // wraps after 0xFFFFFFFF (capture §2.2)
   __atomic_thread_fence(__ATOMIC_RELEASE);
   if (kept_infos_ < kInfos - 1) kept_infos_ = kept_infos_ + 1;   // after completed_: a reader takes this first (keptSerials)
 }
@@ -1002,10 +1007,13 @@ LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uin
   segment_bytes_ = samples * width / 8;
   segment_count_ = segments;
   // a new store: nothing captured, nothing left to push from the last run (its unsent bytes are gone with it)
-  completed_ = released_ = fill_ = 0;
+  fill_ = 0;
+  released_ = 0;
+  completed_ = 0;
   sent_seg_ = 0;
   sent_off_ = 0;
-  captured_ = dropped_ = 0;
+  dropped_ = 0;
+  captured_ = 0;
   queue_ = xQueueCreate(128, sizeof(Chunk));
   if (!takeRing() || !queue_) return Open::kNoMemory;
   // Without internal RAM for two stages (taken by the DMA ring, a trigger's segment, the rest of the firmware), the
@@ -1036,7 +1044,12 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (capacity < 8) return failed();
-  completed_ = released_ = fill_ = queue_overflow_ = overruns_ = stage_drops_ = 0;
+  stage_drops_ = 0;
+  overruns_ = 0;
+  queue_overflow_ = 0;
+  fill_ = 0;
+  released_ = 0;
+  completed_ = 0;
   fill_slot_ = 0;
   kept_infos_ = 0;
   lost_ = false;
@@ -1047,8 +1060,10 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   ring_end_ = 0;
   sent_seg_ = 0;
   sent_off_ = 0;
-  captured_ = dropped_ = 0;
-  gap_pending_ = paused_ = false;
+  dropped_ = 0;
+  captured_ = 0;
+  paused_ = false;
+  gap_pending_ = false;
   reported_ = 0;
   if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);

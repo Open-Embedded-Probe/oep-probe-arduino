@@ -15,7 +15,11 @@
 #include <driver/gpio.h>
 #include <esp_cpu.h>
 #include <hal/dedic_gpio_cpu_ll.h>
+// ESP-IDF's GPIO matrix initializer leaves fields zero; silence its aggregate warning only in the SDK header.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #include <hal/gpio_ll.h>
+#pragma GCC diagnostic pop
 #include <soc/gpio_struct.h>
 
 namespace oep {

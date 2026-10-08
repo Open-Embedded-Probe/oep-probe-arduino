@@ -180,7 +180,11 @@ class DirectBulkStream final : public Stream, public DirectTransport {
     Entry *q = result ? results_ : data_;
     volatile size_t &head = result ? results_head_ : data_head_, &tail = result ? results_tail_ : data_tail_;
     const bool ok = head - tail < kQueue;
-    if (ok) q[head++ % kQueue] = e;
+    if (ok) {
+      const size_t at = head;
+      q[at % kQueue] = e;
+      head = at + 1;
+    }
     portEXIT_CRITICAL(&mux_);
     return ok;
   }
@@ -190,12 +194,20 @@ class DirectBulkStream final : public Stream, public DirectTransport {
       Entry e;
       portENTER_CRITICAL(&mux_);
       if (in_flight_ || (results_head_ == results_tail_ && data_head_ == data_tail_)) { portEXIT_CRITICAL(&mux_); return; }
-      e = results_head_ != results_tail_ ? results_[results_tail_++ % kQueue] : data_[data_tail_++ % kQueue];
+      if (results_head_ != results_tail_) {
+        const size_t at = results_tail_;
+        e = results_[at % kQueue];
+        results_tail_ = at + 1;
+      } else {
+        const size_t at = data_tail_;
+        e = data_[at % kQueue];
+        data_tail_ = at + 1;
+      }
       in_flight_ = true;
       sending_ = e;
       portEXIT_CRITICAL(&mux_);
       if (vendor_.writeDirect(e.buffer, e.length)) return;
-      ++refused_;   // not mounted, or a contract mistake: the buffer is given back unsent
+      refused_ = refused_ + 1;   // not mounted, or a contract mistake: the buffer is given back unsent
       portENTER_CRITICAL(&mux_);
       in_flight_ = false;
       portEXIT_CRITICAL(&mux_);

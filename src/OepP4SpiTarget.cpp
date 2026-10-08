@@ -111,7 +111,7 @@ void IRAM_ATTR P4SpiTarget::onDone(spi_slave_transaction_t *done) {
       self->isr_armed_bits_ = done->trans_len;
     }
   } else if (done->trans_len) {
-    ++self->isr_unarmed_;   // a transfer nobody armed: MOSI dropped, counted (fixture §4)
+    self->isr_unarmed_ = self->isr_unarmed_ + 1;   // a transfer nobody armed: MOSI dropped, counted (fixture §4)
   }
   portEXIT_CRITICAL_ISR(&self->lock_);
   if (spi_slave_queue_trans_isr(SPI2_HOST, next) != ESP_OK) self->isr_load_failed_ = true;
