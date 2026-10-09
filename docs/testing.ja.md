@@ -14,7 +14,7 @@
 | Python client の `tests/hw` | 独立 host による実機の結合検査。現行設定の制約はその README に記載 |
 | `.github/workflows/firmware.yml` | image と manifest/hash の生成。実機での起動・復帰は別途検査 |
 
-新しい設備形式の loader、planner、複数 target の共有 session adapter は実装前です。この文書を追加したことで CI に実機 gate が導入されたわけではありません。
+新しい設備形式には offline loader/planner と仮想 smoke があり、[最小構成の確認](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/hardware-quickstart.ja.md)から試せます。実機 preflight と複数 target の共有 session adapter は未実装です。この文書を追加したことで CI に実機 gate が導入されたわけではありません。
 
 ## 候補 firmware を検証する順序
 
