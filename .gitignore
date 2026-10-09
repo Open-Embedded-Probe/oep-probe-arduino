@@ -1,2 +1,11 @@
 build/
 .vscode/
+.env
+.env.*
+!.env.example
+*.local.toml
+__pycache__/
+.venv/
+.pytest_cache/
+.pytest-results/
+**/build/

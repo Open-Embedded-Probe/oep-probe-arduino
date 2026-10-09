@@ -296,3 +296,5 @@ version in its `library.properties`. OEP itself leaves the string free (core §7
 
 MIT ([LICENSE](LICENSE)); every source file says so (`SPDX-License-Identifier: MIT`). The USB VID:PID is not covered by
 it: see [PID-USE.md](PID-USE.md).
+
+Build, upload and check an installed probe through the [uv / pytest entry point](docs/firmware-transfer.ja.md) (Japanese), using `tests/.env.example`.

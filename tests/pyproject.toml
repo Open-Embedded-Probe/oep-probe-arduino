@@ -1,0 +1,18 @@
+[project]
+name = "oep-probe-arduino-tests"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+  "pytest>=8",
+  "pytest-embedded-arduino-cli==1.8.0",
+  "oep-client-python==0.0.31",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["unit", "portable"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+junit_family = "legacy"
+filterwarnings = [
+  "ignore:record_xml_attribute is an experimental feature:pytest.PytestExperimentalApiWarning",
+]

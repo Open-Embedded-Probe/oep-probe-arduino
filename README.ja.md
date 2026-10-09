@@ -277,3 +277,5 @@ tag から各 example の各 profile をビルドし、`<Example>-<profile>-<ver
 
 MIT（[LICENSE](LICENSE)）。各ソースファイルにも表記がある（`SPDX-License-Identifier: MIT`）。USB の VID:PID はこれに含まれない:
 [PID-USE.ja.md](PID-USE.ja.md)。
+
+実機の build・転送・確認は [uv / pytest の入口](docs/firmware-transfer.ja.md)を参照。設定雛形は `tests/.env.example`。

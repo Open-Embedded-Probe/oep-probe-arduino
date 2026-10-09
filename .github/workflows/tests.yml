@@ -14,10 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Check build profiles and release models
-        run: python3 tests/compile/test_profiles.py
-      - name: Run host tests
-        run: sh tests/host/run.sh
+      - uses: astral-sh/setup-uv@v6
+      - name: Run offline tests in the locked pytest workspace
+        run: uv run --project tests --locked pytest -c tests/pyproject.toml tests/unit tests/portable
 
   plan:
     runs-on: ubuntu-latest

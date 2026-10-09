@@ -4,10 +4,14 @@
 
 共通の保証対象と判定は [OEP 全体のテスト方針](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/testing-policy.ja.md)、設置済みプローブを使う側の責任は [利用プロジェクト向けガイド](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/testing-consumers.ja.md)を参照します。通信の規範は oep-spec が所有し、設備設定の TOML を wire protocol の一部にしません。
 
+Arduino の実行環境は `tests/` の uv / pytest workspace にまとめます。[実機転送の入口](firmware-transfer.ja.md)と `tests/.env.example` を参照してください。通常の運用は候補を転送してから利用し、Flash 退避や旧 firmware の復元を前提にしません。
+
 ## 現在の入口と保証範囲
 
 | 入口 | 保証する範囲 |
 |---|---|
+| `cd tests && uv run pytest` | 転送判定、既存 host 検査、release profile 検査。実機は操作しない |
+| `uv run --env-file .env pytest ../examples/Firmware/OepProbe/test_transfer.py --profile esp32` | classic ESP32 の build・個体照合・転送・宣言と設定／slot の再確認 |
 | `tests/host/run.sh` | host 上の shim と C++ による portable な protocol・状態・資源の検査 |
 | `python3 tests/compile/test_profiles.py` | profile/model の定義の回帰検査 |
 | `.github/workflows/tests.yml` | host 検査と P4/P4X 等の build。実機の電気動作の保証とは別 |
