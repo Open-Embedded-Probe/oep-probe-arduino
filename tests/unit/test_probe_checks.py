@@ -38,3 +38,18 @@ def test_update_failure_is_detected(change, error):
 
 def test_expected_candidate_and_settings_pass():
     check_after(snapshot(), snapshot(), 'candidate')
+
+
+def test_same_firmware_transfer_still_requires_a_new_boot():
+    before = snapshot() | {'boot_id': 123}
+    with pytest.raises(RuntimeError, match='did not reboot'):
+        check_after(before, before, 'candidate')
+    check_after(before, snapshot() | {'boot_id': 124}, 'candidate')
+
+
+def test_unreadable_old_settings_do_not_relax_new_declaration_checks():
+    before = {'config_error': 'old format could not be read'}
+    check_after(before, snapshot(), 'candidate')
+    after = snapshot() | {'missing_declarations': ['ops']}
+    with pytest.raises(RuntimeError, match='missing declarations'):
+        check_after(before, after, 'candidate')
