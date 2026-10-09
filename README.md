@@ -258,6 +258,8 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
 
 ## Releases
 
+See [probe verification](docs/testing.ja.md) (Japanese) for ownership, update checks and consumer regressions. Image generation and hardware verification are separate checks.
+
 The shared [arduino-library-release-toolkit](https://github.com/tanakamasayuki/arduino-library-release-toolkit) is used as is.
 Record changes under `## Unreleased` in `CHANGELOG.md`, (EN) and (JA), and run the GitHub Actions workflow Release
 (workflow_dispatch): it bumps the version in `library.properties`, writes `src/openembeddedprobe_version.h`, rewrites the
