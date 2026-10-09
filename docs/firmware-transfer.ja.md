@@ -20,7 +20,7 @@ cd tests
 uv sync --locked
 cp .env.example .env
 # .env の port、unit ID、候補版、既存の共通ロック、今回の結果保存先を編集
-uv run --env-file .env pytest ../examples/Firmware/OepProbe/test_transfer.py \
+uv run --env-file .env pytest -c pyproject.toml ../examples/Firmware/OepProbe/test_transfer.py \
   --profile esp32 --run-mode=all -vv --junitxml=build/transfer.xml
 ```
 
@@ -29,7 +29,7 @@ uv run --env-file .env pytest ../examples/Firmware/OepProbe/test_transfer.py \
 `--run-mode=all` は build → 個体・silicon・image 照合 → upload → OEP 確認です。`--run-mode=test` も既存 build を **転送してから**確認します。build だけなら設備設定や実機は不要です。
 
 ```sh
-uv run pytest ../examples/Firmware/OepProbe/test_transfer.py --profile esp32 --run-mode=build -vv
+uv run pytest -c pyproject.toml ../examples/Firmware/OepProbe/test_transfer.py --profile esp32 --run-mode=build -vv
 uv run pytest
 ```
 
@@ -81,4 +81,6 @@ picotool を使う場合は core に同梱されたものを bus/address 指定�
 
 BOOTSEL のまま停止した場合、結果に残った `transfer.json` を `OEP_TRANSFER_RESUME_FROM` で明示します。次回の結果は新しいディレクトリへ保存します。前回の個体・profile と現在の bootloader の接続位置を照合し、候補を再転送してから確認します。前回確認した個体を差し替えていないことが前提です。任意の bootloader を「1台だけだから」と選びません。
 
-旧 image の設定が読めないときや、更新後の storage が unreadable のときは保存設定の維持・適用を保証できません。`settings_preservation` を unknown と記録し、更新後の読出しと宣言の検査は実行します。今回の確認では P4 / P4X、RP2040、Pico 2 の実機転送が通りました。Pro Micro は入口を用意した段階です。
+旧 image の設定が読めないときや、更新後の storage が unreadable のときは保存設定の維持・適用を保証できません。`settings_preservation` を unknown と記録し、更新後の読出しと宣言の検査は実行します。今回の確認では P4 / P4X、RP2040、Pico 2 の実機転送が通りました。RP2040 と Pico 2 は、BOOTSEL の udev 権限追加後に明示 bus/address の picotool 転送でも成功し、Flash verify・再起動・OEP 宣言・保存設定を確認しました。Pro Micro は入口を用意した段階です。
+
+転送コマンドは sketch が `tests/` の外にあるため、`-c pyproject.toml` で test workspace の pytest 設定を明示します。これにより `probe_checks` 等の import と plugin 設定が安定します。picotool 経由では `OEP_HW_UF2_DRIVE` を未指定または空にし、結果保存先は毎回新しいディレクトリを指定します。Arduino CLI の `--port UF2_Board` は upload recipe のplaceholderであり、実際の転送経路は `transfer.json` の `upload_command` と `upload.log` で確認します。

@@ -11,7 +11,7 @@ Arduino の実行環境は `tests/` の uv / pytest workspace にまとめます
 | 入口 | 保証する範囲 |
 |---|---|
 | `cd tests && uv run pytest` | 転送判定、既存 host 検査、release profile 検査。実機は操作しない |
-| `uv run --env-file .env pytest ../examples/Firmware/OepProbe/test_transfer.py --profile esp32` | 選択した ESP32 / P4 / P4X / Pico の build・個体／image 照合・転送・再列挙・宣言と設定／slot の再確認 |
+| `uv run --env-file .env pytest -c pyproject.toml ../examples/Firmware/OepProbe/test_transfer.py --profile esp32` | 選択した ESP32 / P4 / P4X / Pico の build・個体／image 照合・転送・再列挙・宣言と設定／slot の再確認 |
 | `tests/host/run.sh` | host 上の shim と C++ による portable な protocol・状態・資源の検査 |
 | `python3 tests/compile/test_profiles.py` | profile/model の定義の回帰検査 |
 | `.github/workflows/tests.yml` | host 検査と P4/P4X 等の build。実機の電気動作の保証とは別 |
