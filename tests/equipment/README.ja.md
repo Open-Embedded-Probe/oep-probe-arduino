@@ -363,3 +363,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_i2c.py
 ```
+
+## SPI targetの論理検査
+
+公開checkerへlogical CS/SCK edgeとarm readinessを明示し、LSB宣言の有無を確認する。
+物理波形と負荷下のCS setup実時間は別に検証する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_spi.py
+```
