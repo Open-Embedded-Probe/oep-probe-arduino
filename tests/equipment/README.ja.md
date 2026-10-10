@@ -83,3 +83,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```
 
 SPEC/共有lockは既存`.env.example`を使い、追加の設備設定や私的ベンチ依存を加えない。
+
+混雑時のsession再送・拒否cacheは[公開pressureガイド](../../../oep-client-python/docs/replay-pressure-conformance.ja.md)を使う。同じ明示pipelineモデルに対する検査で、Sを別接続へ移さない。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
+```
