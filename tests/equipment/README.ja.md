@@ -187,3 +187,10 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_scan.py
 ```
+
+標準consoleのSDI/DMDATAは[公開mailboxガイド](../../../oep-client-python/docs/mailbox-conformance.ja.md)の
+明示logical fixtureで検査する。DMIアクセス順とqueueを確認し、実target配送とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_mailbox.py
+```
