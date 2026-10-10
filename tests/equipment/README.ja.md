@@ -173,3 +173,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_oep_declarations.py
 ```
+
+標準attachのcritical TLVとconsole openの制約は[公開attachガイド](../../../oep-client-python/docs/attach-conformance.ja.md)の明示logical fixtureで検査する。副作用前の拒否と再送を確認し、電気的bringup/配送の実機適合とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_attach.py
+```
