@@ -113,3 +113,9 @@ corr u16の半周・上限とend用番号の確保は[公開corrガイド](../..
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_corr.py
 ```
+
+result_lost後の回復は[公開recoveryガイド](../../../oep-client-python/docs/recovery-conformance.ja.md)の明示sampleを使う。応答を論理的に失わせ、wireの読み直しで判断する。実機timeoutやproduction Host統合の適合結果には含めない。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_recovery.py
+```
