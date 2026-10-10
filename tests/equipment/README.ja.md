@@ -149,3 +149,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_interfaces.py
 ```
+
+common §1を採用するstreamのread/marksは[公開streamガイド](../../../oep-client-python/docs/stream-conformance.ja.md)の明示logical fixtureで検査する。採用・addressing・op対応を指定し、captureや資源型streamの動作まで通ったとは扱わない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_stream.py
+```
