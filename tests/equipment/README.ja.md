@@ -367,6 +367,8 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ## SPI targetの論理検査
 
 公開checkerへlogical CS/SCK edgeとarm readinessを明示し、LSB宣言の有無を確認する。
+未設定armのunavailable・cause 6と副作用なし、configure後の拒否再送保持を確認する。
+設定済みでも準備できないarmはcompleted failedとして区別する。
 物理波形と負荷下のCS setup実時間は別に検証する。
 
 ```sh
