@@ -215,3 +215,10 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_debug.py
 ```
+
+optional blockと状態復元は[公開blockガイド](../../../oep-client-python/docs/block-conformance.ja.md)の
+明示logical fixtureで検査する。busのprefixとscratch/mailbox保持を確認し、物理抽象コマンドとは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_blocks.py
+```
