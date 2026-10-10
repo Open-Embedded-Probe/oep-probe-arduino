@@ -143,3 +143,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_exhausted.py
 ```
+
+全fnの共通宣言は[公開interfaceガイド](../../../oep-client-python/docs/interface-conformance.ja.md)で検査する。独自拡張にも同じ8項目を適用し、OEP固有opやcommon部品の動作と分けて報告する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_interfaces.py
+```
