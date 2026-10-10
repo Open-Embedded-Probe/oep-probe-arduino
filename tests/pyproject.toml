@@ -13,6 +13,7 @@ testpaths = ["unit", "portable"]
 pythonpath = ["."]
 addopts = "-ra --strict-markers"
 junit_family = "legacy"
+markers = ["equipment: explicit conformance equipment/configuration; skipped when absent"]
 filterwarnings = [
   "ignore:record_xml_attribute is an experimental feature:pytest.PytestExperimentalApiWarning",
 ]
