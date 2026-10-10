@@ -137,3 +137,9 @@ end/openの応答喪失後の回復は[公開session-lossガイド](../../../oep
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_session_loss.py
 ```
+
+番号枯渇時の複数pending放棄は[公開exhaustedガイド](../../../oep-client-python/docs/exhausted-conformance.ja.md)の3条件で検査する。旧Sを新経路へ移さず、解放を確認して別IDでopenし、旧操作のunknownを保持する。物理再接続やproduction Host統合は未検査。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_exhausted.py
+```
