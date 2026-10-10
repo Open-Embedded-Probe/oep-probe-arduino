@@ -271,3 +271,7 @@ logical writer gateで検査する。応答の後に依存資源を解放し、c
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_cut.py
 ```
+
+mandatory debug検査にはDMI応答長の境界も含む。64 byte経路で値配列が入らない要求を
+副作用前に拒否し、入る要求では補助TLVを省略して値をすべて返す。入口は既存の
+`test_conformance_debug.py`で、追加設備設定は不要。
