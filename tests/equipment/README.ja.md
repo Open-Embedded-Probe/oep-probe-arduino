@@ -346,3 +346,11 @@ configure/stream/queue/plan寿命は第三段階、採用した共通streamの�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_uart.py /path/to/oep-client-python/tests/test_conformance_uart_stream.py
 ```
+
+## dmseqのmark検査
+
+console §2のresync/TO/CRC markを論理fixtureで確認する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dmseq.py
+```
