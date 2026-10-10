@@ -161,3 +161,9 @@ common writeのacceptedとdebug status/doneは[公開outcomeガイド](../../../
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_outcomes.py
 ```
+
+資源型streamとdebug connectionの寿命は[公開dependencyガイド](../../../oep-client-python/docs/dependency-conformance.ja.md)の明示logical fixtureで検査する。依存順の解放・個別資源指定・historical replayを確認し、標準mechanism制約と物理pin idleの適合は別に報告する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dependencies.py
+```
