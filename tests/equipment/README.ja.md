@@ -125,3 +125,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_recovery_races.py
 ```
+
+corr枯渇前の切替は[公開rolloverガイド](../../../oep-client-python/docs/rollover-conformance.ja.md)の明示sampleで検査する。production Hostや物理readerの切替を検査した結果には含めない。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_rollover.py
+```
