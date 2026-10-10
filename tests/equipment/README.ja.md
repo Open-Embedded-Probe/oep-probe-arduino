@@ -250,3 +250,10 @@ wireのattach reset/idle_clock/targetselは[公開wireガイド](../../../oep-cl
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_wire_options.py
 ```
+
+scanのidle_clock/targetselは[公開scanガイド](../../../oep-client-python/docs/scan-options-conformance.ja.md)の
+明示logical fixtureで検査する。指定selectorと有限候補、探索中のlevelsと解放順を確認し、実配線探索とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_scan_options.py
+```
