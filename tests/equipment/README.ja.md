@@ -15,6 +15,8 @@ CLI plugin を含む既存 uv/pytest 環境内で実行する。SPEC checkout、
 
 `OEP_CONFORMANCE_FRAMING=tcp` と明示した `tcp://HOST:PORT` では独立したlength/fault検査を実行する。公開バーチャルベンチの `--profile core-v1` も同じ入口から検査できる（unit ID `virtual-core-1`、fn 0のみ、target/interfaceなし）。
 
+同時に2接続できるTCP設備では `OEP_CONFORMANCE_TCP_PEER=tcp://HOST:PORT` を明示して追加6項目を実行する（54＋6＝60 core）。同じlistenerでよい。同一個体・boot・宣言を照合してから、共通lock/owner、応答と途中frameの接続分離、primaryのclose後のlock保持、peerだけの過大length切断を確認する。設定がない場合は追加項目を実行しない。設定した設備へ接続できない場合はFAILとし、fallbackしない。元のsessionを別のTCP接続へ移す検査は行わず、再接続後の後始末も再照合して自分のsessionだけを扱う。
+
 core は case ごとの pytest/JUnit 結果、interface は全 fn の共通宣言検査、OEPインターフェース固有の動作は未実行。JSON には送受信 bytes、SPEC commit/dirty/hash、検査器 hash、実装版、未検査範囲が残る。全体適合を名乗らない。
 
 全く設定していない任意入口のみ SKIP。部分設定、接続・権限・個体の誤り、旧仕様と新仕様の不一致は FAIL。transport/cleanup失敗の後の項目は BLOCKED となり、実行全体は FAIL。
