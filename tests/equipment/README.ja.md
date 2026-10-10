@@ -89,3 +89,9 @@ SPEC/共有lockは既存`.env.example`を使い、追加の設備設定や私的
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
 ```
+
+応答送信とleaseは[公開leaseガイド](../../../oep-client-python/docs/lease-conformance.ja.md)を参照する。実時計の論理writer補助検査と、長いop・切断・同session openの仮想時計単体を分ける。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_lease.py /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
+```
