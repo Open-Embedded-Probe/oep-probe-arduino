@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- (JA) 公開適合入口で独立TCP length検査と最小バーチャルcore-v1も実行可能。core-v1の成功をtarget/interface適合として扱わない。
+
 - (JA) 独立serial適合入口からport再接続によるsession・履歴・leaseの保持も検査する。firmwareのprotocol実装は変更しない。
 
 - (JA) 独立serial framingのenv選択と拡張されたコア検査の手順を追加。検査だけを拡張し、firmwareの仕様追従・転送は行わない。
