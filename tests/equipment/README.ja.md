@@ -319,3 +319,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_capture_metadata.py
 ```
+
+## GPIO/planの論理動作検査
+
+明示した仮想fixtureでset/read、planの原子置換、駆動順序、再送と解放を検査する。
+設備なしで動作し、実機のlevel/電流/波形は別に検証する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_gpio.py
+```
