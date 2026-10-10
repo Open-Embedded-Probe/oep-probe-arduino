@@ -292,3 +292,13 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_registered_ops.py
 ```
+
+## 標準describe metadataの論理検査
+
+設備なしでrestart/config/RISC-V/ARM-ADIの宣言条件を検査する。
+対象の公開clientを明示し、私的ベンチへの依存や設備の暗黙検索を追加しない。
+広告opの実動作や実機適合を証明する検査ではない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_selected_metadata.py
+```
