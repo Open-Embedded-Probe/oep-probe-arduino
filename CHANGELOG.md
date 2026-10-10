@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- (JA) 独立serial適合入口からport再接続によるsession・履歴・leaseの保持も検査する。firmwareのprotocol実装は変更しない。
+
 - (JA) 独立serial framingのenv選択と拡張されたコア検査の手順を追加。検査だけを拡張し、firmwareの仕様追従・転送は行わない。
 
 - (JA) 独立した SPEC 適合検査の uv/pytest 入口と明示 env 設定を追加。core は項目別に、共通 interface 宣言は別段階で判定。portable の既存回帰はコピー済み SPEC commit と範囲を記録し、新仕様や実機適合と区別する。firmware の追従は行わない。
