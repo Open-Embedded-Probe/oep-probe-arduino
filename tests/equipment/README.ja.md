@@ -372,3 +372,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_spi.py
 ```
+
+## logic captureの論理検査
+
+公開checkerへsample/時計/errorを明示し、one-shot/repeatの世代と区画寿命を確認する。
+物理sample clockや不確かさ保証、analog/group/streamingは別に検証する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_logic.py
+```
