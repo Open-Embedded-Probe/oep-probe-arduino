@@ -101,3 +101,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_retention.py /path/to/oep-client-python/tests/test_conformance_lease.py /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
 ```
+
+保持欠落とsession/boot寿命は[公開lifecycleガイド](../../../oep-client-python/docs/retention-lifecycle-conformance.ja.md)を使う。論理modelのresetを明示し、実機の再起動/転送へ接続しない。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_retention_lifecycle.py /path/to/oep-client-python/tests/test_conformance_retention.py /path/to/oep-client-python/tests/test_conformance_lease.py /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
+```
