@@ -201,3 +201,10 @@ probe側dmseq framingは[公開dmseqガイド](../../../oep-client-python/docs/d
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dmseq.py
 ```
+
+target側dmseqは[公開targetガイド](../../../oep-client-python/docs/dmseq-target-conformance.ja.md)の
+論理時計で検査する。20/1000 ms境界は論理モデルの結果で、実時間適合とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dmseq_target.py
+```
