@@ -257,3 +257,10 @@ scanのidle_clock/targetselは[公開scanガイド](../../../oep-client-python/d
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_scan_options.py
 ```
+
+線の再試行は[公開retryガイド](../../../oep-client-python/docs/retry-conformance.ja.md)の
+明示logical fixtureで検査する。host DMIの曖昧配送は再送せず、busyとprobe自身の読みに分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_retry.py
+```
