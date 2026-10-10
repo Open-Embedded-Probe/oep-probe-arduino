@@ -302,3 +302,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_selected_metadata.py
 ```
+
+## fixture系metadataの論理検査
+
+GPIO/UART/I2C/SPIの選択した宣言条件は設備なしで検査できる。
+広告opの動作、配線と電気的適合の証拠にはしない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_fixture_metadata.py
+```
