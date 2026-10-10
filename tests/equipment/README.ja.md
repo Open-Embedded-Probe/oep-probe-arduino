@@ -243,3 +243,10 @@ optional runは[公開runガイド](../../../oep-client-python/docs/run-conforma
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_run.py
 ```
+
+wireのattach reset/idle_clock/targetselは[公開wireガイド](../../../oep-client-python/docs/wire-options-conformance.ja.md)の
+明示logical fixtureで検査する。ピン競合と解放・接続同一性を確認し、電気的open-drain/時間/波形は別に検査する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_wire_options.py
+```
