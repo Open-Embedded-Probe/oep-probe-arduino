@@ -66,3 +66,12 @@ uv run --project tests --with-editable /absolute/path/to/oep-client-python \
 ```
 
 実時計APIは既存`.env`のSPEC/共有lockを明示して使い、別の新規JSONへ保存する。データモデルはADDRESS/FRAMING/TCP_PEERを使わない。実機の応答順序・通知経路・queue上限・drop・物理非同期処理は残件。
+
+通知経路・writerは公開Pythonの `docs/route-conformance.ja.md` のinstrumented adapterを使う。論理モデル `virtual-routes-1` で9項目。部分送信の残りbytes、応答優先、dropのseq、経路切断後の保持を確認する。実機のframing/OS buffer、経路別window/max_inflight、並行処理はこの成功に含めない。
+
+```sh
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
+  pytest -c tests/pyproject.toml /absolute/path/to/oep-client-python/tests/test_conformance_routes.py
+```
+
+実時計APIは既存`.env`のSPEC/共有lockを使い、新規JSONへ保存する。私的ベンチ依存や設備探索を加えない。
