@@ -264,3 +264,10 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_retry.py
 ```
+
+線切れ時の順序は[公開cutガイド](../../../oep-client-python/docs/cut-conformance.ja.md)の
+logical writer gateで検査する。応答の後に依存資源を解放し、consoleにはlink-lostを記録する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_cut.py
+```
