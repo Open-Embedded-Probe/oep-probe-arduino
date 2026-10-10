@@ -155,3 +155,9 @@ common §1を採用するstreamのread/marksは[公開streamガイド](../../../
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_stream.py
 ```
+
+common writeのacceptedとdebug status/doneは[公開outcomeガイド](../../../oep-client-python/docs/outcome-conformance.ja.md)の明示logical fixtureで検査する。partial/failedとcache再送を確認し、物理配送・target進捗・標準debug opの適合とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_outcomes.py
+```
