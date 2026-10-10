@@ -275,3 +275,6 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 mandatory debug検査にはDMI応答長の境界も含む。64 byte経路で値配列が入らない要求を
 副作用前に拒否し、入る要求では補助TLVを省略して値をすべて返す。入口は既存の
 `test_conformance_debug.py`で、追加設備設定は不要。
+
+mandatory debugのhartsel検査は、halt/resumeの成功/失敗/既停止とraw DMIを区別する。
+高水準opはhart 0へ戻し、resume/failed haltではhaltreqを下ろす。既存のuv入口から実行できる。
