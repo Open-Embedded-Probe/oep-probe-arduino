@@ -194,3 +194,10 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_mailbox.py
 ```
+
+probe側dmseq framingは[公開dmseqガイド](../../../oep-client-python/docs/dmseq-conformance.ja.md)の
+明示logical fixtureで検査する。CRC・通番・pendingとreset時の状態を確認し、target側timeoutや実配送とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dmseq.py
+```
