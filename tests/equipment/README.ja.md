@@ -22,3 +22,20 @@ core は case ごとの pytest/JUnit 結果、interface は全 fn の共通宣�
 全く設定していない任意入口のみ SKIP。部分設定、接続・権限・個体の誤り、旧仕様と新仕様の不一致は FAIL。transport/cleanup失敗の後の項目は BLOCKED となり、実行全体は FAIL。
 
 既存 portable/C++ の期待値は `tests/vectors/SPEC_COMMIT` に対応する。成功しても最新 SPEC や実機の適合ではない。検査器の範囲と残件は Python client の `docs/conformance-checks.ja.md` を参照する。
+
+
+raw USB検査器には、公開Pythonの `core-v1` ソフトウェアUSBモデルを使う入口もある。unitは `virtual-core-1`、SPEC/新規JSON/既存lockを明示する。ADDRESS/FRAMING/TCP_PEERを使わず、USB device/gadgetやOSのUSB stackを検査したとは扱わない。
+
+```sh
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
+  --env-file tests/.env python -m oep_client.conformance_usb_model --kind bulk
+# HIDは別の新規出力先を使う
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
+  --env-file tests/.env python -m oep_client.conformance_usb_model --kind hid \
+  --out /absolute/path/to/new-hid.json
+# 検査器・モデルの必須回帰（実機を使わない）
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
+  pytest -c tests/pyproject.toml /absolute/path/to/oep-client-python/tests/test_conformance_usb.py
+```
+
+bulk 55項目、ID付きHID 60項目。実機raw adapter・descriptor・packet終端・物理USBの検査は残件。既存HID runtimeの旧仕様回帰はそのまま残し、新しい検査器に合わせて期待値を書き換えない。詳しいadapter契約と検査範囲は公開Pythonの `docs/usb-conformance.ja.md` を参照。
