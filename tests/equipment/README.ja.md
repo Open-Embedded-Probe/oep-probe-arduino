@@ -39,3 +39,12 @@ uv run --project tests --with-editable /absolute/path/to/oep-client-python \
 ```
 
 bulk 55項目、ID付きHID 60項目。実機raw adapter・descriptor・packet終端・物理USBの検査は残件。既存HID runtimeの旧仕様回帰はそのまま残し、新しい検査器に合わせて期待値を書き換えない。詳しいadapter契約と検査範囲は公開Pythonの `docs/usb-conformance.ja.md` を参照。
+
+資源寿命の入口は、公開Pythonの `docs/resource-conformance.ja.md` にある明示adapter APIを使う。作成/解放/状態観測を提供するinterfaceについて14資源契約を確認する。最小in-processサンプルは2 fn / 2種類の資源を持ち、宣言検査を含め16項目。通常のcore入口へ自動追加せず、OEP標準interfaceやArduino firmwareへの適合証拠にも置き換えない。
+
+```sh
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
+  pytest -c tests/pyproject.toml /absolute/path/to/oep-client-python/tests/test_conformance_resources.py
+```
+
+これは実機を使わない回帰。実時計の最小実行例は公開ガイドに従い、既存 `.env` のSPEC/共有lock pathを明示して使う。新しい設備項目や暗黙のベンチ依存は追加しない。購読・通知・経路切断・解放順・電気的idleは続く検査範囲として残す。
