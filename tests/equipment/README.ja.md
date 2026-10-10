@@ -48,3 +48,12 @@ uv run --project tests --with-editable /absolute/path/to/oep-client-python \
 ```
 
 これは実機を使わない回帰。実時計の最小実行例は公開ガイドに従い、既存 `.env` のSPEC/共有lock pathを明示して使う。新しい設備項目や暗黙のベンチ依存は追加しない。購読・通知・経路切断・解放順・電気的idleは続く検査範囲として残す。
+
+購読・出来事の寿命も公開Pythonの明示adapter APIを使う（`docs/subscription-conformance.ja.md`）。最小モデル `virtual-notify-1` では18項目。外部刺激とraw通知を記録し、購読の置換/解除/再送、session終了時の停止を確認する。data、応答優先、route、queue上限、実機の非同期処理はこの成功に含めない。
+
+```sh
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
+  pytest -c tests/pyproject.toml /absolute/path/to/oep-client-python/tests/test_conformance_subscriptions.py
+```
+
+実時計APIは既存`.env`のSPEC/共有lock pathを明示して使い、新規JSONへ保存する。このモデルは実機やADDRESS/FRAMING/TCP_PEERを使わず、私的ベンチ依存を加えない。
