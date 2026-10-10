@@ -107,3 +107,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_retention_lifecycle.py /path/to/oep-client-python/tests/test_conformance_retention.py /path/to/oep-client-python/tests/test_conformance_lease.py /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
 ```
+
+corr u16の半周・上限とend用番号の確保は[公開corrガイド](../../../oep-client-python/docs/corr-conformance.ja.md)の明示sampleで検査する。Arduino firmwareの適合結果には含めない。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_corr.py
+```
