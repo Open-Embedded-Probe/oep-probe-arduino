@@ -57,3 +57,12 @@ uv run --project tests --with-editable /absolute/path/to/oep-client-python \
 ```
 
 実時計APIは既存`.env`のSPEC/共有lock pathを明示して使い、新規JSONへ保存する。このモデルは実機やADDRESS/FRAMING/TCP_PEERを使わず、私的ベンチ依存を加えない。
+
+データ通知には公開Pythonの `docs/data-conformance.ja.md` の明示adapterを使う。サンプル `virtual-stream-1` は購読を含め33項目。外部のbyte位置、raw通知、min_bytes/max_delay、data/event共通seqを検査する。`loss_free=True`は刺激量に対する設備条件で、SPECが認めるdropを禁止する規範変更ではない。seq一周の単体65,538通知は仮想時計・in-processの証拠として扱う。
+
+```sh
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
+  pytest -c tests/pyproject.toml /absolute/path/to/oep-client-python/tests/test_conformance_data.py
+```
+
+実時計APIは既存`.env`のSPEC/共有lockを明示して使い、別の新規JSONへ保存する。データモデルはADDRESS/FRAMING/TCP_PEERを使わない。実機の応答順序・通知経路・queue上限・drop・物理非同期処理は残件。
