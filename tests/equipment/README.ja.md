@@ -2,12 +2,12 @@
 
 仕様 → 検査 → コアの確定 → インターフェース共通契約 → OEPインターフェース固有契約 → 実装追従の順に進める。この入口は現行 firmware を指定した SPEC に当てる検査で、転送も仕様追従も行わない。
 
-検査器は公開 Python client の `oep_client.conformance`。検査を追加中の checkout を使う場合は、その path を明示する。通常の tests プロジェクトの固定依存や隣接 checkout を自動で切り替えない。公開配布に検査器が含まれた後は `--with` を省略できる。
+検査器は公開 Python client の `oep_client.conformance`。検査を追加中の checkout を使う場合は、その path を明示する。通常の tests プロジェクトの固定依存や隣接 checkout を自動で切り替えない。開発中は editable を使い、過去に作った wheel cache を最新の検査器と取り違えない。公開配布に検査器が含まれた後は `--with-editable` を省略できる。
 
 ```sh
 cp tests/.env.example tests/.env
 # .env の OEP_CONFORMANCE_* と共有 OEP_HW_LOCK を設定する
-uv run --project tests --with /absolute/path/to/oep-client-python \
+uv run --project tests --with-editable /absolute/path/to/oep-client-python \
   --env-file tests/.env pytest tests/equipment --junitxml=/absolute/path/to/new-core.xml
 ```
 
