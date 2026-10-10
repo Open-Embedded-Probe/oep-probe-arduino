@@ -11,7 +11,7 @@ uv run --project tests --with-editable /absolute/path/to/oep-client-python \
   --env-file tests/.env pytest tests/equipment --junitxml=/absolute/path/to/new-core.xml
 ```
 
-CLI plugin を含む既存 uv/pytest 環境内で実行する。SPEC checkout、unit ID、port/USB/TCP、既存共有 lock、新規 JSON path を指定する。私的ベンチリポジトリを参照しない。pin・target操作・設定変更・forceを行わない。
+CLI plugin を含む既存 uv/pytest 環境内で実行する。SPEC checkout、unit ID、port/USB/TCP、既存共有 lock、新規 JSON path を指定する。私的ベンチリポジトリを参照しない。`OEP_CONFORMANCE_FRAMING=serial` を指定するとclientから独立したCOBS/CRCとwire faultの検査も行う。pin・target操作・設定変更を行わず、forceは検査器自身が取得したsession間だけで試す。
 
 core は case ごとの pytest/JUnit 結果、interface は全 fn の共通宣言検査、OEPインターフェース固有の動作は未実行。JSON には送受信 bytes、SPEC commit/dirty/hash、検査器 hash、実装版、未検査範囲が残る。全体適合を名乗らない。
 
