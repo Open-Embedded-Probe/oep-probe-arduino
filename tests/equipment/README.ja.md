@@ -75,3 +75,11 @@ uv run --project tests --with-editable /absolute/path/to/oep-client-python \
 ```
 
 実時計APIは既存`.env`のSPEC/共有lockを使い、新規JSONへ保存する。私的ベンチ依存や設備探索を加えない。
+
+経路別のwindow/max_inflight受付・回復は[公開pipelineガイド](../../../oep-client-python/docs/pipeline-conformance.ja.md)に分ける。明示したreject-overflow論理モデルの補助検査で、実機の超過拒否を必須にしない。Arduinoの同じuv/pytest入口で実行する。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_pipeline.py
+```
+
+SPEC/共有lockは既存`.env.example`を使い、追加の設備設定や私的ベンチ依存を加えない。
