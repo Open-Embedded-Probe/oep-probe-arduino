@@ -278,3 +278,10 @@ mandatory debug検査にはDMI応答長の境界も含む。64 byte経路で値�
 
 mandatory debugのhartsel検査は、halt/resumeの成功/失敗/既停止とraw DMIを区別する。
 高水準opはhart 0へ戻し、resume/failed haltではhaltreqを下ろす。既存のuv入口から実行できる。
+
+writer待ち中のleaseは[公開ガイド](../../../oep-client-python/docs/writer-lease-conformance.ja.md)の
+明示logical clockで検査する。実行中停止とwriter待ち、期限切れ後の古い応答を分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_writer_lease.py
+```
