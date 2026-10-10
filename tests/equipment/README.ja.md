@@ -131,3 +131,9 @@ corr枯渇前の切替は[公開rolloverガイド](../../../oep-client-python/do
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_rollover.py
 ```
+
+end/openの応答喪失後の回復は[公開session-lossガイド](../../../oep-client-python/docs/session-loss-conformance.ja.md)の明示sampleで検査する。保存されたopenの成功と現在のsessionの有効性を分け、result_lostからoutcomeやlease値を推測しない。物理再接続やproduction Hostへの統合は未検査。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_session_loss.py
+```
