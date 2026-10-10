@@ -328,3 +328,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_gpio.py
 ```
+
+## GPIO planでのcore寿命検査
+
+明示logical clockで期限切れ/force/再送履歴とpin/planの解放を検査する。
+物理pinの時間とwriter並行性は別に検証する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_gpio_lifecycle.py
+```
