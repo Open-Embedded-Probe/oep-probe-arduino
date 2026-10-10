@@ -337,3 +337,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_gpio_lifecycle.py
 ```
+
+## UARTの論理検査
+
+configure/stream/queue/plan寿命は第三段階、採用した共通streamの境界は第二段階で確認する。
+設備なしで明示logical fixtureを使用し、物理baud/波形/配送は別に検証する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_uart.py /path/to/oep-client-python/tests/test_conformance_uart_stream.py
+```
