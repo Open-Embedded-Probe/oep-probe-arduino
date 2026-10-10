@@ -167,3 +167,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dependencies.py
 ```
+
+標準wire／console固有の宣言は[公開OEP宣言ガイド](../../../oep-client-python/docs/oep-declaration-conformance.ja.md)で検査する。第三段階`oep-interface`として報告し、共通宣言・共通部品・op動作・実機適合と分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_oep_declarations.py
+```
