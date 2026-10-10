@@ -179,3 +179,11 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_attach.py
 ```
+
+標準wireの任意scanは[公開scanガイド](../../../oep-client-python/docs/scan-conformance.ja.md)の
+明示logical fixtureで検査する。全候補の事前検証、有限prefix、pin解放、再送を確認する。
+電気的探索や配線確定の実機適合は別に報告する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_scan.py
+```
