@@ -119,3 +119,9 @@ result_lost後の回復は[公開recoveryガイド](../../../oep-client-python/d
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_recovery.py
 ```
+
+回復中のforceと複数未解決要求は[公開recovery-racesガイド](../../../oep-client-python/docs/recovery-races-conformance.ja.md)の明示sampleで検査する。経路closeとreader世代は論理fixtureの動作で、物理USB/TCP回復の検査とは別に報告する。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_recovery_races.py
+```
