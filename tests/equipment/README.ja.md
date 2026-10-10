@@ -236,3 +236,10 @@ optional resetとDM復帰は[公開resetガイド](../../../oep-client-python/do
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_reset.py
 ```
+
+optional runは[公開runガイド](../../../oep-client-python/docs/run-conformance.ja.md)の
+明示logical fixtureで検査する。停止結果・経過時間・host変更とprogram効果の保持を確認し、CPU実行や実clockとは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_run.py
+```
