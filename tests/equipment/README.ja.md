@@ -354,3 +354,12 @@ console §2のresync/TO/CRC markを論理fixtureで確認する。
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dmseq.py
 ```
+
+## I2C targetの論理検査
+
+公開checkerを明示して呼び出し、stretch/内部pullupの有無とFIFO/plan寿命を確認する。
+設備なしで使用できるlogical fixture。物理バスの波形/実時間は別に検証する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_i2c.py
+```
