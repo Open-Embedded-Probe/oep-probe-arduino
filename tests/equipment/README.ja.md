@@ -222,3 +222,10 @@ optional blockと状態復元は[公開blockガイド](../../../oep-client-pytho
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_blocks.py
 ```
+
+optional stepと再停止は[公開stepガイド](../../../oep-client-python/docs/step-conformance.ja.md)の
+明示logical fixtureで検査する。PC/状態復元とstep_leftを確認し、物理命令・CSR・待ち時間は別に検査する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_step.py
+```
