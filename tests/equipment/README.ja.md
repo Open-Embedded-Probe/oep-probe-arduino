@@ -208,3 +208,10 @@ target側dmseqは[公開targetガイド](../../../oep-client-python/docs/dmseq-t
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_dmseq_target.py
 ```
+
+必須riscv-dmとconsole調停は[公開debugガイド](../../../oep-client-python/docs/debug-conformance.ja.md)の
+明示logical fixtureで検査する。optional操作の状態復元・物理DMI・応答writerは別に確認する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_debug.py
+```
