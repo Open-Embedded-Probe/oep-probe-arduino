@@ -229,3 +229,10 @@ optional stepと再停止は[公開stepガイド](../../../oep-client-python/doc
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_step.py
 ```
+
+optional resetとDM復帰は[公開resetガイド](../../../oep-client-python/docs/reset-conformance.ja.md)の
+明示logical fixtureで検査する。mode/flags・DM待ち・mark/再同期とconnection保持を確認し、物理リセットとは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_reset.py
+```
