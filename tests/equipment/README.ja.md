@@ -285,3 +285,10 @@ writer待ち中のleaseは[公開ガイド](../../../oep-client-python/docs/writ
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_writer_lease.py
 ```
+
+登録済み標準名の必須opと任意opの組は[公開ガイド](../../../oep-client-python/docs/registered-ops-conformance.ja.md)で
+宣言だけを検査する。各opの実動作や固有describe tagの適合とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_registered_ops.py
+```
