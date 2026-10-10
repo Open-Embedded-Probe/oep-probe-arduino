@@ -95,3 +95,9 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```bash
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_lease.py /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
 ```
+
+再送cacheの保持上限は[公開retentionガイド](../../../oep-client-python/docs/retention-conformance.ja.md)の明示sampleで検査する。16 byte / 8件はfixture条件で、実機の最小保持サイズを定めない。
+
+```bash
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_retention.py /path/to/oep-client-python/tests/test_conformance_lease.py /path/to/oep-client-python/tests/test_conformance_replay_pressure.py /path/to/oep-client-python/tests/test_conformance_pipeline.py
+```
