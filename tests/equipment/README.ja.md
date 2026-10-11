@@ -430,3 +430,13 @@ event固定部分、取得区画/statusとの一致、旧世代の通知を捨�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_notifications.py
 ```
+
+## 到達しない仮想triggerの待機とforce
+
+条件不成立のstate 2、再start/configure拒否、stop/errorとforceを確認する。
+forceのpretrigger不足、組の全track待機とforce時trigger_fn 0も含む。
+将来sampleを即時合成する仮想fixtureの検査で、実機latencyとは区別する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_waiting.py
+```
