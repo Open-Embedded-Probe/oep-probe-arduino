@@ -515,6 +515,16 @@ clientの`docs/discovery-conformance.ja.md`に沿い、listとfn 0 describeの�
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_discovery.py
 ```
 
+## 資源番号の上限のlogical検査
+
+clientの`docs/allocator-conformance.ja.md`に沿い、上限の番号と使い切った後の動作を確認する。
+境界seedと時計を明示制御し、end/expiry/forceで番号を戻さず再起動で1へ戻ることを検査する。
+65535回の実割当や実機の資源操作はこの検査に含めない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_allocator.py
+```
+
 ## core clockのlogical検査
 
 clientの`docs/clock-conformance.ja.md`に沿って、u64 ns、実採時、SID 0の非変更、
