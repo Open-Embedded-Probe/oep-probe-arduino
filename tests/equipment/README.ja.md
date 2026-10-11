@@ -458,3 +458,12 @@ rawデータ/時刻/通知とgroupのP_kを確認する。仮想one-shotは将�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_pretrigger.py
 ```
+
+## captureの全状態とgroup-bound query
+
+未openの別Hostからqueryし、現在設定/data/区画/世代/plan/GPIO/bindを変えないことを確認する。
+時刻固定の不変検査と、元設定で時間経過の取得が続く検査を分ける。plan無しはcause 6。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_query.py
+```
