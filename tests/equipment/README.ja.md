@@ -393,3 +393,12 @@ capture §3.3は要求値の上下を問わず最も近い実現可能rateを選
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_rates.py /path/to/oep-client-python/tests/test_virtual_bench_capture.py
 ```
+
+## analog成功payloadの論理検査
+
+公開checkerへ成功payloadと既知のraw sampleを明示する。校正は生データへ適用しない。
+layout/値/scale/skew/frontend/referenceとfactory/vrefintの形を確認し、取得や資源寿命・物理保証は別に検査する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_analog_payload.py
+```
