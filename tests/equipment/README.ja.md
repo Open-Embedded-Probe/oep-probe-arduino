@@ -505,6 +505,16 @@ data/event共通seqの一周、dropでも番号を消費すること、購読の
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_notification_sequence.py
 ```
 
+## core発見処理のlogical検査
+
+clientの`docs/discovery-conformance.ja.md`に沿い、listとfn 0 describeのページ途中を含むcursor、
+保持中/end後の宣言不変、channel labelと未知fnの拒否を確認する。
+短い名前・48 byte名・fn無しの明示fixtureを使う。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_discovery.py
+```
+
 ## core clockのlogical検査
 
 clientの`docs/clock-conformance.ja.md`に沿って、u64 ns、実採時、SID 0の非変更、
