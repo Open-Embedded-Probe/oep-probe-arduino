@@ -494,3 +494,13 @@ fixture入力はsample番号で時刻を表し、過去の波形を変えない�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_changing_trigger.py
 ```
+
+## ARM-ADIのlogical検査
+
+選択したclient checkoutの`docs/arm-adi-conformance.ja.md`を参照する。
+raw ACK、WAIT/進捗、posted transfer read、受付拒否とblockの基本的なバス不変条件を確認する。
+MEM-APのblock packet列、TAR境界、部分失敗や実機のSWD電気的適合は別途必要。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_arm_adi.py
+```
