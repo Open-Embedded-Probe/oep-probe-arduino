@@ -412,3 +412,12 @@ frontend指定・query非適用・拒否前後のcapture/data/plan/GPIOを確認
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_requests.py
 ```
+
+## 仮想captureの世代と区画寿命
+
+logic/analogの旧世代拒否、repeatの解放/再開/gap、途中stopの短い区画、errorでの完了済みdata保持を確認する。
+group stopも短い区画を保つ。実機のsample clock精度と全group契約は別に検査する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_lifetime.py
+```
