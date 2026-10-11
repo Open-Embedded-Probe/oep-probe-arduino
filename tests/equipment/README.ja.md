@@ -402,3 +402,13 @@ layout/値/scale/skew/frontend/referenceとfactory/vrefintの形を確認し、�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_analog_payload.py
 ```
+
+## 仮想captureの設定要求と拒否時不変
+
+frontend指定・query非適用・拒否前後のcapture/data/plan/GPIOを確認する。
+区画満杯のstate 5でconfigureを拒否してdataを保つことはlogic/analog双方へ適用する。
+疎なroleとlayout.orderの対応はSPEC明文化待ちで、現在の連番fixtureから一般化しない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_requests.py
+```
