@@ -449,3 +449,12 @@ configure/query・frontend/trigger・生データの一致を、設備なしで�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_analog_payload.py /path/to/oep-client-python/tests/test_virtual_bench_analog_roles.py
 ```
+
+## 自然triggerのpretrigger不足
+
+最初の成立をpretrigger数まで遅らせないこと、short区画、区画内trigger_index、
+rawデータ/時刻/通知とgroupのP_kを確認する。仮想one-shotは将来sampleを即時合成する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_pretrigger.py
+```
