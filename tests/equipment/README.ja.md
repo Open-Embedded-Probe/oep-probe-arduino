@@ -383,3 +383,13 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_logic.py
 ```
+
+## 仮想captureのrate回帰
+
+capture §3.3は要求値の上下を問わず最も近い実現可能rateを選ぶ。
+既存VirtualCaptureのdivisor clockとanalog共有予算はsource固有のモデルとして検査する。
+実機に同じdivisorを要求する検査ではなく、他のgeometry/取得/物理clock保証は別に確認する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_rates.py /path/to/oep-client-python/tests/test_virtual_bench_capture.py
+```
