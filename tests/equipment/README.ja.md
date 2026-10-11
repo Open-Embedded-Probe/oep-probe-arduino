@@ -495,6 +495,16 @@ fixture入力はsample番号で時刻を表し、過去の波形を変えない�
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_changing_trigger.py
 ```
 
+## 通知seqと再購読のlogical検査
+
+clientの`docs/notification-sequence-conformance.ja.md`を参照する。
+data/event共通seqの一周、dropでも番号を消費すること、購読の置換・成功/拒否の再送保持を確認する。
+経路を変えるraw刺激はprobe検査用で、Hostの通常利用手順には流用しない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_notification_sequence.py
+```
+
 ## core clockのlogical検査
 
 clientの`docs/clock-conformance.ja.md`に沿って、u64 ns、実採時、SID 0の非変更、
