@@ -440,3 +440,12 @@ forceのpretrigger不足、組の全track待機とforce時trigger_fn 0も含む�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_waiting.py
 ```
+
+## analogの飛び番role
+
+layout.orderはplanのrole番号そのもの。成功payload検査と既存仮想ベンチの
+configure/query・frontend/trigger・生データの一致を、設備なしで確認する。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_analog_payload.py /path/to/oep-client-python/tests/test_virtual_bench_analog_roles.py
+```
