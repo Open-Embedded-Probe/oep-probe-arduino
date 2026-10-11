@@ -485,3 +485,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_group_modes.py
 ```
+
+## 待機後の信号変化
+
+全3modeの単独/group取得で、待機後のedge/crossing、履歴rawと世代、group force/stop前の自然成立を確認する。
+fixture入力はsample番号で時刻を表し、過去の波形を変えない。実機の入力latencyの検査とは分ける。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_changing_trigger.py
+```
