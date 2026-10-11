@@ -421,3 +421,12 @@ group stopも短い区画を保つ。実機のsample clock精度と全group契�
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_lifetime.py
 ```
+
+## 仮想captureの通知世代とポーリング一致
+
+event固定部分、取得区画/statusとの一致、旧世代の通知を捨てるHost処理を確認する。
+未購読・repeat満杯・short stop・errorと到達可能なtriggerを扱い、全通知契約を完了扱いにしない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_notifications.py
+```
