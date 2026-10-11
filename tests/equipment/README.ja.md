@@ -476,3 +476,12 @@ streamingのerror時write_posも完了境界から計算する。全group/multir
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_trigger_modes.py
 ```
+
+## repeat/streamingのグループtrigger
+
+異なるactual_rateのlogic/analogを束ね、trigger元を入れ替えて全trackの待機、forceと自然trigger、
+共通時刻とP_k、最初のrepeat区画を確認する。既知波形fixtureの回帰であり実時間latencyは証明しない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_group_modes.py
+```
