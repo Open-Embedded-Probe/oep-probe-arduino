@@ -467,3 +467,12 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_query.py
 ```
+
+## repeat/streamingの初回trigger
+
+未成立時の待機、forceと既知波形の初回trigger、履歴/通知とrepeatのshort初回区画を確認する。
+streamingのerror時write_posも完了境界から計算する。全group/multirate/物理latency適合は含めない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_trigger_modes.py
+```
