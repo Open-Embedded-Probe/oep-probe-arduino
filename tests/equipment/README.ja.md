@@ -495,6 +495,16 @@ fixture入力はsample番号で時刻を表し、過去の波形を変えない�
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_changing_trigger.py
 ```
 
+## core clockのlogical検査
+
+clientの`docs/clock-conformance.ja.md`に沿って、u64 ns、実採時、SID 0の非変更、
+所有clockの再送例外とleaseを確認する。時計は明示制御するlogical fixtureである。
+実機の分解能や電気的適合をこの結果で証明しない。
+
+```sh
+uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_clock.py
+```
+
 ## ARM-ADIのlogical検査
 
 選択したclient checkoutの`docs/arm-adi-conformance.ja.md`を参照する。
