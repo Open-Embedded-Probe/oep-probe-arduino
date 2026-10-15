@@ -285,7 +285,7 @@ void DmConsole::pollSeq() {
     // TO: the target gave up waiting on this frame, and what it wrote after it until an answer came was discarded -
     // mark lost 4 (the target's TO) where that output would have been (oep-if-common §1.3, dmseq "Timeout")
     if ((w0 & 0x40u) && mark_sink_)
-      mark_sink_(sink_ctx_, v1::reg::common::kMarkKindLost, v1::reg::common::kMarkDetailLostTargetTimeout);
+      mark_sink_(sink_ctx_, v1::reg::common::kMarkKindLost, v1::reg::target_console::kMarkDetailLostTargetTimeout);
     seq_last_s_ = s;
     seq_last_syn_ = syn;
   }

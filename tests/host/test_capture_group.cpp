@@ -216,7 +216,7 @@ static void testDescribe() {
 static void testBindTriggerTrack() {
   for (const uint8_t bit : {uint8_t(0), uint8_t(0x80)}) {
     Rig rig(true);   // a holds the trigger
-    const uint8_t tag = bit | grp::kTlvBindTriggerTrack;
+    const uint8_t tag = bit | legacy::kTlvBindTriggerTrack;
     CHECK(rejectedAs(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 3, 0, 1, 0, 0}), kRejectMalformed));   // too long
     CHECK(rejectedAs(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 1, 0, 1}), kRejectMalformed));         // too short
     CHECK(rejectedAs(rig.op(grp::kOpBind, {1, 2, 0, tag, 2, 0, 1, 0}), kRejectMalformed));           // not in the list

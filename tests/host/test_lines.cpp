@@ -31,7 +31,7 @@ static void label(Bytes &items, uint16_t channel, const std::string &text) {
   items.insert(items.end(), text.begin(), text.end());
 }
 static void slot(Bytes &items, uint8_t number) {   // only its tag counts here
-  items.push_back(reg::probe_config::kTlvItemSlot);
+  items.push_back(legacy::kTlvItemSlot);
   items.push_back(1);
   items.push_back(0);
   items.push_back(number);

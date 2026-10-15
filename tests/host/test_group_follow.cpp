@@ -148,7 +148,7 @@ static void testFollowerHearsLate() {
     CHECK(ok(rig.op(rig.analog, ana::kOpConfigure, p)));
     // P_k = ceil(1000 x 20000 / 627451) = 32; the logic's latency a chunk (51 ms) and loop() (100 ms)
     CHECK(rig.logic.trackLatencyNs() > 150000000 && rig.logic.trackLatencyNs() < 152000000);
-    CHECK(ok(rig.op(rig.group, grp::kOpBind, {2, 1, 0, 2, 0, grp::kTlvBindTriggerTrack, 2, 0, 1, 0})));
+    CHECK(ok(rig.op(rig.group, grp::kOpBind, {2, 1, 0, 2, 0, legacy::kTlvBindTriggerTrack, 2, 0, 1, 0})));
     if (short_ring) rig.analog.trackKeep(32, 0);   // a ring of the segment and the room only: about what 87f6d40 had
     CHECK(ok(rig.op(rig.group, grp::kOpStart)));
     Clock clock{rig};
@@ -214,7 +214,7 @@ static void testBindRefusesLongLatency() {
     tlv(p, kCrit | ana::kTlvConfigureRate, u32(20000));
     tlv(p, ana::kTlvConfigureSamples, u32(samples));
     CHECK(ok(rig.op(rig.analog, ana::kOpConfigure, p)));
-    const Result r = rig.op(rig.group, grp::kOpBind, {2, 1, 0, 2, 0, grp::kTlvBindTriggerTrack, 2, 0, 1, 0});
+    const Result r = rig.op(rig.group, grp::kOpBind, {2, 1, 0, 2, 0, legacy::kTlvBindTriggerTrack, 2, 0, 1, 0});
     if (samples == 13000) {
       CHECK(ok(r));
       CHECK(ok(rig.op(rig.group, grp::kOpBind, {0})));

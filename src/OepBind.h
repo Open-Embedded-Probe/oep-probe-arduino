@@ -21,7 +21,7 @@ namespace oep {
 class Binds final : public RawPorts {
  public:
   static constexpr size_t kMaxPorts = Endpoint::kMaxTransports;
-  enum : uint8_t { kSlotConsole = reg::probe_config::kBindStreamSlotConsole, kFixtureUart = reg::probe_config::kBindStreamFixtureUart };
+  enum : uint8_t { kSlotConsole = legacy::kBindStreamSlotConsole, kFixtureUart = legacy::kBindStreamFixtureUart };
   struct Source { uint8_t kind = 0; uint16_t id = 0; BindSource *stream = nullptr; };
   struct Spec {
     bool set = false;

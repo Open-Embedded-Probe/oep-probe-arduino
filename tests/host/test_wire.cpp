@@ -329,9 +329,9 @@ static bool ok(const Result &r) { return r.resolution == kResolutionCompleted &&
 // attach: method, max_speed (critical), [pins (critical)], [idle_clock (critical): 0 high, 1 low; -1 not carried]
 // (every TLV tag(u8) len(u16) value, core §2.2)
 static Bytes attachRequest(uint8_t method, int swdio = -1, int swclk = -1, int idle_clock = -1) {
-  Bytes p = {method, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
+  Bytes p = {method, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
   if (swdio >= 0) {
-    p.insert(p.end(), {uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
+    p.insert(p.end(), {uint8_t(legacy::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
   }
   if (idle_clock >= 0) p.insert(p.end(), {uint8_t(wire::kTlvAttachIdleClock | kTagCritical), 1, 0, uint8_t(idle_clock)});
   return p;
@@ -498,7 +498,7 @@ int main() {
     const uint16_t number = fixed.number;
     auto joined = [&](const Result &r) {   // the existing connection returned, flags bit1
       return ok(r) && fixed.connected && fixed.number == number && out.size() >= 11 &&
-             (out[0] | out[1] << 8) == number && (out[6] & wire::kAttachFlagsExisting);
+             (out[0] | out[1] << 8) == number && (out[6] & legacy::kAttachFlagsExisting);
     };
     // a host attach carrying no idle_clock joins it and leaves it low
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
@@ -533,14 +533,14 @@ int main() {
     // a new connection without the TLV rests high, whatever the last one rested at (the PHY still set low)
     CHECK(phy.idle_low);
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
-    CHECK(ok(r) && fixed.connected && !(out[6] & wire::kAttachFlagsExisting) && !phy.idle_low);
+    CHECK(ok(r) && fixed.connected && !(out[6] & legacy::kAttachFlagsExisting) && !phy.idle_low);
     // ... and a host attach's own idle_clock-low connection: joined without the TLV, it stays low
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, 1), out);
-    CHECK(ok(r) && fixed.connected && !(out[6] & wire::kAttachFlagsExisting) && phy.idle_low);
+    CHECK(ok(r) && fixed.connected && !(out[6] & legacy::kAttachFlagsExisting) && phy.idle_low);
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
-    CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting) && phy.idle_low);
+    CHECK(ok(r) && (out[6] & legacy::kAttachFlagsExisting) && phy.idle_low);
     // a slot joining it (attachRunning with its own idle_clock high) keeps it as well
     CHECK(attachRunning(fixed, DebugPort::kUserSlot, dmstatus, 0, false) && phy.idle_low);
     releaseConnection(fixed, DebugPort::kUserSlot, false);
@@ -641,15 +641,15 @@ int main() {
     CHECK(g_pin_mode[6] == INPUT_PULLDOWN);
     // a pair this wire does not declare: unsupported with the pins tag as received, critical or not (core §2.3)
     phy2.present = true;
-    Bytes bad = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00,
-                 uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 0, 9, 0, 5, 0};
+    Bytes bad = {0, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00,
+                 uint8_t(legacy::kTlvAttachPins | kTagCritical), 4, 0, 9, 0, 5, 0};
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 &&
-          out[0] == (wire::kTlvAttachPins | kTagCritical));
-    bad[8] = wire::kTlvAttachPins;   // not critical: the same, the tag as received
+          out[0] == (legacy::kTlvAttachPins | kTagCritical));
+    bad[8] = legacy::kTlvAttachPins;   // not critical: the same, the tag as received
     r = call(wire_chosen, WireRvswd::kOpAttach, bad, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() >= 1 &&
-          out[0] == wire::kTlvAttachPins);
+          out[0] == legacy::kTlvAttachPins);
     // count = 0 leaves out every channel with an idle item, input ones too (4, 5, 6 here): only 7 is left, no pair
     const Bytes scan_all = {0};
     r = call(wire_chosen, WireRvswd::kOpScan, scan_all, out);
@@ -778,23 +778,23 @@ int main() {
     const uint32_t dmstatus = out[2] | out[3] << 8 | out[4] << 16 | uint32_t(out[5]) << 24;
     CHECK((dmstatus & (1u << 9)) && !(dmstatus & (1u << 11)));   // allhalted, not running (0.0.28: the value before the halt)
     size_t len = 0;
-    const uint8_t *v = answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len);
+    const uint8_t *v = answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len);
     CHECK(v && len == 2 && v[0] == 0 && v[1] == 0);
     // joining it again: no search, no search_retries
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
-    CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting) && !answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len));
+    CHECK(ok(r) && (out[6] & legacy::kAttachFlagsExisting) && !answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len));
     CHECK(!(out[6] & wire::kAttachFlagsHaveresetAcked));
     // joining with a havereset pending: acknowledged, flags bit0 (oep-if-debug §4.6; it was left pending)
     phy.havereset = true;
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
-    CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting) && (out[6] & wire::kAttachFlagsHaveresetAcked) && !phy.havereset);
+    CHECK(ok(r) && (out[6] & legacy::kAttachFlagsExisting) && (out[6] & wire::kAttachFlagsHaveresetAcked) && !phy.havereset);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
     // the first attach() fails, the second takes: search_retries 1
     phy.fail_attaches = 1;
     r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0), out);
     CHECK(ok(r));
-    v = answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len);
+    v = answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len);
     CHECK(v && len == 2 && v[0] == 1 && v[1] == 0);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r));
@@ -1032,7 +1032,7 @@ int main() {
     bad_reset.insert(bad_reset.end(), {uint8_t(wire::kTlvAttachReset | kTagCritical), 2, 0, 8, 0});
     r = call(wire_fixed, WireRvswd::kOpAttach, bad_reset, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
-    r = call(wire_fixed, WireRvswd::kOpAttach, {0, 0xbf, 0, 0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 2, 0, 1, 0}, out);
+    r = call(wire_fixed, WireRvswd::kOpAttach, {0, 0xbf, 0, 0, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 2, 0, 1, 0}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     r = call(wire_fixed, WireRvswd::kOpScan, {0, 0xbf, 0, 0, uint8_t(wire::kTlvScanMaxSpeed), 2, 0, 1, 0}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
@@ -1266,12 +1266,12 @@ int main() {
     for (uint8_t method : {uint8_t(0), uint8_t(1)}) {
       r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(method), out);
       CHECK(ok(r) && fixed.connected && fixed.number == number && fixed.closes == closes);
-      CHECK(out.size() >= 11 && (out[0] | out[1] << 8) == number && (out[6] & wire::kAttachFlagsExisting));
+      CHECK(out.size() >= 11 && (out[0] | out[1] << 8) == number && (out[6] & legacy::kAttachFlagsExisting));
       if (method == 0) {
         CHECK(phy.attaches == attaches + 1);                          // brought up afresh
         CHECK(out[6] & wire::kAttachFlagsHaveresetAcked);             // the power-up's havereset acknowledged
         size_t len = 0;
-        CHECK(answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) != nullptr);   // a bring-up ran
+        CHECK(answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) != nullptr);   // a bring-up ran
       } else {
         CHECK(phy.halted && (out[6] & wire::kAttachFlagsHalted));     // the halt lands on the fresh link
       }
@@ -1383,7 +1383,7 @@ int main() {
       Bytes failed_answer;
       auto expect = [&](bool good, const char *what) { if (!good && !failed) { failed = what; failed_answer = out; } };
       Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1, -1, -1, 1), out);
-      expect(ok(r) && (out[6] & wire::kAttachFlagsExisting) && phy.halted && phy.idle_low, "attach");
+      expect(ok(r) && (out[6] & legacy::kAttachFlagsExisting) && phy.halted && phy.idle_low, "attach");
       r = call(riscv, TargetRiscvDm::kOpHalt, conn, out);
       expect(ok(r) && phy.halted, "halt");
       Bytes wb = conn;

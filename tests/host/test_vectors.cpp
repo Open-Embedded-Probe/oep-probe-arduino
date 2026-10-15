@@ -725,7 +725,7 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     }
     if (!p.open()) return false;
     if (has("settings: the wifi entry") || has("settings as above")) {
-      const Bytes item = {reg::probe_config::kTlvItemWifi, 15, 0, 0, 3, 'l', 'a', 'b', 9,
+      const Bytes item = {legacy::probe_config::kTlvItemWifi, 15, 0, 0, 3, 'l', 'a', 'b', 9,
                           'p', 'a', 's', 's', 'w', 'o', 'r', 'd', '1'};
       if (!p.ok(p.request(8, reg::probe_config::kOpSet, item))) return false;
       p.hash_entry = p.hash();
@@ -737,11 +737,11 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     // slot 0 at boot on the rvswd wire (fn 4), pins 1 / 2, 1 MHz, dmseq console; port 0 bound to its console; set at
     // 1 ms, so the automatic attach is tried then
     if (!p.open()) return false;
-    Bytes slot = {0, 4, 0, 1, 0, 2, 0, reg::probe_config::kSlotAttachAtBoot, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0x00, 0,
+    Bytes slot = {0, 4, 0, 1, 0, 2, 0, legacy::probe_config::kSlotAttachAtBoot, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0x00, 0,
                   reg::target_console::kMechanismDmseq, 3, 'd', 'u', 't'};
-    Bytes items = {uint8_t(reg::probe_config::kTlvItemSlot | kTagCritical), uint8_t(slot.size()), 0};
+    Bytes items = {uint8_t(legacy::kTlvItemSlot | kTagCritical), uint8_t(slot.size()), 0};
     items.insert(items.end(), slot.begin(), slot.end());
-    const Bytes bind = {uint8_t(reg::probe_config::kTlvItemBind | kTagCritical), 4, 0, 0, Binds::kSlotConsole, 0, 0};
+    const Bytes bind = {uint8_t(legacy::probe_config::kTlvItemBind | kTagCritical), 4, 0, 0, Binds::kSlotConsole, 0, 0};
     items.insert(items.end(), bind.begin(), bind.end());
     g_millis = 1;
     g_micros_part = 0;
@@ -838,7 +838,7 @@ static void testOps(const char *file, const char *list) {
       CHECK(!p.hash_entry || p.hash_entry != p.hash_empty);
       uint32_t hash_new = 0;
       if (c["state"].string.find("the probe's hash for the new settings is 0x5A5A0003") != std::string::npos) {
-        CHECK(req.size() == reg::kLimitWifiMinMaxFrame && p.wifi.count == 1);   // a 112-byte set, taken
+        CHECK(req.size() == legacy::top2::kLimitWifiMinMaxFrame && p.wifi.count == 1);   // a 112-byte set, taken
         hash_new = p.hash();
         CHECK(hash_new != p.hash_empty);
       }

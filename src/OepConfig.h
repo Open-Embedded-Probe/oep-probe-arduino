@@ -64,11 +64,11 @@ namespace oep {
 class Endpoint;
 
 // The wifi item (probe.config §1.4): the registry's numbers under this file's names.
-constexpr uint8_t kWifiItemTag = reg::probe_config::kTlvItemWifi;            // index ssid_len ssid pass_len passphrase
-constexpr uint8_t kWifiDescribeMax = reg::probe_config::kTlvDescribeWifiMax; // describe: wifi_max(u8)
-constexpr uint8_t kWifiStateTlv = reg::probe_config::kTlvStateAnswerWifi;    // state: state entry reason rssi ipv4
-constexpr uint16_t kWifiMinMaxFrame = reg::kLimitWifiMinMaxFrame;            // max_frame of a probe with the wifi item
-constexpr uint8_t kWifiPassHidden = reg::probe_config::kWifiPassLenHidden;   // get: has a passphrase; set: keep it
+constexpr uint8_t kWifiItemTag = legacy::probe_config::kTlvItemWifi;            // index ssid_len ssid pass_len passphrase
+constexpr uint8_t kWifiDescribeMax = legacy::probe_config::kTlvDescribeWifiMax; // describe: wifi_max(u8)
+constexpr uint8_t kWifiStateTlv = legacy::probe_config::kTlvStateAnswerWifi;    // state: state entry reason rssi ipv4
+constexpr uint16_t kWifiMinMaxFrame = legacy::top2::kLimitWifiMinMaxFrame;            // max_frame of a probe with the wifi item
+constexpr uint8_t kWifiPassHidden = legacy::probe_config::kWifiPassLenHidden;   // get: has a passphrase; set: keep it
 
 // One network the probe may join (the wifi item, decoded).
 struct WifiEntry {
@@ -86,15 +86,15 @@ struct WifiEntry {
 class WifiControl {
  public:
   enum : uint8_t {
-    kStateOff = reg::probe_config::kWifiStateOff, kStateConnecting = reg::probe_config::kWifiStateConnecting,
-    kStateConnected = reg::probe_config::kWifiStateConnected, kStateWaiting = reg::probe_config::kWifiStateWaiting,
+    kStateOff = legacy::probe_config::kWifiStateOff, kStateConnecting = legacy::probe_config::kWifiStateConnecting,
+    kStateConnected = legacy::probe_config::kWifiStateConnected, kStateWaiting = legacy::probe_config::kWifiStateWaiting,
   };
   enum : uint8_t {
-    kReasonNone = reg::probe_config::kWifiReasonNone, kReasonNotFound = reg::probe_config::kWifiReasonNotFound,
-    kReasonAuth = reg::probe_config::kWifiReasonAuth, kReasonNoAddress = reg::probe_config::kWifiReasonNoAddress,
-    kReasonOther = reg::probe_config::kWifiReasonOther,
+    kReasonNone = legacy::probe_config::kWifiReasonNone, kReasonNotFound = legacy::probe_config::kWifiReasonNotFound,
+    kReasonAuth = legacy::probe_config::kWifiReasonAuth, kReasonNoAddress = legacy::probe_config::kWifiReasonNoAddress,
+    kReasonOther = legacy::probe_config::kWifiReasonOther,
   };
-  static constexpr uint8_t kNoEntry = reg::probe_config::kWifiEntryNone;
+  static constexpr uint8_t kNoEntry = legacy::probe_config::kWifiEntryNone;
   struct Status {
     uint8_t state = kStateOff, entry = kNoEntry, reason = kReasonNone;
     int8_t rssi = 0;          // dBm while connected (0: not known)
@@ -265,7 +265,7 @@ class ProbeConfig final : public Interface {
   Result derive(const uint8_t *items, size_t length, Derived &d, uint8_t *out, size_t capacity) const;
   // A candidate store (the current items with a set's / unset's changes) checked, its plans reserved, then made current.
   Result commit(uint8_t *candidate, size_t length, const uint16_t *plan_fns, size_t plan_fn_count, uint8_t *out, size_t capacity,
-                uint8_t plan_raw = reg::probe_config::kTlvItemPlan);
+                uint8_t plan_raw = legacy::probe_config::kTlvItemPlan);
   Result set(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result unset(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result state(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);

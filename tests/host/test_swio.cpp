@@ -161,7 +161,7 @@ int main() {
   g_on_pin = onPin;
   Bytes out;
   // max_speed 1 MHz, tag(u8) len(u16) value (core §2.2)
-  const Bytes attach = {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
+  const Bytes attach = {0, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
 
   // ---- a fixed-speed wire: describe declares min_clock_hz = max_clock_hz = the speed of a zero's slot (oep-if-debug
   // §3.2), and the connections say that speed; a max_speed at or above it is taken, one under it refused unsupported.
@@ -182,7 +182,7 @@ int main() {
       t = V003{};
       Bytes a = {0};
       if (hz) {
-        a.insert(a.end(), {uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0});
+        a.insert(a.end(), {uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0});
         for (int b = 0; b < 4; ++b) a.push_back(uint8_t(hz >> (8 * b)));
       }
       Result r = call(w, WireRvswd::kOpAttach, a, out);
@@ -193,7 +193,7 @@ int main() {
       } else {
         CHECK(ok(r) && out.size() >= 11 && getU32(out.data() + 7) == SwioPhy::kNominalHz);
         const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
-        r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
+        r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
         CHECK(ok(r) && !port.connected);
       }
     }
@@ -231,7 +231,7 @@ int main() {
       // the pc confirmed: the application's after a silent bootloader (the op waited for the hand-over), else the
       // bootloader's or the application's - whichever ran at the confirmation's halt
       if (mode == 1)
-        CHECK((out[1] & reg::target_riscv_dm::kResetFlagsVerified) &&
+        CHECK((out[1] & legacy::kResetFlagsVerified) &&
               (silent ? getU32(out.data() + 2) == 0x2f6u : getU32(out.data() + 2) != 0));
       // a silent hand-over waited out inside the op, which still answers within the host's wait (core §4.4)
       if (silent && mode != 2) CHECK(took >= 400 && took < v1::reg::kHostWaitAddMs && t.system_resets == 1);
@@ -254,7 +254,7 @@ int main() {
       CHECK(ok(call(riscv, TargetRiscvDm::kOpHalt, conn, out)) && t.halted);
       CHECK(ok(call(riscv, TargetRiscvDm::kOpResume, conn, out)) && !t.halted);
       CHECK(t.system_resets == 1);
-      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
+      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
       CHECK(ok(r) && !port.connected);
     }
   }
@@ -280,7 +280,7 @@ int main() {
     g_millis += 5000;   // handed over at last
     r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
     CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && (out[5] & 0x0f) == 2);
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
   }
 
   // ---- attach's reset TLV with method 0 (the line pulled and let go, the target left running) on a target whose
@@ -292,7 +292,7 @@ int main() {
     CHECK(ok(r) && port.connected);
     Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
     if (!live) {
-      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
+      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
       CHECK(ok(r) && !port.connected);
     }
     t.boot_mode = true;
@@ -309,7 +309,7 @@ int main() {
     conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
     r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
     CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && (out[5] & 0x0f) == 2);
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
   }
 
   // ---- a link in step pays nothing for a relink: no configuration pair is written while reads answer ----
@@ -326,7 +326,7 @@ int main() {
     }
     CHECK(phy.retries() == before && t.sdi);
     (void)pairs;
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
   }
 
   printf("swio: %d checks, %d failures\n", checks, failures);

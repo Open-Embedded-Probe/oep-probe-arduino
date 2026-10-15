@@ -38,13 +38,13 @@ class TargetConsoleStream final : public Interface, public BindSource {
     kOpClose = reg::target_console::kOpClose, kOpStreams = reg::target_console::kOpStreams,
   };
   enum : uint8_t {
-    kMarkReset = reg::common::kMarkKindReset, kMarkRestart = reg::common::kMarkKindRestart,
-    kMarkAttach = reg::common::kMarkKindAttach, kMarkDetach = reg::common::kMarkKindDetach,
+    kMarkReset = reg::target_console::kMarkKindReset, kMarkRestart = reg::target_console::kMarkKindRestart,
+    kMarkAttach = legacy::kMarkKindAttach, kMarkDetach = legacy::kMarkKindDetach,
     kMarkLost = reg::common::kMarkKindLost, kMarkClear = reg::common::kMarkKindClear,
-    kMarkHost = reg::common::kMarkKindHost, kMarkLinkLost = reg::common::kMarkKindLinkLost,
-    kMarkClosed = reg::common::kMarkKindClosed,
+    kMarkHost = reg::common::kMarkKindHost, kMarkLinkLost = legacy::kMarkKindLinkLost,
+    kMarkClosed = legacy::kMarkKindClosed,
   };
-  enum : uint8_t { kUserHost = reg::target_console::kStreamUsersHostSession, kUserSlot = reg::target_console::kStreamUsersSlot };
+  enum : uint8_t { kUserHost = legacy::kStreamUsersHostSession, kUserSlot = legacy::kStreamUsersSlot };
   TargetConsoleStream(DebugPort &port, DmConsole &driver, uint16_t instance)
       : port_(port), driver_(driver), instance_(instance), stream_(buffer_, kCapacity, marks_, kMarks) {
     driver_.setSink(&TargetConsoleStream::take, this, &TargetConsoleStream::takeMark);   // straight into this buffer
@@ -59,10 +59,10 @@ class TargetConsoleStream final : public Interface, public BindSource {
   // The host's session ended (end, a lapse, a takeover): its share of the stream goes - before the wire's share of the
   // connection (sessionOverFirst) - and a stream it was the last user of closes with mark closed 2 (session_ended),
   // readable until the same place and mechanism is opened again (oep-if-console §2).
-  void sessionOver() override { release(kUserHost, reg::common::kMarkDetailClosedSessionEnded); }
+  void sessionOver() override { release(kUserHost, legacy::kMarkDetailClosedSessionEnded); }
   bool sessionOverFirst() const override { return true; }
   // oep.probe.restart (oep-if-restart §2): the slot's share goes too, before the wire closes the connection
-  void probeRestart() override { release(kUserHost | kUserSlot, reg::common::kMarkDetailClosedAllReleased); }
+  void probeRestart() override { release(kUserHost | kUserSlot, legacy::kMarkDetailClosedAllReleased); }
   void poll();   // from loop()
   // What one read may return: declare it within the probe's frame (1000 suits a 1 KiB frame).
   void setMaxRead(uint16_t bytes) { max_read_ = bytes; }
@@ -70,7 +70,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   // slot's share. false: no connection, or another mechanism is open.
   bool bindOpen(uint8_t mechanism);
   // The slot's share goes (its bind no longer carries it, or the slot was replaced / removed: mark closed 3 when last).
-  void bindClose(uint8_t detail = reg::common::kMarkDetailClosedAllReleased) { release(kUserSlot, detail); }
+  void bindClose(uint8_t detail = legacy::kMarkDetailClosedAllReleased) { release(kUserSlot, detail); }
   bool isOpen() const { return open_; }
   uint8_t users() const { return users_; }
   DebugPort &port() const { return port_; }

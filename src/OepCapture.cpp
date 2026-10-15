@@ -25,8 +25,7 @@ enum : uint8_t { kTagMode = cap::kTlvConfigureMode, kTagRate = cap::kTlvConfigur
                  kTagTrigger = cap::kTlvConfigureTrigger, kTagPretrigger = cap::kTlvConfigurePretrigger };
 enum : uint8_t { kTagActualRate = cap::kTlvConfigureAnswerActualRate, kTagLayout = cap::kTlvConfigureAnswerLayout,
                  kTagActualSamples = cap::kTlvConfigureAnswerActualSamples,
-                 kTagActualSegments = cap::kTlvConfigureAnswerActualSegments,
-                 kTagBlocking = cap::kTlvConfigureAnswerBlockingMs };
+                 kTagActualSegments = cap::kTlvConfigureAnswerActualSegments };
 enum : uint8_t { kEventSegment = cap::kEventSegment, kEventStopped = cap::kEventStopped };
 enum : uint8_t { kStoppedComplete = cap::kStoppedReasonComplete, kStoppedHost = cap::kStoppedReasonHost };
 
@@ -998,7 +997,6 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // every answer row of the mode (capture §3.3): actual_samples in modes 1 / 2, actual_segments in mode 2 only
   if (mode != cap::kModeStreaming) w.u32(kTagActualSamples, samples);
   if (mode == cap::kModeRepeat) w.u32(kTagActualSegments, actual_segments);
-  w.u32(kTagBlocking, 0);
   return w.ok() ? completed(w.length()) : failed();
 }
 

@@ -95,7 +95,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
     case grp::kOpBind: {   // n(u8) n x fn(u16) [TLV 0x01 trigger_track fn(u16)]
       if (length < 1 || length < 1u + 2u * payload[0]) return rejected(kRejectMalformed);
       const uint8_t n = payload[0];
-      static const uint8_t kKnown[] = {grp::kTlvBindTriggerTrack};
+      static const uint8_t kKnown[] = {legacy::kTlvBindTriggerTrack};
       const Result parsed = tail.parse(payload + 1 + 2 * n, length - 1 - 2 * n, kKnown, out, capacity);
       if (refused(parsed)) return parsed;
       uint8_t chosen[kMaxTracks];
@@ -106,7 +106,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       // the list, is malformed
       int trigger = -1;
       const uint8_t *v = nullptr;
-      const Result fixed = tail.fixed(grp::kTlvBindTriggerTrack, 2, v, out, capacity);
+      const Result fixed = tail.fixed(legacy::kTlvBindTriggerTrack, 2, v, out, capacity);
       if (refused(fixed)) return fixed;
       if (v) {
         trigger = indexOf(getU16(v));
@@ -230,7 +230,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       stopAll(cap::kStoppedReasonHost, 0);
       return completed();
     }
-    case grp::kOpForce: {   // the trigger track starts now; the others follow it as for a trigger
+    case legacy::kOpGroupForce: {   // the trigger track starts now; the others follow it as for a trigger
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (trigger_ >= 0 && running_ && trigger_ns_ == ~uint64_t{0}) {
@@ -287,7 +287,7 @@ void CaptureGroup::poll() {
       putU16(e, forced_ ? 0 : endpoint_.fnOf(*tracks_[trigger_].interface));
       putU64(e + 2, ns);
       putU32(e + 10, generation_);
-      endpoint_.event(*this, grp::kEventTriggered, e, sizeof e);
+      endpoint_.event(*this, legacy::kEventGroupTriggered, e, sizeof e);
     }
   }
   if (!running_) return;

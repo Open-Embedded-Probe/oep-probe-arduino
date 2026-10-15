@@ -48,7 +48,7 @@ void TargetConsoleStream::release(uint8_t user, uint8_t detail) {
 void TargetConsoleStream::poll() {
   if (seen_closes_ != port_.closes) {     // the connection went: the stream ends with it, and stays readable
     seen_closes_ = port_.closes;
-    closeStream(reg::common::kMarkDetailClosedConnectionClosed, port_.lost, port_.detached);
+    closeStream(legacy::kMarkDetailClosedConnectionClosed, port_.lost, port_.detached);
   }
   if (!open_) return;
   if (port_.resets != seen_resets_) {     // a reset the host asked for (riscv-dm reset, attach's reset TLV)
@@ -57,18 +57,18 @@ void TargetConsoleStream::poll() {
   }
   if (port_.dm.restarts() != seen_restarts_) {   // havereset seen and acknowledged: the target restarted by itself
     seen_restarts_ = port_.dm.restarts();
-    stream_.mark(kMarkRestart, reg::common::kMarkDetailRestartHavereset);
+    stream_.mark(kMarkRestart, reg::target_console::kMarkDetailRestartHavereset);
     driver_.unsync();
   }
   driver_.poll();
   if (driver_.lineLost()) {   // judged inside the console's reading (oep-if-debug §2): link-lost, then closed 4
     releaseConnection(port_, 0xff, true, true);
     seen_closes_ = port_.closes;
-    closeStream(reg::common::kMarkDetailClosedConnectionClosed, true);
+    closeStream(legacy::kMarkDetailClosedConnectionClosed, true);
     return;
   }
   if (driver_.resyncs() > seen_resyncs_) {   // the target's console started over: after the first, a restart
-    if (seen_resyncs_ > 0) stream_.mark(kMarkRestart, reg::common::kMarkDetailRestartResync);
+    if (seen_resyncs_ > 0) stream_.mark(kMarkRestart, reg::target_console::kMarkDetailRestartResync);
     seen_resyncs_ = driver_.resyncs();
   }
 }
@@ -135,7 +135,7 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     bool existing = false;
     if (!openStream(mechanism, kUserHost, existing)) return failedStatus(kStatusLine, out, capacity);
     putU16(out, stream_number_);
-    out[2] = existing ? con::kOpenFlagsExisting : 0;
+    out[2] = existing ? legacy::kOpenFlagsExisting : 0;
     return completed(3);
   }
   if (op == kOpStreams) {   // first(u16) [TLV] -> more(u8) count(u8) count x (stream(u16) connection(u16) mechanism(u8) users(u8) state(u8))
@@ -149,7 +149,7 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     putU16(out + 4, connection_);
     out[6] = mechanism_;
     out[7] = users_;
-    out[8] = open_ ? con::kStreamStateOpen : con::kStreamStateClosed;
+    out[8] = open_ ? legacy::kStreamStateOpen : legacy::kStreamStateClosed;
     return completed(9);
   }
   if (length < 2) return rejected(kRejectMalformed);
@@ -190,7 +190,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (checking_) return completed();
-      release(kUserHost, reg::common::kMarkDetailClosedAllReleased);
+      release(kUserHost, legacy::kMarkDetailClosedAllReleased);
       return completed();
     }
     case kOpClear: {

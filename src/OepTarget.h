@@ -58,7 +58,7 @@ struct DebugPort {
   // Who uses the connection (oep-if-common §2): the host through attach, a slot (oep.probe.config) through its
   // automatic attach or the console its bind opened. A host's detach drops only its own use; the link goes when nobody
   // uses it, or on a forced detach. The bits are the connections entry's users (registry connection_users).
-  enum : uint8_t { kUserHost = reg::wire_rvswd::kConnectionUsersHostSession, kUserSlot = reg::wire_rvswd::kConnectionUsersSlot };
+  enum : uint8_t { kUserHost = legacy::kConnectionUsersHostSession, kUserSlot = legacy::kConnectionUsersSlot };
   uint8_t users = 0;
   // The live connection's target_id as its attach read it (oep-if-debug §1; has_tid false: none).
   bool has_tid = false;
@@ -149,7 +149,7 @@ class TargetRiscvDm final : public Interface {
     kStepPollTime = reg::target_riscv_dm::kDmiStepPollUs,
   };
   enum : uint8_t {
-    kResetRun = reg::target_riscv_dm::kResetModeRun, kResetRunConfirm = reg::target_riscv_dm::kResetModeRunVerified,
+    kResetRun = reg::target_riscv_dm::kResetModeRun, kResetRunConfirm = legacy::kResetModeRunVerified,
     kResetHalt = reg::target_riscv_dm::kResetModeHaltAtReset,
   };
   TargetRiscvDm(DebugPort &port, uint16_t instance) : instance_(instance) { ports_[0] = &port; }

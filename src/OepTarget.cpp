@@ -330,7 +330,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
   const uint8_t count = payload[0];
   const size_t fixed = 1u + 4u * count;
-  static const uint8_t kScanTags[] = {wire::kTlvScanMaxSpeed, wire::kTlvScanSkip, wire::kTlvScanIdleClock};
+  static const uint8_t kScanTags[] = {wire::kTlvScanMaxSpeed, legacy::kTlvScanSkip, wire::kTlvScanIdleClock};
   Tail tail;
   Result unknown = completed();   // an unknown critical tag: unsupported once the format is checked
   const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, isRvswd() ? 3 : 2, out, capacity, &unknown);
@@ -341,7 +341,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   {
     bool skip_critical = false;   // a count > 0 scan does not look at skip (oep-if-debug §1)
     const uint8_t *v = nullptr;
-    const Result r = tail.fixed(wire::kTlvScanSkip, 2, v, out, capacity, &skip_critical);
+    const Result r = tail.fixed(legacy::kTlvScanSkip, 2, v, out, capacity, &skip_critical);
     if (refused(r)) return r;
     if (v && count == 0) skip = getU16(v);
   }
@@ -447,7 +447,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
 // A failed attach answers status(u8) alone: line (no answer), timeout (the hart did not stop / start).
 Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // idle_clock is rvswd's (oep-if-debug §3): on swio it is an unknown tag (critical: rejected unsupported)
-  static const uint8_t kAttachTags[] = {wire::kTlvAttachMaxSpeed, wire::kTlvAttachPins, wire::kTlvAttachReset,
+  static const uint8_t kAttachTags[] = {legacy::kTlvAttachMaxSpeed, legacy::kTlvAttachPins, wire::kTlvAttachReset,
                                         wire::kTlvAttachIdleClock};
   if (length < 1) return rejected(kRejectMalformed);
   Tail tail;
@@ -462,7 +462,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   // Every TLV's form (core §2.3: another length than its definition is malformed, critical or not); max_speed is
   // required (oep-if-debug §1): absent is malformed.
   {
-    const Result r = maxSpeed(tail, wire::kTlvAttachMaxSpeed, max_hz, critical, out, capacity);
+    const Result r = maxSpeed(tail, legacy::kTlvAttachMaxSpeed, max_hz, critical, out, capacity);
     if (refused(r)) return r;
   }
   if (isRvswd()) {
@@ -474,7 +474,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   bool pins_critical = false, reset_critical = false;
   const uint8_t *pins = nullptr, *reset_value = nullptr;
   {
-    const Result r = tail.fixed(wire::kTlvAttachPins, 4, pins, out, capacity, &pins_critical);
+    const Result r = tail.fixed(legacy::kTlvAttachPins, 4, pins, out, capacity, &pins_critical);
     if (refused(r)) return r;
     const Result q = tail.fixed(wire::kTlvAttachReset, 4, reset_value, out, capacity, &reset_critical);
     if (refused(q)) return q;
@@ -497,10 +497,10 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     with_reset = true;
   }
   if (phy.minClockHz() && max_hz < phy.minClockHz())
-    return unsupportedTag(out, capacity, wire::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
+    return unsupportedTag(out, capacity, legacy::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
   // a pair this wire does not declare: unsupported with the tag as received, critical or not (core §2.3)
   if (pins && !pairAllowed(port_, getU16(pins), getU16(pins + 2)))
-    return Tail::refuse(wire::kTlvAttachPins, pins_critical, out, capacity);
+    return Tail::refuse(legacy::kTlvAttachPins, pins_critical, out, capacity);
   // No pins and no live connection on a wire whose pins the host chooses: the one candidate there is - allowed, nothing
   // else holding it, no channel disabled or with an idle item - is used as if named (oep-if-debug §1). Only one
   // combination allowed, and it is not a candidate: refused for what keeps it out. Otherwise the host names one
@@ -564,7 +564,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
     PinRefusal why;
     if (const uint8_t bad = choosePair(pins, plen, why)) {
-      if (bad == kRejectUnsupported) return Tail::refuse(wire::kTlvAttachPins, pins_critical, out, capacity);
+      if (bad == kRejectUnsupported) return Tail::refuse(legacy::kTlvAttachPins, pins_critical, out, capacity);
       if (bad == kRejectUnavailable) return unavailable(out, capacity, why.cause, why.channel);
       return rejected(bad);
     }
@@ -604,16 +604,16 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     if (revive) {
       searched = true;
       if (!phy.setMaxHz(max_hz))   // a ceiling this link cannot keep (a fixed speed above it)
-        return Tail::refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
+        return Tail::refuse(legacy::kTlvAttachMaxSpeed, critical, out, capacity);
       port_.dm.detach();
       if (!attachAndRead(port_.dm, status)) failure = kStatusLine;
       else if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
     } else if (phy.clockHz() > max_hz) {
       searched = true;
       if (!(phy.setMaxHz(max_hz) && phy.retune() && phy.clockHz() <= max_hz))
-        return Tail::refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
+        return Tail::refuse(legacy::kTlvAttachMaxSpeed, critical, out, capacity);
     }
-    flags |= wire::kAttachFlagsExisting;
+    flags |= legacy::kAttachFlagsExisting;
     port_.dm.selectHart0();   // the halt below and the DMSTATUS answered are hart 0's (oep-if-debug §4)
     if (with_reset) {
       // attach's reset TLV on this connection (mark reset 3), then stopped at the vector or left running
@@ -625,7 +625,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
         if (!attachAndRead(port_.dm, status, true)) failure = kStatusLine;
         else if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
       }
-      if (failure == kStatusOk) { ++port_.resets; port_.reset_detail = reg::common::kMarkDetailResetAttachReset; }
+      if (failure == kStatusOk) { ++port_.resets; port_.reset_detail = legacy::kMarkDetailResetAttachReset; }
     }
     if (failure == kStatusOk) {
       // a pending havereset acknowledged first (oep-if-debug §4.6), and said (flags bit0): a DM may freeze DMSTATUS's
@@ -646,7 +646,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     }
   } else {
     if (!phy.setMaxHz(max_hz))   // a ceiling this link cannot keep (a fixed speed above it)
-      return Tail::refuse(wire::kTlvAttachMaxSpeed, critical, out, capacity);
+      return Tail::refuse(legacy::kTlvAttachMaxSpeed, critical, out, capacity);
     // A scan may have left the link up at a speed over the new ceiling: search again under it.
     if (port_.dm.attached() && phy.clockHz() > max_hz) port_.dm.detach();
     if (with_reset && halt) {
@@ -684,7 +684,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       phy.loss().clear();   // a new connection: its own wire-loss clock (oep-if-debug §2)
       phy.holdWakes(true);  // a connection: no wake outside attach and reset (oep-if-debug §2)
       holdPins(port_);
-      if (with_reset) { ++port_.resets; port_.reset_detail = reg::common::kMarkDetailResetAttachReset; }
+      if (with_reset) { ++port_.resets; port_.reset_detail = legacy::kMarkDetailResetAttachReset; }
     } else {
       port_.dm.detach();   // a failed attach holds no pins: they go free
       freeWire(port_);
@@ -708,7 +708,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   }
   if (searched && n + kTlvHeader + 2 <= capacity) {   // search_retries (oep-if-debug §1): u16, 0xFFFF = that many or more
     const uint32_t retries = phy.searchRetries();
-    putTlvHeader(out + n, wire::kTlvAttachAnswerSearchRetries, 2);
+    putTlvHeader(out + n, legacy::kTlvAttachAnswerSearchRetries, 2);
     putU16(out + n + kTlvHeader, static_cast<uint16_t>(retries < 0xffff ? retries : 0xffff));
     n += kTlvHeader + 2;
   }
@@ -732,13 +732,13 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
     }
     case kOpDetach: {   // connection(u16) [TLV 0x01 force]
       // The host's use goes; the link stays while another user (a bind's console) has it, unless forced.
-      static const uint8_t kDetachTags[] = {wire::kTlvDetachForce};
+      static const uint8_t kDetachTags[] = {legacy::kTlvDetachForce};
       if (length < 2) return rejected(kRejectMalformed);
       const Result parsed = tail.parse(payload + 2, length - 2, kDetachTags, out, capacity);
       if (refused(parsed)) return parsed;
       const uint8_t *force_value = nullptr;
       bool force_critical = false;   // length 0 (oep-if-debug §3); longer: a longer request TLV (core §2.3)
-      const Result r = tail.fixed(wire::kTlvDetachForce, 0, force_value, out, capacity, &force_critical);
+      const Result r = tail.fixed(legacy::kTlvDetachForce, 0, force_value, out, capacity, &force_critical);
       if (refused(r)) return r;
       const bool force = force_value != nullptr;
       if (!port_.connected || getU16(payload) != port_.number)
@@ -851,14 +851,14 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       } else {
         const Ch32Dm::ResetReport r = dm.reset(p[0] == kResetRunConfirm);
         // bit0 and bit1 only: the others are reserved (0)
-        out[1] = r.flags & (reg::target_riscv_dm::kResetFlagsReached | reg::target_riscv_dm::kResetFlagsVerified);
+        out[1] = r.flags & (reg::target_riscv_dm::kResetFlagsReached | legacy::kResetFlagsVerified);
         putU32(out + 2, r.pc);
-        ok = p[0] == kResetRunConfirm ? (r.flags & reg::target_riscv_dm::kResetFlagsVerified) != 0
+        ok = p[0] == kResetRunConfirm ? (r.flags & legacy::kResetFlagsVerified) != 0
                                       : (r.flags & reg::target_riscv_dm::kResetFlagsReached) != 0;
       }
       dm.phy().loss().excuseReset();   // the reset asserted: the target may not answer for a while (oep-if-debug §2)
       ++port_->resets;   // the console marks it (detail 1 ndmreset)
-      port_->reset_detail = reg::common::kMarkDetailResetNdmreset;
+      port_->reset_detail = reg::target_console::kMarkDetailResetNdmreset;
       // not reached: the module answers - timeout, or fault for a cmderr; it does not - line (oep-if-debug §4.3)
       out[0] = ok ? kStatusOk : dm.lastCmderr() ? kStatusFault : failure(kStatusTimeout);
       return outcome(out[0], 0, 6);

@@ -192,9 +192,9 @@ static bool ok(const Result &r) { return r.resolution == kResolutionCompleted &&
 // what riscv.Wire.attach_body sends: method, max_speed (critical), pins (critical), idle_clock low (critical); every
 // TLV tag(u8) len(u16) value (core §2.2)
 static Bytes attachRequest(uint8_t method, uint32_t hz, int swdio, int swclk, bool idle_low) {
-  Bytes p = {method, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, uint8_t(hz), uint8_t(hz >> 8),
+  Bytes p = {method, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, uint8_t(hz), uint8_t(hz >> 8),
              uint8_t(hz >> 16), uint8_t(hz >> 24)};
-  p.insert(p.end(), {uint8_t(wire::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
+  p.insert(p.end(), {uint8_t(legacy::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
   if (idle_low) p.insert(p.end(), {uint8_t(wire::kTlvAttachIdleClock | kTagCritical), 1, 0, 1});
   return p;
 }
@@ -232,9 +232,9 @@ int main() {
         took_min = took < took_min ? took : took_min;
         took_max = took > took_max ? took : took_max;
         CHECK(ok(r) && out.size() >= 11);
-        CHECK(!(out[6] & wire::kAttachFlagsExisting));
+        CHECK(!(out[6] & legacy::kAttachFlagsExisting));
         size_t len = 0;
-        const uint8_t *v = answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len);
+        const uint8_t *v = answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len);
         CHECK(v && len == 2);
         r = call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
         CHECK(ok(r) && !port.connected);
@@ -247,9 +247,9 @@ int main() {
   // ---- B: a slot shares the connection: the host's detach leaves it up ----
   {
     Result r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
-    CHECK(ok(r) && !(out[6] & wire::kAttachFlagsExisting));
+    CHECK(ok(r) && !(out[6] & legacy::kAttachFlagsExisting));
     size_t len = 0;
-    CHECK(answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) != nullptr);
+    CHECK(answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) != nullptr);
     port.users |= DebugPort::kUserSlot;   // as a slot's automatic attach / a bind's console would have it
     r = call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
     CHECK(ok(r) && port.connected);       // the host's use goes; the link stays
@@ -257,8 +257,8 @@ int main() {
     const uint32_t t0 = micros();
     r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
     const uint32_t took = micros() - t0;
-    CHECK(ok(r) && (out[6] & wire::kAttachFlagsExisting));
-    CHECK(answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) == nullptr);
+    CHECK(ok(r) && (out[6] & legacy::kAttachFlagsExisting));
+    CHECK(answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) == nullptr);
     printf("  B slot-shared: second attach flags 0x%02x (existing), no TLV 0x12, %u.%03u ms (sim)\n", out[6],
            took / 1000, took % 1000);
     r = call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);   // force
@@ -272,7 +272,7 @@ int main() {
       Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out, cap);
       size_t len = 0;
       printf("  C capacity %2zu: %s, %zu bytes, TLV 0x12 %s\n", cap, ok(r) ? "ok" : "not ok", out.size(),
-             answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) ? "present" : "absent");
+             answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) ? "present" : "absent");
       if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
     }
   }
@@ -305,12 +305,12 @@ int main() {
       Result r = call(w, WireRvswd::kOpAttach, attachRequest(c.method, c.hz, 0, 1, true), out);
       const uint32_t took = micros() - t0;
       size_t len = 0;
-      const uint8_t *v = ok(r) && out.size() > 11 ? answerTlv(out, 11, wire::kTlvAttachAnswerSearchRetries, len) : nullptr;
+      const uint8_t *v = ok(r) && out.size() > 11 ? answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) : nullptr;
       printf("  D %-28s %s  %4u.%03u ms (sim)%s%u\n", c.name, ok(r) && out.size() >= 11 && out[0] != 0xff ? "answer" : "status",
              took / 1000, took % 1000, v ? "  search_retries " : "", v ? unsigned(v[0] | v[1] << 8) : 0u);
       if (c.hz < RvswdPhy::kMinClockHz)   // under min_clock_hz: unsupported, the tag as received, nothing run
         CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() == 1 &&
-              out[0] == (wire::kTlvAttachMaxSpeed | kTagCritical) && took == 0);
+              out[0] == (legacy::kTlvAttachMaxSpeed | kTagCritical) && took == 0);
       else
         CHECK(r.resolution == kResolutionCompleted && took <= limits::kAttachBudgetMs * 1000u);
       if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
@@ -353,7 +353,7 @@ int main() {
       const uint32_t t0 = micros();
       r = call(w, WireRvswd::kOpAttach, attachRequest(method, kHz, 0, 1, true), out);
       const uint32_t took = micros() - t0;
-      CHECK(ok(r) && out.size() >= 11 && port.connected && port.number == number && (out[6] & wire::kAttachFlagsExisting));
+      CHECK(ok(r) && out.size() >= 11 && port.connected && port.number == number && (out[6] & legacy::kAttachFlagsExisting));
       CHECK(took <= (limits::kAttachBudgetMs + 20) * 1000u);
       if (method == 1) CHECK(out[6] & wire::kAttachFlagsHalted);
       printf("  F power off %4u ms, attach %s: %s %u.%03u ms (sim)\n", off_ms, method ? "halt" : "run ",

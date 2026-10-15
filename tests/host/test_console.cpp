@@ -144,7 +144,7 @@ static uint8_t crc8(const uint8_t *p, size_t n) {   // dmseq's CRC-8: poly 0x07,
   return crc;
 }
 // method 0, max_speed 1 MHz: tag len(u16) value (core §2.2)
-static Bytes attachRequest() { return {0, uint8_t(wire::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00}; }
+static Bytes attachRequest() { return {0, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00}; }
 
 // A dmseq target as the reference one (oep-spec experiments/dm-console-seq DmSeq.h): its sketch calls available() every
 // `period` ms, which takes an answer and, idle, posts an empty frame; input rides on the answers.
@@ -263,7 +263,7 @@ int main() {
   {
     // mark attach carries no detail (common §1.3: "—"; it carried the mechanism, 2)
     const std::vector<MarkSeen> marks = marksOf(console, stream);
-    CHECK(!marks.empty() && marks.back().kind == reg::common::kMarkKindAttach && marks.back().detail == 0);
+    CHECK(!marks.empty() && marks.back().kind == legacy::kMarkKindAttach && marks.back().detail == 0);
   }
 
   // ---- core §4.3: the form first, then the stream number ----
@@ -463,7 +463,7 @@ int main() {
     for (int i = 0; i < 3; ++i) { g_millis += 10; console.poll(); }
     const std::vector<MarkSeen> marks = marksOf(console, console.bindStreamNumber());
     CHECK(!marks.empty() && marks.back().kind == reg::common::kMarkKindLost &&
-          marks.back().detail == reg::common::kMarkDetailLostTargetTimeout);
+          marks.back().detail == reg::target_console::kMarkDetailLostTargetTimeout);
     const PositionStream *ps = console.bindStream();
     CHECK(ps && !marks.empty() && marks.back().position == ps->end());   // after the 'x'
     // the same frame read again (a duplicate) adds nothing
@@ -518,7 +518,7 @@ int main() {
     const uint16_t fresh = uint16_t(out[0] | out[1] << 8);
     CHECK(fresh != old_stream);
     std::vector<MarkSeen> marks = marksOf(console, fresh);
-    CHECK(marks.size() == 1 && marks[0].kind == reg::common::kMarkKindAttach);
+    CHECK(marks.size() == 1 && marks[0].kind == legacy::kMarkKindAttach);
     if (!before.empty() && marks.size() == 1) CHECK(marks[0].serial > before.back().serial);   // serials go on
     r = call(console, TargetConsoleStream::kOpRead, cat(le16(fresh), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
     CHECK(ok(r) && out.size() == 11 && out[8] == 0 && out[9] == 0);   // nothing of the old stream, no gap
@@ -527,7 +527,7 @@ int main() {
     r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
     CHECK(ok(r));
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
-    CHECK(ok(r) && out[2] == con::kOpenFlagsExisting && uint16_t(out[0] | out[1] << 8) == fresh);
+    CHECK(ok(r) && out[2] == legacy::kOpenFlagsExisting && uint16_t(out[0] | out[1] << 8) == fresh);
     marks = marksOf(console, fresh);
     CHECK(marks.size() == 3);   // attach, closed, attach: reopened at the same place, the marks continue
     r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
@@ -556,15 +556,15 @@ int main() {
     CHECK(ok(r) && console.isOpen());
     const uint16_t s = uint16_t(out[0] | out[1] << 8);
     Bytes detach = le16(port.number);
-    if (force) detach.insert(detach.end(), {uint8_t(wire::kTlvDetachForce | kTagCritical), 0, 0});
+    if (force) detach.insert(detach.end(), {uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0});
     r = call(wire_fn, WireRvswd::kOpDetach, detach, out);
     CHECK(ok(r) && !port.connected);
     console.poll();
     CHECK(!console.isOpen());
     const std::vector<MarkSeen> marks = marksOf(console, s);
-    CHECK(marks.size() >= 2 && marks.back().kind == reg::common::kMarkKindClosed &&
-          marks.back().detail == reg::common::kMarkDetailClosedConnectionClosed);
-    if (marks.size() >= 2) CHECK((marks[marks.size() - 2].kind == reg::common::kMarkKindDetach) == force);
+    CHECK(marks.size() >= 2 && marks.back().kind == legacy::kMarkKindClosed &&
+          marks.back().detail == legacy::kMarkDetailClosedConnectionClosed);
+    if (marks.size() >= 2) CHECK((marks[marks.size() - 2].kind == legacy::kMarkKindDetach) == force);
   }
   r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
   CHECK(ok(r) && port.connected);
@@ -661,7 +661,7 @@ int main() {
     };
     auto closedMarks = [](const std::vector<MarkSeen> &marks, uint8_t detail) {
       int n = 0;
-      for (const MarkSeen &m : marks) n += m.kind == reg::common::kMarkKindClosed && m.detail == detail;
+      for (const MarkSeen &m : marks) n += m.kind == legacy::kMarkKindClosed && m.detail == detail;
       return n;
     };
 
@@ -677,26 +677,26 @@ int main() {
     CHECK(!console4.isOpen() && !port4.connected);   // the stream closed, and the connection with it
     console4.poll();                                 // the connection's close seen: nothing more on a closed stream
     std::vector<MarkSeen> marks = streamMarks(s4);   // readable without a session
-    CHECK(!marks.empty() && marks.back().kind == reg::common::kMarkKindClosed &&
-          marks.back().detail == reg::common::kMarkDetailClosedSessionEnded);
-    CHECK(closedMarks(marks, reg::common::kMarkDetailClosedConnectionClosed) == 0 && closedMarks(marks, reg::common::kMarkDetailClosedSessionEnded) == 1);
+    CHECK(!marks.empty() && marks.back().kind == legacy::kMarkKindClosed &&
+          marks.back().detail == legacy::kMarkDetailClosedSessionEnded);
+    CHECK(closedMarks(marks, legacy::kMarkDetailClosedConnectionClosed) == 0 && closedMarks(marks, legacy::kMarkDetailClosedSessionEnded) == 1);
     a = send(2, TargetConsoleStream::kOpRead, cat(le16(s4), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), 0);
     CHECK(answeredOk(a));
     a = send(2, TargetConsoleStream::kOpMarks, cat(le16(s4), {0, 0, 0, 0}), 7);   // the ended session's id: no resume
     CHECK(answered(a, kResolutionRejected, kRejectNoSession));
     a = send(2, TargetConsoleStream::kOpStreams, {0, 0}, 0);   // first(u16) 0: listed closed, nobody using it
     CHECK(answeredOk(a) && a.size() == kResultHeader + 9 && uint16_t(a[7] | a[8] << 8) == s4 && a[12] == 0 &&
-          a[13] == con::kStreamStateClosed);
+          a[13] == legacy::kStreamStateClosed);
 
     // session 8: a new connection at the same place, the same mechanism: the same number, its marks continued
     CHECK(answeredOk(send(0, reg::core::kOpOpen, lease, 8)));
     CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 8)) && port4.connected);
     a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {con::kMechanismDmseq}), 8);
     CHECK(answeredOk(a) && a.size() == kResultHeader + 3 && uint16_t(a[5] | a[6] << 8) == s4 &&
-          (a[7] & con::kOpenFlagsExisting));
+          (a[7] & legacy::kOpenFlagsExisting));
     const size_t before = marks.size();
     marks = streamMarks(s4);
-    CHECK(marks.size() == before + 1 && marks.back().kind == reg::common::kMarkKindAttach);
+    CHECK(marks.size() == before + 1 && marks.back().kind == legacy::kMarkKindAttach);
     bool host_mark = false;
     for (const MarkSeen &m : marks) host_mark |= m.kind == reg::common::kMarkKindHost && m.detail == 0x11;
     CHECK(host_mark);
@@ -709,8 +709,8 @@ int main() {
     console4.poll();
     CHECK(console4.isOpen() && console4.users() == TargetConsoleStream::kUserSlot && port4.connected);
     CHECK(streamMarks(s4).size() == marks.size());
-    console4.bindClose(reg::common::kMarkDetailClosedSlotChanged);
-    CHECK(!console4.isOpen() && streamMarks(s4).back().detail == reg::common::kMarkDetailClosedSlotChanged);
+    console4.bindClose(legacy::common::kMarkDetailClosedSlotChanged);
+    CHECK(!console4.isOpen() && streamMarks(s4).back().detail == legacy::common::kMarkDetailClosedSlotChanged);
     releaseConnection(port4, DebugPort::kUserSlot, false);
     CHECK(!port4.connected);
 
@@ -722,7 +722,7 @@ int main() {
     g_millis += reg::kLimitLeaseMinMs + 1;
     marks = streamMarks(s4);   // the lapse is judged as this request arrives
     CHECK(!console4.isOpen() && !port4.connected && !marks.empty() &&
-          marks.back().kind == reg::common::kMarkKindClosed && marks.back().detail == reg::common::kMarkDetailClosedSessionEnded);
+          marks.back().kind == legacy::kMarkKindClosed && marks.back().detail == legacy::kMarkDetailClosedSessionEnded);
   }
 
   // ---- the console's write latency (oep-if-console §2): a host's line goes in one write and reaches the target one

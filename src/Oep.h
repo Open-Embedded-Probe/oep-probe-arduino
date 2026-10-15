@@ -32,6 +32,64 @@ namespace oep {
 // The wire numbers (generated from oep-spec registry/oep-v1.toml - protocol revision 1 - into OepRegistry.h).
 namespace reg = v1::reg;
 
+// Numbers the specification no longer has (oep-spec 498ae95 had them; cf69012 does not): the firmware's own, inside
+// it only - never on the wire under an oep. name (core §12 rule 7). docs/spec-follow-notes R1-R5 in oep-client-python.
+namespace legacy {
+constexpr uint8_t kBindStreamSlotConsole = 0x01, kBindStreamFixtureUart = 0x02;   // R1 slot / bind
+constexpr uint8_t kTlvItemSlot = 0x04;
+constexpr uint8_t kConnectionUsersHostSession = 0x01, kConnectionUsersSlot = 0x02;
+constexpr uint8_t kStreamUsersHostSession = 0x01, kStreamUsersSlot = 0x02;
+constexpr uint8_t kStreamStateOpen = 0x00, kStreamStateClosed = 0x01, kOpenFlagsExisting = 0x01;
+constexpr uint8_t kMarkKindAttach = 0x03, kMarkKindDetach = 0x04, kMarkKindLinkLost = 0x08, kMarkKindClosed = 0x09;
+constexpr uint8_t kMarkDetailClosedAllReleased = 0x01, kMarkDetailClosedSessionEnded = 0x02,
+                  kMarkDetailClosedConnectionClosed = 0x04, kMarkDetailResetAttachReset = 0x03;
+constexpr uint8_t kResetModeRunVerified = 0x01, kResetFlagsVerified = 0x02;
+constexpr uint8_t kTlvAttachPins = 0x03, kTlvScanSkip = 0x02, kTlvDetachForce = 0x01, kTlvAttachAnswerSearchRetries = 0x12;
+constexpr uint8_t kAttachFlagsExisting = 0x02;
+constexpr uint8_t kTlvAttachMaxSpeed = 0x01;   // now in attach's fixed part (oep-if-debug §1)
+constexpr uint8_t kTlvBindTriggerTrack = 0x01, kOpGroupForce = 0x04, kEventGroupTriggered = 0x03;   // R3
+}  // namespace legacy
+// legacy registry copies (auto)
+namespace legacy {
+namespace probe_config {
+constexpr uint8_t kSlotAttachAtBoot = 0x01;
+constexpr uint8_t kTlvDescribeWifiMax = 0x46;
+constexpr uint8_t kTlvItemBind = 0x05;
+constexpr uint8_t kTlvItemPlan = 0x01;
+constexpr uint8_t kTlvItemWifi = 0x08;
+constexpr uint8_t kTlvStateAnswerWifi = 0x01;
+constexpr uint8_t kWifiEntryNone = 0xFF;
+constexpr uint8_t kWifiPassLenHidden = 0xFF;
+constexpr uint8_t kWifiReasonAuth = 0x02;
+constexpr uint8_t kWifiReasonNoAddress = 0x03;
+constexpr uint8_t kWifiReasonNone = 0x00;
+constexpr uint8_t kWifiReasonNotFound = 0x01;
+constexpr uint8_t kWifiReasonOther = 0x04;
+constexpr uint8_t kWifiStateConnected = 0x02;
+constexpr uint8_t kWifiStateConnecting = 0x01;
+constexpr uint8_t kWifiStateOff = 0x00;
+constexpr uint8_t kWifiStateWaiting = 0x03;
+constexpr uint8_t kTlvItemUart = 0x06;
+constexpr uint8_t kTlvItemSlot = 0x04;
+constexpr uint8_t kStorageUnreadableInterface = 0x02;
+constexpr uint8_t kStorageUnreadableRefused = 0x03;
+constexpr uint8_t kTlvDescribeSlotsMax = 0x42;
+constexpr uint8_t kSlotStateConnected = 0x00;
+constexpr uint8_t kSlotStateAbsent = 0x01;
+constexpr uint8_t kBindFlowStreaming = 0x01;
+constexpr uint8_t kBindFlowIdle = 0x00;
+constexpr uint8_t kBindFlowHeld = 0x02;
+}
+namespace common {
+constexpr uint8_t kMarkDetailClosedSlotChanged = 0x03;
+}
+namespace target_console {
+constexpr uint8_t kMechanismNone = 0xFF;
+}
+namespace top2 { constexpr uint32_t kLimitWifiMinMaxFrame = 0x70; }
+}  // namespace legacy
+// end legacy registry copies
+
 // oep.probe.restart's handler (Endpoint::setRestart, oep::platformRestart): a probe on USB first takes its device off the
 // bus (the pull-up off: the host records an unplug, not a device that stopped answering mid-transfer), waits
 // kRestartDetachMs for the host to see it, and only then resets the chip, which takes kRestartResetMs at most to start

@@ -42,16 +42,7 @@ size_t FixtureGpio::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.roleChannels(kGpioRoles, sizeof kGpioRoles, pins_.allowedMask());
   w.u32(gp::kTlvDescribeModes, kModes);   // modes 0-6 (u32 bit set)
-  // drive_levels (fixture §1.1): default(u8) n(u8) n x ma(u16), the chip's levels (OepPlatform.h); none: not switched
-  const DriveLevels d = platformDriveLevels();
-  if (d.count) {
-    uint8_t v[2 + 2 * 8];
-    const uint8_t n = d.count < 8 ? d.count : 8;
-    v[0] = d.default_level;
-    v[1] = n;
-    for (uint8_t i = 0; i < n; ++i) putU16(v + 2 + 2 * i, d.ma[i]);
-    w.put(gp::kTlvDescribeDriveLevels, v, 2u + 2u * n);
-  }
+  // the output strength is the probe's (fixture §1): not declared
   return w.ok() ? w.length() : 0;
 }
 
@@ -84,53 +75,23 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
   if (length < 1) return rejected(kRejectMalformed);
   const uint8_t n = payload[0];
   switch (op) {
-    case kOpSet: {   // n(u8) n x (channel u16, mode u8) [TLV 0x01 drive, repeated]: in order; nothing done if any
-      // entry cannot be (fixture §1, core §4.3: a malformed request, then a mode or drive this probe does not handle
-      // unsupported, then a channel not planned unavailable with the channel and its position)
-      const DriveLevels levels = platformDriveLevels();
-      static const uint8_t kKnown[] = {gp::kTlvSetDrive};
+    case kOpSet: {   // n(u8) n x (channel u16, mode u8) [TLV]: in order; nothing done if any entry cannot be (fixture
+      // §1, core §4.3: a malformed request, then a mode this probe does not handle unsupported, then a channel not
+      // planned unavailable with the channel and its position). The output strength is the probe's (fixture §1).
       const size_t fixed = 1u + 3u * n;
       if (length < fixed) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(payload + fixed, length - fixed, kKnown, out, capacity);
+      const Result parsed = tail.parse(payload + fixed, length - fixed, out, capacity);
       if (refused(parsed)) return parsed;
-      auto isOutput = [&](uint8_t i) {
-        const uint8_t m = payload[3 + 3 * i];
-        return m == gp::kModeOutputLow || m == gp::kModeOutputHigh;
-      };
-      // drive TLVs (fixture §1.1), index(u8) level(u8), one per mode 3 / 4 element: another length, index n or more, an
-      // index twice or an element not mode 3 / 4 is malformed (the whole request); a level past drive_levels (0xFF: the
-      // default level) or any drive on a probe without drive_levels unsupported with the tag as received. Every form is
-      // checked before an unsupported one is answered.
-      uint8_t drive[255];
-      memset(drive, PinTable::kDriveDefault, n);
-      uint8_t seen[32] = {};
-      Result unsupported = completed();
-      size_t at = 0, len = 0;
-      uint8_t raw = 0;
-      const uint8_t *v = nullptr;
-      while (tail.next(at, raw, v, len)) {
-        if ((raw & ~kTagCritical) != gp::kTlvSetDrive) continue;
-        if (len != 2) return rejected(kRejectMalformed);
-        const uint8_t index = v[0];
-        if (index >= n || ((seen[index / 8] >> (index % 8)) & 1) || !isOutput(index)) return rejected(kRejectMalformed);
-        seen[index / 8] |= static_cast<uint8_t>(1u << (index % 8));
-        uint8_t level = 0;
-        if (PinTable::driveLevelOf(levels, v[1], level)) drive[index] = level;
-        else if (!refused(unsupported)) unsupported = Tail::refuse(raw, raw & kTagCritical, out, capacity);
-      }
-      if (refused(unsupported)) return unsupported;
       // a mode this probe does not declare, or one the table leaves unused (7+): unsupported with the channel and index
       for (uint8_t i = 0; i < n; ++i)
         if (payload[3 + 3 * i] > gp::kModeOpenDrainRelease || !((kModes >> payload[3 + 3 * i]) & 1))
           return unsupportedAt(out, capacity, getU16(payload + 1 + 3 * i), i);
       for (uint8_t i = 0; i < n; ++i)
         if (!planned(getU16(payload + 1 + 3 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 3 * i), out, capacity);
-      // the strength of a mode 3 / 4 element: its drive, else its channel's idle drive, else the default level; kept
-      // until the channel is set again
+      // a mode 3 / 4 element at its channel's idle strength, else the default level (the probe's choice)
       for (uint8_t i = 0; i < n; ++i) {
         const uint16_t c = getU16(payload + 1 + 3 * i);
-        pins_.setPad(static_cast<uint8_t>(c), platformMode(payload[3 + 3 * i]),
-                     drive[i] != PinTable::kDriveDefault ? drive[i] : pins_.idleDrive(c));
+        pins_.setPad(static_cast<uint8_t>(c), platformMode(payload[3 + 3 * i]), pins_.idleDrive(c));
       }
       return completed();
     }
