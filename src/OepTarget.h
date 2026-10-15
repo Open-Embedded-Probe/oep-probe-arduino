@@ -67,7 +67,7 @@ struct DebugPort {
   uint8_t slot = 0xff;
   // The connection's number: from the probe's one space (core §9, ResourceNumbers), taken when a connection comes up,
   // closed when it goes. A host holding an old number gets no_connection.
-  uint16_t number = 0;
+  uint32_t number = 0;
 };
 
 // Attach without stopping the hart (method 0), for a probe's own use (a bind's automatic attach): the same as the

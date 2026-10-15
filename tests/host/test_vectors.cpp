@@ -637,8 +637,7 @@ struct OpsProbe {
   }
   // attach (rvswd, fn 4) on channels 1 / 2 at 1 MHz, the hart left as it is: connection 1 from boot
   bool attach() {
-    return ok(request(4, reg::wire_rvswd::kOpAttach,
-                      {0, 0x81, 4, 0, 0x40, 0x42, 0x0f, 0x00, 0x83, 4, 0, 1, 0, 2, 0}));
+    return ok(request(4, reg::wire_rvswd::kOpAttach, {0, 1, 0, 2, 0, 0x40, 0x42, 0x0f, 0x00}));   // method 0, pins 1 / 2, 1 MHz
   }
   // The target's dmseq console writes `text` (frames of 2 bytes at most, the first a SYN), the hart running.
   void say(const char *text) {
@@ -772,13 +771,25 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
   }
   if (has("console")) {
     if (has("read from 4")) return true;
+    const bool high = has("connection 65536") || has("stream 65537");   // numbers above u16: connection 65536, stream 65537 (core §9)
+    if (high) ResourceNumbers::reset(65536);
+    if (has("mechanisms SDI")) p.console.declareMechanisms(1u << reg::target_console::kMechanismSdi);
+    const bool sdi = has("mechanisms SDI") || has("is SDI");
+    if (has("ops open/read/close/streams")) p.console.offerOptional(false);
     if (!p.open() || !p.attach()) return false;
-    if (g_millis >= 1) return false;   // the attach mark at 1 ms
-    g_millis = 1;
-    g_micros_part = 0;
-    const Bytes r = p.request(7, reg::target_console::kOpOpen, {1, 0, reg::target_console::kMechanismDmseq});
-    if (!p.ok(r) || r.size() < 8 || getU16(&r[5]) != 2) return false;   // stream 2 on connection 1
+    const uint32_t connection = high ? 65536 : 1;
+    if (has("stream 65537") || has("one open dmseq stream") || !high) {
+      const uint8_t mech = sdi ? reg::target_console::kMechanismSdi : reg::target_console::kMechanismDmseq;
+      const Bytes r = p.request(7, reg::target_console::kOpOpen, {uint8_t(connection), uint8_t(connection >> 8),
+                                                                  uint8_t(connection >> 16), uint8_t(connection >> 24), mech});
+      if (!p.ok(r) || r.size() < 9 || getU32(&r[5]) != connection + 1) return false;   // the next number: the stream
+    }
     if (has("5 bytes written")) p.say("hello");
+    if (has("one host mark")) {   // value 0 at 1 ms (the mark's time_ns is the probe's clock, core §2.7)
+      g_millis = 1;
+      g_micros_part = 0;
+      return p.ok(p.request(7, reg::target_console::kOpMark, {2, 0, 0, 0, 0}));
+    }
     return true;
   }
   if (has("items has wifi")) {   // wifi_max 4; settings "as above": entry 0 "lab", passphrase "password1"
@@ -1110,7 +1121,7 @@ static void testWideCases() {
     Bytes want = hex(c["answer_hex"].string), got;
     if (names(c["fns"], "oep.target.console")) {
       // the console's marks (common §1.3) from its PositionStream: a ring of 4 marks with serials 0 - 8 made (5 - 8
-      // kept), mark k at position 10 k (k >= 5), time k ms, kind 7 (reset) detail k; max_frame 64: 59 bytes of payload
+      // kept), mark k at position 10 k (k >= 5), time k ms, kind 3 (host) detail k; max_frame 64: 59 bytes of payload
       uint8_t buffer[1024];
       PositionStream::Mark marks[4];
       PositionStream st(buffer, sizeof buffer, marks, 4);
@@ -1118,11 +1129,11 @@ static void testWideCases() {
         while (st.end() < 10 * k) st.put(0);
         g_millis = k;
         g_micros_part = 0;
-        st.mark(7, static_cast<uint8_t>(k));
+        st.mark(reg::common::kMarkKindHost, static_cast<uint8_t>(k));
       }
       uint8_t out[64 - kResultHeader];
       got = {kRoleResult, req[1], req[2], kResolutionCompleted, kOutcomeSuccess};
-      const size_t n = st.marks(getU32(&req[12]), out, sizeof out);
+      const size_t n = st.marks(getU32(&req[14]), out, sizeof out);   // after stream(u32)
       got.insert(got.end(), out, out + n);
     } else if (names(c["fns"], "oep.fixture.spi-target")) {
       // configured with the case's bit order, armed for 4 bytes (tx ff ff: the work registers' stale bits), then 12

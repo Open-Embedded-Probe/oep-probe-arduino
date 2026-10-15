@@ -11,12 +11,16 @@ namespace con = reg::target_console;
 
 size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  static const uint8_t kMechanisms[] = {con::kMechanismSdi, con::kMechanismDmdata, con::kMechanismDmseq};
-  w.put(con::kTlvDescribeMechanisms, kMechanisms, sizeof kMechanisms);   // oep-if-console §1
+  // mechanisms: n(u8) n x mechanism (oep-if-console §1), the ones declareMechanisms left
+  uint8_t v[1 + 8];
+  uint8_t n = 0;
+  for (uint8_t m = 0; m < 8; ++m) if (offersMechanism(m)) v[1 + n++] = m;
+  v[0] = n;
+  w.put(con::kTlvDescribeMechanisms, v, 1u + n);
   return w.ok() ? w.length() : 0;
 }
 
-// A bind's input (probe.config §1.2) goes into the same send queue as the write op, as much as fits.
+// The old binds' input (the firmware's own pass-through): into the send queue as the write op, as much as fits.
 size_t TargetConsoleStream::bindInput(const uint8_t *data, size_t length) {
   if (!open_) return 0;
   const size_t n = driver_.queue(data, length);
@@ -24,36 +28,27 @@ size_t TargetConsoleStream::bindInput(const uint8_t *data, size_t length) {
   return n;
 }
 
-// The stream closes (oep-if-console §2): the driver stops, the reason is marked, and what was collected stays readable.
-void TargetConsoleStream::closeStream(uint8_t detail, bool link_lost, bool detached) {
+// The stream goes (oep-if-console §2: close, the connection released, the session's end): the driver stops, the stream,
+// its buffer and send queue are freed, and its number is never used again (core §9). No mark: nothing reads it after.
+void TargetConsoleStream::closeStream() {
   if (!open_) return;
   driver_.stop();
-  if (link_lost) stream_.mark(kMarkLinkLost);
-  if (detached) stream_.mark(kMarkDetach);   // a forced detach closed the connection (oep-if-debug §2's table)
-  stream_.mark(kMarkClosed, detail);
-  open_ = false;
-  users_ = 0;
+  open_ = exists_ = false;
+  stream_.erase();
   ResourceNumbers::close(stream_number_);
 }
 
-void TargetConsoleStream::release(uint8_t user, uint8_t detail) {
-  if (!open_ || !(users_ & user)) return;
-  users_ &= static_cast<uint8_t>(~user);
-  if (users_) return;
-  closeStream(detail);
-  // The stream was the connection's last user of its own: a connection nobody else uses closes with it
-  // (oep-if-common §2). The wire's users say who else is there; the slot's share of the connection is the settings'.
-}
+void TargetConsoleStream::release(uint8_t, uint8_t) { closeStream(); }
 
 void TargetConsoleStream::poll() {
-  if (seen_closes_ != port_.closes) {     // the connection went: the stream ends with it, and stays readable
+  if (seen_closes_ != port_.closes) {     // the connection went: the stream goes with it (common §2)
     seen_closes_ = port_.closes;
-    closeStream(legacy::kMarkDetailClosedConnectionClosed, port_.lost, port_.detached);
+    closeStream();
   }
   if (!open_) return;
-  if (port_.resets != seen_resets_) {     // a reset the host asked for (riscv-dm reset, attach's reset TLV)
+  if (port_.resets != seen_resets_) {     // the reset op succeeded (debug §4.6): reset 0x40, detail 1 ndmreset
     seen_resets_ = port_.resets;
-    stream_.mark(kMarkReset, port_.reset_detail);
+    stream_.mark(kMarkReset, reg::target_console::kMarkDetailResetNdmreset);
   }
   if (port_.dm.restarts() != seen_restarts_) {   // havereset seen and acknowledged: the target restarted by itself
     seen_restarts_ = port_.dm.restarts();
@@ -61,107 +56,82 @@ void TargetConsoleStream::poll() {
     driver_.unsync();
   }
   driver_.poll();
-  if (driver_.lineLost()) {   // judged inside the console's reading (oep-if-debug §2): link-lost, then closed 4
+  if (driver_.lineLost()) {   // judged inside the console's reading (oep-if-debug §2): connection and stream close, no mark
     releaseConnection(port_, 0xff, true, true);
     seen_closes_ = port_.closes;
-    closeStream(legacy::kMarkDetailClosedConnectionClosed, true);
+    closeStream();
     return;
   }
-  if (driver_.resyncs() > seen_resyncs_) {   // the target's console started over: after the first, a restart
+  if (driver_.resyncs() > seen_resyncs_) {   // a new SYN after the first sync: restart, detail 2 resync (console §2)
     if (seen_resyncs_ > 0) stream_.mark(kMarkRestart, reg::target_console::kMarkDetailRestartResync);
     seen_resyncs_ = driver_.resyncs();
   }
 }
 
-// Open (or join) the stream of `mechanism` on the live connection for `user`. existing: the stream was already open, or
-// is the closed stream of the same place and mechanism opened again under its own number (oep-if-console §2).
-bool TargetConsoleStream::openStream(uint8_t mechanism, uint8_t user, bool &existing) {
-  existing = false;
-  if (open_) {
-    if (mechanism_ != mechanism) return false;
-    users_ |= user;
-    existing = true;
-    return true;
-  }
-  const bool same_place = exists_ && mechanism_ == mechanism && place_swdio_ == port_.swdio && place_swclk_ == port_.swclk;
-  uint16_t number = stream_number_;
-  if (same_place) {
-    if (!ResourceNumbers::reopen(number, ResourceNumbers::kStream)) return false;
-  } else {
-    number = ResourceNumbers::take(ResourceNumbers::kStream);
-    if (!number) return false;
-  }
-  if (!driver_.start(mechanism)) { ResourceNumbers::close(number); return false; }
-  // Another mechanism or another place: a new stream, and the old one is erased (oep-if-console §2) - its bytes and marks
-  // went with it (the new stream showed the old one's marks). This probe keeps one stream per console.
-  if (!same_place) stream_.erase();
+// A new stream of `mechanism` on the live connection: its own number (0: none left, cause 2), positions and serials
+// from 0 (common §1.1).
+uint32_t TargetConsoleStream::openStream(uint8_t mechanism) {
+  const uint32_t number = ResourceNumbers::take(ResourceNumbers::kStream);
+  if (!number) return 0;
+  if (!driver_.start(mechanism)) { ResourceNumbers::close(number); return 0xffffffffu; }
+  stream_.restart();
   stream_number_ = number;
   connection_ = port_.number;
-  place_swdio_ = port_.swdio;
-  place_swclk_ = port_.swclk;
   exists_ = open_ = true;
   mechanism_ = mechanism;
-  users_ = user;
   seen_resets_ = port_.resets;
   seen_restarts_ = port_.dm.restarts();
   seen_closes_ = port_.closes;
   seen_resyncs_ = driver_.resyncs();
-  stream_.mark(kMarkAttach);   // detail: none for attach (oep-if-common §1.3; it carried the mechanism)
-  existing = same_place;
-  return true;
+  return number;
 }
 
-bool TargetConsoleStream::bindOpen(uint8_t mechanism) {
-  if (!port_.connected || mechanism > con::kMechanismDmseq) return false;
-  bool existing = false;
-  return openStream(mechanism, kUserSlot, existing);
-}
+bool TargetConsoleStream::bindOpen(uint8_t) { return false; }   // the old binds: the pass-through takes their place
 
 Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
-  if (op == kOpOpen) {   // connection(u16) mechanism(u8) [TLV]  ->  stream(u16) flags(u8: bit0 existing) [TLV]
-    const Result parsed = plainTail(tail, payload, length, 3, out, capacity);
+  if (op == kOpOpen) {   // connection(u32) mechanism(u8) [TLV]  ->  stream(u32) [TLV] (oep-if-console §1)
+    const Result parsed = plainTail(tail, payload, length, 5, out, capacity);
     if (refused(parsed)) return parsed;
-    const uint8_t mechanism = payload[2];
-    if (mechanism > con::kMechanismDmseq) return unsupportedValue(out, capacity);   // not a mechanism this probe opens
-    if (!port_.connected || getU16(payload) != port_.number) {
-      // a live connection of another wire this console does not ride on - an arm-adi (swd) one: unavailable cause 6
-      // (oep-if-console §1, §3); a number no live connection has: no_connection
-      if (ResourceNumbers::kindOf(getU16(payload)) == ResourceNumbers::kConnection) return wrongState(out, capacity);
-      return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
+    const uint8_t mechanism = payload[4];
+    if (!offersMechanism(mechanism)) return unsupportedValue(out, capacity);   // not in describe's mechanisms (0x00)
+    const uint32_t connection = getU32(payload);
+    if (!port_.connected || connection != port_.number) {
+      // another kind's number, or a connection this console does not ride on (arm-adi): unavailable cause 6; a number
+      // nobody holds: no_resource (console §1)
+      if (ResourceNumbers::kindOf(connection) != ResourceNumbers::kNone) return wrongState(out, capacity);
+      return ResourceNumbers::refuse(connection, ResourceNumbers::kConnection, out, capacity);
     }
-    if (open_ && mechanism_ != mechanism) return wrongState(out, capacity);   // one live stream on a connection (§2)
-    if (capacity < 3) return failed();
-    bool existing = false;
-    if (!openStream(mechanism, kUserHost, existing)) return failedStatus(kStatusLine, out, capacity);
-    putU16(out, stream_number_);
-    out[2] = existing ? legacy::kOpenFlagsExisting : 0;
-    return completed(3);
+    if (open_) return wrongState(out, capacity);   // one live stream on a connection (console §2): cause 6
+    if (capacity < 4) return failed();
+    const uint32_t number = openStream(mechanism);
+    if (!number) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // numbers used up (core §9)
+    if (number == 0xffffffffu) return failed();
+    putU32(out, number);
+    return completed(4);
   }
-  if (op == kOpStreams) {   // first(u16) [TLV] -> more(u8) count(u8) count x (stream(u16) connection(u16) mechanism(u8) users(u8) state(u8))
+  if (op == kOpStreams) {   // first(u16) [TLV] -> more(u8) count(u8) count x (stream u32, connection u32, mechanism u8) [TLV]
     const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
     if (refused(parsed)) return parsed;
-    if (capacity < 9) return failed();
-    out[0] = 0;   // more: never (one stream at most); first at or past the count: none, more 0 (core §7.3)
-    out[1] = exists_ && getU16(payload) == 0 ? 1 : 0;
+    if (capacity < 11) return failed();
+    out[0] = 0;   // more: never (one stream at most); first at or past the count: none (core §7.3)
+    out[1] = open_ && getU16(payload) == 0 ? 1 : 0;
     if (!out[1]) return completed(2);
-    putU16(out + 2, stream_number_);   // no element length (core §2.3)
-    putU16(out + 4, connection_);
-    out[6] = mechanism_;
-    out[7] = users_;
-    out[8] = open_ ? legacy::kStreamStateOpen : legacy::kStreamStateClosed;
-    return completed(9);
+    putU32(out + 2, stream_number_);   // no element length (core §2.3)
+    putU32(out + 6, connection_);
+    out[10] = mechanism_;
+    return completed(11);
   }
-  if (length < 2) return rejected(kRejectMalformed);
+  if (length < 4) return rejected(kRejectMalformed);
   // The request's form and values first, nothing done, then the number it names (core §4.3: every check before
   // anything changes).
   checking_ = true;
-  const Result checked = streamOp(op, payload + 2, length - 2, out, capacity);
+  const Result checked = streamOp(op, payload + 4, length - 4, out, capacity);
   checking_ = false;
   if (refused(checked)) return checked;
-  if (!exists_ || getU16(payload) != stream_number_)   // a number it does not know (core §4.3)
-    return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kStream, out, capacity);
-  return streamOp(op, payload + 2, length - 2, out, capacity);
+  if (!open_ || getU32(payload) != stream_number_)   // a number it does not know, a closed one too (core §4.3, §9)
+    return ResourceNumbers::refuse(getU32(payload), ResourceNumbers::kStream, out, capacity);
+  return streamOp(op, payload + 4, length - 4, out, capacity);
 }
 
 // read, marks, close, clear, mark, write on the stream (after its number). checking_: only checked - a refusal, or
@@ -174,6 +144,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (refused(parsed)) return parsed;
       const Result values = PositionStream::checkRead(p, out, capacity);   // from 4+ (common §1.2)
       if (refused(values)) return values;
+      if (!optional_ && p[0] == reg::common::kReadFromLastMark) return unsupportedValue(out, capacity);   // no marks (§1)
       if (checking_) return completed();
       poll();   // take what is waiting first
       return stream_.read(p, out, capacity, max_read_);
@@ -190,7 +161,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (checking_) return completed();
-      release(kUserHost, legacy::kMarkDetailClosedAllReleased);
+      closeStream();
       return completed();
     }
     case kOpClear: {
@@ -216,6 +187,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (refused(parsed)) return parsed;
       if (checking_) return completed();
       if (!open_) return wrongState(out, capacity);
+      if (mechanism_ == reg::target_console::kMechanismSdi) return unsupportedValue(out, capacity);   // one way (§1, §3.1)
       if (capacity < 2) return failed();
       poll();   // a frame waiting takes from the queue first, so its free space is as it is now
       if (!open_) return wrongState(out, capacity);

@@ -431,7 +431,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         searched = true;
         if (!ok) freePort(port_);   // a failed attach holds nothing: the pair goes free
         if (ok) {
-          const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
+          const uint32_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
           if (!number) { freePort(port_); return unavailable(out, capacity, reg::core::kUnavailableCauseLimit); }
           port_.connected = true;
           port_.number = number;
@@ -485,8 +485,8 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       const uint8_t *force = nullptr;   // length 0 (oep-if-debug §3); longer: a longer request TLV (core §2.3)
       const Result r = tail.fixed(sw::kTlvDetachForce, 0, force, out, capacity);
       if (refused(r)) return r;
-      if (!port_.connected || getU16(payload) != port_.number)
-        return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
+      if (!port_.connected || getU32(payload) != port_.number)
+        return ResourceNumbers::refuse(getU32(payload), ResourceNumbers::kConnection, out, capacity);
       close();   // the host is this connection's only user: its detach closes it (oep-if-debug §5)
       return completed();
     }
@@ -511,17 +511,17 @@ uint8_t TargetArmAdi::xfer(bool ap, bool read, uint8_t a23, uint32_t &data) {
 }
 
 Result TargetArmAdi::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length < 2) return rejected(kRejectMalformed);
+  if (length < 4) return rejected(kRejectMalformed);
   // The request's form and values first, nothing run, then the connection it names (core §4.3: every check before
   // anything runs).
   checking_ = true;
-  const Result checked = run(op, payload + 2, length - 2, out, capacity);
+  const Result checked = run(op, payload + 4, length - 4, out, capacity);
   checking_ = false;
   if (refused(checked)) return checked;
-  if (!port_.connected || getU16(payload) != port_.number)
-    return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
+  if (!port_.connected || getU32(payload) != port_.number)
+    return ResourceNumbers::refuse(getU32(payload), ResourceNumbers::kConnection, out, capacity);
   retry_ = WireRetry();   // the request's allowance for wire retries (oep-if-debug §2)
-  return run(op, payload + 2, length - 2, out, capacity);
+  return run(op, payload + 4, length - 4, out, capacity);
 }
 
 // One request after its connection (checking_: only checked - a refusal, or completed when it would run).

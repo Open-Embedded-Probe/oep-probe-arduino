@@ -488,46 +488,44 @@ class TlvWriter {
   bool ok_ = true;
 };
 
-// The resource numbers (core §9): one u16 space for the whole probe (connections, streams, whatever an interface numbers),
-// each new one the previous plus 1 (65535 then 1 again), a number in use skipped. Live numbers are remembered with their
-// kind so a request naming a live number of another kind is refused unavailable cause 6, and a number nobody holds
-// no_connection.
+// The resource numbers (core §9): one u32 space for the whole probe (connections, streams, whatever an interface
+// numbers), from 1, each new one the previous plus 1 and never used again while the boot_id is the same - a closed one
+// neither. 0xFFFFFFFF used up: take answers 0 and the request is refused unavailable cause 2 until a restart. Live
+// numbers are remembered with their kind so a request naming a live number of another kind is refused unavailable
+// cause 6, and a number nobody holds no_resource.
 class ResourceNumbers {
  public:
   enum Kind : uint8_t { kNone = 0, kConnection = 1, kStream = 2 };
   static constexpr size_t kLive = 16;
-  // The next free number, registered live as `kind` (0 when every number is live - not in practice).
-  static uint16_t take(Kind kind) {
-    for (uint32_t tries = 0; tries < 0x10000; ++tries) {
-      const uint16_t n = next_++;
-      if (next_ == 0) next_ = 1;
-      if (n == 0 || kindOf(n) != kNone) continue;
-      for (Live &l : live_) if (l.kind == kNone) { l = {n, kind}; return n; }
-      return 0;
+  // The next number, registered live as `kind` (0: every number used in this boot, or no room to remember it).
+  static uint32_t take(Kind kind) {
+    if (spent_) return 0;
+    for (Live &l : live_) {
+      if (l.kind != kNone) continue;
+      const uint32_t n = next_;
+      if (++next_ == 0) spent_ = true;   // 0xFFFFFFFF was the last
+      l = {n, kind};
+      return n;
     }
     return 0;
   }
-  static void close(uint16_t number) {
+  static void close(uint32_t number) {
     for (Live &l : live_) if (l.kind != kNone && l.number == number) l.kind = kNone;
   }
-  // Re-register a number that was closed (a console stream opened again at the same place keeps its number).
-  static bool reopen(uint16_t number, Kind kind) {
-    if (kindOf(number) != kNone) return kindOf(number) == kind;
-    for (Live &l : live_) if (l.kind == kNone) { l = {number, kind}; return true; }
-    return false;
-  }
-  static Kind kindOf(uint16_t number) {
+  static Kind kindOf(uint32_t number) {
     for (const Live &l : live_) if (l.kind != kNone && l.number == number) return l.kind;
     return kNone;
   }
-  // As at boot: nothing live, the next number 1 (a host test that plays a probe from boot).
-  static void reset() {
-    next_ = 1;
+  // As at boot: nothing live, the next number 1 (a host test that plays a probe from boot); `next`: a test starting
+  // further on (a number above u16, the last one).
+  static void reset(uint32_t next = 1) {
+    next_ = next;
+    spent_ = false;
     for (Live &l : live_) l = {0, kNone};
   }
   // The rejection for a number that is not the resource asked for: another live kind = unavailable cause 6, else
-  // no_connection (core §4.3).
-  static Result refuse(uint16_t number, Kind wanted, uint8_t *out, size_t capacity) {
+  // no_resource (core §4.3, §9).
+  static Result refuse(uint32_t number, Kind wanted, uint8_t *out, size_t capacity) {
     const Kind k = kindOf(number);
     if (k != kNone && k != wanted) {
       if (capacity < 4) return rejected(kRejectUnavailable);
@@ -539,8 +537,9 @@ class ResourceNumbers {
   }
 
  private:
-  struct Live { uint16_t number; Kind kind; };
-  static inline uint16_t next_ = 1;
+  struct Live { uint32_t number; Kind kind; };
+  static inline uint32_t next_ = 1;
+  static inline bool spent_ = false;
   static inline Live live_[kLive] = {};
 };
 

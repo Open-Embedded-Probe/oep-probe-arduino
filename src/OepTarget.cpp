@@ -125,7 +125,7 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
     if (!attachAndRead(port.dm, dmstatus)) return fail();
     port.dm.ackHaveReset();
     if (!port.dm.readDmiSure(kDmStatus, dmstatus)) return fail();
-    const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
+    const uint32_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
     if (!number) return fail();
     port.connected = true;
     port.number = number;
@@ -257,9 +257,9 @@ void holdPins(DebugPort &port) {
   if (port.swclk != 0xffff) port.pins->claim(port.swclk, port.pin_owner);
 }
 
-// connections (oep-if-debug §2.1): first(u8) -> more(u8) count(u8), count x entry: connection(u16) swdio(u16) swclk(u16)
-// speed_hz(u32) users(u8) slot(u8) tid_scheme(u8) tid_len(u8) tid (no element length, core §2.3). One place per wire
-// here: at most one entry.
+// connections (oep-if-debug §2.1): first(u8) -> more(u8) count(u8), count x entry: connection(u32) swdio(u16) swclk(u16)
+// speed_hz(u32) tid_scheme(u8) tid_len(u8) tid (no element length, core §2.3), [TLV]. One connection per wire here
+// (max_connections 1): at most one entry.
 Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity) {
   if (capacity < 2 + 18) return failed();
   out[0] = 0;   // more: never (one entry at most)
@@ -267,12 +267,10 @@ Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t 
   if (!port.connected || first > 0) return completed(2);
   out[1] = 1;
   uint8_t *e = out + 2;
-  putU16(e, port.number);
-  putU16(e + 2, port.swdio);
-  putU16(e + 4, port.swclk);
-  putU32(e + 6, speed_hz);
-  e[10] = port.users;
-  e[11] = port.slot;
+  putU32(e, port.number);
+  putU16(e + 4, port.swdio);
+  putU16(e + 6, port.swclk);
+  putU32(e + 8, speed_hz);
   e[12] = port.has_tid ? reg::common::kTargetIdSchemeDmi7f : 0;
   e[13] = port.has_tid ? 4 : 0;   // tid_len: scheme dmi_7f's value is a u32
   if (port.has_tid) putU32(e + 14, port.tid);
@@ -290,6 +288,7 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   static const uint8_t kReset[] = {wire::kPinRoleReset};
   if (port_.reset_allowed) w.roleChannels(kReset, 1, port_.reset_allowed);   // attach's reset TLV: its channels, no default
   DmiPhy &phy = port_.dm.phy();
+  w.u32(kTagFeatures, 1u << 0);   // attach_halt: attach's method 1 (oep-if-debug §3)
   if (phy.minClockHz()) w.u32(kTagMinClockHz, phy.minClockHz());   // a max_speed under it is unsupported
   if (phy.maxClockHz()) w.u32(kTagMaxClockHz, phy.maxClockHz());   // a fixed-speed link: min = max = its speed
   return w.ok() ? w.length() : 0;
@@ -327,24 +326,20 @@ uint8_t WireRvswd::choosePair(const uint8_t *pins, size_t len, PinRefusal &why) 
 // each, no element length). Only dmactive is written; a pair without a module goes back to Hi-Z. A live connection's
 // settings (its speed, its idle_clock) are never changed by a scan (debug §1).
 Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length < 1 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
+  // count(u8) count x (swdio u16, swclk u16) [TLV 0x01 max_speed, 0x04 idle_clock (rvswd)]: the host names every
+  // candidate, count 1 or more (oep-if-debug §1: count 0 is malformed, no implicit list)
+  if (length < 1 || payload[0] == 0 || length < 1u + 4u * payload[0]) return rejected(kRejectMalformed);
   const uint8_t count = payload[0];
   const size_t fixed = 1u + 4u * count;
-  static const uint8_t kScanTags[] = {wire::kTlvScanMaxSpeed, legacy::kTlvScanSkip, wire::kTlvScanIdleClock};
+  static const uint8_t kScanTags[] = {wire::kTlvScanMaxSpeed, wire::kTlvScanIdleClock};
   Tail tail;
   Result unknown = completed();   // an unknown critical tag: unsupported once the format is checked
-  const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, isRvswd() ? 3 : 2, out, capacity, &unknown);
+  const Result parsed = tail.parse(payload + fixed, length - fixed, kScanTags, isRvswd() ? 2 : 1, out, capacity, &unknown);
   if (refused(parsed)) return parsed;
   DmiPhy &phy = port_.dm.phy();
-  const bool one_wire = port_.swclk == 0xffff;
-  uint16_t skip = 0;
-  {
-    bool skip_critical = false;   // a count > 0 scan does not look at skip (oep-if-debug §1)
-    const uint8_t *v = nullptr;
-    const Result r = tail.fixed(legacy::kTlvScanSkip, 2, v, out, capacity, &skip_critical);
-    if (refused(r)) return r;
-    if (v && count == 0) skip = getU16(v);
-  }
+  for (uint8_t k = 0; k < count; ++k)   // the same candidate twice is malformed (oep-if-debug §1)
+    for (uint8_t q = 0; q < k; ++q)
+      if (getU32(payload + 1 + 4 * k) == getU32(payload + 1 + 4 * q)) return rejected(kRejectMalformed);
   uint32_t max_hz = 0;
   bool critical = false, idle_low = false, idle_given = false, idle_critical = false;
   {
@@ -368,8 +363,12 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
     const uint16_t idle = pairIdle(port_, d, c, true);   // an output idle: cause 5 (debug §1)
     if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
-    if (port_.connected && (d != port_.swdio || c != port_.swclk))   // the one seat taken (debug §1): a count limit
+    if (port_.connected) {   // a live connection's pins are never searched (cause 1); its one PHY is busy (cause 2)
+      if (d == port_.swdio || d == port_.swclk) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, d);
+      if (c != 0xffff && (c == port_.swdio || c == port_.swclk))
+        return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, c);
       return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+    }
     if (!pairFree(port_, d, c)) return pairHeldRefusal(port_, d, c, out, capacity);   // cause 1, the channel
   }
   if (capacity < 2) return failed();
@@ -390,13 +389,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     if (at + 9 > capacity || (tried && millis() - began >= limits::kScanBudgetMs)) return false;
     uint32_t status = 0;
     bool ok = false;
-    if (port_.connected) {
-      // the live connection: look through it - re-attaching (and detaching on a miss) would pull the link out
-      // from under the host that holds it
-      ok = moduleAnswers(port_.dm, status) && port_.dm.readDmiSure(kDmStatus, status);   // the status answered: read twice
-      // a scan is a request on the connection: wire loss decided here closes it (oep-if-debug §2)
-      if (!ok && phy.loss().lost()) releaseConnection(port_, 0xff, true, true);
-    } else if (usePair(port_, d, c)) {
+    if (usePair(port_, d, c)) {
       {
         AttachDeadline budget(phy);
         ok = port_.dm.probe(status);                     // wake / configuration and dmactive only (debug §1)
@@ -415,26 +408,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
     ++tried;
     return true;
   };
-  if (count) {
-    for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
-  } else if (port_.connected || !port_.pin_choice) {   // the count-0 list: the live pair, or the fixed one
-    // a fixed pair with an idle item on a channel is not in the list (debug §1); the live pair is
-    if (skip == 0 && pairDisabled(port_, port_.swdio, port_.swclk) == 0xffff &&
-        (port_.connected || pairIdle(port_, port_.swdio, port_.swclk, false) == 0xffff))
-      tryPair(port_.swdio, port_.swclk);
-  } else {                                            // swdio ascending, then swclk; held pairs and idle items left out
-    uint32_t index = 0;
-    bool more = true;
-    auto consider = [&](uint16_t d, uint16_t c) {
-      if (more && tried < 255 && pairAllowed(port_, d, c) && pairFree(port_, d, c) &&
-          pairIdle(port_, d, c, false) == 0xffff && index++ >= skip)
-        more = tryPair(d, c);
-    };
-    for (uint16_t d = 0; d < 64; ++d) {
-      if (one_wire) consider(d, 0xffff);
-      else for (uint16_t c = 0; c < 64; ++c) consider(d, c);
-    }
-  }
+  for (uint8_t k = 0; k < count && tryPair(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k)); ) ++k;
   out[0] = tried;
   out[1] = found;
   return completed(at);
@@ -446,43 +420,36 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
 //       search_retries when a speed search ran]
 // A failed attach answers status(u8) alone: line (no answer), timeout (the hart did not stop / start).
 Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // idle_clock is rvswd's (oep-if-debug §3): on swio it is an unknown tag (critical: rejected unsupported)
-  static const uint8_t kAttachTags[] = {legacy::kTlvAttachMaxSpeed, legacy::kTlvAttachPins, wire::kTlvAttachReset,
-                                        wire::kTlvAttachIdleClock};
-  if (length < 1) return rejected(kRejectMalformed);
+  // method(u8) swdio(u16) swclk(u16) max_speed(u32) [TLV] (oep-if-debug §1, §3): idle_clock 0x04 is rvswd's (on swio an
+  // unknown tag), reset 0x05 on both. A short fixed part is malformed.
+  static const uint8_t kAttachTags[] = {wire::kTlvAttachReset, wire::kTlvAttachIdleClock};
+  if (length < 9) return rejected(kRejectMalformed);
+  const uint8_t method = payload[0];
+  const uint16_t swdio = getU16(payload + 1), swclk = getU16(payload + 3);
+  const uint32_t max_hz = getU32(payload + 5);
   Tail tail;
   // Every format check of the request first, then what it does not handle (core §4.3: every check before anything
   // changes): an unknown critical tag is held back until then.
   Result unknown = completed();
-  const Result parsed = tail.parse(payload + 1, length - 1, kAttachTags, isRvswd() ? 4 : 3, out, capacity, &unknown);
+  const Result parsed = tail.parse(payload + 9, length - 9, kAttachTags, isRvswd() ? 2 : 1, out, capacity, &unknown);
   if (refused(parsed)) return parsed;
   DmiPhy &phy = port_.dm.phy();
-  uint32_t max_hz = 0;
-  bool critical = false, idle_low = false, idle_given = false, idle_critical = false;
-  // Every TLV's form (core §2.3: another length than its definition is malformed, critical or not); max_speed is
-  // required (oep-if-debug §1): absent is malformed.
-  {
-    const Result r = maxSpeed(tail, legacy::kTlvAttachMaxSpeed, max_hz, critical, out, capacity);
-    if (refused(r)) return r;
-  }
+  bool idle_low = false, idle_given = false, idle_critical = false;
   if (isRvswd()) {
     const Result r = idleClock(tail, wire::kTlvAttachIdleClock, idle_low, idle_given, idle_critical, out, capacity);
     if (refused(r)) return r;
   }
-  if (!max_hz) return rejected(kRejectMalformed);
-  size_t plen = 4;
-  bool pins_critical = false, reset_critical = false;
-  const uint8_t *pins = nullptr, *reset_value = nullptr;
+  if (!max_hz) return rejected(kRejectMalformed);   // max_speed 0 (oep-if-debug §1)
+  bool reset_critical = false;
+  const uint8_t *reset_value = nullptr;
   {
-    const Result r = tail.fixed(legacy::kTlvAttachPins, 4, pins, out, capacity, &pins_critical);
-    if (refused(r)) return r;
     const Result q = tail.fixed(wire::kTlvAttachReset, 4, reset_value, out, capacity, &reset_critical);
     if (refused(q)) return q;
   }
   if (refused(unknown)) return unknown;
-  // not a method of the table: unsupported, payload 0x00 (oep-if-debug §3; a later revision may define it, core §2.5)
-  if (payload[0] > wire::kAttachMethodHalt) return unsupportedValue(out, capacity);
-  const bool halt = payload[0] == wire::kAttachMethodHalt;
+  // method: 0 always, 1 when describe's features bit0 (attach_halt) says so; other values unsupported 0x00 (§3)
+  if (method > wire::kAttachMethodHalt) return unsupportedValue(out, capacity);
+  const bool halt = method == wire::kAttachMethodHalt;
   // reset(channel u16, hold_ms u16): the line to hold first; one this probe allows (unsupported otherwise) and nobody
   // holds (unavailable), held at most max_op_ms (core §7.5)
   bool with_reset = false;
@@ -491,83 +458,36 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   if (reset_value) {
     reset_channel = getU16(reset_value);
     hold_ms = getU16(reset_value + 2);
-    // a value it cannot take: unsupported with the tag as received, critical or not (core §2.3)
     if (reset_channel > 63 || !((port_.reset_allowed >> reset_channel) & 1) || hold_ms > kMaxOpMs)
       return Tail::refuse(wire::kTlvAttachReset, reset_critical, out, capacity);
     with_reset = true;
   }
-  if (phy.minClockHz() && max_hz < phy.minClockHz())
-    return unsupportedTag(out, capacity, legacy::kTlvAttachMaxSpeed | (critical ? kTagCritical : 0));
-  // a pair this wire does not declare: unsupported with the tag as received, critical or not (core §2.3)
-  if (pins && !pairAllowed(port_, getU16(pins), getU16(pins + 2)))
-    return Tail::refuse(legacy::kTlvAttachPins, pins_critical, out, capacity);
-  // No pins and no live connection on a wire whose pins the host chooses: the one candidate there is - allowed, nothing
-  // else holding it, no channel disabled or with an idle item - is used as if named (oep-if-debug §1). Only one
-  // combination allowed, and it is not a candidate: refused for what keeps it out. Otherwise the host names one
-  // (choosePair: unavailable). With one channel set for both roles only a one-wire link can have a single candidate.
-  uint8_t only[4];
-  if (!pins && port_.pin_choice && !port_.connected) {
-    const bool one_wire = port_.swclk == 0xffff;
-    uint16_t cd = 0xffff, cc = 0xffff, ad = 0xffff, ac = 0xffff;
-    unsigned candidates = 0, allowed = 0;
-    auto consider = [&](uint16_t d, uint16_t c) {
-      if (!pairAllowed(port_, d, c)) return;
-      ++allowed;
-      ad = d;
-      ac = c;
-      if (pairFree(port_, d, c) && pairHeld(port_, d, c) == 0xffff && pairIdle(port_, d, c, false) == 0xffff) {
-        ++candidates;
-        cd = d;
-        cc = c;
-      }
-    };
-    for (uint16_t d = 0; d < 64; ++d) {
-      if (one_wire) consider(d, 0xffff);
-      else for (uint16_t c = 0; c < 64; ++c) consider(d, c);
-    }
-    if (candidates == 1) {
-      putU16(only, cd);
-      putU16(only + 2, cc);
-      pins = only;
-      plen = 4;
-    } else if (candidates == 0 && allowed == 1) {
-      const uint16_t off = pairDisabled(port_, ad, ac);
-      if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
-      const uint16_t idle = pairIdle(port_, ad, ac, false);   // any idle item: no candidate left (debug §1)
-      if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
-      return pairHeldRefusal(port_, ad, ac, out, capacity);
-    }
+  // below min_clock_hz, or a pair the declaration does not allow: unsupported, the fixed part's 0x00 (oep-if-debug §1)
+  if (phy.minClockHz() && max_hz < phy.minClockHz()) return unsupportedValue(out, capacity);
+  if (!pairAllowed(port_, swdio, swclk)) return unsupportedValue(out, capacity);
+  // a channel the settings disable, or whose idle is an output - the pair, the reset line: cause 5 with the channel
+  uint16_t off = pairDisabled(port_, swdio, swclk);
+  if (off == 0xffff && with_reset && port_.pins && port_.pins->disabled(static_cast<uint16_t>(reset_channel)))
+    off = static_cast<uint16_t>(reset_channel);
+  if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
+  uint16_t idle = pairIdle(port_, swdio, swclk, true);
+  if (idle == 0xffff && with_reset && port_.pins) {
+    const uint8_t mode = port_.pins->idle(static_cast<uint16_t>(reset_channel));
+    if (mode == PinTable::kIdleOutputLow || mode == PinTable::kIdleOutputHigh) idle = static_cast<uint16_t>(reset_channel);
+  }
+  if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
+  // attach makes a new connection, never joins or evicts one (oep-if-debug §1): a live connection holds these pins -
+  // cause 1 with the channel - or the wire's one connection is taken - cause 2 (max_connections 1)
+  if (port_.connected) {
+    if (port_.swdio == swdio || port_.swclk == swdio) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, swdio);
+    if (swclk != 0xffff && (port_.swdio == swclk || port_.swclk == swclk))
+      return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, swclk);
+    return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
   }
   {
-    // a channel the settings disable - the pins asked for, the fixed pair, the reset line: cause 5 with the channel
-    // (probe.config §1), before choosePair moves anything
-    uint16_t off = 0xffff;
-    if (pins)
-      off = pairDisabled(port_, getU16(pins), getU16(pins + 2));
-    else if (!pins && !port_.pin_choice)
-      off = pairDisabled(port_, port_.swdio, port_.swclk);
-    if (off == 0xffff && with_reset && port_.pins && port_.pins->disabled(static_cast<uint16_t>(reset_channel)))
-      off = static_cast<uint16_t>(reset_channel);
-    if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
-    // an idle item (debug §1): pins naming a channel whose idle is an output, or - no pins, no live connection - the
-    // fixed pair with any idle item (the candidates leave it out, so none is left): cause 5
-    uint16_t idle = 0xffff;
-    if (pins)
-      idle = pairIdle(port_, getU16(pins), getU16(pins + 2), true);
-    else if (!pins && !port_.pin_choice && !port_.connected)
-      idle = pairIdle(port_, port_.swdio, port_.swclk, false);
-    // the reset line with an output idle (debug §1, §3): the same refusal, nothing executed
-    if (idle == 0xffff && with_reset && port_.pins) {
-      const uint8_t mode = port_.pins->idle(static_cast<uint16_t>(reset_channel));
-      if (mode == PinTable::kIdleOutputLow || mode == PinTable::kIdleOutputHigh) idle = static_cast<uint16_t>(reset_channel);
-    }
-    if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
-    PinRefusal why;
-    if (const uint8_t bad = choosePair(pins, plen, why)) {
-      if (bad == kRejectUnsupported) return Tail::refuse(legacy::kTlvAttachPins, pins_critical, out, capacity);
-      if (bad == kRejectUnavailable) return unavailable(out, capacity, why.cause, why.channel);
-      return rejected(bad);
-    }
+    const uint16_t held = pairHeld(port_, swdio, swclk);   // a plan or another wire holds one of them: cause 1
+    if (held != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, held);
+    if (!usePair(port_, swdio, swclk)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
   }
   if (with_reset && port_.pins && port_.pins->owner(static_cast<uint16_t>(reset_channel)))
     return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse, static_cast<uint16_t>(reset_channel));
@@ -578,7 +498,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     if (idle_given) return Tail::refuse(wire::kTlvAttachIdleClock, idle_critical, out, capacity);
     phy.setIdleClockLow(false);
   }
-  if (capacity < 11) return failed();
+  if (capacity < 13) return failed();
   ResetLine reset_line{reset_channel, port_.pins, &phy.loss()};
   uint32_t status = 0, dpc = 0;
   uint8_t flags = 0;
@@ -590,63 +510,9 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   AttachDeadline budget(phy, with_reset ? hold_ms : 0);
   DmiPhy::WakeScope wakes(phy);
   phy.clearSearchRetries();
-  bool searched = !port_.connected || with_reset;   // a search ran (search_retries goes in the answer)
-  // The live connection's module does not answer (the target lost its power and came back, a wire that lost its
-  // sync): the same connection, its bring-up done afresh under max_speed - the attach budget's search, as for a new one
-  // (oep-if-debug §1). Answering line instead held the stale link: every attach after the power came back timed out
-  // until a forced detach (0.0.28+68d9694, P4 and a CH32V003). An attach with the reset TLV brings the link up anyway.
-  bool revive = false;
-  if (port_.connected && !with_reset) revive = !moduleAnswers(port_.dm, status);
-  if (port_.connected) {
-    // Already attached: the same connection, nothing redone (a one-command-per-process host gets its link back).
-    // A running link over the new ceiling is slowed to it (going slower is safe); only a link that cannot keep
-    // the ceiling refuses it.
-    if (revive) {
-      searched = true;
-      if (!phy.setMaxHz(max_hz))   // a ceiling this link cannot keep (a fixed speed above it)
-        return Tail::refuse(legacy::kTlvAttachMaxSpeed, critical, out, capacity);
-      port_.dm.detach();
-      if (!attachAndRead(port_.dm, status)) failure = kStatusLine;
-      else if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
-    } else if (phy.clockHz() > max_hz) {
-      searched = true;
-      if (!(phy.setMaxHz(max_hz) && phy.retune() && phy.clockHz() <= max_hz))
-        return Tail::refuse(legacy::kTlvAttachMaxSpeed, critical, out, capacity);
-    }
-    flags |= legacy::kAttachFlagsExisting;
-    port_.dm.selectHart0();   // the halt below and the DMSTATUS answered are hart 0's (oep-if-debug §4)
-    if (with_reset) {
-      // attach's reset TLV on this connection (mark reset 3), then stopped at the vector or left running
-      if (halt) {
-        if (!port_.dm.attachUnderReset(holdReset, releaseReset, &reset_line, hold_ms, dpc)) failure = kStatusTimeout;
-        else have_dpc = true;
-      } else {
-        port_.dm.pulseReset(holdReset, releaseReset, &reset_line, hold_ms);
-        if (!attachAndRead(port_.dm, status, true)) failure = kStatusLine;
-        else if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
-      }
-      if (failure == kStatusOk) { ++port_.resets; port_.reset_detail = legacy::kMarkDetailResetAttachReset; }
-    }
-    if (failure == kStatusOk) {
-      // a pending havereset acknowledged first (oep-if-debug §4.6), and said (flags bit0): a DM may freeze DMSTATUS's
-      // halt / run bits until then
-      if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
-      // halt() is idempotent and also brings this driver's own halted state in line with the hart: a hart left
-      // halted (by an earlier process or a reset-halt) must count as halted here, or block reads refuse it
-      // read twice (readDmiSure): answered, and a halted one is halted again - a missed read giving a halted-looking
-      // word had attach with method 0 halt a running hart
-      if (!port_.dm.readDmiSure(kDmStatus, status)) failure = kStatusLine;
-      else if ((halt || (status & (1u << 9))) && !(port_.dm.halt() && port_.dm.readDmiSure(kDmStatus, status)))
-        failure = kStatusTimeout;
-    }
-    // the connection closes after the answer only once the wire is lost (oep-if-debug §2): that answer is line
-    if (phy.loss().lost()) {
-      failure = kStatusLine;
-      releaseConnection(port_, 0xff, true, true);
-    }
-  } else {
-    if (!phy.setMaxHz(max_hz))   // a ceiling this link cannot keep (a fixed speed above it)
-      return Tail::refuse(legacy::kTlvAttachMaxSpeed, critical, out, capacity);
+  {
+    if (!phy.setMaxHz(max_hz))   // a ceiling this link cannot keep (a fixed speed above it): the fixed part's 0x00
+      return unsupportedValue(out, capacity);
     // A scan may have left the link up at a speed over the new ceiling: search again under it.
     if (port_.dm.attached() && phy.clockHz() > max_hz) port_.dm.detach();
     if (with_reset && halt) {
@@ -672,7 +538,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       }
     }
     if (failure == kStatusOk) {
-      const uint16_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
+      const uint32_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
       if (!number) {
         port_.dm.detach();
         freeWire(port_);
@@ -696,21 +562,15 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     flags |= wire::kAttachFlagsHalted;
     if (!have_dpc) have_dpc = readDpc(port_.dm, dpc);
   }
-  putU16(out, port_.number);
-  putU32(out + 2, status);
-  out[6] = flags;
-  putU32(out + 7, phy.clockHz());
-  size_t n = 11 + targetId(port_, out + 11, capacity - 11);
+  putU32(out, port_.number);   // connection(u32) id(u32: DMSTATUS) flags(u8) speed_hz(u32) [TLV] (oep-if-debug §3)
+  putU32(out + 4, status);
+  out[8] = flags;
+  putU32(out + 9, phy.clockHz());
+  size_t n = 13 + targetId(port_, out + 13, capacity - 13);
   if (have_dpc && (flags & wire::kAttachFlagsHalted) && n + kTlvHeader + 4 <= capacity) {
     putTlvHeader(out + n, wire::kTlvAttachAnswerDpc, 4);
     putU32(out + n + kTlvHeader, dpc);
     n += kTlvHeader + 4;
-  }
-  if (searched && n + kTlvHeader + 2 <= capacity) {   // search_retries (oep-if-debug §1): u16, 0xFFFF = that many or more
-    const uint32_t retries = phy.searchRetries();
-    putTlvHeader(out + n, legacy::kTlvAttachAnswerSearchRetries, 2);
-    putU16(out + n + kTlvHeader, static_cast<uint16_t>(retries < 0xffff ? retries : 0xffff));
-    n += kTlvHeader + 2;
   }
   return completed(n);
 }
@@ -730,20 +590,13 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
       if (refused(parsed)) return parsed;
       return connectionsOf(port_, payload[0], port_.dm.phy().clockHz(), out, capacity);
     }
-    case kOpDetach: {   // connection(u16) [TLV 0x01 force]
-      // The host's use goes; the link stays while another user (a bind's console) has it, unless forced.
-      static const uint8_t kDetachTags[] = {legacy::kTlvDetachForce};
-      if (length < 2) return rejected(kRejectMalformed);
-      const Result parsed = tail.parse(payload + 2, length - 2, kDetachTags, out, capacity);
+    case kOpDetach: {   // connection(u32) [TLV]: the connection and the streams on it go (oep-if-debug §2)
+      if (length < 4) return rejected(kRejectMalformed);
+      const Result parsed = plainTail(tail, payload, length, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      const uint8_t *force_value = nullptr;
-      bool force_critical = false;   // length 0 (oep-if-debug §3); longer: a longer request TLV (core §2.3)
-      const Result r = tail.fixed(legacy::kTlvDetachForce, 0, force_value, out, capacity, &force_critical);
-      if (refused(r)) return r;
-      const bool force = force_value != nullptr;
-      if (!port_.connected || getU16(payload) != port_.number)
-        return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
-      releaseConnection(port_, DebugPort::kUserHost, force, false, force);   // forced: its streams mark detach (§2)
+      if (!port_.connected || getU32(payload) != port_.number)
+        return ResourceNumbers::refuse(getU32(payload), ResourceNumbers::kConnection, out, capacity);
+      releaseConnection(port_, DebugPort::kUserHost, true, false, false);
       return completed();
     }
     default:
@@ -786,21 +639,21 @@ Result TargetRiscvDm::asLine(uint8_t op, uint8_t *out, const Result &r) {
 }
 
 Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (length < 2) return rejected(kRejectMalformed);
+  if (length < 4) return rejected(kRejectMalformed);   // connection(u32) first (common §2)
   // The request's form and values first, nothing run (port_ null), then the connection it names (core §4.3: every
   // check before anything runs).
   port_ = nullptr;
-  const Result checked = dispatch(op, payload + 2, length - 2, out, capacity);
+  const Result checked = dispatch(op, payload + 4, length - 4, out, capacity);
   if (refused(checked)) return checked;
   // The wire whose live connection the request names (one riscv-dm serves every wire's connections).
   for (DebugPort *port : ports_)
-    if (port && port->connected && getU16(payload) == port->number) port_ = port;
-  if (!port_) return ResourceNumbers::refuse(getU16(payload), ResourceNumbers::kConnection, out, capacity);
+    if (port && port->connected && getU32(payload) == port->number) port_ = port;
+  if (!port_) return ResourceNumbers::refuse(getU32(payload), ResourceNumbers::kConnection, out, capacity);
   line_lost_ = false;
   port_->dm.phy().beginRequest();   // the request's allowance for wire retries (oep-if-debug §2)
   // the ops other than dmi are on hart 0: hartsel 0 before, and so after (oep-if-debug §4); dmi is the host's own
   if (op != kOpDmi) port_->dm.selectHart0();
-  Result r = dispatch(op, payload + 2, length - 2, out, capacity);
+  Result r = dispatch(op, payload + 4, length - 4, out, capacity);
   port_->dm.noteRequest();   // the console reads DMSTATUS before its next DATA0 read (oep-if-console §3)
   // Wire loss is looked at after every request on the connection, whatever the op answered (oep-if-debug §2): an op
   // that ran on reads which may be a register's own all zeros / all ones (a raw dmi read of DATA0, say) leaves the

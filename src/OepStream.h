@@ -64,6 +64,14 @@ class PositionStream {
     kept_ = 0;
     overflowing_ = false;
   }
+  // A new stream with a resource number of its own (common §1.1: such a stream starts at position 0, its marks at
+  // serial 0): nothing of the one before.
+  void restart() {
+    total_ = base_ = 0;
+    serial_ = 0;
+    slot_ = kept_ = 0;
+    overflowing_ = false;
+  }
   void clear() {   // nothing before now is kept
     base_ = total_;
     overflowing_ = false;

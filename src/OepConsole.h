@@ -39,10 +39,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   };
   enum : uint8_t {
     kMarkReset = reg::target_console::kMarkKindReset, kMarkRestart = reg::target_console::kMarkKindRestart,
-    kMarkAttach = legacy::kMarkKindAttach, kMarkDetach = legacy::kMarkKindDetach,
-    kMarkLost = reg::common::kMarkKindLost, kMarkClear = reg::common::kMarkKindClear,
-    kMarkHost = reg::common::kMarkKindHost, kMarkLinkLost = legacy::kMarkKindLinkLost,
-    kMarkClosed = legacy::kMarkKindClosed,
+    kMarkLost = reg::common::kMarkKindLost, kMarkClear = reg::common::kMarkKindClear, kMarkHost = reg::common::kMarkKindHost,
   };
   enum : uint8_t { kUserHost = legacy::kStreamUsersHostSession, kUserSlot = legacy::kStreamUsersSlot };
   TargetConsoleStream(DebugPort &port, DmConsole &driver, uint16_t instance)
@@ -54,15 +51,21 @@ class TargetConsoleStream final : public Interface, public BindSource {
   uint8_t revision() const override { return reg::target_console::kRevision; }
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::target_console::kLockFreeOps, op); }
-  bool offers(uint8_t op) const override { return opIn(op, reg::target_console::kOpOpen, reg::target_console::kOpStreams); }
+  // open / read / close / streams always; marks, clear, mark and write while offerOptional (console §1: the minimum is
+  // open / read / close / streams, without the marks' ring or a send queue)
+  bool offers(uint8_t op) const override {
+    if (!opIn(op, reg::target_console::kOpOpen, reg::target_console::kOpStreams)) return false;
+    return optional_ || op == kOpOpen || op == kOpRead || op == kOpClose || op == kOpStreams;
+  }
+  void offerOptional(bool on) { optional_ = on; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   // The host's session ended (end, a lapse, a takeover): its share of the stream goes - before the wire's share of the
   // connection (sessionOverFirst) - and a stream it was the last user of closes with mark closed 2 (session_ended),
   // readable until the same place and mechanism is opened again (oep-if-console §2).
-  void sessionOver() override { release(kUserHost, legacy::kMarkDetailClosedSessionEnded); }
+  void sessionOver() override { closeStream(); }   // the session's stream goes with it (console §2)
   bool sessionOverFirst() const override { return true; }
   // oep.probe.restart (oep-if-restart §2): the slot's share goes too, before the wire closes the connection
-  void probeRestart() override { release(kUserHost | kUserSlot, legacy::kMarkDetailClosedAllReleased); }
+  void probeRestart() override { closeStream(); }
   void poll();   // from loop()
   // What one read may return: declare it within the probe's frame (1000 suits a 1 KiB frame).
   void setMaxRead(uint16_t bytes) { max_read_ = bytes; }
@@ -70,13 +73,16 @@ class TargetConsoleStream final : public Interface, public BindSource {
   // slot's share. false: no connection, or another mechanism is open.
   bool bindOpen(uint8_t mechanism);
   // The slot's share goes (its bind no longer carries it, or the slot was replaced / removed: mark closed 3 when last).
-  void bindClose(uint8_t detail = legacy::kMarkDetailClosedAllReleased) { release(kUserSlot, detail); }
+  void bindClose(uint8_t = 0) {}   // the old binds (the pass-through takes their place)
   bool isOpen() const { return open_; }
-  uint8_t users() const { return users_; }
+  uint8_t users() const { return open_ ? kUserHost : 0; }
+  // The mechanisms describe declares (console §1: n(u8) n x mechanism, at least one, none twice): bit k = mechanism k.
+  void declareMechanisms(uint8_t mask) { mechanisms_ = mask; }
+  bool offersMechanism(uint8_t m) const { return m < 8 && ((mechanisms_ >> m) & 1); }
   DebugPort &port() const { return port_; }
   // BindSource: the stream while it exists (a closed one too, until another is opened), the target's input.
   const PositionStream *bindStream() const override { return exists_ ? &stream_ : nullptr; }
-  uint16_t bindStreamNumber() const override { return stream_number_; }
+  uint16_t bindStreamNumber() const override { return static_cast<uint16_t>(stream_number_); }
   size_t bindInput(const uint8_t *data, size_t length) override;
 
  private:
@@ -85,12 +91,12 @@ class TargetConsoleStream final : public Interface, public BindSource {
   DmConsole &driver_;
   uint16_t instance_;
   bool exists_ = false;    // a stream was opened (and may be closed but still readable)
-  uint16_t stream_number_ = 0;   // the stream's number (the probe's one space); kept while closed for the same place
-  uint16_t connection_ = 0;      // the connection it was opened on (the streams entry)
-  uint16_t place_swdio_ = 0, place_swclk_ = 0;   // where (the same place reopens the same number)
+  uint32_t stream_number_ = 0;   // the live stream's number (the probe's one space, core §9)
+  uint32_t connection_ = 0;      // the connection it was opened on (the streams entry)
+  uint8_t mechanisms_ = 0x07;    // SDI, DMDATA, dmseq
+  bool optional_ = true;         // marks / clear / mark / write offered
   bool open_ = false;
   uint8_t mechanism_ = 0;
-  uint8_t users_ = 0;
   uint16_t max_read_ = 1000;
   uint8_t buffer_[kCapacity];
   PositionStream::Mark marks_[kMarks];
@@ -98,8 +104,8 @@ class TargetConsoleStream final : public Interface, public BindSource {
   uint32_t seen_resets_ = 0, seen_resyncs_ = 0, seen_restarts_ = 0, seen_closes_ = 0;
   bool checking_ = false;   // streamOp only checks the request's form and values (handle: the number after)
   Result streamOp(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity);
-  bool openStream(uint8_t mechanism, uint8_t user, bool &existing);
-  void closeStream(uint8_t detail, bool link_lost = false, bool detached = false);
+  uint32_t openStream(uint8_t mechanism);   // 0: no number left; 0xFFFFFFFF: the driver did not start
+  void closeStream();
   void release(uint8_t user, uint8_t detail);
   static void take(void *self, uint8_t byte) { static_cast<TargetConsoleStream *>(self)->stream_.put(byte); }
   static void takeMark(void *self, uint8_t kind, uint8_t detail) {
