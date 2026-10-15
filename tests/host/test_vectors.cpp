@@ -500,6 +500,7 @@ static void testOpsEncoding() {
 // written, DMCONTROL's haltreq / resumereq acted on.
 class VecPhy final : public DmiPhy {
  public:
+  uint32_t target_id = 0x00203500;   // DMI 0x7F (0: none read, no target_id TLV)
   bool attached_flag = false, halted = true;
   uint32_t data0 = 0, data1 = 0;
   // the wire goes silent (nothing answers, writes lost) at the run's first abstract command (this fake runs none: the
@@ -538,7 +539,7 @@ class VecPhy final : public DmiPhy {
       case 0x11: value = 2 | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (1u << 22); break;
       case 0x12: value = 0x0002'1000u | 0x380; break;
       case 0x16: value = 2; break;
-      case 0x7f: value = 0x00203500; break;
+      case 0x7f: value = target_id; break;
       default: value = 0; break;
     }
     return true;
@@ -833,6 +834,15 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
   if (has("save not offered")) { p.config.setStorage(false); return true; }
   if (has("probe.config set")) return p.open();
   if (has("riscv-dm run not offered")) { p.riscv.offerOptional(false); return true; }
+  if (has("declares only dmi") || has("raw-only fn")) p.riscv.offerOptional(false);
+  if (has("attach halt method is not offered")) { p.wire.offerHalt(false); return true; }
+  if (has("rvswd attach")) {   // oep-if-debug §1 on fn 4
+    if (has("next resource 65536")) ResourceNumbers::reset(65536);
+    if (has("pins 3 / 4 allowed")) { p.port.pin_choice |= (1ull << 3) | (1ull << 4); p.phy.target_id = 0; }
+    if (!p.open()) return false;
+    if (has("owns connection 1 on pins 1 / 2")) return p.attach();
+    return true;
+  }
   if (has("logic")) {
     // a one-shot of 1000 samples on one line (channel 0), started at 5 ms, done: generation 1
     g_fake_heap = FakeHeap{};
@@ -917,6 +927,14 @@ static void testOps(const char *file, const char *list) {
   const Json v = load(file);
   for (const Json &c : v[list].items) {
     if (outputIdleRefused(c)) continue;
+    // a case whose state this probe cannot be: max_connections 2 (one connection per wire here, oep-if-debug §1:
+    // the probe's choice), or swd / arm-adi named as fn 5 / 15 (tests/host/test_swd.cpp runs that wire)
+    if (c["state"].string.find("max_connections 2") != std::string::npos || names(c["fns"], "oep.wire.swd") ||
+        names(c["fns"], "oep.target.arm-adi")) {
+      printf("  %s \"%s\": not this probe's configuration (one connection per wire; swd in test_swd)\n", file,
+             c["name"].string.c_str());
+      continue;
+    }
     if (elsewhere(c)) continue;
     if (multirate(c) || ownSegments(c)) {
       printf("  %s \"%s\": %s\n", file, c["name"].string.c_str(), multirate(c) ? "multirate, not offered" : "in test_capture");

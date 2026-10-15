@@ -288,7 +288,7 @@ size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
   static const uint8_t kReset[] = {wire::kPinRoleReset};
   if (port_.reset_allowed) w.roleChannels(kReset, 1, port_.reset_allowed);   // attach's reset TLV: its channels, no default
   DmiPhy &phy = port_.dm.phy();
-  w.u32(kTagFeatures, 1u << 0);   // attach_halt: attach's method 1 (oep-if-debug §3)
+  if (halt_) w.u32(kTagFeatures, 1u << 0);   // attach_halt: attach's method 1 (oep-if-debug §3)
   if (phy.minClockHz()) w.u32(kTagMinClockHz, phy.minClockHz());   // a max_speed under it is unsupported
   if (phy.maxClockHz()) w.u32(kTagMaxClockHz, phy.maxClockHz());   // a fixed-speed link: min = max = its speed
   return w.ok() ? w.length() : 0;
@@ -448,7 +448,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   }
   if (refused(unknown)) return unknown;
   // method: 0 always, 1 when describe's features bit0 (attach_halt) says so; other values unsupported 0x00 (§3)
-  if (method > wire::kAttachMethodHalt) return unsupportedValue(out, capacity);
+  if (method > wire::kAttachMethodHalt || (method == wire::kAttachMethodHalt && !halt_)) return unsupportedValue(out, capacity);
   const bool halt = method == wire::kAttachMethodHalt;
   // reset(channel u16, hold_ms u16): the line to hold first; one this probe allows (unsupported otherwise) and nobody
   // holds (unavailable), held at most max_op_ms (core §7.5)
@@ -689,7 +689,8 @@ Result TargetRiscvDm::dispatch(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       // hart and whether it redoes the sequence is this probe's (Ch32Dm::reset).
       const Result parsed = plainTail(tail, p, n, 1, out, capacity);
       if (refused(parsed)) return parsed;
-      if (p[0] > kResetHalt) return unsupportedValue(out, capacity);   // mode 3 or more (oep-if-debug §4.3, core §2.5)
+      // modes 0 and 2 only (oep-if-debug §4.3): any other unsupported, the fixed part's 0x00
+      if (p[0] != kResetRun && p[0] != kResetHalt) return unsupportedValue(out, capacity);
       if (!target) return completed();
       Ch32Dm &dm = *target;
       if (capacity < 6) return failed();
@@ -910,7 +911,9 @@ Result TargetRiscvDm::dmi(const uint8_t *p, size_t length, uint8_t *out, size_t 
       case kStepPoll: size = 12; ++values; break;
       case kStepDelay: size = 5; if (at + size <= length) wait_us += getU32(p + at + 1); break;
       case kStepPollTime: size = 14; ++values; if (at + size <= length) wait_us += getU32(p + at + 10); break;
-      default: return rejected(kRejectMalformed);   // an unknown step kind cannot be sized: the list is broken
+      // an unknown step kind: its arguments' length is not guessed; checking stops there and the whole request is
+      // unsupported, the fixed part's 0x00, nothing before it run (oep-if-debug §4.1)
+      default: return unsupportedValue(out, capacity);
     }
     if (at + size > length) return rejected(kRejectMalformed);
     at += size;

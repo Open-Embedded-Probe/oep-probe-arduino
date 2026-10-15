@@ -121,6 +121,9 @@ class WireRvswd final : public Interface {
   DebugPort &port() const { return port_; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void sessionOver() override { releaseConnection(port_, DebugPort::kUserHost, false); }
+  // attach's method 1 (halt): offered and declared (features bit0 attach_halt) unless turned off (oep-if-debug §3)
+  void offerHalt(bool on) { halt_ = on; }
+  bool halt_ = true;
   // oep.probe.restart (oep-if-restart §2): the connection closes whoever uses it (a slot too); the target is left as it is
   void probeRestart() override { releaseConnection(port_, 0xff, true); }
 
@@ -163,8 +166,9 @@ class TargetRiscvDm final : public Interface {
   // dmi, halt, resume always; reset, read_block / write_block (a pair), run and step are optional (oep-if-debug §4) -
   // all offered unless offerOptional(false) leaves them out: the ops tag declares what offers says (core §1.2)
   bool offers(uint8_t op) const override {
-    return opIn(op, reg::target_riscv_dm::kOpDmi, reg::target_riscv_dm::kOpResume) ||
-           (optional_ && opIn(op, reg::target_riscv_dm::kOpReset, reg::target_riscv_dm::kOpStep));
+    // dmi alone is required; halt, resume, reset, read_block / write_block, run and step are optional (oep-if-debug §4)
+    return op == reg::target_riscv_dm::kOpDmi ||
+           (optional_ && opIn(op, reg::target_riscv_dm::kOpHalt, reg::target_riscv_dm::kOpStep));
   }
   // A probe without the optional ops (a smaller build): they answer unknown_operation and are not in the ops tag.
   void offerOptional(bool on) { optional_ = on; }
