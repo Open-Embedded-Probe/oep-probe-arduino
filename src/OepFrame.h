@@ -89,6 +89,8 @@ class SerialReader {
   // No byte for 200 ms: a candidate still open is raw.
   void idle(RawSink sink, void *context);
   const uint8_t *message() const { return dec_; }
+  // A candidate is being received (its first byte after the 0x00 came): oep-if-link §3's frame on the line.
+  bool receiving() const { return open_ && have_ > 0; }
   size_t length() const { return length_; }
   uint32_t crcErrors() const { return crc_errors_; }
   // Candidates closed by a 0x00 that were not a frame (no valid COBS, or the CRC did not match): the line's noise. The

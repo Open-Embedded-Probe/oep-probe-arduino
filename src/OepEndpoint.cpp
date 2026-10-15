@@ -506,6 +506,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   send(total);
   if (restart_taken_) { restartNow(); return; }
   speedApply();   // port_speed: the answer went out at the old speed; now switch (or revert)
+  if (speed_fallback_ && current_ == speed_port_) speedRevert();   // phase 3: this frame's answer is out (link §3)
 }
 
 // After restart's answer (oep-if-restart §2): it leaves the probe, every line is let go of, and the chip restarts as from
@@ -726,6 +727,7 @@ Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, 
   if (step == reg::probe_link::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
   if (step > reg::probe_link::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
   if (transports_[port].kind != kUartBridge) return wrongState(out, capacity);
+  if (speed_fallback_) return wrongState(out, capacity);   // phase 3: every step refused, never cancelled (link §3)
   const bool this_port = speed_state_ != kSpeedBase && speed_port_ == port;   // this port is off its boot speed
   uint32_t answer = 0;
   if (step == reg::probe_link::kPortSpeedStepTry) {
@@ -772,7 +774,31 @@ void Endpoint::speedApply() {
   speed_good_ms_ = millis();
 }
 
+// port_state (oep-if-link §1): [TLV] -> baud(u32) state(u8) [TLV], the port the request came on. A port that is no UART
+// bridge: unavailable cause 6.
+Result Endpoint::portState(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  Tail tail;
+  const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
+  if (refused(parsed)) return parsed;
+  const uint8_t port = static_cast<uint8_t>(current_);
+  if (transports_[port].kind != kUartBridge) return wrongState(out, capacity);
+  if (capacity < 5) return failed();
+  const uint8_t phase = portPhase(port);
+  putU32(out, phase == 0 ? speed_base_ : speed_rate_);
+  out[4] = phase;
+  return completed(5);
+}
+
+// A return condition (oep-if-link §3): back now, or - a frame being received on the raised port - phase 3 until that
+// frame's answer has gone (handleMessage then reverts) or the line goes quiet (the reader's gap: speedPoll).
+void Endpoint::speedFall() {
+  if (speed_state_ == kSpeedBase) return;
+  if (transports_[speed_port_].serial.receiving()) { speed_fallback_ = true; return; }
+  speedRevert();
+}
+
 void Endpoint::speedRevert() {
+  speed_fallback_ = false;
   if (speed_state_ == kSpeedBase) return;
   transports_[speed_port_].stream->flush();
   port_speed_(speed_port_, speed_base_, true);
@@ -783,9 +809,13 @@ void Endpoint::speedRevert() {
 
 void Endpoint::speedPoll() {
   if (speed_pending_ == kSpeedRevert) { speed_pending_ = kSpeedNone; speedRevert(); }
+  if (speed_fallback_) {   // phase 3: back once nothing is being received (a frame's answer reverts in handleMessage)
+    if (!transports_[speed_port_].serial.receiving()) speedRevert();
+    return;
+  }
   const uint32_t now = millis();
-  if (speed_state_ == kSpeedTry && static_cast<int32_t>(now - speed_until_) >= 0) speedRevert();   // no commit in time
-  else if (speed_state_ == kSpeedCommitted && now - speed_good_ms_ >= reg::kPortSpeedIdleMs) speedRevert();
+  if (speed_state_ == kSpeedTry && static_cast<int32_t>(now - speed_until_) >= 0) speedFall();   // no commit in time
+  else if (speed_state_ == kSpeedCommitted && now - speed_good_ms_ >= reg::kPortSpeedIdleMs) speedFall();
 }
 
 // open (core §6.4): lease_ms(u32) force(u8) [TLV 0x01 owner], the session's id in the header  ->  lease_ms(u32)
@@ -1126,6 +1156,7 @@ Result Link::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *
       return completed();
     }
     case reg::probe_link::kOpPortSpeed: return endpoint_.portSpeed(payload, length, out, capacity);
+    case reg::probe_link::kOpPortState: return endpoint_.portState(payload, length, out, capacity);
     default: return rejected(kRejectUnknownOperation);
   }
 }

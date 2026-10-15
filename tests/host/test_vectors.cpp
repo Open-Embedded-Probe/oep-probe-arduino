@@ -595,6 +595,7 @@ struct OpsProbe {
   OpsProbe() {
     ep.addTransport(bulk, rx2, sizeof rx2, Endpoint::kVendorBulk, 0);
     ep.setBootId(0x12345678);
+    ep.setPortSpeed(&OpsProbe::speed, 115200);
     port.pin_choice = (1ull << 1) | (1ull << 2);
     port.pins = &pins;
     ep.add(link);      // fn 1
@@ -612,7 +613,9 @@ struct OpsProbe {
     config.setPins(&pins);
   }
   ~OpsProbe() { logic.planRelease(); }
-  Bytes send(const Bytes &m) { return bulkMessage(ep, bulk, m); }
+  bool on_bridge = false;   // the case's requests come on the UART bridge (serial port 0, COBS): oep.probe.link's port_speed
+  Bytes send(const Bytes &m) { return on_bridge ? serialMessage(ep, uart_bridge, m) : bulkMessage(ep, bulk, m); }
+  static uint32_t speed(uint8_t, uint32_t baud, bool) { return baud; }   // any rate asked, made exactly
   // A request of this test's own (set `corr` before the vector's): the whole answer.
   Bytes request(uint16_t fn, uint8_t op, const Bytes &payload, uint32_t session = kS) {
     Bytes m = {kRoleRequest, uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op,
@@ -667,6 +670,21 @@ static bool names(const Json &fns, const char *name) {
 // The state a case of ops.json / refusals.json assumes (its name, `state` and `fns`), from boot; false: not set up.
 static bool setUp(OpsProbe &p, const std::string &name, const std::string &state, const Json &fns = Json{}) {
   auto has = [&](const char *s) { return name.find(s) != std::string::npos || state.find(s) != std::string::npos; };
+  if (has("source and sink only")) p.ep.setPortSpeed(nullptr, 115200);   // a link without port_speed (link §1)
+  if (has("UART bridge") || has("phase3") || has("session S live on this route")) {   // oep-if-link §3 on serial port 0
+    p.on_bridge = true;
+    if (has("expired try")) return true;                                    // back at the boot speed: phase 0
+    if (has("previous owner ended")) { p.ep.testSpeed(0, 921600, 3, true); return true; }
+    if (has("session S ended")) {                                           // a session that ended, the return pending
+      if (!p.open() || !p.ok(p.request(0, kOpEnd, {}))) return false;
+      p.ep.testSpeed(0, 921600, 3, true);
+      return true;
+    }
+    if (!p.open()) return false;
+    p.ep.testSpeed(0, 921600, 3, has("idle expiry"));
+    p.no_open = true;
+    return true;
+  }
   if (names(fns, "oep.probe.restart")) {   // listed with a handler (fn 11), which here only counts
     p.ep.setRestart(OpsProbe::restartHook, 2000);
     p.no_open = has("lock free");

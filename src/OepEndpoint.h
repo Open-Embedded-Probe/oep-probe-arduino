@@ -241,6 +241,16 @@ class Endpoint {
   // baud asked is refused unsupported (the endpoint checks it).
   using PortSpeedFn = uint32_t (*)(uint8_t port, uint32_t baud, bool apply);
   void setPortSpeed(PortSpeedFn fn, uint32_t base) { port_speed_ = fn; speed_base_ = base; }
+  // TEST HOOK (host tests): port `port` at `rate` in phase `phase` (1 trying, 2 committed, 3 a return pending after a
+  // try - `committed` false - or a committed rate), as if a port_speed had got it there.
+  void testSpeed(uint8_t port, uint32_t rate, uint8_t phase, bool committed = false) {
+    speed_port_ = port;
+    speed_rate_ = speed_asked_ = rate;
+    speed_state_ = phase == 1 || (phase == 3 && !committed) ? kSpeedTry : kSpeedCommitted;
+    speed_fallback_ = phase == 3;
+    speed_until_ = millis() + 1000;
+    speed_good_ms_ = millis();
+  }
   // The optional oep.probe.restart (oep-if-restart). Setting a handler before the first poll() lists the interface (after
   // the sketch's and oep.probe.plan; restartFn) with restart (0x01) and restart_max_ms (describe 0x40); without one
   // the probe does not list it. A call after the first poll() changes nothing (the list is fixed for the boot, core §7.2).
@@ -264,6 +274,12 @@ class Endpoint {
   bool restarting() const { return restarting_; }
   // The rate a sped-up port runs at now (0: every port at its boot speed), and whether it is committed (else trying).
   uint32_t portSpeedNow() const { return speed_state_ == kSpeedBase ? 0 : speed_rate_; }
+  // port_state's phase of the port a request came on (oep-if-link §1): 0 boot, 1 trying, 2 committed, 3 a return pending
+  uint8_t portPhase(uint8_t port) const {
+    if (speed_state_ == kSpeedBase || port != speed_port_) return 0;
+    if (speed_fallback_) return 3;
+    return speed_state_ == kSpeedTry ? 1 : 2;
+  }
   bool portSpeedCommitted() const { return speed_state_ == kSpeedCommitted; }
   // An event from an interface that notifies() (sent to the lock holder if it subscribed to that fn): not batched, it
   // goes out as soon as the answers to what has arrived have (core §11.3, §11.4); kept in a small queue until then
@@ -356,14 +372,17 @@ class Endpoint {
   uint32_t speed_base_ = 115200;
   uint8_t speed_state_ = kSpeedBase, speed_port_ = 0xff;
   uint32_t speed_asked_ = 0, speed_rate_ = 0, speed_until_ = 0, speed_good_ms_ = 0;
+  bool speed_fallback_ = false;   // phase 3: a return condition holds, the frame on the line is let finish (link §3)
   uint8_t speed_pending_ = kSpeedNone, speed_pending_port_ = 0xff;
   uint32_t speed_pending_baud_ = 0, speed_pending_verify_ = 0;
   friend class Link;
   Result portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  Result portState(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   size_t maxFrameIn() const { return limits_.max_frame; }
   void speedApply();             // the switch or revert a request asked for, after its answer
   void speedRevert();            // back to the boot speed (nothing when there already)
   void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
+  void speedFall();              // a return condition: now, or phase 3 while a frame is being received
   static bool speedWithin(uint32_t rate, uint32_t baud);   // port_speed_tolerance_pct
   RestartFn restart_ = nullptr;  // setRestart: oep.probe.restart listed
   uint32_t restart_max_ms_ = 0;
@@ -456,7 +475,7 @@ class Link final : public Interface {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_link::kLockFreeOps, op); }
   bool offers(uint8_t op) const override {
     return op == reg::probe_link::kOpSource || op == reg::probe_link::kOpSink ||
-           (op == reg::probe_link::kOpPortSpeed && endpoint_.port_speed_ != nullptr);
+           ((op == reg::probe_link::kOpPortSpeed || op == reg::probe_link::kOpPortState) && endpoint_.port_speed_ != nullptr);
   }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 
