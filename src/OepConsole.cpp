@@ -41,6 +41,11 @@ void TargetConsoleStream::closeStream() {
 void TargetConsoleStream::release(uint8_t, uint8_t) { closeStream(); }
 
 void TargetConsoleStream::poll() {
+  if (pass_sink_) {   // a pass-through's reading (config §1.2): line loss ends it (no mark, nothing of OEP's)
+    driver_.poll();
+    if (driver_.lineLost()) { passStop(); pass_lost_ = true; }
+    return;
+  }
   if (seen_closes_ != port_.closes) {     // the connection went: the stream goes with it (common §2)
     seen_closes_ = port_.closes;
     closeStream();
@@ -87,6 +92,22 @@ uint32_t TargetConsoleStream::openStream(uint8_t mechanism) {
 }
 
 bool TargetConsoleStream::bindOpen(uint8_t) { return false; }   // the old binds: the pass-through takes their place
+
+bool TargetConsoleStream::passStart(uint8_t mechanism, PassSink sink, void *context) {
+  if (open_ || pass_sink_ || !port_.resident || !offersMechanism(mechanism)) return false;
+  pass_sink_ = sink;
+  pass_ctx_ = context;
+  pass_lost_ = false;
+  if (!driver_.start(mechanism)) { pass_sink_ = nullptr; pass_ctx_ = nullptr; return false; }
+  return true;
+}
+
+void TargetConsoleStream::passStop() {
+  if (!pass_sink_) return;
+  driver_.stop();
+  pass_sink_ = nullptr;
+  pass_ctx_ = nullptr;
+}
 
 Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;

@@ -87,6 +87,13 @@ class FixtureUart final : public Interface, public BindSource {
   void planRelease() override;
   uint8_t planRefusalCause() const override { return refusal_cause_; }
   void planRefusalDetail(uint16_t &channel) const override { channel = refusal_channel_; }
+  // probe.config §1.1's pass-through: the UART on `rx` alone while no plan is there, its bytes to `sink`
+  using PassSink = void (*)(void *context, const uint8_t *data, size_t length);
+  bool passStart(uint16_t rx, uint32_t baud, uint8_t format, PassSink sink, void *context);
+  void passStop();
+  bool passing() const { return pass_sink_ != nullptr; }
+  bool rxAllowed(uint16_t ch) const { return ch < 64 && ((rx_mask_ >> ch) & 1); }   // an RX candidate (role_channels)
+  bool planned() const { return (rx_ >= 0 || tx_ >= 0) && !pass_sink_; }
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 14 ? static_cast<uint16_t>(max_frame - 14) : 0; }
   void poll();   // from loop(): moves what the UART received into the stream
   uint32_t baud() const { return running_ ? baud_ : 0; }
@@ -137,6 +144,8 @@ class FixtureUart final : public Interface, public BindSource {
   bool session_configured_ = false; // a configure took (fixture §2): the UART runs; unconfigured again when it fails
   uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;   // planCheck's last unavailable (core §4.3)
   uint16_t refusal_channel_ = 0xffff;
+  PassSink pass_sink_ = nullptr;
+  void *pass_ctx_ = nullptr;
   uint32_t declared_formats_ = 0x03330333u;   // 8 / 7 bits x none / even / odd x 1 / 2 stop
   bool item_set_ = false;
   uint32_t item_baud_ = kDefaultBaud;

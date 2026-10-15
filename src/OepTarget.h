@@ -60,6 +60,11 @@ struct DebugPort {
   // uses it, or on a forced detach. The bits are the connections entry's users (registry connection_users).
   enum : uint8_t { kUserHost = legacy::kConnectionUsersHostSession, kUserSlot = legacy::kConnectionUsersSlot };
   uint8_t users = 0;
+  // probe.config §1.2: the link a console pass-through holds - no OEP connection (no number, not in connections, its
+  // pins not claimed); a session's attach makes it give way first (yield).
+  bool resident = false;
+  void (*yield)(void *) = nullptr;
+  void *yield_context = nullptr;
   // The live connection's target_id as its attach read it (oep-if-debug §1; has_tid false: none).
   bool has_tid = false;
   uint32_t tid = 0;
@@ -75,6 +80,10 @@ struct DebugPort {
 // (no_answer set: the wire got nothing back - status line), or no connection number was left.
 // A new connection takes the line settings given (oep-if-debug §3: a slot's max_speed / idle_clock); an existing one keeps
 // its own.
+// probe.config §1.2: the link up for a console pass-through on (swdio, swclk) - method 0, never a reset; false: no
+// answer (the pins go back to their free state). residentRelease: down again, the target untouched (debug §2).
+bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz);
+void residentRelease(DebugPort &port);
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
@@ -126,12 +135,12 @@ class WireRvswd final : public Interface {
   bool halt_ = true;
   // oep.probe.restart (oep-if-restart §2): the connection closes whoever uses it (a slot too); the target is left as it is
   void probeRestart() override { releaseConnection(port_, 0xff, true); }
+  bool isRvswd() const { return strcmp(name_, reg::wire_rvswd::kName) == 0; }
 
  private:
   DebugPort &port_;
   uint16_t instance_;
   const char *name_;
-  bool isRvswd() const { return strcmp(name_, reg::wire_rvswd::kName) == 0; }
   struct PinRefusal { uint8_t cause; uint16_t channel; };   // an unavailable's payload (core §4.3)
   uint8_t choosePair(const uint8_t *pins, size_t len, PinRefusal &why);
   Result scan(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);

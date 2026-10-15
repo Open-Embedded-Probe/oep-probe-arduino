@@ -105,6 +105,35 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   return kTlvHeader + 5;
 }
 
+bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz) {
+  if (port.connected || port.resident) return port.resident;
+  if (!usePair(port, swdio, swclk)) return false;
+  DmiPhy &phy = port.dm.phy();
+  if (!phy.setMaxHz(max_hz)) phy.setMaxHz(0);
+  phy.setIdleClockLow(false);
+  if (port.dm.attached() && phy.clockHz() > max_hz) port.dm.detach();
+  AttachDeadline budget(phy);
+  uint32_t status = 0;
+  if (!attachAndRead(port.dm, status)) {
+    port.dm.detach();
+    freeWire(port);
+    return false;
+  }
+  port.dm.ackHaveReset();
+  port.resident = true;
+  phy.loss().clear();
+  phy.holdWakes(true);   // no wake outside attach and reset (debug §2)
+  return true;
+}
+
+void residentRelease(DebugPort &port) {
+  if (!port.resident) return;
+  port.resident = false;
+  port.dm.detach();   // the target untouched (debug §2: closing does not reset or resume it)
+  port.dm.phy().holdWakes(false);
+  freeWire(port);
+}
+
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz, bool idle_low) {
   if (port.connected) {
     if (!moduleAnswers(port.dm, dmstatus)) return false;
@@ -447,6 +476,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     if (refused(q)) return q;
   }
   if (refused(unknown)) return unknown;
+  if (port_.resident && port_.yield) port_.yield(port_.yield_context);   // a pass-through gives way (config §1.2)
   // method: 0 always, 1 when describe's features bit0 (attach_halt) says so; other values unsupported 0x00 (§3)
   if (method > wire::kAttachMethodHalt || (method == wire::kAttachMethodHalt && !halt_)) return unsupportedValue(out, capacity);
   const bool halt = method == wire::kAttachMethodHalt;

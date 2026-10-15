@@ -159,8 +159,9 @@ uint8_t FixtureUart::planCheck(const RoleAssignment *roles, size_t count) {
       return kRejectUnavailable;
     }
   }
-  if ((rx_ >= 0 || tx_ >= 0) && session_configured_) return kRejectUnavailable;   // configured: no change (cause 6)
+  if ((rx_ >= 0 || tx_ >= 0) && session_configured_ && !pass_sink_) return kRejectUnavailable;   // configured: no change (cause 6)
   auto mine = [&](int c) { return c >= 0 && pins_.freeFor(static_cast<uint16_t>(c), owner_); };
+  if (pass_sink_ && !session_configured_) { /* the pass-through gives way at planApply */ }
   if ((rx >= 0 && !mine(rx)) || (tx >= 0 && !mine(tx))) return kRejectUnavailable;
   return 0;
 }
@@ -174,7 +175,30 @@ void FixtureUart::idleHigh() {
   platformGpio(tx_, kGpioOutputHigh);
 }
 
+// probe.config §1.1: the UART on `rx` alone (TX unused, nothing driven), its bytes to `sink` - while no plan of this fn is
+// there; the pin is not claimed (a session's plan or connection takes it at once: passStop first).
+bool FixtureUart::passStart(uint16_t rx, uint32_t baud, uint8_t format, PassSink sink, void *context) {
+  if (rx_ >= 0 || tx_ >= 0) return false;
+  rx_ = rx;
+  pass_sink_ = sink;
+  pass_ctx_ = context;
+  pinMode(rx_, INPUT);
+  if (!begin(baud, format)) { passStop(); return false; }
+  return true;
+}
+
+void FixtureUart::passStop() {
+  if (!pass_sink_) return;
+  stopUart();
+  const int rx = rx_;
+  rx_ = -1;
+  pass_sink_ = nullptr;
+  pass_ctx_ = nullptr;
+  if (rx >= 0) pins_.rest(static_cast<uint16_t>(rx));   // to its free state (core §8)
+}
+
 bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
+  passStop();   // a session's plan wins over the pass-through (config §1.1)
   int rx = -1, tx = -1;
   for (size_t i = 0; i < count; ++i) (roles[i].role == ua::kRoleRx ? rx : tx) = roles[i].channel;
   if (rx_ >= 0 || tx_ >= 0) {   // an unconfigured plan replaced (fixture §2): its buffer and marks go, positions stay
@@ -311,7 +335,8 @@ void FixtureUart::poll() {
     if (n <= 0) break;
     const size_t k = serial_.readBytes(chunk, static_cast<size_t>(n) < want ? static_cast<size_t>(n) : want);
     if (!k) break;
-    for (size_t i = 0; i < k; ++i) stream_.put(chunk[i]);
+    if (pass_sink_) pass_sink_(pass_ctx_, chunk, k);   // a pass-through: to its port, never the stream (config §1.1)
+    else for (size_t i = 0; i < k; ++i) stream_.put(chunk[i]);
     taken_ += static_cast<uint32_t>(k);
 #if !(defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_UART_RP2))
     taken_seen_.store(taken_, std::memory_order_release);

@@ -78,6 +78,13 @@ class TargetConsoleStream final : public Interface, public BindSource {
   uint8_t users() const { return open_ ? kUserHost : 0; }
   // The mechanisms describe declares (console §1: n(u8) n x mechanism, at least one, none twice): bit k = mechanism k.
   void declareMechanisms(uint8_t mask) { mechanisms_ = mask; }
+  // probe.config §1.2: the console read for a pass-through on the port's resident link, its output to `sink` (no
+  // stream, no number, no mark); false: a session's stream is open, or the mechanism did not start.
+  using PassSink = void (*)(void *context, const uint8_t *data, size_t length);
+  bool passStart(uint8_t mechanism, PassSink sink, void *context);
+  void passStop();
+  bool passing() const { return pass_sink_ != nullptr; }
+  bool passLost() const { return pass_lost_; }
   bool offersMechanism(uint8_t m) const { return m < 8 && ((mechanisms_ >> m) & 1); }
   DebugPort &port() const { return port_; }
   // BindSource: the stream while it exists (a closed one too, until another is opened), the target's input.
@@ -95,6 +102,9 @@ class TargetConsoleStream final : public Interface, public BindSource {
   uint32_t connection_ = 0;      // the connection it was opened on (the streams entry)
   uint8_t mechanisms_ = 0x07;    // SDI, DMDATA, dmseq
   bool optional_ = true;         // marks / clear / mark / write offered
+  PassSink pass_sink_ = nullptr;
+  void *pass_ctx_ = nullptr;
+  bool pass_lost_ = false;
   bool open_ = false;
   uint8_t mechanism_ = 0;
   uint16_t max_read_ = 1000;
@@ -107,9 +117,14 @@ class TargetConsoleStream final : public Interface, public BindSource {
   uint32_t openStream(uint8_t mechanism);   // 0: no number left; 0xFFFFFFFF: the driver did not start
   void closeStream();
   void release(uint8_t user, uint8_t detail);
-  static void take(void *self, uint8_t byte) { static_cast<TargetConsoleStream *>(self)->stream_.put(byte); }
+  static void take(void *self, uint8_t byte) {
+    TargetConsoleStream *t = static_cast<TargetConsoleStream *>(self);
+    if (t->pass_sink_) t->pass_sink_(t->pass_ctx_, &byte, 1);   // a pass-through: to its port only
+    else t->stream_.put(byte);
+  }
   static void takeMark(void *self, uint8_t kind, uint8_t detail) {
-    static_cast<TargetConsoleStream *>(self)->stream_.mark(kind, detail);
+    TargetConsoleStream *t = static_cast<TargetConsoleStream *>(self);
+    if (!t->pass_sink_) t->stream_.mark(kind, detail);
   }
 };
 

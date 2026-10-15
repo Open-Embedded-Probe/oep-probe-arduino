@@ -556,14 +556,6 @@ class NullUartStream final : public Stream {   // nothing on the fixture UART's 
 
 constexpr uint32_t kS = 0x11223344;
 
-// The radio behind probe.config's wifi item (the cases whose state says "items has wifi"): takes the list, reports st.
-struct VecWifi final : WifiControl {
-  Status st;
-  size_t count = 0;
-  void apply(const WifiEntry *, size_t n) override { count = n; }
-  Status status() const override { return st; }
-};
-
 struct OpsProbe {
   MemStream uart_bridge, bulk;
   uint8_t rx[2200], rx2[2200], tx[1100];
@@ -584,10 +576,6 @@ struct OpsProbe {
   Binds binds;
   ProbeConfig config{ep, binds};
   LogicCapture logic{ep, pins};
-  VecWifi wifi;
-  // The wifi cases' hashes are the probe's own (probe.config §2): the vectors write 0x5A5A0001 for the settings with
-  // wifi entry 0 and 0x5A5A0002 for the empty ones; these are what this probe answered for them.
-  uint32_t hash_entry = 0, hash_empty = 0;
   uint16_t corr = 1;
   uint32_t actual_samples = 0;   // the logic configure's answer
   bool no_open = false;          // the case's state has the lock free: the vector's session is not opened
@@ -793,46 +781,29 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     }
     return true;
   }
-  if (has("items has wifi")) {   // wifi_max 4; settings "as above": entry 0 "lab", passphrase "password1"
-    p.config.setWifi(&p.wifi);
-    p.hash_empty = p.hash();
-    if (has("connected through entry 0")) {   // -52 dBm, 192.168.1.23
-      p.wifi.st.state = WifiControl::kStateConnected;
-      p.wifi.st.entry = 0;
-      p.wifi.st.rssi = -52;
-      const uint8_t ip[4] = {192, 168, 1, 23};
-      memcpy(p.wifi.st.ipv4, ip, 4);
-      return true;
+  if (names(fns, "oep.probe.config")) {   // probe.config's cases (oep-if-probe-config §1-§3): from what they say is there
+    fakeConfigStore(nullptr, 0);
+    auto set = [&](const Bytes &items) { return p.ok(p.request(8, reg::probe_config::kOpSet, items)); };
+    const Bytes idle4 = {1, reg::probe_config::kTlvItemIdle, 3, 0, 4, 0, 0};
+    const Bytes disable4 = {1, reg::probe_config::kTlvItemDisable, 2, 0, 4, 0};
+    if (has("CRC-valid saved blob")) {   // disable 5, idle 4 Hi-Z, a label on channel 40 (not this probe's): saved whole
+      Bytes blob = {reg::probe_config::kTlvItemLabel, 3, 0, 40, 0, 'x', reg::probe_config::kTlvItemIdle, 3, 0, 4, 0, 0,
+                    reg::probe_config::kTlvItemDisable, 2, 0, 5, 0};
+      const uint32_t crc = crc32Ieee(blob.data(), blob.size());
+      blob.insert(blob.end(), {uint8_t(crc), uint8_t(crc >> 8), uint8_t(crc >> 16), uint8_t(crc >> 24)});
+      fakeConfigStore(blob.data(), blob.size());
+      p.config.load();
+      p.config.applySaved();
+      return p.pins.disabled(5);
     }
+    if (has("no storage")) p.config.setStorage(false);
+    if (has("state offered") || has("no storage")) return true;   // lock-free / refused before any session
     if (!p.open()) return false;
-    if (has("settings: the wifi entry") || has("settings as above")) {
-      const Bytes item = {legacy::probe_config::kTlvItemWifi, 15, 0, 0, 3, 'l', 'a', 'b', 9,
-                          'p', 'a', 's', 's', 'w', 'o', 'r', 'd', '1'};
-      if (!p.ok(p.request(8, reg::probe_config::kOpSet, item))) return false;
-      p.hash_entry = p.hash();
-      return p.wifi.count == 1 && p.hash_entry != p.hash_empty;
-    }
+    if (has("one idle item") || has("one item generation2") || has("idle channel4 exists")) return set(idle4);
+    if (has("disable channel4")) return set(disable4);
+    if (has("generation0xFFFFFFFF")) p.config.testGeneration(0xFFFFFFFFu);
     return true;
   }
-  if (has("probe.config state")) {
-    // slot 0 at boot on the rvswd wire (fn 4), pins 1 / 2, 1 MHz, dmseq console; port 0 bound to its console; set at
-    // 1 ms, so the automatic attach is tried then
-    if (!p.open()) return false;
-    Bytes slot = {0, 4, 0, 1, 0, 2, 0, legacy::probe_config::kSlotAttachAtBoot, 0, 0, 0, 0, 0x40, 0x42, 0x0f, 0x00, 0,
-                  reg::target_console::kMechanismDmseq, 3, 'd', 'u', 't'};
-    Bytes items = {uint8_t(legacy::kTlvItemSlot | kTagCritical), uint8_t(slot.size()), 0};
-    items.insert(items.end(), slot.begin(), slot.end());
-    const Bytes bind = {uint8_t(legacy::probe_config::kTlvItemBind | kTagCritical), 4, 0, 0, Binds::kSlotConsole, 0, 0};
-    items.insert(items.end(), bind.begin(), bind.end());
-    g_millis = 1;
-    g_micros_part = 0;
-    if (!p.ok(p.request(8, reg::probe_config::kOpSet, items))) return false;
-    p.config.poll();
-    p.ep.poll();
-    return p.port.connected && p.port.number == 1;
-  }
-  if (has("save not offered")) { p.config.setStorage(false); return true; }
-  if (has("probe.config set")) return p.open();
   if (has("riscv-dm run not offered")) { p.riscv.offerOptional(false); return true; }
   if (has("declares only dmi") || has("raw-only fn")) p.riscv.offerOptional(false);
   if (has("attach halt method is not offered")) { p.wire.offerHalt(false); return true; }
@@ -957,23 +928,7 @@ static void testOps(const char *file, const char *list) {
     Bytes want = hex(c["answer_hex"].string);
     OpsProbe::restarts = 0;
     Bytes got = p.send(req);
-    if (c["state"].string.find("items has wifi") != std::string::npos) {
-      // the placeholders 0x5A5A0001 (entry 0 set) / 0x5A5A0002 (empty) / 0x5A5A0003 (the new settings of a set, the
-      // 112-byte one of the longest wifi item) -> this probe's hashes; a set that made entry 0 has it now
-      if (!p.hash_entry && name.find("set: wifi entry 0") != std::string::npos) p.hash_entry = p.hash();
-      CHECK(!p.hash_entry || p.hash_entry != p.hash_empty);
-      uint32_t hash_new = 0;
-      if (c["state"].string.find("the probe's hash for the new settings is 0x5A5A0003") != std::string::npos) {
-        CHECK(req.size() == legacy::top2::kLimitWifiMinMaxFrame && p.wifi.count == 1);   // a 112-byte set, taken
-        hash_new = p.hash();
-        CHECK(hash_new != p.hash_empty);
-      }
-      for (size_t i = 5; i + 4 <= want.size(); ++i)
-        if (want[i + 1] == 0 && want[i + 2] == 0x5a && want[i + 3] == 0x5a && want[i] >= 1 && want[i] <= 3) {
-          putU32(&want[i], want[i] == 1 ? p.hash_entry : want[i] == 2 ? p.hash_empty : hash_new);
-          i += 3;
-        }
-    }
+
     if (names(c["fns"], "oep.probe.restart"))   // the restart follows its success answer only (oep-if-restart §2)
       CHECK(OpsProbe::restarts == (name.find("completed success") != std::string::npos ? 1 : 0));
     if (c["state"].string.find("roles 0 and 1") != std::string::npos && got.size() == want.size()) {
@@ -988,6 +943,8 @@ static void testOps(const char *file, const char *list) {
       putU32(&want[5 + 2 + 12], p.actual_samples);                   // the probe's own values (see the top)
       putU32(&want[5 + 2 + 24], LogicCapture::kStartUncertaintyNs);
     }
+    if (name.find("response extensions") != std::string::npos && want.size() >= 4 && want[want.size() - 4] == 0x7f)
+      want.resize(want.size() - 4);   // the answer TLV after the items is the host's to skip (core §2.3); none sent here
     CHECK(same(file, name, got, want));
   }
 }
@@ -1383,7 +1340,10 @@ static void testRestartLetsGo() {
     halted = seen->phy.halted;
   }, 2000);
   CHECK(p.ep.restartFn() == 11);
-  CHECK(setUp(p, "probe.config state", ""));   // the slot at boot attached, its console bound (session S open)
+  CHECK(p.open() && p.attach());   // session S's connection 1 and its console's stream
+  const Bytes s = p.request(7, reg::target_console::kOpOpen, {1, 0, 0, 0, reg::target_console::kMechanismDmseq});
+  CHECK(p.ok(s));
+  p.phy.halted = true;
   CHECK(p.port.connected && p.console.isOpen() && p.phy.halted);
   CHECK(p.plan(2, reg::fixture_gpio::kRoleLine, 3));
   const RoleAssignment settings[] = {{5, reg::fixture_uart::kRoleTx, 6}};
@@ -1417,6 +1377,75 @@ static void testEveryOpsCanonical() {
   CHECK(!p.ep.interfaceAt(12));
 }
 
+// probe.config §1.1 / §1.2 and transports §4: a pass-through's bytes go out on the serial port (here the UART bridge,
+// port 0) between frames while no session's requests came on it; a session there stops it until the session ends.
+static Bytes rawOf(const Bytes &tx) {   // what is outside the COBS frames (0x00 ... 0x00) of what the port sent
+  Bytes raw;
+  for (size_t i = 0; i < tx.size(); ++i) {
+    if (tx[i] != 0) { raw.push_back(tx[i]); continue; }
+    while (i + 1 < tx.size() && tx[i + 1] != 0) ++i;   // a frame: to its closing 0x00
+    ++i;
+  }
+  return raw;
+}
+static void testPassthrough() {
+  ++cases;
+  {   // UART fn 5 on RX channel 3 to port 0
+    boot();
+    OpsProbe p;
+    CHECK(p.open());   // session S on the bulk port: port 0 not held
+    const Bytes item = {1, reg::probe_config::kTlvItemPassthrough, 10, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
+    CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
+    p.config.poll();
+    CHECK(p.uart.passing());
+    for (char c : std::string("hello\r\n")) p.serial.fakePush(uint8_t(c));
+    p.config.poll();
+    p.ep.poll();
+    CHECK(p.uart_bridge.tx == Bytes({'h', 'e', 'l', 'l', 'o', '\r', '\n'}));
+    p.uart_bridge.tx.clear();
+    CHECK(p.plan(5, reg::fixture_uart::kRoleRx, 3));   // the session takes the fn's plan: the session's UART wins
+    p.config.poll();
+    CHECK(!p.uart.passing());
+    p.ep.poll();
+    CHECK(p.uart_bridge.tx.empty());
+  }
+  {   // a session's request on port 0 stops it; its end starts it again
+    boot();
+    OpsProbe p;
+    p.on_bridge = true;
+    CHECK(p.open());
+    const Bytes item = {1, reg::probe_config::kTlvItemPassthrough, 10, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
+    CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
+    p.config.poll();
+    CHECK(!p.uart.passing());
+    p.uart_bridge.tx.clear();   // (the UART is stopped: what came then was never received)
+    CHECK(p.ok(p.request(0, kOpEnd, {})));
+    p.config.poll();
+    CHECK(p.uart.passing());
+    for (char c : std::string("free")) p.serial.fakePush(uint8_t(c));
+    p.config.poll();
+    p.ep.poll();
+    CHECK(rawOf(p.uart_bridge.tx) == Bytes({'f', 'r', 'e', 'e'}));   // nothing of the session's time kept
+  }
+  {   // the target's console (rvswd fn 4 on 1 / 2, console fn 7, dmseq) to port 0: no connection, no stream of OEP's
+    boot();
+    OpsProbe p;
+    CHECK(p.open());
+    const Bytes item = {1, reg::probe_config::kTlvItemConsolePassthrough, 14, 0, 0, 4, 0, 1, 0, 2, 0, 0x40, 0x42, 0x0f,
+                        0x00, 7, 0, reg::target_console::kMechanismDmseq};
+    CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
+    p.config.poll();
+    CHECK(p.port.resident && !p.port.connected && !p.console.isOpen());
+    p.say("hi");
+    p.config.poll();
+    p.ep.poll();
+    CHECK(p.uart_bridge.tx == Bytes({'h', 'i'}));
+    CHECK(p.attach());   // a session's attach takes the wire: the pass-through yields, the target untouched
+    p.config.poll();
+    CHECK(p.port.connected && !p.port.resident);
+  }
+}
+
 int main() {
   testHeaders();
   testCobs();
@@ -1431,6 +1460,7 @@ int main() {
   testLogicEvents();
   testRestartLetsGo();
   testEveryOpsCanonical();
+  testPassthrough();
   printf("vectors: %d cases, %d checks, %d failures\n", cases, checks, failures);
   return failures ? 1 : 0;
 }
