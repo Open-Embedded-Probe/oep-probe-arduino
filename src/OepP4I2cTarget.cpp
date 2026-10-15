@@ -26,6 +26,17 @@ uint8_t P4I2cTarget::planCheck(const RoleAssignment *roles, size_t count) {
   if (sda < 0 || scl < 0 || sda == scl) return kRejectUnsupported;
   // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
   if (!pins_.canOutput(sda) || !pins_.canOutput(scl)) return kRejectUnsupported;
+  // a channel whose idle is an output: not taken (core §8: this interface does not say it takes one), cause 5
+  refusal_cause_ = reg::core::kUnavailableCauseWrongState;
+  refusal_channel_ = 0xffff;
+  for (size_t i = 0; i < count; ++i) {
+    const uint8_t idle = pins_.idle(roles[i].channel);
+    if (idle == PinTable::kIdleOutputLow || idle == PinTable::kIdleOutputHigh) {
+      refusal_cause_ = reg::core::kUnavailableCauseHeldBySettings;
+      refusal_channel_ = roles[i].channel;
+      return kRejectUnavailable;
+    }
+  }
   if (!pins_.freeFor(sda, kOwnerId) || !pins_.freeFor(scl, kOwnerId)) return kRejectUnavailable;
   if (sda_ >= 0 && started_) return kRejectUnavailable;   // running (state 1): no change, cause 6 (fixture §3)
   return 0;
@@ -267,7 +278,10 @@ void P4I2cTarget::unlock() {}
 void P4I2cTarget::service() {}
 
 #if defined(OEP_HOST_FAKE_I2C_SLAVE)
-bool P4I2cTarget::start() { started_ = true; rx_count_ = 0; tx_pos_ = 0; return true; }
+bool P4I2cTarget::start() {
+  if (fake_fail_start) { fake_fail_start = false; return false; }   // the driver does not start (once)
+  started_ = true; rx_count_ = 0; tx_pos_ = 0; return true;
+}
 void P4I2cTarget::stop() { started_ = false; }
 
 bool P4I2cTarget::hostTransaction(const uint8_t *data, size_t count, size_t read, uint8_t *got) {
@@ -298,7 +312,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       stop();
       clearTarget();   // frames, slots, rx_frames and errors go; stretch stays
       address_ = payload[0];
-      if (!start()) return failed();
+      if (!start()) { clearTarget(); return failed(); }   // state 0: queue, slots and counters gone, stretch kept (fixture §3)
       return completed();
     }
     case kOpReadRx: {   // [TLV] -> pending(u8) count(u16) data: the oldest received frame, then the ones still queued

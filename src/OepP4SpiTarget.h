@@ -77,6 +77,10 @@ class P4SpiTarget final : public Interface {
   size_t describe(uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
+  uint8_t planRefusalCause() const override { return refusal_cause_; }
+  void planRefusalDetail(uint16_t &channel) const override { channel = refusal_channel_; }
+  uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;   // the last planCheck's unavailable (core §4.3)
+  uint16_t refusal_channel_ = 0xffff;
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   void service();  // call from loop(): collects the finished transaction into the queue

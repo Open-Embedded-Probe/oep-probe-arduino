@@ -24,6 +24,17 @@ uint8_t P4SpiTarget::planCheck(const RoleAssignment *roles, size_t count) {
   // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
   for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.allowed(pin[r])) return kRejectUnsupported;
   if (!pins_.canOutput(pin[kRoleMiso])) return kRejectUnsupported;   // MISO: not in its role_channels
+  // a channel whose idle is an output: not taken (core §8: this interface does not say it takes one), cause 5
+  refusal_cause_ = reg::core::kUnavailableCauseWrongState;
+  refusal_channel_ = 0xffff;
+  for (size_t i = 0; i < count; ++i) {
+    const uint8_t idle = pins_.idle(roles[i].channel);
+    if (idle == PinTable::kIdleOutputLow || idle == PinTable::kIdleOutputHigh) {
+      refusal_cause_ = reg::core::kUnavailableCauseHeldBySettings;
+      refusal_channel_ = roles[i].channel;
+      return kRejectUnavailable;
+    }
+  }
   for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.freeFor(pin[r], kOwnerId)) return kRejectUnavailable;
   if (sck_ >= 0 && started_) return kRejectUnavailable;   // running (state 1): no change, cause 6 (fixture §4)
   return 0;
@@ -317,7 +328,13 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       if (sck_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §4: unavailable cause 6)
       stop();   // the queue and the wait go
       mode_ = payload[0]; bit_order_ = payload[1]; transactions_ = 0; errors_ = 0;
-      if (!start()) return failed();
+      if (!start()) {   // state 0: mode, order, the arm, the queue and the counters all 0 (fixture §4)
+        stop();
+        mode_ = bit_order_ = 0;
+        armed_ = false;
+        queue_count_ = 0;
+        return failed();
+      }
       return completed();
     }
     case kOpArm: {   // length(u16) count(u16) tx [TLV]: MISO bytes for the next CS-framed transaction of length bytes

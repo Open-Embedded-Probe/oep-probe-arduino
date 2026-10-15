@@ -58,6 +58,7 @@ struct spi_slave_transaction_t {
 };
 
 struct FakeSpiSlave {
+  bool fail_init = false, fail_queue = false;   // the next initialize / the arm's queue_trans fails
   bool up = false;
   int queue_size = 0;
   int inits = 0;
@@ -111,7 +112,7 @@ inline void fakeSpiIsr() {
 inline esp_err_t spi_slave_initialize(spi_host_device_t, const spi_bus_config_t *b, const spi_slave_interface_config_t *c,
                                       spi_dma_chan_t) {
   FakeSpiSlave &f = g_fake_spi;
-  if (f.up) return ESP_FAIL;
+  if (f.up || f.fail_init) { f.fail_init = false; return ESP_FAIL; }
   f.cs_pin = c->spics_io_num; f.miso_pin = b->miso_io_num;
   if (f.cs_pin >= 0) g_fake_gpio.level[f.cs_pin] = f.cs_low ? 0 : 1;
   if (f.miso_pin >= 0) g_fake_gpio.oe_by_gpio[f.miso_pin] = false;   // routed to the slave: its output enable
@@ -131,6 +132,7 @@ inline esp_err_t spi_slave_free(spi_host_device_t) {
 inline esp_err_t spi_slave_queue_trans(spi_host_device_t, const spi_slave_transaction_t *t, TickType_t) {
   FakeSpiSlave &f = g_fake_spi;
   if (!f.up || f.queued.size() >= static_cast<size_t>(f.queue_size)) return ESP_FAIL;
+  if (f.fail_queue) { f.fail_queue = false; return ESP_FAIL; }   // the arm's preparation fails (once)
   f.queued.push_back(const_cast<spi_slave_transaction_t *>(t));
   f.intr_on = true;
   fakeSpiIsr();

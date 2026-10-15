@@ -74,7 +74,12 @@ class P4I2cTarget final : public Interface {
   Result handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   size_t describe(uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
+  static inline bool fake_fail_start = false;   // host tests: the next start fails
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
+  uint8_t planRefusalCause() const override { return refusal_cause_; }
+  void planRefusalDetail(uint16_t &channel) const override { channel = refusal_channel_; }
+  uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;   // the last planCheck's unavailable (core §4.3)
+  uint16_t refusal_channel_ = 0xffff;
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   void service();  // call from loop(): ends a stretch hold, reloads the TX FIFO when a preload waited for an idle bus

@@ -671,6 +671,20 @@ static bool names(const Json &fns, const char *name) {
 static bool setUp(OpsProbe &p, const std::string &name, const std::string &state, const Json &fns = Json{}) {
   auto has = [&](const char *s) { return name.find(s) != std::string::npos || state.find(s) != std::string::npos; };
   if (has("source and sink only")) p.ep.setPortSpeed(nullptr, 115200);   // a link without port_speed (link §1)
+  if (names(fns, "oep.fixture.i2c-target") && !names(fns, "oep.probe.plan")) {   // fixture §3: fn 3 on channels 8 / 9
+    auto planned = [&]() {
+      return p.ok(p.request(p.ep.planFn(), kOpPlanApply, {0x10, 5, 0, 3, 0, P4I2cTarget::kRoleSda, 8, 0,
+                                                          0x10, 5, 0, 3, 0, P4I2cTarget::kRoleScl, 9, 0}));
+    };
+    auto configure = [&]() { return p.ok(p.request(3, P4I2cTarget::kOpConfigure, {0x42})); };
+    if (has("fn 3 has its SDA/SCL plan")) return p.open() && planned();
+    if (has("driver fails to start")) { if (!p.open() || !planned() || !configure()) return false; P4I2cTarget::fake_fail_start = true; return true; }
+    if (has("configure above failed")) {
+      if (!p.open() || !planned() || !configure()) return false;
+      P4I2cTarget::fake_fail_start = true;
+      return !p.ok(p.request(3, P4I2cTarget::kOpConfigure, {0x42}));
+    }
+  }
   if (names(fns, "oep.fixture.uart")) {   // fixture §2: fn 5, RX on channel 3, TX on channel 4
     auto rx = [&](const char *bytes) { for (const char *b = bytes; *b; ++b) p.serial.fakeReceive(static_cast<uint8_t>(*b)); p.uart.poll(); };
     auto configure = [&](uint32_t baud) { return p.ok(p.request(5, reg::fixture_uart::kOpConfigure, {uint8_t(baud), uint8_t(baud >> 8), uint8_t(baud >> 16), uint8_t(baud >> 24)})); };
@@ -861,9 +875,37 @@ static bool elsewhere(const Json &c) {
   return c["state"].string.find("marks 5 to 8 kept") != std::string::npos;
 }
 
+// "plan_apply: <interface> refuses output idle" (core §8): a plan onto a channel whose idle is an output, refused
+// unavailable cause 5 with that channel by the interface's own check. The vector names fn 5 for each interface, which
+// this test's probes number otherwise: the rule is checked on the interface itself.
+static bool outputIdleRefused(const Json &c) {
+  if (c["name"].string.find("refuses output idle") == std::string::npos) return false;
+  PinTable pins{0xFFFFull};
+  pins.setIdle(3, PinTable::kIdleOutputHigh);
+  uint8_t cause = 0;
+  uint16_t channel = 0;
+  uint8_t reason = 0;
+  if (names(c["fns"], "oep.fixture.i2c-target")) {
+    P4I2cTarget t{pins};
+    const RoleAssignment r[] = {{5, P4I2cTarget::kRoleSda, 3}, {5, P4I2cTarget::kRoleScl, 4}};
+    reason = t.planCheck(r, 2); cause = t.planRefusalCause(); t.planRefusalDetail(channel);
+  } else if (names(c["fns"], "oep.fixture.spi-target")) {
+    P4SpiTarget t{pins};
+    const RoleAssignment r[] = {{5, P4SpiTarget::kRoleSck, 3}, {5, P4SpiTarget::kRoleMosi, 4},
+                                {5, P4SpiTarget::kRoleMiso, 5}, {5, P4SpiTarget::kRoleCs, 6}};
+    reason = t.planCheck(r, 4); cause = t.planRefusalCause(); t.planRefusalDetail(channel);
+  } else {
+    return false;
+  }
+  ++cases;
+  CHECK(reason == kRejectUnavailable && cause == reg::core::kUnavailableCauseHeldBySettings && channel == 3);
+  return true;
+}
+
 static void testOps(const char *file, const char *list) {
   const Json v = load(file);
   for (const Json &c : v[list].items) {
+    if (outputIdleRefused(c)) continue;
     if (elsewhere(c)) continue;
     if (multirate(c) || ownSegments(c)) {
       printf("  %s \"%s\": %s\n", file, c["name"].string.c_str(), multirate(c) ? "multirate, not offered" : "in test_capture");
@@ -1086,13 +1128,34 @@ static void testWideCases() {
       // configured with the case's bit order, armed for 4 bytes (tx ff ff: the work registers' stale bits), then 12
       // MOSI bits 1 1 0 0 0 0 0 0 1 0 1 1 and CS high
       WideProbe p;
-      const uint8_t order = c["state"].string.find("bit_order 1") != std::string::npos ? 1 : 0;
-      CHECK(p.open());
-      CHECK(p.ok(p.request(14, P4SpiTarget::kOpConfigure, {0, order})));
-      CHECK(p.ok(p.request(14, P4SpiTarget::kOpArm, {4, 0, 2, 0, 0xff, 0xff})));
+      const std::string &state = c["state"].string;
+      auto in = [&](const char *s) { return state.find(s) != std::string::npos || name.find(s) != std::string::npos; };
+      const uint8_t order = in("bit_order 1") ? 1 : 0;
       const uint8_t wire_bits[] = {0xc0, 0xb0};
-      CHECK(fakeSpiTransfer(12, wire_bits));
-      p.spi.service();
+      CHECK(p.open());
+      if (in("success has no fixed part")) {
+        // the plan only: the vector's configure is the first
+      } else if (in("configure above failed")) {   // configured, then a configure whose driver does not start
+        CHECK(p.ok(p.request(14, P4SpiTarget::kOpConfigure, {0, 0})));
+        g_fake_spi.fail_init = true;
+        CHECK(!p.ok(p.request(14, P4SpiTarget::kOpConfigure, {0, 0})));
+        if (in("a CS transfer came afterwards")) { fakeSpiTransfer(12, wire_bits); p.spi.service(); }
+      } else if (in("driver fails to start")) {   // running, armed, a transaction queued; the next start fails
+        CHECK(p.ok(p.request(14, P4SpiTarget::kOpConfigure, {0, 0})));
+        CHECK(p.ok(p.request(14, P4SpiTarget::kOpArm, {4, 0, 2, 0, 0xff, 0xff})));
+        CHECK(fakeSpiTransfer(12, wire_bits));
+        p.spi.service();
+        CHECK(p.ok(p.request(14, P4SpiTarget::kOpArm, {4, 0, 2, 0, 0xff, 0xff})));
+        g_fake_spi.fail_init = true;
+      } else if (in("cannot prepare output")) {   // configured; the arm's preparation fails
+        CHECK(p.ok(p.request(14, P4SpiTarget::kOpConfigure, {0, 0})));
+        g_fake_spi.fail_queue = true;
+      } else {
+        CHECK(p.ok(p.request(14, P4SpiTarget::kOpConfigure, {0, order})));
+        CHECK(p.ok(p.request(14, P4SpiTarget::kOpArm, {4, 0, 2, 0, 0xff, 0xff})));
+        CHECK(fakeSpiTransfer(12, wire_bits));
+        p.spi.service();
+      }
       p.corr = static_cast<uint16_t>(getU16(&req[1]) - 1);
       got = p.send(req);
     } else if (name.find("cannot keep the group's pretrigger") != std::string::npos) {
