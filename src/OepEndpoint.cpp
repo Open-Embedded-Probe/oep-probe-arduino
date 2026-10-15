@@ -567,6 +567,7 @@ size_t Endpoint::opsTlv(uint16_t fn, uint8_t *out, size_t capacity) const {
   int lo = -1, hi = -1;
   for (int op = 1; op < kReservedOps; ++op)
     if (offersOp(fn, static_cast<uint8_t>(op))) { if (lo < 0) lo = op; hi = op; }
+  if (lo > 0) lo &= ~7;   // base: the lowest op rounded down to a multiple of 8 (the shared vectors' form; core §7.4 allows any)
   const size_t bytes = lo < 0 ? 0 : static_cast<size_t>((hi - lo) / 8 + 1);
   if (capacity < kTlvHeader + 1 + bytes) return 0;
   putTlvHeader(out, kTagOps, static_cast<uint16_t>(1 + bytes));

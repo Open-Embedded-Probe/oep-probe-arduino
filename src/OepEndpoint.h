@@ -123,6 +123,8 @@ class Endpoint {
     addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
     setPushQueue(1024);
   }
+  // How many requests the resend record keeps (core §5.1: the probe's choice).
+  static constexpr size_t kDedupEntriesOf() { return kDedupEntries; }
   // confirm's max_frame: the same on every transport of this endpoint.
   uint16_t maxFrame() const { return limits_.max_frame; }
   // confirm's values within core §7.1's bounds, whatever the sketch gave: max_frame 64 or more, window max_frame or
