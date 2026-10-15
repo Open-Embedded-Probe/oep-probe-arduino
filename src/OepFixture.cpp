@@ -51,7 +51,7 @@ uint8_t FixtureGpio::planCheck(const RoleAssignment *roles, size_t count) {
   for (size_t i = 0; i < count; ++i) {
     const uint16_t c = roles[i].channel;
     if (roles[i].role != gp::kRoleLine || !pins_.allowed(c) || ((seen >> c) & 1)) return kRejectUnsupported;
-    if (!pins_.free(c)) return kRejectUnavailable;
+    if (!pins_.freeFor(c, owner_)) return kRejectUnavailable;
     seen |= uint64_t{1} << c;
   }
   return 0;
@@ -121,7 +121,10 @@ size_t FixtureUart::describe(uint8_t *out, size_t capacity) {
   uint8_t formats[12], n = 0;
   for (uint8_t stop = 0; stop < 2; ++stop)
     for (uint8_t parity = 0; parity < 3; ++parity)
-      for (uint8_t data = 0; data < 2; ++data) formats[n++] = static_cast<uint8_t>(data | parity << 2 | stop << 4);
+      for (uint8_t data = 0; data < 2; ++data) {
+        const uint8_t f = static_cast<uint8_t>(data | parity << 2 | stop << 4);
+        if (formatDeclared(f)) formats[n++] = f;
+      }
   w.u8List(ua::kTlvDescribeFormats, formats, n);
   return w.ok() ? w.length() : 0;
 }
@@ -144,7 +147,21 @@ uint8_t FixtureUart::planCheck(const RoleAssignment *roles, size_t count) {
     if (roles[i].role == ua::kRoleTx && !pins_.canOutput(c)) return kRejectUnsupported;     // TX on an input-only pin
   }
   if (rx >= 0 && tx >= 0 && rx == tx) return kRejectUnsupported;
-  if ((rx >= 0 && !pins_.free(rx)) || (tx >= 0 && !pins_.free(tx)) || rx_ >= 0 || tx_ >= 0) return kRejectUnavailable;
+  refusal_cause_ = reg::core::kUnavailableCauseWrongState;
+  refusal_channel_ = 0xffff;
+  // a channel whose idle is an output: the UART does not take it (core §8: no interface here says it does), cause 5
+  const int planned[2] = {rx, tx};
+  for (int c : planned) {
+    const uint8_t idle = c >= 0 ? pins_.idle(static_cast<uint16_t>(c)) : PinTable::kIdleUnset;
+    if (idle == PinTable::kIdleOutputLow || idle == PinTable::kIdleOutputHigh) {
+      refusal_cause_ = reg::core::kUnavailableCauseHeldBySettings;
+      refusal_channel_ = static_cast<uint16_t>(c);
+      return kRejectUnavailable;
+    }
+  }
+  if ((rx_ >= 0 || tx_ >= 0) && session_configured_) return kRejectUnavailable;   // configured: no change (cause 6)
+  auto mine = [&](int c) { return c >= 0 && pins_.freeFor(static_cast<uint16_t>(c), owner_); };
+  if ((rx >= 0 && !mine(rx)) || (tx >= 0 && !mine(tx))) return kRejectUnavailable;
   return 0;
 }
 
@@ -160,6 +177,11 @@ void FixtureUart::idleHigh() {
 bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
   int rx = -1, tx = -1;
   for (size_t i = 0; i < count; ++i) (roles[i].role == ua::kRoleRx ? rx : tx) = roles[i].channel;
+  if (rx_ >= 0 || tx_ >= 0) {   // an unconfigured plan replaced (fixture §2): its buffer and marks go, positions stay
+    pins_.release(owner_);
+    stream_.erase();
+    rx_ = tx_ = -1;
+  }
   if (rx >= 0 && !pins_.claim(rx, owner_)) return false;
   if (tx >= 0 && !pins_.claim(tx, owner_)) { pins_.release(owner_); return false; }
   rx_ = rx;
@@ -168,9 +190,8 @@ bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
   if (tx_ >= 0) pins_.ownStrength(tx_);
   session_configured_ = false;
   if (rx_ >= 0) pinMode(rx_, INPUT);
-  idleHigh();   // before the UART starts, too: the DUT's RX stays connected
-  applySettings();   // the plan makes the stream: the UART runs from here (fixture §2)
-  return true;
+  idleHigh();   // TX rests high from the plan on, before any configure (fixture §2): the DUT's RX stays connected
+  return true;   // nothing is received before a configure (fixture §2): the UART starts there
 }
 
 void FixtureUart::planRelease() {
@@ -455,6 +476,7 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       const Result parsed = tail.parse(payload + 4, length - 4, kKnown, out, capacity);
       if (refused(parsed)) return parsed;
       const uint32_t baud = getU32(payload);
+      if (baud == 0) return rejected(kRejectMalformed);   // a value the definition excludes (fixture §2)
       // format: bits 0-1 data bits (0 = 8, 1 = 7), bits 2-3 parity (0 none, 1 even, 2 odd), bit 4 stop bits (0 = 1,
       // 1 = 2). 8N1 when absent. A value the definition leaves unused (or a reserved bit) is unsupported with the tag as
       // received, critical or not (core §2.3); every defined one is declared here (fixture §2).
@@ -464,15 +486,18 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       const Result form = tail.fixed(ua::kTlvConfigureFormat, 1, f, out, capacity, &format_critical);
       if (refused(form)) return form;
       if (f) {
-        if (!formatDefined(f[0])) return Tail::refuse(ua::kTlvConfigureFormat, format_critical, out, capacity);
+        if (!formatDefined(f[0]) || !formatDeclared(f[0])) return Tail::refuse(ua::kTlvConfigureFormat, format_critical, out, capacity);
         format = f[0];
       }
       if (!baudWithinReach(baud)) return unsupportedValue(out, capacity);   // a rate this UART cannot run (core §4.3)
       if (rx_ < 0 && tx_ < 0) return wrongState(out, capacity);               // no plan: no pins
       if (capacity < 4) return failed();
-      if (!begin(baud, format)) {   // the rate came out more than 5 % off: not a rate this UART runs
-        applySettings();
-        return unsupportedValue(out, capacity);
+      if (!begin(baud, format)) {   // taken, not brought up: stopped, unconfigured, the plan and the data kept (fixture §2)
+        stopUart();
+        session_configured_ = false;
+        idleHigh();
+        putU32(out, 0);
+        return failed(4);
       }
       session_configured_ = true;
       putU32(out, baud_);

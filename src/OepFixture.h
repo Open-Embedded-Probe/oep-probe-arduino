@@ -85,6 +85,8 @@ class FixtureUart final : public Interface, public BindSource {
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
+  uint8_t planRefusalCause() const override { return refusal_cause_; }
+  void planRefusalDetail(uint16_t &channel) const override { channel = refusal_channel_; }
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 14 ? static_cast<uint16_t>(max_frame - 14) : 0; }
   void poll();   // from loop(): moves what the UART received into the stream
   uint32_t baud() const { return running_ ? baud_ : 0; }
@@ -95,6 +97,9 @@ class FixtureUart final : public Interface, public BindSource {
   // What probe.config checks before taking a uart item: the format's bits defined (else malformed), the baud this UART
   // can run within 5 % (else unsupported).
   static bool formatDefined(uint8_t format);
+  // The formats describe declares (fixture §2: 8N1 required): bit k = format value k. Every defined one by default.
+  void declareFormats(uint32_t mask) { declared_formats_ = mask | 1u; }
+  bool formatDeclared(uint8_t format) const { return format < 32 && ((declared_formats_ >> format) & 1); }
   static bool baudWithinReach(uint32_t baud) { return baud >= kMinBaud && baud <= kMaxBaud; }
   // The channels the peripheral can take as RX and as TX (platform wiring: an RP2 UART reaches a few pins each way).
   // describe declares role_channels from these, planCheck refuses others as unsupported - before the core's pin
@@ -129,7 +134,10 @@ class FixtureUart final : public Interface, public BindSource {
   uint8_t owner_;
   int rx_ = -1, tx_ = -1;
   bool running_ = false;            // the UART runs (planned and begun)
-  bool session_configured_ = false; // configure since the plan: it wins over the item until the plan is released
+  bool session_configured_ = false; // a configure took (fixture §2): the UART runs; unconfigured again when it fails
+  uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;   // planCheck's last unavailable (core §4.3)
+  uint16_t refusal_channel_ = 0xffff;
+  uint32_t declared_formats_ = 0x03330333u;   // 8 / 7 bits x none / even / odd x 1 / 2 stop
   bool item_set_ = false;
   uint32_t item_baud_ = kDefaultBaud;
   uint8_t item_format_ = 0;

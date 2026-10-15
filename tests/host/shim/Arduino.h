@@ -101,6 +101,7 @@ class HardwareSerial {
   // and a break (fake_break, getBreakReceived).
   bool fakeBegin(uint32_t baud, int rx, int tx, uint32_t config, int irq_core) {
     (void)rx; (void)tx; (void)config;
+    if (fake_fail_begin) { fake_fail_begin = false; return false; }   // the driver does not start (once)
     fake_baud = baud;
     fake_irq_core = irq_core;
     fake_running = true;
@@ -157,4 +158,5 @@ class HardwareSerial {
   bool fake_overrun = false, fake_running = false, fake_queue_overflow = false, fake_break = false;
   uint32_t fake_baud = 0;
   int fake_irq_core = -2, fake_begins = 0;
+  bool fake_fail_begin = false;
 };

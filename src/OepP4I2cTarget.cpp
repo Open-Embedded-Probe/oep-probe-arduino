@@ -15,17 +15,19 @@
 namespace oep {
 
 uint8_t P4I2cTarget::planCheck(const RoleAssignment *roles, size_t count) {
-  if (count != 2) return kRejectMalformed;
+  // roles 1 and 2 exactly once each, on two channels (fixture §3): another set is unsupported (oep-if-plan §2.4)
+  if (count != 2) return kRejectUnsupported;
   int sda = -1, scl = -1;
   for (size_t i = 0; i < count; ++i) {
     int &pin = roles[i].role == kRoleSda ? sda : scl;
-    if ((roles[i].role != kRoleSda && roles[i].role != kRoleScl) || pin >= 0) return kRejectMalformed;   // each role once
+    if ((roles[i].role != kRoleSda && roles[i].role != kRoleScl) || pin >= 0) return kRejectUnsupported;   // each role once
     pin = roles[i].channel;
   }
-  if (sda < 0 || scl < 0 || sda == scl) return kRejectMalformed;
+  if (sda < 0 || scl < 0 || sda == scl) return kRejectUnsupported;
   // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
   if (!pins_.canOutput(sda) || !pins_.canOutput(scl)) return kRejectUnsupported;
-  if (!pins_.free(sda) || !pins_.free(scl) || sda_ >= 0) return kRejectUnavailable;
+  if (!pins_.freeFor(sda, kOwnerId) || !pins_.freeFor(scl, kOwnerId)) return kRejectUnavailable;
+  if (sda_ >= 0 && started_) return kRejectUnavailable;   // running (state 1): no change, cause 6 (fixture §3)
   return 0;
 }
 

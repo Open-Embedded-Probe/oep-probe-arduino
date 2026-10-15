@@ -11,20 +11,21 @@
 namespace oep {
 
 uint8_t P4SpiTarget::planCheck(const RoleAssignment *roles, size_t count) {
-  if (count != 4) return kRejectMalformed;
+  // roles 1 to 4 exactly once each, on four channels (fixture §4): another set is unsupported (oep-if-plan §2.4)
+  if (count != 4) return kRejectUnsupported;
   int pin[5] = {-1, -1, -1, -1, -1};
   for (size_t i = 0; i < count; ++i) {
-    if (roles[i].role < kRoleSck || roles[i].role > kRoleCs || pin[roles[i].role] >= 0) return kRejectMalformed;
+    if (roles[i].role < kRoleSck || roles[i].role > kRoleCs || pin[roles[i].role] >= 0) return kRejectUnsupported;
     pin[roles[i].role] = roles[i].channel;
   }
   for (int r = kRoleSck; r <= kRoleCs; ++r) {
-    for (int q = r + 1; q <= kRoleCs; ++q) if (pin[r] == pin[q]) return kRejectMalformed;
+    for (int q = r + 1; q <= kRoleCs; ++q) if (pin[r] == pin[q]) return kRejectUnsupported;
   }
   // a channel outside role_channels is unsupported, a declared one something else holds unavailable (core §8)
   for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.allowed(pin[r])) return kRejectUnsupported;
   if (!pins_.canOutput(pin[kRoleMiso])) return kRejectUnsupported;   // MISO: not in its role_channels
-  for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.free(pin[r])) return kRejectUnavailable;
-  if (sck_ >= 0) return kRejectUnavailable;
+  for (int r = kRoleSck; r <= kRoleCs; ++r) if (!pins_.freeFor(pin[r], kOwnerId)) return kRejectUnavailable;
+  if (sck_ >= 0 && started_) return kRejectUnavailable;   // running (state 1): no change, cause 6 (fixture §4)
   return 0;
 }
 

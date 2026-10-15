@@ -39,6 +39,10 @@ class PinTable {
   bool disabled(uint16_t channel) const { return channel < kChannels && (disabled_ >> channel) & 1; }
   uint64_t disabledMask() const { return disabled_; }
   bool free(uint16_t channel) const { return allowed(channel) && !disabled(channel) && owner_[channel] == 0; }
+  // Free, or held by `owner` itself: a plan_apply's check of the plan that replaces `owner`'s own (oep-if-plan §2.1)
+  bool freeFor(uint16_t channel, uint8_t owner) const {
+    return allowed(channel) && !disabled(channel) && (owner_[channel] == 0 || owner_[channel] == owner);
+  }
   bool claim(uint16_t channel, uint8_t owner) {
     if (!free(channel)) return false;
     owner_[channel] = owner;

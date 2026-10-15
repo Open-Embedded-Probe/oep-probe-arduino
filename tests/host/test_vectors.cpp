@@ -671,6 +671,37 @@ static bool names(const Json &fns, const char *name) {
 static bool setUp(OpsProbe &p, const std::string &name, const std::string &state, const Json &fns = Json{}) {
   auto has = [&](const char *s) { return name.find(s) != std::string::npos || state.find(s) != std::string::npos; };
   if (has("source and sink only")) p.ep.setPortSpeed(nullptr, 115200);   // a link without port_speed (link §1)
+  if (names(fns, "oep.fixture.uart")) {   // fixture §2: fn 5, RX on channel 3, TX on channel 4
+    auto rx = [&](const char *bytes) { for (const char *b = bytes; *b; ++b) p.serial.fakeReceive(static_cast<uint8_t>(*b)); p.uart.poll(); };
+    auto configure = [&](uint32_t baud) { return p.ok(p.request(5, reg::fixture_uart::kOpConfigure, {uint8_t(baud), uint8_t(baud >> 8), uint8_t(baud >> 16), uint8_t(baud >> 24)})); };
+    if (!p.open()) return false;
+    if (has("idle high in volatile config")) { p.pins.setIdle(3, PinTable::kIdleOutputHigh); return true; }
+    if (has("formats declares 8N1 only")) p.uart.declareFormats(1);
+    if (has("TX-only plan")) {   // an RX plan received 7 bytes and went; now TX alone
+      if (!p.plan(5, reg::fixture_uart::kRoleRx, 3) || !configure(9600)) return false;
+      rx("1234567");
+      if (!p.ok(p.request(p.ep.planFn(), kOpPlanRelease, {1, 5, 0}))) return false;
+      return p.plan(5, reg::fixture_uart::kRoleTx, 4);
+    }
+    if (!p.plan(5, reg::fixture_uart::kRoleRx, 3)) return false;
+    if (has("boot-scoped write position7")) {   // an earlier plan took 7 bytes; this one is not configured
+      if (!configure(9600)) return false;
+      rx("1234567");
+      if (!p.ok(p.request(p.ep.planFn(), kOpPlanRelease, {1, 5, 0}))) return false;
+      return p.plan(5, reg::fixture_uart::kRoleRx, 3);
+    }
+    if (has("configure above failed")) {   // "abcd" at 3 to 6 kept, then a configure the driver did not start
+      if (!configure(9600)) return false;
+      rx("xyz");
+      if (!p.ok(p.request(5, reg::fixture_uart::kOpClear, {}))) return false;
+      rx("abcd");
+      p.serial.fake_fail_begin = true;
+      return !p.ok(p.request(5, reg::fixture_uart::kOpConfigure, {0x00, 0xc2, 0x01, 0x00}));
+    }
+    if (has("driver fails to start")) { if (!configure(9600)) return false; p.serial.fake_fail_begin = true; return true; }
+    if (has("at 9600 baud") || has("configured at 9600")) return configure(9600);
+    return true;
+  }
   if (has("UART bridge") || has("phase3") || has("session S live on this route")) {   // oep-if-link §3 on serial port 0
     p.on_bridge = true;
     if (has("expired try")) return true;                                    // back at the boot speed: phase 0

@@ -956,6 +956,40 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
   } settle(pins_);
   bool listed[kMaxInterfaces] = {};
   for (size_t k = 0; k < nfns; ++k) if (fns[k] >= 1 && fns[k] <= count_) listed[fns[k] - 1] = true;
+  // oep-if-plan §2.1: a fn whose set of (role, channel) does not change is left alone (nothing released or taken again);
+  // every other one is checked against what runs now - its own channels counted as its own - before anything is
+  // released, so that a refusal changes nothing (a configured UART, a running capture keep their state and data).
+  for (size_t i = 0; i < count_; ++i) {
+    if (!listed[i]) continue;
+    RoleAssignment mine[kMaxRoles];
+    size_t m = 0, had = 0, kept = 0;
+    for (size_t r = 0; r < count; ++r) if (roles[r].function == i + 1 && m < kMaxRoles) mine[m++] = roles[r];
+    for (size_t r = 0; r < plan_count_; ++r) {
+      if (plan_roles_[r].function != i + 1) continue;
+      ++had;
+      for (size_t q = 0; q < m; ++q)
+        if (mine[q].role == plan_roles_[r].role && mine[q].channel == plan_roles_[r].channel) { ++kept; break; }
+    }
+    if (had == m && kept == m && (m || !planned_[i])) { listed[i] = false; continue; }   // the same set: nothing to do
+    if (!m) continue;
+    if (const uint8_t reason = interfaces_[i]->planCheck(mine, m)) {
+      if (reason == kRejectUnavailable) {
+        plan_refusal_ = {interfaces_[i]->planRefusalCause(), 0xffff};
+        interfaces_[i]->planRefusalDetail(plan_refusal_.channel);
+        for (size_t r = 0; r < m && pins_; ++r) {   // a channel another fn holds: cause 1, that channel
+          const uint16_t ch = mine[r].channel;
+          const uint8_t owner = pins_->owner(ch);
+          if (!owner || owner == 0xff || pins_->freeFor(ch, owner) == false) continue;
+          bool own = false;
+          for (size_t q = 0; q < plan_count_; ++q) own |= plan_roles_[q].function == i + 1 && plan_roles_[q].channel == ch;
+          if (own) continue;
+          plan_refusal_ = {reg::core::kUnavailableCausePinInUse, ch};
+          break;
+        }
+      }
+      return reason;
+    }
+  }
   RoleAssignment old[kMaxRoles];
   size_t old_count = 0;
   bool old_persistent[kMaxInterfaces] = {};
@@ -1070,8 +1104,8 @@ uint8_t Endpoint::replacePlan(const RoleAssignment *roles, size_t count, const u
 
 Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // first(u16) [TLV]  ->  total(u16) count(u8) count x entry (core §7.2)
-  // entry: fn(u16) instance(u16) revision(u8) flags(u8) name_len(u8) name; fn 0 (the core) has no name and is never
-  // an entry - a probe with no interface lists nothing. total: the interfaces; first past them: count 0.
+  // entry: fn(u16) instance(u16) revision(u8) name_len(u8) name; fn 0 (the core) has no name and is never an entry - a
+  // probe with no interface lists nothing. total: the interfaces; first past them: count 0.
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
   if (refused(parsed)) return parsed;
@@ -1082,15 +1116,14 @@ Result Endpoint::list(const uint8_t *payload, size_t length, uint8_t *out, size_
   for (size_t i = first; i < count_; ++i) {
     Interface &it = *interfaces_[i];
     const size_t name_len = strlen(it.name());
-    if (used + 7 + name_len > capacity || count == 255) break;
+    if (used + 6 + name_len > capacity || count == 255) break;
     uint8_t *e = out + used;
     putU16(e, static_cast<uint16_t>(i + 1));
     putU16(e + 2, instanceOf(static_cast<uint16_t>(i + 1)));
     e[4] = it.revision();
-    e[5] = it.flags();
-    e[6] = static_cast<uint8_t>(name_len);
-    memcpy(e + 7, it.name(), name_len);
-    used += 7 + name_len;
+    e[5] = static_cast<uint8_t>(name_len);
+    memcpy(e + 6, it.name(), name_len);
+    used += 6 + name_len;
     ++count;
   }
   putU16(out, static_cast<uint16_t>(count_));
