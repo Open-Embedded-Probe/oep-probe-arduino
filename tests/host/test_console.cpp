@@ -274,13 +274,13 @@ int main() {
     r = call(console, TargetConsoleStream::kOpRead, cat(unknown, {4, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);   // from 4
     CHECK(rejectedWith(r, kRejectUnsupported));
     r = call(console, TargetConsoleStream::kOpWrite, cat(unknown, {0, 0}), out);   // count 0: well formed
-    CHECK(rejectedWith(r, kRejectNoConnection));
+    CHECK(rejectedWith(r, kRejectNoResource));
     r = call(console, TargetConsoleStream::kOpWrite, cat(le16(stream), {0, 0}), out);   // accepted 0 = count: success
     CHECK(ok(r) && out == le16(0));
     r = call(console, TargetConsoleStream::kOpMark, unknown, out);                 // no value
     CHECK(rejectedWith(r, kRejectMalformed));
     r = call(console, TargetConsoleStream::kOpMark, cat(unknown, {1}), out);       // well formed: no_connection
-    CHECK(rejectedWith(r, kRejectNoConnection));
+    CHECK(rejectedWith(r, kRejectNoResource));
   }
 
   // ---- read from 3 (the last mark of kind arg): arg over 0xFF matches no mark - from now (common §1.2; it read kind
@@ -523,7 +523,7 @@ int main() {
     r = call(console, TargetConsoleStream::kOpRead, cat(le16(fresh), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
     CHECK(ok(r) && out.size() == 11 && out[8] == 0 && out[9] == 0);   // nothing of the old stream, no gap
     r = call(console, TargetConsoleStream::kOpRead, cat(le16(old_stream), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
-    CHECK(rejectedWith(r, kRejectNoConnection));   // the old number is gone (no_connection, core §4.3)
+    CHECK(rejectedWith(r, kRejectNoResource));   // the old number is gone (no_connection, core §4.3)
     r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
     CHECK(ok(r));
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
@@ -578,7 +578,7 @@ int main() {
                                                                 reg::core::kUnavailableCauseWrongState}));
     ResourceNumbers::close(swd);
     r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);   // closed: unknown
-    CHECK(rejectedWith(r, kRejectNoConnection));
+    CHECK(rejectedWith(r, kRejectNoResource));
   }
 
   // ---- one bad DMSTATUS read with havereset set is no restart (ackHaveReset's own read decides): it unsynced dmseq,

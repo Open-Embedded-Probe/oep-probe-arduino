@@ -515,7 +515,7 @@ static void testResourceNumbers() {
   CHECK(r.detail == kRejectUnavailable && r.length == 4 && out[3] == reg::core::kUnavailableCauseWrongState);
   ResourceNumbers::close(a);
   r = ResourceNumbers::refuse(a, ResourceNumbers::kConnection, out, sizeof out);
-  CHECK(r.detail == kRejectNoConnection);
+  CHECK(r.detail == kRejectNoResource);
   bool reused = false;
   for (int i = 0; i < 10; ++i) reused |= ResourceNumbers::take(ResourceNumbers::kConnection) == a;
   CHECK(!reused);   // the count goes on past it (+1 each time)

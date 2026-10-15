@@ -59,7 +59,7 @@ constexpr uint8_t kRejectResultLost = reg::kRejectResultLost;
 constexpr uint8_t kRejectNoSession = reg::kRejectNoSession;              // a session_id while no session holds the lock: open again
 constexpr uint8_t kRejectLocked = reg::kRejectLocked;                    // another session holds it; payload = remaining ms
 constexpr uint8_t kRejectSessionRequired = reg::kRejectSessionRequired;  // an op that needs the lock with session_id 0
-constexpr uint8_t kRejectNoConnection = reg::kRejectNoConnection;        // the request's connection is not known
+constexpr uint8_t kRejectNoResource = reg::kRejectNoResource;            // a resource number this probe does not know (core §4.3)
 constexpr uint8_t kRejectUnsupported = reg::kRejectUnsupported;          // defined, not handled here: payload tag(u8) [TLV]
 
 // The longest one request may take (core §7.5 max_op_ms, declared in fn 0's describe): this implementation's value
@@ -94,6 +94,9 @@ constexpr uint8_t kCoreFirmware = reg::core::kTlvDescribeFirmware, kCoreModel = 
 // unsupported payload's "fixed-part value" marker).
 constexpr uint8_t kTagCritical = reg::kTagCritical;
 constexpr uint8_t kTagValue = reg::kTagReservedZero;
+// The index of an element of the request's list, in a refusal's payload: the interfaces' own tag 0x40 (core §4.3 leaves
+// 0x40 on to the interface; every standard interface that names an element puts its index there)
+constexpr uint8_t kTagIndex = 0x40;
 
 inline uint16_t getU16(const uint8_t *p) { return uint16_t(p[0]) | uint16_t(p[1]) << 8; }
 inline uint32_t getU32(const uint8_t *p) {
@@ -103,8 +106,9 @@ inline void putU16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 inline void putU32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 inline uint64_t getU64(const uint8_t *p) { return getU32(p) | (static_cast<uint64_t>(getU32(p + 4)) << 32); }
 inline void putU64(uint8_t *p, uint64_t v) { putU32(p, static_cast<uint32_t>(v)); putU32(p + 4, static_cast<uint32_t>(v >> 32)); }
-// bit n of a registry kLockFreeOps mask = op n needs no lock
-inline bool lockFreeIn(uint64_t mask, uint8_t op) { return op < 64 && ((mask >> op) & 1); }
+// bit n of a registry kLockFreeOps bitmap (u64 words) = op n needs no lock
+template <size_t N>
+constexpr bool lockFreeIn(const uint64_t (&mask)[N], uint8_t op) { return op / 64 < N && ((mask[op / 64] >> (op % 64)) & 1); }
 // op among first .. last (an interface's op table, for Interface::offers)
 constexpr bool opIn(uint8_t op, uint8_t first, uint8_t last) { return op >= first && op <= last; }
 
@@ -187,7 +191,7 @@ inline Result unsupportedAt(uint8_t *out, size_t capacity, uint16_t channel, uin
   out[0] = kTagValue;
   putTlvHeader(out + 1, reg::core::kTlvUnsupportedPayloadChannel, 2);
   putU16(out + 4, channel);
-  putTlvHeader(out + 6, reg::core::kTlvUnsupportedPayloadIndex, 1);
+  putTlvHeader(out + 6, kTagIndex, 1);
   out[9] = index;
   return {kResolutionRejected, kRejectUnsupported, 10};
 }
@@ -195,7 +199,7 @@ inline Result unsupportedAt(uint8_t *out, size_t capacity, uint16_t channel, uin
 inline Result unsupportedIndex(uint8_t *out, size_t capacity, uint8_t index) {
   if (capacity < 5) return unsupportedValue(out, capacity);
   out[0] = kTagValue;
-  putTlvHeader(out + 1, reg::core::kTlvUnsupportedPayloadIndex, 1);
+  putTlvHeader(out + 1, kTagIndex, 1);
   out[4] = index;
   return {kResolutionRejected, kRejectUnsupported, 5};
 }
@@ -283,7 +287,7 @@ class Tail {
     size_t len = 0;
     const uint8_t *value = nullptr;
     while (at < n)
-      if (!step(at, raw, value, len)) return rejected(kRejectMalformed);
+      if (!step(at, raw, value, len) || (raw & ~kTagCritical) == 0) return rejected(kRejectMalformed);   // tag 0 (§2.2)
     if (deferred) *deferred = completed();
     for (at = 0; at < n && step(at, raw, value, len);) {
       const uint8_t tag = raw & ~kTagCritical;
@@ -473,7 +477,7 @@ class ResourceNumbers {
       out[3] = reg::core::kUnavailableCauseWrongState;
       return {kResolutionRejected, kRejectUnavailable, 4};
     }
-    return rejected(kRejectNoConnection);
+    return rejected(kRejectNoResource);
   }
 
  private:

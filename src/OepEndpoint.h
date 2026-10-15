@@ -417,12 +417,17 @@ class Endpoint {
   // (rejected result_lost): kDedupBytes covers a whole frame of the largest profile, so a 1 KiB read_block whose answer
   // was corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).
   static constexpr size_t kDedupEntries = 8, kDedupBytes = 1024 + 5;
+  // The request is kept too, up to kDedupRequestBytes (core §5.1: a resent request is compared byte for byte with the
+  // one recorded - a different one is malformed; one whose bytes are not kept is result_lost).
+  static constexpr size_t kDedupRequestBytes = 64;
   struct Dedup {
     bool used = false, kept = false;
     uint16_t corr = 0;
-    uint16_t length = 0;
+    uint16_t length = 0, request_length = 0;   // request_length 0: the request's bytes not kept
     uint8_t result[kDedupBytes];
+    uint8_t request[kDedupRequestBytes];
   };
+  bool fresh_session_ = false;   // this request is an open that began a new session (its corr starts the order, §5.1)
   Dedup dedup_[kDedupEntries];
   size_t dedup_next_ = 0;
   uint16_t newest_corr_ = 0;   // the last session's newest request (core §4.1: the host numbers them in order)

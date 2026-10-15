@@ -1055,7 +1055,7 @@ int main() {
     r = call(riscv, TargetRiscvDm::kOpReset, {uint8_t(gone), uint8_t(gone >> 8), 3}, out);
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
     r = call(riscv, TargetRiscvDm::kOpHalt, {uint8_t(gone), uint8_t(gone >> 8)}, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectNoConnection);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectNoResource);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
   }

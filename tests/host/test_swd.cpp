@@ -105,7 +105,7 @@ int main() {
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
     t.back() = 0x06;
     r = call(adi, TargetArmAdi::kOpTransfer, t, out);
-    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectNoConnection);
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectNoResource);
   }
 
   // ---- core §4.3's order: every format error before anything unsupported (it answered unsupported first) ----

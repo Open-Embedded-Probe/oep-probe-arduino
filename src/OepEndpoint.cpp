@@ -432,24 +432,29 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   // op that needs the lock with session_id 0 (open's own id 0 is malformed: open checks it) - before the resend table
   // (order 2), so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
   const bool is_open = fn == 0 && op == kOpOpen;
+  if (corr == 0) { sendReject(corr, kRejectMalformed); return; }   // core §4.3 order 1: corr 0 first
   if (fn != 0 && fn > count_) { sendReject(corr, kRejectUnknownFunction); return; }
   if (!offersOp(fn, op)) { sendReject(corr, kRejectUnknownOperation); return; }
   if (session == 0 && !is_open && !lockFreeOp(fn, op)) { sendReject(corr, kRejectSessionRequired); return; }
-  // Order 2: the last session's request sent again (the host lost the result) - the corr alone says which (core §4.1,
-  // §5.2): answer from what was kept, never run it twice, and before the session is judged - a resent end is answered
-  // from here and does not take the lock back. The host numbers its requests in order: a corr no newer than the newest
-  // seen and not in the table was dropped from it. An open is never looked up (a resent open is decided by §6.2).
-  const bool mine = session != 0 && have_last_ && session == last_ && !is_open;
+  // Order 2 (core §5.1): a request of the last new session - open included - whose corr was recorded is a resend:
+  // compared byte for byte with the recorded request (a different one is malformed, one not kept is result_lost) and
+  // answered from the record, never run twice, before the session is judged (a resent end does not take the lock
+  // back). A corr not recorded is new only 1 to 32767 past the last one (d = corr - last mod 65536); any other is
+  // result_lost - a recorded request no longer kept is not run again.
+  const bool mine = session != 0 && have_last_ && session == last_;
   if (mine) {
     for (Dedup &d : dedup_) {
       if (!d.used || d.corr != corr) continue;
-      if (!d.kept) { sendReject(corr, kRejectResultLost); return; }
+      if (have_newest_ && static_cast<uint16_t>(newest_corr_ - d.corr) >= 0x8000) { d.used = false; continue; }   // half a turn old: dropped (§5.1)
+      if (!d.kept || !d.request_length) { sendReject(corr, kRejectResultLost); return; }
+      if (d.request_length != length || memcmp(d.request, message, length) != 0) { sendReject(corr, kRejectMalformed); return; }
       memcpy(tx_, d.result, d.length);
       send(d.length);
       return;
     }
-    if (have_newest_ && static_cast<int16_t>(corr - newest_corr_) <= 0) { sendReject(corr, kRejectResultLost); return; }
+    if (have_newest_ && static_cast<uint16_t>(corr - newest_corr_ - 1) >= 0x7fff) { sendReject(corr, kRejectResultLost); return; }
   }
+  fresh_session_ = false;
   Result result;
   restart_taken_ = false;
   // core §6.2 (order 3): every request with a session_id but open - lock-free ones too (core §4.1) - goes through it
@@ -476,7 +481,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   tx_[3] = result.resolution;
   tx_[4] = result.detail;
   const size_t total = kResultHeader + result.length;
-  if (mine) {   // kept for a request sent again, rejected answers too (core §5.2; a successful open drops the table)
+  if (mine || fresh_session_) {   // the order and the record: rejected answers too (core §5.1; a new session's open starts them)
     newest_corr_ = corr;
     have_newest_ = true;
     Dedup &d = dedup_[dedup_next_];
@@ -486,6 +491,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     d.kept = total <= kDedupBytes;
     d.length = d.kept ? static_cast<uint16_t>(total) : 0;
     if (d.kept) memcpy(d.result, tx_, total);
+    d.request_length = length <= kDedupRequestBytes ? static_cast<uint16_t>(length) : 0;
+    if (d.request_length) memcpy(d.request, message, length);
   }
   if (restart_taken_) {
     // oep.probe.restart (oep-if-restart §2): no notification after its answer - the session's end, and the zero-copy data
@@ -576,7 +583,7 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
   switch (op) {
     case kOpConfirm: {
       // "OEP?" min_rev(u8) max_rev(u8) [TLV]
-      //   ->  "OEP!" revision(u8) flags(u8) max_frame(u16) window(u32) max_inflight(u8) boot_id(u32) [TLV]  (core §7.1)
+      //   ->  "OEP!" revision(u8) max_frame(u16) window(u32) max_inflight(u8) boot_id(u32) [TLV]  (core §7.1)
       // TLV 0x01 transport (u8): the index (§7.5) of the transport this confirm came on, always attached. A range
       // with min_rev > max_rev is malformed; one without this probe's revision is unsupported with the supported range.
       // Request and answer fit 64 bytes (core §7.1).
@@ -592,17 +599,16 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
         out[5] = reg::kProtocolRevision;   // max
         return {kResolutionRejected, kRejectUnsupported, 6};
       }
-      if (capacity < 21) return failed();
+      if (capacity < 20) return failed();
       memcpy(out, reg::kConfirmResultMagic, 4);
       out[4] = reg::kProtocolRevision;
-      out[5] = 0;                                     // flags: reserved
-      putU16(out + 6, limits_.max_frame);
-      putU32(out + 8, limits_.window_bytes);
-      out[12] = limits_.max_inflight;
-      putU32(out + 13, bootId());                     // a host without the lock learns of a restart here (core §6.5)
-      putTlvHeader(out + 17, reg::core::kTlvConfirmAnswerTransport, 1);
-      out[20] = transports_[current_].index;          // the entry of describe's transport list it came on
-      return completed(21);
+      putU16(out + 5, limits_.max_frame);
+      putU32(out + 7, limits_.window_bytes);
+      out[11] = limits_.max_inflight;
+      putU32(out + 12, bootId());                     // a host without the lock learns of a restart here (core §6.5)
+      putTlvHeader(out + 16, reg::core::kTlvConfirmAnswerTransport, 1);
+      out[19] = transports_[current_].index;          // the entry of describe's transport list it came on
+      return completed(20);
     }
     case kOpList: return list(payload, length, out, capacity);
     case kOpDescribe: return describe(payload, length, out, capacity);
@@ -803,20 +809,29 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
   const uint8_t *owner = tail.find(reg::core::kTlvOpenOwner, owner_len);
   if (owner && (owner_len == 0 || owner_len > sizeof owner_)) return rejected(kRejectMalformed);
   if (capacity < 8) return failed();
-  if (locked_ && holder_ != session && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
-  if (locked_ && holder_ != session) releaseLock();   // force: the old session is released first (core §6.4, §9)
-  if (locked_) {
-    pushHere();   // a resent open: the notifications go to this transport (core §6.2)
-  } else {
-    if (owner) memcpy(owner_, owner, owner_len);
-    owner_length_ = owner ? static_cast<uint8_t>(owner_len) : 0;
+  const uint32_t asked = lease == 0 ? kLeaseDefaultMs : (lease > kLeaseMaxMs ? kLeaseMaxMs : lease < kLeaseMinMs ? kLeaseMinMs : lease);
+  if (locked_ && holder_ == session) {
+    // the holder's new open (core §6.2): the lease from lease_ms; resources, the resend record and where the
+    // subscriptions send all kept
+    lease_ms_ = asked;
+    expires_ms_ = millis() + lease_ms_;
+    putU32(out, lease_ms_);
+    putU32(out + 4, bootId());
+    return completed(8);
   }
+  if (!locked_ && have_last_ && session == last_) return rejected(kRejectNoSession);   // no resume (core §6.2, §6.4)
+  if (locked_ && !force) return lockedFor(remaining(), owner_, owner_length_, out, capacity);
+  if (locked_) releaseLock();   // force: the old session is released first (core §6.4, §9)
+  if (owner) memcpy(owner_, owner, owner_len);
+  owner_length_ = owner ? static_cast<uint8_t>(owner_len) : 0;
+  // a new session (another id): the resend state starts again from this open (core §5.1)
   for (Dedup &d : dedup_) d.used = false;
   have_newest_ = false;
+  fresh_session_ = true;
   locked_ = true;
   holder_ = last_ = session;
   have_last_ = true;
-  lease_ms_ = lease == 0 ? kLeaseDefaultMs : (lease > kLeaseMaxMs ? kLeaseMaxMs : lease < kLeaseMinMs ? kLeaseMinMs : lease);
+  lease_ms_ = asked;
   expires_ms_ = millis() + lease_ms_;
   putU32(out, lease_ms_);
   putU32(out + 4, bootId());

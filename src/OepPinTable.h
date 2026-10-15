@@ -92,7 +92,7 @@ class PinTable {
   // pull-down idle on a channel without that pull (setNoPull).
   static constexpr uint8_t kIdleHiZ = 0, kIdlePullUp = 1, kIdlePullDown = 2, kIdleOutputLow = 3, kIdleOutputHigh = 4,
                            kIdleUnset = 0xff;
-  static constexpr uint8_t kDriveDefault = reg::fixture_gpio::kDriveLevelDefault;   // no strength given: the default level
+  static constexpr uint8_t kDriveDefault = 0xff;   // no strength given: the default level (the strength is the probe's, oep-if-fixture §1)
   bool setIdle(uint16_t channel, uint8_t mode, bool apply = true, uint8_t drive = kDriveDefault) {
     if (!allowed(channel) || (mode > kIdleOutputHigh && mode != kIdleUnset)) return false;
     if ((mode == kIdleOutputLow || mode == kIdleOutputHigh) && !canOutput(channel)) return false;
