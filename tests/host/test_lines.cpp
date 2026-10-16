@@ -30,12 +30,6 @@ static void label(Bytes &items, uint16_t channel, const std::string &text) {
   items.push_back(channel >> 8);
   items.insert(items.end(), text.begin(), text.end());
 }
-static void slot(Bytes &items, uint8_t number) {   // only its tag counts here
-  items.push_back(legacy::kTlvItemSlot);
-  items.push_back(1);
-  items.push_back(0);
-  items.push_back(number);
-}
 static uint16_t find(const Bytes &items, const char *s, const char *n) { return findLine(items.data(), items.size(), s, n); }
 static uint16_t find(const Bytes &items, const Bytes &firmware, const char *s, const char *n) {
   return findLine(items.data(), items.size(), s, n, firmware.data(), firmware.size());
@@ -61,44 +55,42 @@ int main() {
     label(items, 7, "nrst");
     CHECK(find(items, nullptr, "nrst") == 0xffff);
   }
-  {   // one slot: "S.N" first, then "N"
+  {   // one port named (S of "S.N"): "S.N" first, then "N" (host guide §5.3)
     Bytes items;
     label(items, 3, "nrst");
-    slot(items, 0);
-    CHECK(find(items, "dut", "nrst") == 3);
+    CHECK(find(items, "dut", "nrst") == 3);   // no port named yet: "N"
     label(items, 9, "Dut.Nrst");
     CHECK(find(items, "dut", "nrst") == 9);
     label(items, 10, "dut.nrst");   // two at the "S.N" step: none (no fall back to "N")
     CHECK(find(items, "dut", "nrst") == 0xffff);
   }
-  {   // two slots: "N" alone names nothing for a slot
+  {   // two ports named: "N" alone names nothing for a port
     Bytes items;
     label(items, 3, "nrst");
     label(items, 4, "b.nrst");
-    slot(items, 0);
-    slot(items, 1);
+    label(items, 5, "a.swdio");
     CHECK(find(items, "a", "nrst") == 0xffff);
     CHECK(find(items, "b", "nrst") == 4);
     CHECK(find(items, "a", "b.nrst") == 0xffff);
   }
-  {   // step (c): with at most one slot, a firmware label "N" when no settings label names the line
+  {   // step (c): with at most one port named, a firmware label "N" when no settings label names the line
     Bytes firmware;
     firmwareLabel(firmware, 0x20, "x");   // another TLV of fn 0's describe is passed over
     firmware[0] = reg::core::kTlvDescribeChannels;
     firmwareLabel(firmware, 12, "NRST");
     Bytes items;
-    CHECK(find(items, firmware, nullptr, "nrst") == 12);   // no slots
-    slot(items, 0);
-    CHECK(find(items, firmware, "dut", "nrst") == 12);     // one slot
+    CHECK(find(items, firmware, nullptr, "nrst") == 12);   // no port named
+    label(items, 7, "dut.swdio");
+    CHECK(find(items, firmware, "dut", "nrst") == 12);     // one port
     CHECK(find(items, firmware, "dut", "power_hi") == 0xffff);
     label(items, 4, "nrst");                                // (b) first
     CHECK(find(items, firmware, "dut", "nrst") == 4);
     label(items, 5, "dut.nrst");                            // (a) first
     CHECK(find(items, firmware, "dut", "nrst") == 5);
     Bytes two;
-    slot(two, 0);
-    slot(two, 1);
-    CHECK(find(two, firmware, "dut", "nrst") == 0xffff);   // two slots: no (b), no (c)
+    label(two, 7, "dut.swdio");
+    label(two, 8, "aux.swdio");
+    CHECK(find(two, firmware, "dut", "nrst") == 0xffff);   // two ports: no (b), no (c)
     Bytes twice = firmware;
     firmwareLabel(twice, 13, "nrst");
     CHECK(find(Bytes{}, twice, nullptr, "nrst") == 0xffff);   // two channels at (c): none

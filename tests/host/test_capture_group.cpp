@@ -69,7 +69,7 @@ class Track final : public Interface, public GroupTrack {
  public:
   explicit Track(bool trigger = false) : trigger_(trigger) {}
   const char *name() const override { return "io.github.test.track"; }
-  uint16_t instance() const override { return 0; }
+  uint16_t instance() const override { return id_; }   // each its own (core §7.2: a second (name, revision, instance) is not added)
   bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
@@ -100,6 +100,8 @@ class Track final : public Interface, public GroupTrack {
 
  private:
   bool trigger_;
+  static inline uint16_t next_ = 0;
+  const uint16_t id_ = next_++;
 };
 
 struct Rig {
@@ -171,22 +173,21 @@ static void testStartPrerequisites() {
   CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 0, 6, 0x05, 2, 0, 1, 0}) && rig.a.starts == 1);
 }
 
-// The trigger track failing to start after the group's start (it waits for the followers' pretrigger): the group goes
-// to state 6 and every track is stopped (§4.1).
-static void testTriggerTrackFails() {
-  Rig rig(true);   // a holds the trigger, b follows
-  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 0, 1, 0})));
-  rig.a.fail_start = true;
-  CHECK(ok(rig.op(grp::kOpStart)) && rig.b.state == 2);
-  rig.group.poll();   // b armed: the trigger track starts, and fails
-  CHECK(rig.a.starts == 1 && rig.b.stops >= 1 && rig.b.state == 1);
-  Result r = rig.op(grp::kOpStatus);
+// A track failing to start inside the group's start (capture §4.1): completed failed with the same fixed form, the
+// group 6, the tracks already started stopped; the next start goes again once the track is ready.
+static void testTrackFailsToStart() {
+  Rig rig;
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
+  rig.b.fail_start = true;
+  Result r = rig.op(grp::kOpStart);
+  CHECK(r.resolution == kResolutionCompleted && r.detail == kOutcomeFailed && rig.a.stops >= 1);
+  r = rig.op(grp::kOpStatus);
   CHECK(ok(r) && rig.out[0] == cap::kStateError);
-  rig.a.fail_start = false;
-  rig.a.state = 1;   // the track configured again: the group starts again
+  rig.b.fail_start = false;
+  rig.a.state = rig.b.state = 1;
   CHECK(ok(rig.op(grp::kOpStart)));
   r = rig.op(grp::kOpStatus);
-  CHECK(ok(r) && rig.out[0] == cap::kStateWaiting);
+  CHECK(ok(r) && rig.out[0] == cap::kStateCapturing);
 }
 
 // bind over a budget (§4.1): unavailable cause 2 with TLV fn naming the track whose load goes over it.
@@ -210,44 +211,50 @@ static void testDescribe() {
   CHECK(all == (Bytes{grp::kTlvDescribeTracks, 5, 0, 2, 1, 0, 2, 0}));
 }
 
-// bind's trigger_track (§4.1) is checked the same with or without bit 7 (core §2.3): sent plain it is used as sent
-// critical; a length other than 2, or a track not in the list, is malformed; nothing is bound by a refusal. An unknown
-// non-critical TLV is passed over, an unknown critical one refused unsupported with its tag.
-static void testBindTriggerTrack() {
-  for (const uint8_t bit : {uint8_t(0), uint8_t(0x80)}) {
-    Rig rig(true);   // a holds the trigger
-    const uint8_t tag = bit | legacy::kTlvBindTriggerTrack;
-    CHECK(rejectedAs(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 3, 0, 1, 0, 0}), kRejectMalformed));   // too long
-    CHECK(rejectedAs(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 1, 0, 1}), kRejectMalformed));         // too short
-    CHECK(rejectedAs(rig.op(grp::kOpBind, {1, 2, 0, tag, 2, 0, 1, 0}), kRejectMalformed));           // not in the list
+// bind (§4.1): immediate tracks only - a track with a trigger is refused unavailable cause 6 with TLV fn naming it,
+// nothing bound; v1 has no bind TLV - an unknown non-critical one is passed over, a critical one (a future selector)
+// refused unsupported with its tag; the same list again keeps the state; a track named twice is malformed.
+static void testBindImmediate() {
+  {
+    Rig rig(true);   // a has a trigger
+    const Result r = rig.op(grp::kOpBind, {2, 1, 0, 2, 0});
+    CHECK(rejectedAs(r, kRejectUnavailable) && rig.payload(r) == (Bytes{0x01, 1, 0, 6, 0x05, 2, 0, 1, 0}));
     CHECK(rig.a.boundTo() == 0 && rig.b.boundTo() == 0);
-    CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, tag, 2, 0, 1, 0, 0x61, 1, 0, 9})));
-    CHECK(ok(rig.op(grp::kOpStart)) && rig.a.starts == 0 && rig.b.starts == 1);   // b follows: it runs first
-    CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateWaiting && rig.a.starts == 1);   // then a, the trigger
-    rig.op(grp::kOpStop);
-    const Result r = rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0xE1, 0, 0});
-    CHECK(rejectedAs(r, kRejectUnsupported) && rig.payload(r) == Bytes{0xE1});
   }
+  Rig rig;
+  CHECK(rejectedAs(rig.op(grp::kOpBind, {2, 1, 0, 1, 0}), kRejectMalformed));
+  Result r = rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 0, 1, 0});
+  CHECK(rejectedAs(r, kRejectUnsupported) && rig.payload(r) == Bytes{0x81});
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x61, 1, 0, 9})));   // unknown, non-critical: passed over
+  CHECK(ok(rig.op(grp::kOpStart)) && rig.a.starts == 1 && rig.b.starts == 1);
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})) && rig.a.starts == 1);   // the same list while capturing: kept
+  r = rig.op(grp::kOpBind, {1, 1, 0});                                    // another list while capturing: cause 6
+  CHECK(rejectedAs(r, kRejectUnavailable));
 }
 
-// status state (§4.1): 2 only while the trigger has not fired and a track is 2 or 3; tracks paused (5) make it 3.
+// status (§4.1): state start_ns generation; the state 0 unbound, 6 when a track is 6, 4 once started and every track
+// is 4, 3 when a track is 3 or 5, else 1.
 static void testStatusState() {
-  Rig rig(true);
-  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0, 0x81, 2, 0, 1, 0})));
+  Rig rig;
+  Result r = rig.op(grp::kOpStatus);
+  CHECK(ok(r) && r.length == 13 && rig.out[0] == cap::kStateUnconfigured);
+  CHECK(ok(rig.op(grp::kOpBind, {2, 1, 0, 2, 0})));
+  CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateConfigured && getU32(rig.out + 9) == 0);
   CHECK(ok(rig.op(grp::kOpStart)));
-  CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateWaiting);
-  rig.a.state = rig.b.state = 5;
+  r = rig.op(grp::kOpStatus);
+  CHECK(ok(r) && rig.out[0] == cap::kStateCapturing && getU32(rig.out + 9) == 1);
+  rig.a.state = 5;
   CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateCapturing);
-  rig.a.state = rig.b.state = 1;
-  CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateConfigured);
+  rig.a.state = rig.b.state = 4;
+  CHECK(ok(rig.op(grp::kOpStatus)) && rig.out[0] == cap::kStateDone);
 }
 
 int main() {
   testStartPrerequisites();
-  testTriggerTrackFails();
+  testTrackFailsToStart();
   testBudgetNamesTrack();
   testDescribe();
-  testBindTriggerTrack();
+  testBindImmediate();
   testStatusState();
   testBoundPlan();
   printf("capture-group: %d checks, %d failures\n", checks, failures);

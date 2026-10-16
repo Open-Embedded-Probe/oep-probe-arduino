@@ -986,17 +986,43 @@ size_t labelsNaming(const uint8_t *items, size_t length, const char *slot, const
   return found;
 }
 
+// The ports the labels name (host guide §5.3): the distinct S of the "S.N" labels, counted up to 2 (more is "many").
+size_t portsNamed(const uint8_t *items, size_t length) {
+  const uint8_t *first = nullptr;
+  size_t first_len = 0, at = 0, count = 0;
+  auto lower = [](uint8_t c) { return c >= 'A' && c <= 'Z' ? static_cast<uint8_t>(c - 'A' + 'a') : c; };
+  while (at < length && count < 2) {
+    uint8_t tag = 0;
+    const uint8_t *v = nullptr;
+    size_t vlen = 0, next = 0;
+    if (!tlvAt(items, length, at, tag, v, vlen, next)) break;
+    at = next;
+    if (tag != config_kind::kLabel || vlen < 2) continue;
+    const uint8_t *text = v + 2;
+    size_t dot = 0;
+    while (dot < vlen - 2 && text[dot] != '.') ++dot;
+    if (dot == vlen - 2 || dot == 0) continue;   // no "S." prefix
+    bool same = first && first_len == dot;
+    for (size_t i = 0; same && i < dot; ++i) same = lower(first[i]) == lower(text[i]);
+    if (!first) { first = text; first_len = dot; count = 1; }
+    else if (!same) count = 2;
+  }
+  return count;
+}
+
 }  // namespace
 
 uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line, const uint8_t *firmware,
                   size_t firmware_length) {
   uint16_t channel = 0xffff;
-  if (slot) {
+  if (slot) {   // (a) "S.N"
     const size_t n = labelsNaming(items, length, slot, line, channel);
     if (n) return n == 1 ? channel : 0xffff;
   }
-  const size_t n = labelsNaming(items, length, nullptr, line, channel);
+  if (portsNamed(items, length) > 1) return 0xffff;   // "N" and the firmware's names say nothing for one of several ports
+  const size_t n = labelsNaming(items, length, nullptr, line, channel);   // (b) "N"
   if (n) return n == 1 ? channel : 0xffff;
+  // (c) the firmware's "N"
   return labelsNaming(firmware, firmware_length, nullptr, line, channel, reg::core::kTlvDescribeLabel) == 1 ? channel : 0xffff;
 }
 

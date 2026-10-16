@@ -240,8 +240,10 @@ void fakeConfigStore(const uint8_t *blob, size_t length);   // a host test's sav
 namespace oep {
 
 // The label convention (host guide §5.3: the host's way to find a line; the probe drives none of these lines itself)
-// over a store of items (ProbeConfig::items: kind 1 the labels, channel key then text) and the firmware's labels: the channel of line `line` - the settings label "slot.line", else
-// "line", else the firmware label "line" (ASCII case ignored; two found in one step: none). 0xFFFF: none.
+// over a store of items (ProbeConfig::items: kind 1 the labels, channel key then text) and the firmware's labels: the
+// channel of line `line` of port `slot` - the settings label "slot.line", else (at most one port named) "line", else
+// the firmware label "line" (ASCII case ignored; two found in one step: none). A port is the S of "S.N" labels; with
+// more than one named, "line" and the firmware's labels name nothing. 0xFFFF: none.
 uint16_t findLine(const uint8_t *items, size_t length, const char *slot, const char *line,
                   const uint8_t *firmware = nullptr, size_t firmware_length = 0);
 
