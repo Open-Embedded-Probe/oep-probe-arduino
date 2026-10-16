@@ -688,6 +688,17 @@ bool Ch32Dm::loadBlock(const uint32_t *program, size_t words, uint32_t address) 
   return phy_.read(kData1, next) && next == address;
 }
 
+namespace {
+// CRC-32 (IEEE, reflected) of one little-endian word, folded into crc
+uint32_t crcWord(uint32_t crc, uint32_t word) {
+  for (int b = 0; b < 32; ++b) {
+    const uint32_t bit = (crc ^ (word >> b)) & 1u;
+    crc = (crc >> 1) ^ (bit ? 0xEDB88320u : 0u);
+  }
+  return crc;
+}
+}  // namespace
+
 bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *cmderr) {
   if (!halted_ || !words) return false;
   if (cmderr) *cmderr = 0;
@@ -700,15 +711,26 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
   // than hand the caller a plausible-looking answer (2026-09-23).
   uint8_t err = 0;
   bool done = false;
-  for (int attempt = 0; attempt < 3 && !done; ++attempt) {
+  // A wire without a check on its reads (swio): a pass is taken only when a second one reads the same words (their
+  // CRC-32): a bit the bus or the line flipped comes back as a good read otherwise (bench, the V003 jig on a classic
+  // ESP32 with Wi-Fi on: 6 words in 123 k wrong, every read successful, 2026-10-16). Twice the reads; a mismatch starts
+  // over.
+  const bool twice = phy_.uncheckedReads();
+  bool checking = false;   // this pass is the second one: it compares, the words stay as the first pass read them
+  uint32_t first_crc = 0;
+  for (int attempt = 0; attempt < (twice ? 6 : 3) && !done; ++attempt) {
     if (!held([&] { return loadBlock(kReader, sizeof kReader / sizeof kReader[0], address); })) break;
     const uint32_t revives = phy_.revives();   // a revive inside the run is a drop met there (as in a held group)
     autoOn();
     phy_.write(kCommand, 0x00240000);  // first run
     bool ok = true;
+    uint32_t crc = 0xffffffffu;
     for (size_t i = 0; i < words; ++i) {
       // E156: one program-buffer run finishes within one DMI transaction; no poll.
-      if (!phy_.read(kData0, out[i])) { ok = false; break; }
+      uint32_t word = 0;
+      if (!phy_.read(kData0, word)) { ok = false; break; }
+      if (!checking) out[i] = word;
+      if (twice) crc = crcWord(crc, word);
     }
     // The last read launched a look-ahead; let it finish and record its cmderr
     // (an exception there is expected at the end of flash and does not affect data).
@@ -740,7 +762,11 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
     // reads then returned whatever was left in DATA0, which looks like data and is not.
     // A good look last: no word above met a drop (a stale read).
     done = ok && off && counted && (err == 0 || err == 3) && linkHeld() && phy_.revives() == revives;
-    if (!done) steady();   // a redo from a link that stays up
+    if (done && twice) {   // the first good pass waits for a second that agrees; a disagreement starts over
+      if (!checking) { first_crc = crc; checking = true; done = false; continue; }
+      if (crc != first_crc) { checking = false; done = false; }
+    }
+    if (!done && !checking) steady();   // a redo from a link that stays up
   }
   // The words stand only with everything back: a block op that could not put the GPRs back answers no words.
   return restoreBlock() && done;

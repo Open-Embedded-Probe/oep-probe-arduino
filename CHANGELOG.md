@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) swio block reads are taken only when two passes agree (Ch32Dm::readWords, DmiPhy::uncheckedReads): swio reads
+  carry no parity (oep-if-debug §3.2), and on the classic ESP32 with Wi-Fi on a bit came back flipped or the word shifted
+  with the read reporting success - 6 words in 123 k (16 KiB x 30 from the V003 jig, serial and TCP); none with Wi-Fi off.
+  With two passes compared by CRC-32: 0 in 123 k on serial and on TCP, 16 KiB in about 2.7 s instead of 2.4 s. Timing
+  each bit with the cycle counter did not catch them (a frame's normal spread reaches 70 cycles; a flip came at 80).
+- (JA) swio の block の読み出しは、2 回の読みが一致したときだけ採る（Ch32Dm::readWords、DmiPhy::uncheckedReads）。swio の読みには
+  パリティが無く（oep-if-debug §3.2）、classic ESP32 で Wi-Fi が動いていると、成功と答えたままビットが化けたり語がずれたりした
+  （V003 の台で 16 KiB を 30 回、シリアルと TCP で 12.3 万語に 6 語。Wi-Fi 無しでは 0）。CRC-32 で 2 回を照合して、シリアル・TCP とも
+  0 語、16 KiB は約 2.4 s から 2.7 s に。ビットごとの時間を数える方式では捕まらなかった（正常なフレームでも 70 サイクルまでばらつき、
+  80 で化けが残った）。
 - (EN) oep.wire.rvswd's rest (oep-spec ba4e8ee, debug §3.1): an attach without idle_clock rests the line by the setting
   rvswd-rest of its SWCLK channel (high / low), else by the target_id read right after the link comes up (registry
   idle_low_family: a CH32L103 rests low; others high); the attach answer and connections carry the rest in use.

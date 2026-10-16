@@ -112,6 +112,9 @@ class DmiPhy {
   // released (Hi-Z). false: this backend's pins are fixed, or the pair cannot be used.
   virtual bool usePins(int swdio, int swclk) { (void)swdio; (void)swclk; return false; }
   virtual bool canIdleClockLow() const { return false; }
+  // A wire whose reads carry no check (swio: no parity, oep-if-debug §3.2): a wrong bit comes back as a good read, so a
+  // block read is taken only when two passes agree (Ch32Dm::readWords).
+  virtual bool uncheckedReads() const { return false; }
   // Measured at attach: wall time of one DMI read and the clock rate it implies (0 before attach).
   virtual uint32_t dmiNs() const = 0;
   virtual uint32_t clockHz() const = 0;

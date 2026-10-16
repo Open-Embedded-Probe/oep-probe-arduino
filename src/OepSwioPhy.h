@@ -26,6 +26,7 @@ class SwioPhy final : public DmiPhy {
  public:
   bool begin(int swio);   // GPIO0-31 (ESP32-P4: 0-54)
   bool usePins(int swdio, int swclk) override;   // swclk -1: one wire
+  bool uncheckedReads() const override { return true; }   // no parity (oep-if-debug §3.2)
   // The wake / configuration and dmactive (only when DMCONTROL does not read it set), the configuration read back, then
   // the write check on PROGBUF0 (put back after) - oep-if-debug §1, §3. false: no target.
   bool attach() override;
