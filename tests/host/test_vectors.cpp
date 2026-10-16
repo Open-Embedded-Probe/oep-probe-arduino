@@ -1515,6 +1515,23 @@ static void testPassthrough() {
   }
 }
 
+// core_extensions.json request_cases (core §2.2): a named extension in a request - unknown name ignored, critical refused
+// unsupported 0xFF, a name_len past its value malformed. The clock's own values aside, the refusals byte for byte.
+static void testRequestExtensions() {
+  const Json v = load("core_extensions.json");
+  for (const Json &c : v["request_cases"].items) {
+    ++cases;
+    boot();
+    OpsProbe p;
+    const Bytes want = hex(c["answer_hex"].string);
+    const Bytes got = p.send(hex(c["request_hex"].string));
+    CHECK(got.size() >= 5 && want.size() >= 5);
+    if (got.size() < 5 || want.size() < 5) continue;
+    if (want[3] == kResolutionCompleted) CHECK(got[3] == want[3] && got[4] == want[4]);
+    else CHECK(same("core_extensions.json", c["name"].string, got, want));
+  }
+}
+
 int main() {
   testHeaders();
   testCobs();
@@ -1524,6 +1541,7 @@ int main() {
   testSessions();
   testOpsEncoding();
   testOps("refusals.json", "cases");
+  testRequestExtensions();
   testOps("ops.json", "cases");
   testWideCases();
   testLogicEvents();

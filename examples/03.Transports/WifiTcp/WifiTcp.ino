@@ -23,7 +23,7 @@ static constexpr size_t kConnections = 3;
 
 static constexpr uint16_t kMaxFrame = 1024;   // confirm's max_frame on every transport (the UART and each connection)
 // probe.config §1.4: with the wifi item, every transport answers max_frame 112 or more (one set of the longest wifi item)
-static_assert(kMaxFrame >= oep::kWifiMinMaxFrame, "a probe with the wifi item answers max_frame >= wifi_min_max_frame");
+static_assert(kMaxFrame >= oep::reg::kLimitWifiMinMaxFrame, "a probe with the wifi item answers max_frame >= wifi_min_max_frame");
 static uint8_t rxBuffer[1100];   // the serial port's encoded frame (a little more than max_frame)
 static_assert(sizeof rxBuffer >= oep::cobsFrameMax(kMaxFrame), "the serial port's encoded candidate");
 static uint8_t txBuffer[1024];

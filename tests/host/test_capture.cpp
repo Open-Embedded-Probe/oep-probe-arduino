@@ -208,7 +208,7 @@ static void testStreamingWithoutStages() {
     if (!ok(r)) printf("  streaming internal=%zu: resolution %u detail %u\n", internal, r.resolution, r.detail);
     // streaming's answer rows (capture §3.3): no actual_samples, no actual_segments
     CHECK(hasTag(out, cap::kTlvConfigureAnswerActualRate) && hasTag(out, cap::kTlvConfigureAnswerLayout) &&
-          hasTag(out, cap::kTlvConfigureAnswerBlockingMs) && !hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
+          !hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
           !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
   }
 }
@@ -264,11 +264,11 @@ static void testValuesRefused() {
   // an unknown non-critical tag is passed over; the answer has no ignored (0x7F), timing (0x54) or rate_accuracy (0x5A)
   Bytes p = base(kCrit);
   tlv(p, 0x61, {1, 2, 3});
-  tlv(p, 0x7F, {cap::kTlvConfigureSamples});   // no longer a special tag: unknown, non-critical
+  tlv(p, reg::kTagNamedExtension, {4, 'i', 'o', '.', 'x', 1});   // a named extension it does not know (core §2.2)
   CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)));
   CHECK(hasTag(out, cap::kTlvConfigureAnswerActualRate) && hasTag(out, cap::kTlvConfigureAnswerLayout) &&
-        hasTag(out, cap::kTlvConfigureAnswerActualSamples) && hasTag(out, cap::kTlvConfigureAnswerBlockingMs));
-  CHECK(!hasTag(out, 0x7F) && !hasTag(out, 0x54) && !hasTag(out, 0x5A));
+        hasTag(out, cap::kTlvConfigureAnswerActualSamples));
+  CHECK(!hasTag(out, reg::kTagNamedExtension) && !hasTag(out, 0x54) && !hasTag(out, 0x5A));
 }
 
 // capture §3.3's contract, configure and query alike: mode and rate required, samples in modes 1 / 2, none of them 0
@@ -326,7 +326,7 @@ static void testContract() {
     // every row of the mode: one-shot rate, layout, actual_samples, blocking_ms; repeat also actual_segments
     CHECK(ok(raw(rig.cap, op, base(0), out)) && hasTag(out, cap::kTlvConfigureAnswerActualRate) &&
           hasTag(out, cap::kTlvConfigureAnswerLayout) && hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
-          hasTag(out, cap::kTlvConfigureAnswerBlockingMs) && !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
+          !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
     p = base(0, cap::kTlvConfigureMode);
     tlv(p, cap::kTlvConfigureMode, {2});
     tlv(p, cap::kTlvConfigureSegments, u32(3));

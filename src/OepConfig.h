@@ -191,6 +191,7 @@ class ProbeConfig final : public Interface {
   uint8_t storage_state_ = reg::probe_config::kStorageStateNone, reason_ = 0;
   uint32_t saved_generation_ = 0;
   uint8_t saved_[kMaxItems];     // what is saved now, as a store (the items whose names this firmware knows)
+  static uint8_t scratch_[kMaxItems];   // a change's candidate store / the saved items being applied
   size_t saved_length_ = 0;
   bool saved_unknown_ = false;   // the save held names this firmware does not know (§3: invalid items)
   bool loaded_ = false;          // a saved blob read whole (load)

@@ -271,7 +271,6 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
   w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + channels_);
   w.u32(cap::kTlvConfigureAnswerActualSamples, samples);   // one-shot: no actual_segments (capture §3.3)
-  w.u32(cap::kTlvConfigureAnswerBlockingMs, 0);    // loop()'s core keeps answering
   return w.ok() ? completed(w.length()) : failed();
 }
 

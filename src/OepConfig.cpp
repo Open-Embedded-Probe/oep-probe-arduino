@@ -133,6 +133,8 @@ uint32_t crc32Ieee(const uint8_t *data, size_t length) {
   return ~crc;
 }
 
+uint8_t ProbeConfig::scratch_[ProbeConfig::kMaxItems];
+
 bool ProbeConfig::addPlace(WireRvswd &wire, TargetConsoleStream &console) {
   if (place_count_ == kMaxPlaces) return false;
   places_[place_count_++] = {&wire, &console};
@@ -559,7 +561,7 @@ Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, siz
     p += kTlvHeader + len;
   }
   if (refused(unsupported)) return unsupported;
-  static uint8_t candidate[kMaxItems];
+  uint8_t *const candidate = scratch_;   // one work area for set / unset / applySaved (never at once)
   size_t clen = items_length_;
   memcpy(candidate, items_, clen);
   for (size_t p = 1, i = 0; i < count; ++i) {
@@ -579,7 +581,7 @@ Result ProbeConfig::set(const uint8_t *payload, size_t length, uint8_t *out, siz
       v = old;   // a secret's value kept (§1.7)
       len = had;
     }
-    if (!insert(candidate, clen, sizeof candidate, kind, v, len))
+    if (!insert(candidate, clen, kMaxItems, kind, v, len))
       return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // more than this probe holds (§2)
     p += kTlvHeader + getU16(payload + p + 1);
   }
@@ -603,7 +605,7 @@ Result ProbeConfig::unset(const uint8_t *payload, size_t length, uint8_t *out, s
     if (!kindOf(number) && !undeclared) undeclared = number;
   }
   if (undeclared) return unsupportedTag(out, capacity, undeclared);
-  static uint8_t candidate[kMaxItems];
+  uint8_t *const candidate = scratch_;   // one work area for set / unset / applySaved (never at once)
   size_t clen = items_length_;
   memcpy(candidate, items_, clen);
   for (uint8_t i = 0; i < count; ++i) remove(candidate, clen, kindOf(payload[1 + 3 * i]), getU16(payload + 2 + 3 * i));
@@ -720,7 +722,7 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       const bool same = storage_state_ == cfg::kStorageStateApplied && saved_length_ == items_length_ &&
                         memcmp(saved_, items_, items_length_) == 0;
       if (!same) {
-        static uint8_t blob[kMaxBlob];
+        uint8_t blob[kMaxBlob];   // on loop()'s stack, as the save before
         const size_t n = saveBlob(blob, sizeof blob);
         if (!n || !storeWrite(blob, n)) return failed(4);   // the state says what is kept (§3's table)
         memcpy(saved_, items_, items_length_);
@@ -779,7 +781,7 @@ size_t ProbeConfig::saveBlob(uint8_t *blob, size_t capacity) const {
 }
 
 void ProbeConfig::load() {
-  static uint8_t blob[kMaxBlob];
+  uint8_t blob[kMaxBlob];
   size_t length = 0;
   saved_length_ = 0;
   saved_unknown_ = false;
@@ -826,7 +828,7 @@ void ProbeConfig::load() {
 // out and the rest applied (storage_state 3, reason 2). A key saved twice applies neither copy.
 void ProbeConfig::applySaved() {
   if (!loaded_) { adopt(items_, 0); return; }
-  static uint8_t applied[kMaxItems];
+  uint8_t *const applied = scratch_;
   size_t alen = 0;
   bool bad = saved_unknown_;
   uint8_t scratch[16];
@@ -849,7 +851,7 @@ void ProbeConfig::applySaved() {
       // the wifi passphrase kept as it is (the store's own form): pass_len 0xFF never saved
       bool ok = seen == 1 && !refused(checkItem(tag, numberOf(tag), v, vlen, scratch, sizeof scratch));
       if (ok && tag == kIdle && getU16(v) < 64 && ((disabled >> getU16(v)) & 1)) ok = false;   // disable wins
-      if (ok && !insert(applied, alen, sizeof applied, tag, v, vlen)) ok = false;
+      if (ok && !insert(applied, alen, kMaxItems, tag, v, vlen)) ok = false;
       bad |= !ok;
     }
   }

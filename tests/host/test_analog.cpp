@@ -155,12 +155,12 @@ static void testValuesRefused() {
   // and keeps skew, scale, blocking_ms, frontend_used and reference
   Bytes p = configureRequest(10000);
   tlv(p, 0x61, {1, 2, 3});
-  tlv(p, 0x7F, {ana::kTlvConfigureSamples});   // no longer a special tag: unknown, non-critical
+  tlv(p, reg::kTagNamedExtension, {4, 'i', 'o', '.', 'x', 1});   // a named extension it does not know (core §2.2)
   CHECK(ok(rig.op(ana::kOpConfigure, p)));
-  CHECK(!hasTag(rig.out, 0x7F) && !hasTag(rig.out, 0x54) && !hasTag(rig.out, 0x5A));
+  CHECK(!hasTag(rig.out, reg::kTagNamedExtension) && !hasTag(rig.out, 0x54) && !hasTag(rig.out, 0x5A));
   CHECK(hasTag(rig.out, ana::kTlvConfigureAnswerActualSamples) && !hasTag(rig.out, ana::kTlvConfigureAnswerActualSegments));
   CHECK(hasTag(rig.out, ana::kTlvConfigureAnswerSkew) && hasTag(rig.out, ana::kTlvConfigureAnswerScale) &&
-        hasTag(rig.out, ana::kTlvConfigureAnswerBlockingMs) && hasTag(rig.out, ana::kTlvConfigureAnswerFrontendUsed) &&
+        hasTag(rig.out, ana::kTlvConfigureAnswerFrontendUsed) &&
         hasTag(rig.out, ana::kTlvConfigureAnswerReference));
 }
 

@@ -148,8 +148,8 @@ constexpr uint8_t kCoreFirmware = reg::core::kTlvDescribeFirmware, kCoreModel = 
                   kCoreUnitId = reg::core::kTlvDescribeUnitId, kCoreChannels = reg::core::kTlvDescribeChannels,
                   kCoreLabel = reg::core::kTlvDescribeLabel, kCoreChip = reg::core::kTlvDescribeChip;
 
-// TLV tag bits (core §2.2): bit 7 = critical (in requests); 0x00 and 0x7F are never tags (0x00: the rejected
-// unsupported payload's "fixed-part value" marker).
+// TLV tag bits (core §2.2): bit 7 = critical (in requests); 0x00 is never a tag (the rejected unsupported payload's
+// "fixed-part value" marker); 0x7F is the named extension in every context (reg::kTagNamedExtension).
 constexpr uint8_t kTagCritical = reg::kTagCritical;
 constexpr uint8_t kTagValue = reg::kTagReservedZero;
 // The index of an element of the request's list, in a refusal's payload: the interfaces' own tag 0x40 (core §4.3 leaves
@@ -344,8 +344,11 @@ class Tail {
     uint8_t raw = 0;
     size_t len = 0;
     const uint8_t *value = nullptr;
-    while (at < n)
+    while (at < n) {
       if (!step(at, raw, value, len) || (raw & ~kTagCritical) == 0) return rejected(kRejectMalformed);   // tag 0 (§2.2)
+      // a named extension whose name_len passes its value: malformed, critical or not (core §2.2)
+      if ((raw & ~kTagCritical) == reg::kTagNamedExtension && (len < 1 || value[0] + 1u > len)) return rejected(kRejectMalformed);
+    }
     if (deferred) *deferred = completed();
     for (at = 0; at < n && step(at, raw, value, len);) {
       const uint8_t tag = raw & ~kTagCritical;

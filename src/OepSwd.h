@@ -40,6 +40,7 @@ struct SwdPort {
   uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
   bool active_targetsel = false;   // the live connection's TARGETSEL (part of its identity, oep-if-debug §5)
   uint32_t targetsel = 0;
+  uint32_t dpidr = 0;          // the DPIDR the attach read (connections' tid, scheme 2)
   // Host-chosen pins (oep-if-debug §1), as DebugPort: the channels SWDIO / SWCLK may take (role_channels); 0 = the fixed
   // pair above. swdio / swclk are then the pair the link is on, held in `pins` under pin_owner while it is live.
   uint64_t pin_choice = 0;
