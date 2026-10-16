@@ -1516,12 +1516,8 @@ static void testPassthrough() {
     OpsProbe p;
     p.passthroughs();
     CHECK(p.open());
-    Bytes item = {1, p.number(config_kind::kConsolePass), 16, 0, 0, 0, 4, 0, 1, 0, 2, 0, 0x40, 0x42, 0x0f,
-                  0x00, 7, 0, p.console.numberOf(TargetConsoleStream::kDriverDmseq), 0};
-    item.back() = reg::wire_rvswd::kIdleClockLow + 1;   // an idle_clock debug §3 leaves unused: unsupported (§1.2)
-    { const Bytes a = p.request(8, reg::probe_config::kOpSet, item);
-      CHECK(a.size() >= 5 && a[3] == kResolutionRejected && a[4] == kRejectUnsupported); }
-    item.back() = reg::wire_rvswd::kIdleClockLow;   // a CH32L103 needs SWCLK low at rest
+    const Bytes item = {1, p.number(config_kind::kConsolePass), 15, 0, 0, 0, 4, 0, 1, 0, 2, 0, 0x40, 0x42, 0x0f,
+                        0x00, 7, 0, p.console.numberOf(TargetConsoleStream::kDriverDmseq)};
     CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
     p.config.poll();
     CHECK(p.port.resident && !p.port.connected && !p.console.isOpen());

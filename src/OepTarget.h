@@ -82,7 +82,7 @@ struct DebugPort {
 // its own.
 // probe.config §1.2: the link up for a console pass-through on (swdio, swclk) - method 0, never a reset; false: no
 // answer (the pins go back to their free state). residentRelease: down again, the target untouched (debug §2).
-bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz, bool idle_low = false);
+bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz);
 void residentRelease(DebugPort &port);
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
