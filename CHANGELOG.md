@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.33
 - (EN) swio block reads are taken only when two passes agree (Ch32Dm::readWords, DmiPhy::uncheckedReads): swio reads
   carry no parity (oep-if-debug §3.2), and on the classic ESP32 with Wi-Fi on a bit came back flipped or the word shifted
   with the read reporting success - 6 words in 123 k (16 KiB x 30 from the V003 jig, serial and TCP); none with Wi-Fi off.
