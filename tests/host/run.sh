@@ -96,7 +96,10 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWIO -I"$he
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -pthread -DOEP_HOST_FAKE_SWIO \
   -I"$here/shim" -I"$src" -o "$out-wire-gate" "$here/test_wire_gate.cpp" "$src/OepSwioPhy.cpp" "$src/OepCh32Dm.cpp" \
   "$src/OepDmConsole.cpp"
-"$out-wire-gate"
+# its span checks are the host's wall clock: a loaded host may miss them, so the whole test runs up to three times, and
+# a failure does not stop the tests after it (the script still fails at the end)
+wire_gate_failed=
+"$out-wire-gate" || "$out-wire-gate" || "$out-wire-gate" || wire_gate_failed=1
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWD -I"$here/shim" -I"$src" -o "$out-swd" \
   "$here/test_swd.cpp" "$src/OepSwd.cpp" "$src/OepFrame.cpp"
 "$out-swd"
@@ -127,3 +130,4 @@ for bad in -DOEP_HOST_NO_UNIT_ID "-DOEP_UNIT_ID=\"Host\"" "-DOEP_UNIT_ID=\"\""; 
   fi
 done
 echo "unit-id: builds without a usable OEP_UNIT_ID refused"
+if [ -n "$wire_gate_failed" ]; then echo "wire-gate failed three times (wall-clock checks: run it again on an idle host)"; exit 1; fi

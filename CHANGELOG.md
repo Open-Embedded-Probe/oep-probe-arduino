@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.wire.rvswd's rest (oep-spec ba4e8ee, debug §3.1): an attach without idle_clock rests the line by the setting
+  rvswd-rest of its SWCLK channel (high / low), else by the target_id read right after the link comes up (registry
+  idle_low_family: a CH32L103 rests low; others high); the attach answer and connections carry the rest in use.
+  oep.probe.config offers the item rvswd-rest (mode auto / high / low, key the port's SWCLK) when a place is on rvswd.
+  The console pass-through's attach follows the same rule.
+- (JA) oep.wire.rvswd の線の休ませ方（oep-spec ba4e8ee、debug §3.1）: idle_clock の無い attach は、その SWCLK の channel の設定
+  rvswd-rest（high / low）、無ければ線がつながった直後に読む target_id（registry idle_low_family: CH32L103 は low、ほかは high）で
+  休ませる。attach の応答と connections に使う休ませ方を付ける。rvswd の place があれば oep.probe.config が項目 rvswd-rest（mode
+  auto / high / low、key はその口の SWCLK）を出す。素通しの attach も同じ規則。
 - (EN) A build between releases may name its commit in the firmware string (-DOEP_FIRMWARE_BUILD: "0.0.32+1491c13").
   Registry and vectors from oep-spec e25a654 (debug §4.3's halt-at-reset 1, the line names; console-passthrough keeps its
   13-byte form - the idle_clock field of 91209aa was withdrawn).

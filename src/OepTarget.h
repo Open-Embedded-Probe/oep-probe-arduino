@@ -68,6 +68,12 @@ struct DebugPort {
   // The live connection's target_id as its attach read it (oep-if-debug §1; has_tid false: none).
   bool has_tid = false;
   uint32_t tid = 0;
+  // rvswd (oep-if-debug §3.1): how the live connection rests SWCLK - the attach's idle_clock, else the setting
+  // rvswd-rest of its SWCLK channel (rest_setting: oep.probe.config's lookup, reg::probe_config::kRvswdRestMode*), else
+  // the probe's choice from the target_id. Answered in attach and connections.
+  bool rest_low = false;
+  uint8_t (*rest_setting)(const void *, uint16_t swclk) = nullptr;
+  const void *rest_context = nullptr;
   // The slot registered on this place (oep.probe.config), 0xff: none - the connections entry's slot.
   uint8_t slot = 0xff;
   // The connection's number: from the probe's one space (core §9, ResourceNumbers), taken when a connection comes up,
@@ -85,6 +91,10 @@ struct DebugPort {
 bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz);
 void residentRelease(DebugPort &port);
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
+// rvswd's rest when the attach gave no idle_clock (oep-if-debug §3.1), the link just up and resting high: the target_id
+// read now (has_tid / tid), then the setting rvswd-rest of the port's SWCLK, else low for a family in the registry's
+// idle_low_family. Sets the PHY's rest and rest_low.
+void chooseRest(DebugPort &port);
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`). lost: the line was found gone (the console
@@ -108,7 +118,7 @@ Result pairHeldRefusal(const DebugPort &port, uint16_t swdio, uint16_t swclk, ui
 void holdPins(DebugPort &port);
 // The connections answer (oep-if-debug §2.1: first(u8) -> more(u8) count(u8) count x entry) for a wire with
 // this one place.
-Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity);
+Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity, bool rest = false);
 
 class WireRvswd final : public Interface {
  public:
@@ -145,6 +155,7 @@ class WireRvswd final : public Interface {
   uint8_t choosePair(const uint8_t *pins, size_t len, PinRefusal &why);
   Result scan(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result attach(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  void settleRest(bool given, bool low);
 };
 
 class TargetRiscvDm final : public Interface {

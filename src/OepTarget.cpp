@@ -92,6 +92,21 @@ bool readDpc(Ch32Dm &dm, uint32_t &dpc) { return dm.readDpc(dpc); }
 
 // ---- oep.wire.rvswd / oep.wire.swio ------------------------------------------------------------------
 
+void chooseRest(DebugPort &port) {
+  namespace rv = reg::wire_rvswd;
+  namespace pc = reg::probe_config;
+  uint32_t id = 0;
+  port.has_tid = port.dm.readDmiSure(0x7f, id) && id != 0 && id != 0xffffffffu;
+  port.tid = port.has_tid ? id : 0;
+  const uint8_t mode = port.rest_setting ? port.rest_setting(port.rest_context, port.swclk) : pc::kRvswdRestModeAuto;
+  bool low = false;
+  if (mode == pc::kRvswdRestModeLow) low = true;
+  else if (mode == pc::kRvswdRestModeAuto && port.has_tid)
+    low = (port.tid >> rv::kTargetIdFamilyShift) == rv::kIdleLowFamilyCh32l103;   // registry idle_low_family
+  port.rest_low = low;
+  port.dm.phy().setIdleClockLow(low);
+}
+
 // The attach result's target_id (oep-if-debug §1): scheme dmi_7f, the u32 at DMI 0x7F; 0 and all ones = none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   uint32_t id = 0;
@@ -119,6 +134,7 @@ bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t ma
     freeWire(port);
     return false;
   }
+  if (phy.canIdleClockLow()) chooseRest(port);   // rvswd: the setting, else from target_id (oep-if-debug §3.1)
   port.dm.ackHaveReset();
   port.resident = true;
   phy.loss().clear();
@@ -152,6 +168,8 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
       return false;
     };
     if (!attachAndRead(port.dm, dmstatus)) return fail();
+    if (!idle_low && phy.canIdleClockLow()) chooseRest(port);   // rvswd without a given rest (oep-if-debug §3.1)
+    else port.rest_low = idle_low;
     port.dm.ackHaveReset();
     if (!port.dm.readDmiSure(kDmStatus, dmstatus)) return fail();
     const uint32_t number = ResourceNumbers::take(ResourceNumbers::kConnection);
@@ -289,8 +307,8 @@ void holdPins(DebugPort &port) {
 // connections (oep-if-debug §2.1): first(u8) -> more(u8) count(u8), count x entry: connection(u32) swdio(u16) swclk(u16)
 // speed_hz(u32) tid_scheme(u8) tid_len(u8) tid (no element length, core §2.3), [TLV]. One connection per wire here
 // (max_connections 1): at most one entry.
-Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity) {
-  if (capacity < 2 + 18) return failed();
+Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t *out, size_t capacity, bool rest) {
+  if (capacity < 2 + 18 + kTlvHeader + 2) return failed();
   out[0] = 0;   // more: never (one entry at most)
   out[1] = 0;
   if (!port.connected || first > 0) return completed(2);
@@ -303,7 +321,14 @@ Result connectionsOf(DebugPort &port, uint8_t first, uint32_t speed_hz, uint8_t 
   e[12] = port.has_tid ? reg::common::kTargetIdSchemeDmi7f : 0;
   e[13] = port.has_tid ? 4 : 0;   // tid_len: scheme dmi_7f's value is a u32
   if (port.has_tid) putU32(e + 14, port.tid);
-  return completed(2u + (port.has_tid ? 18 : 14));
+  size_t n = 2u + (port.has_tid ? 18 : 14);
+  if (rest) {   // rvswd: TLV idle_clock (entry_index, rest) for the entry (oep-if-debug §2.1, §3.1)
+    putTlvHeader(out + n, reg::wire_rvswd::kTlvConnectionsAnswerIdleClock, 2);
+    out[n + kTlvHeader] = 0;
+    out[n + kTlvHeader + 1] = port.rest_low ? reg::wire_rvswd::kIdleClockLow : reg::wire_rvswd::kIdleClockHigh;
+    n += kTlvHeader + 2;
+  }
+  return completed(n);
 }
 
 size_t WireRvswd::describe(uint8_t *out, size_t capacity) {
@@ -552,6 +577,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
         failure = answers ? kStatusTimeout : kStatusLine;
       } else {
         have_dpc = true;
+        settleRest(idle_given, idle_low);
         if (!port_.dm.readDmiSure(kDmStatus, status)) failure = kStatusLine;
       }
     } else {
@@ -559,6 +585,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
       if (!attachAndRead(port_.dm, status, with_reset)) {
         failure = kStatusLine;
       } else {
+        settleRest(idle_given, idle_low);   // first: a CH32L103 resting high loses its debug module in ~1 ms (§3.1)
         // A pending havereset freezes a V00x's DMSTATUS halt / run bits at their reset values (ch32rv 0.8.0):
         // acknowledge it first so the DMSTATUS returned is current, and say that it was there (flags bit0).
         if (port_.dm.ackHaveReset()) flags |= wire::kAttachFlagsHaveresetAcked;
@@ -602,7 +629,19 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
     putU32(out + n + kTlvHeader, dpc);
     n += kTlvHeader + 4;
   }
+  if (isRvswd() && n + kTlvHeader + 1 <= capacity) {   // the rest in use, always (oep-if-debug §3.1)
+    putTlvHeader(out + n, reg::wire_rvswd::kTlvAttachAnswerIdleClock, 1);
+    out[n + kTlvHeader] = port_.rest_low ? reg::wire_rvswd::kIdleClockLow : reg::wire_rvswd::kIdleClockHigh;
+    n += kTlvHeader + 1;
+  }
   return completed(n);
+}
+
+// The rest of the connection just made (oep-if-debug §3.1): the attach's idle_clock as given, else chooseRest.
+void WireRvswd::settleRest(bool given, bool low) {
+  if (!isRvswd()) return;
+  if (given) port_.rest_low = low;
+  else chooseRest(port_);
 }
 
 Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
@@ -618,7 +657,7 @@ Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint
     case kOpConnections: {   // first(u8) [TLV] -> more count entries: the live connections from the first-th (no lock)
       const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
       if (refused(parsed)) return parsed;
-      return connectionsOf(port_, payload[0], port_.dm.phy().clockHz(), out, capacity);
+      return connectionsOf(port_, payload[0], port_.dm.phy().clockHz(), out, capacity, isRvswd());
     }
     case kOpDetach: {   // connection(u32) [TLV]: the connection and the streams on it go (oep-if-debug §2)
       if (length < 4) return rejected(kRejectMalformed);

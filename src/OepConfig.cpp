@@ -138,7 +138,19 @@ uint8_t ProbeConfig::scratch_[ProbeConfig::kMaxItems];
 bool ProbeConfig::addPlace(WireRvswd &wire, TargetConsoleStream &console) {
   if (place_count_ == kMaxPlaces) return false;
   places_[place_count_++] = {&wire, &console};
+  if (wire.isRvswd()) {   // its rest can be fixed per port (rvswd-rest, oep-if-debug §3.1)
+    wire.port().rest_setting = &ProbeConfig::restOf;
+    wire.port().rest_context = this;
+    ++rest_ports_;
+  }
   return true;
+}
+
+uint8_t ProbeConfig::restOf(const void *self, uint16_t swclk) {
+  const ProbeConfig &c = *static_cast<const ProbeConfig *>(self);
+  size_t vlen = 0;
+  const uint8_t *v = c.find(c.items_, c.items_length_, kRvswdRest, swclk, vlen);
+  return v && vlen == 3 ? v[2] : cfg::kRvswdRestModeAuto;
 }
 
 bool ProbeConfig::addUart(FixtureUart &uart) {
@@ -185,6 +197,7 @@ bool ProbeConfig::declares(uint8_t kind) const {
     case kPass: return uart_count_ > 0;
     case kConsolePass: return place_count_ > 0;
     case kWifi: case kIpv4: return wifi_ != nullptr;
+    case kRvswdRest: return rest_ports_ > 0;
     default: return kind >= kOwn && kind < kOwn + own_count_;
   }
 }
@@ -212,6 +225,7 @@ const char *ProbeConfig::nameOf(uint8_t kind) const {
     case kConsolePass: return cfg::kNameSettingConsolePassthrough;
     case kWifi: return cfg::kNameSettingWifi;
     case kIpv4: return cfg::kNameSettingIpv4;
+    case kRvswdRest: return cfg::kNameSettingRvswdRest;
     default: return kind >= kOwn && kind < kOwn + own_count_ ? own_[kind - kOwn].name : "";
   }
 }
@@ -227,7 +241,7 @@ uint8_t ProbeConfig::kindNamed(const uint8_t *name, size_t length) const {
 // The setting's keys (§1): fn 0's channels, the transports, the wifi entries, the netifs + 1 (netif numbers from 1).
 uint16_t ProbeConfig::keysOf(uint8_t kind) const {
   switch (kind) {
-    case kLabel: case kIdle: case kDisable: return channels_;
+    case kLabel: case kIdle: case kDisable: case kRvswdRest: return channels_;
     case kPass: case kConsolePass: return static_cast<uint16_t>(endpoint_.transportCount());
     case kWifi: return kMaxWifi;
     case kIpv4: return 2;   // netif 1, "wifi"
@@ -307,6 +321,7 @@ Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, si
     case kLabel: if (n < 1 || n > reg::kLimitLabelMaxBytes) return rejected(kRejectMalformed); break;
     case kIdle: if (n != 1) return rejected(kRejectMalformed); break;
     case kDisable: if (n != 0) return rejected(kRejectMalformed); break;
+    case kRvswdRest: if (n != 1) return rejected(kRejectMalformed); break;
     case kPass:
       if (n != kPassData || getU32(d + 4) == 0) return rejected(kRejectMalformed);   // baud 0 (fixture §2's rule)
       break;
@@ -341,6 +356,9 @@ Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, si
   }
   if (!declares(kind) || key >= keysOf(kind)) return unsupportedTag(out, capacity, number);
   switch (kind) {
+    case kRvswdRest:   // a mode the definition leaves unused: unsupported, the number as received (§1)
+      if ((pins_ && !pins_->allowed(key)) || d[0] > cfg::kRvswdRestModeLow) return unsupportedTag(out, capacity, number);
+      return completed();
     case kLabel: case kIdle: case kDisable: {
       if (pins_ ? !pins_->allowed(key) : key >= PinTable::kChannels) return unsupportedTag(out, capacity, number);
       if (kind == kIdle) {

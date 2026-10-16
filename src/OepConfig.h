@@ -41,7 +41,7 @@
 namespace oep {
 // The kinds the store holds (the probe's own numbers, never on the wire; see above). findLine reads labels by kLabel.
 namespace config_kind {
-enum : uint8_t { kLabel = 1, kIdle, kDisable, kPass, kConsolePass, kWifi, kIpv4, kOwn };
+enum : uint8_t { kLabel = 1, kIdle, kDisable, kPass, kConsolePass, kWifi, kIpv4, kRvswdRest, kOwn };
 }
 
 }  // namespace oep
@@ -176,6 +176,7 @@ class ProbeConfig final : public Interface {
   uint16_t channels_ = PinTable::kChannels;
   Place places_[kMaxPlaces];
   size_t place_count_ = 0;
+  size_t rest_ports_ = 0;        // places on an rvswd wire: the item rvswd-rest is offered (oep-if-debug §3.1)
   FixtureUart *uarts_[kMaxUarts] = {};
   size_t uart_count_ = 0;
   WifiControl *wifi_ = nullptr;
@@ -200,6 +201,7 @@ class ProbeConfig final : public Interface {
   bool console_tried_[kMaxPorts] = {};
 
   bool declares(uint8_t kind) const;
+  static uint8_t restOf(const void *self, uint16_t swclk);   // rvswd-rest of that channel (auto when none)
   uint8_t kindOf(uint8_t number) const;   // 0: no item of that number
   uint8_t kindNamed(const uint8_t *name, size_t length) const;   // 0: a name this firmware does not know
   const char *nameOf(uint8_t kind) const;
