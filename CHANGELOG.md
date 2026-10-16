@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) probe.config console-passthrough carries idle_clock (oep-spec 91209aa, §1.2): the pass-through's attach rests the
+  line as the item says - low on rvswd for a CH32L103, which resets its debug module when SWCLK rests high; low on swio
+  or an unused value is unsupported. A build between releases may name its commit in the firmware string
+  (-DOEP_FIRMWARE_BUILD: "0.0.32+1491c13").
+- (JA) probe.config の console-passthrough が idle_clock を持つ（oep-spec 91209aa、§1.2）。素通しの attach は項目のとおりに
+  線を休ませる（CH32L103 は SWCLK が high で休むと debug module がリセットされるので rvswd で low）。swio の low と未使用の値は
+  unsupported。リリースの間のビルドは firmware の文字列に commit を足せる（-DOEP_FIRMWARE_BUILD: "0.0.32+1491c13"）。
 - (EN) capture start (oep.fixture.logic on the classic ESP32 sampler and the ESP32-P4, oep.fixture.analog): the answer is
   generation(u32) [TLV] (capture §3.2) - 0.0.32 still put a blocking_ms(u32) before it, and a host reading the spec's form
   took the generation as a TLV (found on the bench by tests/hw capture_analog, ESP32 0070070d9394).

@@ -105,12 +105,12 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room) {
   return kTlvHeader + 5;
 }
 
-bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz) {
+bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz, bool idle_low) {
   if (port.connected || port.resident) return port.resident;
   if (!usePair(port, swdio, swclk)) return false;
   DmiPhy &phy = port.dm.phy();
   if (!phy.setMaxHz(max_hz)) phy.setMaxHz(0);
-  phy.setIdleClockLow(false);
+  phy.setIdleClockLow(idle_low);   // the item's idle_clock (probe.config §1.2): what the target needs
   if (port.dm.attached() && phy.clockHz() > max_hz) port.dm.detach();
   AttachDeadline budget(phy);
   uint32_t status = 0;

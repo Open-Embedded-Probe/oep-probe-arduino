@@ -23,7 +23,7 @@ namespace {
 
 using namespace config_kind;
 // data lengths after the key (§1's table)
-constexpr size_t kPassData = 9, kConsolePassData = 13, kIpv4Data = 14;
+constexpr size_t kPassData = 9, kConsolePassData = 14, kIpv4Data = 14;
 constexpr uint8_t kPassHidden = 0xFF;   // wifi pass_len: get's "has a passphrase", set's "keep it" (§1.4)
 
 // The saved blob, by name (§1: read back by name): groups of name_len(u8) name count(u16) count x (len(u16) key data)
@@ -368,6 +368,10 @@ Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, si
       if (!pairAllowed(port, getU16(d + 2), getU16(d + 4)) ||
           (port.dm.phy().minClockHz() && max_hz < port.dm.phy().minClockHz()) ||
           !places_[k].console->offersMechanism(d[12]))
+        return unsupportedTag(out, capacity, number);
+      // idle_clock (debug §3's values): low only on rvswd, an unused value unsupported (§1.2)
+      if (d[13] != reg::wire_rvswd::kIdleClockHigh &&
+          (d[13] != reg::wire_rvswd::kIdleClockLow || !places_[k].wire->isRvswd()))
         return unsupportedTag(out, capacity, number);
       return completed();
     }
@@ -917,7 +921,7 @@ void ProbeConfig::runPassthroughs() {
           pc->config->runPassthroughsYield(pc->port);
         };
         dp.yield_context = &gPassContext[port];
-        if (residentAttach(dp, swdio, swclk, getU32(d + 6)) &&
+        if (residentAttach(dp, swdio, swclk, getU32(d + 6), d[13] == reg::wire_rvswd::kIdleClockLow) &&
             console.passStart(d[12], &ProbeConfig::passIn, &gPassContext[port]))
           pass_console_[port] = static_cast<int8_t>(k);
         else
