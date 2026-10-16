@@ -170,6 +170,7 @@ void setup() {
   endpoint.setRawPorts(&binds);
   endpoint.add(config);   // last: the fns before it keep their numbers
   config.addPlace(wireRvswd, console);
+  config.addHold(swd.hold, oep::checkSwdHold, &swd);   // oep.wire.swd's hold after a close (oep-if-debug §2): wire-hold
   config.addUart(uart);
   config.setPins(&pins);   // the idle item sets these pins' free state
   analog.setPins(&pins, 7);   // PinTable owners: gpio 1, uart 2, the analog 7 (its pads go analog)

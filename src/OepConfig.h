@@ -41,7 +41,7 @@
 namespace oep {
 // The kinds the store holds (the probe's own numbers, never on the wire; see above). findLine reads labels by kLabel.
 namespace config_kind {
-enum : uint8_t { kLabel = 1, kIdle, kDisable, kPass, kConsolePass, kWifi, kIpv4, kRvswdRest, kOwn };
+enum : uint8_t { kLabel = 1, kIdle, kDisable, kPass, kConsolePass, kWifi, kIpv4, kRvswdRest, kWireHold, kOwn };
 }
 
 }  // namespace oep
@@ -115,6 +115,10 @@ class ProbeConfig final : public Interface {
   }
   // A wire and its console a console-passthrough item may name (after the endpoint has them).
   bool addPlace(WireRvswd &wire, TargetConsoleStream &console);
+  // A debug wire's hold after a close (oep-if-debug §2): the setting wire-hold read through `hold`, and `check` called
+  // from poll() to end a hold whose pins were taken or whose settings changed. addPlace does it for its wire; oep.wire.swd
+  // (SwdPort) comes here: config.addHold(swd.hold, checkSwdHold, &swd).
+  bool addHold(WireHold &hold, void (*check)(void *), void *port);
   // A fixture UART a passthrough item may name (after the endpoint has it).
   bool addUart(FixtureUart &uart);
   // The pins the idle and disable items work on.
@@ -177,6 +181,10 @@ class ProbeConfig final : public Interface {
   Place places_[kMaxPlaces];
   size_t place_count_ = 0;
   size_t rest_ports_ = 0;        // places on an rvswd wire: the item rvswd-rest is offered (oep-if-debug §3.1)
+  static constexpr size_t kMaxHolds = kMaxPlaces + 2;
+  struct HoldSite { void (*check)(void *) = nullptr; void *port = nullptr; };
+  HoldSite holds_[kMaxHolds];
+  size_t hold_count_ = 0;        // debug wires that hold after a close: the item wire-hold is offered
   FixtureUart *uarts_[kMaxUarts] = {};
   size_t uart_count_ = 0;
   WifiControl *wifi_ = nullptr;
@@ -202,6 +210,7 @@ class ProbeConfig final : public Interface {
 
   bool declares(uint8_t kind) const;
   static uint8_t restOf(const void *self, uint16_t swclk);   // rvswd-rest of that channel (auto when none)
+  static bool holdOf(const void *self, uint16_t swdio);      // wire-hold of that channel (on when none)
   uint8_t kindOf(uint8_t number) const;   // 0: no item of that number
   uint8_t kindNamed(const uint8_t *name, size_t length) const;   // 0: a name this firmware does not know
   const char *nameOf(uint8_t kind) const;

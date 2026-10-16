@@ -51,7 +51,8 @@ static int failures = 0, checks = 0;
 // The pins as a PHY leaves them, and a debug module that answers when `present`.
 class FakePhy final : public DmiPhy {
  public:
-  enum State { kFree, kReleased, kDriven };   // free: Hi-Z no pull; released: Hi-Z with SWDIO's pull-up; driven
+  enum State { kFree, kReleased, kDriven, kHeld };   // free: Hi-Z no pull; released: Hi-Z with SWDIO's pull-up; driven;
+                                                    // held: driven at the rest after a close (oep-if-debug §2)
   State state = kFree;
   bool idle_low = false, attached_flag = false, present = true;
   uint32_t version = 2;
@@ -197,6 +198,7 @@ class FakePhy final : public DmiPhy {
     state = idle_low ? kDriven : kReleased;   // SWCLK low is driven
   }
   void free() override { state = kFree; attached_flag = false; }
+  void hold() override { state = kHeld; attached_flag = false; }
   bool attached() const override { return attached_flag; }
   // ignore_halt / ignore_resume: haltreq / resumereq do not change the hart (a halt or resume that never lands);
   // step_returns: a resumereq runs one instruction and the hart is back in debug mode at once (a step); each read takes
@@ -491,17 +493,25 @@ int main() {
     CHECK(fixed.connected);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
-    CHECK(phy.state == FakePhy::kFree);
+    CHECK(phy.state == FakePhy::kHeld && fixed.holding);   // oep-if-debug §2: held at the rest, the next attach takes it
+    r = call(wire_fixed, reg::wire_rvswd::kOpHolds, Bytes{0}, out);
+    CHECK(ok(r) && out.size() == 7 && out[0] == 0 && out[1] == 1);   // one held port, lock-free (§2.2)
   }
 
-  // ---- idle_clock low rests SWCLK driven; closing the connection lets it go (core §8) ----
+  // ---- idle_clock low rests SWCLK driven; closing the connection holds it there (oep-if-debug §2), a lost line does not ----
   {
     phy.halted = false;
     Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, 1), out);
     CHECK(ok(r) && fixed.connected);
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r) && !fixed.connected);
-    CHECK(phy.state == FakePhy::kFree);   // 0.0.28: park() left SWCLK driven low
+    CHECK(phy.state == FakePhy::kHeld && fixed.holding);   // SWCLK held low: a CH32L103 keeps its halt
+    r = call(wire_fixed, reg::wire_rvswd::kOpHolds, Bytes{0}, out);
+    CHECK(ok(r) && out.size() == 7 && out[1] == 1 && out[6] == wire::kIdleClockLow);
+    r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(0, -1, -1, 1), out);   // taken like a free pin
+    CHECK(ok(r) && fixed.connected && !fixed.holding);
+    releaseConnection(fixed, DebugPort::kUserHost, true, true);   // a lost line: not held (§2)
+    CHECK(phy.state == FakePhy::kFree && !fixed.holding);
     phy.idle_low = false;
   }
 

@@ -49,6 +49,9 @@ struct SwdPort {
   WireLossClock loss{};        // oep-if-debug §2: the live connection closes only once the wire is lost
   bool io_driven = false;      // the lines are driven (from a wake on, until they are let go)
   bool rest_free = false;      // oep-if-debug §2: no answer since the last exchange - the lines free between exchanges
+  // oep-if-debug §2: after a close that was not a lost line the lines stay driven at the rest (checkSwdHold ends it)
+  WireHold hold;
+  bool holding = false;
 };
 
 // One request's wire retries (oep-if-debug §2): at most limits::kWireRetryMs of it goes to retrying the wire. fits: one more
@@ -59,7 +62,8 @@ struct WireRetry {
 };
 
 // The live connection goes: pins released (Hi-Z), its number closed, let go of in the pin table.
-void closePort(SwdPort &port);
+void closePort(SwdPort &port, bool lost = false);
+void checkSwdHold(void *port);   // WireHold's check for a SwdPort: the pins taken, or the hold no longer allowed
 
 class WireSwd final : public Interface {
  public:
@@ -72,7 +76,8 @@ class WireSwd final : public Interface {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::wire_swd::kLockFreeOps, op); }
   // scan, attach, detach, connections: required on every wire (oep-if-debug §0)
   bool offers(uint8_t op) const override {
-    return opIn(op, reg::wire_swd::kOpScan, reg::wire_swd::kOpDetach) || op == reg::wire_swd::kOpConnections;
+    return opIn(op, reg::wire_swd::kOpScan, reg::wire_swd::kOpDetach) || op == reg::wire_swd::kOpConnections ||
+           op == reg::wire_swd::kOpHolds;
   }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;

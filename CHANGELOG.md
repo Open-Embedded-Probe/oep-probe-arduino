@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep-spec bc52327 (debug §2, §2.2; probe.config wire-hold): a debug wire's connection closed other than by a lost line
+  leaves its lines driven at the rest - rvswd SWCLK at its idle_clock and SWDIO high, swio the line high, swd after its 8
+  idle cycles - until the pins are taken, wire-hold goes off for the port's SWDIO, an idle / disable item lands on them or
+  the probe restarts (DmiPhy::hold, WireHold, ProbeConfig::addHold / poll). A CH32L103 kept its halt across processes on the
+  bench (it loses it about 5 ms after the drive stops). The op holds (0x14, lock-free) lists the held port; rvswd / swio /
+  swd offer it.
+- (JA) oep-spec bc52327（debug §2、§2.2、probe.config wire-hold）: debug の線の接続が線切れ以外で閉じたら、線を休みの状態のまま駆動する
+  （rvswd は SWCLK を idle_clock の水準・SWDIO を high、swio は線を high、swd は 8 idle cycle の後）。ピンが取られる、その口の SWDIO の
+  wire-hold が off、idle / disable の項目、probe の再起動で終わる（DmiPhy::hold、WireHold、ProbeConfig::addHold / poll）。実機で CH32L103 の
+  halt がプロセスをまたいで残った（駆動が止まると約 5 ms で失う）。op holds（0x14、ロック不要）が保持中の口を返す。rvswd / swio / swd が持つ。
 
 ## 0.0.33
 - (EN) swio block reads are taken only when two passes agree (Ch32Dm::readWords, DmiPhy::uncheckedReads): swio reads

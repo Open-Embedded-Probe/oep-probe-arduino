@@ -138,12 +138,29 @@ uint8_t ProbeConfig::scratch_[ProbeConfig::kMaxItems];
 bool ProbeConfig::addPlace(WireRvswd &wire, TargetConsoleStream &console) {
   if (place_count_ == kMaxPlaces) return false;
   places_[place_count_++] = {&wire, &console};
+  addHold(wire.port().hold, checkHoldOf, &wire.port());
   if (wire.isRvswd()) {   // its rest can be fixed per port (rvswd-rest, oep-if-debug §3.1)
     wire.port().rest_setting = &ProbeConfig::restOf;
     wire.port().rest_context = this;
     ++rest_ports_;
   }
   return true;
+}
+
+bool ProbeConfig::addHold(WireHold &hold, void (*check)(void *), void *port) {
+  for (size_t k = 0; k < hold_count_; ++k) if (holds_[k].port == port) return true;   // one wire, several places
+  if (hold_count_ == kMaxHolds) return false;
+  hold.on = &ProbeConfig::holdOf;
+  hold.context = this;
+  holds_[hold_count_++] = {check, port};
+  return true;
+}
+
+bool ProbeConfig::holdOf(const void *self, uint16_t swdio) {
+  const ProbeConfig &c = *static_cast<const ProbeConfig *>(self);
+  size_t vlen = 0;
+  const uint8_t *v = c.find(c.items_, c.items_length_, kWireHold, swdio, vlen);
+  return !(v && vlen == 3 && v[2] == cfg::kWireHoldModeOff);
 }
 
 uint8_t ProbeConfig::restOf(const void *self, uint16_t swclk) {
@@ -198,6 +215,7 @@ bool ProbeConfig::declares(uint8_t kind) const {
     case kConsolePass: return place_count_ > 0;
     case kWifi: case kIpv4: return wifi_ != nullptr;
     case kRvswdRest: return rest_ports_ > 0;
+    case kWireHold: return hold_count_ > 0;
     default: return kind >= kOwn && kind < kOwn + own_count_;
   }
 }
@@ -226,6 +244,7 @@ const char *ProbeConfig::nameOf(uint8_t kind) const {
     case kWifi: return cfg::kNameSettingWifi;
     case kIpv4: return cfg::kNameSettingIpv4;
     case kRvswdRest: return cfg::kNameSettingRvswdRest;
+    case kWireHold: return cfg::kNameSettingWireHold;
     default: return kind >= kOwn && kind < kOwn + own_count_ ? own_[kind - kOwn].name : "";
   }
 }
@@ -241,7 +260,7 @@ uint8_t ProbeConfig::kindNamed(const uint8_t *name, size_t length) const {
 // The setting's keys (§1): fn 0's channels, the transports, the wifi entries, the netifs + 1 (netif numbers from 1).
 uint16_t ProbeConfig::keysOf(uint8_t kind) const {
   switch (kind) {
-    case kLabel: case kIdle: case kDisable: case kRvswdRest: return channels_;
+    case kLabel: case kIdle: case kDisable: case kRvswdRest: case kWireHold: return channels_;
     case kPass: case kConsolePass: return static_cast<uint16_t>(endpoint_.transportCount());
     case kWifi: return kMaxWifi;
     case kIpv4: return 2;   // netif 1, "wifi"
@@ -321,7 +340,7 @@ Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, si
     case kLabel: if (n < 1 || n > reg::kLimitLabelMaxBytes) return rejected(kRejectMalformed); break;
     case kIdle: if (n != 1) return rejected(kRejectMalformed); break;
     case kDisable: if (n != 0) return rejected(kRejectMalformed); break;
-    case kRvswdRest: if (n != 1) return rejected(kRejectMalformed); break;
+    case kRvswdRest: case kWireHold: if (n != 1) return rejected(kRejectMalformed); break;
     case kPass:
       if (n != kPassData || getU32(d + 4) == 0) return rejected(kRejectMalformed);   // baud 0 (fixture §2's rule)
       break;
@@ -358,6 +377,9 @@ Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, si
   switch (kind) {
     case kRvswdRest:   // a mode the definition leaves unused: unsupported, the number as received (§1)
       if ((pins_ && !pins_->allowed(key)) || d[0] > cfg::kRvswdRestModeLow) return unsupportedTag(out, capacity, number);
+      return completed();
+    case kWireHold:   // off / on (§1): another mode unsupported, the number as received
+      if ((pins_ && !pins_->allowed(key)) || d[0] > cfg::kWireHoldModeOn) return unsupportedTag(out, capacity, number);
       return completed();
     case kLabel: case kIdle: case kDisable: {
       if (pins_ ? !pins_->allowed(key) : key >= PinTable::kChannels) return unsupportedTag(out, capacity, number);
@@ -966,7 +988,10 @@ void ProbeConfig::runPassthroughsYield(uint8_t port) {
   binds_.drop(port);
 }
 
-void ProbeConfig::poll() { runPassthroughs(); }
+void ProbeConfig::poll() {
+  runPassthroughs();
+  for (size_t k = 0; k < hold_count_; ++k) holds_[k].check(holds_[k].port);   // holds whose pins were taken or settings changed
+}
 
 }  // namespace oep
 

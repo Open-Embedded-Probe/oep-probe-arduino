@@ -31,6 +31,7 @@ class RvswdPhy final : public DmiPhy {
   void release() override;
   void free() override;
   void park() override;
+  void hold() override;   // driven at the rest: SWCLK low / SWDIO high with idle_clock low, both high otherwise
   bool attached() const override { return attached_; }
   // One cheap look for a debug module at this half period: drive the bus, set dmactive (unless DMCONTROL reads it set)
   // and read DMSTATUS once. For sweeping candidate pin pairs, where attach()'s margin check

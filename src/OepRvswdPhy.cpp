@@ -276,6 +276,16 @@ void RvswdPhy::free() {
   attached_ = false;
 }
 
+void RvswdPhy::hold() {
+  rest_free_ = false;
+  attached_ = false;
+  if (swdio_ < 0) return;
+  ioClkPull(swclk_, 0);
+  if (park_low_) gIo.clkLowDio(true);
+  else gIo.bothHigh();
+  ioDrive(swdio_, swclk_);
+}
+
 void RvswdPhy::park() {
   rest_free_ = false;
   if (swdio_ < 0) { attached_ = false; return; }
@@ -751,6 +761,7 @@ bool RvswdPhy::begin(int, int) { return false; }
 bool RvswdPhy::usePins(int, int) { return false; }
 bool RvswdPhy::attach() { return false; }
 void RvswdPhy::release() { attached_ = false; }
+void RvswdPhy::hold() { attached_ = false; }
 void RvswdPhy::free() { attached_ = false; }
 void RvswdPhy::park() { attached_ = false; }
 bool RvswdPhy::readWire(uint8_t, uint32_t &) { return false; }

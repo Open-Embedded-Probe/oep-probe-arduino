@@ -285,7 +285,10 @@ int main() {
     CHECK(ok(r) && fixed.io.driven && !fixed.rest_free);
     const uint32_t before = g_swd.idle_run;
     r = call(wire, WireSwd::kOpDetach, u32(fixed.number), out);
-    CHECK(ok(r) && g_swd.idle_run >= before + 8 && !fixed.io.driven);
+    // oep-if-debug §2: the 8 idle cycles, then the lines held driven at the rest (not a lost line); holds lists the port
+    CHECK(ok(r) && g_swd.idle_run >= before + 8 && fixed.io.driven && fixed.holding);
+    r = call(wire, reg::wire_swd::kOpHolds, Bytes{0}, out);
+    CHECK(ok(r) && out.size() == 7 && out[1] == 1);
   }
 
   // ---- the lines while the wire does not answer (oep-if-debug §2, §5): from a transfer with no answer until one

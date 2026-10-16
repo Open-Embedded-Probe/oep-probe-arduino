@@ -186,6 +186,11 @@ void SwioPhy::release() {
   if (gPin >= 0) pinMode(gPin, INPUT_PULLUP);
 }
 
+void SwioPhy::hold() {
+  attached_ = rest_free_ = false;
+  if (gPin >= 0) configureIo();   // driven high (configureIo ends that way)
+}
+
 // The free state (oep-core §8): Hi-Z, no pull. attach() puts the pull-up back before it looks at the line.
 void SwioPhy::free() {
   attached_ = rest_free_ = false;
@@ -450,6 +455,11 @@ void SwioPhy::release() {
   unconfigureIo();
 }
 
+void SwioPhy::hold() {
+  attached_ = rest_free_ = false;
+  if (gPin >= 0 && !configureIo()) unconfigureIo();   // driven high in the bundle (configureIo ends that way)
+}
+
 // The free state (oep-core §8): out of the bundle, Hi-Z, no pull. attach() puts the pull-up back before it looks.
 void SwioPhy::free() {
   release();
@@ -519,6 +529,7 @@ void SwioPhy::write(uint8_t address, uint32_t value) {
 }
 bool SwioPhy::lineUp() { return fakeSwioLineHigh(); }
 void SwioPhy::release() { attached_ = rest_free_ = false; }
+void SwioPhy::hold() { release(); }
 void SwioPhy::free() { release(); }
 
 }  // namespace oep
@@ -665,6 +676,7 @@ bool SwioPhy::readWire(uint8_t, uint32_t &) { return false; }
 void SwioPhy::write(uint8_t, uint32_t) {}
 bool SwioPhy::attach() { return false; }
 void SwioPhy::release() { attached_ = false; }
+void SwioPhy::hold() { attached_ = false; }
 void SwioPhy::reinit() {}
 void SwioPhy::free() { attached_ = false; }
 bool SwioPhy::bringUp(uint32_t &) { return false; }

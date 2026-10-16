@@ -25,6 +25,7 @@
 #include "OepCh32Dm.h"
 #include "Oep.h"
 #include "OepDebug.h"
+#include "OepPinTable.h"
 
 namespace oep {
 
@@ -72,6 +73,10 @@ struct DebugPort {
   // rvswd-rest of its SWCLK channel (rest_setting: oep.probe.config's lookup, reg::probe_config::kRvswdRestMode*), else
   // the probe's choice from the target_id. Answered in attach and connections.
   bool rest_low = false;
+  // oep-if-debug §2: after a close that was not a lost line the lines stay driven at the rest (holding), until the pins
+  // are taken, the setting wire-hold goes off, an idle / disable item lands on them, or the probe restarts (checkHold).
+  WireHold hold;
+  bool holding = false;
   uint8_t (*rest_setting)(const void *, uint16_t swclk) = nullptr;
   const void *rest_context = nullptr;
   // The slot registered on this place (oep.probe.config), 0xff: none - the connections entry's slot.
@@ -95,6 +100,10 @@ bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t m
 // read now (has_tid / tid), then the setting rvswd-rest of the port's SWCLK, else low for a family in the registry's
 // idle_low_family. Sets the PHY's rest and rest_low.
 void chooseRest(DebugPort &port);
+// A hold ended (debug §2): its pins taken by something else (the taker drives them now), or no longer allowed (the
+// lines go to their free state). For ProbeConfig::poll and the wire's own requests.
+void checkHold(DebugPort &port);
+void checkHoldOf(void *port);   // the same, for WireHold's check (a DebugPort)
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
 size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 // Drop `user`'s use; the link is closed when nobody is left (or `force`). lost: the line was found gone (the console
@@ -134,7 +143,8 @@ class WireRvswd final : public Interface {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::wire_rvswd::kLockFreeOps, op); }
   // scan, attach, detach, connections: required on every wire (oep-if-debug §0)
   bool offers(uint8_t op) const override {
-    return opIn(op, reg::wire_rvswd::kOpScan, reg::wire_rvswd::kOpDetach) || op == reg::wire_rvswd::kOpConnections;
+    return opIn(op, reg::wire_rvswd::kOpScan, reg::wire_rvswd::kOpDetach) || op == reg::wire_rvswd::kOpConnections ||
+           op == reg::wire_rvswd::kOpHolds;
   }
   size_t describe(uint8_t *out, size_t capacity) override;
   DebugPort &port() const { return port_; }

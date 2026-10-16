@@ -194,4 +194,20 @@ class PinTable {
   }
 };
 
+// oep-if-debug §2: whether a debug wire holds its lines at their rest after a close that is not a lost line - the
+// setting wire-hold of the port's SWDIO (oep.probe.config sets `on`; none: on) and no idle / disable item on its pins.
+// `check` (set by the wire) ends a hold whose pins were taken or whose settings changed; ProbeConfig::poll calls it.
+struct WireHold {
+  bool (*on)(const void *, uint16_t swdio) = nullptr;
+  const void *context = nullptr;
+  bool allows(const PinTable *pins, uint16_t swdio, uint16_t swclk) const {
+    if (on && !on(context, swdio)) return false;
+    if (!pins) return true;
+    const uint16_t both[2] = {swdio, swclk};
+    for (uint16_t ch : both)
+      if (ch != 0xffff && (pins->disabled(ch) || pins->idle(ch) != PinTable::kIdleUnset)) return false;
+    return true;
+  }
+};
+
 }  // namespace oep

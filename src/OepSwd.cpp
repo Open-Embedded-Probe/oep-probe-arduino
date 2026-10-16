@@ -195,11 +195,37 @@ static void freePort(SwdPort &port) {
 }
 
 // The live connection goes: pins to their free state, its number closed, let go of in the pin table.
-void closePort(SwdPort &port) {
+void closePort(SwdPort &port, bool lost) {
   if (!port.connected) return;
   port.connected = false;
   ResourceNumbers::close(port.number);
+  // oep-if-debug §2: not a lost line, the lines driven and answering - they stay driven at the rest (after the last
+  // packet's 8 idle cycles), the pins free for anyone to take
+  if (!lost && port.io_driven && !port.rest_free && port.hold.allows(port.pins, port.swdio, port.swclk)) {
+    port.io.hostDrives(true);
+    swd::idle(port.io, 8);
+    port.holding = true;
+    if (port.pins && port.pin_choice) port.pins->releaseQuiet(port.pin_owner);
+    return;
+  }
+  port.holding = false;
   freePort(port);
+}
+
+void checkSwdHold(void *p) {
+  SwdPort &port = *static_cast<SwdPort *>(p);
+  if (!port.holding) return;
+  if (port.connected) { port.holding = false; return; }
+  if (port.pins && (port.pins->owner(port.swdio) != 0 || port.pins->owner(port.swclk) != 0)) {
+    port.holding = false;   // the taker drives them now
+    port.io_driven = false;
+    return;
+  }
+  if (!port.hold.allows(port.pins, port.swdio, port.swclk)) {
+    port.holding = false;
+    port.io_driven = false;   // no idle cycles: the lines just go
+    freePort(port);
+  }
 }
 
 void WireSwd::close() { closePort(port_); }
@@ -237,7 +263,21 @@ bool WireSwd::wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr,
 
 Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
+  checkSwdHold(&port_);
+  if (op == kOpScan || op == kOpAttach) port_.holding = false;   // they take the line (or move it): the hold ends (§2)
   switch (op) {
+    case reg::wire_swd::kOpHolds: {   // first(u8) [TLV] -> more count entries (swdio swclk rest 0), lock-free (§2.2)
+      const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (capacity < 7) return failed();
+      out[0] = out[1] = 0;
+      if (!port_.holding || payload[0] > 0) return completed(2);
+      out[1] = 1;
+      putU16(out + 2, port_.swdio);
+      putU16(out + 4, port_.swclk);
+      out[6] = 0;
+      return completed(7);
+    }
     case kOpScan: {
       // count(u8, 1 or more) count x (swdio(u16) swclk(u16)) [TLV 0x01 max_speed, 0x02 targetsel]  ->  tried(u8) count(u8)
       // count x (kind(u8) swdio(u16) swclk(u16) DPIDR(u32)) (oep-if-debug §1, §5; 9 bytes each, no element length)
@@ -500,7 +540,7 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       out[2] = status;
       out[3] = ack;
       putU16(out + 4, nvals);
-      if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
+      if (lostAfter(port_, status)) closePort(port_, true);   // only once the wire is lost (oep-if-debug §2)
       return outcome(status, done, o);
     }
     case kOpReadBlock: {
@@ -539,7 +579,7 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       const uint8_t status = statusOf(ack);
       putU16(out, done);
       out[2] = status;
-      if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
+      if (lostAfter(port_, status)) closePort(port_, true);   // only once the wire is lost (oep-if-debug §2)
       return outcome(status, done, o);
     }
     case kOpWriteBlock: {
@@ -580,7 +620,7 @@ Result TargetArmAdi::run(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, s
       const uint8_t status = statusOf(ack);
       putU16(out, done);
       out[2] = status;
-      if (lostAfter(port_, status)) closePort(port_);   // only once the wire is lost (oep-if-debug §2)
+      if (lostAfter(port_, status)) closePort(port_, true);   // only once the wire is lost (oep-if-debug §2)
       return outcome(status, done, 3);
     }
     default:

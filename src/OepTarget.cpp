@@ -210,8 +210,31 @@ void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost, boo
   port.detached = detached;
   ++port.closes;
   ResourceNumbers::close(port.number);
+  // oep-if-debug §2: not a lost line - the lines stay driven at the connection's rest (a CH32L103 drops its halt about
+  // 5 ms after the drive stops), the pins free for anyone to take
+  if (!lost && port.hold.allows(port.pins, port.swdio, port.swclk)) {
+    port.dm.phy().hold();
+    port.holding = true;
+    if (port.pins && port.pin_choice) port.pins->releaseQuiet(port.pin_owner);
+    return;
+  }
+  port.holding = false;
   freeWire(port);
 }
+
+void checkHold(DebugPort &port) {
+  if (!port.holding) return;
+  if (port.connected) { port.holding = false; return; }
+  const bool taken = port.pins && (port.pins->owner(port.swdio) != 0 ||
+                                   (port.swclk != 0xffff && port.pins->owner(port.swclk) != 0));
+  if (taken) { port.holding = false; return; }   // the taker drives them now
+  if (!port.hold.allows(port.pins, port.swdio, port.swclk)) {
+    port.holding = false;
+    freeWire(port);
+  }
+}
+
+void checkHoldOf(void *port) { checkHold(*static_cast<DebugPort *>(port)); }
 
 // One DMSTATUS read, with the wire retries of one request (oep-if-debug §2). A check that gets nothing back is not wire
 // loss by itself: the connection closes only once the wire has failed for limits::kWireLostMs with no good exchange between
@@ -647,7 +670,21 @@ void WireRvswd::settleRest(bool given, bool low) {
 Result WireRvswd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   port_.dm.phy().beginRequest();   // the request's allowance for wire retries (oep-if-debug §2)
+  checkHold(port_);
+  if (op == kOpScan || op == kOpAttach) port_.holding = false;   // they take the line (or move it): the hold ends (§2)
   switch (op) {
+    case reg::wire_rvswd::kOpHolds: {   // first(u8) [TLV] -> more count entries (swdio swclk rest), lock-free (§2.2)
+      const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (capacity < 7) return failed();
+      out[0] = out[1] = 0;
+      if (!port_.holding || payload[0] > 0) return completed(2);
+      out[1] = 1;
+      putU16(out + 2, port_.swdio);
+      putU16(out + 4, port_.swclk);
+      out[6] = isRvswd() && port_.rest_low ? reg::wire_rvswd::kIdleClockLow : reg::wire_rvswd::kIdleClockHigh;
+      return completed(7);
+    }
     case kOpScan: return scan(payload, length, out, capacity);
     case kOpAttach: {
       const Result r = attach(payload, length, out, capacity);
