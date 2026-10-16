@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.34
 - (EN) oep-spec bc52327 (debug §2, §2.2; probe.config wire-hold): a debug wire's connection closed other than by a lost line
   leaves its lines driven at the rest - rvswd SWCLK at its idle_clock and SWDIO high, swio the line high, swd after its 8
   idle cycles - until the pins are taken, wire-hold goes off for the port's SWDIO, an idle / disable item lands on them or
