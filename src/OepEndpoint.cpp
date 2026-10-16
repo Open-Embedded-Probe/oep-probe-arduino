@@ -53,6 +53,10 @@ bool Endpoint::add(Interface &interface) {
   bool any = interface.notifies();
   for (int op = 1; op < kReservedOps && !any; ++op) any = interface.offers(static_cast<uint8_t>(op));
   if (!any) return false;
+  for (size_t i = 0; i < count_; ++i)   // (name, revision, instance) names one interface (core §7.2)
+    if (interfaces_[i]->instance() == interface.instance() && interfaces_[i]->revision() == interface.revision() &&
+        strcmp(interfaces_[i]->name(), interface.name()) == 0)
+      return false;
   interfaces_[count_++] = &interface;
   interface.setFrameLimit(limits_.max_frame);
   return true;
