@@ -189,17 +189,19 @@ static Result call(Interface &i, uint8_t op, const Bytes &payload, Bytes &out, s
   return r;
 }
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
-// what riscv.Wire.attach_body sends: method, max_speed (critical), pins (critical), idle_clock low (critical); every
-// TLV tag(u8) len(u16) value (core §2.2)
+// what riscv.Wire.attach_body sends (debug §1): method swdio(u16) swclk(u16) max_speed(u32), idle_clock low
+// (critical); every TLV tag(u8) len(u16) value (core §2.2)
 static Bytes attachRequest(uint8_t method, uint32_t hz, int swdio, int swclk, bool idle_low) {
-  Bytes p = {method, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, uint8_t(hz), uint8_t(hz >> 8),
-             uint8_t(hz >> 16), uint8_t(hz >> 24)};
-  p.insert(p.end(), {uint8_t(legacy::kTlvAttachPins | kTagCritical), 4, 0, uint8_t(swdio), 0, uint8_t(swclk), 0});
+  Bytes p = {method, uint8_t(swdio), uint8_t(swdio >> 8), uint8_t(swclk), uint8_t(swclk >> 8),
+             uint8_t(hz), uint8_t(hz >> 8), uint8_t(hz >> 16), uint8_t(hz >> 24)};
   if (idle_low) p.insert(p.end(), {uint8_t(wire::kTlvAttachIdleClock | kTagCritical), 1, 0, 1});
   return p;
 }
-static Bytes detachRequest(uint16_t number) { return {uint8_t(number), uint8_t(number >> 8)}; }
-static const uint8_t *answerTlv(const Bytes &out, size_t from, uint8_t tag, size_t &len) {
+static Bytes detachRequest(uint32_t number) {
+  return {uint8_t(number), uint8_t(number >> 8), uint8_t(number >> 16), uint8_t(number >> 24)};
+}
+constexpr size_t kAttachAnswer = 13;   // connection(u32) id(u32) flags(u8) speed_hz(u32)
+[[maybe_unused]] static const uint8_t *answerTlv(const Bytes &out, size_t from, uint8_t tag, size_t &len) {
   for (size_t at = from; at + 3 <= out.size(); at += 3u + (out[at + 1] | out[at + 2] << 8)) {
     const size_t n = out[at + 1] | out[at + 2] << 8;
     if (out[at] == tag && at + 3u + n <= out.size()) { len = n; return out.data() + at + 3; }
@@ -231,49 +233,23 @@ int main() {
         const uint32_t took = micros() - t0;
         took_min = took < took_min ? took : took_min;
         took_max = took > took_max ? took : took_max;
-        CHECK(ok(r) && out.size() >= 11);
-        CHECK(!(out[6] & legacy::kAttachFlagsExisting));
-        size_t len = 0;
-        const uint8_t *v = answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len);
-        CHECK(v && len == 2);
+        CHECK(ok(r) && out.size() >= kAttachAnswer);
         r = call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
         CHECK(ok(r) && !port.connected);
       }
-      printf("  A %s gap %4u ms: attach %u.%03u-%u.%03u ms (sim), search_retries present\n", halt ? "halt" : "run ",
+      printf("  A %s gap %4u ms: attach %u.%03u-%u.%03u ms (sim)\n", halt ? "halt" : "run ",
              gap_ms, took_min / 1000, took_min % 1000, took_max / 1000, took_max % 1000);
     }
   }
 
-  // ---- B: a slot shares the connection: the host's detach leaves it up ----
+  // ---- C: the answer at a small capacity: the fixed part (13 bytes) and the optional TLVs (target_id 8, dpc 7) as
+  // far as they fit ----
   {
-    Result r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
-    CHECK(ok(r) && !(out[6] & legacy::kAttachFlagsExisting));
-    size_t len = 0;
-    CHECK(answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) != nullptr);
-    port.users |= DebugPort::kUserSlot;   // as a slot's automatic attach / a bind's console would have it
-    r = call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
-    CHECK(ok(r) && port.connected);       // the host's use goes; the link stays
-    g_millis += 50;
-    const uint32_t t0 = micros();
-    r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
-    const uint32_t took = micros() - t0;
-    CHECK(ok(r) && (out[6] & legacy::kAttachFlagsExisting));
-    CHECK(answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) == nullptr);
-    printf("  B slot-shared: second attach flags 0x%02x (existing), no TLV 0x12, %u.%03u ms (sim)\n", out[6],
-           took / 1000, took % 1000);
-    r = call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);   // force
-    CHECK(ok(r) && !port.connected);
-  }
-
-  // ---- C: the answer at a small capacity: where TLV 0x12 would be dropped silently (the fixed part 11 bytes, then
-  // target_id 8, dpc 7 and search_retries 5 with their 3-byte headers) ----
-  {
-    for (size_t cap : {11u, 19u, 26u, 30u, 31u}) {
+    for (size_t cap : {13u, 21u, 28u}) {
       Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out, cap);
-      size_t len = 0;
-      printf("  C capacity %2zu: %s, %zu bytes, TLV 0x12 %s\n", cap, ok(r) ? "ok" : "not ok", out.size(),
-             answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) ? "present" : "absent");
-      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+      printf("  C capacity %2zu: %s, %zu bytes\n", cap, ok(r) ? "ok" : "not ok", out.size());
+      CHECK(ok(r) && out.size() >= kAttachAnswer && out.size() <= cap);
+      if (port.connected) call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
     }
   }
 
@@ -304,16 +280,13 @@ int main() {
       const uint32_t t0 = micros();
       Result r = call(w, WireRvswd::kOpAttach, attachRequest(c.method, c.hz, 0, 1, true), out);
       const uint32_t took = micros() - t0;
-      size_t len = 0;
-      const uint8_t *v = ok(r) && out.size() > 11 ? answerTlv(out, 11, legacy::kTlvAttachAnswerSearchRetries, len) : nullptr;
-      printf("  D %-28s %s  %4u.%03u ms (sim)%s%u\n", c.name, ok(r) && out.size() >= 11 && out[0] != 0xff ? "answer" : "status",
-             took / 1000, took % 1000, v ? "  search_retries " : "", v ? unsigned(v[0] | v[1] << 8) : 0u);
-      if (c.hz < RvswdPhy::kMinClockHz)   // under min_clock_hz: unsupported, the tag as received, nothing run
-        CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out.size() == 1 &&
-              out[0] == (legacy::kTlvAttachMaxSpeed | kTagCritical) && took == 0);
+      printf("  D %-28s %s  %4u.%03u ms (sim)\n", c.name, ok(r) && out.size() >= kAttachAnswer ? "answer" : "status",
+             took / 1000, took % 1000);
+      if (c.hz < RvswdPhy::kMinClockHz)   // under min_clock_hz: unsupported, the fixed part (0x00), nothing run
+        CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && out == Bytes({0}) && took == 0);
       else
         CHECK(r.resolution == kResolutionCompleted && took <= limits::kAttachBudgetMs * 1000u);
-      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+      if (port.connected) call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
     }
     t.min_read_half = t.min_write_half = 0;
   }
@@ -328,10 +301,10 @@ int main() {
       Result r = call(w, WireRvswd::kOpAttach, req, out);
       const uint32_t took = micros() - t0;
       printf("  E reset 20 ms, %s, %8u Hz: %s %u.%03u ms (sim)\n", method ? "halt" : "run ", hz,
-             ok(r) && out.size() >= 11 ? "answer" : "status/reject", took / 1000, took % 1000);
+             ok(r) && out.size() >= kAttachAnswer ? "answer" : "status/reject", took / 1000, took % 1000);
       if (hz < RvswdPhy::kMinClockHz) CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
       else CHECK(ok(r) && took <= (limits::kAttachBudgetMs + 20) * 1000u);   // the budget, the hold aside
-      if (port.connected) call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+      if (port.connected) call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
     }
   }
 
@@ -343,23 +316,26 @@ int main() {
     phy.beginRequest();
     Result r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
     CHECK(ok(r) && port.connected);
-    const uint16_t number = port.number;
     t.awake = false;                          // power gone: the line rests on its pull-up
     g_millis += off_ms;
     t.dmcontrol = 0;                          // power back: a fresh module, the hart running, the link asleep
     t.hart_bits = 3u << 10;
+    // attach is a new connection only (debug §1): the host detaches the old one and attaches afresh
+    r = call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
+    CHECK(ok(r) && !port.connected);
     for (uint8_t method : {uint8_t(0), uint8_t(1)}) {
       phy.beginRequest();
       const uint32_t t0 = micros();
       r = call(w, WireRvswd::kOpAttach, attachRequest(method, kHz, 0, 1, true), out);
       const uint32_t took = micros() - t0;
-      CHECK(ok(r) && out.size() >= 11 && port.connected && port.number == number && (out[6] & legacy::kAttachFlagsExisting));
+      CHECK(ok(r) && out.size() >= kAttachAnswer && port.connected);
       CHECK(took <= (limits::kAttachBudgetMs + 20) * 1000u);
-      if (method == 1) CHECK(out[6] & wire::kAttachFlagsHalted);
+      if (method == 1) CHECK(out[8] & wire::kAttachFlagsHalted);
       printf("  F power off %4u ms, attach %s: %s %u.%03u ms (sim)\n", off_ms, method ? "halt" : "run ",
              ok(r) ? "answer" : "status", took / 1000, took % 1000);
+      if (method == 0) call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
     }
-    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
     CHECK(!port.connected);
   }
 
@@ -377,7 +353,7 @@ int main() {
       phy.beginRequest();
       Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out);   // halt, idle_clock low
       CHECK(ok(r) && port.connected && t.hart_bits == 3u << 8);
-      const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+      const Bytes conn = detachRequest(port.number);   // connection(u32)
       const int resets = t.target_resets, wakes = t.wakes;
       advanceMicros(400);                    // the host's next request, past the PHY's rest
       t.drop_until_us = micros() + hold_us;  // and the drop met by it
@@ -385,7 +361,7 @@ int main() {
       // dmi: DMSTATUS, DMCONTROL, ABSTRACTCS read (a raw look, as RiscvDm.held starts one)
       phy.beginRequest();
       const uint32_t t0 = micros();
-      r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 3, 0, 0x02, 0x11, 0x02, 0x10, 0x02, 0x16}, out);
+      r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], conn[2], conn[3], 3, 0, 0x02, 0x11, 0x02, 0x10, 0x02, 0x16}, out);
       const uint32_t took = micros() - t0;
       const bool answered = ok(r) && out.size() >= 5 + 12 && out[2] == kStatusOk;
       const uint32_t status = answered ? getU32(out.data() + 5) : 0;
@@ -395,7 +371,7 @@ int main() {
       printf("  G drop %4u us met by a request: %s, DMSTATUS %08x, %d wakes, %d target restarts, %u.%03u ms (sim)\n",
              hold_us, answered ? "answer" : "status", status, t.wakes - wakes, t.target_resets - resets, took / 1000,
              took % 1000);
-      call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+      call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
       CHECK(!port.connected);
     }
     // a link only a wake brings back (the target's power gone and back, its link asleep): on the connection, outside
@@ -404,18 +380,21 @@ int main() {
     phy.beginRequest();
     Result r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
     CHECK(ok(r) && port.connected);
-    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+    const Bytes conn = detachRequest(port.number);   // connection(u32)
     const int wakes = t.wakes;
     advanceMicros(400);
     t.awake = false;
     phy.beginRequest();
-    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], conn[2], conn[3], 1, 0, 0x02, 0x11}, out);
     CHECK(!ok(r) && out.size() >= 3 && out[2] == kStatusLine && t.wakes == wakes);
+    // the host detaches and attaches afresh (attach is a new connection only, debug §1): its wake brings the link back
+    r = call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
+    CHECK(ok(r) && !port.connected);
     phy.beginRequest();
     r = call(w, WireRvswd::kOpAttach, attachRequest(0, kHz, 0, 1, true), out);
     CHECK(ok(r) && port.connected && t.wakes > wakes);
     printf("  G link asleep: line with no wake, back after %d wakes in an attach\n", t.wakes - wakes);
-    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
     t.wake_resets = false;
     t.drop_until_us = 0;
     t.out_of_step = false;
@@ -438,7 +417,7 @@ int main() {
     phy.beginRequest();
     Result r = call(w, WireRvswd::kOpAttach, attachRequest(1, kHz, 0, 1, true), out);   // halt, idle_clock low
     CHECK(ok(r) && port.connected && t.hart_bits == 3u << 8);
-    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+    const Bytes conn = detachRequest(port.number);   // connection(u32)
     auto rd = [](Bytes &b, uint8_t a) { b.insert(b.end(), {0x02, a}); };
     auto wr = [](Bytes &b, uint8_t a, uint32_t v) {
       b.insert(b.end(), {0x01, a, uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)});
@@ -514,7 +493,7 @@ int main() {
       t.gpr[9] = 0x0000eab0u;
       t.data0 = 0x00001000u;
       phy.beginRequest();
-      r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);   // the link in use
+      r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], conn[2], conn[3], 1, 0, 0x02, 0x11}, out);   // the link in use
       CHECK(ok(r));
       const uint32_t revives = phy.revives();
       Bytes q = conn;
@@ -538,7 +517,7 @@ int main() {
     }
     t.drop_until_us = 0;
     t.out_of_step = false;
-    call(w, WireRvswd::kOpDetach, {uint8_t(port.number), uint8_t(port.number >> 8), 0x01, 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, detachRequest(port.number), out);
   }
 
   printf("attach-cycle: %d checks, %d failures\n", checks, failures);
