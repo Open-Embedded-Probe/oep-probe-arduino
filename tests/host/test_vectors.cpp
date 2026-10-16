@@ -1027,10 +1027,12 @@ static bool describeFits(Page page) {
 // ---- the cases of other probes (`fns` 12 to 15, a small mark ring) -----------------------------------------------
 
 // An interface that only fills a fn number (the vectors' probe has other interfaces there).
-class Filler final : public Interface {
+class Filler final : public Interface {   // each its own instance: (name, revision, instance) names one (core §7.2)
  public:
+  static inline uint16_t next = 0;
+  const uint16_t id = next++;
   const char *name() const override { return "io.github.test.filler"; }
-  uint16_t instance() const override { return 0; }
+  uint16_t instance() const override { return id; }
   bool offers(uint8_t op) const override { return op == 1; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
 };
