@@ -160,8 +160,8 @@ int main() {
   port.reset_allowed = 1ull << kResetPin;
   g_on_pin = onPin;
   Bytes out;
-  // max_speed 1 MHz, tag(u8) len(u16) value (core §2.2)
-  const Bytes attach = {0, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00};
+  // attach (debug §1): method 0, swdio 19, swclk 0xFFFF (one wire), max_speed 1 MHz
+  const Bytes attach = {0, 19, 0, 0xff, 0xff, 0x40, 0x42, 0x0f, 0x00};
 
   // ---- a fixed-speed wire: describe declares min_clock_hz = max_clock_hz = the speed of a zero's slot (oep-if-debug
   // §3.2), and the connections say that speed; a max_speed at or above it is taken, one under it refused unsupported.
@@ -180,20 +180,17 @@ int main() {
     CHECK(tagU32(kTagMinClockHz) == SwioPhy::kNominalHz && tagU32(kTagMaxClockHz) == SwioPhy::kNominalHz);
     for (const uint32_t hz : {0u, 1000000u, 2000000u, 900000u, SwioPhy::kNominalHz, 800000u, SwioPhy::kNominalHz - 1}) {
       t = V003{};
-      Bytes a = {0};
-      if (hz) {
-        a.insert(a.end(), {uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0});
-        for (int b = 0; b < 4; ++b) a.push_back(uint8_t(hz >> (8 * b)));
-      }
+      Bytes a = {0, 19, 0, 0xff, 0xff};
+      for (int b = 0; b < 4; ++b) a.push_back(uint8_t(hz >> (8 * b)));
       Result r = call(w, WireRvswd::kOpAttach, a, out);
-      if (!hz) {   // attach needs max_speed (oep-if-debug §1)
+      if (!hz) {   // max_speed 0 is malformed (oep-if-debug §1)
         CHECK(r.resolution == kResolutionRejected && r.detail == kRejectMalformed);
       } else if (hz < SwioPhy::kNominalHz) {
         CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported && !port.connected);
       } else {
-        CHECK(ok(r) && out.size() >= 11 && getU32(out.data() + 7) == SwioPhy::kNominalHz);
-        const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
-        r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
+        CHECK(ok(r) && out.size() >= 13 && getU32(out.data() + 9) == SwioPhy::kNominalHz);   // speed_hz
+        const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8), uint8_t(port.number >> 16), uint8_t(port.number >> 24)};
+        r = call(w, WireRvswd::kOpDetach, conn, out);
         CHECK(ok(r) && !port.connected);
       }
     }
@@ -209,43 +206,39 @@ int main() {
   // the hand-over before the confirmation's halt, after the op, and a silent bootloader (from 200 us into its run, or
   // from the resume on: the resume's acknowledgement is not seen)
   const Boot boots[] = {{500, ~0u}, {30000, ~0u}, {400000, 200}, {400000, 0}};
-  for (const uint8_t mode : {uint8_t(1), uint8_t(0), uint8_t(2)}) {
+  const uint8_t kHaltAtReset = reg::target_riscv_dm::kResetModeHaltAtReset;
+  for (const uint8_t mode : {reg::target_riscv_dm::kResetModeRun, kHaltAtReset}) {
     for (const Boot &boot : boots) {
       const bool silent = boot.dark_after_us != ~0u;
       t = V003{};
       Result r = call(w, WireRvswd::kOpAttach, attach, out);
       CHECK(ok(r) && port.connected);
-      const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+      const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8), uint8_t(port.number >> 16), uint8_t(port.number >> 24)};
       t.boot_mode = true;
       t.boot_us = boot.boot_us;
       t.dark_after_us = boot.dark_after_us;
       phy.beginRequest();
       const uint32_t began = millis();
-      r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], mode}, out);
+      r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], conn[2], conn[3], mode}, out);
       const uint32_t took = millis() - began;
       CHECK(out.size() == 6);
       CHECK(ok(r) && out[0] == kStatusOk && (out[1] & reg::target_riscv_dm::kResetFlagsReached));
       if (!ok(r) || out.size() < 6 || out[0] != kStatusOk)
         printf("  mode %u boot %u us silent from %d: status %u flags %#x, %u ms\n", mode, boot.boot_us,
                silent ? int(boot.dark_after_us) : -1, out.size() > 0 ? out[0] : 0, out.size() > 1 ? out[1] : 0, took);
-      // the pc confirmed: the application's after a silent bootloader (the op waited for the hand-over), else the
-      // bootloader's or the application's - whichever ran at the confirmation's halt
-      if (mode == 1)
-        CHECK((out[1] & legacy::kResetFlagsVerified) &&
-              (silent ? getU32(out.data() + 2) == 0x2f6u : getU32(out.data() + 2) != 0));
       // a silent hand-over waited out inside the op, which still answers within the host's wait (core §4.4)
-      if (silent && mode != 2) CHECK(took >= 400 && took < v1::reg::kHostWaitAddMs && t.system_resets == 1);
-      if (mode == 2) {
+      if (silent && mode != kHaltAtReset) CHECK(took >= 400 && took < v1::reg::kHostWaitAddMs && t.system_resets == 1);
+      if (mode == kHaltAtReset) {
         r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
         // silent from the resume on, its acknowledgement is not seen (the hart left debug mode unobserved): line
         CHECK(boot.dark_after_us == 0 ? out.size() == 1 && out[0] == kStatusLine : ok(r));
       }
       // a mode 0 / 1 reset's own hand-over is over by its answer when it was silent; otherwise (or after a host's
       // resume of a reset-halt: the target restarting by itself, oep-if-debug §2) the host's requests may meet it
-      if (!silent || mode == 2) g_millis += silent ? 500 : 100;
+      if (!silent || mode == kHaltAtReset) g_millis += silent ? 500 : 100;
       // raw DMSTATUS reads on the same connection: answered (a pending havereset shows; it is the host's to see)
       for (int i = 0; i < 3; ++i) {
-        r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
+        r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], conn[2], conn[3], 1, 0, 0x02, 0x11}, out);
         CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && (out[5] & 0x0f) == 2);
         g_millis += 200;
       }
@@ -254,45 +247,46 @@ int main() {
       CHECK(ok(call(riscv, TargetRiscvDm::kOpHalt, conn, out)) && t.halted);
       CHECK(ok(call(riscv, TargetRiscvDm::kOpResume, conn, out)) && !t.halted);
       CHECK(t.system_resets == 1);
-      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
+      r = call(w, WireRvswd::kOpDetach, conn, out);
       CHECK(ok(r) && !port.connected);
     }
   }
 
   // ---- a module that stays silent past the reset's wait: status line, within the host's wait, and no redo (it would
   // start the target into the same hand-over again); the connection is kept (the reset's excuse, oep-if-debug §2) ----
-  for (const uint8_t mode : {uint8_t(1), uint8_t(0)}) {
+  // (mode run only: halt_at_reset stops the hart at the reset vector, before the bootloader runs)
+  for (const uint8_t mode : {reg::target_riscv_dm::kResetModeRun}) {
     t = V003{};
     Result r = call(w, WireRvswd::kOpAttach, attach, out);
     CHECK(ok(r) && port.connected);
-    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8), uint8_t(port.number >> 16), uint8_t(port.number >> 24)};
     t.boot_mode = true;
     t.boot_us = 5000000;
     t.dark_after_us = 200;
     phy.beginRequest();
     const uint32_t began = millis();
-    r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], mode}, out);
+    r = call(riscv, TargetRiscvDm::kOpReset, {conn[0], conn[1], conn[2], conn[3], mode}, out);
     const uint32_t took = millis() - began;
     CHECK(r.resolution == kResolutionCompleted && r.detail != kOutcomeSuccess && out.size() == 6);
     CHECK(out.size() == 6 && out[0] == kStatusLine && !(out[1] & 3));   // status flags pc: no attempts (debug §4.3)
     CHECK(took >= Ch32Dm::kResetSettleMs && took < v1::reg::kHostWaitAddMs);
     CHECK(port.connected);
     g_millis += 5000;   // handed over at last
-    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], conn[2], conn[3], 1, 0, 0x02, 0x11}, out);
     CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && (out[5] & 0x0f) == 2);
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, conn, out);
   }
 
   // ---- attach's reset TLV with method 0 (the line pulled and let go, the target left running) on a target whose
   // bootloader is silent for 400 ms before its hand-over: the attach goes on trying until its search's deadline (three
-  // tries took a few ms and answered line); a new connection and the live one alike ----
-  for (const bool live : {false, true}) {
+  // tries took a few ms and answered line); a new connection (attach makes no other, debug §1) ----
+  for (const bool live : {false}) {
     t = V003{};
     Result r = call(w, WireRvswd::kOpAttach, attach, out);
     CHECK(ok(r) && port.connected);
-    Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+    Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8), uint8_t(port.number >> 16), uint8_t(port.number >> 24)};
     if (!live) {
-      r = call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
+      r = call(w, WireRvswd::kOpDetach, conn, out);
       CHECK(ok(r) && !port.connected);
     }
     t.boot_mode = true;
@@ -306,10 +300,10 @@ int main() {
     CHECK(ok(r) && port.connected && t.line_resets == 1 && t.system_resets == 1);
     CHECK(took >= 400 && took < limits::kAttachBudgetMs + 10);
     if (!ok(r)) printf("  attach with reset, live %d: %u ms, outcome %u\n", live, took, r.detail);
-    conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
-    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], 1, 0, 0x02, 0x11}, out);
+    conn = {uint8_t(port.number), uint8_t(port.number >> 8), uint8_t(port.number >> 16), uint8_t(port.number >> 24)};
+    r = call(riscv, TargetRiscvDm::kOpDmi, {conn[0], conn[1], conn[2], conn[3], 1, 0, 0x02, 0x11}, out);
     CHECK(ok(r) && out.size() >= 9 && out[2] == kStatusOk && (out[5] & 0x0f) == 2);
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, conn, out);
   }
 
   // ---- a link in step pays nothing for a relink: no configuration pair is written while reads answer ----
@@ -317,7 +311,7 @@ int main() {
     t = V003{};
     Result r = call(w, WireRvswd::kOpAttach, attach, out);
     CHECK(ok(r) && port.connected);
-    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8)};
+    const Bytes conn = {uint8_t(port.number), uint8_t(port.number >> 8), uint8_t(port.number >> 16), uint8_t(port.number >> 24)};
     const uint32_t before = phy.retries();
     int pairs = 0;
     for (int i = 0; i < 5; ++i) {
@@ -326,7 +320,7 @@ int main() {
     }
     CHECK(phy.retries() == before && t.sdi);
     (void)pairs;
-    call(w, WireRvswd::kOpDetach, {conn[0], conn[1], uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0}, out);
+    call(w, WireRvswd::kOpDetach, conn, out);
   }
 
   printf("swio: %d checks, %d failures\n", checks, failures);
