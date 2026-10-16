@@ -78,7 +78,7 @@ static void testCoreAndRates() {
   uart.setInterruptCore(0);
   const RoleAssignment plan[] = {{1, ua::kRoleRx, 4}, {1, ua::kRoleTx, 5}};
   CHECK(uart.planCheck(plan, 2) == 0 && uart.planApply(plan, 2));
-  CHECK(serial.fake_running && serial.fake_irq_core == 0 && serial.fake_baud == FixtureUart::kDefaultBaud);
+  CHECK(!serial.fake_running);   // nothing received before the host's configure (fixture §2)
   uint8_t out[64];
   Result r = configure(uart, 2000000, out, sizeof out);
   CHECK(r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess && getU32(out) == 2000000);
@@ -90,7 +90,9 @@ static void testCoreAndRates() {
   uart.planRelease();
   CHECK(!serial.fake_running);
   FixtureUart other(pins, serial, 1, 5);   // no setInterruptCore: the caller's core (-1)
-  CHECK(other.planApply(plan, 2) && serial.fake_irq_core == -1);
+  CHECK(other.planApply(plan, 2));
+  r = configure(other, 115200, out, sizeof out);
+  CHECK(r.resolution == kResolutionCompleted && serial.fake_irq_core == -1);
   other.planRelease();
 }
 
@@ -108,8 +110,8 @@ static void testOps() {
   CHECK(r.resolution == kResolutionCompleted && r.length == 5 && getU32(out) == 0 && out[4] == 0);
   const RoleAssignment plan[] = {{1, ua::kRoleRx, 4}, {1, ua::kRoleTx, 5}};
   CHECK(uart.planApply(plan, 2));
-  r = call(uart, ua::kOpStatus, {}, out, sizeof out);   // the default: 115200 8N1
-  CHECK(r.resolution == kResolutionCompleted && r.length == 5 && getU32(out) == FixtureUart::kDefaultBaud && out[4] == 0);
+  r = call(uart, ua::kOpStatus, {}, out, sizeof out);   // planned, not configured: baud 0 format 0 (fixture §2)
+  CHECK(r.resolution == kResolutionCompleted && r.length == 5 && getU32(out) == 0 && out[4] == 0);
   // format 7E2 (data 1, parity 1, stop 1): taken, in status
   const uint8_t f7e2 = 0x01 | ua::kFormatFieldParityEven | ua::kFormatFieldStopBits2;
   std::vector<uint8_t> p = {0x00, 0xC2, 0x01, 0x00, ua::kTlvConfigureFormat, 1, 0, f7e2};   // 115200
@@ -340,6 +342,8 @@ static void testQueueOverflowAtGap() {
   FixtureUart uart(pins, serial, 0, 2);
   const RoleAssignment plan[] = {{1, ua::kRoleRx, 4}};
   CHECK(uart.planApply(plan, 1));
+  uint8_t cfg_out[16];
+  CHECK(!refused(configure(uart, 115200, cfg_out, sizeof cfg_out)));   // receiving starts at the host's configure (fixture §2)
   Feed f(serial);
   std::vector<Mark> all;
   f.bytes(10);
@@ -364,6 +368,8 @@ static void testOverrunRounds() {
   FixtureUart uart(pins, serial, 0, 2);
   const RoleAssignment plan[] = {{1, ua::kRoleRx, 4}};
   CHECK(uart.planApply(plan, 1));
+  uint8_t cfg_out[16];
+  CHECK(!refused(configure(uart, 115200, cfg_out, sizeof cfg_out)));   // receiving starts at the host's configure (fixture §2)
   Feed f(serial);
   std::vector<Mark> all;
   std::vector<std::pair<uint64_t, uint64_t>> windows;   // per overrun: the earliest allowed place, the gap
