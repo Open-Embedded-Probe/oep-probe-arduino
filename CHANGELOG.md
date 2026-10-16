@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+## 0.0.32
 - (EN) Follow oep-spec up to 675288a (the core's numbering rules and named extensions, named settings, the debug wires'
   attach as a fixed part and a new connection only, the immediate capture-group). probe.config: the items are named -
   describe lists the settings (label, idle, disable, passthrough, console-passthrough, wifi, ipv4 and the sketch's own
