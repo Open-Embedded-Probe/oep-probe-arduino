@@ -34,6 +34,7 @@ class Endpoint;
 class SamplerCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 8;
+  static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsWhen1;   // describe trigger opts
   // The declared ceiling, from the bench (0.0.29-dev 873c8f0, V003 jig, 64 captures a row, 1 and 4 lines, serial and
   // TCP, with and without Wi-Fi): 400 kHz was the fastest rate at which no immediate window and no forced capture
   // without SWIO traffic slipped; 500 kHz slipped (immediate 1 - 4 / 64, forced 10 - 15 / 64), 750 kHz always. 300 kHz
@@ -131,6 +132,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
+  uint8_t arm_ = 1, when_ = 0;   // trigger_opts (capture §3.3)
   volatile uint8_t control_ = 0;          // from loop()'s core: force, abort the search
   volatile bool trig_seen_ = false, aborted_ = false;
   volatile uint32_t trig_count_ = 0;      // the trigger's sample in its burst

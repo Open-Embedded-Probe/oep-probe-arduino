@@ -91,6 +91,14 @@ class WireGate {
     openTurn();
     return true;
   }
+  // A burst that arms first (a trigger's pretrigger, capture §3.3 arm 1): a turn at once only for a request waiting;
+  // a poll's turn comes once it is armed (the sampler's loop), so what a command makes the target do is looked at.
+  OEP_GATE_INLINE bool beginArmingBurst() {
+    window_.store(kExclusive);
+    if (!held_.load() && !needed_.load()) return false;
+    openTurn();
+    return true;
+  }
   OEP_GATE_INLINE void openTurn() {
     wanted_.store(0);
     needed_.store(0);

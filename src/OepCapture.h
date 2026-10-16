@@ -57,6 +57,7 @@ class LogicCapture final : public Interface, public GroupTrack {
     kStateError = reg::fixture_logic::kStateError,
   };
   static constexpr uint8_t kMaxChannels = 16;
+  static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsWhen1;   // describe trigger opts
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
   static constexpr uint32_t kSourceHz = 160000000, kMinHz = 627451;   // PLL_F160M / 255 (256 silently fails)
   // one-shot's ceiling by channel count (configure takes the nearest it allows): up to 8 lines 100 MHz, 16 lines 48 MHz
@@ -221,6 +222,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
+  uint8_t arm_ = 1, when_ = 0;   // trigger_opts (capture §3.3)
+  uint8_t format_ = 0;            // the data format (capture §1): 0, or 4 the test sequence
+  bool level_false_ = false;      // a level, when 0: a sample not at it seen since arming
   uint32_t follow_pre_ = 0;          // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
   uint32_t pre() const { return follow_ ? follow_pre_ : pretrigger_; }
   volatile uint8_t trig_phase_ = 0;  // 0 waiting, 1 filling, 2 done

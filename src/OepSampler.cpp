@@ -75,6 +75,8 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
   plan.trig_role = trig_role_;
   plan.trig_value = static_cast<uint8_t>(trig_value_);
   plan.pre = pretrigger_;
+  plan.arm = arm_;
+  plan.when = when_;
   const uint64_t off_ms = kOffNs / 1000000u;
   const uint64_t limit = static_cast<uint64_t>(cpu_hz_) / 1000u * off_ms / cycles_;
   plan.burst = static_cast<uint32_t>(limit - (samples_ - pretrigger_ - 1));   // > pre: samples < limit (configure)
@@ -132,9 +134,9 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   range[8] = 0;                                    // not any value: whole CPU cycles per sample
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);   // max(u8)
-  uint8_t trig[8];                                 // types(u32) max_pretrigger(u32)
-  putU32(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge));
-  putU32(trig + 4, kBufferBytes - 1);              // the pretrigger: less than the segment's samples
+  uint8_t trig[9];                                 // types(u32) max_pretrigger(u32) opts(u8)
+  putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge),
+                 kBufferBytes - 1, kTriggerOpts);  // the pretrigger: less than the segment's samples
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
   return w.ok() ? w.length() : 0;
 }
@@ -183,16 +185,18 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   // cannot honour refuses the whole configure unsupported, the tag as received. An unknown critical tag is unsupported,
   // an unknown non-critical one passed over. Everything is checked before anything changes (core §4.3): the form, then
   // the values, then the plan, the group and the state (unavailable).
-  static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger};
+  static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger,
+                                   capture_tag::kTriggerOpts};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
   struct Item { uint8_t tag; size_t size; const uint8_t *v; bool critical; };
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
-                  {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false}};
+                  {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false},
+                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
-       &trigger_tlv = items[4], &pretrigger_tlv = items[5];
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -222,6 +226,8 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     trig_role = v[1];
     trig_value = value;
   }
+  TriggerOpts opts;   // arm 0 and when 1 as well as the defaults (kTriggerOpts)
+  if (!triggerOpts(opts_tlv.v, kTriggerOpts, opts)) return Tail::refuse(capture_tag::kTriggerOpts, opts_tlv.critical, out, capacity);
   // The answer carries the rate that is really paced (whole cycles a sample). GPIO32..39 in the plan add a register read
   // a sample: it kept 1 MHz (1.52 MHz actually sampled at 2 MHz, 2026-09-29), far above kMaxHz.
   const uint32_t cpu_hz = getCpuFrequencyMhz() * 1000000u;
@@ -258,6 +264,8 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     trig_role_ = trig_role;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
+    arm_ = opts.arm;
+    when_ = opts.when;
     cycles_ = cycles;
     cpu_hz_ = cpu_hz;
     state_ = cap::kStateConfigured;
@@ -290,12 +298,14 @@ void SamplerCapture::poll() {
   gWireGate.release();   // loop() came round: the SWIO wire's request has ended, a window may open (OepWireGate.h)
   if (state_ == cap::kStateWaiting && trig_seen_) {
     state_ = cap::kStateCapturing;
-    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64) generation(u32)
-      uint8_t e[20];
-      putU32(e, 0);
-      putU32(e + 4, trig_kept_);
-      putU64(e + 8, trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_);
-      putU32(e + 16, generation_);
+    if (subscribed_) {   // capture §3.4: no record (rearm 0); +- a sample. The search runs in bursts with gaps between
+      // them, so the sample from the generation's start is its time from start at the rate (what a sampler that never
+      // paused would have counted)
+      uint8_t e[kTriggeredBytes];
+      const uint64_t ns = trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_;
+      const uint64_t sample = ns > start_ns_ ? (ns - start_ns_) * (cpu_hz_ / 1000u) / cycles_ / 1000000u : 0;
+      putTriggered(e, 0, trig_kept_, sample, ns,
+                   static_cast<uint32_t>(static_cast<uint64_t>(cycles_) * 1000000000ull / cpu_hz_ + 1), generation_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
   }

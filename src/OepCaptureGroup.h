@@ -96,12 +96,66 @@ struct CaptureAsk { const uint8_t *v; bool critical; };
 namespace capture_tag {
 constexpr uint8_t kMode = reg::fixture_logic::kTlvConfigureMode, kRate = reg::fixture_logic::kTlvConfigureRate,
                   kSamples = reg::fixture_logic::kTlvConfigureSamples, kSegments = reg::fixture_logic::kTlvConfigureSegments,
-                  kTrigger = reg::fixture_logic::kTlvConfigureTrigger, kPretrigger = reg::fixture_logic::kTlvConfigurePretrigger;
+                  kTrigger = reg::fixture_logic::kTlvConfigureTrigger, kPretrigger = reg::fixture_logic::kTlvConfigurePretrigger,
+                  kTriggerOpts = reg::fixture_logic::kTlvConfigureTriggerOpts;
 static_assert(kMode == reg::fixture_analog::kTlvConfigureMode && kRate == reg::fixture_analog::kTlvConfigureRate &&
               kSamples == reg::fixture_analog::kTlvConfigureSamples && kSegments == reg::fixture_analog::kTlvConfigureSegments &&
-              kTrigger == reg::fixture_analog::kTlvConfigureTrigger && kPretrigger == reg::fixture_analog::kTlvConfigurePretrigger,
+              kTrigger == reg::fixture_analog::kTlvConfigureTrigger && kPretrigger == reg::fixture_analog::kTlvConfigurePretrigger &&
+              kTriggerOpts == reg::fixture_analog::kTlvConfigureTriggerOpts,
               "logic and analog share the configure tags");
 }  // namespace capture_tag
+// trigger_opts (capture §3.3): arm(u8) rearm(u8) when(u8) hysteresis(u32), 7 bytes. The defaults - arm 1 (looked at
+// once the pretrigger is in), rearm 0, when 0 (a level counts from false to true), hysteresis 0 - are every probe's;
+// the rest only as describe's trigger opts say (`opts`: bit 0 arm 0, bit 1 rearm 1, bit 2 when 1, bit 3 hysteresis).
+// false: a value it does not handle (refused unsupported, the tag as received).
+struct TriggerOpts { uint8_t arm = 1, rearm = 0, when = 0; uint32_t hysteresis = 0; };
+constexpr uint8_t kTriggerOptsBytes = 7;
+constexpr uint8_t kTriggerOptsArm0 = 1, kTriggerOptsRearm = 2, kTriggerOptsWhen1 = 4, kTriggerOptsHysteresis = 8;
+inline bool triggerOpts(const uint8_t *v, uint8_t opts, TriggerOpts &o) {
+  o = TriggerOpts();
+  if (!v) return true;
+  o.arm = v[0];
+  o.rearm = v[1];
+  o.when = v[2];
+  o.hysteresis = getU32(v + 3);
+  if (o.arm > 1 || o.rearm > 1 || o.when > 1) return false;
+  return (o.arm || (opts & kTriggerOptsArm0)) && (!o.rearm || (opts & kTriggerOptsRearm)) &&
+         (!o.when || (opts & kTriggerOptsWhen1)) && (!o.hysteresis || (opts & kTriggerOptsHysteresis));
+}
+// The triggered event's fixed part (capture §3.4): serial trigger_index record(0xFFFFFFFF: none, rearm 0)
+// sample(u64: from the generation's start) trigger_ns(u64) uncertainty_ns generation - 36 bytes.
+constexpr size_t kTriggeredBytes = 36;
+inline void putTriggered(uint8_t *e, uint32_t serial, uint32_t index, uint64_t sample, uint64_t ns, uint32_t uncertainty,
+                         uint32_t generation) {
+  putU32(e, serial);
+  putU32(e + 4, index);
+  putU32(e + 8, 0xFFFFFFFFu);
+  putU64(e + 12, sample);
+  putU64(e + 20, ns);
+  putU32(e + 28, uncertainty);
+  putU32(e + 32, generation);
+}
+// describe's trigger (capture §3.5): types(u32) max_pretrigger(u32) opts(u8), 9 bytes
+inline void putTriggerDecl(uint8_t *v, uint32_t types, uint32_t max_pretrigger, uint8_t opts) {
+  putU32(v, types);
+  putU32(v + 4, max_pretrigger);
+  v[8] = opts;
+}
+
+// Data format 4, the test sequence (capture §1): the byte at stream position k is k & 0xFF. Written over what a frame
+// or a read carries, so the bytes go the real path at format 0's volume and pace.
+inline void putTestCounter(uint8_t *d, uint64_t position, size_t n) {
+  size_t j = 0;
+  for (; j < n && ((position + j) & 3); ++j) d[j] = static_cast<uint8_t>(position + j);
+  uint32_t word = 0;
+  for (int b = 0; b < 4; ++b) word |= static_cast<uint32_t>(static_cast<uint8_t>(position + j + b)) << (8 * b);
+  for (; j + 4 <= n; j += 4) {   // 4 bytes at a time: each byte up 4, wrapping in its own lane (no carry across)
+    memcpy(d + j, &word, 4);
+    word = ((word & 0x7F7F7F7Fu) + 0x04040404u) ^ (word & 0x80808080u);
+  }
+  for (; j < n; ++j) d[j] = static_cast<uint8_t>(position + j);
+}
+
 // Malformed (core §2.3): mode or rate missing, a value the definition excludes (rate 0, samples or segments 0), samples
 // missing in mode 1 / 2.
 inline bool captureMalformed(CaptureAsk mode, CaptureAsk rate, CaptureAsk samples, CaptureAsk segments) {

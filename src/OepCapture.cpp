@@ -191,6 +191,7 @@ void LogicCapture::sendStage() {
   putU16(s + 5, endpoint_.takeSeq(fn));
   putU64(s + 7, stage_pos_);
   putU16(s + 15, static_cast<uint16_t>(fill));
+  if (format_ == cap::kDataFormatTestCounter) putTestCounter(s + kPushHead, stage_pos_, fill);
   putTlvHeader(s + kPushHead + fill, cap::kTlvDataGeneration, 4);
   putU32(s + kPushHead + fill + kTlvHeader, generation_);
   if (!t->queueData(s, kPushHead + fill + kPushTail, stageDone, this)) __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
@@ -234,17 +235,25 @@ void LogicCapture::freeStages() {   // the stages stay allocated (openStages); w
   for (int i = 0; i < 500 && (stage_free_ & all) != all; ++i) delay(2);
 }
 
-// The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. One before
-// the pretrigger has filled counts too (capture §3.3: the segment is then short, trigger_index smaller). A byte whose
-// samples cannot trigger (the channel's bits masked: all at the known level for an edge, none at the level wanted for
-// a level) is skipped whole; the rest is looked at sample by sample. The last level carries over for edges.
+// The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. With arm 1
+// (trigger_opts, the default) a sample before the pretrigger has filled is only seen (an edge keeps its level), so the
+// segment always has its pretrigger; with arm 0 one counts too (capture §3.3: the segment is then short, trigger_index
+// smaller). A level with when 0 (the default) counts only after a sample not at it since arming. A byte whose samples
+// cannot trigger (the channel's bits masked: all at the known level for an edge, none at the level wanted for a level
+// - or all at it while a level waits for a sample not at it) is skipped whole; the rest is looked at sample by sample.
+// The last level carries over for edges.
 bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t first_sample, uint64_t &at) {
   const uint8_t w = width_, k = trig_role_;
   const bool edge = trig_type_ == cap::kTriggerEdge;
   const uint8_t want = trig_value_ & 1;
-  auto hits = [&](uint8_t level) {
-    const bool hit = edge ? have_level_ && level != last_level_ && (trig_value_ == 2 || (trig_value_ == 0) == (level == 1))
-                          : level == want;
+  const uint64_t from = arm_ ? pre() : 0;
+  auto hits = [&](uint8_t level, uint64_t sample) {
+    bool hit = false;
+    if (sample >= from) {
+      if (edge) hit = have_level_ && level != last_level_ && (trig_value_ == 2 || (trig_value_ == 0) == (level == 1));
+      else if (level != want) level_false_ = true;
+      else hit = when_ || level_false_;
+    }
     last_level_ = level;
     have_level_ = true;
     return hit;
@@ -254,11 +263,21 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
     uint8_t mask = 0;
     for (uint8_t s = 0; s < per; ++s) mask |= static_cast<uint8_t>(1u << (s * w + k));
     for (size_t b = 0; b < length; ++b) {
+      const uint64_t first = first_sample + static_cast<uint64_t>(b) * per;
       const uint8_t v = data[b] & mask;
-      if (edge ? have_level_ && v == (last_level_ ? mask : 0) : v == (want ? 0 : mask)) continue;
+      if (first >= from) {
+        if (edge ? have_level_ && v == (last_level_ ? mask : 0)
+                 : v == (want ? 0 : mask) ? (level_false_ = true)
+                                          : (!when_ && !level_false_ && v == (want ? mask : 0)))
+          continue;
+      } else if (first + per <= from) {   // arming: only its last level
+        last_level_ = (data[b] >> ((per - 1) * w + k)) & 1;
+        have_level_ = true;
+        continue;
+      }
       for (uint8_t s = 0; s < per; ++s)
-        if (hits((data[b] >> (s * w + k)) & 1)) {
-          at = first_sample + static_cast<uint64_t>(b) * per + s;
+        if (hits((data[b] >> (s * w + k)) & 1, first + s)) {
+          at = first + s;
           return true;
         }
     }
@@ -266,7 +285,7 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
   }
   for (size_t i = 0; i + 1 < length; i += 2) {   // 16-bit samples
     const uint16_t v = static_cast<uint16_t>(data[i] | data[i + 1] << 8);
-    if (hits((v >> k) & 1)) { at = first_sample + i / 2; return true; }
+    if (hits((v >> k) & 1, first_sample + i / 2)) { at = first_sample + i / 2; return true; }
   }
   return false;
 }
@@ -453,7 +472,7 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   trig_phase_ = 0;
   ext_ready_ = false;
   trig_overrun_ = false;
-  have_level_ = false;
+  have_level_ = level_false_ = false;
   lost_ = false;
   lost_pos_ = 0;
   error_ = cap::kErrorPeripheral;
@@ -623,10 +642,12 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);   // max(u8)
   // immediate, level, edge (one-shot); the most pretrigger the ring can give back (the narrowest sample)
-  uint8_t trig[8];                                 // types(u32) max_pretrigger(u32)
-  putU32(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge));
-  putU32(trig + 4, kSegmentBytes * 8 - 1);         // at w = 1 (below the segment); a wider sample's is less (configure)
+  uint8_t trig[9];                                 // types(u32) max_pretrigger(u32) opts(u8)
+  putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge),
+                 kSegmentBytes * 8 - 1, kTriggerOpts);   // at w = 1 (below the segment); a wider sample's is less
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
+  const uint8_t formats[] = {cap::kDataFormatTestCounter};   // beyond 0 (capture §3.5)
+  w.put(cap::kTlvDescribeFormats, formats, sizeof formats);
   return w.ok() ? w.length() : 0;
 }
 
@@ -815,16 +836,18 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // cannot honour refuses the whole configure unsupported, the tag as received. An unknown critical tag is unsupported,
   // an unknown non-critical one passed over. Everything is checked before anything changes (core §4.3): the form, then
   // the values, then the plan, the group and the state (unavailable).
-  static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger};
+  static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger,
+                                   capture_tag::kTriggerOpts, cap::kTlvConfigureFormat};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
   if (refused(parsed)) return parsed;
   struct Item { uint8_t tag; size_t size; const uint8_t *v; bool critical; };
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
-                  {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false}};
+                  {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false},
+                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}, {cap::kTlvConfigureFormat, 1, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
-       &trigger_tlv = items[4], &pretrigger_tlv = items[5];
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &format_tlv = items[7];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -862,6 +885,12 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     trig_role = v[1];
     trig_value = value;
   }
+  TriggerOpts opts;   // arm 0 and when 1 as well as the defaults (kTriggerOpts)
+  if (!triggerOpts(opts_tlv.v, kTriggerOpts, opts)) return Tail::refuse(capture_tag::kTriggerOpts, opts_tlv.critical, out, capacity);
+  // the data format (capture §1): 0, or 4 the test sequence (describe formats); any other unsupported
+  const uint8_t format = format_tlv.v ? format_tlv.v[0] : cap::kDataFormatPacked;
+  if (format != cap::kDataFormatPacked && format != cap::kDataFormatTestCounter)
+    return Tail::refuse(cap::kTlvConfigureFormat, format_tlv.critical, out, capacity);
   if (pretrigger_tlv.v) pretrigger = getU32(pretrigger_tlv.v);   // checked against samples below
   const uint8_t width = widthFor(channels_);
   uint32_t actual_segments = 1;
@@ -978,6 +1007,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     trig_role_ = trig_role;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
+    arm_ = opts.arm;
+    when_ = opts.when;
+    format_ = format;
     rate_hz_ = rate;
     mode_ = mode;
     width_ = width;
@@ -1000,6 +1032,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // every answer row of the mode (capture §3.3): actual_samples in modes 1 / 2, actual_segments in mode 2 only
   if (mode != cap::kModeStreaming) w.u32(kTagActualSamples, samples);
   if (mode == cap::kModeRepeat) w.u32(kTagActualSegments, actual_segments);
+  if (format != cap::kDataFormatPacked) w.u8(cap::kTlvConfigureAnswerFormat, format);   // always when not 0 (§3.3)
   return w.ok() ? completed(w.length()) : failed();
 }
 
@@ -1171,12 +1204,10 @@ void LogicCapture::pollTriggered() {
   if (trig_phase_ >= 1 && state_ == kStateWaiting) state_ = kStateCapturing;
   if (trig_phase_ >= 1 && !reported_trigger_) {
     reported_trigger_ = true;
-    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64) generation(u32)
-      uint8_t e[20];
-      putU32(e, 0);
-      putU32(e + 4, trigger_index_);
-      putU64(e + 8, start_ns_ + nsOf(seg_first_sample_ + trigger_index_));
-      putU32(e + 16, generation_);
+    if (subscribed_) {   // capture §3.4: no record (rearm 0); the sample from the generation's start; +- a sample
+      uint8_t e[kTriggeredBytes];
+      putTriggered(e, 0, trigger_index_, seg_first_sample_ + trigger_index_,
+                   start_ns_ + nsOf(seg_first_sample_ + trigger_index_), static_cast<uint32_t>(nsOf(1) + 1), generation_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
   }
@@ -1288,6 +1319,7 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
   putU64(out, infos_[serial % kInfos].position + sent_off_);
   putU16(out + 8, static_cast<uint16_t>(n));
   memcpy(out + kHead, store_ + static_cast<size_t>(infos_[serial % kInfos].slot) * segment_bytes_ + sent_off_, n);
+  if (format_ == cap::kDataFormatTestCounter) putTestCounter(out + kHead, infos_[serial % kInfos].position + sent_off_, n);
   putTlvHeader(out + kHead + n, cap::kTlvDataGeneration, 4);
   putU32(out + kHead + n + kTlvHeader, generation_);
   sent_off_ += n;
@@ -1446,6 +1478,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         out[8] = flags;
         putU16(out + 9, static_cast<uint16_t>(count));
         if (count) memcpy(out + kHead, data, count);
+        if (count && format_ == cap::kDataFormatTestCounter) putTestCounter(out + kHead, pos, count);
         return completed(kHead + count);
       };
       // no plan or configuration (released: the data went with it), no store: nothing to read

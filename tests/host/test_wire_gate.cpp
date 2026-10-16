@@ -488,10 +488,11 @@ int main() {
     CHECK(waited < 50 && outcome.aborted);
   }
 
-  // ---- an edge in the first samples of a burst: a shorter segment, the trigger index what came before it ----
+  // ---- arm 0: an edge in the first samples of a burst - a shorter segment, the trigger index what came before it ----
   {
     static uint8_t buffer[4000];
     sampler::Plan plan{buffer, sizeof buffer, 10000, 1000000000u, sampler::kEdge, 0, 1, 1000, 20000, 500, 0};
+    plan.arm = 0;   // trigger_opts arm 0 (capture §3.3): looked at from the burst's start
     volatile uint8_t control = 0;
     sampler::Outcome outcome;
     g_marker = 1;

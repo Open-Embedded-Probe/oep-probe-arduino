@@ -94,9 +94,9 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   range[8] = 0;
   w.put(ana::kTlvDescribeRateRange, range, sizeof range);   // one channel (more share the ADC: configure says)
   w.u8(ana::kTlvDescribeChannels, kMaxChannels);             // max(u8)
-  uint8_t trig[8];   // types(u32) max_pretrigger(u32)
-  putU32(trig, (1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown));
-  putU32(trig + 4, maxPretrigger());
+  uint8_t trig[9];   // types(u32) max_pretrigger(u32) opts(u8)
+  putTriggerDecl(trig, (1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown),
+                 maxPretrigger(), kTriggerOpts);
   w.put(ana::kTlvDescribeTrigger, trig, sizeof trig);
   for (const Frontend &f : kFrontends) {
     uint8_t v[13];
@@ -183,7 +183,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   // changes (core §4.3): the form, then the values, then the plan, the group and the state (unavailable).
   static const uint8_t kKnown[] = {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
                                    ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
-                                   ana::kTlvConfigureFrontend};
+                                   ana::kTlvConfigureFrontend, ana::kTlvConfigureTriggerOpts};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity, &unknown_critical);
@@ -191,9 +191,10 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   struct Item { uint8_t tag; size_t size; const uint8_t *v; bool critical; };
   Item items[] = {{ana::kTlvConfigureMode, 1, nullptr, false},     {ana::kTlvConfigureRate, 4, nullptr, false},
                   {ana::kTlvConfigureSamples, 4, nullptr, false},  {ana::kTlvConfigureSegments, 4, nullptr, false},
-                  {ana::kTlvConfigureTrigger, 6, nullptr, false},  {ana::kTlvConfigurePretrigger, 4, nullptr, false}};
+                  {ana::kTlvConfigureTrigger, 6, nullptr, false},  {ana::kTlvConfigurePretrigger, 4, nullptr, false},
+                  {ana::kTlvConfigureTriggerOpts, kTriggerOptsBytes, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
-       &trigger_tlv = items[4], &pretrigger_tlv = items[5];
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -244,6 +245,9 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     trig_role = v[1];
     trig_value = value;
   }
+  TriggerOpts opts;   // arm 0 as well as the defaults (kTriggerOpts); no hysteresis
+  if (!triggerOpts(opts_tlv.v, kTriggerOpts, opts))
+    return Tail::refuse(ana::kTlvConfigureTriggerOpts, opts_tlv.critical, out, capacity);
   uint32_t most = kMaxBytes / (2u * count);
 #if defined(OEP_ANALOG_RP2)
   if (trig_type) most = kRingBytes / 4 / count;   // half the ring: the DMA runs on while poll sees it is full
@@ -308,6 +312,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     trig_type_ = trig_type;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
+    arm_ = opts.arm;
     samples_ = samples;
     total_hz_ = total_hz;
     rate_num_ = num;
@@ -661,9 +666,10 @@ uint64_t AnalogCapture::framesNs(uint64_t frames) const {   // frames x den / nu
 
 // Frames [searched_, got_) are in the ring: the first from frame 1 (a crossing needs the value before it) where the
 // value crosses (or force) is the trigger - following a group, the frame nearest the group's trigger, once it has
-// come; the segment then runs from pretrigger frames before it to samples - pretrigger - 1 after it. A trigger before
-// the pretrigger has filled is taken too: the segment starts at frame 0 and is that much shorter (capture §3.3).
-// (It was looked for only from frame `pretrigger` on.)
+// come; the segment then runs from pretrigger frames before it to samples - pretrigger - 1 after it. With arm 1
+// (trigger_opts, the default) a crossing counts from frame `pretrigger` on (against the frame before it): the segment
+// always has its pretrigger. With arm 0 one before it is taken too: the segment starts at frame 0 and is that much
+// shorter (capture §3.3).
 void AnalogCapture::search() {
   if (follow_) {
     searched_ = got_;
@@ -677,8 +683,10 @@ void AnalogCapture::search() {
     const uint32_t f = searched_;
     const uint16_t v = r[(static_cast<size_t>(f) * channels_ + trig_slot_) % ring_len_];
     bool hit = false;
-    if (f >= 1)
-      hit = force_ || (have_prev_ && (up ? prev_ < trig_value_ && v >= trig_value_ : prev_ > trig_value_ && v <= trig_value_));
+    const uint32_t from = arm_ && pre() > 1 ? pre() : 1;
+    if (force_ && f >= 1) hit = true;
+    else if (f >= from)
+      hit = have_prev_ && (up ? prev_ < trig_value_ && v >= trig_value_ : prev_ > trig_value_ && v <= trig_value_);
     prev_ = v;
     have_prev_ = true;
     if (hit) {
@@ -794,12 +802,10 @@ void AnalogCapture::pollTriggered() {
   if (phase_ >= 1 && state_ == ana::kStateWaiting) state_ = ana::kStateCapturing;
   if (phase_ >= 1 && !trig_reported_) {
     trig_reported_ = true;
-    if (subscribed_) {   // serial(u32) trigger_index(u32) trigger_ns(u64) generation(u32)
-      uint8_t e[20];
-      putU32(e, 0);
-      putU32(e + 4, trig_frame_ - seg_first_);
-      putU64(e + 8, start_ns_ + framesNs(trig_frame_));
-      putU32(e + 16, generation_);
+    if (subscribed_) {   // capture §3.4: no record (rearm 0); the frame from the generation's start; +- a frame
+      uint8_t e[kTriggeredBytes];
+      putTriggered(e, 0, trig_frame_ - seg_first_, trig_frame_, start_ns_ + framesNs(trig_frame_),
+                   static_cast<uint32_t>(framesNs(1) + 1), generation_);
       endpoint_.event(*this, ana::kEventTriggered, e, sizeof e);
     }
   }

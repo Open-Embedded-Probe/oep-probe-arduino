@@ -15,8 +15,11 @@
 // what a command or a reset sent during a search makes the target do is sampled (0.0.29-dev 51360ea gave the turn
 // between two bursts, when nothing sampled: the target acted right then, and an edge trigger on what it did never
 // fired). After the trigger the window is exclusive (a holder already on goes on frame by frame).
-// A trigger early in a burst, before `pre` samples of it are in, gives a shorter segment (capture §3.3: the segment is
-// short, trigger_index smaller) - no part of a burst is blind to the trigger but its first sample for an edge.
+// Arming (capture §3.3, trigger_opts): with arm 1 (the default) a burst looks for the trigger from its sample `pre` on
+// (an edge against the sample before it), so the segment always has its pretrigger; with arm 0 from its first sample
+// (an edge from its second), a trigger before `pre` samples giving a shorter segment (trigger_index smaller). A level
+// with when 0 (the default) counts only after a sample not at it since the burst armed; when 1 one already at it too.
+// Each burst arms afresh: the gap between bursts is not sampled.
 // Every sample taken one period or more late (a frame, or the other core holding the bus) is counted; the segment is
 // slipped when one of its own samples was.
 // Every interrupts-off span ends by the clock, not by its count of samples (`span` cycles; 0 = no bound): at the fastest
@@ -76,6 +79,8 @@ struct Plan {
   uint32_t burst;       // search samples per burst at most (+ the rest of the segment: kOffNs)
   uint32_t turn;        // samples of a wire turn
   uint32_t span;        // CPU cycles an interrupts-off span lasts at most (0: no bound)
+  uint8_t arm = 1;      // trigger_opts (capture §3.3): 1 looks once `pre` samples of the burst are in, 0 at once
+  uint8_t when = 0;     // a level: 0 only after a sample not at it (since arming), 1 already there counts too
 };
 
 struct Outcome {
@@ -148,7 +153,9 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
   for (;;) {
     p.at = p.n = p.late_n = 0;
     if (control & kControlAbort) { gWireGate.endWindow(); r.aborted = true; return r; }
-    bool turned = gWireGate.beginBurst();                     // the wire held or asked for: a turn at once
+    // the wire held or asked for: a turn at once - arming (arm 1), a waiting request's only, a poll's once armed
+    const uint32_t from = plan.arm ? pre : 0;
+    bool turned = from ? gWireGate.beginArmingBurst() : gWireGate.beginBurst();
     uint32_t turn_left = turned ? plan.turn : 0;
     io.interruptsOff();
     gWireGate.beginReading();
@@ -157,11 +164,16 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
     const uint32_t span_start = p.next;
     uint8_t stop = 0;
     bool hit = false;
-    // The burst's first sample: a level there is the trigger; an edge needs the sample before it, so it is only its level.
+    // The burst's first sample: a level there is the trigger (armed at once, when 1, or after a sample not at it); an
+    // edge needs the sample before it, so it is only its level. Samples before `from` are only taken (arm 1).
+    bool need_false = !edge && !plan.when;
     uint8_t last = take<true>(p) & mask;
     uint32_t c = 0;
-    if (!edge && last == level) hit = true;
-    else c = 1;
+    if (from == 0 && !edge && last == level && !need_false) hit = true;
+    else {
+      if (from == 0 && !edge && last != level) need_false = false;
+      c = 1;
+    }
     // Blocks of up to kSpanCheck samples, each sample a take and the trigger's test alone (as lean as an immediate
     // window's); between blocks the clock against the span, the wire's turns and the control word (force, abort): a
     // turn or a force waits at most a block (32 us at 2 MHz, 64 at 1 MHz). Looking at those every sample took several
@@ -174,13 +186,23 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
         turn_left = turn_left > kSpanCheck ? turn_left - kSpanCheck : 0;
         if (turn_left == 0 || gWireGate.turnDone()) { turn_left = 0; gWireGate.closeTurn(); }
       } else if (const uint32_t want = gWireGate.turnWanted()) {
-        if (want == 2 || !turned) { gWireGate.openTurn(); turned = true; turn_left = plan.turn; }
+        if (want == 2 || (!turned && c >= from)) { gWireGate.openTurn(); turned = true; turn_left = plan.turn; }
       }
       if ((stop = control) != 0) {   // force: the trigger is the next sample; abort: no more
         if (stop & kControlForce) take<true>(p);
         break;
       }
       const uint32_t end = plan.burst - c < kSpanCheck ? plan.burst : c + kSpanCheck;
+      if (c < from) {   // arming: the pretrigger comes in, nothing looked at (an edge keeps the last level)
+        const uint32_t until = end < from ? end : from;
+        for (; c < until; ++c) last = take<true>(p) & mask;
+        continue;
+      }
+      if (need_false) {   // a level, when 0: first a sample not at it
+        for (; c < end; ++c)
+          if ((take<true>(p) & mask) != level) { need_false = false; ++c; break; }
+        continue;
+      }
       if (edge) {
         for (; c < end; ++c) {
           const uint8_t now = take<true>(p) & mask;

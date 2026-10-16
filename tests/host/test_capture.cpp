@@ -60,6 +60,7 @@ struct Config {
   uint32_t segments = 0;
   bool trigger = false;
   uint32_t pretrigger = 0;
+  bool arm0 = false;         // trigger_opts arm 0 (capture §3.3): looked at from the start, an early trigger shortens
 };
 
 static Bytes request(const Config &c) {
@@ -75,6 +76,7 @@ static Bytes request(const Config &c) {
     tlv(p, kCrit | cap::kTlvConfigureTrigger, t);
   }
   if (c.pretrigger) tlv(p, kCrit | cap::kTlvConfigurePretrigger, u32(c.pretrigger));
+  if (c.arm0) tlv(p, kCrit | cap::kTlvConfigureTriggerOpts, {0, 0, 0, 0, 0, 0, 0});
   return p;
 }
 
@@ -352,9 +354,51 @@ static void testDescribe() {
     if (tag == cap::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == modes); }
     if (tag == cap::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == LogicCapture::kMaxChannels); }
     CHECK(tag < 0x40 || tag == cap::kTlvDescribeMode || tag == cap::kTlvDescribeRateRange ||
-          tag == cap::kTlvDescribeChannels || tag == cap::kTlvDescribeTrigger);
+          tag == cap::kTlvDescribeChannels || tag == cap::kTlvDescribeTrigger || tag == cap::kTlvDescribeFormats);
+    if (tag == cap::kTlvDescribeTrigger)   // types max_pretrigger opts (capture §3.5): arm 0 and when 1 beyond the defaults
+      CHECK(len == 9 && d[at + kTlvHeader + 8] == LogicCapture::kTriggerOpts);
+    if (tag == cap::kTlvDescribeFormats) CHECK(len == 1 && d[at + kTlvHeader] == cap::kDataFormatTestCounter);
   }
   CHECK(modes == 3 && channels);
+}
+
+// capture §1 format 4 and §3.3 trigger_opts: the test sequence answered, another format refused; arm 0 and when 1
+// taken, rearm 1 and a hysteresis refused (not declared), a short value malformed.
+static void testFormatAndTriggerOpts() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Bytes out;
+  auto hasFormat = [&](uint8_t f) {
+    for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+      if (out[at] == cap::kTlvConfigureAnswerFormat) return getU16(out.data() + at + 1) == 1 && out[at + kTlvHeader] == f;
+    return false;
+  };
+  Bytes p = request(Config{});
+  tlv(p, kCrit | cap::kTlvConfigureFormat, {cap::kDataFormatTestCounter});
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpQuery, p, out)) && hasFormat(cap::kDataFormatTestCounter));
+  p = request(Config{});
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpQuery, p, out)) && !hasFormat(cap::kDataFormatPacked));   // 0: left out
+  p = request(Config{});
+  tlv(p, kCrit | cap::kTlvConfigureFormat, {cap::kDataFormatLogicBlocks});
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectUnsupported) &&
+        out == Bytes{uint8_t(kCrit | cap::kTlvConfigureFormat)});
+  Config c;
+  c.trigger = true;
+  c.pretrigger = 8;
+  const uint8_t opts = kCrit | cap::kTlvConfigureTriggerOpts;
+  for (const Bytes &v : {Bytes{0, 0, 0, 0, 0, 0, 0}, Bytes{1, 0, 1, 0, 0, 0, 0}, Bytes{1, 0, 0, 0, 0, 0, 0}}) {
+    p = request(c);
+    tlv(p, opts, v);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpQuery, p, out)));
+  }
+  for (const Bytes &v : {Bytes{1, 1, 0, 0, 0, 0, 0}, Bytes{1, 0, 0, 5, 0, 0, 0}, Bytes{2, 0, 0, 0, 0, 0, 0}}) {
+    p = request(c);
+    tlv(p, opts, v);
+    CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectUnsupported) && out == Bytes{opts});
+  }
+  p = request(c);
+  tlv(p, opts, {1, 0, 0});
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectMalformed));
 }
 
 // core §4.3: malformed before unsupported before unavailable, over the whole request; the plan (cause 6) last.
@@ -1083,7 +1127,7 @@ static void testTriggerIndexMidByte() {
 }
 
 // force (capture §3.3): triggered at the sample of that instant, trigger_index = the pretrigger when that many are in;
-// a force (or an edge) before then: the segment is short - the samples there are, the trigger's and samples - pretrigger -
+// a force (or, with arm 0, an edge) before then: the segment is short - the samples there are, the trigger's and samples - pretrigger -
 // 1 after it - with trigger_index the samples before it.
 static void testForcedAndEarly() {
   board(512 * 1024, size_t(32) << 20);
@@ -1120,6 +1164,7 @@ static void testForcedAndEarly() {
     c.samples = 8192;
     c.trigger = true;
     c.pretrigger = 1000;
+    c.arm0 = true;            // arm 0: the edge before the pretrigger counts
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
     const uint32_t generation = getU32(out.data());
@@ -1218,6 +1263,7 @@ int main() {
   testValuesRefused();
   testContract();
   testDescribe();
+  testFormatAndTriggerOpts();
   testConfigureOrder();
   testStreamingWithoutStages();
   testOverLimitRoundsDown();

@@ -1499,7 +1499,7 @@
       "fns": {
         "12": "oep.fixture.capture-group"
       },
-      "state": "both tracks immediate, v1 defines no bind tags; no effects",
+      "state": "both tracks immediate; the probe declares no features trigger_source (capture §4.4), so bind's critical trigger_source is refused; no effects",
       "request_hex": "018c000c001a443322110209000d008102000900",
       "answer_hex": "028c00000b81"
     },
@@ -1635,9 +1635,9 @@
       "fns": {
         "9": "oep.fixture.logic"
       },
-      "state": "fn 9 subscribed; start answered generation 4 while generation 3's stop was still queued; the edge at sample 1000 of serial 0, at 7.05 ms",
+      "state": "fn 9 subscribed; start answered generation 4 while generation 3's stop was still queued; the edge at sample 1000 of serial 0 (1 MHz, rearm 0: no record), at 7.05 ms +-1 us",
       "generation": 4,
-      "event_hex": "03090008000300000000e803000010936b000000000004000000"
+      "event_hex": "03090008000300000000e8030000ffffffffe80300000000000010936b0000000000e803000004000000"
     },
     {
       "name": "logic stopped: data dropped inside a segment, error 2",

@@ -1,6 +1,25 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep-spec 8e7ca20 (capture §1, §3.3, §3.4, §3.5): trigger_opts (arm, rearm, when, hysteresis) with the defaults
+  arm 1 (a trigger is looked for once the pretrigger is in, so a triggered segment always has it) and when 0 (a level
+  counts from a sample not at it on) on every track - the PARLIO logic, the classic ESP32's sampler and the analog; arm 0
+  takes the earlier behaviour (an early trigger, a shorter segment), when 1 a level already there. describe's trigger has
+  its opts byte (logic arm 0 + when 1, analog arm 0). The sampler arms afresh each burst and gives a poll's wire turn
+  only once armed (a waiting request at once as before), so what a console command makes the target do lands where the
+  trigger is looked for. The triggered event is 36 bytes (record none, the sample from the generation's start, the
+  uncertainty a sample period). The P4's logic takes data format 4, the test sequence (the byte at stream position k is
+  k & 0xFF, at format 0's volume and pace, through the stages, pull and read), to measure the real path.
+- (JA) oep-spec 8e7ca20（capture §1、§3.3、§3.4、§3.5）に追従。
+  - trigger_opts（arm、rearm、when、hysteresis）を受ける。既定は arm 1（pretrigger が溜まってから見る。トリガで始まる区画はいつも pretrigger を
+    持つ）と when 0（level は、その値でないサンプルを見てから数える）で、PARLIO のロジック、classic ESP32 のサンプラ、アナログの全部に入れた。
+    arm 0 で前の動き（早いトリガで区画が短い）、when 1 で「すでに真」でも立つ。describe の trigger に opts を足した（ロジック arm 0 + when 1、
+    アナログ arm 0）。
+  - サンプラはバーストごとにアームし直し、コンソールの poll の線の番はアームの後に渡す（待っている要求は今までどおりすぐ）。これで、コマンドで
+    target がしたことが、トリガを見る区間に入る。
+  - triggered の出来事は 36 byte（record なし、世代の始まりからのサンプル、不確かさは 1 サンプル周期）。
+  - P4 のロジックはデータの形式 4（試験の並び: ストリームの position k のバイトが k & 0xFF）を受ける。形式 0 と同じ量と速さで、stage、pull、
+    read を通る。経路の実際の速さを測るためのもの。
 
 ## 0.0.34
 - (EN) oep-spec bc52327 (debug §2, §2.2; probe.config wire-hold): a debug wire's connection closed other than by a lost line

@@ -60,6 +60,7 @@ inline void analogScale(int32_t min_mv, int32_t max_mv, uint32_t full, int32_t &
 class AnalogCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 4;
+  static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0;   // describe trigger opts: what trigger_opts may ask
   static constexpr size_t kMaxBytes = 32768;   // one segment: samples x channels x 2
   AnalogCapture(Endpoint &endpoint, uint64_t adc_pins, uint16_t instance = 0)
       : endpoint_(endpoint), adc_pins_(adc_pins), instance_(instance) {}
@@ -145,6 +146,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint8_t trig_type_ = 0, trig_slot_ = 0;
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
+  uint8_t arm_ = 1;               // trigger_opts (capture §3.3)
   uint32_t follow_pre_ = 0;   // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
   uint64_t follow_late_ns_ = 0;   // ... and how long its trigger may take to come (the trigger track's latency)
   uint32_t follow_frames_ = 0;    // ... and the frames of its ring (ESP32: the buffer, grown for it)
