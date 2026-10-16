@@ -323,7 +323,7 @@ static void testContract() {
       const Result r = raw(rig.cap, op, p, out);
       CHECK(pre == 1023 ? ok(r) : rejectedAs(r, kRejectUnsupported) && out == Bytes{cap::kTlvConfigurePretrigger});
     }
-    // every row of the mode: one-shot rate, layout, actual_samples, blocking_ms; repeat also actual_segments
+    // every row of the mode: one-shot rate, layout, actual_samples; repeat also actual_segments
     CHECK(ok(raw(rig.cap, op, base(0), out)) && hasTag(out, cap::kTlvConfigureAnswerActualRate) &&
           hasTag(out, cap::kTlvConfigureAnswerLayout) && hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
           !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
@@ -544,8 +544,8 @@ static void testPlanReleaseForgets() {
   c.samples = 16384;   // 4096 bytes at w = 2
   c.segments = 2;
   CHECK(ok(configure(rig.cap, c, out)));
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)) && out.size() == 8);
-  const uint32_t generation = getU32(out.data() + 4);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)) && out.size() == 4);
+  const uint32_t generation = getU32(out.data());
   dma.deliver(4096, 0x55);
   dma.run();
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && getU32(out.data() + 1) == 1);
@@ -570,7 +570,7 @@ static void testTriggeredStop() {
   c.pretrigger = 100;
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-  const uint32_t generation = getU32(out.data() + 4);
+  const uint32_t generation = getU32(out.data());
   dma.deliver(1000, 0xFF);   // samples 0..3999 high
   dma.run();
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateWaiting);
@@ -608,7 +608,7 @@ static void testPositions() {
     c.segments = 2;
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-    const uint32_t generation = getU32(out.data() + 4);
+    const uint32_t generation = getU32(out.data());
     dma.deliver(4096, 0x11);
     dma.deliver(4096, 0x22);
     dma.deliver(4096, 0x33);   // no free segment: discarded (paused)
@@ -717,7 +717,7 @@ static void testImmediateStop() {
   c.samples = 40000;   // 10000 bytes at w = 2
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-  const uint32_t generation = getU32(out.data() + 4);
+  const uint32_t generation = getU32(out.data());
   dma.deliver(4096, 0xA5);   // one node finished
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
@@ -759,7 +759,7 @@ static void testEveryStartFresh() {
   int made = g_fake_parlio_made;
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
   CHECK(g_fake_parlio_made == made + 1 && g_fake_parlio_units == 1);
-  uint32_t generation = getU32(out.data() + 4);
+  uint32_t generation = getU32(out.data());
   complete(0xFF);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 200), out)) && getU16(out.data() + 9) == 200);
@@ -774,7 +774,7 @@ static void testEveryStartFresh() {
   made = g_fake_parlio_made;
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
   CHECK(g_fake_parlio_made == made + 1 && g_fake_parlio_size == 5120);
-  generation = getU32(out.data() + 4);
+  generation = getU32(out.data());
   complete(0xFF);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone && getU64(out.data() + 5) == 5120);
   for (uint32_t at : {0u, 4000u, 4920u}) {   // before, across and after where the stopped run had got to
@@ -868,7 +868,7 @@ static void testLostChunk() {
     c.segments = 4;
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-    const uint32_t generation = getU32(out.data() + 4);
+    const uint32_t generation = getU32(out.data());
     dma.deliver(4096, 0x11, 32);   // 128 chunks: the queue full
     dma.deliver(64, 0x22, 32);     // 2 lost
     dma.run();
@@ -894,7 +894,7 @@ static void testLostChunk() {
     c.segments = 4;
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-    const uint32_t generation = getU32(out.data() + 4);
+    const uint32_t generation = getU32(out.data());
     dma.deliver(4096 + 1024, 0x11);   // serial 0 and a quarter of serial 1
     dma.run();
     dma.deliver(1024, 0x22, 8);       // 128 chunks: the queue full
@@ -920,7 +920,7 @@ static void testLostChunk() {
     c.pretrigger = 100;
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-    const uint32_t generation = getU32(out.data() + 4);
+    const uint32_t generation = getU32(out.data());
     dma.deliver(1000, 0xFF);   // samples 0..3999 high
     dma.deliver(2000, 0x00);   // the edge at sample 4000; the segment from byte 975
     dma.run();
@@ -958,7 +958,7 @@ static void testSerialsWrap() {
   c.segments = 4;
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-  const uint32_t generation = getU32(out.data() + 4);
+  const uint32_t generation = getU32(out.data());
   LogicCaptureSerials::set(rig.cap, 0xFFFFFFFEu);
   dma.deliver(4096, 0x11);
   dma.deliver(4096, 0x22);
@@ -1035,7 +1035,7 @@ static void testTriggerIndexMidByte() {
   Dma dma;
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-  const uint32_t generation = getU32(out.data() + 4);
+  const uint32_t generation = getU32(out.data());
   dma.deliver(1000, 0xFF);   // samples 0..3999 high
   dma.put({0x03});           // sample 4000 high, 4001 low: the edge at 4001; the segment from 3901
   dma.deliver(2000, 0x00);
@@ -1053,7 +1053,7 @@ static void testTriggerIndexMidByte() {
   c.samples = 40000;
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-  const uint32_t generation = getU32(out.data() + 4);
+  const uint32_t generation = getU32(out.data());
   dma.deliver(1000, 0xFF);
   dma.put({0x03});
   dma.deliver(999, 0x00);   // stream bytes 975 (holding sample 3901) .. 1999 copied: 1025 bytes less 2 bits
@@ -1122,7 +1122,7 @@ static void testForcedAndEarly() {
     c.pretrigger = 1000;
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-    const uint32_t generation = getU32(out.data() + 4);
+    const uint32_t generation = getU32(out.data());
     dma.deliver(100, 0xFF);   // samples 0..399 high
     dma.put({0x03});          // the edge at 401, before 1000 samples are in
     dma.deliver(4096, 0x00);
@@ -1158,7 +1158,7 @@ static void testForcedAfterWrap() {
     uint32_t actual = 0;
     CHECK(findU32(out, cap::kTlvConfigureAnswerActualSamples, actual));   // whole cache lines: 60416 for 60000 at w = 2
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-    const uint32_t generation = getU32(out.data() + 4);
+    const uint32_t generation = getU32(out.data());
     dma.layout();
     const uint8_t w = k.w;
     auto pattern = [w](uint64_t g) { return w == 1 ? uint8_t{0xFF} : static_cast<uint8_t>(0x55 | ((g % 13) & 1) << 1 | ((g % 7) & 1) << 3 | ((g % 11) & 1) << 5 | ((g % 5) & 1) << 7); };

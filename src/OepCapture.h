@@ -10,7 +10,7 @@
 // again. Streaming uses the same segments, sends them as data pushes (role 0x06) and reuses a segment once it is sent;
 // with every segment unsent, new bytes are dropped and the stream position skips them (the host sees the jump).
 //
-//   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32, generation u32   0x03 stop   0x04 force   0x05 status
+//   0x01 configure(TLV) -> TLV   0x02 start -> generation u32   0x03 stop   0x04 force   0x05 status
 //   0x06 read(generation, position, max u32) -> position flags len(u32) data   0x07 segments(from u32) -> more count ...
 //   0x08 release(generation, serial) (repeat)   0x09 query(TLV) -> TLV, no lock
 // Every start makes a new generation; read and release name it (another one is rejected unavailable cause 6), the

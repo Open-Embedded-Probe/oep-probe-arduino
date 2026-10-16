@@ -922,17 +922,16 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
   switch (op) {
     case ana::kOpConfigure: return configure(p, n, out, capacity, false);
     case ana::kOpQuery: return configure(p, n, out, capacity, true);
-    case ana::kOpStart: {   // -> blocking_ms(u32) generation(u32) [TLV]
+    case ana::kOpStart: {   // -> generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (bound()) return boundInGroup(*this, out, capacity);   // the group starts it (cause 4)
       if (!trackReady() && state_ != ana::kStateError) return wrongState(out, capacity);
-      if (capacity < 8) return failed();
+      if (capacity < 4) return failed();
       follow_ = false;
       if (!startNow()) return failed();
-      putU32(out, 0);   // blocking_ms: DMA, the probe keeps answering
-      putU32(out + 4, generation_);
-      return completed(8);
+      putU32(out, generation_);
+      return completed(4);
     }
     case ana::kOpStop: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);

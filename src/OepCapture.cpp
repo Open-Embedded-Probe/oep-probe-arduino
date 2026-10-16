@@ -447,7 +447,7 @@ uint32_t LogicCapture::filledSamples() const {
 }
 
 Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
-  if (capacity < 8) return failed();
+  if (capacity < 4) return failed();
   kept_samples_ = 0;   // the last generation's segment goes
   kept_short_ = false;
   trig_phase_ = 0;
@@ -489,9 +489,8 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   state_ = kStateWaiting;
   generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
-  putU32(out, 0);
-  putU32(out + 4, generation_);
-  return completed(8);
+  putU32(out, generation_);
+  return completed(4);
 }
 
 void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
@@ -1045,7 +1044,7 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
 }
 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
-  if (capacity < 8) return failed();
+  if (capacity < 4) return failed();
   stage_drops_ = 0;
   overruns_ = 0;
   queue_overflow_ = 0;
@@ -1082,9 +1081,8 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   state_ = kStateCapturing;
   generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
-  putU32(out, 0);
-  putU32(out + 4, generation_);
-  return completed(8);
+  putU32(out, generation_);
+  return completed(4);
 }
 
 void LogicCapture::stopRepeat() {
@@ -1111,7 +1109,7 @@ bool LogicCapture::trackStartFollowing() {
     triggered_ = true;
   }
   follow_ = true;
-  uint8_t out[8];   // blocking_ms, generation (a 4-byte one failed every follower's start since the generations)
+  uint8_t out[4];   // generation
   const Result r = startTriggered(out, sizeof out);
   return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
 }
@@ -1310,13 +1308,13 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
   // bound in a capture-group: the group starts and stops it (unavailable cause 4, after the request's form, core §4.3)
   if (bound() && !group_op_ && (op == kOpStart || op == kOpStop || op == kOpForce)) return boundInGroup(*this, out, capacity);
   switch (op) {
-    case kOpStart: {   // -> blocking_ms(u32) generation(u32) [TLV]
+    case kOpStart: {   // -> generation(u32) [TLV]
       if (state_ != kStateConfigured && state_ != kStateDone && state_ != kStateError) return wrongState(out, capacity);
       if (mode_ == 3 && !subscribed_) return wrongState(out, capacity);   // streaming pushes: subscribe first
       if (mode_ == 2 || mode_ == 3) return startRepeat(out, capacity);
       follow_ = false;
       if (triggered_) return startTriggered(out, capacity);
-      if (capacity < 8) return failed();
+      if (capacity < 4) return failed();
       if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }   // a unit made for this start
       done_ = false;
       produced_ = 0;
@@ -1331,9 +1329,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { fail(cap::kErrorPeripheral); return failed(); }
       state_ = kStateCapturing;
       generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
-      putU32(out, 0);              // blocking_ms: DMA, the probe keeps answering
-      putU32(out + 4, generation_);
-      return completed(8);
+      putU32(out, generation_);
+      return completed(4);
     }
     case kOpStop: {
       uint8_t stopped[6] = {kStoppedHost, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)

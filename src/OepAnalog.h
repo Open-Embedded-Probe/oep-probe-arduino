@@ -15,7 +15,7 @@
 // A trigger keeps the ADC converting into a ring while it is looked for (ESP32: the segment's buffer, filled by the
 // driver's reads; RP2: a 32 KiB DMA write ring) and takes the segment from pretrigger frames before the crossing.
 //
-//   0x01 configure(TLV) -> TLV   0x02 start -> blocking_ms u32, generation u32   0x03 stop   0x04 force   0x05 status
+//   0x01 configure(TLV) -> TLV   0x02 start -> generation u32   0x03 stop   0x04 force   0x05 status
 //   0x06 read(generation, position, max)   0x07 segments   0x08 release (nothing to do in one-shot)   0x09 query (no lock)
 //   0x0A calibration -> TLV (no lock)
 //

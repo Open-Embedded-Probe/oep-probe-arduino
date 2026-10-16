@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) capture start (oep.fixture.logic on the classic ESP32 sampler and the ESP32-P4, oep.fixture.analog): the answer is
+  generation(u32) [TLV] (capture §3.2) - 0.0.32 still put a blocking_ms(u32) before it, and a host reading the spec's form
+  took the generation as a TLV (found on the bench by tests/hw capture_analog, ESP32 0070070d9394).
+- (JA) capture の start（classic ESP32 の sampler と ESP32-P4 の oep.fixture.logic、oep.fixture.analog）: 応答は
+  generation(u32) [TLV]（capture §3.2）。0.0.32 は前に blocking_ms(u32) を残しており、仕様の形で読む host は generation を TLV
+  として読んだ（実機の tests/hw capture_analog、ESP32 0070070d9394 で発見）。
 
 ## 0.0.32
 - (EN) Follow oep-spec up to 675288a (the core's numbering rules and named extensions, named settings, the debug wires'

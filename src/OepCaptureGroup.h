@@ -7,7 +7,7 @@
 // track's offset is its first segment's start_ns minus the group's.
 //
 //   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn]) -> -
-//   0x02 start -> blocking_ms u32, start_ns u64, generation u32, n u8, n x (fn u16, generation u32) (bind order)
+//   0x02 start -> start_ns u64, generation u32, n u8, n x (fn u16, generation u32) (bind order)
 //   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16, generation u32 (no lock)
 //   events: 0x03 triggered (trigger_fn u16, trigger_ns u64, generation u32), 0x02 stopped (reason u8, error u8,
 //   generation u32) - the group's generation, one up at every start of the group (capture §4.1, §4.2)

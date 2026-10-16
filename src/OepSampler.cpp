@@ -317,12 +317,12 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
   switch (op) {
     case cap::kOpConfigure: return configure(p, n, out, capacity, false);
     case cap::kOpQuery: return configure(p, n, out, capacity, true);
-    case cap::kOpStart: {   // -> blocking_ms(u32) generation(u32) [TLV]
+    case cap::kOpStart: {   // -> generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (boundRefused()) return boundInGroup(*this, out, capacity);
       if (state_ != cap::kStateConfigured && state_ != cap::kStateDone && state_ != cap::kStateError) return wrongState(out, capacity);
-      if (capacity < 8) return failed();
+      if (capacity < 4) return failed();
       waitIdle();
       listen(pins_, channels_);
       done_ = trig_seen_ = aborted_ = false;
@@ -343,9 +343,8 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       }
       state_ = trig_type_ ? cap::kStateWaiting : cap::kStateCapturing;
       generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
-      putU32(out, 0);              // blocking_ms: the probe keeps answering
-      putU32(out + 4, generation_);
-      return completed(8);
+      putU32(out, generation_);
+      return completed(4);
     }
     case cap::kOpStop: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);

@@ -152,7 +152,7 @@ static void testValuesRefused() {
     }
   }
   // an unknown non-critical tag is passed over; the answer has no ignored (0x7F), timing (0x54) or rate_accuracy (0x5A),
-  // and keeps skew, scale, blocking_ms, frontend_used and reference
+  // and keeps skew, scale, frontend_used and reference
   Bytes p = configureRequest(10000);
   tlv(p, 0x61, {1, 2, 3});
   tlv(p, reg::kTagNamedExtension, {4, 'i', 'o', '.', 'x', 1});   // a named extension it does not know (core §2.2)
@@ -286,7 +286,7 @@ static void testHole() {
   tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(10));
   CHECK(ok(rig.op(ana::kOpConfigure, p)));
   CHECK(ok(rig.op(ana::kOpStart)));
-  const uint32_t generation = getU32(rig.out.data() + 4);
+  const uint32_t generation = getU32(rig.out.data());
   convert(20, 100);
   convert(30, 4000);
   rig.cap.poll();                 // the crossing at frame 20: the segment runs 10 - 109
@@ -308,7 +308,7 @@ static void testPlanReleaseForgets() {
   CHECK(rig.plan({26}) == 0);
   CHECK(ok(rig.op(ana::kOpConfigure, configureRequest(10000, 100))));
   CHECK(ok(rig.op(ana::kOpStart)));
-  const uint32_t generation = getU32(rig.out.data() + 4);
+  const uint32_t generation = getU32(rig.out.data());
   convert(100, 0x123);
   rig.cap.poll();
   CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateDone && getU64(rig.out.data() + 5) == 200);
@@ -330,7 +330,7 @@ static void testStop() {
     CHECK(rig.plan({26}) == 0);
     CHECK(ok(rig.op(ana::kOpConfigure, configureRequest(10000, 100))));
     CHECK(ok(rig.op(ana::kOpStart)));
-    const uint32_t generation = getU32(rig.out.data() + 4);
+    const uint32_t generation = getU32(rig.out.data());
     convert(30, 0x321);
     CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateCapturing);
     CHECK(ok(rig.op(ana::kOpStop)));
@@ -351,7 +351,7 @@ static void testStop() {
     tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(10));
     CHECK(ok(rig.op(ana::kOpConfigure, p)));
     CHECK(ok(rig.op(ana::kOpStart)));
-    const uint32_t generation = getU32(rig.out.data() + 4);
+    const uint32_t generation = getU32(rig.out.data());
     convert(20, 100);
     CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateWaiting);
     convert(30, 4000);
@@ -395,7 +395,7 @@ static void testTriggerIndex() {
     tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(10));
     CHECK(ok(rig.op(ana::kOpConfigure, p)));
     CHECK(ok(rig.op(ana::kOpStart)));
-    const uint32_t generation = getU32(rig.out.data() + 4);
+    const uint32_t generation = getU32(rig.out.data());
     const uint32_t t = kind == 0 ? 30 : 5;
     convert(t, 100);
     rig.cap.poll();
