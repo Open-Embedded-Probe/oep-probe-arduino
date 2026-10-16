@@ -112,6 +112,7 @@ static Result call(Interface &i, uint8_t op, const Bytes &payload, Bytes &out) {
 static bool ok(const Result &r) { return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess; }
 static bool rejectedWith(const Result &r, uint8_t reason) { return r.resolution == kResolutionRejected && r.detail == reason; }
 static Bytes le16(uint16_t v) { return {uint8_t(v), uint8_t(v >> 8)}; }
+static Bytes le32(uint32_t v) { return {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)}; }   // a resource number
 static Bytes cat(Bytes a, const Bytes &b) { a.insert(a.end(), b.begin(), b.end()); return a; }
 struct MarkSeen { uint32_t serial; uint64_t position; uint8_t kind, detail; };
 // A marks answer: more(u8) count(u8) count x (serial u32, position u64, kind u8, time_ns u64, detail u8) - 22 bytes
@@ -129,9 +130,9 @@ static std::vector<MarkSeen> parseMarks(const Bytes &out) {
   return all;
 }
 // Every mark the stream keeps (marks from serial 0; the ring holds 16).
-static std::vector<MarkSeen> marksOf(Interface &console, uint16_t stream) {
+static std::vector<MarkSeen> marksOf(Interface &console, uint32_t stream) {
   Bytes out;
-  const Bytes req = {uint8_t(stream), uint8_t(stream >> 8), 0, 0, 0, 0};
+  const Bytes req = cat(le32(stream), {0, 0, 0, 0});   // stream(u32) from_serial(u32)
   if (call(console, TargetConsoleStream::kOpMarks, req, out).resolution != kResolutionCompleted) return {};
   return parseMarks(out);
 }
@@ -144,7 +145,10 @@ static uint8_t crc8(const uint8_t *p, size_t n) {   // dmseq's CRC-8: poly 0x07,
   return crc;
 }
 // method 0, max_speed 1 MHz: tag len(u16) value (core §2.2)
-static Bytes attachRequest() { return {0, uint8_t(legacy::kTlvAttachMaxSpeed | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00}; }
+// attach (debug §1): method 0, swdio swclk (the port's pair), max_speed 1 MHz
+static Bytes attachRequest(uint16_t swdio = 0, uint16_t swclk = 1) {
+  return {0, uint8_t(swdio), uint8_t(swdio >> 8), uint8_t(swclk), uint8_t(swclk >> 8), 0x40, 0x42, 0x0f, 0x00};
+}
 
 // A dmseq target as the reference one (oep-spec experiments/dm-console-seq DmSeq.h): its sketch calls available() every
 // `period` ms, which takes an answer and, idle, posts an empty frame; input rides on the answers.
@@ -182,9 +186,9 @@ struct SeqTarget {
 static uint32_t pingDeliveryMs(Interface &wire, DebugPort &port, TargetConsoleStream &console, FakePhy &phy,
                                uint32_t period_ms, uint32_t rtt_ms) {
   Bytes out;
-  if (!port.connected) call(wire, WireRvswd::kOpAttach, attachRequest(), out);
-  call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
-  const uint16_t stream = uint16_t(out[0] | out[1] << 8);
+  if (!port.connected) call(wire, WireRvswd::kOpAttach, attachRequest(port.swdio, port.swclk), out);
+  call(console, TargetConsoleStream::kOpOpen, cat(le32(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
+  const uint32_t stream = getU32(out.data());
   SeqTarget target(phy.data0);
   uint32_t next = millis();
   auto run = [&](uint32_t us) {
@@ -201,7 +205,7 @@ static uint32_t pingDeliveryMs(Interface &wire, DebugPort &port, TargetConsoleSt
   while (target.rx.size() < sizeof msg && millis() - start < 5000) {
     if (sent == sizeof msg) { run(250); continue; }
     run(rtt_ms * 500);
-    Bytes req = cat(le16(stream), {uint8_t(sizeof msg - sent), 0});
+    Bytes req = cat(le32(stream), {uint8_t(sizeof msg - sent), 0});
     req.insert(req.end(), msg + sent, msg + sizeof msg);
     call(console, TargetConsoleStream::kOpWrite, req, out);
     const size_t took = out.size() >= 2 ? size_t(out[0] | out[1] << 8) : 0;
@@ -210,7 +214,7 @@ static uint32_t pingDeliveryMs(Interface &wire, DebugPort &port, TargetConsoleSt
     if (!took) run(5000);
   }
   const uint32_t ms = millis() - start;
-  call(console, TargetConsoleStream::kOpClose, le16(stream), out);
+  call(console, TargetConsoleStream::kOpClose, le32(stream), out);
   return target.rx == std::vector<uint8_t>(msg, msg + sizeof msg) ? ms : 99999;
 }
 
@@ -229,7 +233,7 @@ class MemStream final : public Stream {
 static Bytes u32(uint32_t v) { return {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)}; }
 // One request (core §4.1): role 0x01, corr(u16), fn(u16), op(u8), session_id(u32; 0 = no session), payload; sent as
 // length(u16) message, the answer message (role, corr, resolution, detail, payload) taken back (empty: none).
-static Bytes exchange(Endpoint &ep, MemStream &link, uint16_t corr, uint16_t fn, uint8_t op, const Bytes &payload,
+[[maybe_unused]] static Bytes exchange(Endpoint &ep, MemStream &link, uint16_t corr, uint16_t fn, uint8_t op, const Bytes &payload,
                       uint32_t session) {
   Bytes m = {0x01, uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op};
   m = cat(cat(m, u32(session)), payload);
@@ -243,8 +247,8 @@ static Bytes exchange(Endpoint &ep, MemStream &link, uint16_t corr, uint16_t fn,
 static bool answered(const Bytes &a, uint8_t resolution, uint8_t detail) {
   return a.size() >= kResultHeader && a[3] == resolution && a[4] == detail;
 }
-static bool answeredOk(const Bytes &a) { return answered(a, kResolutionCompleted, kOutcomeSuccess); }
-static Bytes answerPayload(const Bytes &a) { return a.size() > kResultHeader ? Bytes(a.begin() + kResultHeader, a.end()) : Bytes{}; }
+[[maybe_unused]] static bool answeredOk(const Bytes &a) { return answered(a, kResolutionCompleted, kOutcomeSuccess); }
+[[maybe_unused]] static Bytes answerPayload(const Bytes &a) { return a.size() > kResultHeader ? Bytes(a.begin() + kResultHeader, a.end()) : Bytes{}; }
 
 int main() {
   static FakePhy phy;
@@ -257,25 +261,21 @@ int main() {
 
   Result r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
   CHECK(ok(r) && port.connected);
-  r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
-  CHECK(ok(r) && out.size() == 3);
-  const uint16_t stream = uint16_t(out[0] | out[1] << 8);
-  {
-    // mark attach carries no detail (common §1.3: "—"; it carried the mechanism, 2)
-    const std::vector<MarkSeen> marks = marksOf(console, stream);
-    CHECK(!marks.empty() && marks.back().kind == legacy::kMarkKindAttach && marks.back().detail == 0);
-  }
+  r = call(console, TargetConsoleStream::kOpOpen, cat(le32(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
+  CHECK(ok(r) && out.size() == 4);   // stream(u32) (console §1)
+  const uint32_t stream = getU32(out.data());
+  CHECK(marksOf(console, stream).empty());   // no attach mark (console §2)
 
   // ---- core §4.3: the form first, then the stream number ----
   {
-    const Bytes unknown = le16(uint16_t(stream + 100));
+    const Bytes unknown = le32(stream + 100);
     r = call(console, TargetConsoleStream::kOpRead, cat(unknown, {0, 0, 0}), out);   // cut short
     CHECK(rejectedWith(r, kRejectMalformed));
     r = call(console, TargetConsoleStream::kOpRead, cat(unknown, {4, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);   // from 4
     CHECK(rejectedWith(r, kRejectUnsupported));
     r = call(console, TargetConsoleStream::kOpWrite, cat(unknown, {0, 0}), out);   // count 0: well formed
     CHECK(rejectedWith(r, kRejectNoResource));
-    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(stream), {0, 0}), out);   // accepted 0 = count: success
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le32(stream), {0, 0}), out);   // accepted 0 = count: success
     CHECK(ok(r) && out == le16(0));
     r = call(console, TargetConsoleStream::kOpMark, unknown, out);                 // no value
     CHECK(rejectedWith(r, kRejectMalformed));
@@ -286,9 +286,9 @@ int main() {
   // ---- read from 3 (the last mark of kind arg): arg over 0xFF matches no mark - from now (common §1.2; it read kind
   // arg & 0xFF, then was malformed) ----
   {
-    r = call(console, TargetConsoleStream::kOpRead, cat(le16(stream), {3, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}), out);
+    r = call(console, TargetConsoleStream::kOpRead, cat(le32(stream), {3, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 16, 0}), out);
     CHECK(ok(r) && out.size() == 11 && out[8] == 0 && out[9] == 0);   // start = now, no flags, len 0
-    r = call(console, TargetConsoleStream::kOpRead, cat(le16(stream), {3, 0xff, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
+    r = call(console, TargetConsoleStream::kOpRead, cat(le32(stream), {3, 0xff, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
     CHECK(ok(r));
     // the fixture UART's read alike
     static PinTable uart_pins(0);
@@ -312,14 +312,15 @@ int main() {
     bool declared = false;
     for (size_t at = 0; at + kTlvHeader <= dn; at += kTlvHeader + (d[at + 1] | d[at + 2] << 8))
       declared |= d[at] == 0x41;   // the old send_queue tag
-    CHECK(!declared && dn == kTlvHeader + 3);   // mechanisms only
+    // the mechanisms only, one name each (console §1, core §7.7): sdi, dmdata, dmseq
+    CHECK(!declared && dn == 3 * kTlvHeader + strlen("sdi") + strlen("dmdata") + strlen("dmseq"));
     phy.halted = true;   // nothing taken from the queue meanwhile (the console does not read a halted hart's mailbox)
     g_millis += 25;
     console.poll();
-    const Bytes five = cat(le16(stream), {5, 0, 'a', 'b', 'c', 'd', 'e'});
+    const Bytes five = cat(le32(stream), {5, 0, 'a', 'b', 'c', 'd', 'e'});
     r = call(console, TargetConsoleStream::kOpWrite, five, out);
     CHECK(ok(r) && out == Bytes({5, 0}));
-    Bytes big = cat(le16(stream), le16(300));
+    Bytes big = cat(le32(stream), le16(300));
     big.resize(big.size() + 300, 'x');
     r = call(console, TargetConsoleStream::kOpWrite, big, out);   // what fits: the rest of the queue
     CHECK(r.detail == kOutcomePartial && out == le16(uint16_t(DmConsole::kSendQueue - 5)));
@@ -327,25 +328,25 @@ int main() {
     CHECK(r.detail == kOutcomeFailed && out == Bytes({0, 0}));
     const uint8_t typed[10] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
     CHECK(console.bindInput(typed, sizeof typed) == 0);            // a bind's input: the same queue
-    r = call(console, TargetConsoleStream::kOpClose, le16(stream), out);
+    r = call(console, TargetConsoleStream::kOpClose, le32(stream), out);
     CHECK(ok(r) && !console.isOpen());
     CHECK(driver.room() == 0);   // closed: nothing taken
     phy.halted = false;
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le32(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
     CHECK(ok(r) && console.isOpen());
     CHECK(driver.room() == DmConsole::kSendQueue);   // the queue went with the closed stream
-    const uint16_t dmdata = uint16_t(out[0] | out[1] << 8);
-    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(dmdata), {5, 0, 'a', 'b', 'c', 'd', 'e'}), out);
+    const uint32_t dmdata = getU32(out.data());
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le32(dmdata), {5, 0, 'a', 'b', 'c', 'd', 'e'}), out);
     CHECK(ok(r) && out == Bytes({5, 0}));
     CHECK(console.bindInput(typed, sizeof typed) == sizeof typed);
-    r = call(console, TargetConsoleStream::kOpClose, le16(dmdata), out);
+    r = call(console, TargetConsoleStream::kOpClose, le32(dmdata), out);
     CHECK(ok(r));
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverSdi)}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le32(port.number), {console.numberOf(TargetConsoleStream::kDriverSdi)}), out);
     CHECK(ok(r));
-    const uint16_t sdi = uint16_t(out[0] | out[1] << 8);
-    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(sdi), {1, 0, 'a'}), out);   // one way: nothing
-    CHECK(r.detail == kOutcomeFailed && out == Bytes({0, 0}));
-    r = call(console, TargetConsoleStream::kOpClose, le16(sdi), out);
+    const uint32_t sdi = getU32(out.data());
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le32(sdi), {1, 0, 'a'}), out);   // one way (console §1)
+    CHECK(rejectedWith(r, kRejectUnsupported) && out == Bytes({0}));
+    r = call(console, TargetConsoleStream::kOpClose, le32(sdi), out);
     CHECK(ok(r));
   }
 
@@ -359,9 +360,9 @@ int main() {
     phy.halted = false;
     phy.data0 = 0x80u | 7u | uint32_t('h') << 8 | uint32_t('i') << 16 | uint32_t('!') << 24;
     const size_t writes_before = phy.data0_writes.size();
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le32(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
     CHECK(ok(r));
-    const uint16_t s1 = uint16_t(out[0] | out[1] << 8);
+    const uint32_t s1 = getU32(out.data());
     CHECK(phy.data0_writes.size() == writes_before);   // open wrote nothing
     const PositionStream *ps = console.bindStream();
     const uint64_t at_open = ps ? ps->end() : 0;
@@ -375,7 +376,7 @@ int main() {
     polls(3);
     CHECK(phy.data0_writes.size() == writes_now);
     // input rides on the answers, three bytes each, from the queue's head
-    r = call(console, TargetConsoleStream::kOpWrite, cat(le16(s1), {5, 0, 'P', 'I', 'N', 'G', '\n'}), out);
+    r = call(console, TargetConsoleStream::kOpWrite, cat(le32(s1), {5, 0, 'P', 'I', 'N', 'G', '\n'}), out);
     CHECK(ok(r) && out == Bytes({5, 0}));
     phy.data0 = 0x80u | 5u | uint32_t('a') << 8;        // a slot with one byte: answered with "PIN"
     polls(1);
@@ -399,7 +400,7 @@ int main() {
     phy.data0 = 0x84u;
     polls(3);
     CHECK(phy.data0 == 0);
-    r = call(console, TargetConsoleStream::kOpClose, le16(s1), out);
+    r = call(console, TargetConsoleStream::kOpClose, le32(s1), out);
     CHECK(ok(r));
     phy.data0 = phy.data1 = 0;
   }
@@ -407,7 +408,7 @@ int main() {
   // ---- reading goes on while the hart runs, judged from DMSTATUS at least every 20 ms (oep-if-console §3): a hart the
   // probe halted and the host resumed through raw DMI is read again (it waited for the next high-level op) ----
   {
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le32(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(ok(r) && console.isOpen());
     CHECK(dm.halt() && dm.halted() && phy.halted);
     g_millis += 25;
@@ -500,38 +501,13 @@ int main() {
     CHECK(lostMarks() == 2);   // a new episode after the clear
   }
 
-  // ---- an open with another mechanism makes a new stream and erases the old one (oep-if-console §2; the new stream
-  // showed the old one's marks): its only mark is attach, its positions go on; the same mechanism again reopens it with
-  // its marks; a fixture UART's stream disappears with its plan (oep-if-fixture §2) ----
+  // ---- one live stream on a connection (oep-if-console §2): another open while one is open, with the same mechanism or
+  // another, is cause 6; a fixture UART's stream disappears with its plan (oep-if-fixture §2) ----
   {
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
-    CHECK(ok(r));
-    const uint16_t old_stream = uint16_t(out[0] | out[1] << 8);
-    r = call(console, TargetConsoleStream::kOpMark, cat(le16(old_stream), {0x5a}), out);
-    CHECK(ok(r));
-    const std::vector<MarkSeen> before = marksOf(console, old_stream);
-    CHECK(before.size() >= 2);
-    r = call(console, TargetConsoleStream::kOpClose, le16(old_stream), out);
-    CHECK(ok(r));
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
-    CHECK(ok(r) && out[2] == 0);
-    const uint16_t fresh = uint16_t(out[0] | out[1] << 8);
-    CHECK(fresh != old_stream);
-    std::vector<MarkSeen> marks = marksOf(console, fresh);
-    CHECK(marks.size() == 1 && marks[0].kind == legacy::kMarkKindAttach);
-    if (!before.empty() && marks.size() == 1) CHECK(marks[0].serial > before.back().serial);   // serials go on
-    r = call(console, TargetConsoleStream::kOpRead, cat(le16(fresh), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
-    CHECK(ok(r) && out.size() == 11 && out[8] == 0 && out[9] == 0);   // nothing of the old stream, no gap
-    r = call(console, TargetConsoleStream::kOpRead, cat(le16(old_stream), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), out);
-    CHECK(rejectedWith(r, kRejectNoResource));   // the old number is gone (no_connection, core §4.3)
-    r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
-    CHECK(ok(r));
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
-    CHECK(ok(r) && out[2] == legacy::kOpenFlagsExisting && uint16_t(out[0] | out[1] << 8) == fresh);
-    marks = marksOf(console, fresh);
-    CHECK(marks.size() == 3);   // attach, closed, attach: reopened at the same place, the marks continue
-    r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
-    CHECK(ok(r));
+    for (uint8_t d : {uint8_t(TargetConsoleStream::kDriverDmseq), uint8_t(TargetConsoleStream::kDriverDmdata)}) {
+      r = call(console, TargetConsoleStream::kOpOpen, cat(le32(port.number), {console.numberOf(d)}), out);
+      CHECK(rejectedWith(r, kRejectUnavailable));
+    }
 
     static PinTable uart_pins(0);
     static HardwareSerial serial;
@@ -545,39 +521,15 @@ int main() {
     CHECK(ok(r) && out.size() == 2 && out[1] == 0);
   }
 
-  // ---- detach with force closes the connection: its stream marks detach, then closed 4 (oep-if-debug §2's table; it
-  // marked closed 4 alone); a plain detach that closes it marks closed 4 alone ----
-  for (bool force : {true, false}) {
-    if (!port.connected) {
-      r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
-      CHECK(ok(r) && port.connected);
-    }
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
-    CHECK(ok(r) && console.isOpen());
-    const uint16_t s = uint16_t(out[0] | out[1] << 8);
-    Bytes detach = le16(port.number);
-    if (force) detach.insert(detach.end(), {uint8_t(legacy::kTlvDetachForce | kTagCritical), 0, 0});
-    r = call(wire_fn, WireRvswd::kOpDetach, detach, out);
-    CHECK(ok(r) && !port.connected);
-    console.poll();
-    CHECK(!console.isOpen());
-    const std::vector<MarkSeen> marks = marksOf(console, s);
-    CHECK(marks.size() >= 2 && marks.back().kind == legacy::kMarkKindClosed &&
-          marks.back().detail == legacy::kMarkDetailClosedConnectionClosed);
-    if (marks.size() >= 2) CHECK((marks[marks.size() - 2].kind == legacy::kMarkKindDetach) == force);
-  }
-  r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
-  CHECK(ok(r) && port.connected);
-
   // ---- open on a live connection this console does not ride on (an arm-adi one): unavailable cause 6
   // (oep-if-console §1; it answered no_connection) ----
   {
     const uint16_t swd = ResourceNumbers::take(ResourceNumbers::kConnection);
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le32(swd), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(rejectedWith(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1, 0,
                                                                 reg::core::kUnavailableCauseWrongState}));
     ResourceNumbers::close(swd);
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);   // closed: unknown
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le32(swd), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);   // closed: unknown
     CHECK(rejectedWith(r, kRejectNoResource));
   }
 
@@ -592,11 +544,11 @@ int main() {
     static WireRvswd wire3(port3, 2);
     static DmConsole driver3(dm3, phy3);
     static TargetConsoleStream console3(port3, driver3, 2);
-    r = call(wire3, WireRvswd::kOpAttach, attachRequest(), out);
+    r = call(wire3, WireRvswd::kOpAttach, attachRequest(4, 5), out);
     CHECK(ok(r) && port3.connected);
-    r = call(console3, TargetConsoleStream::kOpOpen, cat(le16(port3.number), {console3.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
+    r = call(console3, TargetConsoleStream::kOpOpen, cat(le32(port3.number), {console3.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(ok(r));
-    const uint16_t s3 = uint16_t(out[0] | out[1] << 8);
+    const uint32_t s3 = getU32(out.data());
     SeqTarget target(phy3.data0);
     uint32_t next = millis();
     auto run = [&](uint32_t us) {
@@ -609,7 +561,7 @@ int main() {
     run(100 * 1000);   // synced
     const size_t marks_before = marksOf(console3, s3).size();
     const uint8_t line[] = {'R', 'E', 'A', 'D', ' ', '1', '3', '\n'};
-    r = call(console3, TargetConsoleStream::kOpWrite, cat(cat(le16(s3), {uint8_t(sizeof line), 0}), Bytes(line, line + sizeof line)), out);
+    r = call(console3, TargetConsoleStream::kOpWrite, cat(cat(le32(s3), {uint8_t(sizeof line), 0}), Bytes(line, line + sizeof line)), out);
     CHECK(ok(r) && out == Bytes({uint8_t(sizeof line), 0}));
     phy3.lose_data0 = 1;       // the answer that carries "RE" (to the target's next frame) does not land
     for (int i = 0; i < 100 && phy3.lose_data0; ++i) run(250);
@@ -627,102 +579,10 @@ int main() {
     run(1000);
     CHECK(phy3.reinits > reinits && !phy3.dropped && console3.isOpen());
     target.rx.clear();
-    r = call(console3, TargetConsoleStream::kOpWrite, cat(le16(s3), {2, 0, 'o', 'k'}), out);
+    r = call(console3, TargetConsoleStream::kOpWrite, cat(le32(s3), {2, 0, 'o', 'k'}), out);
     CHECK(ok(r));
     run(100 * 1000);
     CHECK(target.rx == std::vector<uint8_t>({'o', 'k'}));
-  }
-
-  // ---- a session's end takes the host's share of the console stream (oep-if-console §2, core §6.4, §9): an explicit
-  // end (as a lapse) closes a stream the session was the last user of with mark closed 2 (session_ended), and the stream's
-  // share goes before the connection's - so closed 2, not closed 4, though the connection closes with it. The closed
-  // stream stays readable without a session; a request with the ended session's id is no_session; the next open at the
-  // same place and mechanism returns the same number with its marks (flags bit0). A stream a slot's bind also uses stays
-  // open through the end. ----
-  {
-    static FakePhy phy4;
-    static Ch32Dm dm4(phy4);
-    static DebugPort port4{dm4, 6, 7};
-    static WireRvswd wire4(port4, 3);
-    static DmConsole driver4(dm4, phy4);
-    static TargetConsoleStream console4(port4, driver4, 3);
-    static MemStream link;
-    static uint8_t rx4[1024], tx4[1024];
-    static Endpoint ep(link, rx4, sizeof rx4, tx4, sizeof tx4, {512, 1024, 2}, Endpoint::kVendorBulk, 0);
-    CHECK(ep.add(wire4) && ep.add(console4));   // fn 1, fn 2
-    uint16_t corr = 1;
-    auto send = [&](uint16_t fn, uint8_t op, const Bytes &payload, uint32_t session) {
-      return exchange(ep, link, corr++, fn, op, payload, session);
-    };
-    const Bytes lease = cat(u32(3000), {0});   // lease_ms, force 0
-    auto streamMarks = [&](uint16_t s) {      // marks from serial 0, lock-free with session_id 0
-      const Bytes a = send(2, TargetConsoleStream::kOpMarks, cat(le16(s), {0, 0, 0, 0}), 0);
-      return answeredOk(a) ? parseMarks(answerPayload(a)) : std::vector<MarkSeen>{};
-    };
-    auto closedMarks = [](const std::vector<MarkSeen> &marks, uint8_t detail) {
-      int n = 0;
-      for (const MarkSeen &m : marks) n += m.kind == legacy::kMarkKindClosed && m.detail == detail;
-      return n;
-    };
-
-    // session 7: attach, open dmseq, a host mark; then end
-    CHECK(answeredOk(send(0, reg::core::kOpOpen, lease, 7)));
-    CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 7)) && port4.connected);
-    Bytes a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {console4.numberOf(TargetConsoleStream::kDriverDmseq)}), 7);
-    CHECK(answeredOk(a) && a.size() == kResultHeader + 3 && a[kResultHeader + 2] == 0);
-    const uint16_t s4 = a.size() >= kResultHeader + 2 ? uint16_t(a[kResultHeader] | a[kResultHeader + 1] << 8) : 0;
-    CHECK(answeredOk(send(2, TargetConsoleStream::kOpMark, cat(le16(s4), {0x11}), 7)));
-    CHECK(console4.isOpen() && console4.users() == TargetConsoleStream::kUserHost);
-    CHECK(answeredOk(send(0, reg::core::kOpEnd, {}, 7)));
-    CHECK(!console4.isOpen() && !port4.connected);   // the stream closed, and the connection with it
-    console4.poll();                                 // the connection's close seen: nothing more on a closed stream
-    std::vector<MarkSeen> marks = streamMarks(s4);   // readable without a session
-    CHECK(!marks.empty() && marks.back().kind == legacy::kMarkKindClosed &&
-          marks.back().detail == legacy::kMarkDetailClosedSessionEnded);
-    CHECK(closedMarks(marks, legacy::kMarkDetailClosedConnectionClosed) == 0 && closedMarks(marks, legacy::kMarkDetailClosedSessionEnded) == 1);
-    a = send(2, TargetConsoleStream::kOpRead, cat(le16(s4), {1, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0}), 0);
-    CHECK(answeredOk(a));
-    a = send(2, TargetConsoleStream::kOpMarks, cat(le16(s4), {0, 0, 0, 0}), 7);   // the ended session's id: no resume
-    CHECK(answered(a, kResolutionRejected, kRejectNoSession));
-    a = send(2, TargetConsoleStream::kOpStreams, {0, 0}, 0);   // first(u16) 0: listed closed, nobody using it
-    CHECK(answeredOk(a) && a.size() == kResultHeader + 9 && uint16_t(a[7] | a[8] << 8) == s4 && a[12] == 0 &&
-          a[13] == legacy::kStreamStateClosed);
-
-    // session 8: a new connection at the same place, the same mechanism: the same number, its marks continued
-    CHECK(answeredOk(send(0, reg::core::kOpOpen, lease, 8)));
-    CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 8)) && port4.connected);
-    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {console4.numberOf(TargetConsoleStream::kDriverDmseq)}), 8);
-    CHECK(answeredOk(a) && a.size() == kResultHeader + 3 && uint16_t(a[5] | a[6] << 8) == s4 &&
-          (a[7] & legacy::kOpenFlagsExisting));
-    const size_t before = marks.size();
-    marks = streamMarks(s4);
-    CHECK(marks.size() == before + 1 && marks.back().kind == legacy::kMarkKindAttach);
-    bool host_mark = false;
-    for (const MarkSeen &m : marks) host_mark |= m.kind == reg::common::kMarkKindHost && m.detail == 0x11;
-    CHECK(host_mark);
-
-    // a slot's bind uses it too: the end takes only the session's share - the stream stays open, no closed mark
-    uint32_t dmstatus = 0;
-    CHECK(attachRunning(port4, DebugPort::kUserSlot, dmstatus) && console4.bindOpen(console4.numberOf(TargetConsoleStream::kDriverDmseq)));
-    CHECK(console4.users() == (TargetConsoleStream::kUserHost | TargetConsoleStream::kUserSlot));
-    CHECK(answeredOk(send(0, reg::core::kOpEnd, {}, 8)));
-    console4.poll();
-    CHECK(console4.isOpen() && console4.users() == TargetConsoleStream::kUserSlot && port4.connected);
-    CHECK(streamMarks(s4).size() == marks.size());
-    console4.bindClose(legacy::common::kMarkDetailClosedSlotChanged);
-    CHECK(!console4.isOpen() && streamMarks(s4).back().detail == legacy::common::kMarkDetailClosedSlotChanged);
-    releaseConnection(port4, DebugPort::kUserSlot, false);
-    CHECK(!port4.connected);
-
-    // a lapse ends the session the same way: closed 2
-    CHECK(answeredOk(send(0, reg::core::kOpOpen, cat(u32(reg::kLimitLeaseMinMs), {0}), 9)));
-    CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 9)));
-    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {console4.numberOf(TargetConsoleStream::kDriverDmseq)}), 9);
-    CHECK(answeredOk(a) && uint16_t(a[5] | a[6] << 8) == s4);
-    g_millis += reg::kLimitLeaseMinMs + 1;
-    marks = streamMarks(s4);   // the lapse is judged as this request arrives
-    CHECK(!console4.isOpen() && !port4.connected && !marks.empty() &&
-          marks.back().kind == legacy::kMarkKindClosed && marks.back().detail == legacy::kMarkDetailClosedSessionEnded);
   }
 
   // ---- the console's write latency (oep-if-console §2): a host's line goes in one write and reaches the target one
@@ -752,16 +612,16 @@ int main() {
     static WireRvswd wire5(port5, 2);
     static DmConsole driver5(dm5, phy5);
     static TargetConsoleStream console5(port5, driver5, 2);
-    CHECK(ok(call(wire5, WireRvswd::kOpAttach, attachRequest(), out)));
-    CHECK(ok(call(console5, TargetConsoleStream::kOpOpen, cat(le16(port5.number), {console5.numberOf(TargetConsoleStream::kDriverDmseq)}), out)));
-    const uint16_t s5 = uint16_t(out[0] | out[1] << 8);
+    CHECK(ok(call(wire5, WireRvswd::kOpAttach, attachRequest(4, 5), out)));
+    CHECK(ok(call(console5, TargetConsoleStream::kOpOpen, cat(le32(port5.number), {console5.numberOf(TargetConsoleStream::kDriverDmseq)}), out)));
+    const uint32_t s5 = getU32(out.data());
     SeqTarget target(phy5.data0);
     for (int i = 0; i < 200; ++i) { advanceMicros(500); console5.poll(); target.available(); }   // synced
     phy5.paused = true;
     const int reads = phy5.reads;
     const size_t answers = phy5.data0_writes.size();
     const uint8_t line[] = {'B', 'U', 'R', 'S', 'T', ' ', '2', '0', '6', '\n'};
-    Bytes req = cat(le16(s5), {uint8_t(sizeof line), 0});
+    Bytes req = cat(le32(s5), {uint8_t(sizeof line), 0});
     req.insert(req.end(), line, line + sizeof line);
     r = call(console5, TargetConsoleStream::kOpWrite, req, out);
     CHECK(ok(r) && out == le16(sizeof line));                     // queued whole while the wire is paused
