@@ -279,8 +279,16 @@ inline uint16_t blockMaxLength(size_t max_frame, size_t buffer_bytes) {
 inline bool blockCountFits(uint16_t count, uint16_t max_length) { return 4u * count <= max_length; }
 
 // The firmware string every probe reports (fn 0's describe tag 0x40): the library's release version
-// (openembeddedprobe_version.h, written by the release). A build between releases reports the last release.
+// (openembeddedprobe_version.h, written by the release). A build between releases reports the last release, or with
+// -DOEP_FIRMWARE_BUILD=<token> (e.g. the commit: arduino-cli compile --build-property
+// "compiler.cpp.extra_flags=-DOEP_FIRMWARE_BUILD=ffd6a14") the last release and that token: "0.0.32+ffd6a14".
+#define OEP_FIRMWARE_STR2(x) #x
+#define OEP_FIRMWARE_STR(x) OEP_FIRMWARE_STR2(x)
+#ifdef OEP_FIRMWARE_BUILD
+constexpr const char *kFirmwareVersion = OPENEMBEDDEDPROBE_VERSION_STR "+" OEP_FIRMWARE_STR(OEP_FIRMWARE_BUILD);
+#else
 constexpr const char *kFirmwareVersion = OPENEMBEDDEDPROBE_VERSION_STR;
+#endif
 
 // A token of `a-z 0-9 -` only, 1 to `max` bytes (core §7.5: unit_id; interface names' labels).
 inline bool lowerToken(const uint8_t *p, size_t n, size_t max) {
