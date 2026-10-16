@@ -180,7 +180,8 @@ static void testDescribe() {
     if (tag == ana::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == ana::kModeOneShot); }
     if (tag == ana::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == AnalogCapture::kMaxChannels); }
     if (tag == ana::kTlvDescribeFrontend) ++frontends;
-    CHECK(tag != 0x42 && tag != 0x43 && tag != 0x47 && tag != 0x48 && tag != 0x49);
+    CHECK(tag < 0x40 || tag == ana::kTlvDescribeMode || tag == ana::kTlvDescribeRateRange ||
+          tag == ana::kTlvDescribeChannels || tag == ana::kTlvDescribeTrigger || tag == ana::kTlvDescribeFrontend);
   }
   CHECK(modes == 1 && channels && frontends == 1);
 }
@@ -261,11 +262,12 @@ static void testOutputIdle() {
   CHECK(rig.ep.replacePlan(roles, 2, fns, 1) == 0);
 }
 
-static Bytes readReq(uint32_t generation, uint64_t position, uint32_t max) {
-  Bytes p(16);
+// read (capture §3.2): generation(u32) position(u64) max(u16) -> position(u64) flags(u8) len(u16) data
+static Bytes readReq(uint32_t generation, uint64_t position, uint16_t max) {
+  Bytes p(14);
   putU32(p.data(), generation);
   putU64(p.data() + 4, position);
-  putU32(p.data() + 12, max);
+  putU16(p.data() + 12, max);
   return p;
 }
 // The DMA writes `count` values of `value` (of the transfer the capture set up).
@@ -294,7 +296,7 @@ static void testHole() {
         getU32(rig.out.data() + 1) == 0 && getU64(rig.out.data() + 5) == 0 && (rig.out[13] & ana::kStatusFlagDropped) &&
         rig.out[21] == ana::kErrorStorage);
   CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out[1] == 0);
-  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 0);
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU16(rig.out.data() + 9) == 0);
   CHECK(ok(rig.op(ana::kOpStart)));   // from state 6: a new generation
   CHECK(ok(rig.op(ana::kOpStatus)) && rig.out.size() == 18);
 }
@@ -310,14 +312,14 @@ static void testPlanReleaseForgets() {
   convert(100, 0x123);
   rig.cap.poll();
   CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateDone && getU64(rig.out.data() + 5) == 200);
-  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 200);
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU16(rig.out.data() + 9) == 200);
   CHECK(rig.plan({26, 27, 28, 29}) == 0);
   CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateUnconfigured && getU32(rig.out.data() + 1) == 0 &&
         getU64(rig.out.data() + 5) == 0);
-  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && rig.out.size() == 13 && getU32(rig.out.data() + 9) == 0);
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && rig.out.size() == 11 && getU16(rig.out.data() + 9) == 0);
   CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 && rig.out[1] == 0);
   rig.cap.planRelease();
-  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 0);
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU16(rig.out.data() + 9) == 0);
 }
 
 // stop (capture §3.2): capturing (state 3) -> 1 with the segment cut short (flags bit1) holding what came in, readable;
@@ -336,8 +338,8 @@ static void testStop() {
           getU64(rig.out.data() + 5) == 60);
     CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 + 37 && rig.out[1] == 1);
     CHECK(getU32(rig.out.data() + 2 + 12) == 30 && (rig.out[2 + 32] & ana::kSegmentFlagShort));
-    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 60 &&
-          getU16(rig.out.data() + 13) == 0x321);
+    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU16(rig.out.data() + 9) == 60 &&
+          getU16(rig.out.data() + 11) == 0x321);
     CHECK(ok(rig.op(ana::kOpStart)));   // from state 1: the next generation, the segment gone
     CHECK(ok(rig.op(ana::kOpStatus)) && getU32(rig.out.data() + 1) == 0);
   }
@@ -359,8 +361,8 @@ static void testStop() {
     CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 + 37 && rig.out[1] == 1);
     CHECK(getU32(rig.out.data() + 2 + 12) == 40 && getU32(rig.out.data() + 2 + 28) == 10 &&
           (rig.out[2 + 32] & ana::kSegmentFlagShort));
-    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 80);
-    CHECK(getU16(rig.out.data() + 13 + 2 * 9) == 100 && getU16(rig.out.data() + 13 + 2 * 10) == 4000);
+    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU16(rig.out.data() + 9) == 80);
+    CHECK(getU16(rig.out.data() + 11 + 2 * 9) == 100 && getU16(rig.out.data() + 11 + 2 * 10) == 4000);
     // waiting, never crossed: state 1, nothing
     CHECK(ok(rig.op(ana::kOpStart)));
     convert(20, 100);
@@ -405,9 +407,9 @@ static void testTriggerIndex() {
     CHECK(ok(rig.op(ana::kOpSegments, {0, 0, 0, 0})) && rig.out.size() >= 2 + 37 && rig.out[1] == 1);
     CHECK(getU32(rig.out.data() + 2 + 12) == n && getU32(rig.out.data() + 2 + 28) == before &&
           (rig.out[2 + 32] & ana::kSegmentFlagShort) == 0);
-    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU32(rig.out.data() + 9) == 2 * n);
+    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU16(rig.out.data() + 9) == 2 * n);
     if (kind != 2)
-      CHECK(getU16(rig.out.data() + 13 + 2 * (before - 1)) == 100 && getU16(rig.out.data() + 13 + 2 * before) == 4000);
+      CHECK(getU16(rig.out.data() + 11 + 2 * (before - 1)) == 100 && getU16(rig.out.data() + 11 + 2 * before) == 4000);
   }
 }
 
