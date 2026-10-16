@@ -221,13 +221,14 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
    Python からは `oep_client.link.open_host(<port>)` でセッションを得る。シリアルの口（USB-Serial/JTAG、USB CDC、UART bridge）は
    OEP のフレーム（`0x00 <COBS> 0x00`）と bind の生のバイトを 1 本で運ぶ。host は排他（TIOCEXCL）で開き、フレームの外は雑音として
    捨てる（oep-spec の host 開発ガイド §1、§2）。
-3. **設定**: 起動時から target のコンソールをシリアルの口に流すには、スロットと bind を登録する（`oep.probe.config`、ESP32 は
-   NVS、RP2040 / RP2350 は flash に保存）。線の設定は target のもので、host が渡す（CH32L103 は、休ませる間は SWCLK を low、reset 直後は 1 MHz まで）:
+3. **設定**: セッションの無い間、target のコンソールをシリアルの口に流すには、console-passthrough を設定する（`oep.probe.config`、
+   ESP32 は NVS、RP2040 / RP2350 は flash に名前で保存）。口の名前は label の `S.N` で付ける（host が `oep://<probe>/<口>` で名指す）:
 
    ```sh
-   oep config slot <probe> --name l103 --wire rvswd --pins 2,54 --attach at-boot --retry 1 --mechanism dmseq \
-       --max-speed 1000000 --idle-clock low
-   oep config bind <probe> --port 1 --stream slot:l103 --save
+   oep config label <probe> 2 l103.swdio
+   oep config label <probe> 54 l103.swclk
+   oep config console-passthrough <probe> 1 oep.wire.rvswd 2 54 --console oep.target.console --mechanism dmseq \
+       --max-speed 1000000 --save
    oep config show <probe>
    ```
 

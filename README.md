@@ -93,8 +93,9 @@ follow. Nor is there a fixed pin map:
   (RP2 GP26-28, ESP32-P4 GPIO16-23, classic ESP32 GPIO32-36 / 39), and the classic ESP32's SWIO needs an output below
   GPIO32. Wire those lines to such a pin; [Boards](docs/guide/boards.md#pins-of-the-released-firmware) lists them per chip.
 - **The host finds where the target is.** `oep pins` (oep-client-python) reads every offered pin under the probe's pulls,
-  scans the debug wire over the candidates, identifies the target by its ID, and finds its reset line. It then suggests a
-  slot to save (oep-spec host-development-guide §19; per-target notes in oep-spec docs/target-scan-notes.ja.md).
+  scans the debug wire over the candidates, identifies the target by its ID, and finds its reset line. It then suggests
+  the port's labels to save (`S.swdio`, `S.swclk`, `S.nrst`: oep-spec host guide §5.3; per-target notes in oep-spec
+  docs/target-scan-notes.ja.md).
 - **The rest can be found through the target.** Once the debug link is up, the host can drive the target's own GPIOs
   through it and see which probe pin follows, so its other lines (UART, power switch, application pins) are found the same
   way, without a wiring list.
@@ -172,7 +173,7 @@ one of them against this endpoint).
 | `src/OepTcp.h`, `src/OepWifi.h` | TCP (a listener whose connections are each a transport; lwIP sockets) and Wi-Fi on an ESP32 (the settings' networks tried in order, mDNS `_oep._tcp`); header-only, so only a sketch that includes them links the network |
 | `src/OepBind.*` | what each serial port carries (a bind: one stream per port, held during a session and resumed where it stopped) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
-| `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (slots, binds, saved in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
+| `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (named items: labels, idle, disable, pass-throughs, Wi-Fi / IPv4, the sketch's own; saved by name in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1) on the ESP-IDF I2C / SPI slaves (custom `io.github.ch32-riscv-ug.esp32.*` until 2026-09-30) |
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
 | `examples/` | the board firmware and examples to learn from: see [Examples](#examples) |
@@ -201,7 +202,7 @@ uses it.
 | `04.Debug/SwioDebugProbe` | classic ESP32 | a CH32V00x debugger on the one-wire SWIO |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | an ARM debugger on SWD: wire, arm-adi |
 | `05.Capture/LogicCapture` | ESP32-P4 / P4X | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2), streaming over HS; `host/stream_test.py` |
-| `06.Settings/ProbeConfig` | RP2040 / RP2350 | a jig that sets itself up at boot: slots, binds (the target's console on the probe's port), plans, idle states, saved in flash |
+| `06.Settings/ProbeConfig` | RP2040 / RP2350 | a jig that keeps its settings: labels, idle states, disabled channels, pass-throughs (the target's console on the probe's port), saved in flash by name |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | a bring-up tool (text on Serial, not OEP): which pins are a debug port |
 
 ## Getting started
@@ -234,14 +235,15 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
    In Python, `oep_client.link.open_host(<port>)` gives a host session. A serial port (USB-Serial/JTAG, USB CDC, a UART bridge)
    carries OEP frames (`0x00 <COBS> 0x00`) and its bind's raw bytes on one line; the host opens it exclusively (TIOCEXCL)
    and skips the bytes outside frames as noise (oep-spec host guide §1, §2).
-3. **Settings.** To carry a target's console on a serial port from boot, register a slot and a bind (`oep.probe.config`,
-   kept in NVS on ESP32, in flash on RP2040 / RP2350). The line's settings are the target's and come from the host (a CH32L103 wants SWCLK low while the
-   line rests and at most 1 MHz right after a reset):
+3. **Settings.** To carry a target's console on a serial port while no session uses the probe, set a
+   console-passthrough (`oep.probe.config`, saved by name in NVS on ESP32, in flash on RP2040 / RP2350). Name the port with
+   `S.N` labels (a host names it `oep://<probe>/<port>`):
 
    ```sh
-   oep config slot <probe> --name l103 --wire rvswd --pins 2,54 --attach at-boot --retry 1 --mechanism dmseq \
-       --max-speed 1000000 --idle-clock low
-   oep config bind <probe> --port 1 --stream slot:l103 --save
+   oep config label <probe> 2 l103.swdio
+   oep config label <probe> 54 l103.swclk
+   oep config console-passthrough <probe> 1 oep.wire.rvswd 2 54 --console oep.target.console --mechanism dmseq \
+       --max-speed 1000000 --save
    oep config show <probe>
    ```
 

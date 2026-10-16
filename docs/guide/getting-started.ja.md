@@ -196,18 +196,19 @@ sampler はトリガのトラックにはなれますが、ほかのトリガに
 
 ## 5. 治具の設定を probe に持たせる
 
-治具 = firmware + その設定です。一度書いて保存すれば、probe は起動のたびにそれを行います。
+治具 = firmware + その設定です。一度書いて保存すれば、probe は起動のたびにそれを掛け直します。
 
 ```sh
-oep config slot /dev/ttyACM0 --name dut --wire rvswd --pins 2,3 --attach at-boot --retry 1 --mechanism dmseq
-oep config bind /dev/ttyACM0 --port 0 --stream slot:dut      # target のコンソールをこの口に
+oep config label /dev/ttyACM0 2 dut.swdio                 # 口 dut（host は oep://<probe>/dut で名指す）
+oep config label /dev/ttyACM0 3 dut.swclk
+oep config console-passthrough /dev/ttyACM0 0 oep.wire.rvswd 2 3 --console oep.target.console --mechanism dmseq
 oep config idle /dev/ttyACM0 5 pull-up --save
 oep config disable /dev/ttyACM0 28 29 --save            # このボードに出ていない: 使わず、触れない
 oep config show /dev/ttyACM0
 ```
 
-これで、probe のシリアルの口のターミナルに、起動時から target のコンソールが出ます。書き込みの道具は、同じ口で OEP を
-話し続けます。各項目の説明は `06.Settings/ProbeConfig` にあります。
+これで、セッションの無い間、probe のシリアルの口のターミナルに target のコンソールが出ます。書き込みの道具は、同じ口で
+OEP を話し続けます（その間、素通しは止まります）。各項目の説明は `06.Settings/ProbeConfig` にあります。
 
 ## 6. Wi-Fi で（classic ESP32）
 

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- (EN) Follow oep-spec up to 675288a (the core's numbering rules and named extensions, named settings, the debug wires'
+  attach as a fixed part and a new connection only, the immediate capture-group). probe.config: the items are named -
+  describe lists the settings (label, idle, disable, passthrough, console-passthrough, wifi, ipv4 and the sketch's own
+  by `addSetting`) and an item's number is its place in that list; saves are by name (`items8` / `OEP8`; the forms
+  before read as unreadable); wifi / ipv4 and the network op through `WifiControl` (OepWifi.h: static IPv4 by
+  `WiFi.config`). oep.wire.swd / rvswd / swio: attach's fixed part method swdio swclk max_speed, a new connection only
+  (the live pins cause 1), scans of listed pairs, connection numbers u32, detach without force. Console mechanisms as a
+  named list. capture-group: bind / start / status of the immediate group (no trigger track or force). capture read:
+  max / len u16. The list's instance is each interface's own fixed identifier (it was counted from the add order).
+  Host tests rewritten for these forms; the reference firmware builds for RP2350, ESP32-P4 and the classic ESP32. Not
+  run on hardware.
+- (JA) oep-spec 675288a までに追従（番号の規則と名前つきの拡張、名前つき設定、debug の線の attach の固定部と新しい接続だけ、即時の
+  capture-group）。probe.config: 項目は名前で見分け、番号は describe の setting の並びの位置（label、idle、disable、passthrough、
+  console-passthrough、wifi、ipv4、sketch 独自の `addSetting`）。保存は名前で持つ（`items8` / `OEP8`。前の形は unreadable）。
+  wifi / ipv4 と network は `WifiControl` 経由（OepWifi.h: 固定 IPv4 は `WiFi.config`）。oep.wire.swd / rvswd / swio: attach の
+  固定部 method swdio swclk max_speed、新しい接続だけ（使用中のピンは cause 1）、列挙した組の scan、connection は u32、force の
+  無い detach。コンソールの方式は名前の並び。capture-group は即時の一括開始の bind / start / status（連動トリガと force は無し）。
+  capture の read の max / len は u16。list の instance は各インターフェースの固定の識別子（add の順から数えていた）。ホスト試験を
+  この形に書き直し、参照 firmware は RP2350、ESP32-P4、classic ESP32 でビルドできる。実機では未確認。
+
 - (JA) 公開適合入口で独立TCP length検査と最小バーチャルcore-v1も実行可能。core-v1の成功をtarget/interface適合として扱わない。
 
 - (JA) 独立serial適合入口からport再接続によるsession・履歴・leaseの保持も検査する。firmwareのprotocol実装は変更しない。

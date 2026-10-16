@@ -1,31 +1,29 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// A jig that sets itself up at boot: oep.probe.config keeps what the host set, and the probe does it again every boot
+// A jig that keeps its settings: oep.probe.config holds what the host set and the probe applies it again every boot
 // (oep-spec interfaces/oep-if-probe-config.ja.md). Nothing about the jig is in this sketch; its settings say:
 //
-//   slot   a place a target is wired to (a wire and its pins), with a name - attach at boot and retry, the console's
-//          mechanism, the line's settings (max_speed_hz, idle_clock)
-//   bind   the one stream a serial port carries outside the OEP frames: the slot's console (so a terminal on the
-//          probe's port shows the target's output, on the same line as OEP) or a fixture UART
-//   plan   pins an interface keeps (a fixture UART on the DUT's TX / RX)
-//   idle   how a free pin rests (pull-up on a DUT input that must not float)
-//   disable a channel the probe never uses or touches (not on this board, or wired to another part): every request
-//          naming it is refused (unavailable, cause 5), and the pin is never parked - not even at boot
+//   label        a channel's name for the host (a port "dut" is the labels "dut.swdio", "dut.nrst", ...: host guide §5.3)
+//   idle         how a free pin rests (pull-up on a DUT input that must not float)
+//   disable      a channel the probe never uses or touches (not on this board, or wired to another part): every request
+//                naming it is refused (unavailable, cause 5), and the pin is never parked - not even at boot
+//   passthrough  a serial port carries a fixture UART's receive outside the OEP frames while no session uses it
+//   console-passthrough  a serial port carries the target's debug console the same way (read over the wire, no halt)
 //
-// The host sets them with `oep config` (oep-client-python), and `--save` writes them to flash (NVS on ESP32, the last
-// sector on RP2040 / RP2350):
+// Each item is named; describe lists the settings this probe takes and an item's number is its place in that list. The
+// host sets them with `oep config` (oep-client-python), and `--save` writes them, by name, to flash (NVS on ESP32, the
+// last sector on RP2040 / RP2350):
 //
-//   oep config slot  <port> --name dut --wire rvswd --pins 2,3 --attach at-boot --retry 1 --mechanism dmseq
-//   oep config bind  <port> --port 0 --stream slot:dut
-//   oep config plan  <port> oep.fixture.uart#1 rx=5 tx=4
-//   oep config idle  <port> 5 pull-up --save
-//   oep config disable <port> 28 29 --save
-//   oep config show  <port>
+//   oep config label  <probe> 2 dut.swdio
+//   oep config label  <probe> 3 dut.swclk
+//   oep config idle   <probe> 5 pull-up --save
+//   oep config disable <probe> 28 29 --save
+//   oep config console-passthrough <probe> 0 oep.wire.rvswd 2 3 --console oep.target.console --mechanism dmseq --save
+//   oep config show   <probe>
 //
-// Then the probe's USB serial port shows the target's console from boot, and a flash tool still talks OEP on the same
-// port: during its session the console is held and resumes, afterwards, where it stopped (transports §4).
-// Saved settings belong to this firmware's interface list: another firmware leaves them unapplied.
+// Then the probe's USB serial port shows the target's console while no tool uses the probe, and a flash tool still talks
+// OEP on the same port: during its session the console pass-through stops, and starts again after it (probe.config §1.2).
 #include <OepBind.h>
 #include <OepCh32Dm.h>
 #include <OepConfig.h>
@@ -38,7 +36,7 @@
 #include <OepRvswdPhy.h>
 #include <OepTarget.h>
 
-static constexpr uint8_t kSwdio = 2, kSwclk = 3;   // the wire's pair; a slot names it
+static constexpr uint8_t kSwdio = 2, kSwclk = 3;   // the wire's pair
 // The rest of a Pico's pins are fixture channels: GP0-GP22 and GP26-GP28 but the pair. UART0 RX / TX may be GP1/0,
 // GP5/4, GP13/12, GP17/16 or GP29/28.
 static constexpr uint64_t kPair = (1ull << kSwdio) | (1ull << kSwclk);
@@ -47,7 +45,7 @@ static constexpr uint64_t kChannels = (((1ull << 23) - 1) | (0x7ull << 26)) & ~k
 static uint8_t rxBuffer[1100];
 static uint8_t txBuffer[1024];
 static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
-                              oep::Endpoint::kUsbCdc, 0);   // transport 0, serial port 0: the bind's "--port 0"; CDC interface 0
+                              oep::Endpoint::kUsbCdc, 0);   // transport 0, serial port 0: a pass-through's port 0; CDC interface 0
 
 static oep::RvswdPhy phy;
 static oep::Ch32Dm dm(phy);
@@ -60,7 +58,7 @@ static oep::PinTable pins(kChannels);
 static oep::FixtureGpio gpio(pins, 0, 1);
 static oep::FixtureUart uart(pins, Serial1, 0, 2);
 
-// Binds: what the serial ports carry outside the frames. ProbeConfig: the settings, their storage, the slots' attach.
+// Binds: what the serial ports carry outside the frames. ProbeConfig: the settings, their storage, the pass-throughs.
 static oep::Binds binds;
 static oep::ProbeConfig config(endpoint, binds);
 static uint8_t probeTlv[64];
@@ -89,8 +87,8 @@ void setup() {
   endpoint.add(gpio);
   endpoint.add(uart);
   endpoint.add(config);   // last, so the fns before it keep their numbers when the sketch grows
-  config.addPlace(wire, console);   // a slot may name this wire (and its console)
-  config.addUart(uart);             // a bind may carry this UART
+  config.addPlace(wire, console);   // a console-passthrough may name this wire (and its console)
+  config.addUart(uart);             // a passthrough may carry this UART
   config.setPins(&pins);            // idle items set these pins, disable items take them away
   config.applySaved();              // what load() read, done again now that every interface is there
 }
@@ -99,5 +97,5 @@ void loop() {
   endpoint.poll();
   console.poll();
   uart.poll();
-  config.poll();   // the slots' attach at boot and their retries, the bound consoles
+  config.poll();   // the pass-throughs
 }
