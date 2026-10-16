@@ -41,6 +41,9 @@ class Ch32Dm {
   // This helper's view of the hart; checkHalted() reads DMSTATUS and brings it in line (the host may have halted or
   // resumed the hart through raw DMI writes). false from checkHalted: the link did not answer.
   bool halted() const { return halted_; }
+  // The last read_block / write_block could not put back what it used (oep-if-debug §4: the answer, then the connection
+  // and its streams close).
+  bool cleanupFailed() const { return cleanup_failed_; }
   bool checkHalted();
   // DMSTATUS, read by someone else (the console's poll), says the hart runs: this view follows.
   void noteRunning() { halted_ = false; }
@@ -228,6 +231,7 @@ class Ch32Dm {
   bool cmderrClear();
   bool keepBlock();                       // a block op's start: abstractauto, the mailbox, the GPRs (each held)
   bool restoreBlock();                    // a block op's exit: GPRs, the mailbox, then abstractauto (each held, read back)
+  bool cleanup_failed_ = false;           // the last block op's exit could not see its values back (restoreBlock)
 };
 
 }  // namespace oep

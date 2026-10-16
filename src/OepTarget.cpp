@@ -692,7 +692,9 @@ Result TargetRiscvDm::handle(uint8_t op, const uint8_t *payload, size_t length, 
     line_lost_ = true;
     r = asLine(op, out, r);
   }
-  if (line_lost_) releaseConnection(*port_, 0xff, true, true);   // the answer says line; the connection goes with it
+  // a block op that could not put back what it used: its answer, then the connection and its streams close (debug §4)
+  const bool unclean = (op == kOpReadBlock || op == kOpWriteBlock) && port_->dm.cleanupFailed();
+  if (line_lost_ || unclean) releaseConnection(*port_, 0xff, true, true);   // the answer first; the connection goes
   return r;
 }
 

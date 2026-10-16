@@ -474,7 +474,10 @@ bool Ch32Dm::giveGprs() {
 }
 
 // A block op's start: abstractauto (read, then off), the mailbox, the GPRs - each kept over a held link.
-bool Ch32Dm::keepBlock() { return keepAuto() && keepMailbox() && keepGprs(); }
+bool Ch32Dm::keepBlock() {
+  cleanup_failed_ = false;
+  return keepAuto() && keepMailbox() && keepGprs();
+}
 
 // A block op's exit, whatever happened inside it: the GPRs back, autoexec off, cmderr clear, then the mailbox and
 // abstractauto (oep-if-debug §4 table: the probe carries nothing past the answer). Each is read back over a held link;
@@ -485,7 +488,9 @@ bool Ch32Dm::restoreBlock() {
   if (cmderr_) phy_.write(kAbstractCs, 0x700);
   back = giveMailbox() && back;
   back = held([&] { return cmderrClear(); }) && back;
-  return giveAuto() && back;   // last (a redo's relink above clears abstractauto)
+  back = giveAuto() && back;   // last (a redo's relink above clears abstractauto)
+  cleanup_failed_ = !back;
+  return back;
 }
 
 // No cmderr left behind (oep-if-debug §4: the probe carries nothing past the answer): ABSTRACTCS read twice, cleared

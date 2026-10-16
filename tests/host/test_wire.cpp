@@ -140,10 +140,19 @@ class FakePhy final : public DmiPhy {
   std::map<uint32_t, int> stores;   // the hart's stores to memory, by address (a register with side effects - a flash
                                     // key register - takes each write as one: written twice is not written once)
   uint32_t load(uint32_t a) { return a == 0xe0000380u ? data0 : a == 0xe0000384u ? data1 : mem[a]; }
+  // the target's power goes at the first abstract command after this many memory stores (the block op's cleanup: the
+  // words stored and seen, then the line answers nothing)
+  int gone_after_stores = -1;
+  bool gone_armed = false;
   void store(uint32_t a, uint32_t v) {
     if (a == 0xe0000380u) data0 = v;
     else if (a == 0xe0000384u) data1 = v;
-    else { if ((a >> 16) != 0x2000u) ++stray_stores; mem[a] = v; ++stores[a]; }
+    else {
+      if ((a >> 16) != 0x2000u) ++stray_stores;
+      mem[a] = v;
+      ++stores[a];
+      if (gone_after_stores > 0 && --gone_after_stores == 0) gone_armed = true;
+    }
   }
   // pending_drop_access: the drop after that many more DMI accesses, reads and writes alike (pending_drop counts reads
   // only): a drop between two writes - after the one that started the block writer, say - and not only at a read
@@ -255,6 +264,7 @@ class FakePhy final : public DmiPhy {
       if (address == 0x04) { data0 = value; if (abstractauto & 1) { ++autoexec_runs; execute(last_command); } return; }
       if (address == 0x05) { data1 = value; return; }
       if (address == 0x16) { if (value & 0x700) cmderr = 0; return; }
+      if (address == 0x17 && gone_armed && last_command != value) { gone_armed = false; present = false; return; }
       if (address == 0x17) { last_command = value; execute(value); return; }
       if (address == 0x18) { abstractauto = value; return; }
       if (address >= 0x20 && address < 0x28) { progbuf[address - 0x20] = value; return; }
@@ -740,6 +750,26 @@ int main() {
     CHECK(ok(r));
     r = call(wire_fixed, WireRvswd::kOpDetach, detachRequest(fixed.number), out);
     CHECK(ok(r));
+  }
+
+  // ---- write_block's words stored, then the line gone before it could put back what it used (debug §4): completed
+  // partial, done = the words, status line; the answer, then the connection closes (the vector "riscv-dm write_block:
+  // memory written but cleanup lost the line") ----
+  {
+    phy.halted = false;
+    phy.model_block = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.mem.clear();
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    phy.gone_after_stores = 2;
+    r = call(riscv, TargetRiscvDm::kOpWriteBlock, cat(detachRequest(fixed.number), {0, 0, 0, 0x20, 2, 0, 7, 0, 0, 0, 8, 0, 0, 0}), out);
+    CHECK(r.resolution == kResolutionCompleted && r.detail == kOutcomePartial && out.size() == 3 && out[0] == 2 &&
+          out[1] == 0 && out[2] == kStatusLine);
+    CHECK(phy.mem[0x20000000u] == 7 && phy.mem[0x20000004u] == 8 && !fixed.connected);
+    phy.present = true;
+    phy.gone_after_stores = -1;
+    phy.model_block = false;
   }
 
   // ---- halt / resume wait dm_wait_ms of time (oep-if-debug §4, §4.2): halt then clears haltreq and answers timeout,
