@@ -335,8 +335,8 @@ static void testContract() {
   }
 }
 
-// capture §3.5: mode is mode(u8) max_samples(u32) max_segments(u32), one per mode; channels is max(u8); rate_list,
-// rate_limit, max_read and segment_ring (0x42, 0x43, 0x47, 0x48) are not declared.
+// capture §3.5: mode is mode(u8) max_samples(u32) max_segments(u32), one per mode; channels is max(u8); nothing but the
+// common tags and the capture family's describe tags (no rate_list, rate_limit, max_read or segment_ring).
 static void testDescribe() {
   board(512 * 1024, size_t(32) << 20);
   Rig rig(2);
@@ -351,7 +351,8 @@ static void testDescribe() {
     CHECK(len <= 512 - 9);   // core §7.3: fits the smallest max_frame (512) with the header 5, more 1, TLV 3
     if (tag == cap::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == modes); }
     if (tag == cap::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == LogicCapture::kMaxChannels); }
-    CHECK(tag != 0x42 && tag != 0x43 && tag != 0x47 && tag != 0x48);
+    CHECK(tag < 0x40 || tag == cap::kTlvDescribeMode || tag == cap::kTlvDescribeRateRange ||
+          tag == cap::kTlvDescribeChannels || tag == cap::kTlvDescribeTrigger);
   }
   CHECK(modes == 3 && channels);
 }
@@ -522,11 +523,12 @@ struct GappedDma {
   }
 };
 
-static Bytes readReq(uint32_t generation, uint64_t position, uint32_t max) {
-  Bytes p(16);
+// read (capture §3.2): generation(u32) position(u64) max(u16) -> position(u64) flags(u8) len(u16) data
+static Bytes readReq(uint32_t generation, uint64_t position, uint16_t max) {
+  Bytes p(14);
   putU32(p.data(), generation);
   putU64(p.data() + 4, position);
-  putU32(p.data() + 12, max);
+  putU16(p.data() + 12, max);
   return p;
 }
 
@@ -547,11 +549,11 @@ static void testPlanReleaseForgets() {
   dma.deliver(4096, 0x55);
   dma.run();
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && getU32(out.data() + 1) == 1);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && getU32(out.data() + 9) == 100 && out[13] == 0x55);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && getU16(out.data() + 9) == 100 && out[11] == 0x55);
   rig.cap.planRelease();
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 18);
   CHECK(out[0] == cap::kStateUnconfigured && getU32(out.data() + 1) == 0 && getU64(out.data() + 5) == 0);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && out.size() == 13 && getU32(out.data() + 9) == 0);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && out.size() == 11 && getU16(out.data() + 9) == 0);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 && out[1] == 0);
 }
 
@@ -579,9 +581,9 @@ static void testTriggeredStop() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 1);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
   CHECK(getU32(out.data() + 2 + 12) == 2025 * 4 && getU32(out.data() + 2 + 28) == 100 && (out[2 + 32] & cap::kSegmentFlagShort));
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && getU32(out.data() + 9) == 100);
-  CHECK(out[13] == 0xFF && out[13 + 24] == 0xFF && out[13 + 25] == 0x00);   // 25 bytes (100 samples) before the edge
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 2000, 100), out)) && getU32(out.data() + 9) == 25);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 100), out)) && getU16(out.data() + 9) == 100);
+  CHECK(out[11] == 0xFF && out[11 + 24] == 0xFF && out[11 + 25] == 0x00);   // 25 bytes (100 samples) before the edge
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 2000, 100), out)) && getU16(out.data() + 9) == 25);
   // waiting, no edge: state 1, nothing
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
   dma.deliver(1000, 0xFF);
@@ -622,13 +624,13 @@ static void testPositions() {
     CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {2, 0, 0, 0}, out)) && out[1] == 1);
     CHECK(getU64(out.data() + 2 + 4) == 12288 && (out[2 + 32] & cap::kSegmentFlagGap));   // after the discarded bytes
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU64(out.data()) == 4096 &&
-          out[8] == reg::common::kReadFlagsMore && out[13] == 0x22);
+          out[8] == reg::common::kReadFlagsMore && out[11] == 0x22);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 9000, 10), out)) && getU64(out.data()) == 12288 &&
-          (out[8] & reg::common::kReadFlagsGap) && getU32(out.data() + 9) == 10 && out[13] == 0x44);
+          (out[8] & reg::common::kReadFlagsGap) && getU16(out.data() + 9) == 10 && out[11] == 0x44);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 10), out)) && getU64(out.data()) == 4096 &&
           (out[8] & reg::common::kReadFlagsGap));   // released
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 16384, 10), out)) && getU64(out.data()) == 16384 &&
-          getU32(out.data() + 9) == 0);
+          getU16(out.data() + 9) == 0);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && getU64(out.data() + 5) == 16384);
   }
   {
@@ -723,8 +725,8 @@ static void testImmediateStop() {
   CHECK(out[0] == cap::kStateConfigured && getU32(out.data() + 1) == 1 && getU64(out.data() + 5) == 4096);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
   CHECK(getU32(out.data() + 2 + 12) == 4096 * 4 && (out[2 + 32] & cap::kSegmentFlagShort));
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4000, 200), out)) && getU32(out.data() + 9) == 96);
-  CHECK(out[13] == 0xA5);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4000, 200), out)) && getU16(out.data() + 9) == 96);
+  CHECK(out[11] == 0xA5);
   // stopped before any node finished: state 1, nothing
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
@@ -760,8 +762,8 @@ static void testEveryStartFresh() {
   uint32_t generation = getU32(out.data() + 4);
   complete(0xFF);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 200), out)) && getU32(out.data() + 9) == 200);
-  CHECK(std::all_of(out.begin() + 13, out.begin() + 213, [](uint8_t b) { return b == 0xFF; }));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 200), out)) && getU16(out.data() + 9) == 200);
+  CHECK(std::all_of(out.begin() + 11, out.begin() + 211, [](uint8_t b) { return b == 0xFF; }));
   // stopped part way, then a start without a configure: a new unit again, done only at the whole window
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
   {
@@ -776,8 +778,8 @@ static void testEveryStartFresh() {
   complete(0xFF);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone && getU64(out.data() + 5) == 5120);
   for (uint32_t at : {0u, 4000u, 4920u}) {   // before, across and after where the stopped run had got to
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at, 200), out)) && getU32(out.data() + 9) == 200);
-    CHECK(std::all_of(out.begin() + 13, out.begin() + 213, [](uint8_t b) { return b == 0xFF; }));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at, 200), out)) && getU16(out.data() + 9) == 200);
+    CHECK(std::all_of(out.begin() + 11, out.begin() + 211, [](uint8_t b) { return b == 0xFF; }));
   }
   // a repeat and a one-shot through the ring alike: start, stop, start
   Config rep;
@@ -876,7 +878,7 @@ static void testLostChunk() {
     rig.cap.poll();
     CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
     CHECK(getU64(out.data() + 2 + 4) == 0 && !(out[2 + 32] & cap::kSegmentFlagGap));
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU32(out.data() + 9) == 0);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU16(out.data() + 9) == 0);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() == 22 && out[0] == cap::kStateError &&
           getU32(out.data() + 1) == 1 && getU64(out.data() + 5) == 4096 && (out[13] & cap::kStatusFlagDropped) &&
           out[21] == cap::kErrorStorage);
@@ -902,7 +904,7 @@ static void testLostChunk() {
     dma.run();
     rig.cap.poll();
     CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU32(out.data() + 9) == 0);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU16(out.data() + 9) == 0);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateError && getU64(out.data() + 5) == 4096);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));   // state 6 starts again: a new generation, no error
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && out.size() == 18);
@@ -931,8 +933,8 @@ static void testLostChunk() {
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone);
     // segment byte i = stream byte 975 + i: 0x10 up to 3000 + 4096, the lost chunk's 0x20, then 0x30
     const uint64_t at = 3000 + 4096 - 975;
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at - 1, 40), out)) && getU32(out.data() + 9) == 40);
-    CHECK(out[13] == 0x10 && out[13 + 1] == 0x20 && out[13 + 32] == 0x20 && out[13 + 33] == 0x30);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at - 1, 40), out)) && getU16(out.data() + 9) == 40);
+    CHECK(out[11] == 0x10 && out[11 + 1] == 0x20 && out[11 + 32] == 0x20 && out[11 + 33] == 0x30);
   }
 }
 
@@ -971,25 +973,25 @@ static void testSerialsWrap() {
   CHECK(ok(segments(1)) && out.size() == 2 && out[0] == 0 && out[1] == 0);                     // = next: none, more 0
   CHECK(ok(segments(7)) && out[1] == 3 && getU32(out.data() + 2) == 0xFFFFFFFEu);              // not given: the oldest
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 8192, 10), out)) && getU64(out.data()) == 8192 &&
-        out[13] == 0x33);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && out[13] == 0x22 &&
+        out[11] == 0x33);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && out[11] == 0x22 &&
         (out[8] & reg::common::kReadFlagsMore));
   Bytes rel(8);
   putU32(rel.data(), generation);
   putU32(rel.data() + 4, 0xFFFFFFFFu);   // the first two
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRelease, rel, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 10), out)) && getU64(out.data()) == 8192 &&
-        (out[8] & reg::common::kReadFlagsGap) && out[13] == 0x33);
+        (out[8] & reg::common::kReadFlagsGap) && out[11] == 0x33);
   putU32(rel.data() + 4, 0xFFFFFFFEu);   // already released: nothing
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRelease, rel, out)));
   putU32(rel.data() + 4, 100);           // ahead of serial_done: every finished one, not the one filling
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRelease, rel, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 8192, 10), out)) && getU64(out.data()) == 12288 &&
-        getU32(out.data() + 9) == 0);
+        getU16(out.data() + 9) == 0);
   dma.deliver(3096, 0x44);   // the fourth finishes: readable (not released by the earlier serial 100)
   dma.run();
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 12288, 10), out)) && getU32(out.data() + 9) == 10 &&
-        out[13] == 0x44);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 12288, 10), out)) && getU16(out.data() + 9) == 10 &&
+        out[11] == 0x44);
 }
 
 // A triggered one-shot whose ring came round over its segment before the harvest copied it (capture §2.2): no
@@ -1042,8 +1044,8 @@ static void testTriggerIndexMidByte() {
   CHECK(rig.cap.trackState() == cap::kStateDone);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
   CHECK(getU32(out.data() + 2 + 12) == 4096 && getU32(out.data() + 2 + 28) == 100);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 40), out)) && getU32(out.data() + 9) == 40);
-  CHECK(out[13] == 0xFF && out[13 + 24] == 0xFF && out[13 + 25] == 0x00);   // samples 0..99 high, 100 (the edge) low
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 40), out)) && getU16(out.data() + 9) == 40);
+  CHECK(out[11] == 0xFF && out[11 + 24] == 0xFF && out[11 + 25] == 0x00);   // samples 0..99 high, 100 (the edge) low
   }
   {   // stopped while filling: the short segment (flags bit1) starts at the same sample
   Rig rig(2);
@@ -1059,8 +1061,8 @@ static void testTriggerIndexMidByte() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
   CHECK(getU32(out.data() + 2 + 12) == 4099 && getU32(out.data() + 2 + 28) == 100 && (out[2 + 32] & cap::kSegmentFlagShort));
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 40), out)) && getU32(out.data() + 9) == 40);
-  CHECK(out[13] == 0xFF && out[13 + 24] == 0xFF && out[13 + 25] == 0x00);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 40), out)) && getU16(out.data() + 9) == 40);
+  CHECK(out[11] == 0xFF && out[11 + 24] == 0xFF && out[11 + 25] == 0x00);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && getU64(out.data() + 5) == 1025);   // (4099 x 2 + 7) / 8
   c.samples = 4096;
   }
@@ -1130,7 +1132,7 @@ static void testForcedAndEarly() {
     CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
     CHECK(getU32(out.data() + 2 + 12) == 401 + 8192 - 1000 && getU32(out.data() + 2 + 28) == 401);
     CHECK((out[2 + 32] & cap::kSegmentFlagShort) == 0);   // bit1 is a stop's
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 1890, 100), out)) && getU32(out.data() + 9) == 9);   // (7593 x 2 + 7) / 8 bytes
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 1890, 100), out)) && getU16(out.data() + 9) == 9);   // (7593 x 2 + 7) / 8 bytes
   }
 }
 
@@ -1176,9 +1178,9 @@ static void testForcedAfterWrap() {
     Bytes seg;
     for (uint64_t at = 0; at < (static_cast<uint64_t>(samples) * w + 7) / 8;) {
       CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at, 200), out)));
-      const uint32_t n = getU32(out.data() + 9);
+      const uint32_t n = getU16(out.data() + 9);
       if (!n) break;
-      seg.insert(seg.end(), out.begin() + 13, out.begin() + 13 + n);
+      seg.insert(seg.end(), out.begin() + 11, out.begin() + 11 + n);
       at += n;
     }
     CHECK(seg.size() == (static_cast<uint64_t>(samples) * w + 7) / 8);
