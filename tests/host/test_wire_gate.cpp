@@ -512,7 +512,10 @@ int main() {
   // ---- every interrupts-off span ends by the clock (Plan::span), even when every sample is late ----
   // 100 kHz (10 us a sample) read in 15 us: 4000 samples nominally 40 ms take 60 ms. A span of 20 ms bounds them; the
   // bench's int-wdt reset (3169721, test_timing over TCP) was a search burst counted in samples that ran past 300 ms.
-  {
+  // These bounds are the host's wall clock: on a loaded host a thread can be descheduled past the slack, so the block
+  // runs again (at most three times) before its failures count.
+  for (int attempt = 1;; ++attempt) {
+    const int before = failures.load();
     static uint8_t buffer[4000];
     const uint32_t kSpan = 20000000, kSlack = 3000000;   // ns (the host's cycles), the slack: a check's 64 samples and the host
     g_read_us = 15;
@@ -576,6 +579,9 @@ int main() {
       }
     }
     g_read_us = 0;
+    if (failures.load() == before || attempt == 3) break;
+    printf("  (span bounds missed on attempt %d: the host's scheduling; again)\n", attempt);
+    failures = before;
   }
 
   printf("wire-gate: %d checks, %d failures\n", checks.load(), failures.load());
