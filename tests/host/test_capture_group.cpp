@@ -70,7 +70,7 @@ class Track final : public Interface, public GroupTrack {
   explicit Track(bool trigger = false) : trigger_(trigger) {}
   const char *name() const override { return "io.github.test.track"; }
   uint16_t instance() const override { return id_; }   // each its own (core §7.2: a second (name, revision, instance) is not added)
-  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }

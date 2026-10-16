@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "test_ids.h"
 #include "OepFrame.h"
 #include "OepBind.h"
 #include "OepEndpoint.h"
@@ -182,19 +183,17 @@ static void testReader() {
 // ---- the endpoint on a serial port, with binds ---------------------------------------------------------------------------
 
 static void testEndpointSerialPort() {
+  // A pass-through's bytes (probe.config §1.1, transports §4) go out on the serial port between frames while no session's
+  // request came on it; a session there holds the port (nothing of the pass-through goes out); its end frees it.
   MemStream usj, bulk;
   static uint8_t rx[1100], rx2[1100], tx[1100];
   Endpoint ep(bulk, rx2, sizeof rx2, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 1);
   ep.addTransport(usj, rx, sizeof rx, Endpoint::kUsbSerialJtag);
   Binds binds;
   ep.setRawPorts(&binds);
-  FakeSource console;
-  Binds::Spec spec;
-  spec.set = true;
-  spec.source = {Binds::kSlotConsole, 0, &console};
-  binds.set(1, spec);
+  auto put = [&](const char *t) { binds.put(1, reinterpret_cast<const uint8_t *>(t), strlen(t)); };
 
-  console.say("boot\n");
+  put("boot\n");
   ep.poll();
   std::vector<Bytes> frames;
   Bytes raw;
@@ -202,9 +201,9 @@ static void testEndpointSerialPort() {
   CHECK(text(raw) == "boot\n" && frames.empty());
   usj.tx.clear();
 
-  usj.send({'t', 'y', 'p', 'e', 'd'});   // raw from the host: to the console's input
+  usj.send({'t', 'y', 'p', 'e', 'd'});   // bytes outside frames from the host: no input to the target (§1.1), no answer
   ep.poll();
-  CHECK(text(console.input) == "typed");
+  CHECK(usj.tx.empty());
 
   usj.send(frame(request(1, 0, 0x10, openPayload(0x51, 3000, "test owner"))));   // open over the serial port
   ep.poll();
@@ -212,57 +211,51 @@ static void testEndpointSerialPort() {
   CHECK(frames.size() == 1 && frames[0][3] == 1 && frames[0][4] == 0);
   CHECK(ep.held(1));
   usj.tx.clear();
-  console.say("held\n");
-  usj.send({'x'});
+  binds.drop(1);   // the pass-through stops for the session (ProbeConfig drops what its port had)
   ep.poll();
-  CHECK(usj.tx.empty() && text(console.input) == "typed");   // held: nothing out, the raw byte dropped
+  CHECK(usj.tx.empty());   // held: nothing of the pass-through out
 
   bulk.send({6, 0});   // lock_state over vendor bulk (length framing): the owner shows
-  const Bytes ls = request(2, 0, 0x13, {});
+  const Bytes ls = request(2, 0, reg::core::kOpLockState, {});
   bulk.send(ls);
   bulk.rx[bulk.rx.size() - ls.size() - 2] = static_cast<uint8_t>(ls.size());
   ep.poll();
   const std::string lsr = text(bulk.tx);
   CHECK(lsr.find("test owner") != std::string::npos);
 
-  console.say("later\n");
-  usj.send(frame(request(3, 0, 0x11, {}, true, 0x51)));   // end
+  usj.send(frame(request(3, 0, reg::core::kOpEnd, {}, true, 0x51)));   // end: the port is free again
   ep.poll();
   split(usj.tx, frames, raw);
   CHECK(frames.size() == 1 && !ep.held(1));
-  CHECK(text(raw) == "held\nlater\n");   // where it stopped (probe.config §1.2)
-
-  // the transport list in oep.core's describe
   usj.tx.clear();
-  usj.send(frame(request(4, 0, 0x03, {0, 0, 0, 0})));
+  put("later\n");
+  ep.poll();
+  split(usj.tx, frames, raw);
+  CHECK(text(raw) == "later\n" && frames.empty());
+
+  // the transport list in fn 0's describe: index kind interface per transport (core §7.5)
+  usj.tx.clear();
+  usj.send(frame(request(4, 0, reg::core::kOpDescribe, {0, 0, 0, 0})));
   ep.poll();
   split(usj.tx, frames, raw);
   CHECK(frames.size() == 1);
   const Bytes &d = frames[0];
   bool vendor = false, usjSeen = false;
   for (size_t i = 6; i + 6 <= d.size(); ++i)
-    if (d[i] == 0x49 && d[i + 1] == 3 && d[i + 2] == 0) { vendor |= d[i + 3] == 0 && d[i + 4] == 4 && d[i + 5] == 1; usjSeen |= d[i + 3] == 1 && d[i + 4] == 3; }
+    if (d[i] == reg::core::kTlvDescribeTransport && d[i + 1] == 3 && d[i + 2] == 0) {
+      vendor |= d[i + 3] == 0 && d[i + 4] == reg::core::kTransportKindVendorBulk && d[i + 5] == 1;
+      usjSeen |= d[i + 3] == 1 && d[i + 4] == reg::core::kTransportKindUsbSerialJtag;
+    }
   CHECK(vendor && usjSeen);
-
-  // the stream overflowing during a session: the port goes on from the oldest byte left (probe.config §1.2)
-  usj.tx.clear();
-  usj.send(frame(request(5, 0, 0x10, openPayload(0x52, 3000))));
-  ep.poll();
-  CHECK(ep.held(1));
-  for (int i = 0; i < 40; ++i) console.say("0123456789");   // 400 bytes into a 256-byte stream
-  usj.tx.clear();
-  usj.send(frame(request(6, 0, 0x11, {}, true, 0x52)));   // end
-  ep.poll();
-  split(usj.tx, frames, raw);
-  CHECK(!ep.held(1) && raw.size() == 256 && text(raw).substr(0, 4) == "4567");
 }
 
 // An interface that takes any plan (for the plan rules).
 class PlanSink final : public Interface {
  public:
   const char *name() const override { return "io.github.test.plan"; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
@@ -309,14 +302,16 @@ static void testTlvForm() {
   CHECK(v && len == 254);
   const uint8_t past[] = {0x02, 11, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};   // 11 bytes said, 10 there: malformed
   CHECK(tail.parse(past, sizeof past, kKnown, out, sizeof out).detail == kRejectMalformed);
-  for (uint8_t t : {0x00, 0x7F}) {                                      // never a tag: unknown, ignored
-    const uint8_t never[] = {t, 1, 0, 1};
-    CHECK(tail.parse(never, sizeof never, kKnown, out, sizeof out).resolution == kResolutionCompleted);
+  for (uint8_t t : {0x00, 0x80}) {   // TLV number 0, critical or not: malformed (core §2.2)
+    const uint8_t zero[] = {t, 1, 0, 1};
+    CHECK(tail.parse(zero, sizeof zero, kKnown, out, sizeof out).detail == kRejectMalformed);
   }
-  for (uint8_t t : {0x80, 0xFF}) {                                      // the same, critical: unsupported
-    const uint8_t never[] = {t, 1, 0, 1};
-    const Result u = tail.parse(never, sizeof never, kKnown, out, sizeof out);
-    CHECK(u.detail == kRejectUnsupported && out[0] == t);
+  for (uint8_t t : {uint8_t(reg::kTagNamedExtension), uint8_t(reg::kTagNamedExtension | kTagCritical)}) {
+    const uint8_t broken[] = {t, 1, 0, 1};   // name_len 1, no name: malformed, critical or not
+    CHECK(tail.parse(broken, sizeof broken, kKnown, out, sizeof out).detail == kRejectMalformed);
+    const uint8_t named[] = {t, 3, 0, 1, 'x', 9};   // an unknown name: ignored, or unsupported when critical
+    const Result u = tail.parse(named, sizeof named, kKnown, out, sizeof out);
+    CHECK(t & kTagCritical ? u.detail == kRejectUnsupported && out[0] == t : u.resolution == kResolutionCompleted);
   }
   const uint8_t twice[] = {0x01, 1, 0, 5, 0x81, 1, 0, 6};                // a repeated tag: the first is used
   CHECK(tail.parse(twice, sizeof twice, kKnown, out, sizeof out).resolution == kResolutionCompleted);
@@ -365,9 +360,10 @@ struct Bulk {
 class FailsEarly final : public Interface {
  public:
   const char *name() const override { return "io.github.test.fails"; }
-  uint16_t instance() const override { return 0; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
   bool lockFree(uint8_t) const override { return true; }
-  bool offers(uint8_t op) const override { return op == 1; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)
   Result handle(uint8_t, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override {
     Tail tail;
     const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -381,7 +377,7 @@ static void testNoIgnoredList() {
   Bulk b;
   FailsEarly fails;
   b.ep.add(fails);   // fn 1
-  Bytes r = b.send(request(1, 1, 1, {0x30, 1, 0, 9, 0x31, 0, 0, 0x30, 0, 0}));
+  Bytes r = b.send(request(1, 1, 0x10, {0x30, 1, 0, 9, 0x31, 0, 0, 0x30, 0, 0}));
   CHECK(r.size() == 3 && r[0] == kResolutionCompleted && r[1] == kOutcomeFailed && r[2] == 0x05);
   r = b.send(request(3, 0, reg::core::kOpDescribe, {1, 0, 0, 0}));   // describe fn 1: fine
   CHECK(!r.empty() && r[0] == kResolutionCompleted);
@@ -400,7 +396,7 @@ static void testSessionTable() {
   Bulk b;
   b.ep.setBootId(0x11223344);
   Bytes r = b.send(request(1, 0, 0x01, {'O', 'E', 'P', '?', 1, 1}));
-  CHECK(r.size() == 2 + 21 && r[0] == 1 && getU32(&r[2 + 13]) == 0x11223344);   // confirm: ... boot_id(u32)
+  CHECK(r.size() == 2 + 20 && r[0] == 1 && getU32(&r[2 + 12]) == 0x11223344);   // confirm: ... boot_id(u32)
   r = b.send(request(2, 0, 0x10, openPayload(7, 1000)));
   CHECK(r.size() == 2 + 8 && r[0] == 1 && getU32(&r[2]) == 1000 && getU32(&r[2 + 4]) == 0x11223344);
   r = b.send(request(21, 0, 0x10, openPayload(0, 1000)));                    // session_id 0: malformed
@@ -415,16 +411,18 @@ static void testSessionTable() {
   CHECK(r.size() == 2 && r[0] == 1 && !b.ep.locked());
   r = b.send(request(4, 0, 0x12, {}, true, 7));                              // the ended id: no_session (no resume)
   CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectNoSession);
-  r = b.send(request(5, 0, 0x10, openPayload(7, 1000)));                     // a new open (the same id is allowed)
+  r = b.send(request(14, 0, 0x10, openPayload(7, 1000)));                    // the ended id again: no_session
+  CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectNoSession && !b.ep.locked());
+  r = b.send(request(5, 0, 0x10, openPayload(6, 1000)));                     // a new id
   CHECK(r[0] == 1 && b.ep.locked());
   g_millis += 1500;                                                          // the lease lapses
   b.ep.poll();
   CHECK(!b.ep.locked());
-  r = b.send(request(6, 0, 0x12, {}, true, 7));                              // as after an end: no_session
+  r = b.send(request(6, 0, 0x12, {}, true, 6));                              // as after an end: no_session
   CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectNoSession);
-  r = b.send(request(7, 0, 0x10, openPayload(7, 1000)));
+  r = b.send(request(7, 0, 0x10, openPayload(9, 1000)));
   CHECK(r[0] == 1);
-  r = b.send(request(8, 0, 0x10, openPayload(7, 1000)));                     // held and opened again: the lease anew
+  r = b.send(request(8, 0, 0x10, openPayload(9, 1000)));                     // held and opened again: the lease anew
   CHECK(r[0] == 1);
   r = b.send(request(9, 0, 0x10, openPayload(8, 1000, "other")));            // another id while held: locked
   CHECK(r[0] == 0 && r[1] == kRejectLocked);
@@ -432,24 +430,25 @@ static void testSessionTable() {
   force[8] = 1;
   r = b.send(request(10, 0, 0x10, force));                                   // taken by force
   CHECK(r[0] == 1);
-  r = b.send(request(12, 0, 0x12, {}, true, 7));                             // the forced-out id: locked while 8 holds
+  r = b.send(request(12, 0, 0x12, {}, true, 9));                             // the forced-out id: locked while 8 holds
   CHECK(r[0] == 0 && r[1] == kRejectLocked);
   r = b.send(request(11, 0, 0x11, {}, true, 8));
   CHECK(r[0] == 1);
-  r = b.send(request(13, 0, 0x12, {}, true, 7));                             // then no_session
+  r = b.send(request(13, 0, 0x12, {}, true, 9));                             // then no_session
   CHECK(r[0] == 0 && r[1] == kRejectNoSession);
 }
 
-// core §11.3: subscribe (0x30) min_bytes(u16) max_delay_ms(u32) [TLV] and unsubscribe (0x32) [TLV] are ops of the
-// interface that sends the notifications, in its ops only when it does (notifies): a fn that sends none, and fn 0, answer
-// them unknown_operation; an unsubscribe of nothing is fine; an event goes out at the next poll whatever the batching
+// core §10.3: subscribe (0x01) min_bytes(u16) max_delay_ms(u32) [TLV] and unsubscribe (0x02) [TLV] are ops of the
+// interface that sends the notifications, in its ops only when it does (notifies): a fn that sends none answers them
+// unknown_operation (fn 0's 0x01 / 0x02 are confirm and list); an unsubscribe of nothing is fine; an event goes out at the next poll whatever the batching
 // (min_bytes / max_delay_ms batch the data only). core §7.7: clock answers boot_id(u32) uptime_ns(u64), without a
 // session too. fn 0's describe has no plan_roles: oep.probe.plan's describe has it (oep-if-plan §1).
 class Talker final : public Interface {
  public:
   const char *name() const override { return "io.github.test.talker"; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)
   bool notifies() const override { return true; }
   bool subscribe(bool on) override { subscribed = on; ++calls; return true; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
@@ -465,29 +464,29 @@ static void testSubscriptions() {
   CHECK(b.ep.add(talker));   // fn 2: notifies
   CHECK(b.ep.planFn() == 3 && b.ep.restartFn() == 0);
   CHECK(b.send(request(1, 0, 0x10, openPayload(7, 3000)))[0] == 1);
-  Bytes r = b.send(request(2, 1, 0x30, {0, 0, 0, 0, 0, 0}, true, 7));
+  Bytes r = b.send(request(2, 1, kOpSubscribe, {0, 0, 0, 0, 0, 0}, true, 7));
   CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectUnknownOperation);
-  CHECK(b.send(request(3, 1, 0x32, {}, true, 7))[1] == kRejectUnknownOperation);
-  CHECK(b.send(request(4, 0, 0x30, {0, 0, 0, 0, 0, 0}, true, 7))[1] == kRejectUnknownOperation);   // fn 0: none
-  CHECK(b.send(request(5, 2, 0x32, {}, true, 7))[0] == 1 && talker.calls == 0);   // nothing subscribed: fine
-  CHECK(b.send(request(6, 2, 0x30, {0, 0, 0, 0, 0, 0}))[1] == kRejectSessionRequired);
-  r = b.send(request(7, 2, 0x30, {0, 0, 0, 0, 100}, true, 7));   // too short: malformed
+  CHECK(b.send(request(3, 1, kOpUnsubscribe, {}, true, 7))[1] == kRejectUnknownOperation);
+  CHECK(b.send(request(5, 2, kOpUnsubscribe, {}, true, 7))[0] == 1 && talker.calls == 0);   // nothing subscribed: fine
+  CHECK(b.send(request(6, 2, kOpSubscribe, {0, 0, 0, 0, 0, 0}))[1] == kRejectSessionRequired);
+  r = b.send(request(7, 2, kOpSubscribe, {0, 0, 0, 0, 100}, true, 7));   // too short: malformed
   CHECK(r[0] == 0 && r[1] == kRejectMalformed && !talker.subscribed);
   // min_bytes 1000, max_delay_ms 1000: the event goes at the next poll all the same
-  CHECK(b.send(request(8, 2, 0x30, {0xe8, 0x03, 0xe8, 0x03, 0, 0}, true, 7))[0] == 1 && talker.subscribed);
+  CHECK(b.send(request(8, 2, kOpSubscribe, {0xe8, 0x03, 0xe8, 0x03, 0, 0}, true, 7))[0] == 1 && talker.subscribed);
   const uint8_t ev[3] = {9, 8, 7};
   CHECK(b.ep.event(talker, 0x01, ev, sizeof ev));
   b.stream.tx.clear();
   b.ep.poll();
   const Bytes &t = b.stream.tx;   // length(u16) role fn(u16) seq(u16) kind payload
   CHECK(t.size() == 2 + 6 + 3 && t[2] == kRoleEvent && getU16(&t[3]) == 2 && getU16(&t[5]) == 0 && t[7] == 0x01 && t[8] == 9);
-  CHECK(b.send(request(9, 2, 0x32, {}, true, 7))[0] == 1 && !talker.subscribed);
+  CHECK(b.send(request(9, 2, kOpUnsubscribe, {}, true, 7))[0] == 1 && !talker.subscribed);
   CHECK(!b.ep.event(talker, 0x01, ev, sizeof ev));   // not subscribed: not queued
-  // ops: fn 2 sets 0x30 / 0x32 (base 1: bits 0, 47, 49), fn 1 neither
-  Bytes d = b.send(request(10, 0, 0x03, {2, 0, 0, 0}));
-  CHECK(d.size() == 3 + 3 + 1 + 7 && d[3] == 0x09 && d[6] == 1 && d[7] == 1 && d[12] == 0x80 && d[13] == 0x02);
-  d = b.send(request(11, 0, 0x03, {1, 0, 0, 0}));
-  CHECK(d.size() == 3 + 3 + 2 && d[3] == 0x09 && d[6] == 1 && d[7] == 1);
+  // ops (base 0x00, the multiple of 8 below the lowest): fn 2 subscribe / unsubscribe and its own 0x10, fn 1 its 0x10 alone
+  Bytes d = b.send(request(10, 0, reg::core::kOpDescribe, {2, 0, 0, 0}));
+  CHECK(d.size() >= 3 + 3 + 4 && d[3] == kTagOps && getU16(&d[4]) == 4 && d[6] == 0 &&
+        d[7] == ((1u << kOpSubscribe) | (1u << kOpUnsubscribe)) && d[8] == 0 && d[9] == 1);
+  d = b.send(request(11, 0, reg::core::kOpDescribe, {1, 0, 0, 0}));
+  CHECK(d.size() >= 3 + 3 + 2 && d[3] == kTagOps && getU16(&d[4]) == 2 && d[6] == 0x10 && d[7] == 1);
   // clock (core §7.7): boot_id, then the clock read for the answer; with session_id 0 the lock is untouched
   g_millis += 150;
   r = b.send(request(12, 0, 0x04, {}));
@@ -499,7 +498,8 @@ static void testSubscriptions() {
   CHECK(std::search(d.begin(), d.end(), roles.begin(), roles.end()) == d.end());
   CHECK(std::search(d.begin(), d.end(), op.begin(), op.end()) != d.end());
   d = b.send(request(15, 0, 0x03, {3, 0, 0, 0}));
-  const Bytes plan = {0x09, 2, 0, 1, 0x03, 0x40, 4, 0, uint8_t(Endpoint::kMaxRoles), 0, 0, 0};
+  const Bytes plan = {kTagOps, 2, 0, reg::probe_plan::kOpPlanApply, 0x03,   // plan_apply, plan_release
+                      reg::probe_plan::kTlvDescribePlanRoles, 4, 0, uint8_t(Endpoint::kMaxRoles), 0, 0, 0};
   CHECK(Bytes(d.begin() + 3, d.end()) == plan);
 }
 
@@ -519,8 +519,6 @@ static void testResourceNumbers() {
   bool reused = false;
   for (int i = 0; i < 10; ++i) reused |= ResourceNumbers::take(ResourceNumbers::kConnection) == a;
   CHECK(!reused);   // the count goes on past it (+1 each time)
-  CHECK(ResourceNumbers::reopen(a, ResourceNumbers::kConnection) && ResourceNumbers::kindOf(a) == ResourceNumbers::kConnection);
-  ResourceNumbers::close(a);
   ResourceNumbers::close(s);
 }
 
@@ -558,8 +556,9 @@ static void testSettingsPlanStays() {
 class PlanUndeclared final : public Interface {
  public:
   const char *name() const override { return "io.github.test.undeclared"; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return kRejectUnsupported; }
@@ -590,8 +589,9 @@ static void testPlanUnsupportedTag() {
 class PlanAlone final : public Interface {
  public:
   const char *name() const override { return "io.github.test.alone"; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }
@@ -627,8 +627,9 @@ class FakeTrack final : public Interface, public GroupTrack {
  public:
   explicit FakeTrack(bool trigger) : trigger_(trigger) {}
   const char *name() const override { return "io.github.test.track"; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)   // one op: an interface offers at least one (core §7.4)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool trackReady() const override { return state != 2 && state != 3; }
   uint8_t trackMode() const override { return 1; }
@@ -657,10 +658,12 @@ class FakeTrack final : public Interface, public GroupTrack {
 // Two triggered runs in one boot: the second follows its own trigger, not the first's (0.0.17: the group asked the
 // trigger track before starting it, while the followers' pretriggers filled, and took the last run's time).
 static void testGroupSecondRun() {
+  // capture §4.1 (the immediate group): every start makes the group's next generation (kept across binds); the answer is
+  // start_ns(u64) generation(u32) n(u8) n x (fn(u16) generation(u32)) in bind order, status state start_ns generation.
   MemStream bulk;
   static uint8_t rx[1100], tx[1100];
   Endpoint ep(bulk, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 8}, Endpoint::kVendorBulk, 0);
-  FakeTrack logic(true), analog(false);
+  FakeTrack logic(false), analog(false);
   CaptureGroup group(ep);
   ep.add(logic);    // fn 1
   ep.add(analog);   // fn 2
@@ -668,49 +671,19 @@ static void testGroupSecondRun() {
   group.addTrack(logic, logic);
   group.addTrack(analog, analog);
   uint8_t out[64];
-  const uint8_t bind[] = {2, 1, 0, 2, 0, 0x01, 2, 0, 1, 0};   // fns 1, 2; trigger_track fn 1
+  const uint8_t bind[] = {2, 1, 0, 2, 0};   // fns 1, 2
   const uint8_t none[] = {0};
-  auto triggerNs = [&]() {
-    group.handle(0x05, nullptr, 0, out, sizeof out);
-    return getU64(out + 9);
-  };
-  for (uint64_t run = 1; run <= 2; ++run) {
-    CHECK(group.handle(0x01, bind, sizeof bind, out, sizeof out).resolution == kResolutionCompleted);
-    analog.armed = false;                                   // its pretrigger is filling
-    const Result started = group.handle(0x02, nullptr, 0, out, sizeof out);
-    // blocking_ms start_ns, the group's generation (one up at every start, kept across binds), n = 2, (fn, generation)
-    // in bind order: fn 1 = run (its start comes later, the one it will make), fn 2 as the fake keeps it (0)
-    CHECK(started.resolution == kResolutionCompleted && started.length == 12 + 4 + 1 + 12);
-    CHECK(getU32(out + 12) == run && out[16] == 2 && getU16(out + 17) == 1 && getU32(out + 19) == run &&
-          getU16(out + 23) == 2 && getU32(out + 25) == 0);
-    CHECK(group.handle(0x05, nullptr, 0, out, sizeof out).length == 23 && getU32(out + 19) == run);   // status: the group's
-    group.poll();
-    CHECK(logic.starts == static_cast<int>(run) - 1);        // not yet: the follower is not armed
-    CHECK(triggerNs() == ~uint64_t{0} && analog.told == ~uint64_t{0});   // nothing from the last run
-    analog.armed = true;
-    group.poll();
-    CHECK(logic.starts == static_cast<int>(run));
-    CHECK(triggerNs() == ~uint64_t{0});
-    logic.fire(1000 * run);
-    group.poll();
-    CHECK(triggerNs() == 1000 * run && analog.told == 1000 * run);
-    CHECK(group.handle(0x01, none, sizeof none, out, sizeof out).resolution == kResolutionCompleted);   // unbind
+  for (uint32_t run = 1; run <= 2; ++run) {
+    CHECK(group.handle(reg::fixture_capture_group::kOpBind, bind, sizeof bind, out, sizeof out).resolution == kResolutionCompleted);
+    const Result started = group.handle(reg::fixture_capture_group::kOpStart, nullptr, 0, out, sizeof out);
+    CHECK(started.resolution == kResolutionCompleted && started.length == 8 + 4 + 1 + 12);
+    CHECK(getU32(out + 8) == run && out[12] == 2 && getU16(out + 13) == 1 && getU16(out + 19) == 2);
+    const Result st = group.handle(reg::fixture_capture_group::kOpStatus, nullptr, 0, out, sizeof out);
+    CHECK(st.length == 13 && getU32(out + 9) == run);   // status: the group's generation
+    group.handle(reg::fixture_capture_group::kOpStop, nullptr, 0, out, sizeof out);
+    CHECK(group.handle(reg::fixture_capture_group::kOpBind, none, sizeof none, out, sizeof out).resolution == kResolutionCompleted);
   }
-  // the trigger track's generation after 0xFFFFFFFF is 1, never 0 (capture §3.2: nextGeneration)
-  CHECK(group.handle(0x01, bind, sizeof bind, out, sizeof out).resolution == kResolutionCompleted);
-  logic.generation = 0xFFFFFFFFu;
-  CHECK(group.handle(0x02, nullptr, 0, out, sizeof out).resolution == kResolutionCompleted);
-  CHECK(getU32(out + 12) == 3 && getU16(out + 17) == 1 && getU32(out + 19) == 1);
-  CHECK(nextGeneration(0) == 1 && nextGeneration(1) == 2 && nextGeneration(0xFFFFFFFFu) == 1);
-  // capture §4.1's P_k = ceil(P x num_k x den_t / (den_k x num_t)): the spec's example (20 MHz, P 1000 -> 48 kHz: 3),
-  // exact multiples, products past 64 bits, and more than a u32
-  uint32_t pk = 0;
-  CHECK(groupPretrigger(1000, 20000000, 1, 48000, 1, pk) && pk == 3);
-  CHECK(groupPretrigger(1000, 20000000, 1, 10000000, 1, pk) && pk == 500);
-  CHECK(groupPretrigger(0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, pk) && pk == 0xFFFFFFFFu);
-  CHECK(groupPretrigger(3, 0xFFFFFFFFu, 7, 0xFFFFFFFEu, 5, pk) && pk == 5);   // 3 x 7 x (2^32 - 2) / (5 x (2^32 - 1)) = 4.199..
-  CHECK(!groupPretrigger(0xFFFFFFFFu, 1, 1, 2, 1, pk));                        // 2^33 - 2: no u32
-  CHECK(!groupPretrigger(10, 0, 1, 1, 1, pk));
+  CHECK(nextGeneration(0) == 1 && nextGeneration(1) == 2 && nextGeneration(0xFFFFFFFFu) == 1);   // never 0 (capture §3.2)
 }
 
 static void testPlanCapacity() {
@@ -820,8 +793,9 @@ class SlowSink final : public Interface {
  public:
   uint32_t takes_ms = 0;
   const char *name() const override { return "io.github.test.slow"; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { g_millis += takes_ms; return completed(); }
 };
 // port_speed's request (oep-if-link §3): baud(u32) step(u8) verify_ms(u16) - the port is the one it comes on
@@ -832,12 +806,13 @@ static Bytes speedReq(uint32_t baud, uint8_t step, uint16_t verify_ms) {
   p.push_back(uint8_t(verify_ms >> 8));
   return p;
 }
-// oep.probe.link (fn 1) declares port_speed (op 0x03) in its ops tag (core §1.2, §7.4)
+// oep.probe.link (fn 1) declares port_speed in its ops tag (core §1.2, §7.4)
 static bool describesPortSpeed(Uart &u) {
-  const Bytes r = u.send(request(90, 0, 0x03, {1, 0, 0, 0}));
-  if (r.size() < 3 + 5 || r[0] != 1 || r[3] != kTagOps) return false;   // ops first: 09 len(u16) base bitmap
-  const uint8_t base = r[6];
-  return base <= 3 && 3u - base < 8u * (getU16(&r[4]) - 1u) && ((r[7 + (3 - base) / 8] >> ((3 - base) % 8)) & 1);
+  const Bytes r = u.send(request(90, 0, reg::core::kOpDescribe, {1, 0, 0, 0}));
+  if (r.size() < 3 + 5 || r[0] != 1 || r[3] != kTagOps) return false;   // ops first: tag len(u16) base bitmap
+  const uint8_t base = r[6], op = reg::probe_link::kOpPortSpeed;
+  const unsigned off = static_cast<unsigned>(op - base);
+  return base <= op && off < 8u * (getU16(&r[4]) - 1u) && ((r[7 + off / 8] >> (off % 8)) & 1);
 }
 
 static void testPortSpeed() {
@@ -845,40 +820,40 @@ static void testPortSpeed() {
     Uart u(false);
     CHECK(!describesPortSpeed(u));
     u.send(request(1, 0, 0x10, openPayload(5, 5000)));
-    const Bytes r = u.send(request(2, 1, 0x03, speedReq(1500000, 0, 2000), true, 5));
+    const Bytes r = u.send(request(2, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 0, 2000), true, 5));
     CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectUnknownOperation);
   }
   Uart u;
   SlowSink slow;
   CHECK(u.ep.add(slow));   // fn 2, before the first poll (core §7.2: the list is fixed for a boot)
   CHECK(describesPortSpeed(u));
-  Bytes r = u.send(request(1, 1, 0x03, speedReq(1500000, 0, 2000)));   // the lock is needed
+  Bytes r = u.send(request(1, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 0, 2000)));   // the lock is needed
   CHECK(r.size() >= 2 && r[0] == 0 && r[1] == kRejectSessionRequired);
   u.send(request(2, 0, 0x10, openPayload(5, 60000)));
-  r = u.sendBulk(request(4, 1, 0x03, speedReq(1500000, 0, 2000), true, 5));   // the bulk is no UART bridge: cause 6
+  r = u.sendBulk(request(4, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 0, 2000), true, 5));   // the bulk is no UART bridge: cause 6
   CHECK(r.size() >= 6 && r[0] == 0 && r[1] == kRejectUnavailable && r[5] == 6);
-  r = u.send(request(5, 1, 0x03, speedReq(9000000, 0, 2000), true, 5));   // a baud the UART cannot make
+  r = u.send(request(5, 1, reg::probe_link::kOpPortSpeed, speedReq(9000000, 0, 2000), true, 5));   // a baud the UART cannot make
   CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
-  r = u.send(request(6, 1, 0x03, speedReq(1500000, 1, 2000), true, 5));   // commit at the boot speed: cause 6
+  r = u.send(request(6, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 1, 2000), true, 5));   // commit at the boot speed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
-  r = u.send(request(7, 1, 0x03, speedReq(0, 2, 0), true, 5));   // revert at the boot speed: cause 6
+  r = u.send(request(7, 1, reg::probe_link::kOpPortSpeed, speedReq(0, 2, 0), true, 5));   // revert at the boot speed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
   // step 3 and up: a value a later revision may define - unsupported, tag 0x00 (core §2.5, oep-if-link §3)
-  r = u.send(request(8, 1, 0x03, speedReq(1500000, 3, 2000), true, 5));
+  r = u.send(request(8, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 3, 2000), true, 5));
   CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
-  r = u.send(request(9, 1, 0x03, speedReq(1500000, 0, 0), true, 5));   // try with verify_ms 0: malformed
+  r = u.send(request(9, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 0, 0), true, 5));   // try with verify_ms 0: malformed
   CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);
-  r = u.send(request(10, 1, 0x03, Bytes{0x60, 0xe3, 0x16, 0, 0, 0xd0, 0x07, 0, 0, 0, 0}, true, 5));   // the old form
+  r = u.send(request(10, 1, reg::probe_link::kOpPortSpeed, Bytes{0x60, 0xe3, 0x16, 0, 0, 0xd0, 0x07, 0, 0, 0, 0}, true, 5));   // the old form
   CHECK(r.size() == 2 && r[0] == 0 && r[1] == kRejectMalformed);   // its tail is no TLV
   CHECK(g_switches == 0);
   {   // port_speed_tolerance_pct: a UART whose nearest rate is more than 2 % off is unsupported
     Uart v;
     v.ep.setPortSpeed([](uint8_t, uint32_t baud, bool) { return baud + baud / 40; }, 115200);   // 2.5 % fast
     v.send(request(1, 0, 0x10, openPayload(5, 5000)));
-    r = v.send(request(2, 1, 0x03, speedReq(1000000, 0, 2000), true, 5));
+    r = v.send(request(2, 1, reg::probe_link::kOpPortSpeed, speedReq(1000000, 0, 2000), true, 5));
     CHECK(r.size() == 3 && r[0] == 0 && r[1] == kRejectUnsupported && r[2] == 0);
     v.ep.setPortSpeed([](uint8_t, uint32_t baud, bool) { return baud + baud / 50; }, 115200);   // 2 %: taken
-    r = v.send(request(3, 1, 0x03, speedReq(1000000, 0, 2000), true, 5));
+    r = v.send(request(3, 1, reg::probe_link::kOpPortSpeed, speedReq(1000000, 0, 2000), true, 5));
     CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1020000);
   }
   u.stream.tx.clear();
@@ -887,15 +862,15 @@ static void testPortSpeed() {
   g_switches = 0;
 
   // try -> commit: answered at the old speed (the hook not yet called when the answer was written), then switched
-  r = u.send(request(11, 1, 0x03, speedReq(1500000, 0, 2000), true, 5));
+  r = u.send(request(11, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 0, 2000), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000);
   CHECK(g_tx_at_switch == u.stream.tx.size());   // the whole answer was out before the switch
   CHECK(g_baud == 1500000 && !u.ep.portSpeedCommitted() && u.ep.portSpeedNow() == 1500000);
-  r = u.send(request(12, 1, 0x03, speedReq(1000000, 1, 0), true, 5));   // commit of another baud: cause 6
+  r = u.send(request(12, 1, reg::probe_link::kOpPortSpeed, speedReq(1000000, 1, 0), true, 5));   // commit of another baud: cause 6
   CHECK(r.size() >= 6 && r[1] == kRejectUnavailable && r[5] == 6);
-  r = u.send(request(13, 1, 0x03, speedReq(2000000, 0, 2000), true, 5));   // try while trying: cause 6, no switch
+  r = u.send(request(13, 1, reg::probe_link::kOpPortSpeed, speedReq(2000000, 0, 2000), true, 5));   // try while trying: cause 6, no switch
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
-  r = u.sendBulk(request(14, 1, 0x03, speedReq(2000000, 0, 2000), true, 5));   // another port meanwhile: cause 6
+  r = u.sendBulk(request(14, 1, reg::probe_link::kOpPortSpeed, speedReq(2000000, 0, 2000), true, 5));   // another port meanwhile: cause 6
   CHECK(r.size() >= 6 && r[1] == kRejectUnavailable && r[5] == 6);
   CHECK(g_baud == 1500000 && g_switches == 1 && !u.ep.portSpeedCommitted());
   // broken candidates change nothing (no revert on them, oep-if-link §3)
@@ -904,11 +879,11 @@ static void testPortSpeed() {
   u.noise();
   CHECK(g_baud == 1500000);
   g_millis += 500;
-  r = u.send(request(15, 1, 0x03, speedReq(1500000, 1, 0), true, 5));
+  r = u.send(request(15, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 1, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 1500000 && u.ep.portSpeedCommitted());
-  r = u.send(request(16, 1, 0x03, speedReq(1500000, 1, 0), true, 5));   // commit while committed: cause 6
+  r = u.send(request(16, 1, reg::probe_link::kOpPortSpeed, speedReq(1500000, 1, 0), true, 5));   // commit while committed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
-  r = u.send(request(17, 1, 0x03, speedReq(2000000, 0, 2000), true, 5));   // try while committed: cause 6
+  r = u.send(request(17, 1, reg::probe_link::kOpPortSpeed, speedReq(2000000, 0, 2000), true, 5));   // try while committed: cause 6
   CHECK(r.size() >= 5 && r[1] == kRejectUnavailable && r[2] == 0x01 && r[5] == 6);
   CHECK(g_baud == 1500000 && g_switches == 1 && u.ep.portSpeedCommitted());
   for (int i = 0; i < 5; ++i) u.noise();
@@ -926,7 +901,7 @@ static void testPortSpeed() {
   CHECK(g_baud == 115200 && u.ep.portSpeedNow() == 0);
 
   // try timeout: no commit within verify_ms
-  r = u.send(request(19, 1, 0x03, speedReq(750000, 0, 1000), true, 5));
+  r = u.send(request(19, 1, reg::probe_link::kOpPortSpeed, speedReq(750000, 0, 1000), true, 5));
   CHECK(r[0] == 1 && g_baud == 750000);
   g_millis += 999;
   u.ep.poll();
@@ -934,33 +909,33 @@ static void testPortSpeed() {
   g_millis += 1;
   u.ep.poll();
   CHECK(g_baud == 115200);
-  r = u.send(request(20, 1, 0x03, speedReq(750000, 1, 0), true, 5));   // too late to commit
+  r = u.send(request(20, 1, reg::probe_link::kOpPortSpeed, speedReq(750000, 1, 0), true, 5));   // too late to commit
   CHECK(r.size() >= 6 && r[5] == 6);
 
   // step 2: answered (the boot speed) at the speed now, then back
-  u.send(request(23, 1, 0x03, speedReq(500000, 0, 2000), true, 5));
-  u.send(request(24, 1, 0x03, speedReq(500000, 1, 0), true, 5));
+  u.send(request(23, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 0, 2000), true, 5));
+  u.send(request(24, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 1, 0), true, 5));
   const int before = g_switches;
   u.stream.tx.clear();
-  r = u.send(request(25, 1, 0x03, speedReq(0, 2, 0), true, 5));
+  r = u.send(request(25, 1, reg::probe_link::kOpPortSpeed, speedReq(0, 2, 0), true, 5));
   CHECK(r.size() == 6 && r[0] == 1 && getU32(&r[2]) == 115200 && g_baud == 115200 && g_switches == before + 1);
   CHECK(g_tx_at_switch == u.stream.tx.size());
 
   // the session's end: its answer at the fast speed, then back; a lapse too
-  u.send(request(26, 1, 0x03, speedReq(500000, 0, 2000), true, 5));
-  u.send(request(27, 1, 0x03, speedReq(500000, 1, 0), true, 5));
+  u.send(request(26, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 0, 2000), true, 5));
+  u.send(request(27, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 1, 0), true, 5));
   r = u.send(request(28, 0, 0x11, {}, true, 5));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 115200 && g_tx_at_switch == u.stream.tx.size());
-  u.send(request(29, 0, 0x10, openPayload(5, 1000)));
-  u.send(request(30, 1, 0x03, speedReq(500000, 0, 2000), true, 5));
-  u.send(request(31, 1, 0x03, speedReq(500000, 1, 0), true, 5));
+  u.send(request(29, 0, 0x10, openPayload(15, 1000)));   // a new id (5 ended)
+  u.send(request(30, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 0, 2000), true, 15));
+  u.send(request(31, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 1, 0), true, 15));
   CHECK(g_baud == 500000);
   g_millis += 1100;   // the lease lapses
   u.ep.poll();
   CHECK(!u.ep.locked() && g_baud == 115200);
   // taken by force from the other transport
   u.send(request(32, 0, 0x10, openPayload(6, 5000)));
-  u.send(request(33, 1, 0x03, speedReq(500000, 0, 2000), true, 6));
+  u.send(request(33, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 0, 2000), true, 6));
   CHECK(g_baud == 500000);
   Bytes force = openPayload(7, 5000);
   force[8] = 1;
@@ -973,12 +948,12 @@ static void testPortSpeed() {
   CHECK(r.size() >= 1 && r[0] == 1);
   // condition 2: port_speed_idle_ms is not counted while a request runs (like the lease, it runs from the answer). A
   // request that takes longer than that leaves the port at the raised speed, and the count starts over after it.
-  u.send(request(45, 1, 0x03, speedReq(500000, 0, 2000), true, 8));
-  u.send(request(46, 1, 0x03, speedReq(500000, 1, 0), true, 8));
+  u.send(request(45, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 0, 2000), true, 8));
+  u.send(request(46, 1, reg::probe_link::kOpPortSpeed, speedReq(500000, 1, 0), true, 8));
   CHECK(u.ep.portSpeedCommitted());
   g_millis += 2900;
   slow.takes_ms = 3500;   // longer than port_speed_idle_ms
-  r = u.send(request(47, 2, 0x01, {}, true, 8));
+  r = u.send(request(47, 2, 0x10, {}, true, 8));
   CHECK(r.size() >= 1 && r[0] == 1 && g_baud == 500000 && u.ep.portSpeedCommitted());
   g_millis += reg::kPortSpeedIdleMs - 1;   // the count runs from the answer
   u.ep.poll();
@@ -1022,17 +997,17 @@ static void testBootIdAndClock() {
     Bulk b;
     g_millis += 1234 + 777 * boot;                  // the first message comes at another time
     Bytes r = b.send(confirm);
-    CHECK(r.size() == 2 + 21 && r[0] == 1);
-    ids[boot] = getU32(&r[2 + 13]);
+    CHECK(r.size() == 2 + 20 && r[0] == 1);
+    ids[boot] = getU32(&r[2 + 12]);
     g_millis += 5000;
     r = b.send(request(2, 0, 0x01, {'O', 'E', 'P', '?', 1, 1}));
-    CHECK(r.size() == 2 + 21 && getU32(&r[2 + 13]) == ids[boot]);   // fixed for the boot
+    CHECK(r.size() == 2 + 20 && getU32(&r[2 + 12]) == ids[boot]);   // fixed for the boot
   }
   CHECK(ids[0] != ids[1]);
   Bulk set;
   set.ep.setBootId(0);                              // a sketch's own value, 0 included
   Bytes r = set.send(confirm);
-  CHECK(r.size() == 2 + 21 && getU32(&r[2 + 13]) == 0);
+  CHECK(r.size() == 2 + 20 && getU32(&r[2 + 12]) == 0);
   // the clock across the 32-bit micros() wrap
   const uint32_t saved = g_millis;
   g_millis = 4294967;                               // micros() = 4294967000, 295 ms before it wraps
@@ -1061,10 +1036,10 @@ static void testConfirmBoundsAndFixedList() {
   stream.send({uint8_t(m.size()), 0});
   stream.send(m);
   ep.poll();
-  CHECK(stream.tx.size() == 2 + 5 + 21);
-  if (stream.tx.size() == 2 + 5 + 21) {
+  CHECK(stream.tx.size() == 2 + 5 + 20);
+  if (stream.tx.size() == 2 + 5 + 20) {
     const uint8_t *c = stream.tx.data() + 7;
-    CHECK(getU16(c + 6) == 64 && getU32(c + 8) == 64 && c[12] == 1);   // max_frame window max_inflight
+    CHECK(getU16(c + 5) == 64 && getU32(c + 7) == 64 && c[11] == 1);   // max_frame window max_inflight (core §7.1)
   }
   FailsEarly late;
   CHECK(!ep.add(late));   // after poll(): the list a host has seen stays
@@ -1085,17 +1060,17 @@ static void testPlanApplyOrder() {
   b.send(request(1, 0, 0x10, openPayload(9, 3000)));
   CHECK(b.ep.planFn() == 2 && b.ep.interfaceAt(2) && strcmp(b.ep.interfaceAt(2)->name(), "oep.probe.plan") == 0);
   auto reject = [](const Bytes &r) { return r.size() >= 2 && r[0] == kResolutionRejected ? r[1] : 0xff; };
-  CHECK(reject(b.send(request(2, pf, 0x01, {0x90, 5, 0, 0, 0, 0, 3, 0}, true, 9))) == kRejectMalformed);   // fn 0
-  CHECK(reject(b.send(request(3, pf, 0x01, {0x90, 5, 0, 7, 0, 0, 3, 0, 0x90, 4, 0, 1, 0, 0, 3}, true, 9))) == kRejectMalformed);
-  CHECK(reject(b.send(request(4, pf, 0x01, {0xB0, 0, 0, 0x90, 5, 0, 7, 0, 0, 3, 0}, true, 9))) == kRejectUnknownFunction);
-  Bytes r = b.send(request(5, pf, 0x01, {0xB0, 0, 0, 0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9));
+  CHECK(reject(b.send(request(2, pf, reg::probe_plan::kOpPlanApply, {0x90, 5, 0, 0, 0, 0, 3, 0}, true, 9))) == kRejectMalformed);   // fn 0
+  CHECK(reject(b.send(request(3, pf, reg::probe_plan::kOpPlanApply, {0x90, 5, 0, 7, 0, 0, 3, 0, 0x90, 4, 0, 1, 0, 0, 3}, true, 9))) == kRejectMalformed);
+  CHECK(reject(b.send(request(4, pf, reg::probe_plan::kOpPlanApply, {0xB0, 0, 0, 0x90, 5, 0, 7, 0, 0, 3, 0}, true, 9))) == kRejectUnknownFunction);
+  Bytes r = b.send(request(5, pf, reg::probe_plan::kOpPlanApply, {0xB0, 0, 0, 0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9));
   CHECK(r.size() == 3 && reject(r) == kRejectUnsupported && r[2] == 0xB0);
-  r = b.send(request(6, pf, 0x01, {0x90, 5, 0, 2, 0, 0, 3, 0}, true, 9));   // oep.probe.plan has no plan role
+  r = b.send(request(6, pf, reg::probe_plan::kOpPlanApply, {0x90, 5, 0, 2, 0, 0, 3, 0}, true, 9));   // oep.probe.plan has no plan role
   CHECK(r.size() == 3 && reject(r) == kRejectUnsupported && r[2] == 0x90);
-  CHECK(reject(b.send(request(7, pf, 0x01, {0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9))) == 0xff);   // fine
-  CHECK(reject(b.send(request(8, pf, 0x02, {1, 1, 0}, true, 9))) == 0xff);
-  CHECK(reject(b.send(request(9, pf, 0x02, {2, 1, 0}, true, 9))) == kRejectMalformed);   // n = 2 with one fn
-  CHECK(reject(b.send(request(10, pf, 0x01, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectSessionRequired);
+  CHECK(reject(b.send(request(7, pf, reg::probe_plan::kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 3, 0}, true, 9))) == 0xff);   // fine
+  CHECK(reject(b.send(request(8, pf, reg::probe_plan::kOpPlanRelease, {1, 1, 0}, true, 9))) == 0xff);
+  CHECK(reject(b.send(request(9, pf, reg::probe_plan::kOpPlanRelease, {2, 1, 0}, true, 9))) == kRejectMalformed);   // n = 2 with one fn
+  CHECK(reject(b.send(request(10, pf, reg::probe_plan::kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectSessionRequired);
   Bytes d = b.send(request(11, 0, reg::core::kOpDescribe, {0, 0, 0, 0}));
   const Bytes old_roles = {0x4B, 4, 0};
   CHECK(!d.empty() && d[0] == kResolutionCompleted && std::search(d.begin(), d.end(), old_roles.begin(), old_roles.end()) == d.end());
@@ -1106,7 +1081,7 @@ static void testPlanApplyOrder() {
   FailsEarly other;
   none.ep.add(other);
   CHECK(none.ep.planFn() == 0);
-  CHECK(reject(none.send(request(1, 2, 0x01, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectUnknownFunction);
+  CHECK(reject(none.send(request(1, 2, reg::probe_plan::kOpPlanApply, {0x90, 5, 0, 1, 0, 0, 3, 0}))) == kRejectUnknownFunction);
   r = none.send(request(2, 0, reg::core::kOpList, {0, 0}));
   CHECK(r.size() >= 5 && r[0] == kResolutionCompleted && getU16(&r[2]) == 1);   // fn 1 only
 }
@@ -1116,22 +1091,23 @@ static void testPlanApplyOrder() {
 class OffersTwo final : public Interface {
  public:
   const char *name() const override { return "io.github.test.offers"; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1 || op == 2; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10 || op == 0x11; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
 };
 static void testUnknownOperationFirst() {
   Bulk b;
   OffersTwo two;
   b.ep.add(two);   // fn 1
-  Bytes r = b.send(request(1, 1, 3, {}));
+  Bytes r = b.send(request(1, 1, 0x12, {}));
   CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectUnknownOperation);
-  r = b.send(request(2, 1, 1, {}));   // an op it offers, no session: session_required
+  r = b.send(request(2, 1, 0x10, {}));   // an op it offers, no session: session_required
   CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectSessionRequired);
   b.send(request(3, 0, 0x10, openPayload(4, 3000)));
   r = b.send(request(4, 1, 0x7F, {}, true, 4));
   CHECK(r.size() == 2 && r[0] == kResolutionRejected && r[1] == kRejectUnknownOperation);
-  r = b.send(request(5, 1, 2, {}, true, 4));
+  r = b.send(request(5, 1, 0x11, {}, true, 4));
   CHECK(r.size() == 2 && r[0] == kResolutionCompleted);
 }
 
@@ -1148,7 +1124,7 @@ static void testShortAndWrongRoleDiscarded() {
   CHECK(b.send({0x01, 1, 0, 0, 0}).empty() && b.stream.tx.empty());               // 5 bytes
   CHECK(b.send({0x81, 1, 0, 0, 0, 0x12, 7, 0, 0}).empty() && b.stream.tx.empty());   // 9 bytes with session
   const Bytes r = b.send(confirm);
-  CHECK(r.size() == 2 + 21 && r[0] == kResolutionCompleted);
+  CHECK(r.size() == 2 + 20 && r[0] == kResolutionCompleted);
 }
 
 int main() {

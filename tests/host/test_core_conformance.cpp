@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "test_ids.h"
 #include "OepFrame.h"
 #include "OepEndpoint.h"
 
@@ -193,7 +194,8 @@ static uint8_t reason(const Bytes &r) { return r.size() >= 5 && r[3] == kResolut
 class Toy final : public Interface {
  public:
   const char *name() const override { return "io.github.test.toy"; }
-  uint16_t instance() const override { return 0; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
   uint8_t revision() const override { return 1; }
   bool offers(uint8_t op) const override { return op == 0x02 || op == 0x05 || op == 0x11; }
   bool lockFree(uint8_t) const override { return true; }
@@ -202,7 +204,8 @@ class Toy final : public Interface {
 class Silent final : public Interface {   // offers no op
  public:
   const char *name() const override { return "io.github.test.silent"; }
-  uint16_t instance() const override { return 0; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
 };
 static void testOps() {
@@ -445,7 +448,7 @@ class Named final : public Interface {
   const char *name() const override { return name_; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return revision_; }
-  bool offers(uint8_t op) const override { return op == 1; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
  private:
   const char *name_;
@@ -512,8 +515,9 @@ class PlanToy final : public Interface {
   const char *name() const override { return name_; }
   bool notifies() const override { return talks_; }
   bool subscribe(bool on) override { subscribed = on; return true; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }   // one op: an interface offers at least one (core §7.4)
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)   // one op: an interface offers at least one (core §7.4)
   uint8_t revision() const override { return 1; }
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *, size_t) override { return 0; }

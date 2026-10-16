@@ -11,6 +11,7 @@
 #include <string.h>
 #include <vector>
 
+#include "test_ids.h"
 #include "OepEndpoint.h"
 #include "OepFrame.h"
 
@@ -63,7 +64,8 @@ class Ticker final : public Interface {
  public:
   size_t ready = 0;
   const char *name() const override { return "io.github.test.ticker"; }
-  uint16_t instance() const override { return 0; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
   uint8_t revision() const override { return 1; }
   bool offers(uint8_t op) const override { return op == 0x01; }
   bool notifies() const override { return true; }

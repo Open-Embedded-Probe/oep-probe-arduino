@@ -38,6 +38,7 @@
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
 
+#include "test_ids.h"
 #include "OepCapture.h"
 #include "OepConfig.h"
 #include "OepConsole.h"
@@ -459,7 +460,8 @@ class OpSet final : public Interface {
  public:
   explicit OpSet(const std::vector<int> &ops) : ops_(ops) {}
   const char *name() const override { return "io.github.test.ops"; }
-  uint16_t instance() const override { return 0; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
   bool offers(uint8_t op) const override {
     for (int o : ops_) if (o == op) return true;
     return false;
@@ -1033,7 +1035,7 @@ class Filler final : public Interface {   // each its own instance: (name, revis
   const uint16_t id = next++;
   const char *name() const override { return "io.github.test.filler"; }
   uint16_t instance() const override { return id; }
-  bool offers(uint8_t op) const override { return op == 1; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
 };
 
@@ -1043,8 +1045,9 @@ class VecTrack final : public Interface, public GroupTrack {
  public:
   explicit VecTrack(const char *name) : name_(name) {}
   const char *name() const override { return name_; }
-  uint16_t instance() const override { return 0; }
-  bool offers(uint8_t op) const override { return op == 1; }
+  const uint16_t test_instance_ = nextTestInstance();
+  uint16_t instance() const override { return test_instance_; }
+  bool offers(uint8_t op) const override { return op == 0x10; }   // its own range (core §2.5)
   Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return rejected(kRejectUnknownOperation); }
   bool trackReady() const override { return state != 2 && state != 3; }
   uint8_t trackMode() const override { return 1; }
