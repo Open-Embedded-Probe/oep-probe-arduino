@@ -106,10 +106,11 @@ int main() {
     const RoleAssignment twice[] = {{0, P4I2cTarget::kRoleSda, 4}, {0, P4I2cTarget::kRoleSda, 5}};
     const RoleAssignment same[] = {{0, P4I2cTarget::kRoleSda, 4}, {0, P4I2cTarget::kRoleScl, 4}};
     const RoleAssignment other[] = {{0, P4I2cTarget::kRoleSda, 4}, {0, 3, 5}};
-    CHECK(t.planCheck(twice, 2) == kRejectMalformed);
-    CHECK(t.planCheck(same, 2) == kRejectMalformed);
-    CHECK(t.planCheck(other, 2) == kRejectMalformed);
-    CHECK(t.planCheck(twice, 1) == kRejectMalformed);
+    // the roles' count or pins the interface defines not met, a role it does not have: unsupported (oep-if-plan §2.4)
+    CHECK(t.planCheck(twice, 2) == kRejectUnsupported);
+    CHECK(t.planCheck(same, 2) == kRejectUnsupported);
+    CHECK(t.planCheck(other, 2) == kRejectUnsupported);
+    CHECK(t.planCheck(twice, 1) == kRejectUnsupported);
     // a channel outside role_channels: unsupported; a declared one something else holds: unavailable (core §8)
     const RoleAssignment undeclared[] = {{0, P4I2cTarget::kRoleSda, 4}, {0, P4I2cTarget::kRoleScl, 6}};
     CHECK(t.planCheck(undeclared, 2) == kRejectUnsupported);

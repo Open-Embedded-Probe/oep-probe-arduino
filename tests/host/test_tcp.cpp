@@ -124,7 +124,8 @@ int main() {
     slot[k].send(framed(request(10 + k, 0, 0x01, kConfirm)));
     ep.poll();
     const auto ms = messages(slot[k].tx);
-    CHECK(ms.size() == 1 && okAnswer(ms[0], 10 + k) && ms[0].size() == 5 + 21 && ms[0][5 + 20] == 1);
+    // confirm (core §7.1): 16 fixed bytes, then the transport TLV - the listener's entry, 1
+    CHECK(ms.size() == 1 && okAnswer(ms[0], 10 + k) && ms[0].size() == 5 + 16 + 4 && ms[0][5 + 19] == 1);
     CHECK(slot[1 - k].tx.empty() || k == 1);
     slot[k].tx.clear();
   }
@@ -223,11 +224,20 @@ int main() {
     ticker.ready = 10;
     ep.poll();
     CHECK(slot[0].tx.empty() && slot[1].tx.empty() && ep.locked());
-    // the same session's open from connection 1: the notifications go there now (core §6.2)
+    // the same session's open from connection 1 keeps the subscription's route (core §6.2's table): nothing there yet
     slot[1].send(framed(request(71, 0, 0x10, cat(u32(3000), {0}), sid)));
     ep.poll();
     ms = messages(slot[1].tx);
     CHECK(ms.size() >= 1 && okAnswer(ms[0], 71));
+    slot[1].tx.clear();
+    ticker.ready = 10;
+    ep.poll();
+    CHECK(slot[1].tx.empty() && slot[0].tx.empty());
+    // subscribing again from connection 1 replaces the subscription, its route with it (core §10.3)
+    slot[1].send(framed(request(72, 1, kOpSubscribe, cat({0, 0}, u32(0)), sid)));
+    ep.poll();
+    ms = messages(slot[1].tx);
+    CHECK(ms.size() >= 1 && okAnswer(ms[0], 72));
     slot[1].tx.clear();
     ticker.ready = 10;
     ep.poll();

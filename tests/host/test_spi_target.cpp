@@ -329,7 +329,7 @@ int main() {
     const size_t n = t.describe(d, sizeof d);
     bool found = false;
     for (size_t at = 0; at + kTlvHeader <= n; at += kTlvHeader + getU16(d + at + 1))
-      if (d[at] == 0x43 && getU16(d + at + 1) == 4) found = getU32(d + at + 3) == P4SpiTarget::kCsSetupNs;
+      if (d[at] == reg::fixture_spi_target::kTlvDescribeCsSetupNs && getU16(d + at + 1) == 4) found = getU32(d + at + 3) == P4SpiTarget::kCsSetupNs;
     CHECK(found && P4SpiTarget::kCsSetupNs == 15000);   // the bench's 11.9 us (CS rising to MISO undriven) with margin
   }
 
