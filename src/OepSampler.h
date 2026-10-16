@@ -60,7 +60,8 @@ class SamplerCapture final : public Interface, public GroupTrack {
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
   // its unavailable plans are a role twice, more roles than channels, a role skipped: the roles' count limit
-  uint8_t planRefusalCause() const override { return reg::core::kUnavailableCauseLimit; }
+  uint8_t planRefusalCause() const override { return plan_cause_; }   // capturing: 6; the roles: 2
+  uint8_t plan_cause_ = reg::core::kUnavailableCauseLimit;
   bool planApply(const RoleAssignment *roles, size_t count) override;
   void planRelease() override;
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)

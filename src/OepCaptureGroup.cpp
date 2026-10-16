@@ -92,29 +92,16 @@ void CaptureGroup::stopAll(uint8_t reason, uint8_t error) {
 Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (op) {
-    case grp::kOpBind: {   // n(u8) n x fn(u16) [TLV 0x01 trigger_track fn(u16)]
+    case grp::kOpBind: {   // n(u8) n x fn(u16) [TLV] (capture §4.1: immediate tracks only)
       if (length < 1 || length < 1u + 2u * payload[0]) return rejected(kRejectMalformed);
       const uint8_t n = payload[0];
-      static const uint8_t kKnown[] = {legacy::kTlvBindTriggerTrack};
-      const Result parsed = tail.parse(payload + 1 + 2 * n, length - 1 - 2 * n, kKnown, out, capacity);
+      const Result parsed = plainTail(tail, payload, length, 1u + 2u * n, out, capacity);
       if (refused(parsed)) return parsed;
       uint8_t chosen[kMaxTracks];
       for (uint8_t k = 0; k < n; ++k)   // the same fn twice: malformed (core §4.3)
         for (uint8_t j = 0; j < k; ++j)
           if (getU16(payload + 1 + 2 * k) == getU16(payload + 1 + 2 * j)) return rejected(kRejectMalformed);
-      // trigger_track: checked the same with or without bit 7 (core §2.3) - a length other than 2, or a track not in
-      // the list, is malformed
-      int trigger = -1;
-      const uint8_t *v = nullptr;
-      const Result fixed = tail.fixed(legacy::kTlvBindTriggerTrack, 2, v, out, capacity);
-      if (refused(fixed)) return fixed;
-      if (v) {
-        trigger = indexOf(getU16(v));
-        bool in = false;
-        for (uint8_t k = 0; k < n; ++k) in |= getU16(payload + 1 + 2 * k) == getU16(v);
-        if (!in) return rejected(kRejectMalformed);   // the trigger track is not in the list
-      }
-      if (n == 0) {   // unbind: not while capturing (state 3)
+      if (n == 0) {   // unbind: not while capturing (state 3); nothing bound: a no-op
         if (state() == cap::kStateCapturing) return wrongState(out, capacity);
         unbind();
         return completed();
@@ -131,37 +118,18 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         chosen[k] = static_cast<uint8_t>(i);
       }
       if (n > kMaxTracks) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+      // the start's answer (5 + 13 + 6 n) must fit this route's frame (§4.1)
+      if (5u + 13u + 6u * n > endpoint_.maxFrame()) return unsupportedValue(out, capacity);
+      bool same = n == bound_count_;
+      for (uint8_t k = 0; same && k < n; ++k) same = bound_[k] == chosen[k];
+      if (same) return completed();   // the same list again: kept as it is
+      if (state() == cap::kStateCapturing) return wrongState(out, capacity);   // another list while capturing
       auto refuseAt = [&](uint8_t cause, uint8_t k) { return refuseTrack(cause, getU16(payload + 1 + 2 * k), out, capacity); };
       for (uint8_t k = 0; k < n; ++k) {
         const GroupTrack &t = *tracks_[chosen[k]].track;
-        if (!t.trackReady() || (k && t.trackMode() != tracks_[chosen[0]].track->trackMode()))
-          return refuseAt(reg::core::kUnavailableCauseWrongState, k);   // not configured, modes differ
-      }
-      // only the trigger track may have a trigger; with one, the others must be able to follow it
-      const bool triggered = trigger >= 0 && tracks_[trigger].track->trackTriggered();
-      for (uint8_t k = 0; k < n; ++k) {
-        const GroupTrack &t = *tracks_[chosen[k]].track;
-        if (chosen[k] != trigger && (t.trackTriggered() || (triggered && !t.trackCanFollow())))
+        // state 1 / 4 / 6, immediate (no trigger), one mode for all
+        if (!t.trackReady() || t.trackTriggered() || (k && t.trackMode() != tracks_[chosen[0]].track->trackMode()))
           return refuseAt(reg::core::kUnavailableCauseWrongState, k);
-      }
-      // the group's pretrigger (capture §4.1): the trigger track's P as a time, P_k samples on each follower; one that
-      // cannot keep it is refused cause 2 (the resources) with its fn
-      uint32_t keep[kMaxTracks] = {};
-      uint64_t late = 0;
-      if (triggered) {
-        const GroupTrack &t = *tracks_[trigger].track;
-        uint32_t num_t = 0, den_t = 0;
-        const uint32_t p = t.trackPretrigger();
-        t.trackRate(num_t, den_t);
-        late = t.trackLatencyNs();   // what each follower runs on for before it hears of the trigger
-        for (uint8_t k = 0; k < n; ++k) {
-          if (chosen[k] == trigger) continue;
-          const GroupTrack &f = *tracks_[chosen[k]].track;
-          uint32_t num_k = 0, den_k = 0;
-          f.trackRate(num_k, den_k);
-          if ((p && !groupPretrigger(p, num_t, den_t, num_k, den_k, keep[k])) || !f.trackCanKeep(keep[k], late))
-            return refuseAt(reg::core::kUnavailableCauseLimit, k);
-        }
       }
       // short of the resources to capture together (a budget the tracks share): cause 2, the track whose load goes over
       for (size_t b = 0; b < budget_count_; ++b) {
@@ -172,19 +140,19 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
           if (load > budgets_[b].max_rate) return refuseAt(reg::core::kUnavailableCauseLimit, k);
         }
       }
+      const uint64_t start_ns = start_ns_;
       unbind();
+      start_ns_ = start_ns;   // bind changes neither the group's generation nor its last start
       const uint16_t me = endpoint_.fnOf(*this);
       for (uint8_t k = 0; k < n; ++k) {
         bound_[k] = chosen[k];
         tracks_[chosen[k]].track->setBound(true, me);
-        tracks_[chosen[k]].track->following_ = triggered && chosen[k] != trigger;
-        if (tracks_[chosen[k]].track->following_) tracks_[chosen[k]].track->trackKeep(keep[k], late);
+        tracks_[chosen[k]].track->following_ = false;
       }
       bound_count_ = n;
-      trigger_ = triggered ? trigger : -1;
       return completed();
     }
-    case grp::kOpStart: {   // -> blocking_ms(u32) start_ns(u64) generation(u32) n(u8) n x (fn(u16) generation(u32)) [TLV]
+    case grp::kOpStart: {   // -> start_ns(u64) generation(u32) n(u8) n x (fn(u16) generation(u32)) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (!bound_count_) return wrongState(out, capacity);
@@ -194,7 +162,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         if (!(t.following_ ? t.trackCanFollow() : t.trackCanStart()))
           return refuseTrack(reg::core::kUnavailableCauseWrongState, endpoint_.fnOf(*tracks_[bound_[k]].interface), out, capacity);
       }
-      if (capacity < 17 + 6 * bound_count_) return failed();
+      if (capacity < 13 + 6 * bound_count_) return failed();
       failed_ = false;
       generation_ = nextGeneration(generation_);   // the group's: one up at every start, never 0 (§4.1)
       start_ns_ = nowNs();
@@ -213,16 +181,14 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       }
       trigger_pending_ = trigger_ >= 0;
       running_ = started_ = true;
-      putU32(out, 0);   // blocking_ms: every track keeps the probe answering
-      putU64(out + 4, start_ns_);
-      putU32(out + 12, generation_);
-      out[16] = static_cast<uint8_t>(bound_count_);
-      for (size_t k = 0; k < bound_count_; ++k) {   // in bind order; the trigger track's is the one its start will make
-        putU16(out + 17 + 6 * k, endpoint_.fnOf(*tracks_[bound_[k]].interface));
-        const uint32_t gen = tracks_[bound_[k]].track->trackGeneration();
-        putU32(out + 19 + 6 * k, static_cast<int>(bound_[k]) == trigger_ ? nextGeneration(gen) : gen);
+      putU64(out, start_ns_);
+      putU32(out + 8, generation_);
+      out[12] = static_cast<uint8_t>(bound_count_);
+      for (size_t k = 0; k < bound_count_; ++k) {   // in bind order
+        putU16(out + 13 + 6 * k, endpoint_.fnOf(*tracks_[bound_[k]].interface));
+        putU32(out + 15 + 6 * k, tracks_[bound_[k]].track->trackGeneration());
       }
-      return completed(17 + 6 * bound_count_);
+      return completed(13 + 6 * bound_count_);
     }
     case grp::kOpStop: {
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
@@ -230,27 +196,15 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
       stopAll(cap::kStoppedReasonHost, 0);
       return completed();
     }
-    case legacy::kOpGroupForce: {   // the trigger track starts now; the others follow it as for a trigger
+    case grp::kOpStatus: {   // -> state(u8) start_ns(u64) generation(u32) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (trigger_ >= 0 && running_ && trigger_ns_ == ~uint64_t{0}) {
-        if (trigger_pending_ && !startTrigger()) return failed();   // now, with what pretrigger the followers have
-        forced_ = true;
-        tracks_[trigger_].track->trackForce();
-      }
-      return completed();
-    }
-    case grp::kOpStatus: {   // -> state(u8) start_ns(u64) trigger_ns(u64) trigger_fn(u16) generation(u32) [TLV]
-      const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
-      if (refused(parsed)) return parsed;
-      if (capacity < 23) return failed();
+      if (capacity < 13) return failed();
       poll();
       out[0] = state();
-      putU64(out + 1, start_ns_);
-      putU64(out + 9, trigger_ns_);   // not (yet) triggered, or immediate: all ones
-      putU16(out + 17, trigger_ns_ != ~uint64_t{0} && !forced_ ? endpoint_.fnOf(*tracks_[trigger_].interface) : 0);
-      putU32(out + 19, generation_);   // the group's (0 before its first start)
-      return completed(23);
+      putU64(out + 1, start_ns_);       // all ones before the first start
+      putU32(out + 9, generation_);     // the group's (0 before its first start)
+      return completed(13);
     }
     default:
       return rejected(kRejectUnknownOperation);

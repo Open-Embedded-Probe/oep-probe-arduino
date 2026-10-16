@@ -506,6 +506,7 @@ class VecPhy final : public DmiPhy {
   // the wire goes silent (nothing answers, writes lost) at the run's first abstract command (this fake runs none: the
   // preparation - dcsr, a0, dpc - is where it fails)
   bool silent_at_a0 = false, silent = false;
+  uint32_t dmstatus_fixed = 0;   // a case's DMSTATUS as the vector states it (0: the computed one above)
   bool attach() override { attached_flag = true; return true; }
   void release() override { attached_flag = false; }
   bool attached() const override { return attached_flag; }
@@ -536,7 +537,7 @@ class VecPhy final : public DmiPhy {
       case 0x04: value = data0; break;
       case 0x05: value = data1; break;
       case 0x10: value = 1; break;
-      case 0x11: value = 2 | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (1u << 22); break;
+      case 0x11: value = dmstatus_fixed ? dmstatus_fixed : 2 | (1u << 7) | (halted ? (3u << 8) : (3u << 10)) | (1u << 22); break;
       case 0x12: value = 0x0002'1000u | 0x380; break;
       case 0x16: value = 2; break;
       case 0x7f: value = target_id; break;
@@ -749,6 +750,16 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     p.no_open = has("lock free");
     return p.ep.restartFn() == 11;
   }
+  if (has("fn9 state3")) {   // fn 9 capturing on role 0 = channel 1 (a one-shot started, not done)
+    g_fake_heap = FakeHeap{};
+    g_fake_heap.internal_free = 512 * 1024;
+    g_fake_heap.psram_total = g_fake_heap.psram_free = size_t(32) << 20;
+    if (!p.open() || !p.plan(9, 0, 1)) return false;
+    const Bytes c = {uint8_t(reg::fixture_logic::kTlvConfigureMode | kTagCritical), 1, 0, reg::fixture_logic::kModeOneShot,
+                     uint8_t(reg::fixture_logic::kTlvConfigureRate | kTagCritical), 4, 0, 0x40, 0x42, 0x0f, 0x00,
+                     reg::fixture_logic::kTlvConfigureSamples, 4, 0, 0xe8, 0x03, 0, 0};
+    return p.ok(p.request(9, reg::fixture_logic::kOpConfigure, c)) && p.ok(p.request(9, reg::fixture_logic::kOpStart, {}));
+  }
   if (names(fns, "oep.probe.plan")) {   // fn 10: gpio (fn 2) has plan roles
     if (p.ep.planFn() != 10) return false;
     if (has("fn 2 has the plan above")) return p.open() && p.plan(2, reg::fixture_gpio::kRoleLine, 3);
@@ -784,6 +795,8 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     g_fake_heap.psram_total = g_fake_heap.psram_free = size_t(32) << 20;
     return p.open() && p.ok(p.request(p.ep.planFn(), kOpPlanApply, {0x90, 5, 0, 9, 0, 0, 0, 0, 0x90, 5, 0, 9, 0, 1, 1, 0}));
   }
+  if (const size_t at = state.find("DMSTATUS0x"); at != std::string::npos)   // as the vector states it
+    p.phy.dmstatus_fixed = static_cast<uint32_t>(strtoul(state.c_str() + at + 8, nullptr, 16));
   if (has("console")) {
     if (has("read from 4")) return true;
     const bool high = has("connection 65536") || has("stream 65537");   // numbers above u16: connection 65536, stream 65537 (core §9)
@@ -896,7 +909,11 @@ static bool multirate(const Json &c) {
 }
 // A case whose answer depends on the example probe's segment of 1000 bytes (this one's repeat segments are whole 4 KiB):
 // the dropped segment of capture §2.2, checked with this probe's sizes in tests/host/test_capture.cpp (testLostChunk).
-static bool ownSegments(const Json &c) { return c["state"].string.find("overflowed inside serial 2") != std::string::npos; }
+static bool ownSegments(const Json &c) {
+  const std::string &state = c["state"].string;
+  return state.find("overflowed inside serial 2") != std::string::npos ||
+         state.find("16 samples/segment") != std::string::npos;   // the example probe's 16-sample segments
+}
 // Cases of a probe other than OpsProbe's fns 1 to 11 (their own small probes below, or a host test of their own).
 static bool elsewhere(const Json &c) {
   if (c["name"].string.find("does not declare") != std::string::npos) return false;   // fn 16: run as fn 9
@@ -1196,10 +1213,21 @@ static void testWideCases() {
       got = p.send(req);
     } else if (names(c["fns"], "oep.fixture.capture-group")) {
       WideProbe p;
-      CHECK(p.open() && groupBefore(p));
-      CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpBind, {2, 9, 0, 13, 0})));
+      const std::string state = c["state"].string;
+      auto in = [&](const char *s) { return state.find(s) != std::string::npos || name.find(s) != std::string::npos; };
+      CHECK(p.open() && groupBefore(p));   // group generation 4
+      if (in("edge trigger")) {
+        p.logic.trigger = true;            // fn 9 not immediate: no binding made before
+      } else {
+        CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpBind, {2, 9, 0, 13, 0})));
+      }
       g_millis = 7;   // acquisition starts at 7 ms
       g_micros_part = 0;
+      if (in("both tracks capturing")) {   // started (group generation 5), both capturing
+        CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpStart, {})));
+        p.logic.state = reg::fixture_logic::kStateCapturing;
+        p.analog.state = reg::fixture_logic::kStateCapturing;
+      }
       p.corr = static_cast<uint16_t>(getU16(&req[1]) - 1);
       got = p.send(req);
     } else {
@@ -1221,16 +1249,13 @@ static void testWideCases() {
   WideProbe p;
   CHECK(p.open() && groupBefore(p));
   CHECK(p.ok(p.request(12, kOpSubscribe, {0, 0, 0, 0, 0, 0})));
-  p.logic.trigger = true;   // fn 9 configured with a trigger: the trigger track
-  CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpBind, {2, 9, 0, 13, 0, 0x01, 2, 0, 9, 0})));
-  CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpStart, {})));
-  p.group.poll();   // the trigger track starts once the follower is armed
+  CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpBind, {2, 9, 0, 13, 0})));
+  CHECK(p.ok(p.request(12, reg::fixture_capture_group::kOpStart, {})));   // group generation 5, both immediate
+  p.group.poll();
   p.frames();
-  p.logic.fired = true;
-  p.logic.fired_ns = 7050000;
-  p.logic.state = 4;
-  p.analog.state = 4;
-  p.group.poll();   // triggered, then stopped (every track done)
+  p.logic.state = reg::fixture_logic::kStateDone;
+  p.analog.state = reg::fixture_logic::kStateDone;
+  p.group.poll();   // every track done: stopped reason 0
   std::vector<Bytes> sent = p.frames();
   for (const Json &e : v["events"].items) {
     if (!names(e["fns"], "oep.fixture.capture-group")) {
@@ -1239,7 +1264,10 @@ static void testWideCases() {
     ++cases;
     const Bytes want = hex(e["event_hex"].string);
     bool found = false;
-    for (const Bytes &f : sent) found |= f == want;
+    for (Bytes f : sent) {
+      if (f.size() == want.size() && f.size() > 3) f[3] = want[3];   // seq: this run's own (no event came before here)
+      found |= f == want;
+    }
     if (!found) for (const Bytes &f : sent) printf("    sent %s\n", toHex(f).c_str());
     CHECK(same("events", e["name"].string, found ? want : Bytes{}, want));
   }

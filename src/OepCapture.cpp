@@ -632,6 +632,10 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
 }
 
 uint8_t LogicCapture::planCheck(const RoleAssignment *roles, size_t count) {
+  // capture §3.2: a changed plan while waiting, capturing or paused (2 / 3 / 5): cause 6
+  plan_cause_ = reg::core::kUnavailableCauseWrongState;
+  if (state_ == kStateWaiting || state_ == kStateCapturing || state_ == kStatePaused) return kRejectUnavailable;
+  plan_cause_ = reg::core::kUnavailableCauseLimit;
   uint32_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
     if (roles[i].role >= kMaxChannels) return kRejectUnsupported;   // a role this capture does not have (core §8)
@@ -1295,9 +1299,9 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
 
 Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
   if (op == kOpConfigure || op == kOpQuery) return configure(p, n, out, capacity, op == kOpQuery);
-  // Every other request: a fixed part (start / stop / force / status: none; read: generation position max = 16;
+  // Every other request: a fixed part (start / stop / force / status: none; read: generation position max = 14;
   // segments: 4; release: generation serial = 8), then TLVs, none of which these ops read.
-  const size_t fixed = op == kOpRead ? 16 : op == kOpSegments ? 4 : op == kOpRelease ? 8 : 0;
+  const size_t fixed = op == kOpRead ? 14 : op == kOpSegments ? 4 : op == kOpRelease ? 8 : 0;
   Tail tail;
   if (op >= kOpStart && op <= kOpRelease) {
     const Result parsed = plainTail(tail, p, n, fixed, out, capacity);
@@ -1430,20 +1434,20 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       }
       return completed(used);
     }
-    case kOpRead: {   // generation(u32) position(u64) max(u32) [TLV]  ->  position(u64) flags(u8: bit0 more, bit1 gap) len(u32) data [TLV]
-      constexpr size_t kHead = 13;
+    case kOpRead: {   // generation(u32) position(u64) max(u16) [TLV]  ->  position(u64) flags(u8: bit0 more, bit1 gap) len(u16) data [TLV]
+      constexpr size_t kHead = 11;
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
       if (capacity < kHead) return failed();
       poll();
       uint64_t position = getU64(p + 4);
-      uint32_t max = getU32(p + 12);
+      uint32_t max = getU16(p + 12);
       size_t room = capacity - kHead;   // how much read returns is the probe's (capture §3.2): max_read_ and the frame
       if (room > max_read_) room = max_read_;
       if (max > room) max = static_cast<uint32_t>(room);
       auto answer = [&](uint64_t pos, uint8_t flags, const uint8_t *data, uint32_t count) {
         putU64(out, pos);
         out[8] = flags;
-        putU32(out + 9, count);
+        putU16(out + 9, static_cast<uint16_t>(count));
         if (count) memcpy(out + kHead, data, count);
         return completed(kHead + count);
       };

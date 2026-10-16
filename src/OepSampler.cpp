@@ -140,6 +140,10 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
 }
 
 uint8_t SamplerCapture::planCheck(const RoleAssignment *roles, size_t count) {
+  // capture §3.2: a changed plan while waiting, capturing or paused (2 / 3 / 5): cause 6
+  plan_cause_ = reg::core::kUnavailableCauseWrongState;
+  if (state_ == reg::fixture_logic::kStateWaiting || state_ == reg::fixture_logic::kStateCapturing || state_ == reg::fixture_logic::kStatePaused) return kRejectUnavailable;
+  plan_cause_ = reg::core::kUnavailableCauseLimit;
   uint32_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
     if (roles[i].role >= kMaxChannels) return kRejectUnsupported;   // a role this capture does not have (core §8)
@@ -385,27 +389,27 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       }
       return completed(used);
     }
-    case cap::kOpRead: {   // generation(u32) position(u64) max(u32) -> position(u64) flags(u8) len(u32) data [TLV]
-      const Result parsed = plainTail(tail, p, n, 16, out, capacity);
+    case cap::kOpRead: {   // generation(u32) position(u64) max(u16) -> position(u64) flags(u8) len(u16) data [TLV]
+      const Result parsed = plainTail(tail, p, n, 14, out, capacity);
       if (refused(parsed)) return parsed;
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
-      if (capacity < 13) return failed();
+      if (capacity < 11) return failed();
       poll();
       const uint64_t have = state_ == cap::kStateDone ? seg_samples_ : 0;
       uint64_t position = getU64(p + 4);
-      uint32_t max = getU32(p + 12);
+      uint32_t max = getU16(p + 12);
       if (position > have) position = have;
       uint32_t count = static_cast<uint32_t>(have - position);
-      size_t room = capacity - 13;   // how much read returns is the probe's (capture §3.2): max_read_ and the frame
+      size_t room = capacity - 11;   // how much read returns is the probe's (capture §3.2): max_read_ and the frame
       if (room > max_read_) room = max_read_;
       if (max > room) max = static_cast<uint32_t>(room);
       uint8_t flags = 0;
       if (count > max) { count = max; flags |= reg::common::kReadFlagsMore; }
       putU64(out, position);
       out[8] = flags;
-      putU32(out + 9, count);
-      if (count) memcpy(out + 13, buffer_ + position, count);
-      return completed(13 + count);
+      putU16(out + 9, static_cast<uint16_t>(count));
+      if (count) memcpy(out + 11, buffer_ + position, count);
+      return completed(11 + count);
     }
     case cap::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x segment [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);

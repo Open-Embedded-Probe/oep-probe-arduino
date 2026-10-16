@@ -115,7 +115,8 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
 uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
   refusal_cause_ = reg::core::kUnavailableCauseWrongState;
   refusal_channel_ = 0xFFFF;
-  if (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting) return kRejectUnavailable;
+  if (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting || state_ == ana::kStatePaused)
+    return kRejectUnavailable;   // capture §3.2: a changed plan while 2 / 3 / 5
   refusal_cause_ = reg::core::kUnavailableCauseLimit;   // the roles: more than its channels, one twice, one skipped
   if (count > kMaxChannels) return kRejectUnavailable;
   uint8_t seen = 0;
@@ -962,25 +963,25 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       }
       return completed(used);
     }
-    case ana::kOpRead: {   // generation(u32) position(u64) max(u32) -> position(u64) flags(u8: bit0 more) len(u32) data [TLV]
-      const Result parsed = plainTail(tail, p, n, 16, out, capacity);
+    case ana::kOpRead: {   // generation(u32) position(u64) max(u16) -> position(u64) flags(u8: bit0 more) len(u16) data [TLV]
+      const Result parsed = plainTail(tail, p, n, 14, out, capacity);
       if (refused(parsed)) return parsed;
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
       const uint64_t position = getU64(p + 4);
-      const uint32_t most = getU32(p + 12);
+      const uint32_t most = getU16(p + 12);
       // no plan or configuration (released: the data went with it): nothing to read
       const uint64_t end = state_ == ana::kStateUnconfigured || !buffer_ ? 0 : static_cast<uint64_t>(frames_) * channels_ * 2u;
-      if (capacity < 13) return failed();
+      if (capacity < 11) return failed();
       // how much read returns is the probe's (capture §3.2): within max, max_read_ and the frame
       size_t take = position < end ? static_cast<size_t>(end - position) : 0;
       if (take > most) take = most;
       if (take > max_read_) take = max_read_;
-      if (take > capacity - 13) take = capacity - 13;
+      if (take > capacity - 11) take = capacity - 11;
       putU64(out, position);
       out[8] = position + take < end ? reg::common::kReadFlagsMore : 0;
-      putU32(out + 9, static_cast<uint32_t>(take));
-      if (take) memcpy(out + 13, reinterpret_cast<const uint8_t *>(buffer_) + position, take);   // little endian
-      return completed(13 + take);
+      putU16(out + 9, static_cast<uint16_t>(take));
+      if (take) memcpy(out + 11, reinterpret_cast<const uint8_t *>(buffer_) + position, take);   // little endian
+      return completed(11 + take);
     }
     case ana::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x segment [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
