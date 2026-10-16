@@ -574,6 +574,26 @@ struct OpsProbe {
   DmConsole driver{dm, phy};
   TargetConsoleStream console{port, driver, 0};
   Binds binds;
+  // The Wi-Fi the probe.config cases name: entry 0 connected, 192.168.1.23/24, gateway and dns 192.168.1.1, -52 dBm, TCP
+  // on 4242 (when `up`).
+  struct FakeWifi final : WifiControl {
+    bool up = false;
+    void apply(const WifiEntry *, size_t, const Ipv4Setting &) override {}
+    Status status() const override {
+      Status s;
+      if (!up) return s;
+      s.state = kStateConnected;
+      s.entry = 0;
+      s.rssi = -52;
+      const uint8_t a[4] = {192, 168, 1, 23}, g[4] = {192, 168, 1, 1};
+      memcpy(s.ipv4, a, 4);
+      s.prefix = 24;
+      memcpy(s.gateway, g, 4);
+      memcpy(s.dns, g, 4);
+      return s;
+    }
+    uint16_t tcpPort() const override { return up ? 4242 : 0; }
+  } wifi;
   ProbeConfig config{ep, binds};
   LogicCapture logic{ep, pins};
   uint16_t corr = 1;
@@ -597,10 +617,16 @@ struct OpsProbe {
     ep.add(config);    // fn 8
     ep.add(logic);     // fn 9
     ep.setRawPorts(&binds);
+    // the settings the probe.config cases list: 1 label, 2 idle, 3 disable, 4 wifi, 5 ipv4, 6 com.example.ntp-server
+    config.setPins(&pins);
+    config.setWifi(&wifi);
+    config.addSetting("com.example.ntp-server", reg::probe_config::kSettingFormText, 1, 32);
+  }
+  void passthroughs() {   // the pass-throughs' settings too (testPassthrough)
     config.addPlace(wire, console);
     config.addUart(uart);
-    config.setPins(&pins);
   }
+  uint8_t number(uint8_t kind) const { return config.numberOf(kind); }   // a setting's number, by the probe's list
   ~OpsProbe() { logic.planRelease(); }
   bool on_bridge = false;   // the case's requests come on the UART bridge (serial port 0, COBS): oep.probe.link's port_speed
   Bytes send(const Bytes &m) { return on_bridge ? serialMessage(ep, uart_bridge, m) : bulkMessage(ep, bulk, m); }
@@ -762,13 +788,13 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     if (has("read from 4")) return true;
     const bool high = has("connection 65536") || has("stream 65537");   // numbers above u16: connection 65536, stream 65537 (core §9)
     if (high) ResourceNumbers::reset(65536);
-    if (has("mechanisms SDI")) p.console.declareMechanisms(1u << reg::target_console::kMechanismSdi);
+    if (has("mechanisms SDI")) p.console.declareMechanisms(1u << TargetConsoleStream::kDriverSdi);
     const bool sdi = has("mechanisms SDI") || has("is SDI");
     if (has("ops open/read/close/streams")) p.console.offerOptional(false);
     if (!p.open() || !p.attach()) return false;
     const uint32_t connection = high ? 65536 : 1;
     if (has("stream 65537") || has("one open dmseq stream") || !high) {
-      const uint8_t mech = sdi ? reg::target_console::kMechanismSdi : reg::target_console::kMechanismDmseq;
+      const uint8_t mech = p.console.numberOf(sdi ? TargetConsoleStream::kDriverSdi : TargetConsoleStream::kDriverDmseq);
       const Bytes r = p.request(7, reg::target_console::kOpOpen, {uint8_t(connection), uint8_t(connection >> 8),
                                                                   uint8_t(connection >> 16), uint8_t(connection >> 24), mech});
       if (!p.ok(r) || r.size() < 9 || getU32(&r[5]) != connection + 1) return false;   // the next number: the stream
@@ -784,11 +810,19 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
   if (names(fns, "oep.probe.config")) {   // probe.config's cases (oep-if-probe-config §1-§3): from what they say is there
     fakeConfigStore(nullptr, 0);
     auto set = [&](const Bytes &items) { return p.ok(p.request(8, reg::probe_config::kOpSet, items)); };
-    const Bytes idle4 = {1, reg::probe_config::kTlvItemIdle, 3, 0, 4, 0, 0};
-    const Bytes disable4 = {1, reg::probe_config::kTlvItemDisable, 2, 0, 4, 0};
-    if (has("CRC-valid saved blob")) {   // disable 5, idle 4 Hi-Z, a label on channel 40 (not this probe's): saved whole
-      Bytes blob = {reg::probe_config::kTlvItemLabel, 3, 0, 40, 0, 'x', reg::probe_config::kTlvItemIdle, 3, 0, 4, 0, 0,
-                    reg::probe_config::kTlvItemDisable, 2, 0, 5, 0};
+    const Bytes idle4 = {1, p.number(config_kind::kIdle), 3, 0, 4, 0, 0};
+    const Bytes disable4 = {1, p.number(config_kind::kDisable), 2, 0, 4, 0};
+    if (has("CRC-valid saved blob")) {   // disable 5, idle 4 Hi-Z, a label on channel 40 (not this probe's): saved whole,
+      Bytes blob;                        // by name (name_len name count(u16), then len(u16) key data each)
+      auto group = [&](const char *n, const Bytes &value) {
+        blob.push_back(uint8_t(strlen(n)));
+        blob.insert(blob.end(), n, n + strlen(n));
+        blob.insert(blob.end(), {1, 0, uint8_t(value.size()), 0});
+        blob.insert(blob.end(), value.begin(), value.end());
+      };
+      group(reg::probe_config::kNameSettingLabel, {40, 0, 'x'});
+      group(reg::probe_config::kNameSettingIdle, {4, 0, 0});
+      group(reg::probe_config::kNameSettingDisable, {5, 0});
       const uint32_t crc = crc32Ieee(blob.data(), blob.size());
       blob.insert(blob.end(), {uint8_t(crc), uint8_t(crc >> 8), uint8_t(crc >> 16), uint8_t(crc >> 24)});
       fakeConfigStore(blob.data(), blob.size());
@@ -801,6 +835,9 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     if (!p.open()) return false;
     if (has("one idle item") || has("one item generation2") || has("idle channel4 exists")) return set(idle4);
     if (has("disable channel4")) return set(disable4);
+    if (has("wifi entry 0 ssid lab passphrase password1"))
+      return set({1, p.number(config_kind::kWifi), 16, 0, 0, 0, 3, 'l', 'a', 'b', 9, 'p', 'a', 's', 's', 'w', 'o', 'r', 'd', '1'});
+    if (has("entry 0 connected")) p.wifi.up = true;
     if (has("generation0xFFFFFFFF")) p.config.testGeneration(0xFFFFFFFFu);
     return true;
   }
@@ -943,8 +980,9 @@ static void testOps(const char *file, const char *list) {
       putU32(&want[5 + 2 + 12], p.actual_samples);                   // the probe's own values (see the top)
       putU32(&want[5 + 2 + 24], LogicCapture::kStartUncertaintyNs);
     }
-    if (name.find("response extensions") != std::string::npos && want.size() >= 4 && want[want.size() - 4] == 0x7f)
-      want.resize(want.size() - 4);   // the answer TLV after the items is the host's to skip (core §2.3); none sent here
+    if (name.find("response extensions") != std::string::npos)   // a named extension after the items (core §2.2): the
+      for (size_t at = 0; at + kTlvHeader <= want.size(); ++at)   // host's to skip; none sent here
+        if (want[at] == 0x7f && at + kTlvHeader + getU16(&want[at + 1]) == want.size()) { want.resize(at); break; }
     CHECK(same(file, name, got, want));
   }
 }
@@ -1341,7 +1379,7 @@ static void testRestartLetsGo() {
   }, 2000);
   CHECK(p.ep.restartFn() == 11);
   CHECK(p.open() && p.attach());   // session S's connection 1 and its console's stream
-  const Bytes s = p.request(7, reg::target_console::kOpOpen, {1, 0, 0, 0, reg::target_console::kMechanismDmseq});
+  const Bytes s = p.request(7, reg::target_console::kOpOpen, {1, 0, 0, 0, p.console.numberOf(TargetConsoleStream::kDriverDmseq)});
   CHECK(p.ok(s));
   p.phy.halted = true;
   CHECK(p.port.connected && p.console.isOpen() && p.phy.halted);
@@ -1393,8 +1431,9 @@ static void testPassthrough() {
   {   // UART fn 5 on RX channel 3 to port 0
     boot();
     OpsProbe p;
+    p.passthroughs();
     CHECK(p.open());   // session S on the bulk port: port 0 not held
-    const Bytes item = {1, reg::probe_config::kTlvItemPassthrough, 10, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
+    const Bytes item = {1, p.number(config_kind::kPass), 11, 0, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
     CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
     p.config.poll();
     CHECK(p.uart.passing());
@@ -1412,9 +1451,10 @@ static void testPassthrough() {
   {   // a session's request on port 0 stops it; its end starts it again
     boot();
     OpsProbe p;
+    p.passthroughs();
     p.on_bridge = true;
     CHECK(p.open());
-    const Bytes item = {1, reg::probe_config::kTlvItemPassthrough, 10, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
+    const Bytes item = {1, p.number(config_kind::kPass), 11, 0, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
     CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
     p.config.poll();
     CHECK(!p.uart.passing());
@@ -1430,9 +1470,10 @@ static void testPassthrough() {
   {   // the target's console (rvswd fn 4 on 1 / 2, console fn 7, dmseq) to port 0: no connection, no stream of OEP's
     boot();
     OpsProbe p;
+    p.passthroughs();
     CHECK(p.open());
-    const Bytes item = {1, reg::probe_config::kTlvItemConsolePassthrough, 14, 0, 0, 4, 0, 1, 0, 2, 0, 0x40, 0x42, 0x0f,
-                        0x00, 7, 0, reg::target_console::kMechanismDmseq};
+    const Bytes item = {1, p.number(config_kind::kConsolePass), 15, 0, 0, 0, 4, 0, 1, 0, 2, 0, 0x40, 0x42, 0x0f,
+                        0x00, 7, 0, p.console.numberOf(TargetConsoleStream::kDriverDmseq)};
     CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
     p.config.poll();
     CHECK(p.port.resident && !p.port.connected && !p.console.isOpen());

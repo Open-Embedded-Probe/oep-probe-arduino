@@ -76,16 +76,25 @@ class TargetConsoleStream final : public Interface, public BindSource {
   void bindClose(uint8_t = 0) {}   // the old binds (the pass-through takes their place)
   bool isOpen() const { return open_; }
   uint8_t users() const { return open_ ? kUserHost : 0; }
-  // The mechanisms describe declares (console §1: n(u8) n x mechanism, at least one, none twice): bit k = mechanism k.
+  // The driver's mechanisms (DmConsole's own ids, not wire numbers): describe lists their names in this order and the
+  // k-th listed is mechanism number k on the wire (console §1, core §7.7).
+  enum : uint8_t { kDriverSdi = 0, kDriverDmdata = 1, kDriverDmseq = 2, kDrivers = 3 };
+  static constexpr const char *kDriverNames[kDrivers] = {reg::target_console::kNameMechanismSdi,
+                                                         reg::target_console::kNameMechanismDmdata,
+                                                         reg::target_console::kNameMechanismDmseq};
+  // The mechanisms describe declares (at least one): bit d = driver mechanism d.
   void declareMechanisms(uint8_t mask) { mechanisms_ = mask; }
+  // Wire number (from 1) <-> driver mechanism; -1 / 0: not declared.
+  int8_t driverOf(uint8_t number) const;
+  uint8_t numberOf(uint8_t driver) const;
   // probe.config §1.2: the console read for a pass-through on the port's resident link, its output to `sink` (no
   // stream, no number, no mark); false: a session's stream is open, or the mechanism did not start.
   using PassSink = void (*)(void *context, const uint8_t *data, size_t length);
-  bool passStart(uint8_t mechanism, PassSink sink, void *context);
+  bool passStart(uint8_t number, PassSink sink, void *context);   // number: the wire's mechanism number
   void passStop();
   bool passing() const { return pass_sink_ != nullptr; }
   bool passLost() const { return pass_lost_; }
-  bool offersMechanism(uint8_t m) const { return m < 8 && ((mechanisms_ >> m) & 1); }
+  bool offersMechanism(uint8_t number) const { return driverOf(number) >= 0; }   // a wire number
   DebugPort &port() const { return port_; }
   // BindSource: the stream while it exists (a closed one too, until another is opened), the target's input.
   const PositionStream *bindStream() const override { return exists_ ? &stream_ : nullptr; }

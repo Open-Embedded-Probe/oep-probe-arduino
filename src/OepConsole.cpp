@@ -4,6 +4,7 @@
 #include "OepConsole.h"
 
 #include <Arduino.h>
+#include <string.h>
 
 namespace oep {
 
@@ -11,12 +12,9 @@ namespace con = reg::target_console;
 
 size_t TargetConsoleStream::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
-  // mechanisms: n(u8) n x mechanism (oep-if-console §1), the ones declareMechanisms left
-  uint8_t v[1 + 8];
-  uint8_t n = 0;
-  for (uint8_t m = 0; m < 8; ++m) if (offersMechanism(m)) v[1 + n++] = m;
-  v[0] = n;
-  w.put(con::kTlvDescribeMechanisms, v, 1u + n);
+  // mechanism: one name each, the ones declareMechanisms left; the k-th is mechanism number k (console §1, core §7.7)
+  for (uint8_t d = 0; d < kDrivers; ++d)
+    if ((mechanisms_ >> d) & 1) w.put(con::kTlvDescribeMechanism, kDriverNames[d], strlen(kDriverNames[d]));
   return w.ok() ? w.length() : 0;
 }
 
@@ -93,8 +91,21 @@ uint32_t TargetConsoleStream::openStream(uint8_t mechanism) {
 
 bool TargetConsoleStream::bindOpen(uint8_t) { return false; }   // the old binds: the pass-through takes their place
 
-bool TargetConsoleStream::passStart(uint8_t mechanism, PassSink sink, void *context) {
-  if (open_ || pass_sink_ || !port_.resident || !offersMechanism(mechanism)) return false;
+int8_t TargetConsoleStream::driverOf(uint8_t number) const {
+  for (uint8_t d = 0, k = 0; d < kDrivers; ++d)
+    if (((mechanisms_ >> d) & 1) && ++k == number) return static_cast<int8_t>(d);
+  return -1;
+}
+
+uint8_t TargetConsoleStream::numberOf(uint8_t driver) const {
+  uint8_t k = 0;
+  for (uint8_t d = 0; d <= driver && d < kDrivers; ++d) k += (mechanisms_ >> d) & 1;
+  return k;
+}
+
+bool TargetConsoleStream::passStart(uint8_t number, PassSink sink, void *context) {
+  const int8_t mechanism = driverOf(number);
+  if (open_ || pass_sink_ || !port_.resident || mechanism < 0) return false;
   pass_sink_ = sink;
   pass_ctx_ = context;
   pass_lost_ = false;
@@ -114,8 +125,8 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
   if (op == kOpOpen) {   // connection(u32) mechanism(u8) [TLV]  ->  stream(u32) [TLV] (oep-if-console §1)
     const Result parsed = plainTail(tail, payload, length, 5, out, capacity);
     if (refused(parsed)) return parsed;
-    const uint8_t mechanism = payload[4];
-    if (!offersMechanism(mechanism)) return unsupportedValue(out, capacity);   // not in describe's mechanisms (0x00)
+    const int8_t mechanism = driverOf(payload[4]);
+    if (mechanism < 0) return unsupportedValue(out, capacity);   // not in describe's mechanism list (0x00)
     const uint32_t connection = getU32(payload);
     if (!port_.connected || connection != port_.number) {
       // another kind's number, or a connection this console does not ride on (arm-adi): unavailable cause 6; a number
@@ -140,7 +151,7 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     if (!out[1]) return completed(2);
     putU32(out + 2, stream_number_);   // no element length (core §2.3)
     putU32(out + 6, connection_);
-    out[10] = mechanism_;
+    out[10] = numberOf(mechanism_);
     return completed(11);
   }
   if (length < 4) return rejected(kRejectMalformed);
@@ -208,7 +219,7 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
       if (refused(parsed)) return parsed;
       if (checking_) return completed();
       if (!open_) return wrongState(out, capacity);
-      if (mechanism_ == reg::target_console::kMechanismSdi) return unsupportedValue(out, capacity);   // one way (§1, §3.1)
+      if (mechanism_ == kDriverSdi) return unsupportedValue(out, capacity);   // one way (§1, §3.1)
       if (capacity < 2) return failed();
       poll();   // a frame waiting takes from the queue first, so its free space is as it is now
       if (!open_) return wrongState(out, capacity);

@@ -183,7 +183,7 @@ static uint32_t pingDeliveryMs(Interface &wire, DebugPort &port, TargetConsoleSt
                                uint32_t period_ms, uint32_t rtt_ms) {
   Bytes out;
   if (!port.connected) call(wire, WireRvswd::kOpAttach, attachRequest(), out);
-  call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+  call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
   const uint16_t stream = uint16_t(out[0] | out[1] << 8);
   SeqTarget target(phy.data0);
   uint32_t next = millis();
@@ -257,7 +257,7 @@ int main() {
 
   Result r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
   CHECK(ok(r) && port.connected);
-  r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+  r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
   CHECK(ok(r) && out.size() == 3);
   const uint16_t stream = uint16_t(out[0] | out[1] << 8);
   {
@@ -331,7 +331,7 @@ int main() {
     CHECK(ok(r) && !console.isOpen());
     CHECK(driver.room() == 0);   // closed: nothing taken
     phy.halted = false;
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
     CHECK(ok(r) && console.isOpen());
     CHECK(driver.room() == DmConsole::kSendQueue);   // the queue went with the closed stream
     const uint16_t dmdata = uint16_t(out[0] | out[1] << 8);
@@ -340,7 +340,7 @@ int main() {
     CHECK(console.bindInput(typed, sizeof typed) == sizeof typed);
     r = call(console, TargetConsoleStream::kOpClose, le16(dmdata), out);
     CHECK(ok(r));
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismSdi}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverSdi)}), out);
     CHECK(ok(r));
     const uint16_t sdi = uint16_t(out[0] | out[1] << 8);
     r = call(console, TargetConsoleStream::kOpWrite, cat(le16(sdi), {1, 0, 'a'}), out);   // one way: nothing
@@ -359,7 +359,7 @@ int main() {
     phy.halted = false;
     phy.data0 = 0x80u | 7u | uint32_t('h') << 8 | uint32_t('i') << 16 | uint32_t('!') << 24;
     const size_t writes_before = phy.data0_writes.size();
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
     CHECK(ok(r));
     const uint16_t s1 = uint16_t(out[0] | out[1] << 8);
     CHECK(phy.data0_writes.size() == writes_before);   // open wrote nothing
@@ -407,7 +407,7 @@ int main() {
   // ---- reading goes on while the hart runs, judged from DMSTATUS at least every 20 ms (oep-if-console §3): a hart the
   // probe halted and the host resumed through raw DMI is read again (it waited for the next high-level op) ----
   {
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(ok(r) && console.isOpen());
     CHECK(dm.halt() && dm.halted() && phy.halted);
     g_millis += 25;
@@ -504,7 +504,7 @@ int main() {
   // showed the old one's marks): its only mark is attach, its positions go on; the same mechanism again reopens it with
   // its marks; a fixture UART's stream disappears with its plan (oep-if-fixture §2) ----
   {
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(ok(r));
     const uint16_t old_stream = uint16_t(out[0] | out[1] << 8);
     r = call(console, TargetConsoleStream::kOpMark, cat(le16(old_stream), {0x5a}), out);
@@ -513,7 +513,7 @@ int main() {
     CHECK(before.size() >= 2);
     r = call(console, TargetConsoleStream::kOpClose, le16(old_stream), out);
     CHECK(ok(r));
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
     CHECK(ok(r) && out[2] == 0);
     const uint16_t fresh = uint16_t(out[0] | out[1] << 8);
     CHECK(fresh != old_stream);
@@ -526,7 +526,7 @@ int main() {
     CHECK(rejectedWith(r, kRejectNoResource));   // the old number is gone (no_connection, core §4.3)
     r = call(console, TargetConsoleStream::kOpClose, le16(fresh), out);
     CHECK(ok(r));
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmdata}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmdata)}), out);
     CHECK(ok(r) && out[2] == legacy::kOpenFlagsExisting && uint16_t(out[0] | out[1] << 8) == fresh);
     marks = marksOf(console, fresh);
     CHECK(marks.size() == 3);   // attach, closed, attach: reopened at the same place, the marks continue
@@ -552,7 +552,7 @@ int main() {
       r = call(wire_fn, WireRvswd::kOpAttach, attachRequest(), out);
       CHECK(ok(r) && port.connected);
     }
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {con::kMechanismDmseq}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(port.number), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(ok(r) && console.isOpen());
     const uint16_t s = uint16_t(out[0] | out[1] << 8);
     Bytes detach = le16(port.number);
@@ -573,11 +573,11 @@ int main() {
   // (oep-if-console §1; it answered no_connection) ----
   {
     const uint16_t swd = ResourceNumbers::take(ResourceNumbers::kConnection);
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(rejectedWith(r, kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1, 0,
                                                                 reg::core::kUnavailableCauseWrongState}));
     ResourceNumbers::close(swd);
-    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {con::kMechanismDmseq}), out);   // closed: unknown
+    r = call(console, TargetConsoleStream::kOpOpen, cat(le16(swd), {console.numberOf(TargetConsoleStream::kDriverDmseq)}), out);   // closed: unknown
     CHECK(rejectedWith(r, kRejectNoResource));
   }
 
@@ -594,7 +594,7 @@ int main() {
     static TargetConsoleStream console3(port3, driver3, 2);
     r = call(wire3, WireRvswd::kOpAttach, attachRequest(), out);
     CHECK(ok(r) && port3.connected);
-    r = call(console3, TargetConsoleStream::kOpOpen, cat(le16(port3.number), {con::kMechanismDmseq}), out);
+    r = call(console3, TargetConsoleStream::kOpOpen, cat(le16(port3.number), {console3.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
     CHECK(ok(r));
     const uint16_t s3 = uint16_t(out[0] | out[1] << 8);
     SeqTarget target(phy3.data0);
@@ -668,7 +668,7 @@ int main() {
     // session 7: attach, open dmseq, a host mark; then end
     CHECK(answeredOk(send(0, reg::core::kOpOpen, lease, 7)));
     CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 7)) && port4.connected);
-    Bytes a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {con::kMechanismDmseq}), 7);
+    Bytes a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {console4.numberOf(TargetConsoleStream::kDriverDmseq)}), 7);
     CHECK(answeredOk(a) && a.size() == kResultHeader + 3 && a[kResultHeader + 2] == 0);
     const uint16_t s4 = a.size() >= kResultHeader + 2 ? uint16_t(a[kResultHeader] | a[kResultHeader + 1] << 8) : 0;
     CHECK(answeredOk(send(2, TargetConsoleStream::kOpMark, cat(le16(s4), {0x11}), 7)));
@@ -691,7 +691,7 @@ int main() {
     // session 8: a new connection at the same place, the same mechanism: the same number, its marks continued
     CHECK(answeredOk(send(0, reg::core::kOpOpen, lease, 8)));
     CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 8)) && port4.connected);
-    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {con::kMechanismDmseq}), 8);
+    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {console4.numberOf(TargetConsoleStream::kDriverDmseq)}), 8);
     CHECK(answeredOk(a) && a.size() == kResultHeader + 3 && uint16_t(a[5] | a[6] << 8) == s4 &&
           (a[7] & legacy::kOpenFlagsExisting));
     const size_t before = marks.size();
@@ -703,7 +703,7 @@ int main() {
 
     // a slot's bind uses it too: the end takes only the session's share - the stream stays open, no closed mark
     uint32_t dmstatus = 0;
-    CHECK(attachRunning(port4, DebugPort::kUserSlot, dmstatus) && console4.bindOpen(con::kMechanismDmseq));
+    CHECK(attachRunning(port4, DebugPort::kUserSlot, dmstatus) && console4.bindOpen(console4.numberOf(TargetConsoleStream::kDriverDmseq)));
     CHECK(console4.users() == (TargetConsoleStream::kUserHost | TargetConsoleStream::kUserSlot));
     CHECK(answeredOk(send(0, reg::core::kOpEnd, {}, 8)));
     console4.poll();
@@ -717,7 +717,7 @@ int main() {
     // a lapse ends the session the same way: closed 2
     CHECK(answeredOk(send(0, reg::core::kOpOpen, cat(u32(reg::kLimitLeaseMinMs), {0}), 9)));
     CHECK(answeredOk(send(1, WireRvswd::kOpAttach, attachRequest(), 9)));
-    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {con::kMechanismDmseq}), 9);
+    a = send(2, TargetConsoleStream::kOpOpen, cat(le16(port4.number), {console4.numberOf(TargetConsoleStream::kDriverDmseq)}), 9);
     CHECK(answeredOk(a) && uint16_t(a[5] | a[6] << 8) == s4);
     g_millis += reg::kLimitLeaseMinMs + 1;
     marks = streamMarks(s4);   // the lapse is judged as this request arrives
@@ -753,7 +753,7 @@ int main() {
     static DmConsole driver5(dm5, phy5);
     static TargetConsoleStream console5(port5, driver5, 2);
     CHECK(ok(call(wire5, WireRvswd::kOpAttach, attachRequest(), out)));
-    CHECK(ok(call(console5, TargetConsoleStream::kOpOpen, cat(le16(port5.number), {con::kMechanismDmseq}), out)));
+    CHECK(ok(call(console5, TargetConsoleStream::kOpOpen, cat(le16(port5.number), {console5.numberOf(TargetConsoleStream::kDriverDmseq)}), out)));
     const uint16_t s5 = uint16_t(out[0] | out[1] << 8);
     SeqTarget target(phy5.data0);
     for (int i = 0; i < 200; ++i) { advanceMicros(500); console5.poll(); target.available(); }   // synced

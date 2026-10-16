@@ -331,7 +331,6 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   for (uint8_t m = 0; m < channels_; ++m) layout[4 + m] = order[m];
   w.put(ana::kTlvConfigureAnswerLayout, layout, 4u + channels_);
   w.u32(ana::kTlvConfigureAnswerActualSamples, samples);   // one-shot: no actual_segments (capture §3.3)
-  w.u32(ana::kTlvConfigureAnswerBlockingMs, 0);
   for (uint8_t k = 0; k < channels_; ++k) {
     const Frontend &f = *frontendOf(chosen[k]);
     uint8_t scale[9] = {k};

@@ -170,7 +170,10 @@ class CaptureGroup final : public Interface {
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_capture_group::kLockFreeOps, op); }
   // bind .. status, force (optional) included: the ops tag declares them (core §1.2)
-  bool offers(uint8_t op) const override { return opIn(op, reg::fixture_capture_group::kOpBind, reg::fixture_capture_group::kOpStatus); }
+  bool offers(uint8_t op) const override {
+    using namespace reg::fixture_capture_group;
+    return op == kOpBind || op == kOpStart || op == kOpStop || op == kOpStatus;
+  }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }

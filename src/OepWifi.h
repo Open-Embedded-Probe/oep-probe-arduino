@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Wi-Fi for OEP over TCP on an ESP32 with its own radio: joins the networks of oep.probe.config's wifi item (item 0x08,
-// probe.config §1.4, OepConfig.h), listens on one TCP port (OepTcp.h) and announces it by mDNS. Header-only: only a sketch that
+// Wi-Fi for OEP over TCP on an ESP32 with its own radio: joins the networks of oep.probe.config's wifi item with the
+// netif's ipv4 item (probe.config §1.3-§1.5, OepConfig.h; netif 1 "wifi"), listens on one TCP port (OepTcp.h) and
+// announces it by mDNS. Header-only: only a sketch that
 // includes it links the Wi-Fi stack.
 //
 //   static oep::TcpListener<3> tcp;
@@ -11,11 +12,11 @@
 //   wifi.begin(unitId);                    // mDNS names from the unit_id
 //   loop(): wifi.poll(); tcp.poll(); endpoint.poll(); ...
 //
-// The list is tried in index order (probe.config §1.4: no entry skipped - a hidden SSID never shows in a scan), each
+// The list is tried in entry order (probe.config §1.4: no entry skipped - a hidden SSID never shows in a scan), each
 // entry for up to kTryMs (less when the driver reports a failure: network not found, authentication); the first that
 // gets an IPv4 address is kept. After every entry failed the probe waits kRetryMs and starts over; after the link goes
 // it starts over at once. A list changed while connected keeps the link when the entry in use is still there
-// unchanged; otherwise the change takes effect kApplyDelayMs later (the answer to the set that changed it goes out
+// unchanged and the IPv4 is the same; otherwise the change takes effect kApplyDelayMs later (the answer to the set that changed it goes out
 // first, also on that link). An empty list turns the radio off.
 //
 // Discovery (transports §3): DNS-SD over mDNS, host name "oep-<unit_id>", service _oep._tcp on the
@@ -54,11 +55,12 @@ class WifiStation final : public WifiControl {
     WiFi.onEvent(onDisconnected, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   }
 
-  void apply(const WifiEntry *entries, size_t count) override {
-    // the entry in use, unchanged in the new list: the link stays
+  void apply(const WifiEntry *entries, size_t count, const Ipv4Setting &ipv4) override {
+    // the entry in use, unchanged in the new list, with the same IPv4: the link stays (§1.3)
     bool keep = false;
-    if (phase_ == kConnected && current_ < count_)
+    if (phase_ == kConnected && current_ < count_ && ipv4 == ipv4_)
       for (size_t i = 0; i < count; ++i) keep |= entries[i] == list_[current_];
+    ipv4_ = ipv4;
     const WifiEntry was = current_ < count_ ? list_[current_] : WifiEntry{};
     count_ = count > ProbeConfig::kMaxWifi ? ProbeConfig::kMaxWifi : count;
     for (size_t i = 0; i < count_; ++i) list_[i] = entries[i];
@@ -81,11 +83,17 @@ class WifiStation final : public WifiControl {
     s.entry = (phase_ == kConnected || phase_ == kTrying) && current_ < count_ ? list_[current_].index : kNoEntry;
     if (phase_ == kConnected) {
       s.rssi = static_cast<int8_t>(WiFi.RSSI());
-      const uint32_t ip = static_cast<uint32_t>(WiFi.localIP());
+      const uint32_t ip = static_cast<uint32_t>(WiFi.localIP()), gw = static_cast<uint32_t>(WiFi.gatewayIP()),
+                     dns = static_cast<uint32_t>(WiFi.dnsIP());
       memcpy(s.ipv4, &ip, 4);   // network order, as IPAddress keeps it: a.b.c.d
+      memcpy(s.gateway, &gw, 4);
+      memcpy(s.dns, &dns, 4);
+      const IPAddress mask = WiFi.subnetMask();
+      for (int i = 0; i < 4; ++i) for (uint8_t b = mask[i]; b & 0x80; b <<= 1) ++s.prefix;
     }
     return s;
   }
+  uint16_t tcpPort() const override { return listening_ ? port_ : 0; }
 
   void poll() {
     const uint32_t now = millis();
@@ -134,6 +142,7 @@ class WifiStation final : public WifiControl {
   void *tcp_;
   char unit_[40] = {};
   WifiEntry list_[ProbeConfig::kMaxWifi];
+  Ipv4Setting ipv4_;                // DHCP unless the ipv4 item says static
   size_t count_ = 0, current_ = 0;
   size_t tried_ = 0;   // the entries of list_ tried since the start over
   uint8_t phase_ = kOff, state_ = kStateOff, reason_ = kReasonNone;
@@ -222,6 +231,13 @@ class WifiStation final : public WifiControl {
     trying_length_ = 0;
     memcpy(trying_, e.ssid, e.ssid_length);
     trying_length_ = e.ssid_length;
+    if (ipv4_.mode == reg::probe_config::kIpv4ModeStatic) {   // §1.5: the fixed address, gateway and dns (0: none)
+      const uint32_t mask = ipv4_.prefix >= 32 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu >> ipv4_.prefix);
+      WiFi.config(IPAddress(ipv4_.address), IPAddress(ipv4_.gateway),
+                  IPAddress(uint8_t(mask >> 24), uint8_t(mask >> 16), uint8_t(mask >> 8), uint8_t(mask)), IPAddress(ipv4_.dns));
+    } else {
+      WiFi.config(IPAddress(), IPAddress(), IPAddress());   // DHCP (§1.3's default)
+    }
     WiFi.begin(e.ssid, e.pass_length ? e.pass : nullptr);
   }
   void up() {   // an address: the listener, once (it stays across links: it listens on every address)

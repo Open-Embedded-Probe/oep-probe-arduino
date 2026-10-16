@@ -23,7 +23,7 @@ static int failures = 0, checks = 0;
   } while (0)
 
 static void label(Bytes &items, uint16_t channel, const std::string &text) {
-  items.push_back(reg::probe_config::kTlvItemLabel);
+  items.push_back(config_kind::kLabel);
   items.push_back(static_cast<uint8_t>(2 + text.size()));   // len(u16 LE)
   items.push_back(0);
   items.push_back(channel & 0xff);
