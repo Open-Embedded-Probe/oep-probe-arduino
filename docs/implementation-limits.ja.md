@@ -359,6 +359,10 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   次の SETUP が届くと panic する（upstream の不具合）。P4 では panic はチップのリセットになるので、host には device が bus から外れて列挙し
   直し、boot_id が変わったように見える（firmware の文字列には `panic at <n> s`、§2.2）。セッション、資源、保存していない設定は失われる。
   host は boot_id の変化で知り、開き直す。直った版が出たら上げる。
+- **TODO（未解決、優先度低）: 2 回目の streaming での watchdog**: 以前、同じ起動で 2 回目の streaming を始めたときに watchdog の
+  リセットが見えた。0.0.35 の前（2026-10-20、P4X）に、同じセッションで streaming を 10 回続けても再現しなかった（そのときの落としは
+  host の負荷による受信の遅れで、firmware の問題ではなかった）。再現したら、そのときの firmware の文字列（`panic at <n> s` や wdt の
+  印、§2.2）と、直前の操作の並びを残す。
 - fixture UART の受信の割り込みは core 0（loop() は core 1）で、FIFO の閾値は 32 byte、ドライバの受信のバッファは 16 KiB。2000000 bps まで。
 - i2c-target: ESP-IDF の slave ドライバ（v1）は受けた byte の数を知らせず、送信は区切りの無い流れなので、この実装は周辺の割り込みを
   自分で受け、トランザクションの byte を数え、TX FIFO を置き場から埋める（空なら 0xFF）。チップの FIFO の癖（読み出しの最後に余分な byte を
