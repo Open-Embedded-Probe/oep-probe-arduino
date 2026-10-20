@@ -61,6 +61,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint8_t kMaxChannels = 16;
   static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsWhen1;   // describe trigger opts
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
+  // a triggered one-shot's segment, copied out of the ring: up to this (and the store's room) at this rate or below
+  static constexpr size_t kTriggeredSegmentMax = 16 * 1024 * 1024;
+  static constexpr uint32_t kTriggeredLongMaxBytes = 20000000;
   static constexpr uint32_t kSourceHz = 160000000, kMinHz = 627451;   // PLL_F160M / 255 (256 silently fails)
   // one-shot's ceiling by channel count (configure takes the nearest it allows): up to 8 lines 100 MHz, 16 lines 48 MHz
   static constexpr uint8_t kLimitLines8 = 8;

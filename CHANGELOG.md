@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) A triggered one-shot (an edge, a level, linked) is no longer bound to the DMA's one receive (64 KiB): its segment
+  is copied out of the ring into the store, so it takes the store's room (16 MiB at most) at a rate the harvest keeps
+  up with - the internal ring 20 MB/s, a linked track's PSRAM ring 40 MB/s; faster, and an immediate one-shot, 64 KiB as
+  before. describe's one-shot max_samples says the most; configure / query what a setting gets (a query counts the
+  segment it holds as freed, as the configure after it would). The P4X: 10 MHz x 8 lines, 200000 samples both ways in
+  a group, 500000 with an edge alone.
+- (JA) トリガ付きの one-shot（エッジ、レベル、linked）は、DMA の 1 回の受信（64 KiB）に縛られなくなった。
+  - 区画はリングから store へ写すので、収穫が追いつく速さなら store の空き（最大 16 MiB）まで取れる。速さの上限は、内部 RAM の
+    リングで 20 MB/s、linked のトラックの PSRAM のリングで 40 MB/s。それより速いときと即時の one-shot は、前と同じ 64 KiB。
+  - describe の one-shot の max_samples は、取れる最大を宣言する。設定ごとの実際の値は configure / query の答え（query は、持っている
+    区画を空くものとして数え、次の configure と同じ値を返す）。
+  - P4X: 10 MHz × 8 本で、組の両方向とも 200000 サンプル、単独のエッジで 500000 サンプルを確かめた。
 - (EN) A linked logic track (capture-group's trigger source) takes the PSRAM ring (1 MiB) when there is PSRAM, judging
   as well as following: its pretrigger may be that ring's half (524288 samples at w 8; the segment's samples bound it
   too) - the internal ring's half (32768) before. The P4X: pretrigger 40000 at 10 MHz x 8 lines, both ways.

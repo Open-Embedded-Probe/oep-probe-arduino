@@ -126,7 +126,8 @@ static void board(size_t internal, size_t psram) {
   g_fake_heap.psram_total = g_fake_heap.psram_free = psram;
 }
 
-// capture §3.3: samples above the limit is rounded down, actual_samples authoritative - never refused, never wrapped
+// capture §3.3: samples above the limit is rounded down, actual_samples authoritative - never refused, never wrapped;
+// a triggered one-shot's limit is the store's room (copied out of the ring), an immediate one's the DMA's receive
 static void testOverLimitRoundsDown() {
   for (const size_t psram : {size_t(0), size_t(32) << 20}) {
     for (const uint8_t channels : {1, 2, 16}) {
@@ -143,10 +144,18 @@ static void testOverLimitRoundsDown() {
           c.pretrigger = trigger ? 100 : 0;
           const Result r = configure(rig.cap, c, out);
           uint32_t got = 0;
-          CHECK(ok(r) && findU32(out, cap::kTlvConfigureAnswerActualSamples, got) && got > 0 && got <= limit && got + 1024 / w > limit);
-          if (!ok(r) || got == 0 || got > limit) printf("  one-shot w=%u asked=%u trigger=%d psram=%zu: %u (res %u det %u failed allocs %d units %d)\n", w, asked, trigger, psram, got, r.resolution, r.detail, g_fake_heap.failed, g_fake_parlio_units);
+          // immediate: the DMA's one receive (kSegmentBytes); with a trigger at this rate (the lowest) the store's
+          // room, kTriggeredSegmentMax at most - asked within it, whole cache lines (up to 1024 bits more)
+          const uint32_t most = static_cast<uint32_t>(LogicCapture::kTriggeredSegmentMax * 8 / w);
+          bool good = ok(r) && findU32(out, cap::kTlvConfigureAnswerActualSamples, got) && got > 0;
+          if (!trigger) good = good && got <= limit && got + 1024 / w > limit;
+          else good = good && got <= most && got >= (asked < limit ? asked : limit) &&
+                      (asked >= most || got <= asked + 1024 / w) && (!psram || asked < most || got == most);
+          CHECK(good);
+          if (!good) printf("  one-shot w=%u asked=%u trigger=%d psram=%zu: %u (res %u det %u failed allocs %d units %d)\n", w, asked, trigger, psram, got, r.resolution, r.detail, g_fake_heap.failed, g_fake_parlio_units);
           Bytes q;
-          CHECK(ok(configure(rig.cap, c, q, true)) && findU32(q, cap::kTlvConfigureAnswerActualSamples, got) && got > 0 && got <= limit);
+          uint32_t queried = 0;
+          CHECK(ok(configure(rig.cap, c, q, true)) && findU32(q, cap::kTlvConfigureAnswerActualSamples, queried) && queried == got);
         }
         board(512 * 1024, psram);
         Rig rig(channels);
@@ -1274,6 +1283,37 @@ static void testTriggeredHole() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
 }
 
+// A triggered one-shot longer than the DMA's one receive (kSegmentBytes): copied out of the ring into the store chunk
+// by chunk - 2,000,000 samples at w 2 (500 KB, 1 MHz) asked, given, captured whole around the edge.
+static void testLongTriggeredSegment() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.rate = 1000000;
+  c.samples = 2000000;
+  c.trigger = true;   // falling edge on role 0
+  c.pretrigger = 100;
+  CHECK(ok(configure(rig.cap, c, out)));
+  uint32_t got = 0;
+  CHECK(findU32(out, cap::kTlvConfigureAnswerActualSamples, got) && got >= 2000000 && got < 2000000 + 512);   // whole lines
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  const uint32_t generation = getU32(out.data());
+  dma.deliver(1000, 0xFF);   // samples 0..3999 high, then low from 4000: the edge at 4000, the segment from 3900
+  dma.run();
+  for (int k = 0; k < 130; ++k) { dma.deliver(4096, 0x00); dma.run(); }   // 532 KB on: past the segment's end
+  rig.cap.poll();
+  CHECK(rig.cap.trackState() == cap::kStateDone);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 && out[1] == 1);
+  CHECK(getU32(out.data() + 2 + 12) == got && getU32(out.data() + 2 + 28) == 100 && out[2 + 32] == 0);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 30), out)) && getU16(out.data() + 9) == 30);
+  CHECK(out[11] == 0xFF && out[11 + 24] == 0xFF && out[11 + 25] == 0x00);   // samples 0..99 high, the edge low
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 499990, 10), out)) && getU16(out.data() + 9) == 10 &&
+        out[11 + 9] == 0x00);   // its last bytes, low
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && getU64(out.data() + 5) == got / 4);
+}
+
 // trigger_index is the pretrigger exactly (capture §2, §3.3: pretrigger samples kept before the trigger's), wherever in
 // a byte the trigger falls: at w = 2 an edge on the second sample of a byte gave trigger_index 101 for a pretrigger of
 // 100 (the segment started on the byte holding sample t - P; bench, P4, 1001 for 1000). The segment's data starts
@@ -1457,6 +1497,7 @@ static void testForcedAfterWrap() {
 int main() {
   testForcedAfterWrap();
   testTriggerIndexMidByte();
+  testLongTriggeredSegment();
   testForcedAndEarly();
   testFollowerKeeps();
   testSerialsWrap();

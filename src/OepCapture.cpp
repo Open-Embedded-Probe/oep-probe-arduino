@@ -781,7 +781,10 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   // no features: revision 1 defines no bit (query, force, subscribe and unsubscribe are in the ops tag, capture §3.6)
   // mode(u8) max_samples(u32) max_segments(u32), one per mode (capture §3.5)
   uint8_t mode[9] = {1};                           // one-shot (DMA: the probe keeps answering)
-  putU32(mode + 1, kSegmentBytes * 8);             // max samples at w = 1
+  // max samples at w = 1: with a trigger, at a rate the harvest keeps up with, the store's most (an immediate one
+  // kSegmentBytes: configure / query say which a setting gets)
+  const size_t one_shot = storeMax() < kTriggeredSegmentMax ? storeMax() : kTriggeredSegmentMax;
+  putU32(mode + 1, static_cast<uint32_t>((one_shot > kSegmentBytes ? one_shot : kSegmentBytes) * 8));
   putU32(mode + 5, 1);                             // one segment
   w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   mode[0] = 2;                                     // repeat: the most the store can ever hold
@@ -887,7 +890,9 @@ size_t LogicCapture::storeMax() const {
 }
 
 size_t LogicCapture::storeBudget(uint32_t &caps) const {
-  const size_t held = store_ ? store_bytes_ : 0;   // freed before the next store is taken
+  // what it holds now is freed before the next store is taken: the store, a triggered one-shot's segment (its own
+  // block, not the ring) - a query answers as the configure after it would
+  const size_t held = (store_ ? store_bytes_ : 0) + (buffer_ && !buffer_in_ring_ ? bytes_ + 1 : 0);
   const size_t psram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) + held;
   if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0 && psram > 2 * kPsramReserve) {
     caps = MALLOC_CAP_SPIRAM;
@@ -1147,12 +1152,21 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   }
   uint32_t bytes = 0;
   if (mode == 1) {
-    const uint32_t max_samples = static_cast<uint32_t>(kSegmentBytes * 8 / width);
-    if (samples > max_samples) samples = max_samples;
-    bytes = (samples * width + 7) / 8;
-    bytes = (bytes + 127) & ~127u;                                   // whole cache lines for the DMA
-    if (bytes > kSegmentBytes) bytes = kSegmentBytes;
-    samples = bytes * 8 / width;
+    // Immediate, the DMA writes the segment itself: one receive, kSegmentBytes at most. With a trigger the harvest
+    // copies it out of the ring into the store: as long as the store's room, at a rate the harvest keeps up with (the
+    // internal ring 20 MB/s, the PSRAM one a linked track takes 40 MB/s - P4X, 2026-10-20); faster, kSegmentBytes
+    const bool linked_psram = trig_type == cap::kTriggerLinked && streamRingAvailable();
+    const uint64_t speed = static_cast<uint64_t>(rate) * width / 8;
+    size_t most = kSegmentBytes;
+    if (trig_type != cap::kTriggerImmediate && speed <= (linked_psram ? kStreamMaxBytes : kTriggeredLongMaxBytes) &&
+        budget > kSegmentBytes)
+      most = budget < kTriggeredSegmentMax ? budget : kTriggeredSegmentMax;
+    const uint64_t asked = (static_cast<uint64_t>(samples) * width + 7) / 8;
+    uint64_t b = asked < most ? asked : most;
+    b = (b + 127) & ~uint64_t{127};                                  // whole cache lines for the DMA
+    if (b > most) b = most / 128 * 128;
+    bytes = static_cast<uint32_t>(b);
+    samples = static_cast<uint32_t>(static_cast<uint64_t>(bytes) * 8 / width);
   }
   // the pretrigger is what the ring can give back at this sample width (describe declares the most, at w = 1), less
   // than the segment's samples as rounded (capture §3.3); only with a trigger (above), so a one-shot
