@@ -337,17 +337,55 @@ void LogicCapture::dropDirect(size_t n) {
 }
 
 void LogicCapture::dropAfter(size_t n) {
-  if (!spill_used_ && !spill_drop_) { dropDirect(n); return; }
+  if (!spilling()) { dropDirect(n); return; }
   stage_drops_ += n;
   dropped_ += n;
   spill_drop_ += n;   // the position jumps once the spill has gone (drainSpill)
 }
 
+bool IRAM_ATTR LogicCapture::asyncDone(async_memcpy_handle_t, async_memcpy_event_t *, void *context) {
+  auto *self = static_cast<LogicCapture *>(context);
+  self->async_done_ = self->async_done_ + 1;
+  return false;
+}
+
+// The copies finished, oldest first, into spill_used_ (a DMA one's lines read fresh: the cache invalidated); from one
+// whose source the ring came round over, it and those after it dropped. Harvest task only.
+void LogicCapture::retireSpill() {
+  const uint32_t done = async_done_;
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  while (copy_head_ != copy_tail_) {
+    const SpillCopy &c = copies_[copy_head_ % kSpillCopies];
+    if (c.dma) {
+      if (async_retired_ == done) break;   // not finished yet (the GDMA does them in order)
+      ++async_retired_;
+      if (!spill_poison_ && !ringIntact(c.ring)) {   // rewritten before (or while) the DMA read it
+        countOverrun();
+        spill_poison_ = true;
+      }
+    }
+    spill_pending_ -= c.len;
+    if (spill_poison_) {
+      stage_drops_ += c.len;
+      dropped_ += c.len;
+      spill_drop_ += c.len;
+    } else {
+      if (c.dma) esp_cache_msync(spill_ + c.dst, c.len, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+      spill_used_ += c.len;
+      if (spill_used_ > spill_peak_) spill_peak_ = static_cast<uint32_t>(spill_used_);
+    }
+    ++copy_head_;
+  }
+  if (copy_head_ == copy_tail_) spill_poison_ = false;   // the input after it is dropped by spill_drop_ until drained
+}
+
 // Chunk [at, end) into the spill (no stage free, or the spill holds bytes before it). -> where it got to: short when
-// the spill is full (the ring holds the rest). Without a spill: at, unchanged. Harvest task only.
+// the spill is full or kSpillCopies copies are in flight (the ring holds the rest). Without a spill: at, unchanged.
+// Harvest task only.
 size_t LogicCapture::spillIn(const Chunk &chunk, size_t at) {
   if (!spill_ || lost_) return at;
-  if (at == 0 && !spill_used_ && !spill_drop_) {}   // harvestDirect looked at this chunk's start already
+  retireSpill();
+  if (at == 0 && !spilling()) {}   // harvestDirect looked at this chunk's start already
   else if (at == 0) {
     if (const uint32_t m = missed(chunk)) dropAfter(m);   // chunks lost to the queue
     const uint32_t held = ring_end_ - chunk.ring;
@@ -356,29 +394,47 @@ size_t LogicCapture::spillIn(const Chunk &chunk, size_t at) {
   const bool copy = format_ != cap::kDataFormatTestCounter;   // format 4's bytes are written at the send
   while (at < chunk.length) {
     const size_t rest = chunk.length - at;
-    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at)) || spill_drop_) {   // rewritten, or after a drop: dropped
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at)) || spill_drop_ || spill_poison_) {   // rewritten, or after a drop
       if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) countOverrun();
       dropAfter(rest);
       return chunk.length;
     }
-    const size_t tail = (spill_head_ + spill_used_) % kSpillBytes;
-    size_t n = kSpillBytes - spill_used_;
-    if (!n) return at;
+    const uint8_t *src = chunk.data + at;
+    // an empty spill starts where its destination lines up with the source (mod the cache line): the chunks after
+    // it (whole lines long) then go by DMA
+    if (!spill_used_ && !spill_pending_) spill_head_ = reinterpret_cast<uintptr_t>(src) % kSpillAlign;
+    const size_t filled = spill_used_ + spill_pending_;
+    const size_t tail = (spill_head_ + filled) % kSpillBytes;
+    size_t n = kSpillBytes - filled;
+    if (!n || copy_tail_ - copy_head_ >= kSpillCopies) return at;   // full, or the copies in flight: the next pass
     if (n > kSpillBytes - tail) n = kSpillBytes - tail;
     if (n > rest) n = rest;
+    uint8_t *dst = spill_ + tail;
+    const size_t lead = (kSpillAlign - reinterpret_cast<uintptr_t>(src) % kSpillAlign) % kSpillAlign;
+    bool dma = copy && mcp_ && !lead && n >= kSpillAlign && reinterpret_cast<uintptr_t>(dst) % kSpillAlign == 0;
+    if (dma) n -= n % kSpillAlign;           // the whole lines; the rest by the CPU next round
+    else if (lead && lead < n) n = lead;     // the CPU up to the source's line
     const uint32_t t0 = esp_cpu_get_cycle_count();
-    if (copy) memcpy(spill_ + tail, chunk.data + at, n);
+    if (dma && esp_async_memcpy(mcp_, dst, const_cast<uint8_t *>(src), n, asyncDone, this) != ESP_OK) dma = false;
+    if (!dma && copy) {
+      memcpy(dst, src, n);
+      esp_cache_msync(dst, n, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);   // out before a DMA writes there
+    }
     spill_in_cycles_ += esp_cpu_get_cycle_count() - t0;
     spill_in_bytes_ += n;
-    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // while copied
+    if (dma) spill_async_bytes_ += n;
+    if (!dma && !ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // while the CPU copied (a DMA one: at retire)
       countOverrun();
       dropAfter(rest);
       return chunk.length;
     }
-    spill_used_ += n;
-    if (spill_used_ > spill_peak_) spill_peak_ = static_cast<uint32_t>(spill_used_);
+    copies_[copy_tail_ % kSpillCopies] = {chunk.ring + static_cast<uint32_t>(at), static_cast<uint32_t>(tail),
+                                          static_cast<uint32_t>(n), dma};
+    ++copy_tail_;
+    spill_pending_ += n;
     at += n;
   }
+  retireSpill();
   return at;
 }
 
@@ -388,6 +444,7 @@ size_t LogicCapture::spillIn(const Chunk &chunk, size_t at) {
 // bytes (or emptied).
 bool LogicCapture::drainSpill() {
   const bool copy = format_ != cap::kDataFormatTestCounter;
+  retireSpill();
   size_t moved = 0;
   while (spill_used_ && moved < kSpillDrainStep) {
     if (stage_cur_ >= 0 && stage_pos_ + stage_fill_ != captured_) sendStage();
@@ -406,7 +463,7 @@ bool LogicCapture::drainSpill() {
     moved += n;
     if (stage_fill_ == stage_data_) sendStage();
   }
-  if (spill_used_) return true;
+  if (spill_used_ || spill_pending_) return moved != 0;   // more to come (copies in flight): the drop stays after them
   spill_head_ = 0;
   if (spill_drop_) {   // the bytes dropped after it: the position jumps (a new stage, sendStage above)
     captured_ += spill_drop_;
@@ -610,8 +667,14 @@ bool LogicCapture::openStages() {
   stage_cur_ = -1;
   if (!stream_ring_ && stage_count_ >= 2)   // the stream's DMA ring in PSRAM, kept like the stages (none: ring_)
     stream_ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, kStreamRingBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA));
-  if (stream_ring_ && !spill_)   // and the spill behind it, when PSRAM has the room
-    spill_ = static_cast<uint8_t *>(heap_caps_malloc(kSpillBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (stream_ring_ && !spill_)   // and the spill behind it, when PSRAM has the room (lines aligned: the GDMA's copies)
+    spill_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(kSpillAlign, kSpillBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA));
+  if (spill_ && !mcp_) {   // the GDMA that fills it (none: the CPU copies, as before)
+    async_memcpy_config_t mc = ASYNC_MEMCPY_DEFAULT_CONFIG();
+    mc.backlog = kSpillCopies;
+    mc.dma_burst_size = kSpillAlign;
+    if (esp_async_memcpy_install_gdma_axi(&mc, &mcp_) != ESP_OK) mcp_ = nullptr;
+  }
   return stage_count_ >= 2;
 }
 
@@ -638,6 +701,8 @@ void LogicCapture::releaseStages() {
   stream_ring_ = nullptr;
   heap_caps_free(spill_);
   spill_ = nullptr;
+  if (mcp_) esp_async_memcpy_uninstall(mcp_);
+  mcp_ = nullptr;
 }
 
 // The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. With arm 1
@@ -1002,7 +1067,7 @@ void LogicCapture::harvestTask(void *context) {
       if (now - self->harvest_last_ > self->harvest_gap_max_) self->harvest_gap_max_ = now - self->harvest_last_;
       self->harvest_last_ = now;
       // the spill to drain: no waiting on the queue while it moves (a tick when no stage took any: not spinning)
-      const bool spilled = self->spill_used_ || self->spill_drop_;
+      const bool spilled = self->spilling();
       const TickType_t wait = !spilled ? pdMS_TO_TICKS(2) : drained ? 0 : 1;
       if (!held && xQueueReceive(self->queue_, &waiting, wait) == pdTRUE) {
         held = true;
@@ -1011,7 +1076,7 @@ void LogicCapture::harvestTask(void *context) {
       drained = spilled && self->drainSpill();
       if (held) {
         // straight into the stages - after what the spill holds; none free: into the spill
-        if (!self->spill_used_ && !self->spill_drop_) at = self->harvestDirect(waiting, at);
+        if (!self->spilling()) at = self->harvestDirect(waiting, at);
         if (at < waiting.length) at = self->spillIn(waiting, at);
         held = at < waiting.length;
         if (held) { vTaskDelay(1); continue; }   // the stages and the spill full: the ring holds the rest
@@ -1031,21 +1096,27 @@ void LogicCapture::harvestTask(void *context) {
         self->sendStage();
     }
     // what arrived before the stop, as stages free up (kStopDrainMs at most: then the rest is dropped)
-    for (const uint32_t t0 = millis(); held || uxQueueMessagesWaiting(self->queue_) || self->spill_used_;) {
-      if (self->spill_used_ || self->spill_drop_) self->drainSpill();
-      if (!held && !self->spill_used_ && !self->spill_drop_) {
+    for (const uint32_t t0 = millis(); held || uxQueueMessagesWaiting(self->queue_) || self->spilling();) {
+      if (self->spilling()) self->drainSpill();
+      if (!held && !self->spilling()) {
         if (xQueueReceive(self->queue_, &waiting, 0) != pdTRUE) break;
         held = true;
         at = 0;
       }
       if (held) {
-        if (!self->spill_used_ && !self->spill_drop_) at = self->harvestDirect(waiting, at);
+        if (!self->spilling()) at = self->harvestDirect(waiting, at);
         held = at < waiting.length;
       }
-      if (!held && !self->spill_used_) continue;
+      if (!held && !self->spilling()) continue;
       if (millis() - t0 >= kStopDrainMs) {   // the rest dropped (the spill's, the chunk's, the queue's)
-        self->spill_drop_ += self->spill_used_;
-        self->spill_used_ = 0;
+        // the DMA copies still out finish first (they write into the spill): a few ms at most
+        for (int k = 0; k < 20 && self->copy_head_ != self->copy_tail_; ++k) {
+          self->retireSpill();
+          if (self->copy_head_ != self->copy_tail_) vTaskDelay(1);
+        }
+        self->spill_drop_ += self->spill_used_ + self->spill_pending_;
+        self->spill_used_ = self->spill_pending_ = 0;
+        self->copy_head_ = self->copy_tail_;
         self->captured_ += self->spill_drop_;
         self->spill_drop_ = 0;
         if (held) self->dropDirect(waiting.length - at);
@@ -1724,7 +1795,11 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   enc_max_cycles_ = enc_blocks_ = enc_fallbacks_ = 0;
   ring_peak_ = 0;
   spill_peak_ = 0;
-  spill_in_bytes_ = spill_in_cycles_ = spill_out_bytes_ = spill_out_cycles_ = 0;
+  spill_in_bytes_ = spill_in_cycles_ = spill_out_bytes_ = spill_out_cycles_ = spill_async_bytes_ = 0;
+  copy_head_ = copy_tail_ = 0;
+  async_done_ = async_retired_ = 0;
+  spill_pending_ = 0;
+  spill_poison_ = false;
   overrun_room_ = harvest_gap_max_ = 0;
   spill_head_ = spill_used_ = 0;
   spill_drop_ = 0;
@@ -2154,7 +2229,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         // the next byte to write, the dropped ones counted (oep-if-capture §3.2); stopped on a hole, the start of the
         // segment it was in (§2.2)
         putU64(out + 5, lost_ ? lost_pos_ : format_ == cap::kDataFormatLogicBlocks ? enc_pos_
-                        : rep_trig_ ? data_pos_ + fill_ : static_cast<uint64_t>(captured_ + spill_used_ + spill_drop_));
+                        : rep_trig_ ? data_pos_ + fill_ : static_cast<uint64_t>(captured_ + spill_used_ + spill_pending_ + spill_drop_));
         // flags (oep-if-capture §3.2): bit0 the probe dropped data - the chunk queue full, the DMA ring overrun, no free
         // stage, streaming's new data discarded with every segment unsent (§2.1 rule 1; a repeat with no free segment
         // pauses instead, state 5). bit1 (a sample taken a sample period or more late) never: PARLIO keeps its clock.
@@ -2208,9 +2283,9 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       }
       // the spill's diagnostics (named, as above; only with a spill): bytes in (u64), their copy's cycles (u64), bytes
       // out (u64), cycles (u64), DMA overruns while it had room (u32), the longest between two harvest passes (u32,
-      // cycles), the CPU's clock (u32, Hz)
+      // cycles), the CPU's clock (u32, Hz), the bytes in copied by the GDMA (u64)
       static const char kSpill[] = "io.github.open-embedded-probe.capture-spill";
-      constexpr size_t kSpillName = sizeof kSpill - 1, kSpillValue = 1 + kSpillName + 44;
+      constexpr size_t kSpillName = sizeof kSpill - 1, kSpillValue = 1 + kSpillName + 52;
       if (spill_ && used + kTlvHeader + kSpillValue <= capacity) {
         putTlvHeader(out + used, reg::kTagNamedExtension, kSpillValue);
         uint8_t *v = out + used + kTlvHeader;
@@ -2223,6 +2298,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 33 + kSpillName, overrun_room_);
         putU32(v + 37 + kSpillName, harvest_gap_max_);
         putU32(v + 41 + kSpillName, static_cast<uint32_t>(getCpuFrequencyMhz()) * 1000000u);
+        putU64(v + 45 + kSpillName, spill_async_bytes_);
         used += kTlvHeader + kSpillValue;
       }
       // format 1's encoding cost, since the start (named, as above): cycles of the longest block (u32), of all (u64),

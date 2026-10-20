@@ -31,6 +31,7 @@
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
 #if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
 #include <driver/parlio_rx.h>
+#include <esp_async_memcpy.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -271,7 +272,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   void emitBlock(uint32_t samples);
   // the chunks lost to the queue before this one: its start past the stream byte taken last (the stages', the spill's)
   uint32_t missed(const Chunk &chunk) const {
-    return chunk.end - static_cast<uint32_t>(chunk.length) - static_cast<uint32_t>(captured_ + spill_used_ + spill_drop_);
+    return chunk.end - static_cast<uint32_t>(chunk.length) -
+           static_cast<uint32_t>(captured_ + spill_used_ + spill_pending_ + spill_drop_);
   }
   // The DMA's ring position past the last chunk it finished (the ISR, partialReceive), counted as Chunk::ring. The DMA
   // writes on within kDmaAhead of it (the descriptor being filled, and one skipped after an early close).
@@ -444,6 +446,24 @@ class LogicCapture final : public Interface, public GroupTrack {
   // what one drain moves at most before the harvest looks at the ring again: a few chunks' worth, more than comes in
   // meanwhile (one chunk a pass), so the spill still empties
   static constexpr size_t kSpillDrainStep = 16 * 1024;
+  // The copies into the spill, oldest first: by the GDMA (async memcpy, the CPU free for the drain - copied by the CPU
+  // it took ~55 MB/s in and ~104 MB/s out, ~36 MB/s through, under 40: P4X 3b671ca) where source and destination are
+  // cache-line aligned, else by the CPU. Their bytes are the stream's after the spill's [captured_ + spill_used_), in
+  // the spill after its used part; counted into spill_used_ in order once done (retireSpill) - a DMA copy whose source
+  // the ring came round over by then, and every one after it, dropped (spill_drop_).
+  struct SpillCopy { uint32_t ring, dst, len; bool dma; };
+  static constexpr size_t kSpillCopies = 32, kSpillAlign = 64;   // in flight at most; the cache line
+  SpillCopy copies_[kSpillCopies] = {};
+  uint32_t copy_head_ = 0, copy_tail_ = 0;
+  volatile uint32_t async_done_ = 0;   // DMA copies finished (the GDMA's callback)
+  uint32_t async_retired_ = 0;
+  size_t spill_pending_ = 0;           // bytes in copies_
+  bool spill_poison_ = false;          // a copy's source was overwritten: the ones after it dropped as they finish
+  uint64_t spill_async_bytes_ = 0;     // copied by the GDMA (capture-spill)
+  async_memcpy_handle_t mcp_ = nullptr;
+  static bool asyncDone(async_memcpy_handle_t, async_memcpy_event_t *, void *context);
+  void retireSpill();
+  bool spilling() const { return spill_used_ || spill_pending_ || spill_drop_; }
   size_t spillIn(const Chunk &chunk, size_t at);   // -> where it got to (short: the spill is full)
   bool drainSpill();                               // into the stages while one is free; -> moved any
   void dropAfter(size_t n);                        // n stream bytes dropped, after what the spill holds

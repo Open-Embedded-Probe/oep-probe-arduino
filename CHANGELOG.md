@@ -1,6 +1,22 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The spill is filled by the GDMA (async memcpy, AXI) where source and destination are cache-line aligned - every
+  whole chunk once an empty spill starts lined up with its source - and by the CPU elsewhere. Copied by the CPU both
+  ways the spill took ~55 MB/s in and ~104 MB/s out, ~36 MB/s through: under 40, so a 40 MB/s stream that began to
+  spill never caught up and the DMA ring ran over with the spill not full (P4X 3b671ca, the host's reader stopped
+  300 - 700 ms). A DMA copy is counted in once done, in order; one whose source the ring came round over by then
+  drops it and those after it. capture-spill adds the bytes the GDMA copied. Host-tested (testStreamRing with the
+  copies done at once and held to the next pass); not yet on the bench.
+- (JA) 待避 FIFO への書き込みを GDMA（async memcpy、AXI）で行うようにした。コピー元とコピー先がキャッシュラインでそろうところは
+  GDMA で、それ以外は CPU で写す。空の FIFO の書き始めを元とそろえるので、そのあとのチャンクはすべて GDMA で写せる。
+  - 前は両方向を CPU で写していて、入りが約 55 MB/s、出が約 104 MB/s、通しで約 36 MB/s だった。40 MB/s を下回るので、
+    40 MB/s のストリームは一度 FIFO に入り始めると取り戻せず、FIFO に空きがあっても DMA リングが溢れた（P4X 3b671ca、
+    host の受け取りを 300〜700 ms 止めたとき）。
+  - GDMA のコピーは、終わったものから順に FIFO の中身に数える。終わった時点で元がリングに上書きされていたら、それと
+    それ以降を欠落とする。
+  - capture-spill に、GDMA で写したバイト数を足した。
+  - ホストの試験（testStreamRing。コピーがすぐ終わる場合と、次の収穫まで終わらない場合）だけで確かめた。実機ではまだ。
 - (EN) Fix: format 1 streaming without the stages (no internal RAM for two beside the DMA ring: the P4 v1.3) went the
   copied way with raw samples, which the host read as blocks ("block at sample 0 cut short", wireskein 2026-10-21). It
   is refused unavailable cause 3 now (format 1 goes over the stages only). A stream the copied way is capped at
