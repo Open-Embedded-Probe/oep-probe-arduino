@@ -25,6 +25,7 @@
 
 #include "Oep.h"
 #include "OepCaptureGroup.h"
+#include "OepLogicBlocks.h"
 #include "OepPinTable.h"
 
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
@@ -64,6 +65,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint8_t kLimitLines8 = 8;
   static constexpr uint32_t kLimitHz8 = 100000000, kLimitHz16 = 48000000;
   static constexpr uint32_t kStreamMaxBytes = 27000000;   // streaming: what the harvest keeps up with (bytes a second)
+  // format 1 streaming: the samples' bytes a second the encoding keeps up with, the worst case counted (every events
+  // line changing every sample); 13.3 MHz at w 8 until measured further
+  static constexpr uint32_t kStreamBlocksMaxBytes = 13400000;
   static constexpr size_t kRingBytes = 128 * 1024;                    // repeat / streaming: the DMA ring (internal)
   // repeat / streaming segments: in PSRAM when there is some (all of the largest free block but a reserve for the
   // rest of the firmware; boards come with 0, 16 or 32 MB), else a small store in internal RAM
@@ -196,6 +200,20 @@ class LogicCapture final : public Interface, public GroupTrack {
   int stage_cur_ = -1;
   uint32_t stage_fill_ = 0, stage_since_ = 0, stage_data_ = 0;
   uint64_t stage_pos_ = 0;
+  // data format 1 (capture §1.3), streaming over the stages only: the DMA bytes gather into a block of L samples, which
+  // is encoded straight into the stage; a stage (one segment) holds whole blocks, none held back
+  blocks::Plan plan_;
+  blocks::Encoder encoder_;
+  uint8_t *block_buf_ = nullptr;        // one block's samples as the capture took them (L x w / 8 bytes)
+  uint32_t block_fill_ = 0;             // its bytes so far
+  uint64_t enc_pos_ = 0;                // the format 1 stream's position (dropped blocks jump it: their raw bytes)
+  uint64_t sample_pos_ = 0;             // samples taken since start
+  uint64_t stage_first_sample_ = 0;     // the stage's (segment's) first sample
+  uint32_t stage_samples_ = 0;          // its samples
+  // the encoding's cost, since start (named diagnostics capture-encode): cycles of the longest block, of all, blocks,
+  // and the channels carried raw (fallback) summed over the blocks
+  uint32_t enc_max_cycles_ = 0, enc_blocks_ = 0, enc_fallbacks_ = 0;
+  uint64_t enc_cycles_ = 0;
   volatile uint32_t stage_drops_ = 0;  // bytes dropped because every stage was queued or in flight
   volatile uint32_t stage_unsent_ = 0; // bytes of stages the transport would not queue (given back unsent)
   bool carry_ = false;                 // a sample held back from the last frame (so that it ended with a short packet)
@@ -218,6 +236,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   // its descriptor early and goes on at the next descriptor's start, so the rest of that descriptor - up to one
   // descriptor's bytes - keeps an older lap between two chunks of the stream (partialReceive: ring_end_).
   struct Chunk { const uint8_t *data; size_t length; uint32_t end; uint32_t ring; };
+  void harvestBlocks(const Chunk &chunk);   // format 1 streaming (above)
+  void emitBlock(uint32_t samples);
   uint32_t missed(const Chunk &chunk) const { return chunk.end - static_cast<uint32_t>(chunk.length) - static_cast<uint32_t>(captured_); }
   // The DMA's ring position past the last chunk it finished (the ISR, partialReceive), counted as Chunk::ring. The DMA
   // writes on within kDmaAhead of it (the descriptor being filled, and one skipped after an early close).

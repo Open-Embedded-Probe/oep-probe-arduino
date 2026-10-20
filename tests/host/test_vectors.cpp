@@ -38,6 +38,7 @@
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
 
+#include "OepLogicBlocks.h"
 #include "test_ids.h"
 #include "OepCapture.h"
 #include "OepConfig.h"
@@ -1548,6 +1549,44 @@ static void testRequestExtensions() {
   }
 }
 
+// capture_formats.json logic_blocks (capture §1.3): the firmware's format 1 encoder (OepLogicBlocks.h) gives each
+// segment's stream byte for byte - raw channels on sample bits 0 .. R-1, events channels on R .. R+E-1 (w 8), a segment
+// after a gap not contiguous.
+static void testLogicBlocks() {
+  const Json v = load("capture_formats.json");
+  for (const Json &c : v["logic_blocks"].items) {
+    ++cases;
+    oep::blocks::Plan plan;
+    plan.w = 8;
+    plan.raw = static_cast<uint8_t>(c["R"].number);
+    plan.events = static_cast<uint8_t>(c["events_d"].items.size());
+    plan.block = static_cast<uint32_t>(c["L"].number);
+    for (uint8_t j = 0; j < plan.raw; ++j) plan.raw_bit[j] = j;
+    for (uint8_t e = 0; e < plan.events; ++e) {
+      plan.ev_bit[e] = static_cast<uint8_t>(plan.raw + e);
+      plan.d[e] = static_cast<uint32_t>(c["events_d"].items[e].number);
+    }
+    static oep::blocks::Encoder enc;
+    enc.reset();
+    for (const Json &seg : c["segments"].items) {
+      std::vector<std::string> lines;
+      for (const Json &l : seg["raw"].items) lines.push_back(l.string);
+      for (const Json &l : seg["events"].items) lines.push_back(l.string);
+      const size_t n = lines[0].size();
+      Bytes samples(n), got;
+      for (size_t i = 0; i < n; ++i)
+        for (size_t k = 0; k < lines.size(); ++k) samples[i] |= static_cast<uint8_t>((lines[k][i] == '1') << k);
+      for (size_t first = 0; first < n; first += plan.block) {
+        const uint32_t r = static_cast<uint32_t>(n - first < plan.block ? n - first : plan.block);
+        uint8_t out[8192];
+        const size_t len = enc.encode(plan, samples.data() + first, r, out, sizeof out, first > 0 || seg["contiguous"].boolean);
+        got.insert(got.end(), out, out + len);
+      }
+      CHECK(same("logic_blocks", c["name"].string, got, hex(seg["stream_hex"].string)));
+    }
+  }
+}
+
 int main() {
   testHeaders();
   testCobs();
@@ -1561,6 +1600,7 @@ int main() {
   testOps("ops.json", "cases");
   testWideCases();
   testLogicEvents();
+  testLogicBlocks();
   testRestartLetsGo();
   testEveryOpsCanonical();
   testPassthrough();

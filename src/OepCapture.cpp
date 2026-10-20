@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
+#include <esp_cpu.h>
+
 #include "OepCapture.h"
 
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
@@ -116,6 +118,7 @@ void LogicCapture::harvest(const Chunk &chunk) {
 // Streaming, zero-copy transport: copy one finished DMA chunk into the current stage; with no stage free the bytes are
 // dropped and the stream position skips them. Harvest task only.
 void LogicCapture::harvestDirect(const Chunk &chunk) {
+  if (format_ == cap::kDataFormatLogicBlocks) { harvestBlocks(chunk); return; }
   if (lost_) return;
   if (missed(chunk)) { loseSegment(); return; }   // chunks lost to the queue: not data to send (capture §2.2)
   size_t at = 0;
@@ -142,6 +145,59 @@ void LogicCapture::harvestDirect(const Chunk &chunk) {
   }
 }
 
+// Format 1 (capture §1.3), streaming over the stages: the chunk's bytes gather into the block; each full block is
+// encoded into the stage, sent first when the block's worst would not fit. Harvest task only.
+void LogicCapture::harvestBlocks(const Chunk &chunk) {
+  if (lost_) return;
+  if (missed(chunk)) { loseSegment(); return; }   // chunks lost to the queue: a hole (capture §2.2)
+  const uint32_t block_bytes = plan_.block * width_ / 8;
+  size_t at = 0;
+  while (at < chunk.length) {
+    const size_t n = min(static_cast<size_t>(block_bytes - block_fill_), chunk.length - at);
+    memcpy(block_buf_ + block_fill_, chunk.data + at, n);
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA rewrote these bytes
+      overruns_ = overruns_ + 1;
+      loseSegment();
+      return;
+    }
+    block_fill_ += static_cast<uint32_t>(n);
+    at += n;
+    captured_ += n;
+    if (block_fill_ == block_bytes) emitBlock(plan_.block);
+  }
+}
+
+// One block of `samples` from block_buf_ into the stage (a new one when its worst would not fit). No stage free: the
+// block is dropped - the stream's position jumps by its samples' bytes and the next block's start_level is its own
+// first sample (not contiguous, §1.3).
+void LogicCapture::emitBlock(uint32_t samples) {
+  const size_t worst = blocks::worstBytes(plan_, samples);
+  if (stage_cur_ >= 0 && stage_data_ - stage_fill_ < worst) sendStage();
+  const uint32_t raw = static_cast<uint32_t>((static_cast<uint64_t>(samples) * width_ + 7) / 8);
+  if (stage_cur_ < 0 && !takeStage()) {
+    stage_drops_ += raw;
+    dropped_ += raw;
+    enc_pos_ += raw;
+    sample_pos_ += samples;
+    encoder_.reset();
+    block_fill_ = 0;
+    return;
+  }
+  uint8_t *at = stage_[stage_cur_] + kPushHead + stage_fill_;
+  const uint32_t t0 = esp_cpu_get_cycle_count();
+  const size_t n = encoder_.encode(plan_, block_buf_, samples, at, stage_data_ - stage_fill_, true);
+  const uint32_t cycles = esp_cpu_get_cycle_count() - t0;
+  if (cycles > enc_max_cycles_) enc_max_cycles_ = cycles;
+  enc_cycles_ += cycles;
+  ++enc_blocks_;
+  enc_fallbacks_ += encoder_.fallbacks();
+  stage_fill_ += static_cast<uint32_t>(n);
+  stage_samples_ += samples;
+  enc_pos_ += n;
+  sample_pos_ += samples;
+  block_fill_ = 0;
+}
+
 // A free stage becomes the current one, starting with the byte held back from the last frame, if any.
 bool LogicCapture::takeStage() {
   const uint32_t free = stage_free_;
@@ -150,6 +206,13 @@ bool LogicCapture::takeStage() {
   __atomic_fetch_and(&stage_free_, ~(1u << stage_cur_), __ATOMIC_ACQ_REL);
   stage_fill_ = 0;
   stage_pos_ = captured_;
+  if (format_ == cap::kDataFormatLogicBlocks) {   // whole blocks, nothing held back (format 1)
+    stage_pos_ = enc_pos_;
+    stage_samples_ = 0;
+    stage_first_sample_ = sample_pos_;
+    stage_since_ = millis();
+    return true;
+  }
   if (carry_) {   // the next segment starts with what the last frame held back (a segment is a frame's data)
     memcpy(stage_[stage_cur_] + kPushHead, carry_bytes_, carry_n_);
     stage_fill_ = carry_n_;
@@ -176,7 +239,8 @@ void LogicCapture::sendStage() {
   stage_fill_ = 0;
   DirectTransport *tr = endpoint_.direct();
   const uint8_t unit = sampleBytes();
-  if (fill > unit && fill < stage_data_ && (kPushHead + fill + kPushTail) % 512 == 0 && tr && tr->queued() == 0) {
+  const bool blocks = format_ == cap::kDataFormatLogicBlocks;   // whole blocks: none held back (format 1)
+  if (!blocks && fill > unit && fill < stage_data_ && (kPushHead + fill + kPushTail) % 512 == 0 && tr && tr->queued() == 0) {
     carry_n_ = unit;
     memcpy(carry_bytes_, s + kPushHead + fill - unit, unit);
     carry_ = true;
@@ -202,8 +266,8 @@ void LogicCapture::sendStage() {
   uint8_t *info = s + kPushHead + fill + kTlvHeader + 4;
   putTlvHeader(info, cap::kTlvDataSegmentInfo, kSegmentInfoBytes);
   putU64(info + kTlvHeader, stage_pos_);
-  putU32(info + kTlvHeader + 8, static_cast<uint32_t>(static_cast<uint64_t>(fill) * 8 / width_));
-  putU64(info + kTlvHeader + 12, start_ns_ + nsOf(stage_pos_ * 8 / width_));
+  putU32(info + kTlvHeader + 8, blocks ? stage_samples_ : static_cast<uint32_t>(static_cast<uint64_t>(fill) * 8 / width_));
+  putU64(info + kTlvHeader + 12, start_ns_ + nsOf(blocks ? stage_first_sample_ : stage_pos_ * 8 / width_));
   putU32(info + kTlvHeader + 20, kStartUncertaintyNs);
   if (!t->queueData(s, kPushHead + fill + kPushTail, stageDone, this)) {
     stage_unsent_ = stage_unsent_ + fill;   // the transport's queue full: these bytes go nowhere (status's diagnostics)
@@ -572,7 +636,9 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
 // write_pos stays at its start. poll() (failLost) stops the track.
 void LogicCapture::loseSegment() {
   if (direct_) {
-    lost_pos_ = stage_cur_ >= 0 ? stage_pos_ : captured_ - (carry_ ? carry_n_ : 0);
+    lost_pos_ = stage_cur_ >= 0                              ? stage_pos_
+                : format_ == cap::kDataFormatLogicBlocks ? enc_pos_
+                                                         : captured_ - (carry_ ? carry_n_ : 0);
     if (stage_cur_ >= 0) __atomic_fetch_or(&stage_free_, 1u << stage_cur_, __ATOMIC_ACQ_REL);
     stage_cur_ = -1;
     stage_fill_ = 0;
@@ -689,8 +755,15 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge),
                  kSegmentBytes * 8 - 1, kTriggerOpts);   // at w = 1 (below the segment); a wider sample's is less
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
-  const uint8_t formats[] = {cap::kDataFormatTestCounter};   // beyond 0 (capture §3.5)
+  // beyond 0 (capture §3.5): 1 the logic blocks (streaming over the vendor port's stages: configure says), 4 the test
+  // sequence
+  const uint8_t formats[] = {cap::kDataFormatLogicBlocks, cap::kDataFormatTestCounter};
   w.put(cap::kTlvDescribeFormats, formats, sizeof formats);
+  uint8_t carriage[9];   // kinds(u8: raw, events) min_d(u32) max_d(u32): events D 1 - L, powers of 2
+  carriage[0] = static_cast<uint8_t>((1u << cap::kLogicCarriageRaw) | (1u << cap::kLogicCarriageEvents));
+  putU32(carriage + 1, 1);
+  putU32(carriage + 5, blocks::kMaxBlock);
+  w.put(cap::kTlvDescribeCarriage, carriage, sizeof carriage);
   return w.ok() ? w.length() : 0;
 }
 
@@ -881,7 +954,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // an unknown non-critical one passed over. Everything is checked before anything changes (core §4.3): the form, then
   // the values, then the plan, the group and the state (unavailable).
   static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger,
-                                   capture_tag::kTriggerOpts, cap::kTlvConfigureFormat};
+                                   capture_tag::kTriggerOpts, cap::kTlvConfigureFormat, cap::kTlvConfigureCarriage,
+                                   cap::kTlvConfigureBlockMax};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
@@ -889,9 +963,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   struct Item { uint8_t tag; size_t size; const uint8_t *v; bool critical; };
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
                   {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false},
-                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}, {cap::kTlvConfigureFormat, 1, nullptr, false}};
+                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}, {cap::kTlvConfigureFormat, 1, nullptr, false},
+                  {cap::kTlvConfigureBlockMax, 4, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
-       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &format_tlv = items[7];
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &format_tlv = items[7],
+       &block_max_tlv = items[8];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -931,19 +1007,54 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   }
   TriggerOpts opts;   // arm 0 and when 1 as well as the defaults (kTriggerOpts)
   if (!triggerOpts(opts_tlv.v, kTriggerOpts, opts)) return Tail::refuse(capture_tag::kTriggerOpts, opts_tlv.critical, out, capacity);
-  // the data format (capture §1): 0, or 4 the test sequence (describe formats); any other unsupported
+  // the data format (capture §1): 0, 4 the test sequence, or 1 the logic blocks - format 1 streaming over the zero-copy
+  // stages only (describe formats; the answer says what a setting takes); any other unsupported
   const uint8_t format = format_tlv.v ? format_tlv.v[0] : cap::kDataFormatPacked;
-  if (format != cap::kDataFormatPacked && format != cap::kDataFormatTestCounter)
+  const bool blocks_format = format == cap::kDataFormatLogicBlocks;
+  // carriage(role u8, kind u8, d u32), repeated, format 1 only (§1.3, §3.3): its form first over every copy (malformed:
+  // another length, d 0, raw with d other than 1, a role twice, carriage without format 1), then the values
+  // (unsupported, the tag as received: a kind it does not have, an events D not a power of 2 or past a block)
+  uint32_t events_roles = 0, unit = 8;
+  uint32_t d_of[kMaxChannels] = {};
+  {
+    size_t at = 0, vlen = 0;
+    uint8_t raw = 0;
+    const uint8_t *v = nullptr;
+    uint32_t seen = 0;
+    while (tail.next(at, raw, v, vlen)) {
+      if ((raw & ~kTagCritical) != cap::kTlvConfigureCarriage) continue;
+      if (vlen != 6) return rejected(kRejectMalformed);
+      const uint32_t d = getU32(v + 2);
+      if (!blocks_format || d == 0 || (v[1] == cap::kLogicCarriageRaw && d != 1) || (v[0] < 32 && ((seen >> v[0]) & 1)))
+        return rejected(kRejectMalformed);
+      if (v[0] < 32) seen |= 1u << v[0];
+    }
+    at = 0;
+    while (tail.next(at, raw, v, vlen)) {
+      if ((raw & ~kTagCritical) != cap::kTlvConfigureCarriage) continue;
+      const uint32_t d = getU32(v + 2);
+      if ((v[1] != cap::kLogicCarriageRaw && v[1] != cap::kLogicCarriageEvents) || d > blocks::kMaxBlock || (d & (d - 1)))
+        return unsupportedTag(out, capacity, raw);
+      if (v[1] == cap::kLogicCarriageEvents && v[0] < kMaxChannels) {
+        events_roles |= 1u << v[0];
+        d_of[v[0]] = d;
+        if (d > unit) unit = d;
+      }
+    }
+  }
+  if (format != cap::kDataFormatPacked && format != cap::kDataFormatTestCounter &&
+      !(blocks_format && mode == cap::kModeStreaming && endpoint_.directCapable() && channels_ <= 8))   // w 8: the fast path
     return Tail::refuse(cap::kTlvConfigureFormat, format_tlv.critical, out, capacity);
   if (pretrigger_tlv.v) pretrigger = getU32(pretrigger_tlv.v);   // checked against samples below
-  const uint8_t width = widthFor(channels_);
+  // format 1 takes its samples a byte each (w 8, up to 8 lines): the encoder's fast path works on bytes
+  const uint8_t width = blocks_format && widthFor(channels_) < 8 ? 8 : widthFor(channels_);
   // streaming's ceiling: the harvest copies the DMA ring into stages at about kStreamMaxBytes a second; above it the
   // ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture §3.3), as the
   // one-shot's ceiling above (P4X, 2026-10-20: 26.7 MB/s kept with no drop, 30 MB/s overran at once, 32 too)
   if (mode == cap::kModeStreaming) {
     // the highest whole-divider rate at or below it: the nearest the divider picks never lands above
-    const uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + kStreamMaxBytes * 8ull - 1) /
-                                       (kStreamMaxBytes * 8ull));
+    const uint64_t ceiling = blocks_format ? kStreamBlocksMaxBytes : kStreamMaxBytes;   // format 1: its encoding's
+    const uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + ceiling * 8ull - 1) / (ceiling * 8ull));
     if (rate > most) rate = static_cast<uint32_t>(most);
     if (rate < kMinHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   }
@@ -988,6 +1099,29 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
   if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
+  if (events_roles >> channels_) return wrongState(out, capacity);   // a carriage role not in the plan (§3.3)
+  // format 1's block (§1.3): L a multiple of 8 and of every D, at most block_max and kMaxBlock, its worst within a stage
+  blocks::Plan plan;
+  if (blocks_format) {
+    plan.w = width;
+    for (uint8_t k = 0; k < channels_; ++k) {
+      if ((events_roles >> k) & 1) {
+        plan.ev_bit[plan.events] = k;
+        plan.d[plan.events++] = d_of[k];
+      } else {
+        plan.raw_bit[plan.raw++] = k;
+      }
+    }
+    size_t frame = max_read_ + 16 + 2;
+    if (frame > kStageFrameMax) frame = kStageFrameMax;
+    const size_t stage_data = frame / 512 * 512 - kPushHead - kPushTail;
+    const uint32_t most = block_max_tlv.v ? getU32(block_max_tlv.v) : blocks::kMaxBlock;
+    uint32_t L = (most < blocks::kMaxBlock ? most : blocks::kMaxBlock) / unit * unit;
+    while (L && blocks::worstBytes(plan, L) > stage_data) L -= unit;
+    if (!L) return Tail::refuse(block_max_tlv.v ? cap::kTlvConfigureBlockMax : cap::kTlvConfigureFormat,
+                                block_max_tlv.v ? block_max_tlv.critical : format_tlv.critical, out, capacity);
+    plan.block = L;
+  }
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == kStateCapturing || state_ == kStatePaused || state_ == kStateWaiting) && !query) return wrongState(out, capacity);
   // Not even two segments of store, or no DMA ring for a mode that runs through it: refused unavailable cause 3
@@ -1066,6 +1200,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     arm_ = opts.arm;
     when_ = opts.when;
     format_ = format;
+    if (blocks_format) {
+      plan_ = plan;
+      if (!block_buf_) block_buf_ = static_cast<uint8_t *>(heap_caps_malloc(blocks::kMaxBlock * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+      if (!block_buf_) return noStorage(out, capacity);   // a block's samples (w 16 at most)
+    }
     rate_hz_ = rate;
     mode_ = mode;
     width_ = width;
@@ -1082,13 +1221,16 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   putU32(r, num);
   putU32(r + 4, den);
   w.put(kTagActualRate, r, sizeof r);
-  uint8_t layout[2 + kMaxChannels] = {width, channels_};
-  for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
-  w.put(kTagLayout, layout, 2 + channels_);
+  // format 1: w = C = R, the raw channels (§1.3); else every channel at its bit
+  const uint8_t shown = blocks_format ? plan.raw : channels_;
+  uint8_t layout[2 + kMaxChannels] = {blocks_format ? plan.raw : width, shown};
+  for (uint8_t k = 0; k < shown; ++k) layout[2 + k] = k;
+  w.put(kTagLayout, layout, 2 + shown);
   // every answer row of the mode (capture §3.3): actual_samples in modes 1 / 2, actual_segments in mode 2 only
   if (mode != cap::kModeStreaming) w.u32(kTagActualSamples, samples);
   if (mode == cap::kModeRepeat) w.u32(kTagActualSegments, actual_segments);
   if (format != cap::kDataFormatPacked) w.u8(cap::kTlvConfigureAnswerFormat, format);   // always when not 0 (§3.3)
+  if (blocks_format) w.u32(cap::kTlvConfigureAnswerBlock, plan.block);                     // L (§1.3, §3.3)
   // streaming: what it holds unsent (capture §3.3 stream_buffer) - the zero-copy stages (those held, or what internal
   // RAM gives now), else the store
   if (mode == cap::kModeStreaming) w.u32(cap::kTlvConfigureAnswerStreamBuffer, streamBuffer(samples, width, actual_segments));
@@ -1141,6 +1283,8 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (capacity < 4) return failed();
   // configured for the zero-copy path but the subscriber came in on another way (CDC, TCP): the copied way, its store
   // taken now - none to be had, refused cause 3 before anything changes (core §4.3)
+  if (direct_ && !endpoint_.direct() && format_ == cap::kDataFormatLogicBlocks)
+    return wrongState(out, capacity);   // format 1 goes over the stages only: the subscriber must be on the vendor port
   if (direct_ && !endpoint_.direct()) {
     releaseStages();
     uint32_t caps = 0;
@@ -1156,6 +1300,11 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   stage_unsent_ = 0;
   overruns_ = 0;
   queue_overflow_ = 0;
+  enc_pos_ = sample_pos_ = stage_first_sample_ = 0;
+  block_fill_ = stage_samples_ = 0;
+  enc_max_cycles_ = enc_blocks_ = enc_fallbacks_ = 0;
+  enc_cycles_ = 0;
+  encoder_.reset();
   fill_ = 0;
   released_ = 0;
   completed_ = 0;
@@ -1199,6 +1348,8 @@ void LogicCapture::stopRepeat() {
   harvesting_ = false;
   for (int i = 0; i < 100 && task_; ++i) delay(2);   // the task drains what arrived, then ends
   if (direct_) {   // the task is gone: send what is left, the held byte too
+    if (format_ == cap::kDataFormatLogicBlocks && block_fill_ && !lost_)   // the block begun: short (§1.3)
+      emitBlock(block_fill_ * 8 / width_);
     sendStage();
     if (carry_ && takeStage()) sendStage();
     carry_ = false;
@@ -1522,7 +1673,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(out + 1, completed_);
         // the next byte to write, the dropped ones counted (oep-if-capture §3.2); stopped on a hole, the start of the
         // segment it was in (§2.2)
-        putU64(out + 5, lost_ ? lost_pos_ : static_cast<uint64_t>(captured_));
+        putU64(out + 5, lost_ ? lost_pos_ : format_ == cap::kDataFormatLogicBlocks ? enc_pos_ : static_cast<uint64_t>(captured_));
         // flags (oep-if-capture §3.2): bit0 the probe dropped data - the chunk queue full, the DMA ring overrun, no free
         // stage, streaming's new data discarded with every segment unsent (§2.1 rule 1; a repeat with no free segment
         // pauses instead, state 5). bit1 (a sample taken a sample period or more late) never: PARLIO keeps its clock.
@@ -1566,6 +1717,22 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 23 + kName, static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)));
         putU32(v + 27 + kName, static_cast<uint32_t>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)));
         used += kTlvHeader + kValue;
+      }
+      // format 1's encoding cost, since the start (named, as above): cycles of the longest block (u32), of all (u64),
+      // blocks (u32), channels carried raw summed over the blocks (u32), the CPU's clock (u32, Hz)
+      static const char kEncode[] = "io.github.open-embedded-probe.capture-encode";
+      constexpr size_t kEncName = sizeof kEncode - 1, kEncValue = 1 + kEncName + 24;
+      if (format_ == cap::kDataFormatLogicBlocks && used + kTlvHeader + kEncValue <= capacity) {
+        putTlvHeader(out + used, reg::kTagNamedExtension, kEncValue);
+        uint8_t *v = out + used + kTlvHeader;
+        v[0] = static_cast<uint8_t>(kEncName);
+        memcpy(v + 1, kEncode, kEncName);
+        putU32(v + 1 + kEncName, enc_max_cycles_);
+        putU64(v + 5 + kEncName, enc_cycles_);
+        putU32(v + 13 + kEncName, enc_blocks_);
+        putU32(v + 17 + kEncName, enc_fallbacks_);
+        putU32(v + 21 + kEncName, static_cast<uint32_t>(getCpuFrequencyMhz()) * 1000000u);
+        used += kTlvHeader + kEncValue;
       }
       return completed(used);
     }

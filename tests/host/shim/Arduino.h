@@ -14,6 +14,7 @@ inline uint32_t millis() { return g_millis; }
 inline uint32_t micros() { return g_millis * 1000u + g_micros_part; }
 inline void advanceMicros(uint32_t us) { g_micros_part += us; g_millis += g_micros_part / 1000; g_micros_part %= 1000; }
 inline void delay(uint32_t ms) { g_millis += ms; }
+inline uint32_t getCpuFrequencyMhz() { return 360; }   // the P4's clock (a figure the diagnostics report)
 // A busy wait in the code under test: time goes on, and a test may complete USB transfers meanwhile.
 extern void (*g_on_wait)();
 inline void delayMicroseconds(uint32_t us) { advanceMicros(us); if (g_on_wait) g_on_wait(); }

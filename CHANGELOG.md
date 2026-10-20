@@ -1,6 +1,26 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Data format 1, the logic blocks (capture §1.3), on the P4: streaming over the vendor port's zero-copy stages,
+  up to 8 lines (taken a byte a sample), carriage raw and events with D 1 or a power of 2 up to 4096, block_max, L 4096
+  at most and within a stage. A stage (one segment) holds whole blocks; a block with no free stage is dropped (the
+  position jumps by its samples' bytes, the next block starts afresh); stop sends the block begun, short. The encoder
+  (OepLogicBlocks.h, no chip in it) gives the shared vectors byte for byte (tests/host/test_vectors.cpp): a word of four
+  samples at a time, a word with no events change skipped, the raw columns on the low bits gathered by shifts, a channel
+  past L / 32 events carried raw, at -O2. Its cost in status (named io.github.open-embedded-probe.capture-encode: the
+  longest block's cycles, all of them, blocks, fallbacks, the CPU clock). The P4X at 13.3 MHz: 8 raw lines 7.2 k cycles
+  a block (6% of a core), 8 quiet events lines 18.5 k (15%), 4 + 4 47.5 k (39%). The format 1 streaming rate is held at
+  13.3 MHz until measured with busy lines.
+- (JA) P4 にデータの形式 1（ロジックのブロック、capture §1.3）を入れた。
+  - vendor の口の zero-copy の stage での streaming だけ。8 本まで（1 サンプル 1 byte で取る）。carriage は raw と events で、D は 1 か
+    4096 までの 2 の冪。block_max を受ける。L は 4096 以下で、stage に収まる長さ。
+  - stage（1 区画）には丸ごとのブロックだけを入れる。stage が無いブロックは落とす（位置はそのサンプルのバイト数だけ飛び、次のブロックは
+    続きにしない）。stop では作りかけのブロックを短いブロックとして送る。
+  - 符号化器（OepLogicBlocks.h、チップに依存しない）は共有ベクタとバイト単位で一致する（tests/host/test_vectors.cpp）。4 サンプルずつ語で見て
+    events の変化の無い語を飛ばし、下位のビットの raw をシフトで集め、L / 32 件を越えたチャネルは raw で運ぶ。-O2。
+  - 費用を status の名前付き TLV io.github.open-embedded-probe.capture-encode で返す（最長のブロックのサイクル、合計、ブロック数、fallback、
+    CPU のクロック）。P4X の 13.3 MHz で、raw 8 本 7.2 k サイクル / ブロック（1 コアの 6%）、静かな events 8 本 18.5 k（15%）、4 + 4 で 47.5 k
+    （39%）。形式 1 の streaming の rate は、忙しい線で測るまで 13.3 MHz に抑える。
 - (EN) oep-spec 569e86b (capture §3.3 stream_buffer): a streaming configure / query answers what it holds unsent - the
   zero-copy stages (held, or what internal RAM gives now), else the store. Streaming's rate is held at what the harvest
   keeps up with (27 MB/s: the P4X kept 26.7 with no drop and overran at 30), the nearest such rate used as §3.3 asks

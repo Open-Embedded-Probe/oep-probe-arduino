@@ -365,10 +365,12 @@ static void testDescribe() {
     if (tag == cap::kTlvDescribeMode) { ++modes; CHECK(len == 9 && d[at + kTlvHeader] == modes); }
     if (tag == cap::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == LogicCapture::kMaxChannels); }
     CHECK(tag < 0x40 || tag == cap::kTlvDescribeMode || tag == cap::kTlvDescribeRateRange ||
-          tag == cap::kTlvDescribeChannels || tag == cap::kTlvDescribeTrigger || tag == cap::kTlvDescribeFormats);
+          tag == cap::kTlvDescribeChannels || tag == cap::kTlvDescribeTrigger || tag == cap::kTlvDescribeFormats ||
+          tag == cap::kTlvDescribeCarriage);
     if (tag == cap::kTlvDescribeTrigger)   // types max_pretrigger opts (capture §3.5): arm 0 and when 1 beyond the defaults
       CHECK(len == 9 && d[at + kTlvHeader + 8] == LogicCapture::kTriggerOpts);
-    if (tag == cap::kTlvDescribeFormats) CHECK(len == 1 && d[at + kTlvHeader] == cap::kDataFormatTestCounter);
+    if (tag == cap::kTlvDescribeFormats)
+      CHECK(len == 2 && d[at + kTlvHeader] == cap::kDataFormatLogicBlocks && d[at + kTlvHeader + 1] == cap::kDataFormatTestCounter);
   }
   CHECK(modes == 3 && channels);
 }
@@ -389,7 +391,7 @@ static void testFormatAndTriggerOpts() {
   CHECK(ok(raw(rig.cap, LogicCapture::kOpQuery, p, out)) && hasFormat(cap::kDataFormatTestCounter));
   p = request(Config{});
   CHECK(ok(raw(rig.cap, LogicCapture::kOpQuery, p, out)) && !hasFormat(cap::kDataFormatPacked));   // 0: left out
-  p = request(Config{});
+  p = request(Config{});   // format 1 in a one-shot: not this probe's (streaming over the stages only)
   tlv(p, kCrit | cap::kTlvConfigureFormat, {cap::kDataFormatLogicBlocks});
   CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectUnsupported) &&
         out == Bytes{uint8_t(kCrit | cap::kTlvConfigureFormat)});
