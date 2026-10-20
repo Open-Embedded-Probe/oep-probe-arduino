@@ -63,6 +63,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   // one-shot's ceiling by channel count (configure takes the nearest it allows): up to 8 lines 100 MHz, 16 lines 48 MHz
   static constexpr uint8_t kLimitLines8 = 8;
   static constexpr uint32_t kLimitHz8 = 100000000, kLimitHz16 = 48000000;
+  static constexpr uint32_t kStreamMaxBytes = 32000000;   // streaming: what the harvest keeps up with (bytes a second)
   static constexpr size_t kRingBytes = 128 * 1024;                    // repeat / streaming: the DMA ring (internal)
   // repeat / streaming segments: in PSRAM when there is some (all of the largest free block but a reserve for the
   // rest of the firmware; boards come with 0, 16 or 32 MB), else a small store in internal RAM
@@ -203,6 +204,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool takeStage();
   bool openStages();
   void freeStages();
+  uint32_t streamBuffer(uint32_t samples, uint8_t width, uint32_t segments) const;
   void releaseStages();
   void sendStage();
   static void stageDone(void *context, const uint8_t *buffer);

@@ -212,6 +212,17 @@ static void testStreamingWithoutStages() {
     CHECK(hasTag(out, cap::kTlvConfigureAnswerActualRate) && hasTag(out, cap::kTlvConfigureAnswerLayout) &&
           !hasTag(out, cap::kTlvConfigureAnswerActualSamples) &&
           !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
+    uint32_t buffer = 0;   // what it holds unsent (capture §3.3 stream_buffer): stages or the store, never nothing
+    CHECK(findU32(out, cap::kTlvConfigureAnswerStreamBuffer, buffer) && buffer > 0);
+    // above what the harvest keeps up with, the nearest rate it keeps (capture §3.3): 2 lines (w 2) at most
+    // kStreamMaxBytes x 8 / 2 samples a second
+    c.rate = LogicCapture::kSourceHz;
+    CHECK(ok(configure(rig.cap, c, out, true)));
+    for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+      if (out[at] == cap::kTlvConfigureAnswerActualRate) {
+        const uint64_t num = getU32(out.data() + at + kTlvHeader), den = getU32(out.data() + at + kTlvHeader + 4);
+        CHECK(num / den <= uint64_t(LogicCapture::kStreamMaxBytes) * 8 / 2);
+      }
   }
 }
 

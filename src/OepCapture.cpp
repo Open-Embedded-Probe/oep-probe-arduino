@@ -217,6 +217,20 @@ void LogicCapture::stageDone(void *context, const uint8_t *buffer) {
     if (self->stage_[i] == buffer) __atomic_fetch_or(&self->stage_free_, 1u << i, __ATOMIC_ACQ_REL);
 }
 
+uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t segments) const {
+  if (!endpoint_.directCapable()) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);
+  size_t frame = max_read_ + 16 + 2;
+  if (frame > kStageFrameMax) frame = kStageFrameMax;
+  frame = frame / 512 * 512;
+  size_t count = stage_count_;
+  if (!count) {   // not taken yet: as openStages would, frame + 48 KiB left over each
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    while (count < kStagesMax && largest >= frame + 48 * 1024) { ++count; largest -= frame; }
+  }
+  if (count < 2) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);   // the copied way
+  return static_cast<uint32_t>(count * (frame - kPushHead - kPushTail));
+}
+
 bool LogicCapture::openStages() {
   // one frame per stage, a whole number of 512-byte packets within the frame limit, so the host's read runs on across
   // frames (every frame ending with a short packet cost gaps at 40-160 MHz: a host read completing per frame over
@@ -923,6 +937,16 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     return Tail::refuse(cap::kTlvConfigureFormat, format_tlv.critical, out, capacity);
   if (pretrigger_tlv.v) pretrigger = getU32(pretrigger_tlv.v);   // checked against samples below
   const uint8_t width = widthFor(channels_);
+  // streaming's ceiling: the harvest copies the DMA ring into stages at about kStreamMaxBytes a second; above it the
+  // ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture §3.3), as the
+  // one-shot's ceiling above (P4X, 2026-10-20: 30 MB/s kept, 40 MB/s overran)
+  if (mode == cap::kModeStreaming) {
+    // the highest whole-divider rate at or below it: the nearest the divider picks never lands above
+    const uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + kStreamMaxBytes * 8ull - 1) /
+                                       (kStreamMaxBytes * 8ull));
+    if (rate > most) rate = static_cast<uint32_t>(most);
+    if (rate < kMinHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  }
   uint32_t actual_segments = 1;
   uint32_t store_caps = 0;
   const size_t budget = storeBudget(store_caps);
@@ -1065,6 +1089,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (mode != cap::kModeStreaming) w.u32(kTagActualSamples, samples);
   if (mode == cap::kModeRepeat) w.u32(kTagActualSegments, actual_segments);
   if (format != cap::kDataFormatPacked) w.u8(cap::kTlvConfigureAnswerFormat, format);   // always when not 0 (§3.3)
+  // streaming: what it holds unsent (capture §3.3 stream_buffer) - the zero-copy stages (those held, or what internal
+  // RAM gives now), else the store
+  if (mode == cap::kModeStreaming) w.u32(cap::kTlvConfigureAnswerStreamBuffer, streamBuffer(samples, width, actual_segments));
   return w.ok() ? completed(w.length()) : failed();
 }
 

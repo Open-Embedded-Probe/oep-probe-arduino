@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep-spec 569e86b (capture §3.3 stream_buffer): a streaming configure / query answers what it holds unsent - the
+  zero-copy stages (held, or what internal RAM gives now), else the store. Streaming's rate is held at what the harvest
+  keeps up with (32 MB/s: the P4X kept 30 and overran at 40), the nearest such rate used as §3.3 asks (the highest
+  whole-divider rate at or below it).
+- (JA) oep-spec 569e86b（capture §3.3 stream_buffer）に追従。streaming の configure / query は、送る前に溜められる量を返す（zero-copy の
+  stage: 持っている数、まだなら内部 RAM の今の空きで取れる数。そうでなければ store）。streaming の rate は、収穫が DMA に追いつく上限
+  （32 MB/s。P4X で 30 は通り、40 で上書きが出た）に抑え、§3.3 のとおり保てる最も近い rate（その上限以下で最大の、整数の分周の rate）を使う。
 - (EN) P4 streaming, found with format 4 on the P4X: the firmware never wired the zero-copy path (Endpoint::setDirect), so
   every push went through the loop a max_frame at a time (5-7 MB/s at most); now the HS vendor port streams through
   writeDirect stages (18 MB/s at 20 MHz x 8 lines on the P4X, internal RAM only). Each route has its own max_frame
