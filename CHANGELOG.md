@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The spill: a drain moves 16 KiB at most before the harvest looks at the DMA ring again, and the harvest does not
+  wait on its queue while the spill moves (a tick when no stage took any). Draining all of it while the host took
+  stages fast kept the ring unharvested past its 26 ms: an overrun with only 1.2 MB in the spill (P4X 826eee0,
+  wireskein, a host under load).
+- (JA) 待避 FIFO: 1 回の吐き出しは 16 KiB までにし、そのたびに収穫が DMA リングに戻るようにした。FIFO が動いている間は、
+  収穫はキューを待たない（stage がひとつも取れなかったときは 1 tick 待つ）。前は host が stage を速く返す間、FIFO を全部
+  吐き出すまでリングを収穫せず、リングの 26 ms を超えていた。FIFO に 1.2 MB しか無いのに DMA が上書きした（P4X 826eee0、
+  wireskein、負荷のある host）。
 - (EN) The P4's logic streaming over the stages: a spill of 8 MiB in PSRAM behind the stream's DMA ring (which cannot
   grow past 1 MiB: 2 MiB panicked in the driver). With no stage free the harvest moves what the ring holds into it and
   the stages take from it first, so the host may pause about 200 ms at 40 MB/s instead of 26 ms (wireskein: a host

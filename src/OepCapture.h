@@ -427,8 +427,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   size_t spill_head_ = 0, spill_used_ = 0;
   uint64_t spill_drop_ = 0;
   uint32_t spill_peak_ = 0;   // the most it held since the start (bytes; capture-drops)
+  // what one drain moves at most before the harvest looks at the ring again: a few chunks' worth, more than comes in
+  // meanwhile (one chunk a pass), so the spill still empties
+  static constexpr size_t kSpillDrainStep = 16 * 1024;
   size_t spillIn(const Chunk &chunk, size_t at);   // -> where it got to (short: the spill is full)
-  void drainSpill();                               // into the stages while one is free
+  bool drainSpill();                               // into the stages while one is free; -> moved any
   void dropAfter(size_t n);                        // n stream bytes dropped, after what the spill holds
   bool held_ = false;        // the harvest's chunk not all taken (held_chunk_ from held_at_): no stage was free
   size_t held_at_ = 0;

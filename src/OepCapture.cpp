@@ -379,12 +379,16 @@ size_t LogicCapture::spillIn(const Chunk &chunk, size_t at) {
   return at;
 }
 
-// The spill's bytes into the stages, oldest first, while one is free; once it is empty, the drop put after it.
-void LogicCapture::drainSpill() {
+// The spill's bytes into the stages, oldest first, while one is free - kSpillDrainStep at most a call, so the harvest
+// comes back to the DMA ring between (draining all of it while the host took stages fast kept the ring unharvested past
+// its 26 ms: an overrun with 1.2 MB in the spill, P4X 826eee0); once it is empty, the drop put after it. -> it moved
+// bytes (or emptied).
+bool LogicCapture::drainSpill() {
   const bool copy = format_ != cap::kDataFormatTestCounter;
-  while (spill_used_) {
+  size_t moved = 0;
+  while (spill_used_ && moved < kSpillDrainStep) {
     if (stage_cur_ >= 0 && stage_pos_ + stage_fill_ != captured_) sendStage();
-    if (stage_cur_ < 0 && !takeStage()) return;
+    if (stage_cur_ < 0 && !takeStage()) return moved != 0;
     size_t n = stage_data_ - stage_fill_;
     if (n > spill_used_) n = spill_used_;
     if (n > kSpillBytes - spill_head_) n = kSpillBytes - spill_head_;
@@ -393,13 +397,16 @@ void LogicCapture::drainSpill() {
     captured_ += n;
     spill_head_ = (spill_head_ + n) % kSpillBytes;
     spill_used_ -= n;
+    moved += n;
     if (stage_fill_ == stage_data_) sendStage();
   }
+  if (spill_used_) return true;
   spill_head_ = 0;
   if (spill_drop_) {   // the bytes dropped after it: the position jumps (a new stage, sendStage above)
     captured_ += spill_drop_;
     spill_drop_ = 0;
   }
+  return true;
 }
 
 // Format 1 (capture §1.3), streaming over the stages: the chunk's bytes gather into the block; each full block is
@@ -968,12 +975,16 @@ void LogicCapture::harvestTask(void *context) {
     bool &held = self->held_;   // members: a chunk waiting for a stage outlives a pass of the loop
     size_t &at = self->held_at_;
     Chunk &waiting = self->held_chunk_;
+    bool drained = false;   // the last drain moved bytes
     while (self->harvesting_) {
-      if (!held && xQueueReceive(self->queue_, &waiting, pdMS_TO_TICKS(2)) == pdTRUE) {
+      // the spill to drain: no waiting on the queue while it moves (a tick when no stage took any: not spinning)
+      const bool spilled = self->spill_used_ || self->spill_drop_;
+      const TickType_t wait = !spilled ? pdMS_TO_TICKS(2) : drained ? 0 : 1;
+      if (!held && xQueueReceive(self->queue_, &waiting, wait) == pdTRUE) {
         held = true;
         at = 0;
       }
-      if (self->spill_used_ || self->spill_drop_) self->drainSpill();
+      drained = spilled && self->drainSpill();
       if (held) {
         // straight into the stages - after what the spill holds; none free: into the spill
         if (!self->spill_used_ && !self->spill_drop_) at = self->harvestDirect(waiting, at);
