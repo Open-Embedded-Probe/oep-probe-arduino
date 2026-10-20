@@ -1565,8 +1565,57 @@ static void testRepeatTrigger() {
   }
 }
 
+// The bench's case (P4X f8b985e, wireskein): rearm 1 on a line toggling all the time (a UART sending 0x55 from the
+// start), 20000 samples (20480: whole 4 KiB), 5 segments, pretrigger 2000 - every segment its own trigger at its
+// pretrigger, flags bit3, none taken straight on. A segment starting inside the chunk its trigger is in (lead 2600: the
+// first one too) had rearm 0's info, no trigger_index and flags 0.
+static void testRepeatTriggerBusyLine() {
+  for (const size_t lead : {size_t(0), size_t(2600)}) {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(2);
+  Dma dma;
+  Bytes out;
+  Config c;
+  c.mode = 2;
+  c.samples = 20000;
+  c.segments = 5;
+  c.trigger = true;
+  c.pretrigger = 2000;
+  c.rearm = true;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  const uint32_t generation = getU32(out.data());
+  dma.deliver(3968, 0xFF, 3968);   // idle high before the UART starts
+  dma.run();
+  Bytes chunk(3968);
+  size_t sample = 0;
+  for (int k = 0; k < 40; ++k) {
+    for (auto &b : chunk) { b = sample < lead || ((sample - lead) / 87) & 1 ? 0xFF : 0x00; ++sample; }
+    dma.put(chunk);
+    dma.run();
+    rig.cap.poll();
+  }
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)));
+  const uint8_t count = out[1];
+  CHECK(count == 5);
+  for (uint8_t k = 0; k < count; ++k) {
+    const uint8_t *s = out.data() + 2 + 37 * k;
+    const bool good = getU32(s + 28) == 2000 && (s[32] & cap::kSegmentFlagRearm);
+    CHECK(good);
+    Bytes seg;   // the falling edge at its trigger_index
+    const uint64_t position = getU64(s + 4);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, position + 1999, 2), seg)) && getU16(seg.data() + 9) == 2 &&
+          seg[11] == 0xFF && seg[12] == 0x00);
+    if (!good)
+      printf("  lead %zu segment %u: position %llu samples %u trigger_index %u flags %u\n", lead, getU32(s),
+             (unsigned long long)getU64(s + 4), getU32(s + 12), getU32(s + 28), s[32]);
+  }
+  }
+}
+
 int main() {
   testForcedAfterWrap();
+  testRepeatTriggerBusyLine();
   testRepeatTrigger();
   testTriggerIndexMidByte();
   testLongTriggeredSegment();

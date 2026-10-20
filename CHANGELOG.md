@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fix: the P4's repeat with rearm 1 - a segment whose start (pretrigger samples before its trigger) fell inside
+  the chunk its trigger was found in got the info of rearm 0's next segment: no trigger_index, flags 0 (P4X f8b985e,
+  wireskein: segments 0, 2 and 3 of 5 on a line toggling all the time). Its trigger's info is kept now
+  (test_capture's testRepeatTriggerBusyLine).
+- (JA) 修正: P4 の repeat（rearm 1）で、区画の始まり（トリガの pretrigger サンプル前）が、トリガを見つけたチャンクの中にあると、
+  その区画の記録が rearm 0 の「続けて取る区画」のものに書き換わっていた（trigger_index なし、flags 0）。P4X の f8b985e で
+  wireskein が見つけた（常に変化する線で、5 区画のうち 0、2、3 番）。今はトリガの記録を残す（test_capture の
+  testRepeatTriggerBusyLine）。
 - (EN) The ESP builds' analog: streaming (mode 3; capture §2.1, §3.4; wireskein's ask). Segments of 8 KiB (4096 frames
   on one channel), 8 of them in the ring (stream_buffer 64 KiB); no samples, an immediate trigger only; start once
   subscribed. The pushes carry generation and segment_info, complete frames only, one segment each. A segment begun

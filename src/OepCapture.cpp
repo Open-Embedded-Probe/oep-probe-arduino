@@ -138,10 +138,14 @@ void LogicCapture::harvestRepeatTriggered(const Chunk &chunk) {
     return;
   }
   size_t at = 0;
+  // a segment its trigger began in this chunk: its info is the trigger's, even with none of its bytes copied yet (it
+  // starts inside this chunk) - not rearm 0's (P4X f8b985e: such segments came out with no trigger_index, flags 0)
+  bool begun = false;
   while (at < chunk.length) {
     if (rep_wait_) {
       if (!harvestRepeatTrigger(chunk, base, at)) break;   // none in the rest of the chunk
       if (lost_) return;
+      begun = !rep_wait_;
       continue;
     }
     if (completed_ - released_ >= segment_count_) {   // rearm 0's next segment, every one waiting for the host
@@ -153,7 +157,7 @@ void LogicCapture::harvestRepeatTriggered(const Chunk &chunk) {
       break;
     }
     if (paused_ && fill_ == 0) paused_ = false;
-    if (fill_ == 0) {   // rearm 0: the next segment straight after the last one
+    if (fill_ == 0 && !begun) {   // rearm 0: the next segment straight after the last one
       Info &info = infos_[completed_ % kInfos];
       info.serial = completed_;
       info.position = data_pos_;
@@ -175,6 +179,7 @@ void LogicCapture::harvestRepeatTriggered(const Chunk &chunk) {
     at += n;
     if (fill_ == segment_bytes_) {
       finishSegment(segment_bytes_, infos_[completed_ % kInfos].flags);
+      begun = false;
       floor_sample_ = (base + at) * 8 / width_;
       if (rearm_) {   // the next segment's own trigger, looked for from this one's end (arm 1: once its pretrigger is in)
         rep_wait_ = true;
