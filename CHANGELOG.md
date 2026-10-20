@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fix: format 1 streaming without the stages (no internal RAM for two beside the DMA ring: the P4 v1.3) went the
+  copied way with raw samples, which the host read as blocks ("block at sample 0 cut short", wireskein 2026-10-21). It
+  is refused unavailable cause 3 now (format 1 goes over the stages only). A stream the copied way is capped at
+  kStreamCopiedMaxBytes (8.5 MB/s: the P4 kept 8.42 MHz x 8 lines with no loss, lost 11 % at 16 MHz) - configure
+  answers the nearest rate it keeps, as above kStreamMaxBytes (capture §3.3).
+- (JA) 修正: stage なし（DMA リングの横に stage 2 つ分の内部 RAM が無い。P4 v1.3）の形式 1 のストリームは、写す経路に落ちて
+  生のサンプルを送っていた。host はそれをブロックとして読んでいた（「block at sample 0 cut short」、wireskein、2026-10-21）。
+  今は unavailable cause 3 で断る（形式 1 は stage でだけ送る）。写す経路のストリームは kStreamCopiedMaxBytes（8.5 MB/s）を
+  上限にした。P4 では 8 本・8.42 MHz で欠損 0、16 MHz で 11 % 欠けた。configure は、kStreamMaxBytes を超えたときと同じく、
+  保てる一番近い rate を答える（capture §3.3）。
 - (EN) Status: capture-spill (named, only with a spill) - the spill's copies in and out (bytes, CPU cycles), the DMA
   overruns while it had room, the longest between two passes of the harvest's loop (cycles), the CPU clock. To find
   where a stream still loses data with the spill not full (P4X 427c288 under host load).

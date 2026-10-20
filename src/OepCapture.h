@@ -81,6 +81,10 @@ class LogicCapture final : public Interface, public GroupTrack {
   // format 1 streaming: the samples' bytes a second the encoding keeps up with, the worst case counted (every events
   // line changing every sample); 13.3 MHz at w 8 until measured further
   static constexpr uint32_t kStreamBlocksMaxBytes = 13400000;
+  // streaming the copied way (the store, pushed through the endpoint's loop): what it keeps up with - the P4 v1.3 (no
+  // internal RAM for the stages) kept 8 lines at 8.42 MHz w 8 with no loss and lost 11 % at 16 MHz (wireskein,
+  // 2026-10-21); the nearest whole divider at or below 8.5 MB/s
+  static constexpr uint32_t kStreamCopiedMaxBytes = 8500000;
   // repeat / streaming: the DMA ring (internal). 64 KiB: at 40 MB/s 1.6 ms of the harvest's lag, and the internal RAM it
   // leaves goes to the zero-copy stages (27 KiB each)
   static constexpr size_t kRingBytes = 64 * 1024;
@@ -247,6 +251,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool openStages();
   void freeStages();
   uint32_t streamBuffer(uint32_t samples, uint8_t width, uint32_t segments) const;
+  size_t stageFrame() const;
+  size_t stagesPossible() const;
   void releaseStages();
   void sendStage();
   static void stageDone(void *context, const uint8_t *buffer);

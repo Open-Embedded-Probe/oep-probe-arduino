@@ -551,16 +551,30 @@ void LogicCapture::stageDone(void *context, const uint8_t *buffer) {
     if (self->stage_[i] == buffer) __atomic_fetch_or(&self->stage_free_, 1u << i, __ATOMIC_ACQ_REL);
 }
 
-uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t segments) const {
-  if (!endpoint_.directCapable()) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);
+// A stage's frame: max_read_ and the push's framing within kStageFrameMax, whole 512-byte packets (openStages).
+size_t LogicCapture::stageFrame() const {
   size_t frame = max_read_ + 16 + 2;
   if (frame > kStageFrameMax) frame = kStageFrameMax;
-  frame = frame / 512 * 512;
+  return frame / 512 * 512;
+}
+
+// The stages a stream gets: those held, or (none taken yet) as openStages would take them - frame + 48 KiB left over
+// each. Fewer than 2 (or no zero-copy transport): the copied way.
+size_t LogicCapture::stagesPossible() const {
+  if (!endpoint_.directCapable()) return 0;
   size_t count = stage_count_;
-  if (!count) {   // not taken yet: as openStages would, frame + 48 KiB left over each
+  if (!count) {
+    const size_t frame = stageFrame();
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (!ring_) largest = largest > kRingBytes ? largest - kRingBytes : 0;   // the DMA ring is taken first (openRepeat)
     while (count < kStagesMax && largest >= frame + 48 * 1024) { ++count; largest -= frame; }
   }
+  return count;
+}
+
+uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t segments) const {
+  const size_t count = stagesPossible();
+  const size_t frame = stageFrame();
   if (count < 2) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);   // the copied way
   // and the FIFO behind them (formats 0 and 4; held, or PSRAM to take it)
   const bool psram = streamRingAvailable();
@@ -1421,9 +1435,13 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // above it the ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture
   // §3.3), as the one-shot's ceiling above (P4X, 2026-10-20: 40 MHz w 8 kept, formats 0 and 4, 40.15 MB/s on the wire
   // with no drop; the next divider, 53.3 MHz, not measured)
+  // The copied way (no zero-copy transport, or no internal RAM for two stages: the P4 v1.3, 2026-10-21) pushes through
+  // the endpoint's loop: kStreamCopiedMaxBytes. Format 1 goes over the stages only: refused without them (cause 3).
+  const bool copied = mode == cap::kModeStreaming && stagesPossible() < 2;
+  if (blocks_format && copied) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
   if (mode == cap::kModeStreaming) {
     // the highest whole-divider rate at or below it: the nearest the divider picks never lands above
-    const uint64_t ceiling = blocks_format ? kStreamBlocksMaxBytes : kStreamMaxBytes;   // format 1: its encoding's
+    const uint64_t ceiling = copied ? kStreamCopiedMaxBytes : blocks_format ? kStreamBlocksMaxBytes : kStreamMaxBytes;
     const uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + ceiling * 8ull - 1) / (ceiling * 8ull));
     if (rate > most) rate = static_cast<uint32_t>(most);
     if (rate < kMinHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
@@ -1541,6 +1559,10 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     uint32_t got_samples = 0, got_segments = 0;
     const Open opened = openRepeat(rate, width, samples, actual_segments, num, den, got_samples, got_segments);
     if (opened == Open::kNoMemory) return noStorage(out, capacity);
+    if (opened == Open::kOk && blocks_format && !direct_) {   // format 1 goes over the stages only: none to be had
+      close();
+      return noStorage(out, capacity);
+    }
     if (opened != Open::kOk) {
       close();
       fail(cap::kErrorPeripheral);

@@ -208,7 +208,9 @@ class FakeDirect final : public DirectTransport {
 // trigger's ring and the firmware's own use, 0.0.28 on the bench: a streaming configure answered failed) it streams
 // the copied way through the store instead, and configure succeeds.
 static void testStreamingWithoutStages() {
-  for (const size_t internal : {size_t(160) << 10, size_t(512) << 10}) {
+  // 112 KiB: the DMA ring (64 KiB) and no room for two stages - the copied way (the P4 v1.3, 2026-10-21)
+  for (const size_t internal : {size_t(112) << 10, size_t(160) << 10, size_t(512) << 10}) {
+    const bool copied = internal == (size_t(112) << 10);
     board(internal, size_t(32) << 20);
     static FakeDirect direct;
     Rig rig(2);
@@ -234,7 +236,17 @@ static void testStreamingWithoutStages() {
       if (out[at] == cap::kTlvConfigureAnswerActualRate) {
         const uint64_t num = getU32(out.data() + at + kTlvHeader), den = getU32(out.data() + at + kTlvHeader + 4);
         CHECK(num / den <= uint64_t(LogicCapture::kStreamMaxBytes) * 8 / 2);
+        // the copied way (no stages: the P4 v1.3): what the endpoint's loop keeps up with (2026-10-21, wireskein)
+        if (copied) CHECK(num / den <= uint64_t(LogicCapture::kStreamCopiedMaxBytes) * 8 / 2);
       }
+    // format 1 goes over the stages only: without them refused unavailable cause 3 (it sent raw samples as blocks)
+    Bytes p = request(c);
+    tlv(p, kCrit | cap::kTlvConfigureFormat, {cap::kDataFormatLogicBlocks});
+    Bytes o;
+    const Result r1 = raw(rig.cap, LogicCapture::kOpConfigure, p, o);
+    if (copied) CHECK(rejectedAs(r1, kRejectUnavailable) && o.size() >= 4 &&
+                                              o[3] == reg::core::kUnavailableCauseStorageFull);
+    else CHECK(ok(r1));
   }
 }
 
