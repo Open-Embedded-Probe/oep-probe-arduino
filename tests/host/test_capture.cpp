@@ -922,9 +922,9 @@ class MemStream final : public Stream {
 static uint8_t pattern(uint64_t position) { return static_cast<uint8_t>(position * 7 + (position >> 8)); }
 
 // Streaming over the zero-copy stages with the host not taking IN: the stages fill, then the stream's DMA ring in PSRAM
-// holds the rest and nothing is dropped; given back, the stages take it in order. The DMA coming round over bytes not
-// yet taken drops them (the position jumps, no error: no stage had them) and the frame after the jump starts at its
-// own position. Every frame's bytes are the stream's at its position.
+// and the spill behind it hold the rest and nothing is dropped; given back, the stages take it in order. Past the
+// spill's room the DMA comes round over bytes not yet taken and drops them (the position jumps, no error: no stage had
+// them) and the frame after the jump starts at its own position. Every frame's bytes are the stream's at its position.
 static void testStreamRing() {
   board(512 * 1024, size_t(32) << 20);
   MemStream bulk;
@@ -957,8 +957,9 @@ static void testStreamRing() {
   Config c;
   c.mode = 3;
   CHECK(ok(configure(logic, c, out)));
-  uint32_t buffer = 0;   // the stages and the ring
-  CHECK(findU32(out, cap::kTlvConfigureAnswerStreamBuffer, buffer) && buffer > LogicCapture::kStreamRingBytes / 2);
+  uint32_t buffer = 0;   // the stages, the ring and the spill
+  CHECK(findU32(out, cap::kTlvConfigureAnswerStreamBuffer, buffer) &&
+        buffer > LogicCapture::kStreamRingBytes / 2 + LogicCapture::kSpillBytes);
   Dma dma;
   CHECK(ok(raw(logic, LogicCapture::kOpStart, {}, out)));
   CHECK(g_fake_parlio_size == LogicCapture::kStreamRingBytes);
@@ -999,9 +1000,16 @@ static void testStreamRing() {
   for (size_t n = 0; n < ring / 2; n += 4032) { direct.giveBack(); deliver(4032); }   // the host takes it all, keeps up
   CHECK(!dropped());
   CHECK(check(0) + 64 * 1024 > produced);   // all but the stage being filled
-  for (size_t n = 0; n < ring * 2; n += step) deliver(step);   // unread: the DMA comes round over what the ring held
+  // unread for twice the ring: the spill takes it, nothing dropped; given back, in order
+  for (size_t n = 0; n < ring * 2; n += step) deliver(step);
+  CHECK(!dropped());
+  for (size_t n = 0; n < LogicCapture::kSpillBytes / 4032 + 64; ++n) { direct.giveBack(); deliver(4032); }
+  CHECK(!dropped());
+  CHECK(check(0) + 64 * 1024 > produced);
+  // unread past the spill and the ring: the DMA comes round over what the ring held
+  for (size_t n = 0; n < LogicCapture::kSpillBytes + ring * 2; n += step) deliver(step);
   CHECK(dropped());
-  for (size_t n = 0; n < ring; n += 4032) { direct.giveBack(); deliver(4032); }
+  for (size_t n = 0; n < LogicCapture::kSpillBytes / 4032 + 2 * ring / 4032; ++n) { direct.giveBack(); deliver(4032); }
   check(1);
   logic.planRelease();
 }

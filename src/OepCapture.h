@@ -76,6 +76,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   // receive (parlio_rx_unit_receive, the P4X, ESP32 core 3.3.12), 1 MiB runs. Its DMA descriptors take 17 KB of
   // internal RAM
   static constexpr size_t kStreamRingBytes = 1024 * 1024;
+  static constexpr size_t kSpillBytes = 8u * 1024 * 1024;   // the spill behind it (below: spill_)
   static constexpr uint32_t kStreamMaxBytes = 40000000;   // streaming: what the harvest and the port keep up with (bytes a second)
   // format 1 streaming: the samples' bytes a second the encoding keeps up with, the worst case counted (every events
   // line changing every sample); 13.3 MHz at w 8 until measured further
@@ -262,7 +263,10 @@ class LogicCapture final : public Interface, public GroupTrack {
   Chunk held_chunk_ = {};
   void harvestBlocks(const Chunk &chunk);   // format 1 streaming (above)
   void emitBlock(uint32_t samples);
-  uint32_t missed(const Chunk &chunk) const { return chunk.end - static_cast<uint32_t>(chunk.length) - static_cast<uint32_t>(captured_); }
+  // the chunks lost to the queue before this one: its start past the stream byte taken last (the stages', the spill's)
+  uint32_t missed(const Chunk &chunk) const {
+    return chunk.end - static_cast<uint32_t>(chunk.length) - static_cast<uint32_t>(captured_ + spill_used_ + spill_drop_);
+  }
   // The DMA's ring position past the last chunk it finished (the ISR, partialReceive), counted as Chunk::ring. The DMA
   // writes on within kDmaAhead of it (the descriptor being filled, and one skipped after an early close).
   volatile uint32_t ring_end_ = 0;
@@ -413,6 +417,19 @@ class LogicCapture final : public Interface, public GroupTrack {
   bool copyStreamTo(uint8_t *dst, uint64_t from, uint64_t to);   // stream bytes [from, to) to dst; false: not all held
   size_t harvestDirect(const Chunk &chunk, size_t at);   // -> where it got to (short: no stage free yet)
   uint32_t ring_peak_ = 0;   // the most the stream ring held unharvested since the start (bytes; capture-drops)
+  // Streaming over the stages with PSRAM: the spill, a FIFO behind the DMA ring (which cannot grow past 1 MiB). With
+  // no stage free the harvest moves what the ring holds into it, and the stages take from it first, so the host may
+  // pause about kSpillBytes / rate (200 ms at 40 MB/s) instead of the ring's 26 ms. Its bytes are the stream's
+  // [captured_, captured_ + spill_used_); a drop while it holds any (full, or the DMA came round) is put after it
+  // (spill_drop_: the stream bytes after it dropped, every one until it has gone - no marks inside it). Harvest task
+  // only. Taken with the stream ring, given back with the stages (releaseStages); none: the ring alone, as before.
+  uint8_t *spill_ = nullptr;
+  size_t spill_head_ = 0, spill_used_ = 0;
+  uint64_t spill_drop_ = 0;
+  uint32_t spill_peak_ = 0;   // the most it held since the start (bytes; capture-drops)
+  size_t spillIn(const Chunk &chunk, size_t at);   // -> where it got to (short: the spill is full)
+  void drainSpill();                               // into the stages while one is free
+  void dropAfter(size_t n);                        // n stream bytes dropped, after what the spill holds
   bool held_ = false;        // the harvest's chunk not all taken (held_chunk_ from held_at_): no stage was free
   size_t held_at_ = 0;
   void dropDirect(size_t n);

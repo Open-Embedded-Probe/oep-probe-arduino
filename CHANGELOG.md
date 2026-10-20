@@ -1,6 +1,20 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The P4's logic streaming over the stages: a spill of 8 MiB in PSRAM behind the stream's DMA ring (which cannot
+  grow past 1 MiB: 2 MiB panicked in the driver). With no stage free the harvest moves what the ring holds into it and
+  the stages take from it first, so the host may pause about 200 ms at 40 MB/s instead of 26 ms (wireskein: a host
+  under load stopped taking IN for 0.1 - 0.5 s). stream_buffer counts it; capture-drops adds its peak and size. A drop
+  while it holds bytes (full, the DMA round) is put after them. Taken with the stream ring, given back with the stages
+  before a store. Host-tested (test_capture's testStreamRing); not yet on the bench.
+- (JA) P4 のロジックの stage 経由のストリーミングに、PSRAM の待避 FIFO（8 MiB）を足した。DMA リングの後ろに置く。
+  - DMA リングは 1 MiB より大きくできない（2 MiB ではドライバが panic した）。
+  - 空いた stage が無いとき、収穫はリングの中身を FIFO に移す。stage は FIFO から先に取る。host が受けずにいられる時間は、
+    40 MB/s で 26 ms から約 200 ms になる（wireskein の測定では、負荷のある host が 0.1〜0.5 秒 IN を受けない）。
+  - stream_buffer にこの分を含める。capture-drops の後ろに、FIFO の最大使用量と大きさを足した。
+  - FIFO に溜まっている間に起きた欠落（満杯、DMA の一周）は、FIFO の中身の後ろに置く。
+  - ストリームのリングと一緒に取り、store を取る前に stage と一緒に返す。
+  - ホストの試験（test_capture の testStreamRing）だけで確かめた。実機ではまだ確かめていない。
 - (EN) Fix: the P4's repeat with rearm 1 - a segment whose start (pretrigger samples before its trigger) fell inside
   the chunk its trigger was found in got the info of rearm 0's next segment: no trigger_index, flags 0 (P4X f8b985e,
   wireskein: segments 0, 2 and 3 of 5 on a line toggling all the time). Its trigger's info is kept now

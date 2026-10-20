@@ -336,6 +336,72 @@ void LogicCapture::dropDirect(size_t n) {
   captured_ += n;
 }
 
+void LogicCapture::dropAfter(size_t n) {
+  if (!spill_used_ && !spill_drop_) { dropDirect(n); return; }
+  stage_drops_ += n;
+  dropped_ += n;
+  spill_drop_ += n;   // the position jumps once the spill has gone (drainSpill)
+}
+
+// Chunk [at, end) into the spill (no stage free, or the spill holds bytes before it). -> where it got to: short when
+// the spill is full (the ring holds the rest). Without a spill: at, unchanged. Harvest task only.
+size_t LogicCapture::spillIn(const Chunk &chunk, size_t at) {
+  if (!spill_ || lost_) return at;
+  if (at == 0 && !spill_used_ && !spill_drop_) {}   // harvestDirect looked at this chunk's start already
+  else if (at == 0) {
+    if (const uint32_t m = missed(chunk)) dropAfter(m);   // chunks lost to the queue
+    const uint32_t held = ring_end_ - chunk.ring;
+    if (held > ring_peak_) ring_peak_ = held;
+  }
+  const bool copy = format_ != cap::kDataFormatTestCounter;   // format 4's bytes are written at the send
+  while (at < chunk.length) {
+    const size_t rest = chunk.length - at;
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at)) || spill_drop_) {   // rewritten, or after a drop: dropped
+      if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) overruns_ = overruns_ + 1;
+      dropAfter(rest);
+      return chunk.length;
+    }
+    const size_t tail = (spill_head_ + spill_used_) % kSpillBytes;
+    size_t n = kSpillBytes - spill_used_;
+    if (!n) return at;
+    if (n > kSpillBytes - tail) n = kSpillBytes - tail;
+    if (n > rest) n = rest;
+    if (copy) memcpy(spill_ + tail, chunk.data + at, n);
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // while copied
+      overruns_ = overruns_ + 1;
+      dropAfter(rest);
+      return chunk.length;
+    }
+    spill_used_ += n;
+    if (spill_used_ > spill_peak_) spill_peak_ = static_cast<uint32_t>(spill_used_);
+    at += n;
+  }
+  return at;
+}
+
+// The spill's bytes into the stages, oldest first, while one is free; once it is empty, the drop put after it.
+void LogicCapture::drainSpill() {
+  const bool copy = format_ != cap::kDataFormatTestCounter;
+  while (spill_used_) {
+    if (stage_cur_ >= 0 && stage_pos_ + stage_fill_ != captured_) sendStage();
+    if (stage_cur_ < 0 && !takeStage()) return;
+    size_t n = stage_data_ - stage_fill_;
+    if (n > spill_used_) n = spill_used_;
+    if (n > kSpillBytes - spill_head_) n = kSpillBytes - spill_head_;
+    if (copy) memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, spill_ + spill_head_, n);
+    stage_fill_ += n;
+    captured_ += n;
+    spill_head_ = (spill_head_ + n) % kSpillBytes;
+    spill_used_ -= n;
+    if (stage_fill_ == stage_data_) sendStage();
+  }
+  spill_head_ = 0;
+  if (spill_drop_) {   // the bytes dropped after it: the position jumps (a new stage, sendStage above)
+    captured_ += spill_drop_;
+    spill_drop_ = 0;
+  }
+}
+
 // Format 1 (capture §1.3), streaming over the stages: the chunk's bytes gather into the block; each full block is
 // encoded into the stage, sent first when the block's worst would not fit. Harvest task only.
 void LogicCapture::harvestBlocks(const Chunk &chunk) {
@@ -486,7 +552,10 @@ uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t se
   // and the FIFO behind them (formats 0 and 4; held, or PSRAM to take it)
   const bool psram = streamRingAvailable();
   const size_t ring = format_ == cap::kDataFormatLogicBlocks ? 0 : (psram ? kStreamRingBytes : kRingBytes) - kDmaAhead - kChunkMax;
-  return static_cast<uint32_t>(count * (frame - kPushHead - kPushTail) + ring);
+  // the spill behind the ring (formats 0 and 4): held, or PSRAM room for it beside the ring
+  const bool spill = format_ != cap::kDataFormatLogicBlocks && psram &&
+                     (spill_ || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= kSpillBytes + (stream_ring_ ? 0 : kStreamRingBytes));
+  return static_cast<uint32_t>(count * (frame - kPushHead - kPushTail) + ring + (spill ? kSpillBytes : 0));
 }
 
 bool LogicCapture::openStages() {
@@ -514,6 +583,8 @@ bool LogicCapture::openStages() {
   stage_cur_ = -1;
   if (!stream_ring_ && stage_count_ >= 2)   // the stream's DMA ring in PSRAM, kept like the stages (none: ring_)
     stream_ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, kStreamRingBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA));
+  if (stream_ring_ && !spill_)   // and the spill behind it, when PSRAM has the room
+    spill_ = static_cast<uint8_t *>(heap_caps_malloc(kSpillBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   return stage_count_ >= 2;
 }
 
@@ -538,6 +609,8 @@ void LogicCapture::releaseStages() {
   stage_cur_ = -1;
   heap_caps_free(stream_ring_);
   stream_ring_ = nullptr;
+  heap_caps_free(spill_);
+  spill_ = nullptr;
 }
 
 // The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. With arm 1
@@ -900,10 +973,13 @@ void LogicCapture::harvestTask(void *context) {
         held = true;
         at = 0;
       }
+      if (self->spill_used_ || self->spill_drop_) self->drainSpill();
       if (held) {
-        at = self->harvestDirect(waiting, at);
+        // straight into the stages - after what the spill holds; none free: into the spill
+        if (!self->spill_used_ && !self->spill_drop_) at = self->harvestDirect(waiting, at);
+        if (at < waiting.length) at = self->spillIn(waiting, at);
         held = at < waiting.length;
-        if (held) { vTaskDelay(1); continue; }   // the transport has every stage: the ring holds the rest
+        if (held) { vTaskDelay(1); continue; }   // the stages and the spill full: the ring holds the rest
       }
       if (self->stage_cur_ < 0 || self->stage_fill_ == 0) continue;
       // the subscriber's batching: at least min_bytes, or max_delay_ms after the stage's first byte (0, 0: when idle)
@@ -920,16 +996,24 @@ void LogicCapture::harvestTask(void *context) {
         self->sendStage();
     }
     // what arrived before the stop, as stages free up (kStopDrainMs at most: then the rest is dropped)
-    for (const uint32_t t0 = millis(); held || uxQueueMessagesWaiting(self->queue_);) {
-      if (!held) {
+    for (const uint32_t t0 = millis(); held || uxQueueMessagesWaiting(self->queue_) || self->spill_used_;) {
+      if (self->spill_used_ || self->spill_drop_) self->drainSpill();
+      if (!held && !self->spill_used_ && !self->spill_drop_) {
         if (xQueueReceive(self->queue_, &waiting, 0) != pdTRUE) break;
+        held = true;
         at = 0;
       }
-      at = self->harvestDirect(waiting, at);
-      held = at < waiting.length;
-      if (!held) continue;
-      if (millis() - t0 >= kStopDrainMs) {
-        self->dropDirect(waiting.length - at);
+      if (held) {
+        if (!self->spill_used_ && !self->spill_drop_) at = self->harvestDirect(waiting, at);
+        held = at < waiting.length;
+      }
+      if (!held && !self->spill_used_) continue;
+      if (millis() - t0 >= kStopDrainMs) {   // the rest dropped (the spill's, the chunk's, the queue's)
+        self->spill_drop_ += self->spill_used_;
+        self->spill_used_ = 0;
+        self->captured_ += self->spill_drop_;
+        self->spill_drop_ = 0;
+        if (held) self->dropDirect(waiting.length - at);
         held = false;
         while (xQueueReceive(self->queue_, &waiting, 0) == pdTRUE) self->dropDirect(waiting.length);
         break;
@@ -1087,7 +1171,8 @@ size_t LogicCapture::storeBudget(uint32_t &caps) const {
   // what it holds now is freed before the next store is taken: the store, a triggered one-shot's segment (its own
   // block, not the ring) - a query answers as the configure after it would
   const size_t held = (store_ ? store_bytes_ : 0) + (buffer_ && !buffer_in_ring_ ? bytes_ + 1 : 0);
-  const size_t psram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) + held;
+  // a stream's spill too: given back with the stages before a store is taken (releaseStages)
+  const size_t psram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) + held + (spill_ ? kSpillBytes : 0);
   if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0 && psram > 2 * kPsramReserve) {
     caps = MALLOC_CAP_SPIRAM;
     return psram - kPsramReserve;
@@ -1595,6 +1680,9 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   block_fill_ = stage_samples_ = 0;
   enc_max_cycles_ = enc_blocks_ = enc_fallbacks_ = 0;
   ring_peak_ = 0;
+  spill_peak_ = 0;
+  spill_head_ = spill_used_ = 0;
+  spill_drop_ = 0;
   held_ = false;
   held_at_ = 0;
   enc_cycles_ = 0;
@@ -2021,7 +2109,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         // the next byte to write, the dropped ones counted (oep-if-capture §3.2); stopped on a hole, the start of the
         // segment it was in (§2.2)
         putU64(out + 5, lost_ ? lost_pos_ : format_ == cap::kDataFormatLogicBlocks ? enc_pos_
-                        : rep_trig_ ? data_pos_ + fill_ : static_cast<uint64_t>(captured_));
+                        : rep_trig_ ? data_pos_ + fill_ : static_cast<uint64_t>(captured_ + spill_used_ + spill_drop_));
         // flags (oep-if-capture §3.2): bit0 the probe dropped data - the chunk queue full, the DMA ring overrun, no free
         // stage, streaming's new data discarded with every segment unsent (§2.1 rule 1; a repeat with no free segment
         // pauses instead, state 5). bit1 (a sample taken a sample period or more late) never: PARLIO keeps its clock.
@@ -2050,9 +2138,10 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       // the chunks the harvest queue had no room for - u32 each, since the start; then the way the data goes (u8: 1 the
       // zero-copy stages, 0 the store through the endpoint) and the stages held (u8); then the memory a capture draws
       // on now (u32 each): internal RAM's largest free block, DMA-capable internal RAM's, PSRAM's total (0: none); then
-      // the most the DMA ring held not yet harvested since the start (u32, bytes; the stream's buffer in use)
+      // the most the DMA ring held not yet harvested since the start (u32, bytes; the stream's buffer in use); then the
+      // spill behind it: the most it held since the start and its size (u32 each, bytes; 0 0: none)
       static const char kDrops[] = "io.github.open-embedded-probe.capture-drops";
-      constexpr size_t kName = sizeof kDrops - 1, kValue = 1 + kName + 34;
+      constexpr size_t kName = sizeof kDrops - 1, kValue = 1 + kName + 42;
       if (used + kTlvHeader + kValue <= capacity) {
         putTlvHeader(out + used, reg::kTagNamedExtension, kValue);
         uint8_t *v = out + used + kTlvHeader;
@@ -2068,6 +2157,8 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 23 + kName, static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)));
         putU32(v + 27 + kName, static_cast<uint32_t>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)));
         putU32(v + 31 + kName, ring_peak_);
+        putU32(v + 35 + kName, spill_peak_);
+        putU32(v + 39 + kName, spill_ ? static_cast<uint32_t>(kSpillBytes) : 0);
         used += kTlvHeader + kValue;
       }
       // format 1's encoding cost, since the start (named, as above): cycles of the longest block (u32), of all (u64),
