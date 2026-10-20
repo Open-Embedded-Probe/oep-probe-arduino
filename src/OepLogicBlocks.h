@@ -67,6 +67,7 @@ class Encoder {
     uint32_t evmask = 0;
     for (uint8_t e = 0; e < E; ++e) {
       evmask |= 1u << p.ev_bit[e];
+      bit_[e] = p.ev_bit[e];
       start_[e] = (prev >> p.ev_bit[e]) & 1;
       level_[e] = start_[e];
       tick_[e] = 0xFFFFFFFFu;
@@ -74,13 +75,18 @@ class Encoder {
       n_[e] = 0;
       raw_[e] = false;
     }
+    active_ = evmask;   // the events channels still counted (one carried raw drops out of the look)
     if (E) {
       uint32_t i = 0;
       if (p.w == 8 && !(reinterpret_cast<uintptr_t>(src) & 3)) {   // four samples a word (src word-aligned): a word in
         // which no events channel changed is skipped whole
         const uint32_t *words = reinterpret_cast<const uint32_t *>(src);
-        const uint32_t mask4 = (evmask & 0xFF) * 0x01010101u;
+        uint32_t counted = active_, mask4 = (active_ & 0xFF) * 0x01010101u;
         while (i < r) {
+          if (counted != active_) {   // a channel went raw: no longer a reason to look
+            counted = active_;
+            mask4 = (active_ & 0xFF) * 0x01010101u;
+          }
           if (i + 4 <= r) {
             const uint32_t word = words[i >> 2];
             const uint32_t shifted = (word << 8) | (prev & 0xFF);
@@ -91,10 +97,10 @@ class Encoder {
             }
           }
           const uint32_t end = i + 4 < r ? i + 4 : r;
-          for (; i < end; ++i) prev = look(p, i, src[i], prev, evmask);
+          for (; i < end; ++i) prev = look(p, i, src[i], prev, active_);
         }
       } else {
-        for (; i < r; ++i) prev = look(p, i, sample(p, src, i), prev, evmask);
+        for (; i < r; ++i) prev = look(p, i, sample(p, src, i), prev, active_);
       }
       for (uint8_t e = 0; e < E; ++e) flush(e);
     }
@@ -130,6 +136,8 @@ class Encoder {
     } else if (p.w == 8 && (cols == 1 || cols == 2 || cols == 4) && lowBits(cols_bit, cols) &&
                !(reinterpret_cast<uintptr_t>(src) & 3)) {
       packLow(src, r, cols, raw);   // the raw channels on the low bits: a word of four samples at a time
+    } else if (p.w == 8 && cols <= 8) {
+      packTable(src, r, cols_bit, cols, raw);   // any columns of a byte sample: a table of the 256 bytes
     } else if (cols) {
       size_t bit = 0;
       for (uint32_t i = 0; i < r; ++i) {
@@ -190,6 +198,34 @@ class Encoder {
         if ((src[i] >> k) & 1) raw[(bit + k) >> 3] |= static_cast<uint8_t>(1u << ((bit + k) & 7));
   }
 
+  // w 8 samples, any columns (cols <= 8): each byte's packed value from a table built for this block, appended to a
+  // 64-bit accumulator and stored a word at a time
+  void packTable(const uint8_t *src, uint32_t r, const uint8_t *bits, uint8_t cols, uint8_t *raw) {
+    if (cols != table_cols_ || memcmp(bits, table_bits_, cols)) {   // the columns changed: the table again
+      for (uint32_t b = 0; b < 256; ++b) {
+        uint8_t v = 0;
+        for (uint8_t k = 0; k < cols; ++k) v |= static_cast<uint8_t>(((b >> bits[k]) & 1) << k);
+        table_[b] = v;
+      }
+      memcpy(table_bits_, bits, cols);
+      table_cols_ = cols;
+    }
+    uint32_t acc = 0, have = 0;   // 32-bit (the P4 is RV32: a 64-bit shift is several instructions)
+    size_t at = 0;
+    for (uint32_t i = 0; i < r; ++i) {
+      const uint32_t v = table_[src[i]];
+      acc |= v << have;
+      have += cols;
+      if (have >= 32) {             // a word full: stored, the bits past it (cols <= 8) start the next
+        memcpy(raw + at, &acc, 4);
+        at += 4;
+        have -= 32;
+        acc = have ? v >> (cols - have) : 0;
+      }
+    }
+    for (; have > 0; have = have > 8 ? have - 8 : 0, acc >>= 8) raw[at++] = static_cast<uint8_t>(acc);
+  }
+
   static uint32_t sample(const Plan &p, const uint8_t *src, uint32_t i) {
     if (p.w == 16) return static_cast<uint32_t>(src[2 * i] | src[2 * i + 1] << 8);
     if (p.w == 8) return src[i];
@@ -221,12 +257,16 @@ class Encoder {
   // the tick being counted becomes an event; past L / 32 events the channel goes raw
   void flush(uint8_t e) {
     if (!count_[e]) return;
-    if (n_[e] >= limit_) { raw_[e] = true; count_[e] = 0; return; }
+    if (n_[e] >= limit_) { raw_[e] = true; count_[e] = 0; active_ &= ~(1u << bit_[e]); return; }
     events_[e][n_[e]++] = (tick_[e] & 0xFFFF) | (static_cast<uint32_t>(level_[e] << 7 | count_[e]) << 16);
     count_[e] = 0;
   }
 
   uint32_t limit_ = kMaxEvents;   // a channel's events in this block before it goes raw
+  uint8_t table_[256] = {};        // packTable's, for the columns in table_bits_ (kept while they stay the same)
+  uint8_t table_bits_[2 * kMaxChannels] = {}, table_cols_ = 0xFF;
+  uint32_t active_ = 0;            // the events channels still counted in this block (their sample bits)
+  uint8_t bit_[kMaxChannels] = {}; // each events channel's sample bit
   uint32_t before_ = 0;
   bool have_before_ = false;
   uint32_t fallbacks_ = 0;

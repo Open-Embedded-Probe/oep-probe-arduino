@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The P4 builds turn PSRAM on (sketch.yaml: PSRAM=enabled; every P4 SoC has it, and the Arduino menu's default is
+  off): the frame-sized buffers and big allocations go there, internal RAM is left to the DMA ring and the zero-copy
+  stages (the P4X now holds 7 stages, a 57 KB stream_buffer, where it held 4). Format 1's encoder: any raw columns of a
+  byte sample through a table of the 256 bytes (kept while the columns stay), a 32-bit accumulator (the P4 is RV32), and a
+  channel gone raw drops out of the change look. The P4X at 13.3 MHz with the fixture UART's TX looped onto a logic
+  line: 1 Mbaud (every block fallback) 107 k cycles a block (87% of a core) with no drop, 115200 baud D 1 53 k (41%),
+  1 Mbaud D 64 72 k (58%).
+- (JA) P4 のビルドで PSRAM を有効にする（sketch.yaml の PSRAM=enabled。P4 の SoC はすべて PSRAM を持ち、Arduino のメニューの既定は無効）。
+  frame の大きさのバッファや大きな確保は PSRAM へ行き、内部 RAM は DMA のリングと zero-copy の stage に残る（P4X の stage は 4 → 7 個、
+  stream_buffer 57 KB）。形式 1 の符号化器: byte のサンプルの任意の raw の列を 256 通りの表で詰める（列が同じ間は表を作り直さない）、32 bit の
+  溜め（P4 は RV32）、raw に回したチャネルは変化の検査から外す。P4X の 13.3 MHz で、fixture UART の TX をロジックの線に回して測った: 1 Mbaud
+  （ほぼ全ブロック fallback）10.7 万サイクル / ブロック（1 コアの 87%）で落とし無し、115200 baud の D 1 で 5.3 万（41%）、1 Mbaud の D 64 で
+  7.2 万（58%）。
 - (EN) Data format 1, the logic blocks (capture §1.3), on the P4: streaming over the vendor port's zero-copy stages,
   up to 8 lines (taken a byte a sample), carriage raw and events with D 1 or a power of 2 up to 4096, block_max, L 4096
   at most and within a stage. A stage (one segment) holds whole blocks; a block with no free stage is dropped (the
