@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.35
 - (EN) A triggered one-shot (an edge, a level, linked) is no longer bound to the DMA's one receive (64 KiB): its segment
   is copied out of the ring into the store, so it takes the store's room (16 MiB at most) at a rate the harvest keeps
   up with - the internal ring 20 MB/s, a linked track's PSRAM ring 40 MB/s; faster, and an immediate one-shot, 64 KiB as
