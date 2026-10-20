@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Status: capture-spill (named, only with a spill) - the spill's copies in and out (bytes, CPU cycles), the DMA
+  overruns while it had room, the longest between two passes of the harvest's loop (cycles), the CPU clock. To find
+  where a stream still loses data with the spill not full (P4X 427c288 under host load).
+- (JA) status に capture-spill（名前付き。待避 FIFO があるときだけ）を足した。中身は、FIFO への出し入れのバイト数と CPU サイクル、
+  FIFO に空きがあるのに起きた DMA の上書きの回数、収穫のループの間隔の最大（サイクル）、CPU のクロック。FIFO が満杯でないのに
+  ストリームが欠ける原因を探すため（P4X 427c288、host に負荷をかけたとき）。
 - (EN) The spill: a drain moves 16 KiB at most before the harvest looks at the DMA ring again, and the harvest does not
   wait on its queue while the spill moves (a tick when no stage took any). Draining all of it while the host took
   stages fast kept the ring unharvested past its 26 ms: an overrun with only 1.2 MB in the spill (P4X 826eee0,

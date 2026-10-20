@@ -427,6 +427,14 @@ class LogicCapture final : public Interface, public GroupTrack {
   size_t spill_head_ = 0, spill_used_ = 0;
   uint64_t spill_drop_ = 0;
   uint32_t spill_peak_ = 0;   // the most it held since the start (bytes; capture-drops)
+  // capture-spill (status, named): the spill's copies in and out (bytes, CPU cycles), the DMA overruns while it had room,
+  // the longest between two passes of the harvest's loop (cycles) - since the start
+  uint64_t spill_in_bytes_ = 0, spill_in_cycles_ = 0, spill_out_bytes_ = 0, spill_out_cycles_ = 0;
+  uint32_t overrun_room_ = 0, harvest_gap_max_ = 0, harvest_last_ = 0;
+  void countOverrun() {
+    overruns_ = overruns_ + 1;
+    if (spill_ && spill_used_ < kSpillBytes) overrun_room_ = overrun_room_ + 1;
+  }
   // what one drain moves at most before the harvest looks at the ring again: a few chunks' worth, more than comes in
   // meanwhile (one chunk a pass), so the spill still empties
   static constexpr size_t kSpillDrainStep = 16 * 1024;

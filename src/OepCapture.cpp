@@ -309,7 +309,7 @@ size_t LogicCapture::harvestDirect(const Chunk &chunk, size_t at) {
   while (at < chunk.length) {
     const size_t rest = chunk.length - at;
     if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA came round over them: dropped, not a hole -
-      overruns_ = overruns_ + 1;                                  // no segment (stage) had them yet
+      countOverrun();                                  // no segment (stage) had them yet
       dropDirect(rest);
       return chunk.length;
     }
@@ -318,7 +318,7 @@ size_t LogicCapture::harvestDirect(const Chunk &chunk, size_t at) {
     const size_t n = min(static_cast<size_t>(stage_data_ - stage_fill_), rest);
     if (copy) memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, chunk.data + at, n);
     if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // while copied: the stage ends before them
-      overruns_ = overruns_ + 1;
+      countOverrun();
       dropDirect(rest);
       return chunk.length;
     }
@@ -357,7 +357,7 @@ size_t LogicCapture::spillIn(const Chunk &chunk, size_t at) {
   while (at < chunk.length) {
     const size_t rest = chunk.length - at;
     if (!ringIntact(chunk.ring + static_cast<uint32_t>(at)) || spill_drop_) {   // rewritten, or after a drop: dropped
-      if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) overruns_ = overruns_ + 1;
+      if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) countOverrun();
       dropAfter(rest);
       return chunk.length;
     }
@@ -366,9 +366,12 @@ size_t LogicCapture::spillIn(const Chunk &chunk, size_t at) {
     if (!n) return at;
     if (n > kSpillBytes - tail) n = kSpillBytes - tail;
     if (n > rest) n = rest;
+    const uint32_t t0 = esp_cpu_get_cycle_count();
     if (copy) memcpy(spill_ + tail, chunk.data + at, n);
+    spill_in_cycles_ += esp_cpu_get_cycle_count() - t0;
+    spill_in_bytes_ += n;
     if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // while copied
-      overruns_ = overruns_ + 1;
+      countOverrun();
       dropAfter(rest);
       return chunk.length;
     }
@@ -392,7 +395,10 @@ bool LogicCapture::drainSpill() {
     size_t n = stage_data_ - stage_fill_;
     if (n > spill_used_) n = spill_used_;
     if (n > kSpillBytes - spill_head_) n = kSpillBytes - spill_head_;
+    const uint32_t t0 = esp_cpu_get_cycle_count();
     if (copy) memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, spill_ + spill_head_, n);
+    spill_out_cycles_ += esp_cpu_get_cycle_count() - t0;
+    spill_out_bytes_ += n;
     stage_fill_ += n;
     captured_ += n;
     spill_head_ = (spill_head_ + n) % kSpillBytes;
@@ -976,7 +982,11 @@ void LogicCapture::harvestTask(void *context) {
     size_t &at = self->held_at_;
     Chunk &waiting = self->held_chunk_;
     bool drained = false;   // the last drain moved bytes
+    self->harvest_last_ = esp_cpu_get_cycle_count();
     while (self->harvesting_) {
+      const uint32_t now = esp_cpu_get_cycle_count();
+      if (now - self->harvest_last_ > self->harvest_gap_max_) self->harvest_gap_max_ = now - self->harvest_last_;
+      self->harvest_last_ = now;
       // the spill to drain: no waiting on the queue while it moves (a tick when no stage took any: not spinning)
       const bool spilled = self->spill_used_ || self->spill_drop_;
       const TickType_t wait = !spilled ? pdMS_TO_TICKS(2) : drained ? 0 : 1;
@@ -1692,6 +1702,8 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   enc_max_cycles_ = enc_blocks_ = enc_fallbacks_ = 0;
   ring_peak_ = 0;
   spill_peak_ = 0;
+  spill_in_bytes_ = spill_in_cycles_ = spill_out_bytes_ = spill_out_cycles_ = 0;
+  overrun_room_ = harvest_gap_max_ = 0;
   spill_head_ = spill_used_ = 0;
   spill_drop_ = 0;
   held_ = false;
@@ -2171,6 +2183,25 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 35 + kName, spill_peak_);
         putU32(v + 39 + kName, spill_ ? static_cast<uint32_t>(kSpillBytes) : 0);
         used += kTlvHeader + kValue;
+      }
+      // the spill's diagnostics (named, as above; only with a spill): bytes in (u64), their copy's cycles (u64), bytes
+      // out (u64), cycles (u64), DMA overruns while it had room (u32), the longest between two harvest passes (u32,
+      // cycles), the CPU's clock (u32, Hz)
+      static const char kSpill[] = "io.github.open-embedded-probe.capture-spill";
+      constexpr size_t kSpillName = sizeof kSpill - 1, kSpillValue = 1 + kSpillName + 44;
+      if (spill_ && used + kTlvHeader + kSpillValue <= capacity) {
+        putTlvHeader(out + used, reg::kTagNamedExtension, kSpillValue);
+        uint8_t *v = out + used + kTlvHeader;
+        v[0] = static_cast<uint8_t>(kSpillName);
+        memcpy(v + 1, kSpill, kSpillName);
+        putU64(v + 1 + kSpillName, spill_in_bytes_);
+        putU64(v + 9 + kSpillName, spill_in_cycles_);
+        putU64(v + 17 + kSpillName, spill_out_bytes_);
+        putU64(v + 25 + kSpillName, spill_out_cycles_);
+        putU32(v + 33 + kSpillName, overrun_room_);
+        putU32(v + 37 + kSpillName, harvest_gap_max_);
+        putU32(v + 41 + kSpillName, static_cast<uint32_t>(getCpuFrequencyMhz()) * 1000000u);
+        used += kTlvHeader + kSpillValue;
       }
       // format 1's encoding cost, since the start (named, as above): cycles of the longest block (u32), of all (u64),
       // blocks (u32), channels carried raw summed over the blocks (u32), the CPU's clock (u32, Hz)
