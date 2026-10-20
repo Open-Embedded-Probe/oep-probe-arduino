@@ -617,6 +617,13 @@ class Interface {
   virtual void probeRestart() {}
   // The endpoint's frame limit, told when the interface is added: what a describe may promise.
   virtual void setFrameLimit(size_t max_frame) { (void)max_frame; }
+  // The routes' frame limits once every transport is in (the first poll; each route has its own max_frame, core §7.1):
+  // `smallest` is what a describe may promise (it must hold on every route, core §4.4); `largest` what a data path
+  // sized per call by its route's room may use. By default the smallest.
+  virtual void setFrameLimits(size_t smallest, size_t largest) {
+    (void)largest;
+    setFrameLimit(smallest);
+  }
   // Notifications (core §11): an interface that sends them says true here, and the endpoint puts subscribe and
   // unsubscribe (0x30 / 0x32, core §11.3) in its ops and answers them itself (the lock holder's; min_bytes and
   // max_delay_ms batch the data frames only, an event goes out as soon as the answers ahead of it have). One that sends

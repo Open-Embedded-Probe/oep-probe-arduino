@@ -91,6 +91,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
   // read returns at most this much (capture §3.2: the probe's choice, within max and max_frame)
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
+  // a read's answer is sized by its route's room as well: the largest route's (the zero-copy stages too)
+  void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   size_t pending() override;
@@ -183,7 +185,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   // streaming through the endpoint's zero-copy transport: the harvest copies straight from the DMA ring into stages
   // (internal RAM, one whole push frame each: length prefix, push header, data) and hands full ones to the transport
   // length, core push header, position(u64), len(u16); after the data the generation TLV (kPushTail: tag len(u16) u32, oep-if-capture §3.4)
-  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + kPushHeader + 8 + 2, kPushTail = 7;
+  static constexpr size_t kStagesMax = 8, kStageFrameMax = 27136, kPushHead = 2 + kPushHeader + 8 + 2,
+                          kSegmentInfoBytes = 24,   // position(u64) samples(u32) start_ns(u64) start_uncertainty_ns(u32)
+                          kPushTail = kTlvHeader + 4 + kTlvHeader + kSegmentInfoBytes;   // TLV generation, TLV segment_info
   bool direct_ = false;
   uint8_t *stage_[kStagesMax] = {};
   uint8_t stage_count_ = 0;
@@ -192,11 +196,14 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint32_t stage_fill_ = 0, stage_since_ = 0, stage_data_ = 0;
   uint64_t stage_pos_ = 0;
   volatile uint32_t stage_drops_ = 0;  // bytes dropped because every stage was queued or in flight
-  bool carry_ = false;                 // a byte held back from the last frame (so that it ended with a short packet)
-  uint8_t carry_byte_ = 0;
+  volatile uint32_t stage_unsent_ = 0; // bytes of stages the transport would not queue (given back unsent)
+  bool carry_ = false;                 // a sample held back from the last frame (so that it ended with a short packet)
+  uint8_t carry_bytes_[2] = {}, carry_n_ = 0;   // its bytes: 8 / gcd(w, 8) samples' worth, 1 (w <= 8) or 2 (w 16)
+  uint8_t sampleBytes() const { return width_ > 8 ? width_ / 8 : 1; }   // the fewest whole bytes of whole samples
   bool takeStage();
   bool openStages();
   void freeStages();
+  void releaseStages();
   void sendStage();
   static void stageDone(void *context, const uint8_t *buffer);
   size_t store_bytes_ = 0;

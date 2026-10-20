@@ -95,6 +95,7 @@ class FixtureUart final : public Interface, public BindSource {
   bool rxAllowed(uint16_t ch) const { return ch < 64 && ((rx_mask_ >> ch) & 1); }   // an RX candidate (role_channels)
   bool planned() const { return (rx_ >= 0 || tx_ >= 0) && !pass_sink_; }
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 14 ? static_cast<uint16_t>(max_frame - 14) : 0; }
+  void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }   // reads sized by their route
   void poll();   // from loop(): moves what the UART received into the stream
   uint32_t baud() const { return running_ ? baud_ : 0; }
   // The probe.config uart item (oep-if-probe-config §1): applied when the plan gives the UART its pins, unless a

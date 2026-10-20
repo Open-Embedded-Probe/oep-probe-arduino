@@ -135,6 +135,10 @@ inline void putTriggered(uint8_t *e, uint32_t serial, uint32_t index, uint64_t s
   putU32(e + 28, uncertainty);
   putU32(e + 32, generation);
 }
+// One sample period at num / den Hz in ns, rounded up (a triggered event's uncertainty: +- a sample).
+inline uint32_t periodNs(uint32_t num, uint32_t den) {
+  return num ? static_cast<uint32_t>((1000000000ull * den + num - 1) / num) : 0;
+}
 // describe's trigger (capture §3.5): types(u32) max_pretrigger(u32) opts(u8), 9 bytes
 inline void putTriggerDecl(uint8_t *v, uint32_t types, uint32_t max_pretrigger, uint8_t opts) {
   putU32(v, types);

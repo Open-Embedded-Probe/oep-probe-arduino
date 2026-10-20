@@ -805,7 +805,7 @@ void AnalogCapture::pollTriggered() {
     if (subscribed_) {   // capture §3.4: no record (rearm 0); the frame from the generation's start; +- a frame
       uint8_t e[kTriggeredBytes];
       putTriggered(e, 0, trig_frame_ - seg_first_, trig_frame_, start_ns_ + framesNs(trig_frame_),
-                   static_cast<uint32_t>(framesNs(1) + 1), generation_);
+                   periodNs(rate_num_, rate_den_), generation_);
       endpoint_.event(*this, ana::kEventTriggered, e, sizeof e);
     }
   }

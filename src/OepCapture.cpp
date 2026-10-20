@@ -150,10 +150,10 @@ bool LogicCapture::takeStage() {
   __atomic_fetch_and(&stage_free_, ~(1u << stage_cur_), __ATOMIC_ACQ_REL);
   stage_fill_ = 0;
   stage_pos_ = captured_;
-  if (carry_) {
-    stage_[stage_cur_][kPushHead] = carry_byte_;
-    stage_fill_ = 1;
-    --stage_pos_;
+  if (carry_) {   // the next segment starts with what the last frame held back (a segment is a frame's data)
+    memcpy(stage_[stage_cur_] + kPushHead, carry_bytes_, carry_n_);
+    stage_fill_ = carry_n_;
+    stage_pos_ -= carry_n_;
     carry_ = false;
   }
   stage_since_ = millis();
@@ -163,7 +163,10 @@ bool LogicCapture::takeStage() {
 // Hand the current stage to the transport as one push frame (or give it back if nobody may receive it now). A full
 // stage is a whole number of 512-byte packets and the host's read runs on into the next one. A partial one (sent for
 // max_delay_ms, or at stop) that happens to be whole packets would leave the host's read open (the direct build sends
-// no zero-length packet), so its last byte is held back for the next frame and this one ends with a short packet.
+// no zero-length packet), so its last sample is held back for the next frame and this one ends with a short packet.
+// Every frame is one segment (capture §2.2: the probe's own cut, at a sample and a byte boundary) and carries it
+// (§3.4 segment_info): its position, its samples, its start - the start's time plus its samples at the rate (not the
+// clock read again: no step at the seams) - and the start's uncertainty.
 void LogicCapture::sendStage() {
   if (stage_cur_ < 0) return;
   uint8_t *s = stage_[stage_cur_];
@@ -172,10 +175,12 @@ void LogicCapture::sendStage() {
   stage_cur_ = -1;
   stage_fill_ = 0;
   DirectTransport *tr = endpoint_.direct();
-  if (fill > 1 && fill < stage_data_ && (kPushHead + fill + kPushTail) % 512 == 0 && tr && tr->queued() == 0) {
-    carry_byte_ = s[kPushHead + fill - 1];
+  const uint8_t unit = sampleBytes();
+  if (fill > unit && fill < stage_data_ && (kPushHead + fill + kPushTail) % 512 == 0 && tr && tr->queued() == 0) {
+    carry_n_ = unit;
+    memcpy(carry_bytes_, s + kPushHead + fill - unit, unit);
     carry_ = true;
-    --fill;
+    fill -= unit;
   }
   uint16_t fn = 0, min_bytes = 0;
   uint32_t max_delay = 0;
@@ -194,7 +199,16 @@ void LogicCapture::sendStage() {
   if (format_ == cap::kDataFormatTestCounter) putTestCounter(s + kPushHead, stage_pos_, fill);
   putTlvHeader(s + kPushHead + fill, cap::kTlvDataGeneration, 4);
   putU32(s + kPushHead + fill + kTlvHeader, generation_);
-  if (!t->queueData(s, kPushHead + fill + kPushTail, stageDone, this)) __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
+  uint8_t *info = s + kPushHead + fill + kTlvHeader + 4;
+  putTlvHeader(info, cap::kTlvDataSegmentInfo, kSegmentInfoBytes);
+  putU64(info + kTlvHeader, stage_pos_);
+  putU32(info + kTlvHeader + 8, static_cast<uint32_t>(static_cast<uint64_t>(fill) * 8 / width_));
+  putU64(info + kTlvHeader + 12, start_ns_ + nsOf(stage_pos_ * 8 / width_));
+  putU32(info + kTlvHeader + 20, kStartUncertaintyNs);
+  if (!t->queueData(s, kPushHead + fill + kPushTail, stageDone, this)) {
+    stage_unsent_ = stage_unsent_ + fill;   // the transport's queue full: these bytes go nowhere (status's diagnostics)
+    __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
+  }
 }
 
 void LogicCapture::stageDone(void *context, const uint8_t *buffer) {
@@ -233,6 +247,21 @@ void LogicCapture::freeStages() {   // the stages stay allocated (openStages); w
   if (!stage_count_) return;
   const uint32_t all = (1u << stage_count_) - 1;
   for (int i = 0; i < 500 && (stage_free_ & all) != all; ++i) delay(2);
+}
+
+// The stages' internal RAM back, for a store (streaming the copied way, a repeat): kept across configures otherwise, a
+// stream's 8 x 27 KiB left no internal RAM for the next store - configure refused it storage_full (2026-10-20, P4X).
+void LogicCapture::releaseStages() {
+  freeStages();
+  const uint32_t all = stage_count_ ? (1u << stage_count_) - 1 : 0;
+  if ((stage_free_ & all) != all) return;   // still in the transport: kept
+  for (uint8_t i = 0; i < stage_count_; ++i) {
+    heap_caps_free(stage_[i]);
+    stage_[i] = nullptr;
+  }
+  stage_count_ = 0;
+  stage_free_ = 0;
+  stage_cur_ = -1;
 }
 
 // The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. With arm 1
@@ -529,7 +558,7 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
 // write_pos stays at its start. poll() (failLost) stops the track.
 void LogicCapture::loseSegment() {
   if (direct_) {
-    lost_pos_ = stage_cur_ >= 0 ? stage_pos_ : captured_ - (carry_ ? 1 : 0);
+    lost_pos_ = stage_cur_ >= 0 ? stage_pos_ : captured_ - (carry_ ? carry_n_ : 0);
     if (stage_cur_ >= 0) __atomic_fetch_or(&stage_free_, 1u << stage_cur_, __ATOMIC_ACQ_REL);
     stage_cur_ = -1;
     stage_fill_ = 0;
@@ -729,7 +758,8 @@ size_t LogicCapture::storeBudget(uint32_t &caps) const {
     return psram - kPsramReserve;
   }
   caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-  size_t internal = heap_caps_get_largest_free_block(caps) + held;
+  // the stages kept from a stream are given back before a store is taken (releaseStages)
+  size_t internal = heap_caps_get_largest_free_block(caps) + held + static_cast<size_t>(stage_count_) * (stage_data_ + kPushHead + kPushTail);
   internal = internal > kInternalReserve ? internal - kInternalReserve : 0;
   return internal < kInternalStoreMax ? internal : kInternalStoreMax;
 }
@@ -938,7 +968,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if ((state_ == kStateCapturing || state_ == kStatePaused || state_ == kStateWaiting) && !query) return wrongState(out, capacity);
   // Not even two segments of store, or no DMA ring for a mode that runs through it: refused unavailable cause 3
   // before anything is touched (core §4.3; it answered failed with an empty payload).
-  if (mode == 3 && actual_segments < 2) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+  // (streaming over the zero-copy path needs no store: its stages are the segments)
+  if (mode == 3 && actual_segments < 2 && !endpoint_.directCapable())
+    return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
   const bool triggered = mode == cap::kModeOneShot && trig_type != cap::kTriggerImmediate;
   if (!query && (triggered || mode != cap::kModeOneShot) && !takeRing())
     return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
@@ -960,7 +992,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     rateFraction(top, bottom, num, den);
   } else if (mode == 2 || mode == 3) {
     close();
-    direct_ = mode == 3 && endpoint_.direct() != nullptr;
+    direct_ = mode == 3 && endpoint_.directCapable();   // the subscriber must come in on it (startRepeat)
     uint32_t got_samples = 0, got_segments = 0;
     const Open opened = openRepeat(rate, width, samples, actual_segments, num, den, got_samples, got_segments);
     if (opened == Open::kNoMemory) return noStorage(out, capacity);
@@ -1054,7 +1086,9 @@ LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uin
   // stream goes the copied way instead: the segments in the store, pushed by the endpoint like any notification.
   // It failed configure (0.0.28 on the bench: a streaming configure after other captures answered failed).
   if (direct_ && !openStages()) direct_ = false;
+  if (direct_) stage_data_ -= stage_data_ % (width > 8 ? width / 8 : 1);   // a full stage ends at a sample (w 16)
   if (!direct_) {
+    releaseStages();
     uint32_t caps = 0;
     storeBudget(caps);
     store_bytes_ = static_cast<size_t>(segment_bytes_) * segment_count_;
@@ -1078,7 +1112,21 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
 
 Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (capacity < 4) return failed();
+  // configured for the zero-copy path but the subscriber came in on another way (CDC, TCP): the copied way, its store
+  // taken now - none to be had, refused cause 3 before anything changes (core §4.3)
+  if (direct_ && !endpoint_.direct()) {
+    releaseStages();
+    uint32_t caps = 0;
+    const size_t budget = storeBudget(caps);
+    if (segment_count_ < 2 || static_cast<size_t>(segment_bytes_) * segment_count_ > budget)
+      return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+    store_bytes_ = static_cast<size_t>(segment_bytes_) * segment_count_;
+    store_ = static_cast<uint8_t *>(heap_caps_malloc(store_bytes_, caps));
+    if (!store_) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+    direct_ = false;
+  }
   stage_drops_ = 0;
+  stage_unsent_ = 0;
   overruns_ = 0;
   queue_overflow_ = 0;
   fill_ = 0;
@@ -1207,7 +1255,7 @@ void LogicCapture::pollTriggered() {
     if (subscribed_) {   // capture §3.4: no record (rearm 0); the sample from the generation's start; +- a sample
       uint8_t e[kTriggeredBytes];
       putTriggered(e, 0, trigger_index_, seg_first_sample_ + trigger_index_,
-                   start_ns_ + nsOf(seg_first_sample_ + trigger_index_), static_cast<uint32_t>(nsOf(1) + 1), generation_);
+                   start_ns_ + nsOf(seg_first_sample_ + trigger_index_), periodNs(rate_num_, rate_den_), generation_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
   }
@@ -1303,7 +1351,7 @@ size_t LogicCapture::pending() {
 // Streaming push: the next bytes in stream order, from the segment being sent; a segment fully sent is released.
 // payload: position(u64) len(u16) data, then TLV 0x01 generation (core §11.2, oep-if-capture §3.4)
 size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
-  constexpr size_t kHead = 10, kTail = kTlvHeader + 4;   // the generation TLV after the data
+  constexpr size_t kHead = 10, kTail = kTlvHeader + 4 + kTlvHeader + kSegmentInfoBytes;   // TLVs generation, segment_info
   if (mode_ != 3 || direct_ || !store_ || capacity <= kHead + kTail) return 0;
   const uint32_t serial = sent_seg_;
   const bool finished = serialBefore(serial, completed_);
@@ -1322,6 +1370,14 @@ size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
   if (format_ == cap::kDataFormatTestCounter) putTestCounter(out + kHead, infos_[serial % kInfos].position + sent_off_, n);
   putTlvHeader(out + kHead + n, cap::kTlvDataGeneration, 4);
   putU32(out + kHead + n + kTlvHeader, generation_);
+  // the segment (capture §3.4): its position, the samples it has so far, its start's time and uncertainty
+  uint8_t *info = out + kHead + n + kTlvHeader + 4;
+  const Info &si = infos_[serial % kInfos];
+  putTlvHeader(info, cap::kTlvDataSegmentInfo, kSegmentInfoBytes);
+  putU64(info + kTlvHeader, si.position);
+  putU32(info + kTlvHeader + 8, static_cast<uint32_t>(static_cast<uint64_t>(length) * 8 / width_));
+  putU64(info + kTlvHeader + 12, si.start_ns);
+  putU32(info + kTlvHeader + 20, kStartUncertaintyNs);
   sent_off_ += n;
   if (finished && sent_off_ >= length) { sent_off_ = 0; sent_seg_ = serial + 1; released_ = serial + 1; }
   return kHead + n + kTail;
@@ -1460,6 +1516,29 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putTlvHeader(out + 18, cap::kTlvStatusAnswerError, 1);   // segment lost to the queue or the ring (2, §2.2)
         out[21] = error_;
         used = 22;
+      }
+      // where the dropped data went, a named extension (core §2.2; capture §3.2 lets a probe say more): the bytes no
+      // stage was free for, the bytes the transport would not queue, the DMA chunks rewritten before they were copied,
+      // the chunks the harvest queue had no room for - u32 each, since the start; then the way the data goes (u8: 1 the
+      // zero-copy stages, 0 the store through the endpoint) and the stages held (u8); then the memory a capture draws
+      // on now (u32 each): internal RAM's largest free block, DMA-capable internal RAM's, PSRAM's total (0: none)
+      static const char kDrops[] = "io.github.open-embedded-probe.capture-drops";
+      constexpr size_t kName = sizeof kDrops - 1, kValue = 1 + kName + 30;
+      if (used + kTlvHeader + kValue <= capacity) {
+        putTlvHeader(out + used, reg::kTagNamedExtension, kValue);
+        uint8_t *v = out + used + kTlvHeader;
+        v[0] = static_cast<uint8_t>(kName);
+        memcpy(v + 1, kDrops, kName);
+        putU32(v + 1 + kName, stage_drops_);
+        putU32(v + 5 + kName, stage_unsent_);
+        putU32(v + 9 + kName, overruns_);
+        putU32(v + 13 + kName, queue_overflow_);
+        v[17 + kName] = direct_ ? 1 : 0;
+        v[18 + kName] = stage_count_;
+        putU32(v + 19 + kName, static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+        putU32(v + 23 + kName, static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)));
+        putU32(v + 27 + kName, static_cast<uint32_t>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)));
+        used += kTlvHeader + kValue;
       }
       return completed(used);
     }

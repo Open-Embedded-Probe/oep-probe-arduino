@@ -1,6 +1,33 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) P4 streaming, found with format 4 on the P4X: the firmware never wired the zero-copy path (Endpoint::setDirect), so
+  every push went through the loop a max_frame at a time (5-7 MB/s at most); now the HS vendor port streams through
+  writeDirect stages (18 MB/s at 20 MHz x 8 lines on the P4X, internal RAM only). Each route has its own max_frame
+  (core §7.1): the vendor port 8192, a serial port at most 2048 (Endpoint::setBuffers gives transport 0 its buffers in
+  setup(), from PSRAM when there is some). A batch that came due (min_bytes or max_delay_ms) sends all that was pending
+  then, frame after frame (it sent one frame a max_delay_ms and dropped the rest; core: no min_bytes on the rest).
+  Every streaming frame carries segment_info (§3.4): a zero-copy frame is one segment, the sample held back for a short
+  packet (8 / gcd(w, 8) samples) starts the next, and start_ns is the start plus the samples at the rate. A streaming
+  configure over the zero-copy path needs no store, the stages kept from a stream are freed for a store, and a stream
+  whose subscriber came in on another way takes its store at start (storage_full if none). status says where dropped
+  data went (named TLV io.github.open-embedded-probe.capture-drops: no stage, not queued, DMA overrun, queue overflow,
+  the path, stages held, internal / DMA largest free block, PSRAM total). The triggered event's uncertainty is a sample
+  period rounded up (it was one ns more).
+- (JA) P4 の streaming（P4X で形式 4 を使って見つけたもの）:
+  - firmware が zero-copy の経路（Endpoint::setDirect）を配線しておらず、push が全部ループで max_frame ずつ送られていた（最大 5〜7 MB/s）。
+    今は HS の vendor の口が writeDirect の stage で送る（P4X、内部 RAM だけで 20 MHz × 8 本 18 MB/s）。
+  - 経路ごとの max_frame（core §7.1）: vendor 8192、シリアルの口は 2048 まで。transport 0 のバッファは setup() で渡す
+    （Endpoint::setBuffers、PSRAM があればそこから）。
+  - min_bytes か max_delay_ms で送ると決まったら、その時点で溜まっていた分を frame を分けて出し切る（前は max_delay_ms ごとに 1 frame
+    しか送らず残りを捨てていた。core: 残りに min_bytes を掛け直さない）。
+  - streaming の全 frame に segment_info（§3.4）を付ける。zero-copy の frame は 1 区画で、短いパケットのために回すサンプル
+    （8 / gcd(w, 8) サンプル）は次の区画の先頭。start_ns は開始の時刻 + サンプル数 / rate。
+  - zero-copy の経路の streaming の configure は store を求めない。stream の後に持ち続けた stage は store のために放す。購読が別の経路
+    から来たときは start で store を取る（取れなければ storage_full）。
+  - status の名前付き TLV io.github.open-embedded-probe.capture-drops で、落としの内訳（stage なし、キューに積めない、DMA の上書き、
+    キューのあふれ）、経路、stage の数、内部 RAM と DMA 用の最大の空き、PSRAM の総量を返す。
+  - triggered の不確かさは 1 サンプル周期の切り上げ（前は 1 ns 多かった）。registry と vectors は oep-spec 0eb94f8。
 - (EN) oep-spec 8e7ca20 (capture §1, §3.3, §3.4, §3.5): trigger_opts (arm, rearm, when, hysteresis) with the defaults
   arm 1 (a trigger is looked for once the pretrigger is in, so a triggered segment always has it) and when 0 (a level
   counts from a sample not at it on) on every track - the PARLIO logic, the classic ESP32's sampler and the analog; arm 0

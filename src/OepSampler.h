@@ -67,6 +67,8 @@ class SamplerCapture final : public Interface, public GroupTrack {
   void planRelease() override;
   uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
+  // a read's answer is sized by its route's room as well: the largest route's (the zero-copy stages too)
+  void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   // From loop(), every time round: a finished window becomes the segment and stopped events; and the SWIO wire is let

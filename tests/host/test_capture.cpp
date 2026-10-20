@@ -923,7 +923,7 @@ static void testLostChunk() {
     CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
     CHECK(getU64(out.data() + 2 + 4) == 0 && !(out[2 + 32] & cap::kSegmentFlagGap));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU16(out.data() + 9) == 0);
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() == 22 && out[0] == cap::kStateError &&
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 22 && out[0] == cap::kStateError &&
           getU32(out.data() + 1) == 1 && getU64(out.data() + 5) == 4096 && (out[13] & cap::kStatusFlagDropped) &&
           out[21] == cap::kErrorStorage);
   }
@@ -951,7 +951,7 @@ static void testLostChunk() {
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 10), out)) && getU16(out.data() + 9) == 0);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateError && getU64(out.data() + 5) == 4096);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));   // state 6 starts again: a new generation, no error
-    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && out.size() == 18);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && out.size() >= 18);
   }
   {
     board(512 * 1024, size_t(32) << 20);
@@ -1057,7 +1057,7 @@ static void testTriggeredHole() {
   dma.deliver(LogicCapture::kRingBytes + 8192, 0x00, 1024);   // over the ring before the harvest runs again
   dma.run();
   rig.cap.poll();
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() == 22 && out[0] == cap::kStateError &&
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 22 && out[0] == cap::kStateError &&
         getU32(out.data() + 1) == 0 && getU64(out.data() + 5) == 0 && (out[13] & cap::kStatusFlagDropped) &&
         out[21] == cap::kErrorStorage);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);

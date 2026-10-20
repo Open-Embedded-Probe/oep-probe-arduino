@@ -305,7 +305,7 @@ void SamplerCapture::poll() {
       const uint64_t ns = trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_;
       const uint64_t sample = ns > start_ns_ ? (ns - start_ns_) * (cpu_hz_ / 1000u) / cycles_ / 1000000u : 0;
       putTriggered(e, 0, trig_kept_, sample, ns,
-                   static_cast<uint32_t>(static_cast<uint64_t>(cycles_) * 1000000000ull / cpu_hz_ + 1), generation_);
+                   periodNs(cpu_hz_, cycles_), generation_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
   }

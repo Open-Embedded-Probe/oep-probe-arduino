@@ -111,7 +111,8 @@ class Endpoint {
   static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
   // Transports, a TCP listener's connection slots each counted (addTcpListener).
   static constexpr size_t kMaxTransports = 8;
-  // A serial port's frames are decoded here (one at a time): max_frame may not exceed this with a serial port.
+  // A serial port's frames are decoded here (one at a time): a serial port's max_frame is at most this (the
+  // endpoint's own may be larger: its other transports use it, core §7.1).
   static constexpr size_t kMaxSerialFrame = 2048;
 
   // usb_interface (describe transport, core §7.5): for USB CDC the bInterfaceNumber of the CDC communication interface
@@ -125,7 +126,8 @@ class Endpoint {
   }
   // How many requests the resend record keeps (core §5.1: the probe's choice).
   static constexpr size_t kDedupEntriesOf() { return kDedupEntries; }
-  // confirm's max_frame: the same on every transport of this endpoint.
+  // The largest max_frame of this endpoint (the constructor's; a serial port's is at most kMaxSerialFrame - each
+  // transport answers confirm with its own, core §7.1).
   uint16_t maxFrame() const { return limits_.max_frame; }
   // confirm's values within core §7.1's bounds, whatever the sketch gave: max_frame 64 or more, window max_frame or
   // more, max_inflight 1 or more (a host treats a transport answering outside them as not usable). max_inflight is at
@@ -146,6 +148,19 @@ class Endpoint {
   // After a TCP listener (below) no transport is added: the serial ports' indexes are the describe entries' (binds).
   bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface = 0xff,
                     bool flush_after_burst = false);
+  // Buffers given later than the constructor - memory that is up only by setup() (an ESP32's PSRAM): transport 0's
+  // receive buffer (one whole frame of its max_frame, + 2) and the answer buffer. Before the first poll. false: too
+  // small for the max_frame (nothing changed).
+  bool setBuffers(uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity) {
+    if (polled_ || serialKind(transports_[0].kind) || rx_capacity < transports_[0].max_frame + 2u ||
+        tx_capacity < transports_[0].max_frame)
+      return false;
+    transports_[0].reader.reset(rx_buffer, rx_capacity, transports_[0].max_frame);
+    transports_[0].reader.setTcp(transports_[0].kind == kTcp);
+    tx_ = tx_buffer;
+    tx_capacity_ = tx_capacity;
+    return true;
+  }
   // A TCP listening socket (transports §1): one entry in fn 0's describe (kind 6, interface 0xFF), added after every
   // other transport, with `count` connection slots - each its own transport here (rx[k]: max_frame + 2 bytes). A
   // connection's requests are answered on it, its subscriptions' notifications go to it alone, a length over
@@ -298,6 +313,8 @@ class Endpoint {
   // whole push frames itself, from its own task: directPush says whether it may send now (the lock holder subscribed
   // its fn) with the fn and the subscriber's batching; takeSeq numbers a frame (shared with that fn's events).
   void setDirect(DirectTransport *direct) { direct_ = direct; }
+  // A zero-copy path exists (whoever subscribes): a streaming configure can plan on it without a store of its own.
+  bool directCapable() const { return direct_ != nullptr && !serialKind(transports_[0].kind); }
   // the zero-copy path belongs to transport 0: pushes use it only while the subscriber came in on transport 0
   DirectTransport *direct() const {
     return push_ == 0 && !serialKind(transports_[0].kind) ? direct_ : nullptr;
@@ -317,6 +334,7 @@ class Endpoint {
     Endpoint *owner = nullptr;
     bool flush_after_burst = false, wrote = false;
     int tx_room_max = 0;
+    uint16_t max_frame = 0;       // confirm's max_frame on this transport (core §4.4, §7.1: each route its own)
   };
   static void rawSink(void *context, const uint8_t *data, size_t length);
   void rawOut();
@@ -374,7 +392,7 @@ class Endpoint {
   friend class Link;
   Result portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result portState(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
-  size_t maxFrameIn() const { return limits_.max_frame; }
+  size_t maxFrameIn() const { return transports_[current_].max_frame; }   // the request's route
   void speedApply();             // the switch or revert a request asked for, after its answer
   void speedRevert();            // back to the boot speed (nothing when there already)
   void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
@@ -417,6 +435,7 @@ class Endpoint {
   uint32_t max_delay_ms_[kMaxInterfaces] = {};
   uint32_t waiting_since_[kMaxInterfaces] = {};
   bool waiting_[kMaxInterfaces] = {};
+  size_t draining_[kMaxInterfaces] = {};   // a batch due: the bytes still to send of what was pending then
   // events: fn (1 and up: fn 0 sends none, core §11.2), seq per fn shared with data frames
   struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[40]; };
   static constexpr size_t kEvents = 32;

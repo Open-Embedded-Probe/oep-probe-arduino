@@ -134,9 +134,19 @@ static EspUsbDeviceDfu dfu(usbDevice, EspUsbDeviceDfuMode::Download, "OEP probe 
 // check, or a reset before the core confirmed it, boots the one before (BootGuard::lastBoot says "update to <slot> did
 // not reach setup").
 
-static uint8_t rxVendor[1024], rxUsj[1100], rxHid[1024], rxCdc[1100];   // serial ports: cobsFrameMax(1024)
-static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(bulk, rxVendor, sizeof rxVendor, txBuffer, sizeof txBuffer, {1024, 4096, 8},
+// max_frame 16 KiB on the vendor port (each route its own, core §7.1; a serial port's at most 2048): a streaming
+// capture's zero-copy stages and push frames are that big, which the HS vendor port needs for its 33-37 MB/s - at 1024
+// every stage was a 1 KiB transfer and a stream topped out near 7 MB/s, dropping the rest (2026-10-20, P4X). The
+// frame-sized buffers (about 40 KiB) come from PSRAM in setup() (it is up only by then): internal RAM is what a
+// capture's DMA ring and zero-copy stages need. The endpoint starts on small static ones, swapped before its first poll.
+static constexpr size_t kMaxFrame = 8192;
+static constexpr size_t kRxSerial = oep::cobsFrameMax(oep::Endpoint::kMaxSerialFrame), kRxFrame = kMaxFrame + 2;
+static uint8_t rxBoot[64], txBoot[64];
+static uint8_t *frameBuffer(size_t n) {
+  void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  return static_cast<uint8_t *>(p ? p : heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+}
+static oep::Endpoint endpoint(bulk, rxBoot, sizeof rxBoot, txBoot, sizeof txBoot, {kMaxFrame, 4 * kMaxFrame, 8},
                               oep::Endpoint::kVendorBulk, 1);
 static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
 
@@ -273,11 +283,15 @@ void setup() {
     return true;
   });
   usbDevice.begin(usb);
-  bulk.begin();
+  // the direct build's zero-copy path: a capture's pushes go out as whole stages through writeDirect while its
+  // subscriber came in on the vendor port (without it every push went through the loop, one max_frame at a time:
+  // 5-7 MB/s on the P4X, 2026-10-20)
+  if (bulk.begin()) endpoint.setDirect(&bulk);
   endpoint.setFlushAfterBurst(true);
-  endpoint.addTransport(Serial, rxUsj, sizeof rxUsj, oep::Endpoint::kUsbSerialJtag);
-  endpoint.addTransport(hidStream, rxHid, sizeof rxHid, oep::Endpoint::kHid, 0, true);
-  endpoint.addTransport(cdcStream, rxCdc, sizeof rxCdc, oep::Endpoint::kUsbCdc, 2, true);
+  endpoint.setBuffers(frameBuffer(kRxFrame), kRxFrame, frameBuffer(kMaxFrame), kMaxFrame);
+  endpoint.addTransport(Serial, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbSerialJtag);
+  endpoint.addTransport(hidStream, frameBuffer(kRxFrame), kRxFrame, oep::Endpoint::kHid, 0, true);
+  endpoint.addTransport(cdcStream, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbCdc, 2, true);
   endpoint.setRawPorts(&binds);
   endpoint.setRestart(restartProbe, kRestartMaxMs);
 

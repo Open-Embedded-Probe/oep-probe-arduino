@@ -383,8 +383,8 @@ static void testStop() {
   }
 }
 
-// trigger_index (capture §2, §3.3): the pretrigger when that many frames came before the crossing; a crossing or a force
-// before then is taken (it was not looked for before frame `pretrigger`) and gives a short segment - the frames before
+// trigger_index (capture §2, §3.3): the pretrigger when that many frames came before the crossing; with arm 0 a crossing
+// (and a force at any time) before then is taken and gives a short segment - the frames before
 // it, its own and samples - pretrigger - 1 after it - with trigger_index the frames before it.
 static void testTriggerIndex() {
   for (const int kind : {0, 1, 2}) {   // a crossing at frame 30; one at frame 5; a force at frame 5
@@ -393,6 +393,7 @@ static void testTriggerIndex() {
     Bytes p = configureRequest(10000, 100);
     tlv(p, kCrit | ana::kTlvConfigureTrigger, {ana::kTriggerCrossUp, 0, 0xD0, 0x07, 0, 0});   // 2000
     tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(10));
+    if (kind == 1) tlv(p, kCrit | ana::kTlvConfigureTriggerOpts, {0, 0, 0, 0, 0, 0, 0});   // arm 0: an early crossing counts
     CHECK(ok(rig.op(ana::kOpConfigure, p)));
     CHECK(ok(rig.op(ana::kOpStart)));
     const uint32_t generation = getU32(rig.out.data());

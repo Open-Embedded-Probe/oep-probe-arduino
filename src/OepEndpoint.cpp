@@ -73,22 +73,24 @@ void Endpoint::freeze() {
   polled_ = true;
   if (plan) interfaces_[count_++] = &plan_iface_;
   if (restart_) interfaces_[count_++] = &restart_iface_;
-  for (size_t i = 0; i < count_; ++i)
-    if (interfaces_[i] == &plan_iface_ || interfaces_[i] == &restart_iface_) interfaces_[i]->setFrameLimit(limits_.max_frame);
+  size_t smallest = limits_.max_frame;   // the routes' max_frame, each its own (core §7.1)
+  for (size_t k = 0; k < transport_count_; ++k)
+    if (transports_[k].max_frame < smallest) smallest = transports_[k].max_frame;
+  for (size_t i = 0; i < count_; ++i) interfaces_[i]->setFrameLimits(smallest, limits_.max_frame);
 }
 
 bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
                             bool flush_after_burst) {
   if (transport_count_ >= kMaxTransports || listener_) return false;
-  if (serialKind(kind) && limits_.max_frame > kMaxSerialFrame) return false;
   Transport &t = transports_[transport_count_];
+  t.max_frame = serialKind(kind) && limits_.max_frame > kMaxSerialFrame ? kMaxSerialFrame : limits_.max_frame;
   t.stream = &stream;
   t.kind = kind;
   t.usb_interface = usb_interface;
   t.index = entries_++;
   t.owner = this;
   if (serialKind(kind)) t.serial.reset(rx_buffer, rx_capacity, decode_, sizeof decode_);
-  else t.reader.reset(rx_buffer, rx_capacity, limits_.max_frame);
+  else t.reader.reset(rx_buffer, rx_capacity, t.max_frame);
   t.reader.setTcp(kind == kTcp);   // no restart on a pause inside a frame (transports §2)
   t.flush_after_burst = flush_after_burst;
   ++transport_count_;
@@ -106,6 +108,7 @@ bool Endpoint::addTcpListener(Connection *const *slots, uint8_t *const *rx, size
     t.usb_interface = 0xff;
     t.index = entries_;   // every slot: the listener's one entry
     t.owner = this;
+    t.max_frame = limits_.max_frame;
     t.reader.reset(rx[k], rx_capacity, limits_.max_frame);
     t.reader.setTcp(true);
     t.flush_after_burst = true;   // a slot buffers a poll's frames and sends them together when flushed
@@ -134,9 +137,9 @@ void Endpoint::rawSink(void *context, const uint8_t *data, size_t length) {
 void Endpoint::rawOut() {
   if (!raw_) return;
   raw_->poll(locked_);
-  const int reserve = static_cast<int>(cobsFrameMax(limits_.max_frame));
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
+    const int reserve = static_cast<int>(cobsFrameMax(t.max_frame));
     if (!serialKind(t.kind) || held(i)) continue;
     int room = t.stream->availableForWrite() - reserve;
     uint8_t chunk[64];
@@ -229,11 +232,13 @@ void Endpoint::push() {
   if (!locked_ || pushGone()) return;   // the subscriber's TCP connection closed: its notifications go nowhere
   if (!sendEvents()) return;
   size_t room = tx_capacity_ - kPushHeader;
-  if (room > static_cast<size_t>(limits_.max_frame) - kPushHeader) room = limits_.max_frame - kPushHeader;
+  const size_t frame = transports_[current_].max_frame;   // the subscriber's route (core §7.1)
+  if (room > frame - kPushHeader) room = frame - kPushHeader;
   for (size_t i = 0; i < count_; ++i) {
     if (!subscribed_[i]) continue;
-    // batching, of the data only (core §11.3): wait for min_bytes, or max_delay_ms after the first byte became pending
-    if (min_bytes_[i] || max_delay_ms_[i]) {
+    // batching, of the data only (core §11.3): wait for min_bytes, or max_delay_ms after the first byte became pending;
+    // once either holds, what is pending then goes out frame after frame, min_bytes not applied again to the rest
+    if ((min_bytes_[i] || max_delay_ms_[i]) && !draining_[i]) {
       const size_t ready = interfaces_[i]->pending();
       if (ready == 0) { waiting_[i] = false; continue; }
       if (!waiting_[i]) { waiting_[i] = true; waiting_since_[i] = millis(); }
@@ -241,6 +246,7 @@ void Endpoint::push() {
       const bool enough = min_bytes_[i] && ready >= min_bytes_[i];
       const bool due = max_delay_ms_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) >= max_delay_ms_[i];
       if (!enough && !due) continue;
+      draining_[i] = ready;
     }
     Transport &t = transports_[current_];
     const int writable = t.stream->availableForWrite();
@@ -261,12 +267,18 @@ void Endpoint::push() {
       cap = static_cast<size_t>(left);
     }
     const size_t n = interfaces_[i]->pull(tx_ + kPushHeader, cap);   // the payload is the interface's
-    if (n == 0) continue;
+    if (n == 0) {
+      if (draining_[i] && interfaces_[i]->pending() == 0) { draining_[i] = 0; waiting_[i] = false; }   // gone meanwhile
+      continue;
+    }
     tx_[0] = kRolePush;
     putU16(tx_ + 1, static_cast<uint16_t>(i + 1));
     putU16(tx_ + 3, push_seq_[i]++);
     send(kPushHeader + n);
-    waiting_[i] = false;
+    // the batch ends once what was pending when it was due has gone (resetting it after every frame sent one frame a
+    // max_delay_ms and dropped the rest: 1000 bytes every 20 ms of a 10 MB/s stream, 2026-10-20 P4X)
+    draining_[i] = draining_[i] > n ? draining_[i] - n : 0;
+    if (!draining_[i]) waiting_[i] = false;
   }
 }
 
@@ -295,6 +307,7 @@ Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, s
   min_bytes_[i] = min_bytes;
   max_delay_ms_[i] = max_delay;
   waiting_[i] = false;
+  draining_[i] = 0;
   return completed();
 }
 
@@ -429,7 +442,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   const size_t payload_length = length - kRequestHeader;
   uint8_t *out = tx_ + kResultHeader;
   size_t capacity = tx_capacity_ - kResultHeader;
-  if (capacity > static_cast<size_t>(limits_.max_frame) - kResultHeader) capacity = limits_.max_frame - kResultHeader;
+  const size_t frame = transports_[current_].max_frame;   // the request's route (core §4.4)
+  if (capacity > frame - kResultHeader) capacity = frame - kResultHeader;
 
   lapse();
   OEP_LOGF("req corr %u fn %u op 0x%02x sid %08lx len %u", corr, fn, op, static_cast<unsigned long>(session),
@@ -610,7 +624,7 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       if (capacity < 20) return failed();
       memcpy(out, reg::kConfirmResultMagic, 4);
       out[4] = reg::kProtocolRevision;
-      putU16(out + 5, limits_.max_frame);
+      putU16(out + 5, transports_[current_].max_frame);   // this route's (core §7.1)
       putU32(out + 7, limits_.window_bytes);
       out[11] = limits_.max_inflight;
       putU32(out + 12, bootId());                     // a host without the lock learns of a restart here (core §6.5)
