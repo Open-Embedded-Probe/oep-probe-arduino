@@ -41,3 +41,9 @@ inline BaseType_t xTaskCreatePinnedToCore(TaskFunction_t fn, const char *, uint3
 }
 inline UBaseType_t uxTaskPriorityGet(TaskHandle_t) { return 1; }
 inline void vTaskDelete(TaskHandle_t) {}
+inline uint32_t g_fake_task_delays = 0;   // vTaskDelay calls (ticks of 1 ms; time does not move: the test drives it)
+inline void (*g_fake_on_delay)() = nullptr;   // a test's hook: a task that waits (the harvest for a stage) stops there
+inline void vTaskDelay(uint32_t ticks) {
+  g_fake_task_delays += ticks;
+  if (g_fake_on_delay) g_fake_on_delay();
+}

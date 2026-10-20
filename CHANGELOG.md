@@ -1,6 +1,30 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) P4 streaming at 40 MHz with 8 lines (40 MB/s; the ceiling, kStreamMaxBytes, from 27 MB/s): the vendor port's
+  max_frame 27136 (a stage is one 53-packet USB transfer; answers stay within 16 KiB); the stream's DMA ring in PSRAM
+  (1 MiB, 26 ms at 40 MB/s; 2 MiB panicked in the PARLIO driver's receive) is the stream's buffer: with every stage in
+  the transport the harvest leaves the chunk in the ring and comes back to it, one copy into the stage. Bytes the DMA
+  came round over before they were taken, or a chunk the harvest queue had no room for, are dropped and the position
+  skips them (no error: no segment had them yet; capture-drops counts them in dma_overruns) - before, a ring overrun
+  stopped the capture in state 6. stream_buffer counts the ring; capture-drops gains the most it held (u32, 34 bytes).
+  Format 4 writes its counter at aligned addresses (the push header is 17 bytes: misaligned word stores took 27 KB a
+  millisecond, 5x slower) and copies nothing from the ring. The internal ring is 64 KiB (one-shot, repeat, a trigger's).
+  The P4X: 40.15 MB/s on the wire for 9 s (formats 0 and 4, a host only counting bytes); with the Python client's
+  stream() 30 s at 40 MHz kept, or dropped 0.1-0.7 % where the client fell behind for more than the ring.
+- (JA) P4 の streaming を 40 MHz・8 本（40 MB/s）にした。上限 kStreamMaxBytes は 27 MB/s から上げた。
+  - vendor port の max_frame を 27136 にした。stage 1 枚が 53 パケットの USB 転送 1 回になる。応答は 16 KiB 以内のまま。
+  - ストリームの DMA リングを PSRAM に置いた（1 MiB、40 MB/s で 26 ms ぶん。2 MiB は PARLIO のドライバの receive で panic した）。
+    このリングがストリームの溜めになる。stage が全部 transport にあるあいだ、収穫は塊をリングに残しておき、あとで戻ってくる。
+    stage へのコピーは 1 回。
+  - 取る前に DMA に追い越されたバイトと、収穫の queue に入らなかった塊は、落として position を飛ばす。どの区画にもまだ入っていない
+    ので、エラーにはしない（capture-drops の dma_overruns で数える）。前はリングを追い越されると state 6 で止まっていた。
+  - stream_buffer にリングを含めた。capture-drops に、リングが持った最大のバイト数を足した（u32、34 B）。
+  - 形式 4 は、カウンタを揃った番地に書く（push の見出しが 17 B なので、ずれた 4 B 書き込みで 27 KB に 1 ms かかっていた。5 倍遅い）。
+    リングからのコピーはしない。
+  - 内部 RAM のリングは 64 KiB（one-shot、repeat、トリガ用）。
+  - P4X での結果: 線上 40.15 MB/s が 9 秒続いた（形式 0 と 4、バイトを数えるだけの host）。Python の client の stream() では、
+    40 MHz で 30 秒、落としなし。client がリングより長く遅れた回は 0.1〜0.7 % を落とした。
 - (EN) The `promicrorp2350` profile and its release (OepProbe-promicrorp2350) are gone: an RP2350 board runs the
   `rp2350` build (one build a chip; the bench's RP2350 is a Pico 2). A Pro Micro RP2350 runs it with the Pico 2's pins
   (GP23-GP25 / GP29 not given; its GP19, the PSRAM select, is the host's to leave alone). SwdPinSurvey's rp2350 profile

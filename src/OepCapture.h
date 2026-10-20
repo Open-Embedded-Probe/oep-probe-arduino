@@ -64,11 +64,19 @@ class LogicCapture final : public Interface, public GroupTrack {
   // one-shot's ceiling by channel count (configure takes the nearest it allows): up to 8 lines 100 MHz, 16 lines 48 MHz
   static constexpr uint8_t kLimitLines8 = 8;
   static constexpr uint32_t kLimitHz8 = 100000000, kLimitHz16 = 48000000;
-  static constexpr uint32_t kStreamMaxBytes = 27000000;   // streaming: what the harvest keeps up with (bytes a second)
+  // streaming over the zero-copy stages (formats 0 and 4): the PARLIO's DMA ring in PSRAM, the stream's buffer - the
+  // harvest copies from it as the transport gives stages back, so the host's pauses up to its length cost nothing
+  // (26 ms at 40 MB/s); without PSRAM the internal ring (kRingBytes). A power of 2; 2 MiB panicked in the driver's
+  // receive (parlio_rx_unit_receive, the P4X, ESP32 core 3.3.12), 1 MiB runs. Its DMA descriptors take 17 KB of
+  // internal RAM
+  static constexpr size_t kStreamRingBytes = 1024 * 1024;
+  static constexpr uint32_t kStreamMaxBytes = 40000000;   // streaming: what the harvest and the port keep up with (bytes a second)
   // format 1 streaming: the samples' bytes a second the encoding keeps up with, the worst case counted (every events
   // line changing every sample); 13.3 MHz at w 8 until measured further
   static constexpr uint32_t kStreamBlocksMaxBytes = 13400000;
-  static constexpr size_t kRingBytes = 128 * 1024;                    // repeat / streaming: the DMA ring (internal)
+  // repeat / streaming: the DMA ring (internal). 64 KiB: at 40 MB/s 1.6 ms of the harvest's lag, and the internal RAM it
+  // leaves goes to the zero-copy stages (27 KiB each)
+  static constexpr size_t kRingBytes = 64 * 1024;
   // repeat / streaming segments: in PSRAM when there is some (all of the largest free block but a reserve for the
   // rest of the firmware; boards come with 0, 16 or 32 MB), else a small store in internal RAM
   static constexpr size_t kPsramReserve = 1024 * 1024, kInternalReserve = 96 * 1024, kInternalStoreMax = 256 * 1024;
@@ -216,9 +224,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint64_t enc_cycles_ = 0;
   volatile uint32_t stage_drops_ = 0;  // bytes dropped because every stage was queued or in flight
   volatile uint32_t stage_unsent_ = 0; // bytes of stages the transport would not queue (given back unsent)
-  bool carry_ = false;                 // a sample held back from the last frame (so that it ended with a short packet)
-  uint8_t carry_bytes_[2] = {}, carry_n_ = 0;   // its bytes: 8 / gcd(w, 8) samples' worth, 1 (w <= 8) or 2 (w 16)
-  uint8_t sampleBytes() const { return width_ > 8 ? width_ / 8 : 1; }   // the fewest whole bytes of whole samples
+  bool open_transfer_ = false;         // the last frame queued was whole packets: the host's read is still open
+  void closeTransfer();
   bool takeStage();
   bool openStages();
   void freeStages();
@@ -236,6 +243,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   // its descriptor early and goes on at the next descriptor's start, so the rest of that descriptor - up to one
   // descriptor's bytes - keeps an older lap between two chunks of the stream (partialReceive: ring_end_).
   struct Chunk { const uint8_t *data; size_t length; uint32_t end; uint32_t ring; };
+  Chunk held_chunk_ = {};
   void harvestBlocks(const Chunk &chunk);   // format 1 streaming (above)
   void emitBlock(uint32_t samples);
   uint32_t missed(const Chunk &chunk) const { return chunk.end - static_cast<uint32_t>(chunk.length) - static_cast<uint32_t>(captured_); }
@@ -244,9 +252,17 @@ class LogicCapture final : public Interface, public GroupTrack {
   volatile uint32_t ring_end_ = 0;
   static constexpr uint32_t kDmaAhead = 8192;
   // Byte `ring` (counted as Chunk::ring) is still what the DMA wrote there on that lap: the DMA has not come round to it.
-  bool ringIntact(uint32_t ring) const { return ring_end_ + kDmaAhead - ring <= kRingBytes; }
+  bool ringIntact(uint32_t ring) const { return ring_end_ + kDmaAhead - ring <= rx_ring_bytes_; }
+  // the ring the DMA fills now: ring_ (kRingBytes, internal), or a direct stream's in PSRAM (stream_ring_)
+  uint8_t *rx_ring_ = nullptr, *stream_ring_ = nullptr;
+  uint32_t rx_ring_bytes_ = kRingBytes;
+  void useRing(bool stream);
+  static constexpr uint32_t kStopDrainMs = 500;   // at stop the stream ring goes out within this (or the rest is dropped)
   // one-shot with a trigger (or a pretrigger): the ring and the harvest task, searching
-  static constexpr size_t kPretriggerBytes = 64 * 1024;   // history the ring can give back (half of it)
+  static constexpr size_t kPretriggerBytes = kRingBytes / 2;   // history the ring can give back (half of it)
+  // the harvest's core: 0, away from loop() (core 1), which answers the host while it streams - on core 1 the harvest
+  // kept loop() from the keepalive and the host's link resynced (P4X, 2026-10-20); the USB task is unpinned
+  static constexpr BaseType_t kHarvestCore = 0;
   bool triggered_ = false;           // this one-shot goes through the ring
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0;
@@ -341,7 +357,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   static bool partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *, void *context);
   static void harvestTask(void *context);
   void harvest(const Chunk &chunk);
-  void harvestDirect(const Chunk &chunk);
+  size_t harvestDirect(const Chunk &chunk, size_t at);   // -> where it got to (short: no stage free yet)
+  uint32_t ring_peak_ = 0;   // the most the stream ring held unharvested since the start (bytes; capture-drops)
+  bool held_ = false;        // the harvest's chunk not all taken (held_chunk_ from held_at_): no stage was free
+  size_t held_at_ = 0;
+  void dropDirect(size_t n);
   void finishSegment(uint32_t bytes, uint8_t flags);
   Open openRepeat(uint32_t rate_hz, uint8_t width, uint32_t samples, uint32_t segments, uint32_t &num, uint32_t &den,
                   uint32_t &actual_samples, uint32_t &actual_segments);

@@ -149,11 +149,11 @@ class Endpoint {
   bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface = 0xff,
                     bool flush_after_burst = false);
   // Buffers given later than the constructor - memory that is up only by setup() (an ESP32's PSRAM): transport 0's
-  // receive buffer (one whole frame of its max_frame, + 2) and the answer buffer. Before the first poll. false: too
-  // small for the max_frame (nothing changed).
+  // receive buffer (one whole frame of its max_frame, + 2) and the answer buffer (an answer is at most its size: a probe
+  // may answer within less than its max_frame, core §4.4). Before the first poll. false: the receive buffer too small
+  // for the max_frame (nothing changed).
   bool setBuffers(uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity) {
-    if (polled_ || serialKind(transports_[0].kind) || rx_capacity < transports_[0].max_frame + 2u ||
-        tx_capacity < transports_[0].max_frame)
+    if (polled_ || serialKind(transports_[0].kind) || rx_capacity < transports_[0].max_frame + 2u || tx_capacity < 64)
       return false;
     transports_[0].reader.reset(rx_buffer, rx_capacity, transports_[0].max_frame);
     transports_[0].reader.setTcp(transports_[0].kind == kTcp);

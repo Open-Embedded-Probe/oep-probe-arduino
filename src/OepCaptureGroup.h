@@ -149,12 +149,12 @@ inline void putTriggerDecl(uint8_t *v, uint32_t types, uint32_t max_pretrigger, 
 // Data format 4, the test sequence (capture §1): the byte at stream position k is k & 0xFF. Written over what a frame
 // or a read carries, so the bytes go the real path at format 0's volume and pace.
 inline void putTestCounter(uint8_t *d, uint64_t position, size_t n) {
-  size_t j = 0;
-  for (; j < n && ((position + j) & 3); ++j) d[j] = static_cast<uint8_t>(position + j);
+  size_t j = 0;   // to an aligned address first: a misaligned word store is a trap the P4 emulates (15 cycles a byte)
+  for (; j < n && (reinterpret_cast<uintptr_t>(d + j) & 3); ++j) d[j] = static_cast<uint8_t>(position + j);
   uint32_t word = 0;
   for (int b = 0; b < 4; ++b) word |= static_cast<uint32_t>(static_cast<uint8_t>(position + j + b)) << (8 * b);
   for (; j + 4 <= n; j += 4) {   // 4 bytes at a time: each byte up 4, wrapping in its own lane (no carry across)
-    memcpy(d + j, &word, 4);
+    memcpy(__builtin_assume_aligned(d + j, 4), &word, 4);
     word = ((word & 0x7F7F7F7Fu) + 0x04040404u) ^ (word & 0x80808080u);
   }
   for (; j < n; ++j) d[j] = static_cast<uint8_t>(position + j);

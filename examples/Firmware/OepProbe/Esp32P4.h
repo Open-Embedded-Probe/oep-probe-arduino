@@ -134,12 +134,14 @@ static EspUsbDeviceDfu dfu(usbDevice, EspUsbDeviceDfuMode::Download, "OEP probe 
 // check, or a reset before the core confirmed it, boots the one before (BootGuard::lastBoot says "update to <slot> did
 // not reach setup").
 
-// max_frame 16 KiB on the vendor port (each route its own, core §7.1; a serial port's at most 2048): a streaming
-// capture's zero-copy stages and push frames are that big, which the HS vendor port needs for its 33-37 MB/s - at 1024
-// every stage was a 1 KiB transfer and a stream topped out near 7 MB/s, dropping the rest (2026-10-20, P4X). The
-// frame-sized buffers (about 40 KiB) come from PSRAM in setup() (it is up only by then): internal RAM is what a
-// capture's DMA ring and zero-copy stages need. The endpoint starts on small static ones, swapped before its first poll.
-static constexpr size_t kMaxFrame = 8192;
+// max_frame 27136 (53 x 512) on the vendor port (each route its own, core §7.1; a serial port's at most 2048): a
+// streaming capture's zero-copy stage is one frame, one 27 KiB USB transfer - what the HS port needs for 40 MB/s and
+// more (45.6 MB/s measured with 27,136-byte transfers; at 1024 a stream topped out near 7 MB/s, at 8192 near 27). The
+// frame-sized buffers come from PSRAM in setup() (up only by then; every P4 has it): internal RAM is what the DMA ring
+// and the stages need. An answer is at most kAnswerBytes (the vendor stream's result buffers). The endpoint starts on
+// small static buffers, swapped before its first poll.
+static constexpr size_t kMaxFrame = 27136;   // 53 x 512: a stage is one 27 KiB transfer (45 MB/s on the HS port)
+static constexpr size_t kAnswerBytes = 16384;   // an answer's most (DirectBulkStream's result buffers, internal RAM)
 static constexpr size_t kRxSerial = oep::cobsFrameMax(oep::Endpoint::kMaxSerialFrame), kRxFrame = kMaxFrame + 2;
 static uint8_t rxBoot[64], txBoot[64];
 static uint8_t *frameBuffer(size_t n) {
@@ -288,7 +290,7 @@ void setup() {
   // 5-7 MB/s on the P4X, 2026-10-20)
   if (bulk.begin()) endpoint.setDirect(&bulk);
   endpoint.setFlushAfterBurst(true);
-  endpoint.setBuffers(frameBuffer(kRxFrame), kRxFrame, frameBuffer(kMaxFrame), kMaxFrame);
+  endpoint.setBuffers(frameBuffer(kRxFrame), kRxFrame, frameBuffer(kAnswerBytes), kAnswerBytes);
   endpoint.addTransport(Serial, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbSerialJtag);
   endpoint.addTransport(hidStream, frameBuffer(kRxFrame), kRxFrame, oep::Endpoint::kHid, 0, true);
   endpoint.addTransport(cdcStream, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbCdc, 2, true);

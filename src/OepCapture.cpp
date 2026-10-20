@@ -62,9 +62,9 @@ bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parli
   self->produced_ += e->recv_bytes;
   // where in the ring it is: on from the last chunk's end, by what the DMA skipped after an early close (Chunk::ring)
   const uint32_t prev = self->ring_end_;
-  const uint32_t off = static_cast<uint32_t>(static_cast<const uint8_t *>(e->data) - self->ring_);
-  uint32_t ring = (prev & ~static_cast<uint32_t>(kRingBytes - 1)) + off;
-  if (static_cast<int32_t>(ring - prev) < 0) ring += kRingBytes;
+  const uint32_t off = static_cast<uint32_t>(static_cast<const uint8_t *>(e->data) - self->rx_ring_);
+  uint32_t ring = (prev & ~(self->rx_ring_bytes_ - 1)) + off;
+  if (static_cast<int32_t>(ring - prev) < 0) ring += self->rx_ring_bytes_;
   self->ring_end_ = ring + static_cast<uint32_t>(e->recv_bytes);
   const Chunk chunk = {static_cast<const uint8_t *>(e->data), e->recv_bytes, self->produced_, ring};
   BaseType_t woken = pdFALSE;
@@ -114,34 +114,47 @@ void LogicCapture::harvest(const Chunk &chunk) {
   }
 }
 
-// Streaming, zero-copy transport: copy one finished DMA chunk into the current stage; with no stage free the bytes are
-// dropped and the stream position skips them. Harvest task only.
-void LogicCapture::harvestDirect(const Chunk &chunk) {
-  if (format_ == cap::kDataFormatLogicBlocks) { harvestBlocks(chunk); return; }
-  if (lost_) return;
-  if (missed(chunk)) { loseSegment(); return; }   // chunks lost to the queue: not data to send (capture §2.2)
-  size_t at = 0;
+// Streaming, zero-copy transport: copy a finished DMA chunk from `at` into stages while the transport has one free;
+// with none the chunk waits in the ring (the stream's buffer) and the harvest comes back to it. Bytes the DMA came
+// round over before they were taken, or a chunk the queue had no room for, are dropped: the stream position skips them.
+// Harvest task only.
+size_t LogicCapture::harvestDirect(const Chunk &chunk, size_t at) {
+  if (format_ == cap::kDataFormatLogicBlocks) { harvestBlocks(chunk); return chunk.length; }
+  if (lost_) return chunk.length;
+  if (at == 0) {
+    if (const uint32_t m = missed(chunk)) dropDirect(m);   // chunks lost to the queue
+    const uint32_t held = ring_end_ - chunk.ring;
+    if (held > ring_peak_) ring_peak_ = held;
+  }
+  const bool copy = format_ != cap::kDataFormatTestCounter;   // format 4's bytes are written at the send
   while (at < chunk.length) {
-    if (stage_cur_ < 0 && !takeStage()) {
-      const size_t rest = chunk.length - at;
-      stage_drops_ += rest;
-      dropped_ += rest;
-      captured_ += rest;
-      carry_ = false;   // the held byte goes with the drop (the position jump covers it)
-      return;
+    const size_t rest = chunk.length - at;
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA came round over them: dropped, not a hole -
+      overruns_ = overruns_ + 1;                                  // no segment (stage) had them yet
+      dropDirect(rest);
+      return chunk.length;
     }
-    const size_t n = min(static_cast<size_t>(stage_data_ - stage_fill_), chunk.length - at);
-    memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, chunk.data + at, n);
-    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA rewrote these bytes
+    if (stage_cur_ >= 0 && stage_pos_ + stage_fill_ != captured_) sendStage();   // bytes dropped since: a new one
+    if (stage_cur_ < 0 && !takeStage()) return at;
+    const size_t n = min(static_cast<size_t>(stage_data_ - stage_fill_), rest);
+    if (copy) memcpy(stage_[stage_cur_] + kPushHead + stage_fill_, chunk.data + at, n);
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // while copied: the stage ends before them
       overruns_ = overruns_ + 1;
-      loseSegment();
-      return;
+      dropDirect(rest);
+      return chunk.length;
     }
     stage_fill_ += n;
     at += n;
     captured_ += n;
     if (stage_fill_ == stage_data_) sendStage();
   }
+  return at;
+}
+
+void LogicCapture::dropDirect(size_t n) {
+  stage_drops_ += n;
+  dropped_ += n;
+  captured_ += n;
 }
 
 // Format 1 (capture §1.3), streaming over the stages: the chunk's bytes gather into the block; each full block is
@@ -212,12 +225,6 @@ bool LogicCapture::takeStage() {
     stage_since_ = millis();
     return true;
   }
-  if (carry_) {   // the next segment starts with what the last frame held back (a segment is a frame's data)
-    memcpy(stage_[stage_cur_] + kPushHead, carry_bytes_, carry_n_);
-    stage_fill_ = carry_n_;
-    stage_pos_ -= carry_n_;
-    carry_ = false;
-  }
   stage_since_ = millis();
   return true;
 }
@@ -225,7 +232,8 @@ bool LogicCapture::takeStage() {
 // Hand the current stage to the transport as one push frame (or give it back if nobody may receive it now). A full
 // stage is a whole number of 512-byte packets and the host's read runs on into the next one. A partial one (sent for
 // max_delay_ms, or at stop) that happens to be whole packets would leave the host's read open (the direct build sends
-// no zero-length packet), so its last sample is held back for the next frame and this one ends with a short packet.
+// no zero-length packet), so a frame of length 0 (the transport's keepalive, 2 bytes: a short packet) follows it; so
+// does the stream's end (closeTransfer).
 // Every frame is one segment (capture §2.2: the probe's own cut, at a sample and a byte boundary) and carries it
 // (§3.4 segment_info): its position, its samples, its start - the start's time plus its samples at the rate (not the
 // clock read again: no step at the seams) - and the start's uncertainty.
@@ -236,15 +244,7 @@ void LogicCapture::sendStage() {
   uint32_t fill = stage_fill_;
   stage_cur_ = -1;
   stage_fill_ = 0;
-  DirectTransport *tr = endpoint_.direct();
-  const uint8_t unit = sampleBytes();
-  const bool blocks = format_ == cap::kDataFormatLogicBlocks;   // whole blocks: none held back (format 1)
-  if (!blocks && fill > unit && fill < stage_data_ && (kPushHead + fill + kPushTail) % 512 == 0 && tr && tr->queued() == 0) {
-    carry_n_ = unit;
-    memcpy(carry_bytes_, s + kPushHead + fill - unit, unit);
-    carry_ = true;
-    fill -= unit;
-  }
+  const bool blocks = format_ == cap::kDataFormatLogicBlocks;
   uint16_t fn = 0, min_bytes = 0;
   uint32_t max_delay = 0;
   DirectTransport *t = endpoint_.direct();
@@ -268,10 +268,23 @@ void LogicCapture::sendStage() {
   putU32(info + kTlvHeader + 8, blocks ? stage_samples_ : static_cast<uint32_t>(static_cast<uint64_t>(fill) * 8 / width_));
   putU64(info + kTlvHeader + 12, start_ns_ + nsOf(blocks ? stage_first_sample_ : stage_pos_ * 8 / width_));
   putU32(info + kTlvHeader + 20, kStartUncertaintyNs);
-  if (!t->queueData(s, kPushHead + fill + kPushTail, stageDone, this)) {
+  const size_t length = kPushHead + fill + kPushTail;
+  if (!t->queueData(s, length, stageDone, this)) {
     stage_unsent_ = stage_unsent_ + fill;   // the transport's queue full: these bytes go nowhere (status's diagnostics)
     __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
+    return;
   }
+  open_transfer_ = length % 512 == 0;
+  if (open_transfer_ && fill < stage_data_) closeTransfer();   // a partial frame of whole packets: closed now
+}
+
+// The host's read of the last transfer ends only at a short packet: after whole packets, a frame of length 0 (2 bytes,
+// the transport's keepalive, which a host skips) ends it.
+void LogicCapture::closeTransfer() {
+  static uint8_t zero[64] __attribute__((aligned(64))) = {};   // internal RAM, DMA-capable; never written
+  DirectTransport *t = endpoint_.direct();
+  if (!open_transfer_ || !t) return;
+  if (t->queueData(zero, 2, nullptr, nullptr)) open_transfer_ = false;
 }
 
 void LogicCapture::stageDone(void *context, const uint8_t *buffer) {
@@ -291,7 +304,10 @@ uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t se
     while (count < kStagesMax && largest >= frame + 48 * 1024) { ++count; largest -= frame; }
   }
   if (count < 2) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);   // the copied way
-  return static_cast<uint32_t>(count * (frame - kPushHead - kPushTail));
+  // and the FIFO behind them (formats 0 and 4; held, or PSRAM to take it)
+  const bool psram = stream_ring_ || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA) >= kStreamRingBytes;
+  const size_t ring = format_ == cap::kDataFormatLogicBlocks ? 0 : (psram ? kStreamRingBytes : kRingBytes) - kDmaAhead - kChunkMax;
+  return static_cast<uint32_t>(count * (frame - kPushHead - kPushTail) + ring);
 }
 
 bool LogicCapture::openStages() {
@@ -317,6 +333,8 @@ bool LogicCapture::openStages() {
   }
   stage_free_ = stage_count_ ? (1u << stage_count_) - 1 : 0;
   stage_cur_ = -1;
+  if (!stream_ring_ && stage_count_ >= 2)   // the stream's DMA ring in PSRAM, kept like the stages (none: ring_)
+    stream_ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, kStreamRingBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA));
   return stage_count_ >= 2;
 }
 
@@ -339,6 +357,8 @@ void LogicCapture::releaseStages() {
   stage_count_ = 0;
   stage_free_ = 0;
   stage_cur_ = -1;
+  heap_caps_free(stream_ring_);
+  stream_ring_ = nullptr;
 }
 
 // The first sample of `data` (the stream's sample first_sample on) where the trigger holds: at, its index. With arm 1
@@ -602,14 +622,14 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
-  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
+  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, kHarvestCore) != pdPASS) {
     harvesting_ = false;
     return failed();
   }
   parlio_receive_config_t rc = {};
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
-  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
+  if (parlio_rx_unit_receive(unit_, rx_ring_, rx_ring_bytes_, &rc) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
   if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   state_ = kStateWaiting;
@@ -635,13 +655,10 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
 // write_pos stays at its start. poll() (failLost) stops the track.
 void LogicCapture::loseSegment() {
   if (direct_) {
-    lost_pos_ = stage_cur_ >= 0                              ? stage_pos_
-                : format_ == cap::kDataFormatLogicBlocks ? enc_pos_
-                                                         : captured_ - (carry_ ? carry_n_ : 0);
+    lost_pos_ = stage_cur_ >= 0 ? stage_pos_ : format_ == cap::kDataFormatLogicBlocks ? enc_pos_ : captured_;
     if (stage_cur_ >= 0) __atomic_fetch_or(&stage_free_, 1u << stage_cur_, __ATOMIC_ACQ_REL);
     stage_cur_ = -1;
     stage_fill_ = 0;
-    carry_ = false;
   } else {
     lost_pos_ = fill_ ? infos_[completed_ % kInfos].position : captured_;
     fill_ = 0;
@@ -683,20 +700,46 @@ void LogicCapture::harvestTask(void *context) {
   auto *self = static_cast<LogicCapture *>(context);
   Chunk chunk;
   if (self->direct_) {
+    bool &held = self->held_;   // members: a chunk waiting for a stage outlives a pass of the loop
+    size_t &at = self->held_at_;
+    Chunk &waiting = self->held_chunk_;
     while (self->harvesting_) {
-      const bool got = xQueueReceive(self->queue_, &chunk, pdMS_TO_TICKS(2)) == pdTRUE;
-      if (got) self->harvestDirect(chunk);
+      if (!held && xQueueReceive(self->queue_, &waiting, pdMS_TO_TICKS(2)) == pdTRUE) {
+        held = true;
+        at = 0;
+      }
+      if (held) {
+        at = self->harvestDirect(waiting, at);
+        held = at < waiting.length;
+        if (held) { vTaskDelay(1); continue; }   // the transport has every stage: the ring holds the rest
+      }
       if (self->stage_cur_ < 0 || self->stage_fill_ == 0) continue;
       // the subscriber's batching: at least min_bytes, or max_delay_ms after the stage's first byte (0, 0: when idle)
       uint16_t fn = 0, min_bytes = 0;
-  uint32_t max_delay = 0;
+      uint32_t max_delay = 0;
       if (!self->endpoint_.directPush(*self, fn, min_bytes, max_delay)) continue;
       const bool idle = uxQueueMessagesWaiting(self->queue_) == 0;
       if ((min_bytes == 0 && max_delay == 0 && idle) || (min_bytes && self->stage_fill_ >= min_bytes) ||
           (max_delay && millis() - self->stage_since_ >= max_delay))
         self->sendStage();
     }
-    while (xQueueReceive(self->queue_, &chunk, 0) == pdTRUE) self->harvestDirect(chunk);
+    // what arrived before the stop, as stages free up (kStopDrainMs at most: then the rest is dropped)
+    for (const uint32_t t0 = millis(); held || uxQueueMessagesWaiting(self->queue_);) {
+      if (!held) {
+        if (xQueueReceive(self->queue_, &waiting, 0) != pdTRUE) break;
+        at = 0;
+      }
+      at = self->harvestDirect(waiting, at);
+      held = at < waiting.length;
+      if (!held) continue;
+      if (millis() - t0 >= kStopDrainMs) {
+        self->dropDirect(waiting.length - at);
+        held = false;
+        while (xQueueReceive(self->queue_, &waiting, 0) == pdTRUE) self->dropDirect(waiting.length);
+        break;
+      }
+      vTaskDelay(1);
+    }
     self->task_ = nullptr;
     vTaskDelete(nullptr);
   }
@@ -877,7 +920,7 @@ bool LogicCapture::open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t 
 // (an immediate one-shot: done at `bytes`, the DMA nodes counted for a stop) or the DMA ring's (repeat, streaming and
 // a one-shot through the ring: partial receives into the harvest's queue).
 bool LogicCapture::openUnit(uint32_t rate_hz, uint8_t width, bool ring, uint32_t bytes, uint32_t &num, uint32_t &den) {
-  if (!open(rate_hz, width, ring ? kRingBytes : bytes, num, den)) return false;
+  if (!open(rate_hz, width, ring ? rx_ring_bytes_ : bytes, num, den)) return false;
   parlio_rx_event_callbacks_t cb = {};
   if (ring) {
     cb.on_partial_receive = partialReceive;
@@ -930,6 +973,11 @@ void LogicCapture::close() {
   buffer_ = nullptr;
   buffer_in_ring_ = false;
   done_ = false;
+}
+
+void LogicCapture::useRing(bool stream) {
+  rx_ring_ = stream && stream_ring_ ? stream_ring_ : ring_;
+  rx_ring_bytes_ = stream && stream_ring_ ? kStreamRingBytes : kRingBytes;
 }
 
 bool LogicCapture::takeRing() {
@@ -1047,9 +1095,10 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (pretrigger_tlv.v) pretrigger = getU32(pretrigger_tlv.v);   // checked against samples below
   // format 1 takes its samples a byte each (w 8, up to 8 lines): the encoder's fast path works on bytes
   const uint8_t width = blocks_format && widthFor(channels_) < 8 ? 8 : widthFor(channels_);
-  // streaming's ceiling: the harvest copies the DMA ring into stages at about kStreamMaxBytes a second; above it the
-  // ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture §3.3), as the
-  // one-shot's ceiling above (P4X, 2026-10-20: 26.7 MB/s kept with no drop, 30 MB/s overran at once, 32 too)
+  // streaming's ceiling: the harvest copies the DMA ring into stages (or the FIFO) at about kStreamMaxBytes a second;
+  // above it the ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture
+  // §3.3), as the one-shot's ceiling above (P4X, 2026-10-20: 40 MHz w 8 kept, formats 0 and 4, 40.15 MB/s on the wire
+  // with no drop; the next divider, 53.3 MHz, not measured)
   if (mode == cap::kModeStreaming) {
     // the highest whole-divider rate at or below it: the nearest the divider picks never lands above
     const uint64_t ceiling = blocks_format ? kStreamBlocksMaxBytes : kStreamMaxBytes;   // format 1: its encoding's
@@ -1248,8 +1297,7 @@ LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uin
   sent_off_ = 0;
   dropped_ = 0;
   captured_ = 0;
-  queue_ = xQueueCreate(128, sizeof(Chunk));
-  if (!takeRing() || !queue_) return Open::kNoMemory;
+  if (!takeRing()) return Open::kNoMemory;
   // Without internal RAM for two stages (taken by the DMA ring, a trigger's segment, the rest of the firmware), the
   // stream goes the copied way instead: the segments in the store, pushed by the endpoint like any notification.
   // It failed configure (0.0.28 on the bench: a streaming configure after other captures answered failed).
@@ -1263,6 +1311,11 @@ LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uin
     store_ = static_cast<uint8_t *>(heap_caps_malloc(store_bytes_, caps));
     if (!store_) return Open::kNoMemory;
   }
+  useRing(direct_);
+  // a chunk is a descriptor (3968 - 4032 bytes) or the rest of one an early close cut: the ring's worth queued, so a
+  // harvest waiting for a stage loses none
+  queue_ = xQueueCreate(rx_ring_bytes_ == kRingBytes ? 128 : rx_ring_bytes_ / 2048, sizeof(Chunk));
+  if (!queue_) return Open::kNoMemory;
   if (!openUnit(rate_hz, width, true, 0, num, den)) return Open::kFailed;
   actual_samples = samples;
   actual_segments = segment_count_;
@@ -1275,6 +1328,7 @@ LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, 
   storeBudget(caps);                         // PSRAM when there is some: the segment is filled by the CPU, not the DMA
   buffer_ = static_cast<uint8_t *>(heap_caps_malloc(bytes + 1, caps));   // + the byte a mid-byte start reaches into
   if (!takeRing() || !queue_ || !buffer_) return Open::kNoMemory;
+  useRing(false);
   return openUnit(rate_hz, width, true, 0, num, den) ? Open::kOk : Open::kFailed;
 }
 
@@ -1302,6 +1356,9 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   enc_pos_ = sample_pos_ = stage_first_sample_ = 0;
   block_fill_ = stage_samples_ = 0;
   enc_max_cycles_ = enc_blocks_ = enc_fallbacks_ = 0;
+  ring_peak_ = 0;
+  held_ = false;
+  held_at_ = 0;
   enc_cycles_ = 0;
   encoder_.reset();
   fill_ = 0;
@@ -1312,7 +1369,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   lost_ = false;
   lost_pos_ = 0;
   error_ = cap::kErrorPeripheral;
-  carry_ = false;
+  open_transfer_ = false;
   produced_ = 0;
   ring_end_ = 0;
   sent_seg_ = 0;
@@ -1325,14 +1382,14 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
-  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, 0) != pdPASS) {
+  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, kHarvestCore) != pdPASS) {
     harvesting_ = false;
     return failed();
   }
   parlio_receive_config_t rc = {};
   rc.delimiter = delimiter_;
   rc.flags.partial_rx_en = true;
-  if (parlio_rx_unit_receive(unit_, ring_, kRingBytes, &rc) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
+  if (parlio_rx_unit_receive(unit_, rx_ring_, rx_ring_bytes_, &rc) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
   if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   state_ = kStateCapturing;
@@ -1345,13 +1402,12 @@ void LogicCapture::stopRepeat() {
   if (!harvesting_ && !task_) return;
   if (unit_ && delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
   harvesting_ = false;
-  for (int i = 0; i < 100 && task_; ++i) delay(2);   // the task drains what arrived, then ends
+  for (uint32_t t0 = millis(); task_ && millis() - t0 < kStopDrainMs + 200;) delay(2);   // the task sends what arrived, then ends
   if (direct_) {   // the task is gone: send what is left, the held byte too
     if (format_ == cap::kDataFormatLogicBlocks && block_fill_ && !lost_)   // the block begun: short (§1.3)
       emitBlock(block_fill_ * 8 / width_);
     sendStage();
-    if (carry_ && takeStage()) sendStage();
-    carry_ = false;
+    closeTransfer();   // the stream's last transfer ends with a short packet
     return;
   }
   if (fill_ && completed_ - released_ < segment_count_) finishSegment(fill_, infos_[completed_ % kInfos].flags | 2);
@@ -1698,9 +1754,10 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       // stage was free for, the bytes the transport would not queue, the DMA chunks rewritten before they were copied,
       // the chunks the harvest queue had no room for - u32 each, since the start; then the way the data goes (u8: 1 the
       // zero-copy stages, 0 the store through the endpoint) and the stages held (u8); then the memory a capture draws
-      // on now (u32 each): internal RAM's largest free block, DMA-capable internal RAM's, PSRAM's total (0: none)
+      // on now (u32 each): internal RAM's largest free block, DMA-capable internal RAM's, PSRAM's total (0: none); then
+      // the most the DMA ring held not yet harvested since the start (u32, bytes; the stream's buffer in use)
       static const char kDrops[] = "io.github.open-embedded-probe.capture-drops";
-      constexpr size_t kName = sizeof kDrops - 1, kValue = 1 + kName + 30;
+      constexpr size_t kName = sizeof kDrops - 1, kValue = 1 + kName + 34;
       if (used + kTlvHeader + kValue <= capacity) {
         putTlvHeader(out + used, reg::kTagNamedExtension, kValue);
         uint8_t *v = out + used + kTlvHeader;
@@ -1715,6 +1772,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 19 + kName, static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
         putU32(v + 23 + kName, static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)));
         putU32(v + 27 + kName, static_cast<uint32_t>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)));
+        putU32(v + 31 + kName, ring_peak_);
         used += kTlvHeader + kValue;
       }
       // format 1's encoding cost, since the start (named, as above): cycles of the longest block (u32), of all (u64),

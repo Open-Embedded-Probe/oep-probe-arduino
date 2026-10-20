@@ -523,8 +523,10 @@ struct Dma {
   void run() {
     if (!g_fake_task_fn) return;
     g_fake_queue_empty = [] { throw Idle{}; };
+    g_fake_on_delay = [] { throw Idle{}; };   // waiting for a stage: the harvest comes back to it at the next run
     try { g_fake_task_fn(g_fake_task_arg); } catch (const Idle &) {}
     g_fake_queue_empty = nullptr;
+    g_fake_on_delay = nullptr;
   }
 };
 
@@ -700,7 +702,7 @@ static void testPositions() {
     c.mode = 3;
     CHECK(ok(configure(rig.cap, c, out)));
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-    for (int k = 0; k < 4; ++k) { dma.deliver(64 * 1024, 0x55); dma.run(); }
+    for (int k = 0; k < 8; ++k) { dma.deliver(32 * 1024, 0x55); dma.run(); }   // half a ring between harvests
     CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && (out[13] & cap::kStatusFlagDropped) == 0);
     dma.deliver(4096, 0x66);   // nobody took any: new data discarded
     dma.run();
@@ -743,8 +745,9 @@ static void testFollowerKeeps() {
   c.samples = 4096;
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(rig.cap.trackCanKeep(0, 0) && rig.cap.trackCanKeep(4095, 0) && !rig.cap.trackCanKeep(4096, 0));
-  // the ring (128 KiB, w = 2: 524288 samples) less a chunk and the DMA's lead holds P_k and the trigger's latency
-  CHECK(rig.cap.trackCanKeep(4095, 400000000) && !rig.cap.trackCanKeep(4095, 500000000));
+  // the ring (64 KiB, w = 2: 262144 samples) less a chunk and the DMA's lead holds P_k and the trigger's latency: at
+  // 1 MHz about 209 ms of it
+  CHECK(rig.cap.trackCanKeep(4095, 200000000) && !rig.cap.trackCanKeep(4095, 250000000));
   rig.cap.trackKeep(400, 100000000);
   const uint64_t start_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;   // the fake clock does not move
   CHECK(rig.cap.trackStartFollowing());
@@ -861,6 +864,124 @@ static void testEveryStartFresh() {
   CHECK(g_fake_parlio_reused == reused);   // no receive on a unit that had one
 }
 
+// A transport that keeps every frame queued and hands it back only when the test says (the host taking IN).
+class HeldDirect final : public DirectTransport {
+ public:
+  struct Held { const uint8_t *buffer; Done done; void *context; };
+  std::vector<Bytes> frames;
+  std::vector<Held> held;
+  bool queueData(const uint8_t *buffer, size_t length, Done done, void *context) override {
+    frames.emplace_back(buffer, buffer + length);
+    if (done) held.push_back({buffer, done, context});
+    return true;
+  }
+  size_t queued() const override { return held.size(); }
+  void giveBack() {
+    std::vector<Held> h;
+    h.swap(held);
+    for (const Held &e : h) e.done(e.context, e.buffer);
+  }
+};
+
+class MemStream final : public Stream {
+ public:
+  Bytes rx, tx;
+  size_t at = 0;
+  int available() override { return static_cast<int>(rx.size() - at); }
+  int read() override { return at < rx.size() ? rx[at++] : -1; }
+  int peek() override { return at < rx.size() ? rx[at] : -1; }
+  size_t write(uint8_t c) override { return write(&c, 1); }
+  size_t write(const uint8_t *b, size_t n) override { tx.insert(tx.end(), b, b + n); return n; }
+  int availableForWrite() override { return 1 << 20; }
+};
+
+static uint8_t pattern(uint64_t position) { return static_cast<uint8_t>(position * 7 + (position >> 8)); }
+
+// Streaming over the zero-copy stages with the host not taking IN: the stages fill, then the stream's DMA ring in PSRAM
+// holds the rest and nothing is dropped; given back, the stages take it in order. The DMA coming round over bytes not
+// yet taken drops them (the position jumps, no error: no stage had them) and the frame after the jump starts at its
+// own position. Every frame's bytes are the stream's at its position.
+static void testStreamRing() {
+  board(512 * 1024, size_t(32) << 20);
+  MemStream bulk;
+  static uint8_t rx[512], tx[512];
+  Endpoint ep{bulk, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kVendorBulk, 0};
+  PinTable pins{0xFFFFull};
+  LogicCapture logic{ep, pins};
+  ep.add(logic);   // fn 1
+  HeldDirect direct;
+  ep.setDirect(&direct);
+  RoleAssignment roles[8];
+  for (uint8_t k = 0; k < 8; ++k) roles[k] = {1, k, k};
+  logic.planApply(roles, 8);   // w 8
+  auto request = [&](uint16_t fn, uint8_t op, const Bytes &payload) {
+    static uint16_t corr = 1;
+    Bytes m = {kRoleRequest, uint8_t(corr), uint8_t(corr >> 8), uint8_t(fn), uint8_t(fn >> 8), op, 0x44, 0x33, 0x22, 0x11};
+    ++corr;
+    m.insert(m.end(), payload.begin(), payload.end());
+    Bytes f = {uint8_t(m.size()), uint8_t(m.size() >> 8)};
+    f.insert(f.end(), m.begin(), m.end());
+    bulk.rx.insert(bulk.rx.end(), f.begin(), f.end());
+    bulk.tx.clear();
+    ep.poll();
+    return bulk.tx.size() >= 7 && bulk.tx[5] == kResolutionCompleted && bulk.tx[6] == kOutcomeSuccess;
+  };
+  CHECK(request(0, kOpOpen, {0xd0, 0x07, 0, 0, 0}));
+  CHECK(request(1, reg::kOpSubscribe, {0xff, 0xff, 0, 0, 0, 0}));   // min_bytes past a stage: full stages only
+  logic.setFrameLimit(4096);   // after open (the transport's own max_frame): stages of 4 KiB
+  Bytes out;
+  Config c;
+  c.mode = 3;
+  CHECK(ok(configure(logic, c, out)));
+  uint32_t buffer = 0;   // the stages and the ring
+  CHECK(findU32(out, cap::kTlvConfigureAnswerStreamBuffer, buffer) && buffer > LogicCapture::kStreamRingBytes / 2);
+  Dma dma;
+  CHECK(ok(raw(logic, LogicCapture::kOpStart, {}, out)));
+  CHECK(g_fake_parlio_size == LogicCapture::kStreamRingBytes);
+  uint64_t produced = 0;
+  auto deliver = [&](size_t n) {   // the stream's next n bytes, in descriptor-sized chunks, then a harvest
+    Bytes b(4032);
+    for (size_t k = 0; k < n; k += b.size()) {
+      for (size_t i = 0; i < b.size(); ++i) b[i] = pattern(produced + i);
+      dma.put(b);
+      produced += b.size();
+    }
+    dma.run();
+  };
+  auto dropped = [&] { return ok(raw(logic, LogicCapture::kOpStatus, {}, out)) && (out[13] & cap::kStatusFlagDropped); };
+  auto check = [&](size_t want_jumps) {   // every frame's bytes the stream's; positions run on but for the jumps
+    uint64_t next = 0;
+    size_t jumps = 0;
+    bool same = true;
+    for (const Bytes &f : direct.frames) {
+      constexpr size_t kHead = 2 + kPushHeader + 8 + 2;   // length, push header, position(u64), len(u16)
+      if (f.size() < kHead) { same = false; break; }
+      const uint64_t at = getU64(f.data() + 7);
+      const size_t n = getU16(f.data() + 15);
+      if (at != next) ++jumps;
+      same = same && at >= next;
+      for (size_t i = 0; i < n && same; ++i) same = f[kHead + i] == pattern(at + i);
+      next = at + n;
+    }
+    CHECK(same);
+    CHECK(jumps == want_jumps);
+    return next;
+  };
+  const size_t ring = LogicCapture::kStreamRingBytes, step = 24 * 1024;
+  for (size_t n = 0; n < ring * 3 / 4; n += step) deliver(step);   // nobody takes IN: the stages, then the ring holds it
+  const size_t stages = direct.frames.size();
+  CHECK(stages >= 2 && stages <= 32);
+  CHECK(!dropped());
+  for (size_t n = 0; n < ring / 2; n += 4032) { direct.giveBack(); deliver(4032); }   // the host takes it all, keeps up
+  CHECK(!dropped());
+  CHECK(check(0) + 64 * 1024 > produced);   // all but the stage being filled
+  for (size_t n = 0; n < ring * 2; n += step) deliver(step);   // unread: the DMA comes round over what the ring held
+  CHECK(dropped());
+  for (size_t n = 0; n < ring; n += 4032) { direct.giveBack(); deliver(4032); }
+  check(1);
+  logic.planRelease();
+}
+
 // One large immediate one-shot breaks no later triggered configure (0.0.28: 523264 samples on 1 line freed the DMA
 // ring for its segment, the rest of the firmware took a piece of the freed 128 KiB, and every triggered configure after
 // it failed with an empty payload, state 6, until a reboot): the ring is taken with the plan and never freed, the
@@ -892,7 +1013,7 @@ static void testRingKept() {
 
   // no room for the ring at all (no PSRAM, little internal RAM): immediate runs on a block of its own, triggered and
   // repeat are refused cause 3 and the immediate configuration stays
-  board(100 * 1024, 0);
+  board(48 * 1024, 0);   // below the ring (kRingBytes)
   Rig small(1);
   Config imm;
   imm.samples = 40000;
@@ -1279,6 +1400,7 @@ int main() {
   testFormatAndTriggerOpts();
   testConfigureOrder();
   testStreamingWithoutStages();
+  testStreamRing();
   testOverLimitRoundsDown();
   testEveryModeAtTheLowestRate();
   printf("capture: %d checks, %d failures\n", checks, failures);
