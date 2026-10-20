@@ -76,6 +76,7 @@ bool IRAM_ATTR LogicCapture::partialReceive(parlio_rx_unit_handle_t, const parli
 // next segment starts with a gap mark. Runs on the harvest task only.
 void LogicCapture::harvest(const Chunk &chunk) {
   if (lost_) return;                           // stopped taking data (capture §2.2): poll() ends the track
+  if (rep_trig_) { harvestRepeatTriggered(chunk); return; }
   if (missed(chunk)) { loseSegment(); return; }   // chunks lost before this one: the segment has a hole
   size_t at = 0;
   while (at < chunk.length) {
@@ -98,6 +99,7 @@ void LogicCapture::harvest(const Chunk &chunk) {
       info.start_ns = start_ns_ + nsOf(first_sample);
       info.flags = gap_pending_ ? 1 : 0;
       info.slot = slot;
+      info.trigger_index = 0xFFFFFFFFu;
       gap_pending_ = false;
     }
     memcpy(store_ + static_cast<size_t>(slot) * segment_bytes_ + fill_, chunk.data + at, n);
@@ -111,6 +113,178 @@ void LogicCapture::harvest(const Chunk &chunk) {
     at += n;
     captured_ += n;
     if (fill_ == segment_bytes_) finishSegment(segment_bytes_, infos_[completed_ % kInfos].flags);
+  }
+}
+
+// A repeat with a trigger (capture §2.1): while waiting, each chunk is mapped and searched; a trigger begins a segment
+// pretrigger samples before it (not before the last segment's end, nor the oldest the ring still holds), copied through
+// the map, and the chunks after it fill it as a plain repeat's. Once full: rearm 1 waits for the next segment's trigger
+// from its end (the rest of this chunk searched at once), rearm 0 goes on with the next segment straight after. A
+// chunk lost to the queue while waiting only loses history; inside a segment it is a hole (§2.2). Harvest task only.
+void LogicCapture::harvestRepeatTriggered(const Chunk &chunk) {
+  if (const uint32_t skip = missed(chunk)) {           // chunks lost before this one
+    if (!rep_wait_) { loseSegment(); return; }
+    mapLost(captured_, skip, chunk.ring);
+    captured_ += skip;
+    have_level_ = false;
+  }
+  const uint64_t base = captured_;                     // the stream byte of chunk.data[0]
+  addSpan(base, chunk.ring, static_cast<uint32_t>(chunk.length));
+  if (!ringIntact(chunk.ring)) {                       // rewritten before it was looked at
+    overruns_ = overruns_ + 1;
+    if (!rep_wait_) { loseSegment(); return; }
+    captured_ = base + chunk.length;
+    have_level_ = false;
+    return;
+  }
+  size_t at = 0;
+  while (at < chunk.length) {
+    if (rep_wait_) {
+      if (!harvestRepeatTrigger(chunk, base, at)) break;   // none in the rest of the chunk
+      if (lost_) return;
+      continue;
+    }
+    if (completed_ - released_ >= segment_count_) {   // rearm 0's next segment, every one waiting for the host
+      const size_t rest = chunk.length - at;
+      dropped_ += rest;
+      data_pos_ += rest;                              // the discarded bytes take positions (§2.2), as a plain repeat's
+      if (fill_ == 0) gap_pending_ = true;
+      paused_ = true;
+      break;
+    }
+    if (paused_ && fill_ == 0) paused_ = false;
+    if (fill_ == 0) {   // rearm 0: the next segment straight after the last one
+      Info &info = infos_[completed_ % kInfos];
+      info.serial = completed_;
+      info.position = data_pos_;
+      info.start_ns = start_ns_ + nsOf((base + at) * 8 / width_);
+      info.flags = gap_pending_ ? cap::kSegmentFlagGap : 0;
+      info.slot = fill_slot_;
+      info.trigger_index = 0xFFFFFFFFu;
+      gap_pending_ = false;
+    }
+    const size_t n = min(static_cast<size_t>(segment_bytes_ - fill_), chunk.length - at);
+    memcpy(store_ + static_cast<size_t>(fill_slot_) * segment_bytes_ + fill_, chunk.data + at, n);
+    if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA came round while we copied: a hole
+      overruns_ = overruns_ + 1;
+      loseSegment();
+      return;
+    }
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    fill_ += n;
+    at += n;
+    if (fill_ == segment_bytes_) {
+      finishSegment(segment_bytes_, infos_[completed_ % kInfos].flags);
+      floor_sample_ = (base + at) * 8 / width_;
+      if (rearm_) {   // the next segment's own trigger, looked for from this one's end (arm 1: once its pretrigger is in)
+        rep_wait_ = true;
+        arm_from_ = floor_sample_ + (arm_ ? pre() : 0);
+        level_false_ = false;
+        const uint8_t k = trig_role_;   // the level before the floor: the last sample's (an edge right at it)
+        last_level_ = width_ == 16 ? (chunk.data[at - 2 + (k >> 3)] >> (k & 7)) & 1 : (chunk.data[at - 1] >> k) & 1;
+        have_level_ = true;
+      }
+    }
+  }
+  captured_ = base + chunk.length;
+}
+
+// Waiting for a segment's trigger in chunk [at, end): found (or a force's sample reached) -> the segment begun and `at`
+// where its filling goes on in the chunk; true. None: `at` at the chunk's end, false. No free segment: paused, the
+// arming starts again after this chunk (§2.1: the next trigger looked for once there is room).
+bool LogicCapture::harvestRepeatTrigger(const Chunk &chunk, uint64_t base, size_t &at) {
+  const uint64_t end_sample = (base + chunk.length) * 8 / width_;
+  if (completed_ - released_ >= segment_count_) {
+    paused_ = true;
+    gap_pending_ = true;
+    floor_sample_ = end_sample;
+    arm_from_ = floor_sample_ + (arm_ ? pre() : 0);
+    level_false_ = false;
+    have_level_ = false;
+    at = chunk.length;
+    return false;
+  }
+  if (paused_) paused_ = false;
+  const uint64_t first = (base + at) * 8 / width_;
+  uint64_t t = first;
+  if (force_) {   // a force: the sample of that instant, once the stream has come that far (capture §3.3)
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    t = force_sample_;
+    if (t >= end_sample) { at = chunk.length; return false; }
+    if (t < floor_sample_) t = floor_sample_;
+    force_ = false;
+  } else if (!findTrigger(chunk.data + at, chunk.length - at, first, t)) {
+    at = chunk.length;
+    return false;
+  }
+  beginTriggeredSegment(t, base);
+  if (lost_) return true;
+  // where it goes on in the chunk: the segment's next byte, or (done at once from the map) the arming's floor
+  const uint64_t next = rep_wait_ ? floor_sample_ * width_ / 8 : seg_first_sample_ * width_ / 8 + fill_;
+  at = next > base ? static_cast<size_t>(next - base) : 0;
+  return true;
+}
+
+// The segment of a trigger at sample `trigger`: from pretrigger samples before it - not before the last segment's end
+// (floor_sample_) nor the oldest byte the ring holds in order - its bytes before this chunk (stream byte `base`)
+// copied through the map; its info, rearm 1's record and the event for loop(). Harvest task only.
+void LogicCapture::beginTriggeredSegment(uint64_t trigger, uint64_t base) {
+  uint64_t s0 = trigger > pre() ? trigger - pre() : 0;
+  if (s0 < floor_sample_) s0 = floor_sample_;
+  const uint64_t oldest = oldestKept();
+  if (s0 * width_ / 8 < oldest) s0 = (oldest * 8 + width_ - 1) / width_;
+  if (s0 > trigger) s0 = trigger;
+  const uint32_t index = static_cast<uint32_t>(trigger - s0);
+  const bool contiguous = completed_ == 0 ? true : s0 == floor_sample_;
+  Info &info = infos_[completed_ % kInfos];
+  info.serial = completed_;
+  info.position = data_pos_;
+  info.start_ns = start_ns_ + nsOf(s0);
+  info.flags = static_cast<uint8_t>((gap_pending_ || !contiguous ? cap::kSegmentFlagGap : 0) |
+                                    (rearm_ ? cap::kSegmentFlagRearm : 0));   // its own trigger (§2.1)
+  info.slot = fill_slot_;
+  info.trigger_index = index;
+  gap_pending_ = false;
+  seg_first_sample_ = s0;
+  fill_ = 0;
+  const uint64_t from = s0 * width_ / 8;
+  if (from < base) {   // the part before this chunk, through the map
+    const uint64_t to = from + segment_bytes_ < base ? from + segment_bytes_ : base;
+    if (!copyStreamTo(store_ + static_cast<size_t>(fill_slot_) * segment_bytes_, from, to)) { loseSegment(); return; }
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    fill_ = static_cast<uint32_t>(to - from);
+  }
+  uint32_t record = 0xFFFFFFFFu;
+  if (rearm_ && records_) {   // a record for every trigger (§3.10)
+    record = record_next_;
+    records_[record % kTriggerRecords] = {trigger, start_ns_ + nsOf(trigger), record, periodNs(rate_num_, rate_den_)};
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    record_next_ = record + 1;
+  }
+  found_[found_head_ % kFound] = {trigger, completed_, index, record};
+  __atomic_thread_fence(__ATOMIC_RELEASE);
+  found_head_ = found_head_ + 1;
+  rep_wait_ = false;
+  rep_started_ = true;
+  if (fill_ == segment_bytes_) {   // all of it already there (pretrigger as long as the segment): done at once
+    finishSegment(segment_bytes_, info.flags);
+    floor_sample_ = s0 + static_cast<uint64_t>(segment_bytes_) * 8 / width_;
+    if (rearm_) { rep_wait_ = true; arm_from_ = floor_sample_ + (arm_ ? pre() : 0); level_false_ = false; }
+  }
+}
+
+// loop(): the triggered events the harvest found (a repeat with a trigger), in order; the oldest beyond kFound gone.
+void LogicCapture::reportFound() {
+  const uint32_t head = found_head_;
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  if (head - found_tail_ > kFound) found_tail_ = head - kFound;
+  for (; found_tail_ != head; ++found_tail_) {
+    if (!subscribed_) continue;
+    const TriggerFound &f = found_[found_tail_ % kFound];
+    uint8_t e[kTriggeredBytes];
+    putTriggered(e, f.serial, f.index, f.sample, start_ns_ + nsOf(f.sample), periodNs(rate_num_, rate_den_), generation_);
+    putU32(e + 8, f.record);
+    endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
   }
 }
 
@@ -372,7 +546,7 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
   const uint8_t w = width_, k = trig_role_;
   const bool edge = trig_type_ == cap::kTriggerEdge;
   const uint8_t want = trig_value_ & 1;
-  const uint64_t from = arm_ ? pre() : 0;
+  const uint64_t from = arm_from_;   // arm 1: once the pretrigger is in, counted from the arming (capture §3.3)
   auto hits = [&](uint8_t level, uint64_t sample) {
     bool hit = false;
     if (sample >= from) {
@@ -546,6 +720,15 @@ uint64_t LogicCapture::oldestKept() const {
 // Stream bytes [from, to) - in the mapped recent chunks - appended to the segment (buffer_ at filled_). false: some of
 // them are not mapped, or the DMA came round over them before or while they were copied.
 bool LogicCapture::copyStream(uint64_t from, uint64_t to) {
+  const bool ok = copyStreamTo(buffer_ + filled_, from, to);
+  filled_ += static_cast<uint32_t>(to - from);
+  return ok;
+}
+
+// Stream bytes [from, to) - in the mapped recent chunks - to dst. false: some of them are not mapped, or the DMA came
+// round over them before or while they were copied (dst then holds what was there).
+bool LogicCapture::copyStreamTo(uint8_t *dst, uint64_t from, uint64_t to) {
+  uint32_t copied = 0;
   const uint32_t n = span_count_ < kSpans ? span_count_ : static_cast<uint32_t>(kSpans);
   uint32_t k = 0;   // the span holding `from`, counted back from the newest
   while (k < n) {
@@ -566,8 +749,8 @@ bool LogicCapture::copyStream(uint64_t from, uint64_t to) {
     size_t m = rx_ring_bytes_ - r;
     if (m > sp.stream + sp.length - g) m = static_cast<size_t>(sp.stream + sp.length - g);
     if (m > to - g) m = static_cast<size_t>(to - g);
-    memcpy(buffer_ + filled_, rx_ring_ + r, m);
-    filled_ += static_cast<uint32_t>(m);
+    memcpy(dst + copied, rx_ring_ + r, m);
+    copied += static_cast<uint32_t>(m);
     g += m;
     if (g == sp.stream + sp.length) k = k ? k - 1 : UINT32_MAX;
   }
@@ -600,6 +783,7 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   ext_ready_ = false;
   trig_overrun_ = false;
   have_level_ = level_false_ = false;
+  arm_from_ = arm_ ? pre() : 0;
   lost_ = false;
   lost_pos_ = 0;
   error_ = cap::kErrorPeripheral;
@@ -644,6 +828,7 @@ void LogicCapture::finishSegment(uint32_t bytes, uint8_t flags) {
   Info &info = infos_[completed_ % kInfos];
   info.samples = bytes * 8 / width_;
   info.flags = flags;
+  if (rep_trig_) data_pos_ += bytes;   // a repeat with a trigger: the segments' bytes one after another
   __atomic_thread_fence(__ATOMIC_RELEASE);
   fill_ = 0;
   if (segment_count_) fill_slot_ = (fill_slot_ + 1) % segment_count_;
@@ -662,7 +847,7 @@ void LogicCapture::loseSegment() {
     stage_cur_ = -1;
     stage_fill_ = 0;
   } else {
-    lost_pos_ = fill_ ? infos_[completed_ % kInfos].position : captured_;
+    lost_pos_ = fill_ ? infos_[completed_ % kInfos].position : rep_trig_ ? static_cast<uint64_t>(data_pos_) : captured_;
     fill_ = 0;
   }
   __atomic_thread_fence(__ATOMIC_RELEASE);
@@ -801,12 +986,14 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   range[8] = 1;                                    // any value in range (fractional divider)
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);   // max(u8)
-  // immediate, level, edge (one-shot); the most pretrigger the ring can give back (the narrowest sample)
+  // immediate, level, edge (one-shot and repeat), linked (one-shot); the most pretrigger the ring can give back (the
+  // narrowest sample)
   uint8_t trig[9];                                 // types(u32) max_pretrigger(u32) opts(u8)
   putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge) |
                            (1u << cap::kTriggerLinked),
                  kSegmentBytes * 8 - 1, kTriggerOpts);   // at w = 1 (below the segment); a wider sample's is less
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
+  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.10)
   // beyond 0 (capture §3.5): 1 the logic blocks (streaming over the vendor port's stages: configure says), 4 the test
   // sequence
   const uint8_t formats[] = {cap::kDataFormatLogicBlocks, cap::kDataFormatTestCounter};
@@ -859,9 +1046,11 @@ void LogicCapture::planRelease() {
 // read finds nothing, status and segments count none.
 void LogicCapture::forget() {
   mode_ = cap::kModeOneShot;
-  triggered_ = follow_ = linked_ = false;
+  triggered_ = follow_ = linked_ = rep_trig_ = false;
+  rearm_ = 0;
   trig_type_ = 0;
   pretrigger_ = 0;
+  record_next_ = 0;
   samples_ = bytes_ = filled_ = kept_samples_ = 0;
   kept_short_ = false;
   trig_phase_ = 0;
@@ -1055,17 +1244,17 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (rate > limit) rate = limit;
   }
   uint32_t samples = samples_tlv.v ? getU32(samples_tlv.v) : 0, segments = segments_tlv.v ? getU32(segments_tlv.v) : 0;
-  // type(u8) role(u8) value(u32): level and edge in a one-shot (repeat and streaming start at once: immediate only).
+  // type(u8) role(u8) value(u32): level and edge in a one-shot and a repeat (streaming starts at once: immediate only).
   // A role outside the plan is refused unavailable cause 6 below, after every unsupported value (core §4.3).
   uint8_t trig_type = 0, trig_role = 0;
   uint32_t trig_value = 0;
   uint32_t pretrigger = 0;
   if (const uint8_t *v = trigger_tlv.v) {
     const uint32_t value = getU32(v + 2);
+    const bool level_edge = (v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2);
     const bool ok = v[0] == cap::kTriggerImmediate ||
-                    (mode == cap::kModeOneShot &&
-                     ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2) ||
-                      v[0] == cap::kTriggerLinked));   // the group's trigger source (§4.4): role and value not looked at
+                    (mode == cap::kModeOneShot && (level_edge || v[0] == cap::kTriggerLinked)) ||   // linked: §4.4
+                    (mode == cap::kModeRepeat && level_edge);   // every segment's, rearm 1 (§2.1)
     if (!ok) return Tail::refuse(kTagTrigger, trigger_tlv.critical, out, capacity);
     trig_type = v[0];
     trig_role = v[1];
@@ -1112,8 +1301,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
       !(blocks_format && mode == cap::kModeStreaming && endpoint_.directCapable() && channels_ <= 8))   // w 8: the fast path
     return Tail::refuse(cap::kTlvConfigureFormat, format_tlv.critical, out, capacity);
   if (pretrigger_tlv.v) pretrigger = getU32(pretrigger_tlv.v);   // checked against samples below
-  // format 1 takes its samples a byte each (w 8, up to 8 lines): the encoder's fast path works on bytes
-  const uint8_t width = blocks_format && widthFor(channels_) < 8 ? 8 : widthFor(channels_);
+  // format 1 takes its samples a byte each (w 8, up to 8 lines): the encoder's fast path works on bytes; so does a repeat
+  // with a trigger, whose segments start at any sample (pretrigger before the trigger exactly, §3.3: a byte a sample
+  // needs no shift)
+  const bool rep_trig = mode == cap::kModeRepeat && trig_type != cap::kTriggerImmediate;
+  const uint8_t width = (blocks_format || rep_trig) && widthFor(channels_) < 8 ? 8 : widthFor(channels_);
   // streaming's ceiling: the harvest copies the DMA ring into stages (or the FIFO) at about kStreamMaxBytes a second;
   // above it the ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture
   // §3.3), as the one-shot's ceiling above (P4X, 2026-10-20: 40 MHz w 8 kept, formats 0 and 4, 40.15 MB/s on the wire
@@ -1211,6 +1403,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   const bool triggered = mode == cap::kModeOneShot && trig_type != cap::kTriggerImmediate;
   if (!query && (triggered || mode != cap::kModeOneShot) && !takeRing())
     return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+  if (!query && rep_trig && opts.rearm && !records_) {   // rearm 1's records (§3.10): taken once, kept
+    records_ = static_cast<TriggerRecord *>(heap_caps_malloc(sizeof(TriggerRecord) * kTriggerRecords, MALLOC_CAP_SPIRAM));
+    if (!records_) records_ = static_cast<TriggerRecord *>(heap_caps_malloc(sizeof(TriggerRecord) * kTriggerRecords, MALLOC_CAP_8BIT));
+    if (!records_) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+  }
 
   uint32_t num = 0, den = 1;
   if (query) {
@@ -1272,6 +1469,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   }
   if (!query) {
     triggered_ = triggered;
+    rep_trig_ = rep_trig;
+    rearm_ = opts.rearm;
     linked_ = trig_type == cap::kTriggerLinked;
     trig_type_ = trig_type;
     trig_role_ = trig_role;
@@ -1413,6 +1612,18 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   paused_ = false;
   gap_pending_ = false;
   reported_ = 0;
+  // a repeat with a trigger: waiting for the first segment's (state 2), arming from the start
+  rep_wait_ = rep_trig_;
+  rep_started_ = !rep_trig_;
+  floor_sample_ = 0;
+  arm_from_ = arm_ ? pre() : 0;
+  data_pos_ = 0;
+  record_next_ = 0;
+  found_head_ = found_tail_ = 0;
+  span_count_ = 0;
+  have_level_ = level_false_ = false;
+  force_ = false;
+  force_sample_ = 0;
   if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
@@ -1426,7 +1637,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (parlio_rx_unit_receive(unit_, rx_ring_, rx_ring_bytes_, &rc) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
   start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
   if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { stopRepeat(); fail(cap::kErrorPeripheral); return failed(); }
-  state_ = kStateCapturing;
+  state_ = rep_trig_ ? kStateWaiting : kStateCapturing;
   generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
   putU32(out, generation_);
   return completed(4);
@@ -1529,7 +1740,7 @@ size_t LogicCapture::infoBytes(const Info &info, uint8_t *out) const {
   putU32(out + 12, info.samples);
   putU64(out + 16, info.start_ns);
   putU32(out + 24, kStartUncertaintyNs);
-  putU32(out + 28, 0xFFFFFFFFu);
+  putU32(out + 28, info.trigger_index);
   out[32] = info.flags;
   putU32(out + 33, generation_);
   return kInfoBytes;
@@ -1589,6 +1800,10 @@ void LogicCapture::poll() {
     return;
   }
   if (mode_ == 2 || mode_ == 3) {
+    if (rep_trig_) {   // a repeat with a trigger: the first one found (state 2 -> 3); the triggered events
+      if (state_ == kStateWaiting && rep_started_) state_ = kStateCapturing;
+      reportFound();
+    }
     if (mode_ == 2 && (state_ == kStateCapturing || state_ == kStatePaused)) state_ = paused_ ? kStatePaused : kStateCapturing;
     while (reported_ != completed_) {
       if (subscribed_ && mode_ == 2) {   // streaming sends no segment events (its data frames carry the positions)
@@ -1751,7 +1966,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         }
         return completed();
       }
-      if ((mode_ == 2 || mode_ == 3) && (state_ == kStateCapturing || state_ == kStatePaused)) {
+      if ((mode_ == 2 || mode_ == 3) && (state_ == kStateCapturing || state_ == kStatePaused || (rep_trig_ && state_ == kStateWaiting))) {
         stopRepeat();
         poll();
         if (state_ == kStateError) return completed();   // a hole before the stop: stopped on it (§2.2)
@@ -1800,11 +2015,14 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(out + 1, completed_);
         // the next byte to write, the dropped ones counted (oep-if-capture §3.2); stopped on a hole, the start of the
         // segment it was in (§2.2)
-        putU64(out + 5, lost_ ? lost_pos_ : format_ == cap::kDataFormatLogicBlocks ? enc_pos_ : static_cast<uint64_t>(captured_));
+        putU64(out + 5, lost_ ? lost_pos_ : format_ == cap::kDataFormatLogicBlocks ? enc_pos_
+                        : rep_trig_ ? data_pos_ + fill_ : static_cast<uint64_t>(captured_));
         // flags (oep-if-capture §3.2): bit0 the probe dropped data - the chunk queue full, the DMA ring overrun, no free
         // stage, streaming's new data discarded with every segment unsent (§2.1 rule 1; a repeat with no free segment
         // pauses instead, state 5). bit1 (a sample taken a sample period or more late) never: PARLIO keeps its clock.
         out[13] = (lost_ || queue_overflow_ || overruns_ || stage_drops_ || (mode_ == 3 && dropped_)) ? cap::kStatusFlagDropped : 0;
+        // bit2: rearm 1, between segments waiting for the next one's trigger (§3.2: now, not since start)
+        if (rep_trig_ && rearm_ && rep_wait_ && rep_started_ && state_ == kStateCapturing) out[13] |= cap::kStatusFlagRearmWaiting;
       } else if (triggered_) {
         putU32(out + 1, kept_samples_ ? 1 : 0);   // the segment, complete or cut short by stop
         // the segment's bytes so far (a hole: its start, §2.2)
@@ -1950,13 +2168,39 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       return completed();
     }
     case kOpForce:   // waiting for the trigger: the trigger is the sample of this instant; otherwise nothing to do
-      if (state_ == kStateWaiting && trig_phase_ == 0 && !force_) {
+      // (a repeat with a trigger: also rearm 1's wait between segments, §2.1)
+      if (((state_ == kStateWaiting && trig_phase_ == 0) || (rep_trig_ && rep_wait_ && state_ == kStateCapturing)) && !force_) {
         const uint64_t now = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
         force_sample_ = samplesIn(now > start_ns_ ? now - start_ns_ : 0, rate_num_, rate_den_);
         __atomic_thread_fence(__ATOMIC_RELEASE);   // the harvest task (the other core) reads it once force_ is set
         force_ = true;
       }
       return completed();
+    case kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.10)
+      const Result parsed = plainTail(tail, p, n, 8, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
+      if (capacity < 2) return failed();
+      poll();
+      constexpr size_t kRecordBytes = 24;   // serial(u32) sample(u64) trigger_ns(u64) uncertainty_ns(u32)
+      const uint32_t next = rep_trig_ && records_ ? static_cast<uint32_t>(record_next_) : 0;
+      __atomic_thread_fence(__ATOMIC_ACQUIRE);
+      const uint32_t kept = next < kTriggerRecords ? next : kTriggerRecords;
+      uint32_t k = serialPageStart(getU32(p + 4), next - kept, next);   // common §1.3's serial paging
+      uint8_t count = 0;
+      size_t used = 2;
+      for (; k != next && used + kRecordBytes <= capacity && count < 255; ++k, ++count) {
+        const TriggerRecord &r = records_[k % kTriggerRecords];
+        putU32(out + used, r.serial);
+        putU64(out + used + 4, r.sample);
+        putU64(out + used + 12, r.ns);
+        putU32(out + used + 20, r.uncertainty);
+        used += kRecordBytes;
+      }
+      out[0] = k != next ? 1 : 0;
+      out[1] = count;
+      return completed(used);
+    }
     default:
       return rejected(kRejectUnknownOperation);
   }

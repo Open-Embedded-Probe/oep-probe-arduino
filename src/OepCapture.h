@@ -50,7 +50,7 @@ class LogicCapture final : public Interface, public GroupTrack {
     kOpStop = reg::fixture_logic::kOpStop, kOpForce = reg::fixture_logic::kOpForce,
     kOpStatus = reg::fixture_logic::kOpStatus, kOpRead = reg::fixture_logic::kOpRead,
     kOpSegments = reg::fixture_logic::kOpSegments, kOpRelease = reg::fixture_logic::kOpRelease,
-    kOpQuery = reg::fixture_logic::kOpQuery,
+    kOpQuery = reg::fixture_logic::kOpQuery, kOpTriggers = reg::fixture_logic::kOpTriggers,
   };
   enum : uint8_t {
     kStateUnconfigured = reg::fixture_logic::kStateUnconfigured, kStateConfigured = reg::fixture_logic::kStateConfigured,
@@ -59,7 +59,9 @@ class LogicCapture final : public Interface, public GroupTrack {
     kStateError = reg::fixture_logic::kStateError,
   };
   static constexpr uint8_t kMaxChannels = 16;
-  static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsWhen1;   // describe trigger opts
+  // describe trigger opts: arm 0, when 1, and rearm 1 (a repeat's every segment its own trigger, capture §2.1)
+  static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsRearm | kTriggerOptsWhen1;
+  static constexpr uint16_t kTriggerRecords = 64;   // describe trigger_records: rearm 1's records kept (capture §3.10)
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
   // a triggered one-shot's segment, copied out of the ring: up to this (and the store's room) at this rate or below
   static constexpr size_t kTriggeredSegmentMax = 16 * 1024 * 1024;
@@ -96,7 +98,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
   // every op of capture §3.2 (query and force optional, in the ops tag; calibration is analog's)
-  bool offers(uint8_t op) const override { return opIn(op, kOpConfigure, kOpQuery); }
+  // and triggers (rearm 1's records, §3.10: required with the opts' rearm bit)
+  bool offers(uint8_t op) const override { return opIn(op, kOpConfigure, kOpQuery) || op == kOpTriggers; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
@@ -335,7 +338,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   Open openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den);
   void pollTriggered();
   // slot: the store slot holding it (the serial wraps at 2^32, capture §2.2: not a multiple of segment_count_)
-  struct Info { uint32_t serial; uint64_t position; uint32_t samples; uint64_t start_ns; uint8_t flags; uint32_t slot; };
+  // (in this order: 40 bytes, no padding added by trigger_index - kInfos of them in internal RAM, the stages' room)
+  struct Info { uint32_t serial; uint32_t trigger_index; uint64_t position; uint32_t samples; uint32_t slot; uint64_t start_ns;
+                uint8_t flags; };   // trigger_index: a repeat with a trigger's (0xFFFFFFFF: none)
   // serial u32, position u64, samples u32, start_ns u64, start_uncertainty_ns u32, trigger_index u32, flags u8, generation u32
   static constexpr size_t kInfoBytes = 37;
   size_t storeMax() const;   // the most bytes the segment store can ever take (describe mode: the maximum, not the free)
@@ -378,6 +383,34 @@ class LogicCapture final : public Interface, public GroupTrack {
   static bool partialReceive(parlio_rx_unit_handle_t, const parlio_rx_event_data_t *, void *context);
   static void harvestTask(void *context);
   void harvest(const Chunk &chunk);
+  // A repeat with a trigger (capture §2.1): the first segment starts pretrigger samples before the trigger; rearm 0 the
+  // segments after it follow on, rearm 1 each waits for its own trigger from the last one's end (rep_wait_; arm 1:
+  // once its pretrigger is in). The samples are whole bytes (w 8 or 16), so a segment starts at a byte. Its positions
+  // are the segments' bytes one after another (data_pos_: the time waited for a trigger takes none; the bytes discarded
+  // while paused count, as a plain repeat's). The ring's recent chunks are mapped (spans_) for the pretrigger.
+  bool rep_trig_ = false;
+  uint8_t rearm_ = 0;
+  volatile bool rep_wait_ = false;             // looking for the next segment's trigger (harvest task)
+  volatile bool rep_started_ = false;          // the first segment's trigger found (state 2 -> 3)
+  uint64_t arm_from_ = 0;                      // the first sample a trigger may be at (arming: the floor and arm 1's pretrigger)
+  uint64_t floor_sample_ = 0;                  // the first sample the next segment may hold (the last one's end)
+  volatile uint64_t data_pos_ = 0;             // the next segment's position
+  uint32_t seg_trigger_index_ = 0xFFFFFFFFu;   // the segment being filled's (an Info's when it starts)
+  void harvestRepeatTriggered(const Chunk &chunk);
+  bool harvestRepeatTrigger(const Chunk &chunk, uint64_t base, size_t &at);   // waiting: the trigger found -> the segment begun
+  void beginTriggeredSegment(uint64_t trigger, uint64_t base);
+  // rearm 1's records (§3.10): serial (from 0 in the generation), the original sample, ns, uncertainty
+  struct TriggerRecord { uint64_t sample; uint64_t ns; uint32_t serial; uint32_t uncertainty; };   // 24 bytes
+  TriggerRecord *records_ = nullptr;   // kTriggerRecords of them, taken by the first rearm 1 configure (PSRAM when there is some)
+  volatile uint32_t record_next_ = 0;
+  // the triggered events found by the harvest, sent from loop() (poll): serial index record sample
+  struct TriggerFound { uint64_t sample; uint32_t serial, index, record; };
+  static constexpr size_t kFound = 16;
+  TriggerFound found_[kFound] = {};
+  volatile uint32_t found_head_ = 0;
+  uint32_t found_tail_ = 0;
+  void reportFound();
+  bool copyStreamTo(uint8_t *dst, uint64_t from, uint64_t to);   // stream bytes [from, to) to dst; false: not all held
   size_t harvestDirect(const Chunk &chunk, size_t at);   // -> where it got to (short: no stage free yet)
   uint32_t ring_peak_ = 0;   // the most the stream ring held unharvested since the start (bytes; capture-drops)
   bool held_ = false;        // the harvest's chunk not all taken (held_chunk_ from held_at_): no stage was free

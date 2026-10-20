@@ -1,6 +1,23 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The P4's logic: a repeat takes a level or an edge trigger, and trigger_opts' rearm 1 (capture §2.1, §3.10;
+  wireskein's ask). The first segment starts pretrigger samples before its trigger (trigger_index = pretrigger, arm 1);
+  with rearm 0 the segments after it follow on, with rearm 1 each waits for its own trigger from the last one's end
+  (status flags bit2 meanwhile; force works in the wait; flags bit3, and bit0 when not straight after). A record for
+  every rearm trigger (`triggers`, op 0x1B; describe trigger_records 64; the opts declare rearm), a triggered event for
+  every segment's trigger. Positions are the segments' bytes one after another (the wait takes none). Its samples are a
+  byte each (w 8 on up to 8 lines) so that a segment starts at any sample. Host-tested only (test_capture's
+  testRepeatTrigger); not yet on the bench.
+- (JA) P4 のロジック: repeat で level と edge のトリガ、trigger_opts の rearm 1 を受けるようにした（capture §2.1、§3.10。wireskein の依頼）。
+  - 最初の区画は、トリガの pretrigger サンプル前から始まる（arm 1 では trigger_index = pretrigger）。
+  - rearm 0 では、その後の区画は続けて取る。rearm 1 では、各区画が前の区画の終わりから自分のトリガを待つ。待つ間は status の
+    flags bit2 が立ち、force も効く。区画の flags には bit3 が立ち、前の区画の直後でなければ bit0 も立つ。
+  - rearm のトリガごとに記録を残す（`triggers`、op 0x1B。describe の trigger_records は 64。opts に rearm を宣言する）。区画のトリガ
+    ごとに triggered の出来事を送る。
+  - position は区画のバイトをつないだ位置（待った間は数えない）。区画をどのサンプルからでも始められるよう、サンプルは 1 バイト
+    ずつ取る（8 本までは w 8）。
+  - ホストの試験（test_capture の testRepeatTrigger）だけで確かめた。実機ではまだ確かめていない。
 
 ## 0.0.35
 - (EN) A triggered one-shot (an edge, a level, linked) is no longer bound to the DMA's one receive (64 KiB): its segment

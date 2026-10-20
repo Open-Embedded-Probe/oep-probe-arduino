@@ -62,6 +62,7 @@ struct Config {
   uint32_t pretrigger = 0;
   bool arm0 = false;         // trigger_opts arm 0 (capture §3.3): looked at from the start, an early trigger shortens
   bool linked = false;       // the linked trigger (§4.4): the group's trigger source cuts it
+  bool rearm = false;        // trigger_opts rearm 1 (capture §2.1): every segment its own trigger
 };
 
 static Bytes request(const Config &c) {
@@ -78,7 +79,7 @@ static Bytes request(const Config &c) {
     tlv(p, kCrit | cap::kTlvConfigureTrigger, t);
   }
   if (c.pretrigger) tlv(p, kCrit | cap::kTlvConfigurePretrigger, u32(c.pretrigger));
-  if (c.arm0) tlv(p, kCrit | cap::kTlvConfigureTriggerOpts, {0, 0, 0, 0, 0, 0, 0});
+  if (c.arm0 || c.rearm) tlv(p, kCrit | cap::kTlvConfigureTriggerOpts, {uint8_t(c.arm0 ? 0 : 1), uint8_t(c.rearm ? 1 : 0), 0, 0, 0, 0, 0});
   return p;
 }
 
@@ -264,7 +265,7 @@ static void testValuesRefused() {
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureRate)});
       p = base(bit, cap::kTlvConfigureMode);
       tlv(p, kCrit | cap::kTlvConfigureMode, {2});
-      tlv(p, bit | cap::kTlvConfigureTrigger, edge);                              // an edge in repeat
+      tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerLinked, 0, 0, 0, 0, 0});   // linked in repeat (one-shot only)
       CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnsupported) && out == Bytes{uint8_t(bit | cap::kTlvConfigureTrigger)});
       p = base(bit);
       tlv(p, bit | cap::kTlvConfigureTrigger, {cap::kTriggerLevel, 0, 2, 0, 0, 0}); // a level of 2
@@ -377,8 +378,10 @@ static void testDescribe() {
     if (tag == cap::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == LogicCapture::kMaxChannels); }
     CHECK(tag < 0x40 || tag == cap::kTlvDescribeMode || tag == cap::kTlvDescribeRateRange ||
           tag == cap::kTlvDescribeChannels || tag == cap::kTlvDescribeTrigger || tag == cap::kTlvDescribeFormats ||
-          tag == cap::kTlvDescribeCarriage);
-    if (tag == cap::kTlvDescribeTrigger)   // types max_pretrigger opts (capture §3.5): arm 0 and when 1 beyond the defaults
+          tag == cap::kTlvDescribeCarriage || tag == cap::kTlvDescribeTriggerRecords);
+    if (tag == cap::kTlvDescribeTriggerRecords)   // rearm 1's records (§3.10: with the opts' rearm bit)
+      CHECK(len == 2 && getU16(d.data() + at + kTlvHeader) == LogicCapture::kTriggerRecords);
+    if (tag == cap::kTlvDescribeTrigger)   // types max_pretrigger opts (capture §3.5): arm 0, rearm 1, when 1 beyond the defaults
       CHECK(len == 9 && d[at + kTlvHeader + 8] == LogicCapture::kTriggerOpts);
     if (tag == cap::kTlvDescribeFormats)
       CHECK(len == 2 && d[at + kTlvHeader] == cap::kDataFormatLogicBlocks && d[at + kTlvHeader + 1] == cap::kDataFormatTestCounter);
@@ -386,8 +389,8 @@ static void testDescribe() {
   CHECK(modes == 3 && channels);
 }
 
-// capture §1 format 4 and §3.3 trigger_opts: the test sequence answered, another format refused; arm 0 and when 1
-// taken, rearm 1 and a hysteresis refused (not declared), a short value malformed.
+// capture §1 format 4 and §3.3 trigger_opts: the test sequence answered, another format refused; arm 0, rearm 1 and
+// when 1 taken, a hysteresis refused (not declared), a short value malformed.
 static void testFormatAndTriggerOpts() {
   board(512 * 1024, size_t(32) << 20);
   Rig rig(2);
@@ -410,12 +413,12 @@ static void testFormatAndTriggerOpts() {
   c.trigger = true;
   c.pretrigger = 8;
   const uint8_t opts = kCrit | cap::kTlvConfigureTriggerOpts;
-  for (const Bytes &v : {Bytes{0, 0, 0, 0, 0, 0, 0}, Bytes{1, 0, 1, 0, 0, 0, 0}, Bytes{1, 0, 0, 0, 0, 0, 0}}) {
+  for (const Bytes &v : {Bytes{0, 0, 0, 0, 0, 0, 0}, Bytes{1, 0, 1, 0, 0, 0, 0}, Bytes{1, 0, 0, 0, 0, 0, 0}, Bytes{1, 1, 0, 0, 0, 0, 0}}) {
     p = request(c);
     tlv(p, opts, v);
     CHECK(ok(raw(rig.cap, LogicCapture::kOpQuery, p, out)));
   }
-  for (const Bytes &v : {Bytes{1, 1, 0, 0, 0, 0, 0}, Bytes{1, 0, 0, 5, 0, 0, 0}, Bytes{2, 0, 0, 0, 0, 0, 0}}) {
+  for (const Bytes &v : {Bytes{1, 0, 0, 5, 0, 0, 0}, Bytes{2, 0, 0, 0, 0, 0, 0}}) {
     p = request(c);
     tlv(p, opts, v);
     CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectUnsupported) && out == Bytes{opts});
@@ -1494,8 +1497,77 @@ static void testForcedAfterWrap() {
   }
 }
 
+// A repeat with a trigger (capture §2.1, §3.10): the samples a byte each (w 8 on 2 lines); waiting in state 2 until the
+// first trigger; each segment pretrigger samples before its trigger (trigger_index = pretrigger, arm 1); rearm 1: the
+// next waits for its own trigger from the last one's end (status flags bit2 meanwhile), its flags bit3 and bit0 (not
+// straight after), a record each (triggers), positions the segments' bytes one after another; a force in the wait;
+// rearm 0: the segments after the first follow on.
+static void testRepeatTrigger() {
+  board(512 * 1024, size_t(32) << 20);
+  for (const bool rearm : {true, false}) {
+    Rig rig(2);
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.mode = 2;
+    c.samples = 4096;   // 4096 bytes at w 8
+    c.segments = 4;
+    c.trigger = true;   // a falling edge on role 0
+    c.pretrigger = 100;
+    c.rearm = rearm;
+    CHECK(ok(configure(rig.cap, c, out)));
+    uint32_t samples = 0;
+    CHECK(findU32(out, cap::kTlvConfigureAnswerActualSamples, samples) && samples == 4096);
+    CHECK(hasTag(out, cap::kTlvConfigureAnswerLayout));
+    for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+      if (out[at] == cap::kTlvConfigureAnswerLayout) CHECK(out[at + kTlvHeader] == 8);   // w 8: a segment starts at any sample
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    const uint32_t generation = getU32(out.data());
+    dma.deliver(1000, 0xFF);
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateWaiting && getU64(out.data() + 5) == 0);
+    dma.deliver(5000, 0x00);   // the edge at sample 1000: the segment 900 - 4995
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateCapturing && getU32(out.data() + 1) == 1);
+    CHECK(getU64(out.data() + 5) == (rearm ? 4096u : 4096u + 1004u));
+    CHECK(((out[13] & cap::kStatusFlagRearmWaiting) != 0) == rearm && !(out[13] & cap::kStatusFlagDropped));
+    dma.deliver(2000, 0xFF);
+    dma.deliver(5000, 0x00);   // rearm 1: the next edge at sample 8000, the segment 7900 - 11995
+    dma.run();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 2);
+    CHECK(getU32(out.data() + 2 + 12) == 4096 && getU32(out.data() + 2 + 28) == 100);   // trigger_index = pretrigger
+    CHECK(out[2 + 32] == (rearm ? cap::kSegmentFlagRearm : 0) && getU64(out.data() + 2 + 4) == 0);
+    const uint8_t *second = out.data() + 2 + 37;
+    CHECK(getU64(second + 4) == 4096);   // the segments' bytes one after another
+    if (rearm) {
+      CHECK(getU32(second + 28) == 100 && second[32] == (cap::kSegmentFlagRearm | cap::kSegmentFlagGap));
+      CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096 + 99, 2), out)) && getU16(out.data() + 9) == 2 &&
+            out[11] == 0xFF && out[12] == 0x00);   // the edge at its trigger_index
+      Bytes q(8);
+      putU32(q.data(), generation);
+      CHECK(ok(raw(rig.cap, LogicCapture::kOpTriggers, q, out)) && out[0] == 0 && out[1] == 2 && out.size() == 2 + 2 * 24);
+      CHECK(getU32(out.data() + 2) == 0 && getU64(out.data() + 2 + 4) == 1000 && getU32(out.data() + 26) == 1 &&
+            getU64(out.data() + 26 + 4) == 8000);
+      putU32(q.data(), generation + 1);
+      CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpTriggers, q, out), kRejectUnavailable));   // another generation
+      // a force in the wait: the segment from that instant's sample
+      CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && (out[13] & cap::kStatusFlagRearmWaiting));
+      CHECK(ok(raw(rig.cap, LogicCapture::kOpForce, {}, out)));
+      dma.deliver(8192, 0x00);
+      dma.run();
+      CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && getU32(out.data() + 1) >= 3);
+    } else {
+      CHECK(getU32(second + 28) == 0xFFFFFFFFu && second[32] == 0);   // straight after, no trigger of its own
+      CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 4096, 4), out)) && out[11] == 0x00);
+    }
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateConfigured);
+  }
+}
+
 int main() {
   testForcedAfterWrap();
+  testRepeatTrigger();
   testTriggerIndexMidByte();
   testLongTriggeredSegment();
   testForcedAndEarly();
