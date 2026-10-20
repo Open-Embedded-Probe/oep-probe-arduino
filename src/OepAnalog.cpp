@@ -88,6 +88,12 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   putU32(mode + 1, kMaxBytes / 2);
   putU32(mode + 5, 1);
   w.put(ana::kTlvDescribeMode, mode, sizeof mode);
+#if defined(OEP_ANALOG_ESP)
+  mode[0] = ana::kModeStreaming;                 // streaming: segments of kStreamSegmentBytes, pushed (a subscription)
+  putU32(mode + 1, kStreamSegmentBytes / 2);
+  putU32(mode + 5, kStreamSegments);
+  w.put(ana::kTlvDescribeMode, mode, sizeof mode);
+#endif
   uint8_t range[9];
   putU32(range, kMinTotalHz);
   putU32(range + 4, kMaxTotalHz);
@@ -164,6 +170,7 @@ void AnalogCapture::planRelease() {
 // finds nothing (the buffer was sized for the old channels), status and segments count none.
 void AnalogCapture::forget() {
   state_ = ana::kStateUnconfigured;
+  mode_ = ana::kModeOneShot;
   frames_ = samples_ = 0;
   short_ = trig_slipped_ = follow_ = segment_ = lost_ = linked_ = false;
   trig_type_ = 0;
@@ -219,7 +226,13 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   // a channel count for what follows; without a plan, one (the plan's refusal follows)
   const uint8_t count = channels_ ? channels_ : 1;
   const uint8_t planned = channels_ ? channels_ : kMaxChannels;
-  if (mode_tlv.v[0] != ana::kModeOneShot)
+  // one-shot; streaming on the ESP build (its drain feeds a ring the pushes take from, capture §2.1)
+#if defined(OEP_ANALOG_ESP)
+  const bool stream = mode_tlv.v[0] == ana::kModeStreaming;
+#else
+  const bool stream = false;
+#endif
+  if (mode_tlv.v[0] != ana::kModeOneShot && !stream)
     return Tail::refuse(ana::kTlvConfigureMode, mode_tlv.critical, out, capacity);
   // a rate outside rate_range is refused (capture §3.3); inside it, more channels share the ADC: the nearest its
   // conversions a second allow for the channel count
@@ -232,15 +245,17 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   const Result misplaced = captureMisplaced(mode_tlv.v[0], ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv),
                                             ask(pretrigger_tlv), out, capacity);
   if (refused(misplaced)) return misplaced;
-  uint32_t samples = getU32(samples_tlv.v);
+  // streaming takes no samples (captureMisplaced refused it): its segments are the probe's, kStreamSegmentBytes
+  uint32_t samples = stream ? kStreamSegmentBytes / (2u * count) : getU32(samples_tlv.v);
   // type(u8) role(u8) value(u32): the ADC value crossed up (from below to at or above) or down (above to at or below).
   // A role outside the plan is refused unavailable cause 6 below, after every unsupported value (core §4.3).
   uint8_t trig_type = ana::kTriggerImmediate, trig_role = 0;
   uint32_t trig_value = 0;
   if (const uint8_t *v = trigger_tlv.v) {
     const uint32_t value = getU32(v + 2);
-    const bool ok = v[0] == ana::kTriggerImmediate || v[0] == ana::kTriggerLinked ||   // linked: the group's (§4.4)
-                    ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && value <= kFull);
+    const bool ok = v[0] == ana::kTriggerImmediate ||
+                    (!stream && (v[0] == ana::kTriggerLinked ||   // linked: the group's (§4.4)
+                                 ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && value <= kFull)));
     if (!ok) return Tail::refuse(ana::kTlvConfigureTrigger, trigger_tlv.critical, out, capacity);
     trig_type = v[0];
     trig_role = v[1];
@@ -253,7 +268,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
 #if defined(OEP_ANALOG_RP2)
   if (trig_type) most = kRingBytes / 4 / count;   // half the ring: the DMA runs on while poll sees it is full
 #endif
-  if (samples > most) samples = most;
+  if (samples > most && !stream) samples = most;
   uint32_t pretrigger = 0;
   if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger (above), in the segment: less than samples and
     pretrigger = getU32(v);                    // max_pretrigger, and (ESP32) kPretriggerRoom short of the segment's end
@@ -307,11 +322,14 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     if (trig_type && !ring_) ring_ = static_cast<uint16_t *>(aligned_alloc(kRingBytes, kRingBytes));   // the DMA's ring
     if (trig_type && !ring_) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
 #endif
-    const size_t bytes = static_cast<size_t>(samples) * channels_ * 2u;
+    // the segment; streaming, the ring of kStreamSegments segments
+    const size_t bytes = static_cast<size_t>(samples) * channels_ * 2u * (stream ? kStreamSegments : 1u);
     uint16_t *buffer = static_cast<uint16_t *>(realloc(buffer_, bytes));
     if (!buffer) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
     buffer_ = buffer;
     trig_type_ = trig_type;
+    mode_ = mode_tlv.v[0];
+    seg_frames_ = stream ? samples : 0;
     linked_ = trig_type == ana::kTriggerLinked;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
@@ -339,7 +357,9 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   uint8_t layout[4 + kMaxChannels] = {16, 0, 12, channels_};
   for (uint8_t m = 0; m < channels_; ++m) layout[4 + m] = order[m];
   w.put(ana::kTlvConfigureAnswerLayout, layout, 4u + channels_);
-  w.u32(ana::kTlvConfigureAnswerActualSamples, samples);   // one-shot: no actual_segments (capture §3.3)
+  // one-shot: actual_samples, no actual_segments; streaming: neither, and stream_buffer (capture §3.3)
+  if (stream) w.u32(ana::kTlvConfigureAnswerStreamBuffer, samples * channels_ * 2u * kStreamSegments);
+  else w.u32(ana::kTlvConfigureAnswerActualSamples, samples);
   for (uint8_t k = 0; k < channels_; ++k) {
     const Frontend &f = *frontendOf(chosen[k]);
     uint8_t scale[9] = {k};
@@ -365,8 +385,9 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
 #endif
   ref[5] = 0;   // nominal
   w.put(ana::kTlvConfigureAnswerReference, ref, sizeof ref);
-  // judging a capture-group's condition (§4.4): the longest from the crossing's sample to the group knowing it (§3.3)
-  w.u32(ana::kTlvConfigureAnswerJudgeLatencyNs, static_cast<uint32_t>(latencyNs(total_hz)));
+  // judging a capture-group's condition (§4.4, a one-shot): the longest from the crossing's sample to the group
+  // knowing it (§3.3)
+  if (!stream) w.u32(ana::kTlvConfigureAnswerJudgeLatencyNs, static_cast<uint32_t>(latencyNs(total_hz)));
   return w.ok() ? completed(w.length()) : failed();
 }
 
@@ -433,11 +454,18 @@ bool AnalogCapture::startNow() {
   trig_reported_ = trig_type_ == 0 && !follow_;   // every track of a trigger source's group sends its own (§4.4)
   ext_ready_ = false;
   phase_ = 0;
-  end_frame_ = ringMode() ? UINT32_MAX : samples_;
+  end_frame_ = ringMode() || streaming() ? UINT32_MAX : samples_;
+  sent_seg_ = 0;
+  sent_off_ = 0;
+  cur_seg_ = 0;
+  cur_ok_ = prev_ok_ = true;
+  for (uint32_t k = 0; k < kStreamSegments; ++k) { slot_seg_[k] = UINT32_MAX; slot_gap_[k] = false; }
+  stream_dropped_ = false;
 #if defined(OEP_ANALOG_RP2)
   ring_len_ = ringMode() ? kRingBytes / 2 : samples_ * channels_;
 #else
-  ring_len_ = (follow_ && follow_frames_ > samples_ ? follow_frames_ : samples_) * channels_;
+  ring_len_ = streaming() ? seg_frames_ * kStreamSegments * channels_
+                          : (follow_ && follow_frames_ > samples_ ? follow_frames_ : samples_) * channels_;
 #endif
 #if defined(OEP_ANALOG_ESP)
   adc_continuous_handle_cfg_t hc = {};
@@ -585,6 +613,21 @@ void AnalogCapture::finish() {
 // complete (state 4, stopped 0).
 void AnalogCapture::stopNow() {
   if (state_ != ana::kStateWaiting && state_ != ana::kStateCapturing) return;
+#if defined(OEP_ANALOG_ESP)
+  if (streaming()) {   // what came in is pushed after the stop as well (§2.1 streaming rule 2)
+    drain();
+    finish();
+    segment_ = false;
+    state_ = ana::kStateConfigured;
+    reported_ = true;
+    if (subscribed_) {
+      uint8_t stopped[6] = {ana::kStoppedReasonHost, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+      putU32(stopped + 2, generation_);
+      endpoint_.event(*this, ana::kEventStopped, stopped, sizeof stopped);
+    }
+    return;
+  }
+#endif
   poll();   // what has come in
   if (state_ != ana::kStateWaiting && state_ != ana::kStateCapturing) return;
   if (state_ == ana::kStateWaiting) {   // no trigger yet: no segment
@@ -679,7 +722,8 @@ void AnalogCapture::drainNow() {
 #endif
       for (uint8_t m = 0; m < channels_; ++m) {
         if (adc_channel_[m] != channel) continue;
-        if (counts_[m] < end_frame_) buffer_[(static_cast<size_t>(counts_[m]) * channels_ + m) % ring_len_] = value;
+        if (counts_[m] < end_frame_ && (!streaming() || storeOk(counts_[m], m)))
+          buffer_[(static_cast<size_t>(counts_[m]) * channels_ + m) % ring_len_] = value;
         ++counts_[m];
         break;
       }
@@ -691,6 +735,8 @@ void AnalogCapture::drainNow() {
       if (overflow_) { overflow_ = false; overflow_seen_ = true; overflow_frame_ = got_; }
       if (phase_ == 0) search();   // after every read: no channel gets further ahead than one read
       if (phase_ == 1 && got_ >= end_frame_) break;
+    } else if (streaming()) {
+      frames_ = low;
     } else {
       frames_ = low < samples_ ? low : samples_;
       if (frames_ >= samples_) break;
@@ -698,6 +744,97 @@ void AnalogCapture::drainNow() {
   }
 }
 #endif
+
+// Streaming, the drain: frame `frame`'s value of slot `slot` goes into the ring when its segment is stored - decided at
+// the segment's first value (slot 0 of its first frame): stored while fewer than kStreamSegments segments wait unsent,
+// else dropped whole (capture §2.1 rule 1). The other slots of a frame come after slot 0's, at most a read behind.
+bool AnalogCapture::storeOk(uint32_t frame, uint8_t slot) {
+  const uint32_t s = frame / seg_frames_;
+  if (slot == 0 && frame % seg_frames_ == 0 && s != cur_seg_) {
+    prev_ok_ = cur_ok_;
+    cur_seg_ = s;
+    cur_ok_ = s - sent_seg_ < kStreamSegments;
+    if (!cur_ok_) stream_dropped_ = true;
+    else {
+      slot_gap_[s % kStreamSegments] = !prev_ok_;
+      slot_seg_[s % kStreamSegments] = s;
+    }
+  } else if (slot == 0 && frame == 0) {
+    cur_seg_ = 0;
+    cur_ok_ = prev_ok_ = true;
+    slot_gap_[0] = false;
+    slot_seg_[0] = 0;
+  }
+  return s == cur_seg_ ? cur_ok_ : s + 1 == cur_seg_ ? prev_ok_ : false;
+}
+
+// Segment s is in the ring: stored, and its slot not taken by a later one since.
+bool AnalogCapture::segStored(uint32_t s) const { return slot_seg_[s % kStreamSegments] == s; }
+
+// Streaming: what can be pushed now - every stored segment's frames complete so far, from the one being sent.
+size_t AnalogCapture::pending() {
+  if (!streaming() || !buffer_ || !seg_frames_ || state_ == ana::kStateUnconfigured) return 0;
+  const uint32_t got = got_;
+  uint64_t n = 0;
+  for (uint32_t s = sent_seg_, k = 0; static_cast<uint64_t>(s) * seg_frames_ < got && k <= kStreamSegments; ++s, ++k) {
+    if (!segStored(s)) continue;
+    const uint32_t end = (s + 1) * seg_frames_ < got ? (s + 1) * seg_frames_ : got;
+    n += end - s * seg_frames_ - (s == sent_seg_ ? sent_off_ : 0);
+  }
+  return static_cast<size_t>(n * channels_ * 2u);
+}
+
+// Streaming push (core §10.2, capture §3.4): position(u64) len(u16) data, then TLV generation and segment_info - the
+// next frames of the segment being sent, complete ones only; a dropped segment skipped (its positions are a gap).
+size_t AnalogCapture::pull(uint8_t *out, size_t capacity) {
+  constexpr size_t kHead = 10, kTail = kTlvHeader + 4 + kTlvHeader + 24;
+  if (!streaming() || !buffer_ || !seg_frames_ || capacity <= kHead + kTail) return 0;
+  const uint32_t got = got_;
+  const uint32_t frame_bytes = channels_ * 2u;
+  while (static_cast<uint64_t>(sent_seg_) * seg_frames_ < got && !segStored(sent_seg_)) {   // dropped: skipped
+    sent_seg_ = sent_seg_ + 1;
+    sent_off_ = 0;
+  }
+  const uint32_t s = sent_seg_;
+  const uint32_t first = s * seg_frames_ + sent_off_;
+  const uint32_t end = (s + 1) * seg_frames_ < got ? (s + 1) * seg_frames_ : got;
+  if (first >= end) return 0;
+  uint32_t n = end - first;
+  const uint32_t room = static_cast<uint32_t>((capacity - kHead - kTail) / frame_bytes);
+  if (n > room) n = room;
+  if (n > 0xFFFF / frame_bytes) n = 0xFFFF / frame_bytes;
+  if (!n) return 0;
+  const size_t bytes = static_cast<size_t>(n) * frame_bytes;
+  putU64(out, static_cast<uint64_t>(first) * frame_bytes);
+  putU16(out + 8, static_cast<uint16_t>(bytes));
+  memcpy(out + kHead, reinterpret_cast<const uint8_t *>(buffer_) + (static_cast<size_t>(first) * channels_ % ring_len_) * 2u, bytes);
+  uint8_t *t = out + kHead + bytes;
+  putTlvHeader(t, ana::kTlvDataGeneration, 4);
+  putU32(t + kTlvHeader, generation_);
+  t += kTlvHeader + 4;
+  putTlvHeader(t, ana::kTlvDataSegmentInfo, 24);   // the segment: position, samples so far, start_ns, uncertainty
+  putU64(t + kTlvHeader, static_cast<uint64_t>(s) * seg_frames_ * frame_bytes);
+  putU32(t + kTlvHeader + 8, end - s * seg_frames_);
+  putU64(t + kTlvHeader + 12, start_ns_ + framesNs(static_cast<uint64_t>(s) * seg_frames_));
+  putU32(t + kTlvHeader + 20, uncertainty_ns_);
+  sent_off_ += n;
+  if (sent_off_ >= seg_frames_) { sent_off_ = 0; sent_seg_ = s + 1; }
+  return kHead + bytes + kTail;
+}
+
+// A streaming segment's record (capture §2): serial s, its position, its samples, start_ns; no trigger; bit0 when the
+// one before it was dropped.
+size_t AnalogCapture::streamInfo(uint32_t s, uint8_t *out) const {
+  putU32(out, s);
+  putU64(out + 4, static_cast<uint64_t>(s) * seg_frames_ * channels_ * 2u);
+  putU32(out + 12, seg_frames_);
+  putU64(out + 16, start_ns_ + framesNs(static_cast<uint64_t>(s) * seg_frames_));
+  putU32(out + 24, uncertainty_ns_);
+  putU32(out + 28, 0xFFFFFFFFu);
+  out[32] = slot_gap_[s % kStreamSegments] ? ana::kSegmentFlagGap : 0;
+  putU32(out + 33, generation_);
+  return 37;
+}
 
 uint16_t *AnalogCapture::ring() const {
 #if defined(OEP_ANALOG_RP2)
@@ -960,6 +1097,7 @@ void AnalogCapture::poll() {
   else if (state_ == ana::kStateCapturing) {
 #if defined(OEP_ANALOG_ESP)
     drain();
+    if (streaming()) return;   // on until stop: the pushes take the ring
     if (frames_ >= samples_) finish();
 #else
     if (!dma_channel_is_busy(dma_)) {
@@ -1013,6 +1151,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (bound()) return boundInGroup(*this, out, capacity);   // the group starts it (cause 4)
       if (!trackReady() && state_ != ana::kStateError) return wrongState(out, capacity);
       if (linked_) return wrongState(out, capacity);   // linked: only its group starts it (§3.3, cause 6)
+      if (streaming() && !subscribed_) return wrongState(out, capacity);   // streaming pushes: subscribe first
       if (capacity < 4) return failed();
       follow_ = false;
       if (!startNow()) return failed();
@@ -1032,10 +1171,11 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (capacity < 21) return failed();
       poll();
       out[0] = state_;
-      putU32(out + 1, segment_ ? 1 : 0);   // the segment, complete or cut short by stop
+      // streaming: the segments finished (dropped ones counted) and every frame's bytes; else the one segment
+      putU32(out + 1, streaming() ? (seg_frames_ ? frames_ / seg_frames_ : 0) : segment_ ? 1 : 0);
       putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
 #if defined(OEP_ANALOG_ESP)
-      out[13] = (overflow_ || overflow_seen_ || trig_slipped_ || lost_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions were lost
+      out[13] = (overflow_ || overflow_seen_ || trig_slipped_ || lost_ || stream_dropped_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions or a segment lost
 #else
       out[13] = (trig_slipped_ || lost_) ? ana::kStatusFlagDropped : 0;
 #endif
@@ -1057,6 +1197,12 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       // no plan or configuration (released: the data went with it): nothing to read
       const uint64_t end = state_ == ana::kStateUnconfigured || !buffer_ ? 0 : static_cast<uint64_t>(frames_) * channels_ * 2u;
       if (capacity < 11) return failed();
+      if (streaming()) {   // streaming: the data goes as pushes, nothing kept to read back (gap, len 0)
+        putU64(out, position);
+        out[8] = reg::common::kReadFlagsGap;
+        putU16(out + 9, 0);
+        return completed(11);
+      }
       // how much read returns is the probe's (capture §3.2): within max, max_read_ and the frame
       size_t take = position < end ? static_cast<size_t>(end - position) : 0;
       if (take > most) take = most;
@@ -1073,6 +1219,18 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (refused(parsed)) return parsed;
       if (capacity < 3 + 37) return failed();
       poll();
+      if (streaming()) {   // the finished segments, the newest kStreamSegments (common §1.3's paging)
+        const uint32_t done = seg_frames_ ? frames_ / seg_frames_ : 0;
+        const uint32_t oldest = done > kStreamSegments ? done - kStreamSegments : 0;
+        uint32_t k = serialPageStart(getU32(p), oldest, done);
+        uint8_t count = 0;
+        size_t used = 2;
+        for (; k != done && used + 37 <= capacity && count < 255; ++k)
+          if (segStored(k)) { used += streamInfo(k, out + used); ++count; }   // a dropped one has no record
+        out[0] = k != done ? 1 : 0;
+        out[1] = count;
+        return completed(used);
+      }
       // common §1.3's serial paging over the one segment (serial 0, once there): every from_serial but next (1) gets it
       const bool one = segment_ && serialPageStart(getU32(p), 0, 1) == 0;
       out[0] = 0;

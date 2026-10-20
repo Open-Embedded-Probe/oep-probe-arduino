@@ -93,14 +93,19 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
+  // streaming (mode 3, the ESP build): the data pushed while the lock holder is subscribed (core §10.2, capture §3.4)
+  size_t pending() override;
+  size_t pull(uint8_t *out, size_t capacity) override;
   void poll();   // from loop(): collects the conversions, a finished capture becomes the segment and stopped events
   bool planShares() const override { return false; }
   void setPins(PinTable *pins, uint8_t owner) { table_ = pins; owner_ = owner; }
 
   // GroupTrack (oep.fixture.capture-group)
   bool trackReady() const override;
-  bool trackCanStart() const override { return (trackReady() || state_ == reg::fixture_analog::kStateError) && buffer_; }
-  uint8_t trackMode() const override { return reg::fixture_analog::kModeOneShot; }
+  bool trackCanStart() const override {   // streaming needs the subscription (capture §3.2)
+    return (trackReady() || state_ == reg::fixture_analog::kStateError) && buffer_ && (!streaming() || subscribed_);
+  }
+  uint8_t trackMode() const override { return mode_; }
   bool trackTriggered() const override { return trig_type_ != 0; }
   bool trackCanFollow() const override;
   bool trackStartFollowing() override;
@@ -178,6 +183,24 @@ class AnalogCapture final : public Interface, public GroupTrack {
   volatile bool ext_ready_ = false;                       // (set by the judging track's task: ext_frame_ first)
   uint32_t ext_frame_ = 0;
   bool ringMode() const { return trig_type_ != 0 || follow_; }
+  // Streaming (capture §2.1, §3.4; the ESP build): segments of kStreamSegmentBytes, kStreamSegments of them in the ring
+  // (buffer_). A segment is stored when it begins with fewer than kStreamSegments unsent before it, else dropped whole
+  // (rule 1: the stream position skips it, status flags bit0). Positions are frame x channels x 2, the dropped counted.
+  static constexpr uint32_t kStreamSegmentBytes = 8192, kStreamSegments = 8;
+  uint8_t mode_ = reg::fixture_analog::kModeOneShot;
+  bool streaming() const { return mode_ == reg::fixture_analog::kModeStreaming; }
+  uint32_t seg_frames_ = 0;                 // a streaming segment's frames
+  volatile uint32_t sent_seg_ = 0;          // the segment being pushed (loop()) ...
+  uint32_t sent_off_ = 0;                   // ... and its frames pushed so far
+  uint32_t cur_seg_ = 0;                    // the segment the drain is storing (decided at its first value)
+  bool cur_ok_ = true, prev_ok_ = true;     // ... stored, and the one before it
+  // ring slot k: the segment stored there (UINT32_MAX none) and whether the one before it was dropped (its gap flag)
+  volatile uint32_t slot_seg_[kStreamSegments] = {};
+  bool slot_gap_[kStreamSegments] = {};
+  bool stream_dropped_ = false;             // a segment was dropped (status flags bit0)
+  bool storeOk(uint32_t frame, uint8_t slot);   // the drain: frame's value of slot goes into the ring
+  bool segStored(uint32_t s) const;
+  size_t streamInfo(uint32_t s, uint8_t *out) const;   // a streaming segment's record (37 bytes)
   uint8_t phase_ = 0;                                     // 0 searching, 1 filling after the crossing, 2 done
   uint16_t prev_ = 0;
   bool have_prev_ = false, force_ = false, trig_reported_ = true, trig_slipped_ = false;

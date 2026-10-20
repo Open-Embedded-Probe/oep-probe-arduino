@@ -272,7 +272,41 @@ static void testBindRefusesLongLatency() {
   }
 }
 
+// A group of both streaming (§4.1: one mode for all, immediate): start needs each subscription; started together, each
+// pushes its own data; the group's stop stops both.
+static void testBothStreaming() {
+  Rig rig;
+  Dma dma;
+  Bytes p;
+  tlv(p, kCrit | cap::kTlvConfigureMode, {cap::kModeStreaming});
+  tlv(p, kCrit | cap::kTlvConfigureRate, u32(LogicCapture::kMinHz));
+  CHECK(ok(rig.op(rig.logic, cap::kOpConfigure, p)));
+  p.clear();
+  tlv(p, kCrit | ana::kTlvConfigureMode, {ana::kModeStreaming});
+  tlv(p, kCrit | ana::kTlvConfigureRate, u32(20000));
+  CHECK(ok(rig.op(rig.analog, ana::kOpConfigure, p)));
+  CHECK(ok(rig.op(rig.group, grp::kOpBind, {2, 1, 0, 2, 0})));
+  rig.logic.subscribe(true);
+  Result r = rig.op(rig.group, grp::kOpStart);   // the analog not subscribed: wrong state, its fn
+  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && r.length >= 9 &&
+        rig.out[3] == reg::core::kUnavailableCauseWrongState && getU16(rig.out + 7) == 2);
+  rig.analog.subscribe(true);
+  CHECK(ok(rig.op(rig.group, grp::kOpStart)));
+  Clock clock{rig, dma};
+  clock.logic = true;
+  clock.run(120000);
+  CHECK(rig.logic.trackState() == cap::kStateCapturing && rig.analog.trackState() == ana::kStateCapturing);
+  CHECK(rig.logic.pending() > 0);
+  CHECK(rig.analog.pending() > 0);
+  uint8_t buf[520];
+  const size_t n = rig.analog.pull(buf, sizeof buf);
+  CHECK(n > 10 && getU64(buf) == 0 && getU16(buf + 10) == 0);   // frame 0's value first
+  CHECK(ok(rig.op(rig.group, grp::kOpStop)));
+  CHECK(rig.logic.trackState() == cap::kStateConfigured && rig.analog.trackState() == ana::kStateConfigured);
+}
+
 int main() {
+  testBothStreaming();
   testLogicJudges();
   testAnalogJudges();
   testBindRefusesLongLatency();

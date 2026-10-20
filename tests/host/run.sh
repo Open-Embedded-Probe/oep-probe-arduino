@@ -117,6 +117,11 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOE
   -o "$out-group-follow" "$here/test_group_follow.cpp" "$src/OepCapture.cpp" "$src/OepAnalog.cpp" "$src/OepEndpoint.cpp" \
   "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out-group-follow"
+# the analog capture's streaming on the ESP build (ADC continuous fake): the pushes, a segment dropped whole, stop
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_ESP_ADC -I"$here/shim" -I"$src" -o "$out-analog-stream" \
+  "$here/test_analog_stream.cpp" "$src/OepAnalog.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
+  "$src/OepCaptureGroup.cpp"
+"$out-analog-stream"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-analog-scale" "$here/test_analog_scale.cpp"
 "$out-analog-scale"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RP2_ADC -I"$here/shim" -I"$src" -o "$out-analog" \

@@ -1,6 +1,23 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The ESP builds' analog: streaming (mode 3; capture §2.1, §3.4; wireskein's ask). Segments of 8 KiB (4096 frames
+  on one channel), 8 of them in the ring (stream_buffer 64 KiB); no samples, an immediate trigger only; start once
+  subscribed. The pushes carry generation and segment_info, complete frames only, one segment each. A segment begun
+  with no room is dropped whole (rule 1: the position skips it, status flags bit0, no record for it, gap flag on the
+  next); what came in is still pushed after stop; read answers a gap. A capture-group of the logic and the analog both
+  streaming starts and stops them together. The RP2 builds keep one-shot. Host-tested only (test_analog_stream,
+  test_group_follow's testBothStreaming); not yet on the bench.
+- (JA) ESP ビルドのアナログにストリーミング（mode 3）を入れた（capture §2.1、§3.4。wireskein の依頼）。
+  - 区画は 8 KiB（1 チャンネルなら 4096 フレーム）。リングに 8 区画を持つ（stream_buffer は 64 KiB）。
+  - samples は取らない。トリガは immediate だけ。start は subscribe の後でだけ受ける。
+  - push には generation と segment_info を付ける。揃ったフレームだけを送り、1 回の push は 1 区画に収める。
+  - 空きがないときに始まった区画は丸ごと捨てる（rule 1）。position はその区画を飛ばし、status の flags bit0 が立つ。捨てた区画の
+    記録は残さず、次の区画に gap の flag を立てる。
+  - stop の後も、それまでに入った分は push する。read は gap を返す。
+  - ロジックとアナログを両方ストリーミングにした capture-group は、両方を一緒に始めて一緒に止める。
+  - RP2 ビルドは one-shot のまま。
+  - ホストの試験（test_analog_stream と test_group_follow の testBothStreaming）だけで確かめた。実機ではまだ確かめていない。
 - (EN) The P4's logic: a repeat takes a level or an edge trigger, and trigger_opts' rearm 1 (capture §2.1, §3.10;
   wireskein's ask). The first segment starts pretrigger samples before its trigger (trigger_index = pretrigger, arm 1);
   with rearm 0 the segments after it follow on, with rearm 1 each waits for its own trigger from the last one's end
