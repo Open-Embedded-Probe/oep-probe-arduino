@@ -111,6 +111,12 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -I"$
   "$here/test_capture.cpp" "$src/OepCapture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
   "$src/OepCaptureGroup.cpp"
 "$out-capture"
+# a capture-group's trigger source on the ESP32-P4: the logic (PARLIO fake) and the analog (ADC continuous fake), each
+# judging in turn and handing the event to the other from its own task
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOEP_HOST_FAKE_ESP_ADC -I"$here/shim" -I"$src" \
+  -o "$out-group-follow" "$here/test_group_follow.cpp" "$src/OepCapture.cpp" "$src/OepAnalog.cpp" "$src/OepEndpoint.cpp" \
+  "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
+"$out-group-follow"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-analog-scale" "$here/test_analog_scale.cpp"
 "$out-analog-scale"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RP2_ADC -I"$here/shim" -I"$src" -o "$out-analog" \

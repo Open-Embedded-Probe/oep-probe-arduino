@@ -999,6 +999,18 @@ static void testOps(const char *file, const char *list) {
 
     if (names(c["fns"], "oep.probe.restart"))   // the restart follows its success answer only (oep-if-restart §2)
       CHECK(OpsProbe::restarts == (name.find("completed success") != std::string::npos ? 1 : 0));
+    // judge_latency_ns (capture §3.3, optional): this probe answers it in a one-shot; the vectors' answers are the
+    // required set - taken out of what it sent when the vector has none
+    if (names(c["fns"], "oep.fixture.logic") && got.size() > 5 && got[3] == kResolutionCompleted) {
+      bool listed = false;
+      for (size_t at = 5; at + kTlvHeader <= want.size(); at += kTlvHeader + getU16(&want[at + 1]))
+        listed |= want[at] == reg::fixture_logic::kTlvConfigureAnswerJudgeLatencyNs;
+      for (size_t at = 5; !listed && at + kTlvHeader <= got.size(); at += kTlvHeader + getU16(&got[at + 1]))
+        if (got[at] == reg::fixture_logic::kTlvConfigureAnswerJudgeLatencyNs) {
+          got.erase(got.begin() + at, got.begin() + at + kTlvHeader + getU16(&got[at + 1]));
+          break;
+        }
+    }
     if (c["state"].string.find("roles 0 and 1") != std::string::npos && got.size() == want.size()) {
       // actual_samples (0x52) is the probe's own: 200000 asked at w = 2 is whole 128-byte cache lines (200192)
       for (size_t at = 5; at + kTlvHeader + 4 <= want.size(); at += kTlvHeader + getU16(&want[at + 1]))

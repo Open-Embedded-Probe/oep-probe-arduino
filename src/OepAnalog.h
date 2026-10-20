@@ -37,6 +37,14 @@
 #define OEP_ANALOG_ESP 1
 #include <esp_adc/adc_continuous.h>
 #endif
+// On the chip (not the host fake) the driver's pool is drained by a task of its own while a capture runs: a crossing
+// is found, and handed to a capture-group's followers, within a task's round - not when loop() comes round
+#if defined(OEP_ANALOG_ESP) && !defined(OEP_HOST_FAKE_ESP_ADC)
+#define OEP_ANALOG_DRAIN_TASK 1
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
+#endif
 // The RP2's build (its ADC round robin and DMA); OEP_HOST_FAKE_RP2_ADC: a host test with fakes of them (tests/host/shim)
 #if defined(ARDUINO_ARCH_RP2040) || (defined(OEP_HOST_FAKE_RP2_ADC) && !defined(OEP_ANALOG_ESP))
 #define OEP_ANALOG_RP2 1
@@ -166,7 +174,8 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint32_t got_ = 0, searched_ = 0;                       // complete frames so far; frames looked at
   uint32_t trig_frame_ = 0, end_frame_ = 0;               // the crossing; the segment's end (the stream's frames)
   uint32_t seg_first_ = 0;                                // the segment's first frame
-  bool follow_ = false, ext_ready_ = false;               // following a group's trigger, at frame ext_frame_
+  bool follow_ = false;                                   // following a group's trigger, at frame ext_frame_
+  volatile bool ext_ready_ = false;                       // (set by the judging track's task: ext_frame_ first)
   uint32_t ext_frame_ = 0;
   bool ringMode() const { return trig_type_ != 0 || follow_; }
   uint8_t phase_ = 0;                                     // 0 searching, 1 filling after the crossing, 2 done
@@ -194,7 +203,14 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint32_t counts_[kMaxChannels] = {};       // values stored, by frame slot
   bool overflow_seen_ = false;               // triggered: an overflow was seen ...
   uint32_t overflow_frame_ = 0;              // ... when this many frames had come (the loss was before)
-  void drain();
+  void drain();      // the driver's pool into the buffer (the drain task's or loop()'s; under lock_ on the chip)
+  void drainNow();
+#if defined(OEP_ANALOG_DRAIN_TASK)
+  SemaphoreHandle_t lock_ = nullptr;         // the driver and the buffer's filling: the drain task or loop()
+  TaskHandle_t drain_task_ = nullptr;
+  volatile bool draining_ = false;
+  static void drainTask(void *context);
+#endif
 #elif defined(OEP_ANALOG_RP2)
   int dma_ = -1;
   uint32_t cycles_ = 96;                     // 48 MHz ADC clock cycles a conversion

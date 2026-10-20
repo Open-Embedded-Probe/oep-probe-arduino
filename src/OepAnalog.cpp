@@ -485,6 +485,16 @@ bool AnalogCapture::startNow() {
     fail(ana::kErrorPeripheral);
     return false;
   }
+#if defined(OEP_ANALOG_DRAIN_TASK)
+  // the drain task (the last run's gone: it ends a tick after finish); loop()'s core, above loop()
+  for (int i = 0; i < 50 && drain_task_; ++i) delay(1);
+  if (!lock_) lock_ = xSemaphoreCreateMutex();
+  draining_ = lock_ && !drain_task_;
+  if (draining_ && xTaskCreatePinnedToCore(drainTask, "oep_adc", 4096, this, 3, &drain_task_, CONFIG_ARDUINO_RUNNING_CORE) != pdPASS) {
+    draining_ = false;
+    drain_task_ = nullptr;   // loop()'s poll drains alone
+  }
+#endif
   // The P4's driver leaves out the first conversion frame: its first value is one frame after the start. Corrected,
   // it matched to about 0.1 ms (logic-capture §7.4). The classic ESP32 keeps it, but its values came about 100 us
   // before the logic's for the same edge, at 10, 20 and 40 kS/s alike (50-200 us: a time, not a count of samples,
@@ -544,11 +554,18 @@ void AnalogCapture::armDma(uint16_t *to, uint32_t count, bool ring) {
 
 void AnalogCapture::finish() {
 #if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAIN_TASK)
+  draining_ = false;   // the task ends at its next round (it finds no handle meanwhile)
+  if (lock_) xSemaphoreTake(lock_, portMAX_DELAY);
+#endif
   if (handle_) {
     adc_continuous_stop(handle_);
     adc_continuous_deinit(handle_);
     handle_ = nullptr;
   }
+#if defined(OEP_ANALOG_DRAIN_TASK)
+  if (lock_) xSemaphoreGive(lock_);
+#endif
 #else
   adc_run(false);
   if (dma_ >= 0) {
@@ -612,6 +629,31 @@ bool IRAM_ATTR AnalogCapture::onOverflow(adc_continuous_handle_t, const adc_cont
 }
 
 void AnalogCapture::drain() {
+#if defined(OEP_ANALOG_DRAIN_TASK)
+  if (!lock_) return;
+  xSemaphoreTake(lock_, portMAX_DELAY);
+  drainNow();
+  xSemaphoreGive(lock_);
+#else
+  drainNow();
+#endif
+}
+
+#if defined(OEP_ANALOG_DRAIN_TASK)
+// While a capture runs: the pool drained every tick (a conversion frame is 64 values: 1.4 - 105 ms), a crossing
+// found and handed on (eventFound) then. loop()'s poll drains too; the lock keeps them apart.
+void AnalogCapture::drainTask(void *context) {
+  auto *self = static_cast<AnalogCapture *>(context);
+  while (self->draining_) {
+    self->drain();
+    vTaskDelay(1);
+  }
+  self->drain_task_ = nullptr;
+  vTaskDelete(nullptr);
+}
+#endif
+
+void AnalogCapture::drainNow() {
   uint8_t records[kFrameBytes];
   uint32_t got = 0;
   // triggered, the values go round the buffer (end_frame_: none after the segment's last frame); immediate, the
@@ -678,7 +720,9 @@ uint64_t AnalogCapture::framesNs(uint64_t frames) const {   // frames x den / nu
 void AnalogCapture::search() {
   if (follow_) {
     searched_ = got_;
-    if (!ext_ready_ || ext_frame_ >= got_) return;
+    if (!ext_ready_) return;
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);   // ext_frame_ written before ext_ready_ (another task's)
+    if (ext_frame_ >= got_) return;
     hitAt(ext_frame_);
     return;
   }
@@ -704,6 +748,7 @@ void AnalogCapture::search() {
 
 void AnalogCapture::hitAt(uint32_t t) {
   trig_frame_ = t;
+  if (!follow_) eventFound(start_ns_ + framesNs(t));   // judging a group's condition: the followers take it now
   seg_first_ = t > pre() ? t - pre() : 0;
   end_frame_ = t + (samples_ - pre());   // short when fewer than pre() came before it (pre() < samples_)
 #if defined(OEP_ANALOG_ESP)
@@ -742,8 +787,8 @@ bool AnalogCapture::trackCanKeep(uint32_t p, uint64_t late_ns) const {
 uint64_t AnalogCapture::trackLatencyNs() const { return latencyNs(total_hz_); }
 
 uint64_t AnalogCapture::latencyNs(uint32_t total_hz) {
-#if defined(OEP_ANALOG_ESP)
-  return kLoopNs + (total_hz ? static_cast<uint64_t>(kFrameConversions) * 1000000000u / total_hz : 0);
+#if defined(OEP_ANALOG_ESP)   // a conversion frame, and the drain (the task's round; loop()'s in the host fake)
+  return kTaskNs + (total_hz ? static_cast<uint64_t>(kFrameConversions) * 1000000000u / total_hz : 0);
 #else
   (void)total_hz;
   return kLoopNs;
@@ -801,8 +846,9 @@ void AnalogCapture::trackUnjudge() {
   arm_ = judged_arm_;
 }
 
-void AnalogCapture::trackTriggerAt(uint64_t ns) {
+void AnalogCapture::trackTriggerAt(uint64_t ns) {   // from the judging track's task, or loop()
   ext_frame_ = static_cast<uint32_t>(samplesIn(ns > start_ns_ ? ns - start_ns_ : 0, rate_num_, rate_den_));
+  __atomic_thread_fence(__ATOMIC_RELEASE);
   ext_ready_ = true;
 }
 

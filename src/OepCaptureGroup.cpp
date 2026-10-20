@@ -50,7 +50,10 @@ size_t CaptureGroup::describe(uint8_t *out, size_t capacity) {
 }
 
 void CaptureGroup::unbind() {
-  if (trigger_ >= 0) tracks_[trigger_].track->trackUnjudge();
+  if (trigger_ >= 0) {
+    tracks_[trigger_].track->trackUnjudge();
+    tracks_[trigger_].track->setEventSink(nullptr, nullptr);
+  }
   for (size_t k = 0; k < bound_count_; ++k) tracks_[bound_[k]].track->setBound(false);
   bound_count_ = 0;
   running_ = started_ = false;
@@ -188,6 +191,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
         trigger_ = judge;
         arm_ = src.arm;
         tracks_[judge].track->trackJudge(src.type, src.role, src.args, src.arm);
+        tracks_[judge].track->setEventSink(handOn, this);
       }
       return completed();
     }
@@ -276,6 +280,14 @@ bool CaptureGroup::startTrigger() {
   failed_ = true;
   stopAll(cap::kStoppedReasonError, cap::kErrorPeripheral);
   return false;
+}
+
+// From the judging track's own task: every follower takes the event's time now (its own task cuts its segment). The
+// bound set does not change while the group runs (bind refuses then); poll() still records it and sends triggered.
+void CaptureGroup::handOn(void *context, uint64_t ns) {
+  auto *self = static_cast<CaptureGroup *>(context);
+  for (size_t k = 0; k < self->bound_count_; ++k)
+    if (self->tracks_[self->bound_[k]].track->following_) self->tracks_[self->bound_[k]].track->trackTriggerAt(ns);
 }
 
 uint16_t CaptureGroup::triggerFn() const { return forced_ || trigger_ < 0 ? 0 : endpoint_.fnOf(*tracks_[trigger_].interface); }

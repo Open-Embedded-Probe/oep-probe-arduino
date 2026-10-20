@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) capture-group's trigger source: the judging track hands the event to the followers from the task that finds it
+  (GroupTrack::eventFound: the logic's harvest, the analog's drain), not when loop() comes round to the group's poll -
+  the latency a follower keeps (judge_latency_ns) is the judging track's chunk and a task's round (10 ms) instead of
+  100 ms. The ESP analog drains the driver's pool in a task of its own while it captures (loop()'s core, above it; a
+  lock keeps it and loop()'s poll apart). The P4X: an analog crossing now cuts the logic at 10 and 20 MHz x 8 lines
+  (refused cause 2 before), at the event's ns. Host test test_group_follow back for §4.4 (each track judging in turn,
+  the group's poll left out); the vectors' required answer sets compared without the optional judge_latency_ns.
+- (JA) capture-group の出来事の元: 判定したトラックが、見つけたタスクの中から（ロジックは収穫、アナログは読み出し）追う側へ出来事を
+  渡す（GroupTrack::eventFound）。loop() が group の poll に回ってくるのを待たない。
+  - 追う側が溜める遅れ（judge_latency_ns）は、判定するトラックの取り込みの一塊とタスクの一周（10 ms）になった（前は 100 ms）。
+  - ESP のアナログは、取得中は専用のタスクで ADC ドライバの溜めを読み出す（loop と同じコアで、loop より高い優先度。loop の poll とは
+    mutex で分ける）。
+  - P4X: アナログの横切りで、ロジック 10 MHz・20 MHz × 8 本が切れるようになった（前は cause 2 で断っていた）。時刻は出来事の ns と一致。
+  - ホストのテスト test_group_follow を §4.4 の形で戻した（両方向、group の poll なしで切れること）。共有ベクタの必須の答えとの照合では、
+    任意の judge_latency_ns を除いて比べる（fbc3adf から 2 件落ちていた）。
 - (EN) oep-spec e1d5495 (registry and vectors synced): configure / query's judge_latency_ns (0x15, capture §3.3) in a
   one-shot - the logic 100 ms (a loop() round) + a DMA chunk (4032 bytes) at the rate and width, the analog 100 ms + a
   conversion frame (64 values). Streaming with the subscription 0, 0: a stage goes out once the harvest's queue and the

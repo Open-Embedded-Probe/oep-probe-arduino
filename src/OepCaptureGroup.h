@@ -70,6 +70,14 @@ class GroupTrack {
   // track's own search delay plus kLoopNs for loop() to come round (a stop of another track, a long request).
   static constexpr uint64_t kLoopNs = 100000000;
   virtual uint64_t trackLatencyNs() const { return kLoopNs; }
+  // A track that hands its event on itself (eventFound, from its harvest or drain task) needs no loop() round: a
+  // task's round with room to spare instead (a busy core, the USB stack's interrupts)
+  static constexpr uint64_t kTaskNs = 10000000;
+  // The group's handoff (§4.4): the judging track calls eventFound(ns) the moment it knows the event, from whatever
+  // task found it - the followers take the time at once (trackTriggerAt sets what their own task reads), not after
+  // loop() comes round to the group's poll. Set at bind, while nothing runs.
+  using EventSink = void (*)(void *context, uint64_t ns);
+  void setEventSink(EventSink sink, void *context) { sink_ = sink; sink_context_ = context; }
   // The trigger source (capture §4.4): a track configured with the linked trigger (type 7, a one-shot here) has its
   // segment cut by the group's event, around its own pretrigger. trackCanJudge: whether the group's one condition (its
   // type and arguments as bind sent them, the lengths checked) can be judged on this track - kJudgeOk, kJudgeUnsupported
@@ -91,6 +99,9 @@ class GroupTrack {
   bool bound_ = false;
   uint16_t group_fn_ = 0;
   bool following_ = false;   // bound as a follower: start with trackStartFollowing
+  void eventFound(uint64_t ns) { if (sink_) sink_(sink_context_, ns); }
+  EventSink sink_ = nullptr;
+  void *sink_context_ = nullptr;
   friend class CaptureGroup;
 };
 
@@ -290,6 +301,7 @@ class CaptureGroup final : public Interface {
   };
   Result readSource(const Tail &tail, uint8_t n, const uint8_t *fns, Source &src, uint8_t *out, size_t capacity) const;
   uint16_t triggerFn() const;
+  static void handOn(void *context, uint64_t ns);   // the judging track's eventFound: the followers at once
   uint32_t triggerUncertainty() const;
   int indexOf(uint16_t fn) const;
   int indexOf(const GroupTrack &track) const;

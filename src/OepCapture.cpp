@@ -456,6 +456,7 @@ void LogicCapture::harvestTriggered(const Chunk &chunk) {
     if (s0 * width_ / 8 < oldest) s0 = (oldest * 8 + width_ - 1) / width_;
     seg_first_sample_ = s0;
     trigger_index_ = t >= s0 ? static_cast<uint32_t>(t - s0) : 0xFFFFFFFFu;   // before the ring's oldest: gone
+    if (!follow_) eventFound(start_ns_ + nsOf(t));   // judging a group's condition: the followers take it now
     if (t < s0) trig_overrun_ = true;
     // the samples before the trigger, the trigger's and the pretrigger's complement after it (pre() < samples_)
     seg_samples_ = static_cast<uint32_t>((t >= s0 ? t - s0 : 0) + (samples_ - pre()));
