@@ -982,6 +982,12 @@ void LogicCapture::close() {
   done_ = false;
 }
 
+bool LogicCapture::takeStreamRing() {
+  if (!stream_ring_ && streamRingAvailable())
+    stream_ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, kStreamRingBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA));
+  return stream_ring_ != nullptr;
+}
+
 void LogicCapture::useRing(bool stream) {
   rx_ring_ = stream && stream_ring_ ? stream_ring_ : ring_;
   rx_ring_bytes_ = stream && stream_ring_ ? kStreamRingBytes : kRingBytes;
@@ -1150,7 +1156,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   }
   // the pretrigger is what the ring can give back at this sample width (describe declares the most, at w = 1), less
   // than the segment's samples as rounded (capture §3.3); only with a trigger (above), so a one-shot
-  const uint32_t max_pretrigger = static_cast<uint32_t>(kPretriggerBytes * 8 / width);
+  // (linked: the PSRAM ring's half when there is one - a linked track takes it, judging or following)
+  const size_t history = trig_type == cap::kTriggerLinked && streamRingAvailable() ? kStreamRingBytes / 2 : kPretriggerBytes;
+  const uint32_t max_pretrigger = static_cast<uint32_t>(history * 8 / width);
   if (pretrigger && (pretrigger >= samples || pretrigger > max_pretrigger))
     return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
@@ -1436,9 +1444,7 @@ bool LogicCapture::trackStartFollowing() {
   }
   // the stream's ring in PSRAM when there is one: a follower holds its pretrigger and the judging track's latency
   // (an analog's: 100 ms of loop()) - 6.5 ms at 10 MHz x 8 lines in the internal ring, 100 ms in 1 MiB
-  if (!stream_ring_ && streamRingAvailable())
-    stream_ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, kStreamRingBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA));
-  useRing(stream_ring_ != nullptr);
+  useRing(takeStreamRing());
   follow_ = true;
   uint8_t out[4];   // generation
   const Result r = startTriggered(out, sizeof out);
@@ -1683,7 +1689,9 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (mode_ == 2 || mode_ == 3) return startRepeat(out, capacity);
       if (linked_ && !bound()) return wrongState(out, capacity);   // linked: the group's event cuts it (§3.3, cause 6)
       follow_ = false;
-      useRing(false);   // its own trigger: the internal ring (a follower's start took the PSRAM one)
+      // its own trigger: the internal ring; linked (judging a group's condition), the PSRAM one when there is one -
+      // its pretrigger may be that ring's half
+      useRing(linked_ && takeStreamRing());
       if (triggered_) return startTriggered(out, capacity);
       if (capacity < 4) return failed();
       if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }   // a unit made for this start

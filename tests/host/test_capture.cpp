@@ -994,6 +994,24 @@ static void testStreamRing() {
   logic.planRelease();
 }
 
+// A linked track's pretrigger (§3.3, §4.4) may be the PSRAM ring's half when there is PSRAM (it takes that ring,
+// judging or following): 40000 at w 8 (over the internal ring's 32768) configures with it, and is refused without.
+static void testLinkedPretrigger() {
+  for (const size_t psram : {size_t(32) << 20, size_t(0)}) {
+    board(512 * 1024, psram);
+    Rig rig(8);
+    Bytes out;
+    Config c;
+    c.rate = 10000000;
+    c.samples = 60000;
+    c.linked = true;
+    c.pretrigger = 40000;
+    const Result r = configure(rig.cap, c, out);
+    if (psram) CHECK(ok(r));
+    else CHECK(rejectedAs(r, kRejectUnsupported) && out.size() == 1 && out[0] == (kCrit | cap::kTlvConfigurePretrigger));
+  }
+}
+
 // The trigger source (§4.4) with this logic track: configured linked with its own pretrigger it is refused a start of
 // its own (cause 6); bound with a condition on it (a rising edge on role 0) it judges the edge itself, its segment cut
 // with trigger_index = pretrigger (arm 1), and the group's status carries the event (fn, the edge's ns, a sample period);
@@ -1461,6 +1479,7 @@ int main() {
   testStreamingWithoutStages();
   testStreamRing();
   testLinkedGroup();
+  testLinkedPretrigger();
   testOverLimitRoundsDown();
   testEveryModeAtTheLowestRate();
   printf("capture: %d checks, %d failures\n", checks, failures);

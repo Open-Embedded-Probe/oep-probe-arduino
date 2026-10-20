@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) A linked logic track (capture-group's trigger source) takes the PSRAM ring (1 MiB) when there is PSRAM, judging
+  as well as following: its pretrigger may be that ring's half (524288 samples at w 8; the segment's samples bound it
+  too) - the internal ring's half (32768) before. The P4X: pretrigger 40000 at 10 MHz x 8 lines, both ways.
+- (JA) linked のロジックのトラック（capture-group の出来事の元）は、PSRAM があれば、判定する側でも追う側でも PSRAM のリング（1 MiB）で
+  取る。pretrigger の上限は、そのリングの半分（w 8 で 524288。区画のサンプル数でも縛られる）になった（前は内部 RAM のリングの半分の
+  32768）。P4X: 10 MHz × 8 本で pretrigger 40000、両方向とも確かめた。
 - (EN) capture-group's trigger source: the judging track hands the event to the followers from the task that finds it
   (GroupTrack::eventFound: the logic's harvest, the analog's drain), not when loop() comes round to the group's poll -
   the latency a follower keeps (judge_latency_ns) is the judging track's chunk and a task's round (10 ms) instead of

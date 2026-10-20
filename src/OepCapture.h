@@ -133,7 +133,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   // DMA's lead (kDmaAhead) to spare
   bool trackCanKeep(uint32_t p, uint64_t late_ns) const override {
     const uint8_t w = width_ ? width_ : 1;
-    if (p && (p >= samples_ || p > static_cast<uint32_t>(kPretriggerBytes * 8 / w))) return false;
+    const size_t history = linked_ && streamRingAvailable() ? kStreamRingBytes / 2 : kPretriggerBytes;
+    if (p && (p >= samples_ || p > static_cast<uint32_t>(history * 8 / w))) return false;
     const uint64_t late = samplesIn(late_ns, rate_num_, rate_den_) + 1;
     const size_t ring = streamRingAvailable() ? kStreamRingBytes : kRingBytes;   // a follower takes the PSRAM one
     return rate_num_ != 0 && (p + late) * w / 8 + kChunkMax + kDmaAhead <= ring;
@@ -266,6 +267,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t *rx_ring_ = nullptr, *stream_ring_ = nullptr;
   uint32_t rx_ring_bytes_ = kRingBytes;
   void useRing(bool stream);
+  bool takeStreamRing();   // the PSRAM ring, taken now if there is room (kept, as the stages'); false: none
   // the stream's ring held, or PSRAM to take it - asked of MALLOC_CAP_SPIRAM alone: the largest free block with
   // MALLOC_CAP_DMA too is 0 on the P4 though heap_caps_aligned_alloc takes it with those caps (the P4X, core 3.3.12)
   bool streamRingAvailable() const {
