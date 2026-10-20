@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep-spec e1d5495 (registry and vectors synced): configure / query's judge_latency_ns (0x15, capture §3.3) in a
+  one-shot - the logic 100 ms (a loop() round) + a DMA chunk (4032 bytes) at the rate and width, the analog 100 ms + a
+  conversion frame (64 values). Streaming with the subscription 0, 0: a stage goes out once the harvest's queue and the
+  transport are both idle - with the transport busy it takes more meanwhile (it would not go out sooner). Format 1 on
+  quiet lines sent a block a frame (2000 transfers a second at 13.3 MHz, 8 lines /1), more than the host took back,
+  and 35 % of the blocks found no stage; now none (P4X, 10 s), 4 raw + 4 /64 0.05 %.
+- (JA) oep-spec e1d5495 に追従（registry とベクタを取り込み）。
+  - one-shot の configure / query の応答に judge_latency_ns（0x15、capture §3.3）を返す。ロジックは 100 ms（loop の一周）+ DMA の一塊
+    （4032 B）を rate と w で割った時間、アナログは 100 ms + 変換の一塊（64 回）。
+  - streaming の購読が (0, 0) のとき、stage は、収穫の queue と transport の両方が空いたときに送る。transport が忙しいあいだは、今の
+    stage に詰め続ける（それで送るのが遅くなることはない）。形式 1 の静かな線では、ブロック 1 つを 1 フレームで送っていて
+    （13.3 MHz・8 本 /1 で 1 秒に 2000 回の転送）、host が受けきれず、ブロックの 35% が stage を得られずに落ちていた。直した後は
+    落としなし（P4X、10 秒）。4 本 raw + 4 本 /64 では 0.05%。
 - (EN) capture-group's trigger source (capture §4.4), a first version: describe features bit 0 and trigger_caps (one
   stage, one term, one condition, no cross-track AND; the logic level and edge, the analog crossings up and down; no
   serial, no trigger_out); bind's trigger_source / stage / cond TLVs (the form malformed, what it does not take

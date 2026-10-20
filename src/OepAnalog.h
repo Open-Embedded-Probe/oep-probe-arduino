@@ -110,6 +110,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void trackJudge(uint8_t type, uint8_t role, const uint8_t *args, uint8_t arm) override;
   void trackUnjudge() override;
   uint64_t trackLatencyNs() const override;
+  static uint64_t latencyNs(uint32_t total_hz);   // as the judging track at this rate (configure's judge_latency_ns)
   void trackForce() override { if (state_ == reg::fixture_analog::kStateWaiting) force_ = true; }
   uint32_t trackLoad() const override { return total_hz_; }
   bool trackStart() override { follow_ = false; return startNow(); }

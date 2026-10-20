@@ -719,7 +719,11 @@ void LogicCapture::harvestTask(void *context) {
       uint16_t fn = 0, min_bytes = 0;
       uint32_t max_delay = 0;
       if (!self->endpoint_.directPush(*self, fn, min_bytes, max_delay)) continue;
-      const bool idle = uxQueueMessagesWaiting(self->queue_) == 0;
+      // 0, 0: out as soon as nothing waits - the harvest's queue and the transport both idle. With the transport busy
+      // the stage takes more meanwhile (it would not go out sooner): a format 1 block a frame on quiet lines was 2000
+      // transfers a second at 13.3 MHz, more than the host took back, and 35 % of the blocks found no stage (P4X)
+      DirectTransport *t = self->endpoint_.direct();
+      const bool idle = uxQueueMessagesWaiting(self->queue_) == 0 && (!t || t->queued() == 0);
       if ((min_bytes == 0 && max_delay == 0 && idle) || (min_bytes && self->stage_fill_ >= min_bytes) ||
           (max_delay && millis() - self->stage_since_ >= max_delay))
         self->sendStage();
@@ -1287,6 +1291,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // streaming: what it holds unsent (capture §3.3 stream_buffer) - the zero-copy stages (those held, or what internal
   // RAM gives now), else the store
   if (mode == cap::kModeStreaming) w.u32(cap::kTlvConfigureAnswerStreamBuffer, streamBuffer(samples, width, actual_segments));
+  // judging a capture-group's condition (one-shot, §4.4): the longest from its sample to the group knowing it (§3.3)
+  if (mode == cap::kModeOneShot) w.u32(cap::kTlvConfigureAnswerJudgeLatencyNs, static_cast<uint32_t>(latencyNs(num, den, width)));
   return w.ok() ? completed(w.length()) : failed();
 }
 

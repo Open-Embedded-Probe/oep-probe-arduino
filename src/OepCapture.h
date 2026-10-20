@@ -146,9 +146,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   // As the trigger track: an edge is found when its DMA chunk (a descriptor, at most kChunkMax bytes) is done; a force
   // is known at once. And loop() comes round.
   static constexpr uint32_t kChunkMax = 4032;
-  uint64_t trackLatencyNs() const override {
-    const uint64_t samples = static_cast<uint64_t>(kChunkMax) * 8 / (width_ ? width_ : 1);
-    return kLoopNs + (rate_num_ ? samples * rate_den_ * 1000000000ull / rate_num_ : 0);
+  uint64_t trackLatencyNs() const override { return latencyNs(rate_num_, rate_den_, width_); }
+  // as the judging track at this rate and width (configure's judge_latency_ns, §3.3)
+  static uint64_t latencyNs(uint32_t num, uint32_t den, uint8_t width) {
+    const uint64_t samples = static_cast<uint64_t>(kChunkMax) * 8 / (width ? width : 1);
+    return kLoopNs + (num ? samples * den * 1000000000ull / num : 0);
   }
   uint32_t trackLoad() const override { return rate_den_ ? static_cast<uint32_t>(static_cast<uint64_t>(channels_) * rate_num_ / rate_den_) : 0; }
   bool trackStart() override { return groupOp(kOpStart); }

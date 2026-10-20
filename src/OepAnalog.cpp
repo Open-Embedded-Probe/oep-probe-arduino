@@ -365,6 +365,8 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
 #endif
   ref[5] = 0;   // nominal
   w.put(ana::kTlvConfigureAnswerReference, ref, sizeof ref);
+  // judging a capture-group's condition (§4.4): the longest from the crossing's sample to the group knowing it (§3.3)
+  w.u32(ana::kTlvConfigureAnswerJudgeLatencyNs, static_cast<uint32_t>(latencyNs(total_hz)));
   return w.ok() ? completed(w.length()) : failed();
 }
 
@@ -737,10 +739,13 @@ bool AnalogCapture::trackCanKeep(uint32_t p, uint64_t late_ns) const {
 
 // As the trigger track: a crossing is looked for at every drain of the driver's pool (a conversion frame), and loop()
 // comes round to hand it on.
-uint64_t AnalogCapture::trackLatencyNs() const {
+uint64_t AnalogCapture::trackLatencyNs() const { return latencyNs(total_hz_); }
+
+uint64_t AnalogCapture::latencyNs(uint32_t total_hz) {
 #if defined(OEP_ANALOG_ESP)
-  return kLoopNs + (total_hz_ ? static_cast<uint64_t>(kFrameConversions) * 1000000000u / total_hz_ : 0);
+  return kLoopNs + (total_hz ? static_cast<uint64_t>(kFrameConversions) * 1000000000u / total_hz : 0);
 #else
+  (void)total_hz;
   return kLoopNs;
 #endif
 }
