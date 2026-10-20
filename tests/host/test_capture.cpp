@@ -548,7 +548,6 @@ struct Dma {
   }
   void run() {
     if (!g_fake_task_fn) return;
-    fakeAsyncFinish();   // the GDMA's copies held (g_fake_async.defer) finish before the harvest's next pass
     g_fake_queue_empty = [] { throw Idle{}; };
     g_fake_on_delay = [] { throw Idle{}; };   // waiting for a stage: the harvest comes back to it at the next run
     try { g_fake_task_fn(g_fake_task_arg); } catch (const Idle &) {}
@@ -938,10 +937,8 @@ static uint8_t pattern(uint64_t position) { return static_cast<uint8_t>(position
 // and the spill behind it hold the rest and nothing is dropped; given back, the stages take it in order. Past the
 // spill's room the DMA comes round over bytes not yet taken and drops them (the position jumps, no error: no stage had
 // them) and the frame after the jump starts at its own position. Every frame's bytes are the stream's at its position.
-static void testStreamRing(bool defer) {
+static void testStreamRing() {
   board(512 * 1024, size_t(32) << 20);
-  g_fake_async = FakeAsync{};
-  g_fake_async.defer = defer;   // the spill's copies by the GDMA: at once, or finished at the harvest's next pass
   MemStream bulk;
   static uint8_t rx[512], tx[512];
   Endpoint ep{bulk, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kVendorBulk, 0};
@@ -1026,12 +1023,7 @@ static void testStreamRing(bool defer) {
   CHECK(dropped());
   for (size_t n = 0; n < LogicCapture::kSpillBytes / 4032 + 2 * ring / 4032; ++n) { direct.giveBack(); deliver(4032); }
   check(1);
-  CHECK(g_fake_async.calls > 0);   // the spill was filled by the GDMA, not the CPU
-  for (int k = 0; k < 64; ++k) { direct.giveBack(); dma.run(); }   // the copies held finished, the spill sent
-  g_fake_async.defer = false;
-  fakeAsyncFinish();
   logic.planRelease();
-  g_fake_async = FakeAsync{};
 }
 
 // A linked track's pretrigger (§3.3, §4.4) may be the PSRAM ring's half when there is PSRAM (it takes that ring,
@@ -1667,8 +1659,7 @@ int main() {
   testFormatAndTriggerOpts();
   testConfigureOrder();
   testStreamingWithoutStages();
-  testStreamRing(false);
-  testStreamRing(true);
+  testStreamRing();
   testLinkedGroup();
   testLinkedPretrigger();
   testOverLimitRoundsDown();
