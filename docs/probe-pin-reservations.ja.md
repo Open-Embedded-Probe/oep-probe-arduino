@@ -66,7 +66,7 @@ P4 は「適当に繋いでよい」のが長所で、実際 55 本中 51 本を
 
 `GP0–GP15` と `GP26–GP29` が castellated edge に出ている。GP17–GP25 は出ていない。
 
-## RP2350（SparkFun Pro Micro RP2350、`9489dd2ae0953650`）
+## RP2350（`9489dd2ae0953650`。当時は SparkFun Pro Micro RP2350 と推測していたが、利用者の確認で Raspberry Pi Pico 2。firmware は `rp2350`）
 
 | pin | 用途 | 確度 |
 |---|---|---|

@@ -19,8 +19,7 @@ def test_transfer(provider_guard):
             if profile != 'esp32':
                 provider_guard['usb_after'] = usb_identity(unit)
                 expected = {'esp32p4': 'OEP probe (ESP32-P4)', 'esp32p4x': 'OEP probe (ESP32-P4X)',
-                            'rp2040': 'OEP probe (RP2040)', 'rp2350': 'OEP probe (RP2350)',
-                            'promicrorp2350': 'OEP probe (RP2350)'}[profile]
+                            'rp2040': 'OEP probe (RP2040)', 'rp2350': 'OEP probe (RP2350)'}[profile]
                 assert provider_guard['usb_after']['product'] == expected
             break
         except Exception:

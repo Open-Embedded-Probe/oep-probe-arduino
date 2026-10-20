@@ -14,7 +14,7 @@
 |---|---|---|
 | RP2040（Pico、RP2040-Zero など） | `OepProbe-rp2040-<version>.uf2` | BOOTSEL を押しながら挿し、出てきたドライブにコピー |
 | RP2350（Pico 2 など） | `OepProbe-rp2350-<version>.uf2` | 同じ |
-| SparkFun Pro Micro RP2350 | `OepProbe-promicrorp2350-<version>.uf2` | 同じ（GP19（PSRAM の選択）以外のすべての GPIO） |
+| SparkFun Pro Micro RP2350 | `OepProbe-rp2350-<version>.uf2`（Pico 2 と同じもの） | Pico 2 と同じピン（GP19 は PSRAM の選択なので、host が使わない） |
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
 | ESP32-P4X（v3.x） | `OepProbe-esp32p4x-<version>.merged.bin` | 同じ（esptool のチップ名は `esp32p4`） |
 | classic ESP32（DevKitC など） | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |

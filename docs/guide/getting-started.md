@@ -14,7 +14,7 @@ Take the firmware for your chip from the [Releases](https://github.com/Open-Embe
 |---|---|---|
 | RP2040 (Pico, RP2040-Zero, ...) | `OepProbe-rp2040-<version>.uf2` | hold BOOTSEL, plug it in, copy the file to the drive that appears |
 | RP2350 (Pico 2, ...) | `OepProbe-rp2350-<version>.uf2` | the same |
-| SparkFun Pro Micro RP2350 | `OepProbe-promicrorp2350-<version>.uf2` | the same (every GPIO but GP19, its PSRAM select) |
+| SparkFun Pro Micro RP2350 | `OepProbe-rp2350-<version>.uf2` (the Pico 2 one) | the Pico 2's pins (GP19 is its PSRAM select: the host leaves it alone) |
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
 | ESP32-P4X (v3.x) | `OepProbe-esp32p4x-<version>.merged.bin` | the same (esptool's chip name remains `esp32p4`) |
 | classic ESP32 (DevKitC, ...) | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |

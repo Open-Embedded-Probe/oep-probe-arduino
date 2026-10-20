@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-#include <esp_cpu.h>
-
 #include "OepCapture.h"
 
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
 #if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
 
 #include <esp_cache.h>
+#include <esp_cpu.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <hal/hal_utils.h>

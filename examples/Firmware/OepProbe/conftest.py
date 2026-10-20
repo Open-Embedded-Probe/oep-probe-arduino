@@ -47,7 +47,7 @@ def provider_guard(request, arduino_cli_build, arduino_cli_app):
         try:
             resume = os.environ.get('OEP_TRANSFER_RESUME_FROM', '')
             if resume:
-                if profile not in ('rp2040', 'rp2350', 'promicrorp2350'):
+                if profile not in ('rp2040', 'rp2350'):
                     pytest.fail('BOOTSEL resume is supported only for Pico profiles')
                 previous = json.loads(Path(resume).read_text())
                 if previous['profile'] != profile or previous['before']['unit_id'] != unit:
@@ -85,10 +85,10 @@ def arduino_cli_upload(request, arduino_cli_build, provider_guard, arduino_cli_f
     extra = ()
     if profile in ('esp32p4', 'esp32p4x'):
         extra = dfu_args(unit)
-    elif profile in ('rp2040', 'rp2350', 'promicrorp2350'):
+    elif profile in ('rp2040', 'rp2350'):
         extra, provider_guard['bootsel'] = pico_args(provider_guard['resolved_port'],
                                                    provider_guard['usb_before'], profile)
-    flasher = replace(arduino_cli_flasher, port=('UF2_Board' if profile.startswith('rp') or profile == 'promicrorp2350'
+    flasher = replace(arduino_cli_flasher, port=('UF2_Board' if profile.startswith('rp')
                                                 else provider_guard['resolved_port']), extra_args=extra)
     provider_guard['upload_command'] = flasher.upload_command()
     results = Path(required('OEP_TRANSFER_RESULTS'))

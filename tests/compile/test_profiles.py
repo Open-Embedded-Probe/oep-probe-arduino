@@ -54,7 +54,7 @@ class BuildProfilesTest(unittest.TestCase):
         for profile, props, expected in (
             ("esp32p4", "build.mcu=esp32p4\nbuild.chip_variant=esp32p4_es\n", "esp32p4"),
             ("esp32p4x", "build.mcu=esp32p4\nbuild.chip_variant=esp32p4\n", "esp32p4x"),
-            ("promicrorp2350", "build.chip=rp2350\n", "rp2350"),
+            ("rp2350", "build.chip=rp2350\n", "rp2350"),
             ("esp32", "build.mcu=esp32\n", "esp32"),
         ):
             with self.subTest(profile=profile):

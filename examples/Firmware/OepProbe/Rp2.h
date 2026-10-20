@@ -44,16 +44,11 @@ static constexpr const char *kProduct = "OEP probe (RP2350)", *kModel = "rp2350"
 static constexpr const char *kProduct = "OEP probe (RP2040)", *kModel = "rp2040";
 #endif
 
-#if defined(ARDUINO_SPARKFUN_PROMICRO_RP2350)
-// SparkFun Pro Micro RP2350 (profile promicrorp2350): GP0-GP29 are pins, but GP19, its PSRAM's chip select. The L103
-// bench's RVSWD is GP24 / GP23 - the Pico 2 build kept those as the Pico's own (0.0.18).
-static constexpr uint64_t kBoardChannels = ((1ull << 30) - 1) & ~(1ull << 19);
-#else
 // The pins a Pico / Pico 2 brings out: GP0-GP22, GP26-GP28 (GP23-GP25 and GP29 are the board's own there). Other boards
-// with the same chip run this too; their own parts on these pins (an LED, a PSRAM chip select) are for the host to
-// leave alone.
+// with the same chip run this too (a SparkFun Pro Micro RP2350: its GP19 is the PSRAM's chip select); their own parts on
+// these pins (an LED, a PSRAM chip select) are for the host to leave alone. (A Pro Micro profile that also gave
+// GP23-GP25 / GP29 was dropped: one build a chip.)
 static constexpr uint64_t kBoardChannels = ((1ull << 23) - 1) | (0x7ull << 26);
-#endif
 #if OEP_DEBUG_LOG
 #ifndef OEP_DEBUG_LOG_TX
 #error "OEP_DEBUG_LOG: name the trace's TX pin with OEP_DEBUG_LOG_TX (Serial2 = UART1: GP4, GP8, GP20 or GP24)"

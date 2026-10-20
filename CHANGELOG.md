@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The `promicrorp2350` profile and its release (OepProbe-promicrorp2350) are gone: an RP2350 board runs the
+  `rp2350` build (one build a chip; the bench's RP2350 is a Pico 2). A Pro Micro RP2350 runs it with the Pico 2's pins
+  (GP23-GP25 / GP29 not given; its GP19, the PSRAM select, is the host's to leave alone). SwdPinSurvey's rp2350 profile
+  builds for the Pico 2. Every P4 example profile has PSRAM=enabled.
+- (JA) `promicrorp2350` の profile とそのリリース（OepProbe-promicrorp2350）を外した。RP2350 の基板は `rp2350` のビルドを使う（チップごとに
+  1 本。ベンチの RP2350 は Pico 2）。Pro Micro RP2350 は Pico 2 のピンで動く（GP23〜GP25 / GP29 は使わない。GP19 は PSRAM の選択なので
+  host が使わない）。SwdPinSurvey の rp2350 profile は Pico 2 向けにした。P4 の例の profile はすべて PSRAM=enabled。
 - (EN) The P4 builds turn PSRAM on (sketch.yaml: PSRAM=enabled; every P4 SoC has it, and the Arduino menu's default is
   off): the frame-sized buffers and big allocations go there, internal RAM is left to the DMA ring and the zero-copy
   stages (the P4X now holds 7 stages, a 57 KB stream_buffer, where it held 4). Format 1's encoder: any raw columns of a

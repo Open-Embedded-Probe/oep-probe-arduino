@@ -9,8 +9,8 @@ no released firmware.
 
 | | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | other ESP32 (S3, C3, C6, ...) |
 |---|---|---|---|---|
-| Released firmware | `OepProbe-rp2040` / `-rp2350` / `-promicrorp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | none: build it (below) |
-| Checked on a bench | starting, on a Pro Micro RP2350 (CH32L103) | P4: yes (CH32X035 jig); P4X: built only | yes (CH32V003 jig) | no |
+| Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | none: build it (below) |
+| Checked on a bench | on a Pico 2 (CH32L103) | P4: yes (CH32X035 jig); P4X: built only | yes (CH32V003 jig) | no |
 | Transports | USB CDC | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB-Serial/JTAG or USB CDC |
 | RVSWD (CH32 2-wire) | yes (SIO) | yes (dedicated GPIO) | no | yes (dedicated GPIO; built, not checked) |
 | SWIO (CH32V00x 1-wire) | no | no | yes | no |
@@ -45,7 +45,7 @@ plans it; a pin one interface holds is refused to another. The others are the bo
 | Firmware | Pins offered | Left alone |
 |---|---|---|
 | RP2040 / RP2350 | GP0-GP22, GP26-GP28 | GP23-GP25, GP29 (a Pico's SMPS, VBUS sense, LED, VSYS). On other boards, parts on offered pins (an LED, a PSRAM chip select) are for the host to leave alone |
-| SparkFun Pro Micro RP2350 (`promicrorp2350`) | GP0-GP18, GP20-GP29 | GP19 (the PSRAM's chip select) |
+| SparkFun Pro Micro RP2350 (the `rp2350` build) | as the Pico 2: GP0-GP22, GP26-GP28 | GP23-GP25, GP29 (the Pico 2 build's); GP19 is its PSRAM's chip select: the host leaves it alone |
 | ESP32-P4 / P4X | GPIO0-GPIO54 but 24, 25 | GPIO24 / 25 (USB-Serial/JTAG) |
 | classic ESP32 | GPIO4, 5, 13, 14, 16-19 (16 / 17 dropped at start-up on a PICO-D4 / PICO-V3 / D2WD, or with a PSRAM the build enabled), 21-23, 25-27, 32, 33, 34-36, 39 (34-39 input only); SWIO on the outputs below 32 | 1, 3 (UART0: the transport), 6-11 (flash), 0, 2, 12, 15 (boot straps) |
 

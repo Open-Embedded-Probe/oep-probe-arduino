@@ -15,7 +15,7 @@ def required(name):
 
 
 MODELS = {'esp32': 'esp32', 'esp32p4': 'esp32p4', 'esp32p4x': 'esp32p4x',
-          'rp2040': 'rp2040', 'rp2350': 'rp2350', 'promicrorp2350': 'rp2350'}
+          'rp2040': 'rp2040', 'rp2350': 'rp2350'}
 
 
 def check_identity(identity, unit, profile='esp32', *, before=False):
