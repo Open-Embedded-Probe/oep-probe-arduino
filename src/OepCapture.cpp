@@ -305,7 +305,7 @@ uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t se
   }
   if (count < 2) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);   // the copied way
   // and the FIFO behind them (formats 0 and 4; held, or PSRAM to take it)
-  const bool psram = stream_ring_ || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA) >= kStreamRingBytes;
+  const bool psram = streamRingAvailable();
   const size_t ring = format_ == cap::kDataFormatLogicBlocks ? 0 : (psram ? kStreamRingBytes : kRingBytes) - kDmaAhead - kChunkMax;
   return static_cast<uint32_t>(count * (frame - kPushHead - kPushTail) + ring);
 }
@@ -533,7 +533,7 @@ uint64_t LogicCapture::oldestKept() const {
     const Span &sp = spans_[(span_count_ - 1 - k) % kSpans];
     if (sp.ring == kUnmapped || sp.stream + sp.length != oldest) break;
     if (!ringIntact(sp.ring)) {   // its first bytes rewritten already: from the first one that is not
-      const uint32_t gone = ring_end_ + kDmaAhead - kRingBytes - sp.ring;
+      const uint32_t gone = ring_end_ + kDmaAhead - rx_ring_bytes_ - sp.ring;
       if (gone < sp.length) oldest = sp.stream + gone;
       break;
     }
@@ -561,11 +561,11 @@ bool LogicCapture::copyStream(uint64_t from, uint64_t to) {
     if (sp.ring == kUnmapped || g < sp.stream || g >= sp.stream + sp.length) return false;
     const uint32_t q = sp.ring + static_cast<uint32_t>(g - sp.stream);
     if (g == from) first_ring = q;
-    const size_t r = q & (kRingBytes - 1);
-    size_t m = kRingBytes - r;
+    const size_t r = q & (rx_ring_bytes_ - 1);
+    size_t m = rx_ring_bytes_ - r;
     if (m > sp.stream + sp.length - g) m = static_cast<size_t>(sp.stream + sp.length - g);
     if (m > to - g) m = static_cast<size_t>(to - g);
-    memcpy(buffer_ + filled_, ring_ + r, m);
+    memcpy(buffer_ + filled_, rx_ring_ + r, m);
     filled_ += static_cast<uint32_t>(m);
     g += m;
     if (g == sp.stream + sp.length) k = k ? k - 1 : UINT32_MAX;
@@ -610,8 +610,9 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   seg_samples_ = seg_raw_ = 0;
   seg_aligned_ = false;
   trigger_index_ = 0xFFFFFFFFu;
-  // a follower's trigger is the group's event; an immediate start (the ring a group's following left) sends none
-  reported_trigger_ = follow_ || trig_type_ == cap::kTriggerImmediate;
+  // every track of a trigger source's group sends its own triggered too, at its own sample (§4.4); an immediate start
+  // sends none
+  reported_trigger_ = !follow_ && trig_type_ == cap::kTriggerImmediate;
   done_ = false;
   overruns_ = 0;
   queue_overflow_ = 0;
@@ -794,7 +795,8 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);   // max(u8)
   // immediate, level, edge (one-shot); the most pretrigger the ring can give back (the narrowest sample)
   uint8_t trig[9];                                 // types(u32) max_pretrigger(u32) opts(u8)
-  putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge),
+  putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge) |
+                           (1u << cap::kTriggerLinked),
                  kSegmentBytes * 8 - 1, kTriggerOpts);   // at w = 1 (below the segment); a wider sample's is less
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
   // beyond 0 (capture §3.5): 1 the logic blocks (streaming over the vendor port's stages: configure says), 4 the test
@@ -849,7 +851,7 @@ void LogicCapture::planRelease() {
 // read finds nothing, status and segments count none.
 void LogicCapture::forget() {
   mode_ = cap::kModeOneShot;
-  triggered_ = follow_ = false;
+  triggered_ = follow_ = linked_ = false;
   trig_type_ = 0;
   pretrigger_ = 0;
   samples_ = bytes_ = filled_ = kept_samples_ = 0;
@@ -1046,7 +1048,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     const uint32_t value = getU32(v + 2);
     const bool ok = v[0] == cap::kTriggerImmediate ||
                     (mode == cap::kModeOneShot &&
-                     ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2)));
+                     ((v[0] == cap::kTriggerLevel && value <= 1) || (v[0] == cap::kTriggerEdge && value <= 2) ||
+                      v[0] == cap::kTriggerLinked));   // the group's trigger source (§4.4): role and value not looked at
     if (!ok) return Tail::refuse(kTagTrigger, trigger_tlv.critical, out, capacity);
     trig_type = v[0];
     trig_role = v[1];
@@ -1146,7 +1149,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (pretrigger && (pretrigger >= samples || pretrigger > max_pretrigger))
     return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
-  if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
+  const bool roled = trig_type != cap::kTriggerImmediate && trig_type != cap::kTriggerLinked;
+  if (channels_ == 0 || (roled && trig_role >= channels_)) return wrongState(out, capacity);
   if (events_roles >> channels_) return wrongState(out, capacity);   // a carriage role not in the plan (§3.3)
   // format 1's block (§1.3): L a multiple of 8 and of every D, at most block_max and kMaxBlock, its worst within a stage
   blocks::Plan plan;
@@ -1241,6 +1245,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   }
   if (!query) {
     triggered_ = triggered;
+    linked_ = trig_type == cap::kTriggerLinked;
     trig_type_ = trig_type;
     trig_role_ = trig_role;
     trig_value_ = trig_value;
@@ -1422,10 +1427,46 @@ bool LogicCapture::trackStartFollowing() {
     if (openTriggered(rate_hz_, width_, bytes_, num, den) != Open::kOk) { close(); fail(cap::kErrorPeripheral); return false; }
     triggered_ = true;
   }
+  // the stream's ring in PSRAM when there is one: a follower holds its pretrigger and the judging track's latency
+  // (an analog's: 100 ms of loop()) - 6.5 ms at 10 MHz x 8 lines in the internal ring, 100 ms in 1 MiB
+  if (!stream_ring_ && streamRingAvailable())
+    stream_ring_ = static_cast<uint8_t *>(heap_caps_aligned_alloc(128, kStreamRingBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA));
+  useRing(stream_ring_ != nullptr);
   follow_ = true;
   uint8_t out[4];   // generation
   const Result r = startTriggered(out, sizeof out);
   return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
+}
+
+uint8_t LogicCapture::trackCanJudge(uint8_t type, uint8_t role, const uint8_t *args) const {
+  namespace grp = reg::fixture_capture_group;
+  if (type == grp::kTriggerCondLevel) {   // level(u8) when(u8)
+    if (args[0] > 1 || args[1] > 1) return kJudgeUnsupported;
+  } else if (type == grp::kTriggerCondEdge) {   // edge(u8: 0 rising, 1 falling, 2 both)
+    if (args[0] > 2) return kJudgeUnsupported;
+  } else {
+    return kJudgeUnsupported;
+  }
+  return role < channels_ ? kJudgeOk : kJudgeNoRole;
+}
+
+// The group's condition as this track's own trigger (findTrigger): a level or an edge on the role, the source's arm.
+void LogicCapture::trackJudge(uint8_t type, uint8_t role, const uint8_t *args, uint8_t arm) {
+  namespace grp = reg::fixture_capture_group;
+  judged_arm_ = arm_;
+  judged_when_ = when_;
+  trig_type_ = type == grp::kTriggerCondLevel ? cap::kTriggerLevel : cap::kTriggerEdge;
+  trig_role_ = role;
+  trig_value_ = args[0];
+  when_ = type == grp::kTriggerCondLevel ? args[1] : 0;
+  arm_ = arm;
+}
+
+void LogicCapture::trackUnjudge() {
+  if (!linked_ || trig_type_ == cap::kTriggerLinked) return;
+  trig_type_ = cap::kTriggerLinked;
+  arm_ = judged_arm_;
+  when_ = judged_when_;
 }
 
 void LogicCapture::trackTriggerAt(uint64_t ns) {
@@ -1633,7 +1674,9 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (state_ != kStateConfigured && state_ != kStateDone && state_ != kStateError) return wrongState(out, capacity);
       if (mode_ == 3 && !subscribed_) return wrongState(out, capacity);   // streaming pushes: subscribe first
       if (mode_ == 2 || mode_ == 3) return startRepeat(out, capacity);
+      if (linked_ && !bound()) return wrongState(out, capacity);   // linked: the group's event cuts it (§3.3, cause 6)
       follow_ = false;
+      useRing(false);   // its own trigger: the internal ring (a follower's start took the PSRAM one)
       if (triggered_) return startTriggered(out, capacity);
       if (capacity < 4) return failed();
       if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }   // a unit made for this start

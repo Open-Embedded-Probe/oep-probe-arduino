@@ -95,7 +95,8 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   w.put(ana::kTlvDescribeRateRange, range, sizeof range);   // one channel (more share the ADC: configure says)
   w.u8(ana::kTlvDescribeChannels, kMaxChannels);             // max(u8)
   uint8_t trig[9];   // types(u32) max_pretrigger(u32) opts(u8)
-  putTriggerDecl(trig, (1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown),
+  putTriggerDecl(trig, (1u << ana::kTriggerImmediate) | (1u << ana::kTriggerCrossUp) | (1u << ana::kTriggerCrossDown) |
+                           (1u << ana::kTriggerLinked),
                  maxPretrigger(), kTriggerOpts);
   w.put(ana::kTlvDescribeTrigger, trig, sizeof trig);
   for (const Frontend &f : kFrontends) {
@@ -164,7 +165,7 @@ void AnalogCapture::planRelease() {
 void AnalogCapture::forget() {
   state_ = ana::kStateUnconfigured;
   frames_ = samples_ = 0;
-  short_ = trig_slipped_ = follow_ = segment_ = lost_ = false;
+  short_ = trig_slipped_ = follow_ = segment_ = lost_ = linked_ = false;
   trig_type_ = 0;
   pretrigger_ = 0;
   phase_ = 0;
@@ -238,7 +239,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   uint32_t trig_value = 0;
   if (const uint8_t *v = trigger_tlv.v) {
     const uint32_t value = getU32(v + 2);
-    const bool ok = v[0] == ana::kTriggerImmediate ||
+    const bool ok = v[0] == ana::kTriggerImmediate || v[0] == ana::kTriggerLinked ||   // linked: the group's (§4.4)
                     ((v[0] == ana::kTriggerCrossUp || v[0] == ana::kTriggerCrossDown) && value <= kFull);
     if (!ok) return Tail::refuse(ana::kTlvConfigureTrigger, trigger_tlv.critical, out, capacity);
     trig_type = v[0];
@@ -272,7 +273,8 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     }
   }
   // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
-  if (!channels_ || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
+  const bool roled = trig_type != ana::kTriggerImmediate && trig_type != ana::kTriggerLinked;
+  if (!channels_ || (roled && trig_role >= channels_)) return wrongState(out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return wrongState(out, capacity);
   // the actual rate
@@ -310,6 +312,7 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     if (!buffer) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
     buffer_ = buffer;
     trig_type_ = trig_type;
+    linked_ = trig_type == ana::kTriggerLinked;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
     arm_ = opts.arm;
@@ -425,7 +428,7 @@ bool AnalogCapture::startNow() {
   short_ = have_prev_ = force_ = trig_slipped_ = lost_ = false;
   error_ = ana::kErrorPeripheral;
   reported_ = false;
-  trig_reported_ = trig_type_ == 0 || follow_;   // a follower's trigger is the group's event
+  trig_reported_ = trig_type_ == 0 && !follow_;   // every track of a trigger source's group sends its own (§4.4)
   ext_ready_ = false;
   phase_ = 0;
   end_frame_ = ringMode() ? UINT32_MAX : samples_;
@@ -768,6 +771,31 @@ bool AnalogCapture::trackStartFollowing() {
   return startNow();
 }
 
+uint8_t AnalogCapture::trackCanJudge(uint8_t type, uint8_t role, const uint8_t *args) const {
+  namespace grp = reg::fixture_capture_group;
+  // value(u32) hysteresis(u32): a one-shot counts the first crossing, so the hysteresis (what the next one needs) is
+  // never used
+  if (type != grp::kTriggerCondCrossUp && type != grp::kTriggerCondCrossDown) return kJudgeUnsupported;
+  if (getU32(args) > kFull) return kJudgeUnsupported;
+  return role < channels_ ? kJudgeOk : kJudgeNoRole;
+}
+
+// The group's condition as this track's own trigger (search): a crossing on the role, the source's arm.
+void AnalogCapture::trackJudge(uint8_t type, uint8_t role, const uint8_t *args, uint8_t arm) {
+  namespace grp = reg::fixture_capture_group;
+  judged_arm_ = arm_;
+  trig_type_ = type == grp::kTriggerCondCrossUp ? ana::kTriggerCrossUp : ana::kTriggerCrossDown;
+  trig_value_ = getU32(args);
+  for (uint8_t m = 0; m < channels_; ++m) if (order_[m] == role) trig_slot_ = m;
+  arm_ = arm;
+}
+
+void AnalogCapture::trackUnjudge() {
+  if (!linked_ || trig_type_ == ana::kTriggerLinked) return;
+  trig_type_ = ana::kTriggerLinked;
+  arm_ = judged_arm_;
+}
+
 void AnalogCapture::trackTriggerAt(uint64_t ns) {
   ext_frame_ = static_cast<uint32_t>(samplesIn(ns > start_ns_ ? ns - start_ns_ : 0, rate_num_, rate_den_));
   ext_ready_ = true;
@@ -933,6 +961,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       if (refused(parsed)) return parsed;
       if (bound()) return boundInGroup(*this, out, capacity);   // the group starts it (cause 4)
       if (!trackReady() && state_ != ana::kStateError) return wrongState(out, capacity);
+      if (linked_) return wrongState(out, capacity);   // linked: only its group starts it (§3.3, cause 6)
       if (capacity < 4) return failed();
       follow_ = false;
       if (!startNow()) return failed();

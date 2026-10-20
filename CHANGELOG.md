@@ -1,6 +1,34 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) capture-group's trigger source (capture §4.4), a first version: describe features bit 0 and trigger_caps (one
+  stage, one term, one condition, no cross-track AND; the logic level and edge, the analog crossings up and down; no
+  serial, no trigger_out); bind's trigger_source / stage / cond TLVs (the form malformed, what it does not take
+  unsupported with the TLV, a track not linked or the role not in its plan unavailable cause 6, a follower that cannot
+  keep cause 2); force; status's trigger TLV and the triggered event (trigger_fn, record, ns, uncertainty, generation).
+  The logic and analog tracks take the linked trigger (type 7, one-shot) with their own pretrigger, a start alone
+  refused cause 6; the condition's track judges it as its own trigger, the others follow and cut at the nearest
+  sample; every track sends its own triggered. A logic follower runs into the stream's PSRAM ring (1 MiB) when there
+  is one: an analog's event comes up to 100 ms (a loop() round) late. The P4X: a falling edge of the fixture UART's TX
+  (logic 10 MHz) cut the analog (20 kHz) within one of its samples; an analog crossing (GPIO17) cut the logic (5 MHz)
+  at the event's ns.
+- (JA) capture-group の出来事の元（capture §4.4）の最初の版。
+  - describe: features bit 0 と trigger_caps（1 段、1 項、1 条件、トラックをまたぐ AND なし。条件はロジックのレベル・エッジ、アナログの
+    上向き・下向きの横切り。serial と trigger_out はなし）。
+  - bind の trigger_source / stage / cond の TLV:
+    - 形の誤りは malformed。
+    - 持たないもの（2 段以上、count 2 以上、時間の上限、rearm 1、2 つ目の条件、宣言に無い type）は unsupported（その TLV）。
+    - linked でないトラックや、plan に無い役割は unavailable cause 6。
+    - リングに入りきらない追う側は cause 2。
+  - force。status の trigger の TLV と、出来事 triggered（trigger_fn、record、ns、不確かさ、世代）。
+  - ロジックとアナログのトラックは、linked のトリガ（type 7、one-shot）を、自分の pretrigger と一緒に受ける。単独の start は cause 6 で断る。
+  - 条件を持つトラックは、それを自分のトリガとして判定する。ほかのトラックは追い、出来事に最も近いサンプルで切る。どのトラックも自分の
+    triggered を送る。
+  - ロジックが追う側のときは、PSRAM があればストリームのリング（1 MiB）に取る。アナログの出来事は、loop の一周（最大 100 ms）遅れて
+    届くため。
+  - P4X での確認:
+    - fixture の UART の TX の立ち下がり（ロジック 10 MHz）で、アナログ（20 kHz）がそのサンプル 1 つ以内で切れた。
+    - アナログ（GPIO17）の横切りで、ロジック（5 MHz）が出来事の ns で切れた。
 - (EN) P4 streaming at 40 MHz with 8 lines (40 MB/s; the ceiling, kStreamMaxBytes, from 27 MB/s): the vendor port's
   max_frame 27136 (a stage is one 53-packet USB transfer; answers stay within 16 KiB); the stream's DMA ring in PSRAM
   (1 MiB, 26 ms at 40 MB/s; 2 MiB panicked in the PARLIO driver's receive) is the stream's buffer: with every stage in

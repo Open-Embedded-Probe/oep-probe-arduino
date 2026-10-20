@@ -105,6 +105,10 @@ class AnalogCapture final : public Interface, public GroupTrack {
   // comes in while the trigger is on its way (late_ns)
   bool trackCanKeep(uint32_t p, uint64_t late_ns) const override;
   void trackKeep(uint32_t p, uint64_t late_ns) override { follow_pre_ = p; follow_late_ns_ = late_ns; }
+  bool trackLinked() const override { return linked_; }
+  uint8_t trackCanJudge(uint8_t type, uint8_t role, const uint8_t *args) const override;
+  void trackJudge(uint8_t type, uint8_t role, const uint8_t *args, uint8_t arm) override;
+  void trackUnjudge() override;
   uint64_t trackLatencyNs() const override;
   void trackForce() override { if (state_ == reg::fixture_analog::kStateWaiting) force_ = true; }
   uint32_t trackLoad() const override { return total_hz_; }
@@ -149,6 +153,8 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
   uint8_t arm_ = 1;               // trigger_opts (capture §3.3)
+  bool linked_ = false;           // configured with the linked trigger (§4.4): started only by its group
+  uint8_t judged_arm_ = 1;        // the configured arm while the group's condition is judged here
   uint32_t follow_pre_ = 0;   // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)
   uint64_t follow_late_ns_ = 0;   // ... and how long its trigger may take to come (the trigger track's latency)
   uint32_t follow_frames_ = 0;    // ... and the frames of its ring (ESP32: the buffer, grown for it)

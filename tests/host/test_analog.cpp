@@ -414,6 +414,26 @@ static void testTriggerIndex() {
   }
 }
 
+// The linked trigger (§4.4): configure takes it (role and value not looked at) with a pretrigger; a start of its own is
+// refused cause 6 (its group's event cuts it); the group's conditions it judges are the crossings, the value within the
+// ADC's range and the role in its plan.
+static void testLinked() {
+  namespace grp = reg::fixture_capture_group;
+  Rig rig;
+  CHECK(rig.plan({26}) == 0);
+  Bytes p = configureRequest(10000, 1000);
+  tlv(p, kCrit | ana::kTlvConfigureTrigger, {ana::kTriggerLinked, 9, 0, 0, 0, 0});
+  tlv(p, kCrit | ana::kTlvConfigurePretrigger, u32(100));
+  CHECK(ok(rig.op(ana::kOpConfigure, p)));
+  CHECK(rejectedAs(rig.op(ana::kOpStart), kRejectUnavailable) && rig.out == (Bytes{0x01, 1, 0, 6}));
+  CHECK(rig.cap.trackLinked());
+  const uint8_t mid[8] = {0x00, 0x08, 0, 0, 0, 0, 0, 0}, over[8] = {0xFF, 0xFF, 0, 0, 0, 0, 0, 0};
+  CHECK(rig.cap.trackCanJudge(grp::kTriggerCondCrossUp, 0, mid) == GroupTrack::kJudgeOk);
+  CHECK(rig.cap.trackCanJudge(grp::kTriggerCondCrossDown, 1, mid) == GroupTrack::kJudgeNoRole);
+  CHECK(rig.cap.trackCanJudge(grp::kTriggerCondCrossUp, 0, over) == GroupTrack::kJudgeUnsupported);
+  CHECK(rig.cap.trackCanJudge(grp::kTriggerCondEdge, 0, mid) == GroupTrack::kJudgeUnsupported);
+}
+
 int main() {
   testTriggerIndex();
   testStop();
@@ -425,6 +445,7 @@ int main() {
   testValuesRefused();
   testDescribe();
   testConfigureOrder();
+  testLinked();
   printf("analog: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

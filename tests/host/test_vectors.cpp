@@ -1229,8 +1229,13 @@ static void testWideCases() {
       p.corr = static_cast<uint16_t>(getU16(&req[1]) - 1);
       got = p.send(req);
     } else if (names(c["fns"], "oep.fixture.capture-group")) {
-      WideProbe p;
       const std::string state = c["state"].string;
+      if (state.find("declares no features trigger_source") != std::string::npos) {   // this probe has it (§4.4)
+        printf("  ops \"%s\": for a probe without the trigger source, not run here (test_capture_group)\n", name.c_str());
+        ++not_run;
+        continue;
+      }
+      WideProbe p;
       auto in = [&](const char *s) { return state.find(s) != std::string::npos || name.find(s) != std::string::npos; };
       CHECK(p.open() && groupBefore(p));   // group generation 4
       if (in("edge trigger")) {
@@ -1604,6 +1609,6 @@ int main() {
   testRestartLetsGo();
   testEveryOpsCanonical();
   testPassthrough();
-  printf("vectors: %d cases, %d checks, %d failures, %d example-probe cases not run\n", cases, checks, failures, not_run);
+  printf("vectors: %d cases, %d checks, %d failures, %d cases not run (the example probe's, or another probe's)\n", cases, checks, failures, not_run);
   return failures ? 1 : 0;
 }

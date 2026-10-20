@@ -61,6 +61,7 @@ struct Config {
   bool trigger = false;
   uint32_t pretrigger = 0;
   bool arm0 = false;         // trigger_opts arm 0 (capture §3.3): looked at from the start, an early trigger shortens
+  bool linked = false;       // the linked trigger (§4.4): the group's trigger source cuts it
 };
 
 static Bytes request(const Config &c) {
@@ -69,6 +70,7 @@ static Bytes request(const Config &c) {
   tlv(p, kCrit | cap::kTlvConfigureRate, u32(c.rate));
   if (c.samples && c.mode != 3) tlv(p, cap::kTlvConfigureSamples, u32(c.samples));
   if (c.segments) tlv(p, cap::kTlvConfigureSegments, u32(c.segments));
+  if (c.linked) tlv(p, kCrit | cap::kTlvConfigureTrigger, {cap::kTriggerLinked, 0, 0, 0, 0, 0});
   if (c.trigger) {   // an edge on role 0, falling
     Bytes t = {cap::kTriggerEdge, 0};
     const Bytes v = u32(1);
@@ -736,6 +738,16 @@ static void testImmediateAfterFollowing() {
 // A follower keeps the group's pretrigger P_k (capture §4.1): its segment starts P_k samples before the group's trigger
 // (trigger_index P_k), and trackCanKeep bounds it by the ring at this width and the segment's samples.
 static void testFollowerKeeps() {
+  {   // without PSRAM: the internal ring (below)
+    board(512 * 1024, 0);
+    Rig bare(2);
+    Bytes o;
+    Config k;
+    k.rate = 1000000;
+    k.samples = 4096;
+    CHECK(ok(configure(bare.cap, k, o)));
+    CHECK(bare.cap.trackCanKeep(4095, 200000000) && !bare.cap.trackCanKeep(4095, 250000000));
+  }
   board(512 * 1024, size_t(32) << 20);
   Rig rig(2);   // w = 2: 4 samples a byte
   Dma dma;
@@ -745,9 +757,9 @@ static void testFollowerKeeps() {
   c.samples = 4096;
   CHECK(ok(configure(rig.cap, c, out)));
   CHECK(rig.cap.trackCanKeep(0, 0) && rig.cap.trackCanKeep(4095, 0) && !rig.cap.trackCanKeep(4096, 0));
-  // the ring (64 KiB, w = 2: 262144 samples) less a chunk and the DMA's lead holds P_k and the trigger's latency: at
-  // 1 MHz about 209 ms of it
-  CHECK(rig.cap.trackCanKeep(4095, 200000000) && !rig.cap.trackCanKeep(4095, 250000000));
+  // the ring less a chunk and the DMA's lead holds P_k and the trigger's latency: with PSRAM the stream's ring (1 MiB,
+  // w = 2: 4194304 samples) - at 1 MHz about 4.19 s of it; without, the internal one (64 KiB: about 209 ms)
+  CHECK(rig.cap.trackCanKeep(4095, 4000000000ull) && !rig.cap.trackCanKeep(4095, 4300000000ull));
   rig.cap.trackKeep(400, 100000000);
   const uint64_t start_ns = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;   // the fake clock does not move
   CHECK(rig.cap.trackStartFollowing());
@@ -980,6 +992,53 @@ static void testStreamRing() {
   for (size_t n = 0; n < ring; n += 4032) { direct.giveBack(); deliver(4032); }
   check(1);
   logic.planRelease();
+}
+
+// The trigger source (§4.4) with this logic track: configured linked with its own pretrigger it is refused a start of
+// its own (cause 6); bound with a condition on it (a rising edge on role 0) it judges the edge itself, its segment cut
+// with trigger_index = pretrigger (arm 1), and the group's status carries the event (fn, the edge's ns, a sample period);
+// unbound, it is linked again.
+static void testLinkedGroup() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(1);
+  CaptureGroup group(rig.ep);
+  rig.ep.add(rig.cap);   // fn 1
+  rig.ep.add(group);     // fn 2
+  group.addTrack(rig.cap, rig.cap);
+  Bytes out;
+  Config c;
+  c.rate = 10000000;
+  c.samples = 4000;
+  c.linked = true;
+  c.pretrigger = 1000;
+  CHECK(ok(configure(rig.cap, c, out)));
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpStart, {}, out), kRejectUnavailable) && out == (Bytes{0x01, 1, 0, 6}));
+  Bytes bind = {1, 1, 0};
+  tlv(bind, kCrit | grp::kTlvBindTriggerSource, {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0});
+  tlv(bind, kCrit | grp::kTlvBindStage, {0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+  tlv(bind, kCrit | grp::kTlvBindCond, {0, 0, 0, grp::kCondSrcTrack, 1, 0, 0, grp::kTriggerCondEdge, 0});
+  uint8_t g[64];
+  Result r = group.handle(grp::kOpBind, bind.data(), bind.size(), g, sizeof g);
+  CHECK(ok(r));
+  Dma dma;
+  r = group.handle(grp::kOpStart, nullptr, 0, g, sizeof g);
+  CHECK(ok(r));
+  r = group.handle(grp::kOpStatus, nullptr, 0, g, sizeof g);   // poll: the judging track starts (nothing to wait for)
+  CHECK(ok(r) && g[0] == grp::kStateWaiting && r.length == 13);
+  dma.deliver(4096, 0x00);   // 32768 samples low, then high: the rising edge at sample 32768
+  dma.deliver(4096, 0xFF);
+  dma.run();
+  rig.cap.poll();
+  r = group.handle(grp::kOpStatus, nullptr, 0, g, sizeof g);
+  CHECK(ok(r) && r.length == 13 + 17 && g[13] == grp::kTlvStatusAnswerTrigger && getU16(g + 16) == 1 &&
+        getU32(g + 26) == 100);   // fn 1, +- 100 ns (10 MHz)
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out.size() >= 2 + 37 &&
+        getU32(out.data() + 2 + 28) == 1000);   // trigger_index = pretrigger
+  const uint8_t unbind[] = {0};
+  CHECK(ok(group.handle(grp::kOpBind, unbind, sizeof unbind, g, sizeof g)));
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpStart, {}, out), kRejectUnavailable) && out == (Bytes{0x01, 1, 0, 6}));
+  rig.cap.planRelease();
 }
 
 // One large immediate one-shot breaks no later triggered configure (0.0.28: 523264 samples on 1 line freed the DMA
@@ -1401,6 +1460,7 @@ int main() {
   testConfigureOrder();
   testStreamingWithoutStages();
   testStreamRing();
+  testLinkedGroup();
   testOverLimitRoundsDown();
   testEveryModeAtTheLowestRate();
   printf("capture: %d checks, %d failures\n", checks, failures);

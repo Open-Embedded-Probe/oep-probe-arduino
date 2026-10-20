@@ -31,6 +31,7 @@
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
 #if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
 #include <driver/parlio_rx.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -134,9 +135,14 @@ class LogicCapture final : public Interface, public GroupTrack {
     const uint8_t w = width_ ? width_ : 1;
     if (p && (p >= samples_ || p > static_cast<uint32_t>(kPretriggerBytes * 8 / w))) return false;
     const uint64_t late = samplesIn(late_ns, rate_num_, rate_den_) + 1;
-    return rate_num_ != 0 && (p + late) * w / 8 + kChunkMax + kDmaAhead <= kRingBytes;
+    const size_t ring = streamRingAvailable() ? kStreamRingBytes : kRingBytes;   // a follower takes the PSRAM one
+    return rate_num_ != 0 && (p + late) * w / 8 + kChunkMax + kDmaAhead <= ring;
   }
   void trackKeep(uint32_t p, uint64_t late_ns) override { follow_pre_ = p; (void)late_ns; }
+  bool trackLinked() const override { return linked_ && mode_ == reg::fixture_logic::kModeOneShot; }
+  uint8_t trackCanJudge(uint8_t type, uint8_t role, const uint8_t *args) const override;
+  void trackJudge(uint8_t type, uint8_t role, const uint8_t *args, uint8_t arm) override;
+  void trackUnjudge() override;
   // As the trigger track: an edge is found when its DMA chunk (a descriptor, at most kChunkMax bytes) is done; a force
   // is known at once. And loop() comes round.
   static constexpr uint32_t kChunkMax = 4032;
@@ -257,6 +263,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t *rx_ring_ = nullptr, *stream_ring_ = nullptr;
   uint32_t rx_ring_bytes_ = kRingBytes;
   void useRing(bool stream);
+  // the stream's ring held, or PSRAM to take it - asked of MALLOC_CAP_SPIRAM alone: the largest free block with
+  // MALLOC_CAP_DMA too is 0 on the P4 though heap_caps_aligned_alloc takes it with those caps (the P4X, core 3.3.12)
+  bool streamRingAvailable() const {
+    return stream_ring_ || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= kStreamRingBytes;
+  }
   static constexpr uint32_t kStopDrainMs = 500;   // at stop the stream ring goes out within this (or the rest is dropped)
   // one-shot with a trigger (or a pretrigger): the ring and the harvest task, searching
   static constexpr size_t kPretriggerBytes = kRingBytes / 2;   // history the ring can give back (half of it)
@@ -268,6 +279,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint32_t trig_value_ = 0;
   uint32_t pretrigger_ = 0;
   uint8_t arm_ = 1, when_ = 0;   // trigger_opts (capture §3.3)
+  bool linked_ = false;          // configured with the linked trigger (§4.4): started only by its group
+  uint8_t judged_arm_ = 1, judged_when_ = 0;   // the configured trigger_opts while the group's condition is judged here
   uint8_t format_ = 0;            // the data format (capture §1): 0, or 4 the test sequence
   bool level_false_ = false;      // a level, when 0: a sample not at it seen since arming
   uint32_t follow_pre_ = 0;          // following a group's trigger: the group's pretrigger here (P_k, capture §4.1)

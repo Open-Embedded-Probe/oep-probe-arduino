@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// oep.fixture.capture-group revision 1 (oep-spec docs/oep-if-capture.ja.md §4): capture / analog tracks started
+// oep.fixture.capture-group revision 1 (oep-spec interfaces/oep-if-capture.ja.md §4): capture / analog tracks started
 // together. Each track keeps its own configure and is read as usual; the group binds them, starts and stops them at once
 // and says when it started. Every track stamps its own first sample on the probe's one clock (segment start_ns), so a
 // track's offset is its first segment's start_ns minus the group's.
 //
-//   0x01 bind(n u8, n x fn u16, [TLV 0x01 trigger_track fn]) -> -
-//   0x02 start -> start_ns u64, generation u32, n u8, n x (fn u16, generation u32) (bind order)
-//   0x03 stop   0x04 force   0x05 status -> state u8, start_ns u64, trigger_ns u64, trigger_fn u16, generation u32 (no lock)
-//   events: 0x03 triggered (trigger_fn u16, trigger_ns u64, generation u32), 0x02 stopped (reason u8, error u8,
-//   generation u32) - the group's generation, one up at every start of the group (capture §4.1, §4.2)
+//   0x1A bind(n u8, n x fn u16, [TLV 0x01 trigger_source, 0x02 stage, 0x03 cond]) -> -
+//   0x11 start -> start_ns u64, generation u32, n u8, n x (fn u16, generation u32) (bind order)
+//   0x12 stop   0x13 force   0x14 status -> state u8, start_ns u64, generation u32, [TLV 0x02 trigger] (no lock)
+//   events: 0x03 triggered (trigger_fn u16, record u32, trigger_ns u64, uncertainty_ns u32, generation u32), 0x02 stopped
+//   (reason u8, error u8, generation u32) - the group's generation, one up at every start of the group (§4.1, §4.2)
 //
-// With trigger_track, that track waits for its own trigger and the others follow: they run into their rings from the
-// start (the trigger track starts once each holds its pretrigger), and when the trigger's time is known (trackTriggerNs)
-// the group hands it to them (trackTriggerAt), and each cuts its segment around the sample nearest to it, with its own
-// pretrigger. A track that cannot follow (no ring) is refused at bind, and so is a set of tracks over a budget they
-// share (addBudget): the probe's own limit, declared nowhere (capture §4.3: a host tries bind).
+// The trigger source (§4.4) here: one condition on one bound track - a logic level or edge, an analog crossing - every
+// track configured with the linked trigger and its own pretrigger. The condition's track judges it as its own trigger
+// (trackJudge); the others follow: they run into their rings from the start (the judging track starts once each holds
+// its pretrigger, arm 1), and when the event's time is known (trackTriggerNs) the group hands it to them
+// (trackTriggerAt), and each cuts its segment around the sample nearest to it, with its own pretrigger. A follower
+// whose ring cannot hold its pretrigger and the judging track's latency is refused at bind (cause 2), and so is a set
+// of tracks over a budget they share (addBudget): the probe's own limit, declared nowhere (§4.3: a host tries bind).
 #pragma once
 #include <Arduino.h>
 #include "Oep.h"
@@ -68,6 +70,19 @@ class GroupTrack {
   // track's own search delay plus kLoopNs for loop() to come round (a stop of another track, a long request).
   static constexpr uint64_t kLoopNs = 100000000;
   virtual uint64_t trackLatencyNs() const { return kLoopNs; }
+  // The trigger source (capture §4.4): a track configured with the linked trigger (type 7, a one-shot here) has its
+  // segment cut by the group's event, around its own pretrigger. trackCanJudge: whether the group's one condition (its
+  // type and arguments as bind sent them, the lengths checked) can be judged on this track - kJudgeOk, kJudgeUnsupported
+  // (a type or a value it does not take), kJudgeNoRole (the role not in its plan). trackJudge makes it the track that
+  // judges (its own trigger, the condition's, with the source's arm); trackUnjudge puts the linked trigger back.
+  static constexpr uint8_t kJudgeOk = 0, kJudgeUnsupported = 1, kJudgeNoRole = 2;
+  virtual bool trackLinked() const { return false; }
+  virtual uint8_t trackCanJudge(uint8_t type, uint8_t role, const uint8_t *args) const {
+    (void)type; (void)role; (void)args;
+    return kJudgeUnsupported;
+  }
+  virtual void trackJudge(uint8_t type, uint8_t role, const uint8_t *args, uint8_t arm) { (void)type; (void)role; (void)args; (void)arm; }
+  virtual void trackUnjudge() {}
   void setBound(bool on, uint16_t group_fn = 0) { bound_ = on; group_fn_ = on ? group_fn : 0; if (!on) following_ = false; }
   bool bound() const { return bound_; }
   uint16_t groupFn() const { return group_fn_; }   // the group's fn while bound (0: not bound)
@@ -216,6 +231,11 @@ inline uint64_t samplesIn(uint64_t dns, uint32_t num, uint32_t den) {
 class CaptureGroup final : public Interface {
  public:
   static constexpr size_t kMaxTracks = 4;
+  // the trigger source's condition types it takes (§4.4, describe trigger_caps): a logic level or edge, an analog
+  // crossing - each track says which of them it judges (GroupTrack::trackCanJudge)
+  static constexpr uint32_t kCondTypes =
+      (1u << reg::fixture_capture_group::kTriggerCondLevel) | (1u << reg::fixture_capture_group::kTriggerCondEdge) |
+      (1u << reg::fixture_capture_group::kTriggerCondCrossUp) | (1u << reg::fixture_capture_group::kTriggerCondCrossDown);
   CaptureGroup(Endpoint &endpoint, uint16_t instance = 0) : endpoint_(endpoint), instance_(instance) {}
   // A track the group may bind (add both to the endpoint first; describe's tracks).
   bool addTrack(Interface &interface, GroupTrack &track);
@@ -230,7 +250,7 @@ class CaptureGroup final : public Interface {
   // bind .. status, force (optional) included: the ops tag declares them (core §1.2)
   bool offers(uint8_t op) const override {
     using namespace reg::fixture_capture_group;
-    return op == kOpBind || op == kOpStart || op == kOpStop || op == kOpStatus;
+    return op == kOpBind || op == kOpStart || op == kOpStop || op == kOpStatus || op == kOpForce;
   }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
@@ -260,6 +280,17 @@ class CaptureGroup final : public Interface {
   bool startTrigger();
   uint64_t trigger_ns_ = ~uint64_t{0};
   bool forced_ = false;    // the trigger was forced: triggered says trigger_fn 0
+  uint8_t arm_ = 1;        // the trigger source's arm (§4.4): 1 judged once every other track holds its pretrigger
+  // bind's trigger source as read (§4.4): one condition here
+  struct Source {
+    bool present = false;
+    uint8_t arm = 1, cond_raw = 0, role = 0, type = 0;
+    uint16_t fn = 0;
+    uint8_t args[16] = {};
+  };
+  Result readSource(const Tail &tail, uint8_t n, const uint8_t *fns, Source &src, uint8_t *out, size_t capacity) const;
+  uint16_t triggerFn() const;
+  uint32_t triggerUncertainty() const;
   int indexOf(uint16_t fn) const;
   int indexOf(const GroupTrack &track) const;
   uint8_t state() const;
