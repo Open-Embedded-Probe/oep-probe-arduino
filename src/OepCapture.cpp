@@ -939,7 +939,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   const uint8_t width = widthFor(channels_);
   // streaming's ceiling: the harvest copies the DMA ring into stages at about kStreamMaxBytes a second; above it the
   // ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture §3.3), as the
-  // one-shot's ceiling above (P4X, 2026-10-20: 30 MB/s kept, 40 MB/s overran)
+  // one-shot's ceiling above (P4X, 2026-10-20: 26.7 MB/s kept with no drop, 30 MB/s overran at once, 32 too)
   if (mode == cap::kModeStreaming) {
     // the highest whole-divider rate at or below it: the nearest the divider picks never lands above
     const uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + kStreamMaxBytes * 8ull - 1) /
