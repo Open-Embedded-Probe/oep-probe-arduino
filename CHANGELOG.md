@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Interface, GroupTrack and DmiPhy have a protected, non-virtual destructor (nothing is deleted through them): a
+  static interface needs no destructor at exit, its registration nor two vtable slots; Interface::flags(), used
+  nowhere, is gone. 0.95 KB on the CH32X035 (80.5 KB). A custom interface builds as before (CustomInterface).
+- (JA) Interface、GroupTrack、DmiPhy のデストラクタを、仮想でない protected にした（それらを通して delete することは無い）。静的な
+  インターフェースの、終了時のデストラクタとその登録、仮想関数表の 2 つ分が要らなくなる。どこでも使っていない
+  Interface::flags() を消した。CH32X035 で 0.95 KB 減（80.5 KB）。自作のインターフェースは今までどおりビルドできる
+  （CustomInterface で確かめた）。
 - (EN) probe.config's Wi-Fi (the wifi / ipv4 items, the network op, handing them to a WifiControl) compiles out where
   there is no Wi-Fi (kWifiBuild: the ESP32 and the host tests only; elsewhere wifi() is a constant null and setWifi
   refuses one): 1.2 KB on the CH32X035 (81.4 KB with the core's LTO).

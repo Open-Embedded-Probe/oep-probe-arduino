@@ -36,8 +36,10 @@ inline bool dmLinkLook(uint32_t dmstatus, uint32_t dmcontrol) {
 }
 
 class DmiPhy {
+ protected:
+  ~DmiPhy() = default;   // never deleted through a DmiPhy (as Interface)
+
  public:
-  virtual ~DmiPhy() = default;
   // Drive the bus and bring the debug module up (dmactive). false = no target answered.
   virtual bool attach() = 0;
   virtual void release() = 0;

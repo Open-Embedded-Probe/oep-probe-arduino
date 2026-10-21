@@ -30,8 +30,10 @@ class Endpoint;
 // What a capture interface gives a group: whether it can be bound, and a start / stop that the group drives. While
 // bound, the interface refuses its own configure / start / stop / force (rejected unavailable cause 4).
 class GroupTrack {
+ protected:
+  ~GroupTrack() = default;   // never deleted through a GroupTrack (as Interface)
+
  public:
-  virtual ~GroupTrack() = default;
   virtual bool trackReady() const = 0;        // configured and not running
   // a start would be taken now (capture §3.2: configured, complete or error; streaming: subscribed) - the group checks
   // every track before it starts any (§4.1)

@@ -574,13 +574,16 @@ class ResourceNumbers {
 
 // One offered interface. The endpoint gives it fn = 1, 2, ... in registration order.
 class Interface {
+ protected:
+  // Never deleted through an Interface: no virtual destructor, so a static interface needs no destructor run at exit
+  // (nor its registration, nor the vtable's two slots)
+  ~Interface() = default;
+
  public:
-  virtual ~Interface() = default;
   virtual const char *name() const = 0;
   virtual uint16_t instance() const = 0;
   // The payload shapes are fixed by (name, revision) (core §2.7); every oep.* interface in this library is revision 1.
   virtual uint8_t revision() const { return 0; }
-  virtual uint8_t flags() const { return 0; }
   // The whole describe as TLV bytes (declarations only: nothing that changes while the probe runs, core §7.3); the
   // endpoint pages it by whole TLVs.
   virtual size_t describe(uint8_t *out, size_t capacity) { (void)out; (void)capacity; return 0; }
