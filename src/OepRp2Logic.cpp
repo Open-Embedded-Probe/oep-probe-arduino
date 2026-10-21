@@ -33,7 +33,8 @@ enum : uint8_t {
   kPreFall = 8, kHighFall = 10, kFallTurn = 13, kLowFall = 14,   // falling: the pretrigger, then high, then low
   kPost = 16, kEnd = 19,                                         // the samples after it; the IRQ flag, a halt
   kPreEither = 20, kEither = 22,                                 // either edge: the pretrigger, then the first change
-  kLength = 24,
+  kPreHigh = 24, kPreLow = 27,   // a level with when 1: the pretrigger, then at it (hi_r / lo_f: at once if it is)
+  kLength = 30,
 };
 uint16_t gProgram[kLength];
 void build() {
@@ -63,6 +64,12 @@ void build() {
   p[21] = pio_encode_jmp_y_dec(kPreEither);
   p[22] = pio_encode_jmp_pin(kFallTurn);  // high now: the first change is a fall
   p[23] = pio_encode_jmp(kHighRise);      // low: a rise
+  p[24] = in | pio_encode_delay(1);       // pre_h (its last sample to hi_r's first: four cycles, once)
+  p[25] = pio_encode_jmp_y_dec(kPreHigh);
+  p[26] = pio_encode_jmp(kHighRise);
+  p[27] = in | pio_encode_delay(1);       // pre_l
+  p[28] = pio_encode_jmp_y_dec(kPreLow);
+  p[29] = pio_encode_jmp(kLowFall);
 }
 
 uint32_t gcd(uint32_t a, uint32_t b) {
@@ -145,9 +152,11 @@ bool Rp2LogicCapture::begin() {
   uint8_t entry = kPost;
   if (trig_type_) {
     const bool level = trig_type_ == cap::kTriggerLevel;
-    // a level high (when 0) is the rise into it, a level low the fall; an edge 0 rising, 1 falling, 2 either
+    // a level high (when 0) is the rise into it, a level low the fall; when 1 one already at it counts (the wait for
+    // it alone); an edge 0 rising, 1 falling, 2 either
     const uint8_t way = level ? (trig_value_ ? 0 : 1) : static_cast<uint8_t>(trig_value_);
-    if (way == 0) entry = pretrigger_ ? kPreRise : kLowRise;
+    if (level && when_) entry = way == 0 ? (pretrigger_ ? kPreHigh : kHighRise) : (pretrigger_ ? kPreLow : kLowFall);
+    else if (way == 0) entry = pretrigger_ ? kPreRise : kLowRise;
     else if (way == 1) entry = pretrigger_ ? kPreFall : kHighFall;
     else entry = pretrigger_ ? kPreEither : kEither;
   }
@@ -369,6 +378,7 @@ Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size
     trig_role_ = trig_role;
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
+    when_ = opts.when;
     divider_ = divider;
     clk_hz_ = clk;
     state_ = cap::kStateConfigured;

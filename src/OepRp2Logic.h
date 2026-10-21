@@ -8,8 +8,8 @@
 // second channel puts the first back to the ring's start each round); every loop of its program takes one sample in
 // three instructions, at clk_sys / (3 x a whole divider) - the rate answered as that fraction. The trigger is the
 // program's: the pretrigger's samples taken first (arm 1: capture §3.3), then `jmp pin` on the trigger line - an edge
-// (rising, falling, either: the first change after arming) or a level as when 0 has it (after a sample not at it,
-// since arming: the edge into it) - then the samples after it, an IRQ flag, and a halt. Once halted the ring is turned
+// (rising, falling, either: the first change after arming) or a level (when 0: after a sample not at it since arming,
+// the edge into it; when 1: one already at it too) - then the samples after it, an IRQ flag, and a halt. Once halted the ring is turned
 // to start at the segment's first sample and packed to one byte a sample (channel k on bit k, up to 8 channels, any of
 // the probe's GPIOs: the capture only listens, and claims none). A sample is late only if the state machine stalled
 // on a full FIFO (the DMA behind): the segment is then slipped.
@@ -35,7 +35,7 @@ class Endpoint;
 class Rp2LogicCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 8;
-  static constexpr uint8_t kTriggerOpts = 0;   // the defaults only: arm 1, when 0 (describe trigger opts)
+  static constexpr uint8_t kTriggerOpts = kTriggerOptsWhen1;   // arm 1 only; when 0 or 1 (describe trigger opts)
   // The most samples a segment holds: its ring (4 bytes a sample) and the packed segment (1) from the heap.
 #if defined(PICO_RP2350)
   static constexpr uint32_t kMaxSamples = 65536;
@@ -109,6 +109,7 @@ class Rp2LogicCapture final : public Interface, public GroupTrack {
   uint32_t samples_ = 0, divider_ = 0, clk_hz_ = 0;
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0, pretrigger_ = 0;
+  uint8_t when_ = 0;   // trigger_opts' when (capture §3.3)
   uint32_t *ring_ = nullptr;   // samples_ words
   uint8_t *segment_ = nullptr;   // samples_ bytes, packed
   uint32_t capacity_ = 0;   // what ring_ / segment_ hold
