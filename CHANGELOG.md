@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) RP2: oep.fixture.logic, one-shot (OepRp2Logic.h, the Logic choice): a PIO state machine samples GPIO0-31 three
+  cycles a sample (clk_sys / (3 x a whole divider), up to clk_sys / 6) into a DMA ring, its program the trigger (edge
+  rising / falling / either, level as when 0; the pretrigger taken first: arm 1), the ring packed to a byte a sample
+  after. Bench (RP2040, a channel's pulls switched by its gpio fixture): immediate, every trigger and force; 10 MHz not
+  slipped. Both DMA channels are stopped with their enable off (aborting the chained one alone hung: RP2040-E13).
+- (JA) RP2: oep.fixture.logic の一回取り（OepRp2Logic.h、Logic の選択）。
+  - PIO のステートマシンが GPIO0〜31 を 1 サンプル 3 サイクルで読み、DMA のリングに入れる。レートは
+    clk_sys / (3 × 整数の分周) で、最大 clk_sys / 6。
+  - トリガは PIO のプログラムで判定する（edge の立ち上がり・立ち下がり・両方、when 0 の level）。プリトリガは先に取る
+    （arm 1）。取り終わったら、リングを 1 サンプル 1 バイトに詰め直す。
+  - 実機（RP2040。チャンネルのプルを gpio fixture で切り替えた）で、即時・各トリガ・force を確かめた。10 MHz で欠けなし。
+  - DMA の 2 チャンネルは、EN を落としてからまとめて止める。連鎖した側だけを abort すると止まらなかった（RP2040-E13）。
 - (EN) Every interface and every transport of Firmware/OepProbe is a choice, with no build option (OepFeatures.h,
   OepChoice.h): a weak oepWithX() in the chip's header adds X with oepAddX() by default (or nothing, for an optional
   one), and a .cpp of the sketch's own replaces it - an empty one leaves X out and links none of its code (measured: the
