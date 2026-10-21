@@ -11,7 +11,7 @@
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
 // oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and Console in it), Swd, Gpio, Uart,
-// Config, Analog, Link, and Cdc (the transport), all in by default.
+// Config, Analog, Link, I2c (oep.fixture.i2c-target), and Cdc (the transport), all in by default.
 // Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
@@ -35,6 +35,7 @@
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
 #include <OepFixture.h>
+#include <OepP4I2cTarget.h>
 #include <OepLog.h>
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
@@ -189,6 +190,12 @@ void oepAddAnalog() {
   loopWork.add([] { analog->poll(); });
 }
 
+// oep.fixture.i2c-target on arduino-pico's Wire slave (PinTable owner 3)
+void oepAddI2c() {
+  static oep::Slot<oep::P4I2cTarget> i2c;
+  endpoint.add(i2c.make(pins));
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
@@ -204,6 +211,7 @@ __attribute__((weak)) void oepWithUart() { oepAddUart(); }
 __attribute__((weak)) void oepWithConfig() { oepAddConfig(); }
 __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
+__attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
 
 // oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
 // rp2040.reboot(), a watchdog reset, oep::kRestartDetachMs later. restart_max_ms (its describe): the chip is running
@@ -257,7 +265,8 @@ void setup() {
   oepWithUart();
   settingsFn.run();
   oepWithAnalog();   // after the settings: the fns before it keep their numbers
-  oepWithLink();   // last: the fns before it keep their numbers
+  oepWithLink();
+  oepWithI2c();   // after the ones before: they keep their numbers (the saved settings name fns)
   lastly.run();
 }
 

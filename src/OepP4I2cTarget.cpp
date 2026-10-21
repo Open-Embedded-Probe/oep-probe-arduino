@@ -271,7 +271,7 @@ void P4I2cTarget::service() {
   unlock();
 }
 
-#elif defined(ARDUINO_ARCH_CH32RV)
+#elif defined(OEP_I2C_TARGET_WIRE)
 
 namespace {
 P4I2cTarget *running = nullptr;   // the one the Wire callbacks (plain functions) reach
@@ -281,12 +281,12 @@ void P4I2cTarget::lock() { noInterrupts(); }
 void P4I2cTarget::unlock() { interrupts(); }
 void P4I2cTarget::service() {}
 
-// After STOP (interrupt context): the write, its bytes past max_length dropped
+// The write (interrupt context), its bytes past max_length dropped
 void P4I2cTarget::onReceiveIsr(int count) {
   P4I2cTarget *t = running;
   if (!t) return;
   size_t n = 0;
-  for (int c; (c = t->wire_.read()) >= 0; ++n)
+  for (int c; (c = t->wire().read()) >= 0; ++n)
     if (n < kMaxFrame) t->rx_[n] = static_cast<uint8_t>(c);
   t->rx_count_ = count > 0 && static_cast<size_t>(count) > n ? static_cast<size_t>(count) : n;
   t->onTransaction(false);
@@ -296,26 +296,37 @@ void P4I2cTarget::onReceiveIsr(int count) {
 void P4I2cTarget::onRequestIsr() {
   P4I2cTarget *t = running;
   if (!t) return;
-  for (size_t i = 0; t->slot_count_ && i < t->slot_length_[t->slot_head_]; ++i) t->wire_.write(t->txByte(i));
+  for (size_t i = 0; t->slot_count_ && i < t->slot_length_[t->slot_head_]; ++i) t->wire().write(t->txByte(i));
   t->onTransaction(true);
 }
 
 bool P4I2cTarget::start() {
   if (started_) return true;
+#if defined(ARDUINO_ARCH_RP2040)
+  wire_ = ((sda_ >> 1) & 1) ? &wire1_ : &wire0_;   // GP0/1 i2c0, GP2/3 i2c1, and so on in fours
+  if (!wire_->setSDA(sda_) || !wire_->setSCL(scl_)) return false;   // the pair is not one I2C's
+#endif
   running = this;
-  wire_.onReceive(onReceiveIsr);
-  wire_.onRequest(onRequestIsr);
+  wire().onReceive(onReceiveIsr);
+  wire().onRequest(onRequestIsr);
+#if defined(ARDUINO_ARCH_CH32RV)
   if (!wire_.begin(address_, platformPad(sda_), platformPad(scl_), kMaxClockHz)) {   // the pair is no I2C's route
     running = nullptr;
     return false;
   }
+#else
+  wire_->setClock(kMaxClockHz);
+  wire_->begin(address_);
+  gpio_pull_up(sda_);   // the pads' pull-ups (features bit2: fixture §3)
+  gpio_pull_up(scl_);
+#endif
   rx_count_ = 0;
   started_ = true;
   return true;
 }
 
 void P4I2cTarget::stop() {
-  if (started_) wire_.end();
+  if (started_) wire().end();
   running = nullptr;
   started_ = false;
 }

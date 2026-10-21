@@ -20,10 +20,11 @@
 // the slot. The logic past the FIFOs (onTransaction, txByte) is portable and
 // host-tested through OEP_HOST_FAKE_I2C_SLAVE (tests/host).
 //
-// On a WCH CH32 (ArduinoCore-CH32RV) it is the core's Wire slave, an instance of this class's own (CH32RVTwoWire): its
-// receive callback (after STOP, the write readable) makes the frame, its request callback (at the address match) hands
-// the head slot over and uses it up. Frames are the core's Wire buffer (CH32RV_WIRE_BUFFER_SIZE: a longer write keeps
-// its head), at most 400 kHz (the CH32 I2C's fast mode), no internal pull-ups (the bus needs its own), no stretch.
+// On a WCH CH32 (ArduinoCore-CH32RV) and an RP2 (arduino-pico) it is the core's Wire slave, instances of this class's
+// own: its receive callback (the write readable) makes the frame, its request callback (at the address match) hands the
+// head slot over and uses it up. No stretch. CH32: frames of the core's Wire buffer (CH32RV_WIRE_BUFFER_SIZE: a longer
+// write keeps its head), at most 400 kHz (its fast mode), no internal pull-ups (the bus needs its own). RP2: the I2C the
+// SDA pin is on (i2c0 / i2c1: the pair must be one I2C's), 1 MHz (fast mode plus), the pads' pull-ups on.
 #pragma once
 
 #include <Arduino.h>
@@ -34,8 +35,9 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include <driver/i2c_slave.h>
 #include <esp_intr_alloc.h>
-#elif defined(ARDUINO_ARCH_CH32RV)
+#elif defined(ARDUINO_ARCH_CH32RV) || defined(ARDUINO_ARCH_RP2040)
 #include <Wire.h>
+#define OEP_I2C_TARGET_WIRE 1   // the core's Wire slave
 #endif
 
 namespace oep {
@@ -45,7 +47,7 @@ class P4I2cTarget final : public Interface {
   static constexpr uint8_t kOwnerId = 3;
   enum Role : uint8_t { kRoleSda = 1, kRoleScl = 2 };
 #if defined(ARDUINO_ARCH_CH32RV)
-  static constexpr size_t kMaxFrame = CH32RV_WIRE_BUFFER_SIZE;   // the core's Wire buffer
+  static constexpr size_t kMaxFrame = CH32RV_WIRE_BUFFER_SIZE < 128 ? CH32RV_WIRE_BUFFER_SIZE : 128;   // the core's Wire buffer
   static constexpr uint32_t kMaxClockHz = 400000;
   static constexpr bool kInternalPullups = false;
 #else
@@ -140,8 +142,15 @@ class P4I2cTarget final : public Interface {
   void reloadTx();
   void drainRx();
   void applyStretch();
-#elif defined(ARDUINO_ARCH_CH32RV)
-  arduino::CH32RVTwoWire wire_{0};
+#elif defined(OEP_I2C_TARGET_WIRE)
+#if defined(ARDUINO_ARCH_CH32RV)
+  arduino::CH32RVTwoWire wire_{0};   // whichever enabled I2C the pair is a route of
+  TwoWire &wire() { return wire_; }
+#else
+  TwoWire wire0_{i2c0, 0, 1}, wire1_{i2c1, 2, 3};
+  TwoWire *wire_ = &wire0_;   // the one the SDA pin is on (start)
+  TwoWire &wire() { return *wire_; }
+#endif
   static void onReceiveIsr(int count);
   static void onRequestIsr();
 #endif
