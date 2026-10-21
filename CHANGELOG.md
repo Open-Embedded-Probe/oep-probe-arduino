@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Streaming's stages take smaller frames when the full one leaves no room for two: the largest of the frame limit,
+  16 KiB and 8 KiB that gives two (48 KiB left over each, as before). The P4 v1.3 had no room for two of 27 KiB
+  beside the DMA ring and streamed the copied way, 8.4 MB/s at most (wireskein, 2026-10-21); with smaller frames it may
+  take the zero-copy way. stream_buffer and a format 1 block follow the frame taken. Host-tested only.
+- (JA) ストリームの stage は、いちばん大きいフレームでは 2 つ取れないとき、小さいフレームにする。フレームの上限、16 KiB、
+  8 KiB のうち、2 つ取れるいちばん大きいものを選ぶ（それぞれに 48 KiB の余りを残すのは前と同じ）。P4 v1.3 は、DMA リングの
+  横に 27 KiB を 2 つ取れず、写す経路（最大 8.4 MB/s）になっていた（wireskein、2026-10-21）。小さいフレームなら zero-copy の
+  経路に乗れる見込み。stream_buffer と形式 1 のブロックは、取ったフレームに合わせる。ホストの試験だけで確かめた。
 - (EN) The spill: while it holds bytes, every chunk the queue has goes into it at each pass of the harvest, and the
   drain comes before any wait. One chunk a pass beside a 16 KiB drain took the ring at ~17 MB/s: a 32 MB/s stream
   ran it over with the spill not full (P4X ba87edd, the host's reader stopped 500 ms; 36 MB/s at 400 ms, 40 MB/s at

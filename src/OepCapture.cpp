@@ -558,23 +558,32 @@ size_t LogicCapture::stageFrame() const {
   return frame / 512 * 512;
 }
 
-// The stages a stream gets: those held, or (none taken yet) as openStages would take them - frame + 48 KiB left over
-// each. Fewer than 2 (or no zero-copy transport): the copied way.
-size_t LogicCapture::stagesPossible() const {
-  if (!endpoint_.directCapable()) return 0;
+// The stages a stream gets and their frame: those held, or (none taken yet) as openStages would take them - frame +
+// 48 KiB left over each, the frame the largest of stageFrame(), 16 KiB, 8 KiB that gives two (the P4 v1.3 had no room
+// for two of 27 KiB beside the DMA ring and streamed the copied way, 8.4 MB/s at most: wireskein 2026-10-21). Fewer
+// than 2 (or no zero-copy transport): the copied way.
+size_t LogicCapture::stagesPossible(size_t *frame_out) const {
+  size_t frame = stage_count_ ? stage_frame_ : stageFrame();
   size_t count = stage_count_;
-  if (!count) {
-    const size_t frame = stageFrame();
+  if (!endpoint_.directCapable()) count = 0;
+  else if (!count) {
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!ring_) largest = largest > kRingBytes ? largest - kRingBytes : 0;   // the DMA ring is taken first (openRepeat)
-    while (count < kStagesMax && largest >= frame + 48 * 1024) { ++count; largest -= frame; }
+    for (const size_t f : {stageFrame(), size_t(16384), size_t(8192)}) {
+      if (f > stageFrame()) continue;
+      size_t n = 0, left = largest;
+      while (n < kStagesMax && left >= f + 48 * 1024) { ++n; left -= f; }
+      if (n > count || f == stageFrame()) { count = n; frame = f; }
+      if (n >= 2) break;
+    }
   }
+  if (frame_out) *frame_out = frame;
   return count;
 }
 
 uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t segments) const {
-  const size_t count = stagesPossible();
-  const size_t frame = stageFrame();
+  size_t frame = 0;
+  const size_t count = stagesPossible(&frame);
   if (count < 2) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);   // the copied way
   // and the FIFO behind them (formats 0 and 4; held, or PSRAM to take it)
   const bool psram = streamRingAvailable();
@@ -589,9 +598,8 @@ bool LogicCapture::openStages() {
   // one frame per stage, a whole number of 512-byte packets within the frame limit, so the host's read runs on across
   // frames (every frame ending with a short packet cost gaps at 40-160 MHz: a host read completing per frame over
   // usbipd). The host bounds the latency with its read size (64 KiB: four frames).
-  size_t frame = max_read_ + 16 + 2;
-  if (frame > kStageFrameMax) frame = kStageFrameMax;
-  frame = frame / 512 * 512;
+  size_t frame = 0;
+  stagesPossible(&frame);   // the held stages' frame, or the largest that gives two
   stage_data_ = static_cast<uint32_t>(frame - kPushHead - kPushTail);
   // Allocated once and kept: freeing and taking 8 x 16 KiB (and the 128 KiB ring) at every configure fragmented the
   // internal heap until the next streaming configure found no block (2026-09-25).
@@ -606,6 +614,7 @@ bool LogicCapture::openStages() {
     if (!stage_[i]) break;
     ++stage_count_;
   }
+  stage_frame_ = frame;
   stage_free_ = stage_count_ ? (1u << stage_count_) - 1 : 0;
   stage_cur_ = -1;
   if (!stream_ring_ && stage_count_ >= 2)   // the stream's DMA ring in PSRAM, kept like the stages (none: ring_)
@@ -1526,9 +1535,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
         plan.raw_bit[plan.raw++] = k;
       }
     }
-    size_t frame = max_read_ + 16 + 2;
-    if (frame > kStageFrameMax) frame = kStageFrameMax;
-    const size_t stage_data = frame / 512 * 512 - kPushHead - kPushTail;
+    size_t frame = 0;
+    stagesPossible(&frame);   // a block fits the stage it goes into
+    const size_t stage_data = frame - kPushHead - kPushTail;
     const uint32_t most = block_max_tlv.v ? getU32(block_max_tlv.v) : blocks::kMaxBlock;
     uint32_t L = (most < blocks::kMaxBlock ? most : blocks::kMaxBlock) / unit * unit;
     while (L && blocks::worstBytes(plan, L) > stage_data) L -= unit;

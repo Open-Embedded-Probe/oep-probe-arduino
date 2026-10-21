@@ -252,7 +252,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   void freeStages();
   uint32_t streamBuffer(uint32_t samples, uint8_t width, uint32_t segments) const;
   size_t stageFrame() const;
-  size_t stagesPossible() const;
+  size_t stagesPossible(size_t *frame = nullptr) const;
+  size_t stage_frame_ = 0;   // the held stages' frame (openStages)
   void releaseStages();
   void sendStage();
   static void stageDone(void *context, const uint8_t *buffer);

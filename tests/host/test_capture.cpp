@@ -208,8 +208,9 @@ class FakeDirect final : public DirectTransport {
 // trigger's ring and the firmware's own use, 0.0.28 on the bench: a streaming configure answered failed) it streams
 // the copied way through the store instead, and configure succeeds.
 static void testStreamingWithoutStages() {
-  // 112 KiB: the DMA ring (64 KiB) and no room for two stages - the copied way (the P4 v1.3, 2026-10-21)
-  for (const size_t internal : {size_t(112) << 10, size_t(160) << 10, size_t(512) << 10}) {
+  // 112 KiB: the DMA ring (64 KiB) and no room for two stages - the copied way (the P4 v1.3, 2026-10-21); 128 KiB:
+  // room for two of 8 KiB only (48 KiB left over each) - the zero-copy way with smaller frames
+  for (const size_t internal : {size_t(112) << 10, size_t(128) << 10, size_t(160) << 10, size_t(512) << 10}) {
     const bool copied = internal == (size_t(112) << 10);
     board(internal, size_t(32) << 20);
     static FakeDirect direct;
@@ -238,6 +239,7 @@ static void testStreamingWithoutStages() {
         CHECK(num / den <= uint64_t(LogicCapture::kStreamMaxBytes) * 8 / 2);
         // the copied way (no stages: the P4 v1.3): what the endpoint's loop keeps up with (2026-10-21, wireskein)
         if (copied) CHECK(num / den <= uint64_t(LogicCapture::kStreamCopiedMaxBytes) * 8 / 2);
+        else CHECK(num / den > uint64_t(LogicCapture::kStreamCopiedMaxBytes) * 8 / 2);   // the zero-copy way's ceiling
       }
     // format 1 goes over the stages only: without them refused unavailable cause 3 (it sent raw samples as blocks)
     Bytes p = request(c);
