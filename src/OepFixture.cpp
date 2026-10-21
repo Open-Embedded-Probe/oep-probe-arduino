@@ -438,7 +438,7 @@ size_t FixtureUart::bindInput(const uint8_t *data, size_t length) {
   // only what the UART takes without waiting, so the RX side keeps being emptied (a blocking write let the UART's
   // receive buffer overflow while a 64 KiB echo was going out)
   if (!running_ || tx_ < 0) return 0;
-  const int room = serial_.availableForWrite();
+  const int room = platformUartTxRoom(serial_);
   if (room <= 0) return 0;
   return serial_.write(data, static_cast<size_t>(room) < length ? static_cast<size_t>(room) : length);
 }
@@ -573,7 +573,7 @@ Result FixtureUart::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       if (refused(parsed)) return parsed;
       if (!running_ || tx_ < 0) return wrongState(out, capacity);
       if (capacity < 2) return failed();
-      const int room = serial_.availableForWrite();
+      const int room = platformUartTxRoom(serial_);
       const size_t written = room > 0 ? serial_.write(payload + 2, static_cast<size_t>(room) < count ? static_cast<size_t>(room) : count) : 0;
       putU16(out, static_cast<uint16_t>(written));
       return written == count ? completed(2) : written ? partial(2) : failed(2);

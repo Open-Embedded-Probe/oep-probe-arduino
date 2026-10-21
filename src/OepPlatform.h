@@ -327,6 +327,17 @@ inline void platformRestart() {
 }
 #endif
 
+// What a UART's send side takes now without waiting. arduino-pico's availableForWrite says only whether its TX FIFO has
+// room (1 or 0) - a fixture's write took one byte a request; an empty FIFO takes its whole depth (32) at once.
+inline int platformUartTxRoom(OepUart &serial) {
+  const int room = serial.availableForWrite();
+#if defined(ARDUINO_ARCH_RP2040)
+  uart_inst_t *const u = &serial == &Serial1 ? uart0 : &serial == &Serial2 ? uart1 : nullptr;
+  if (room > 0 && u && (uart_get_hw(u)->fr & UART_UARTFR_TXFE_BITS)) return 32;
+#endif
+  return room;
+}
+
 // Sizes are hints: a core that cannot resize its buffers keeps its default.
 inline void platformUartBuffers(OepUart &serial, size_t rx, size_t tx) {
 #if defined(ARDUINO_ARCH_RP2040)
@@ -406,9 +417,13 @@ inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, ui
   (void)irq_core;
   // Only pins the UART reaches (setRX / setTX panic otherwise; the fixture's role masks keep them out upstream).
   const int index = &serial == &Serial1 ? 0 : 1;   // Serial1 = uart0, Serial2 = uart1 in arduino-pico
-  if (rx < 0 || tx < 0 || rx > 63 || tx > 63) return false;
-  if (!((platformUartRxMask(index) >> rx) & 1) || !((platformUartTxMask(index) >> tx) & 1)) return false;
-  if (!serial.setRX(rx) || !serial.setTX(tx)) return false;
+  // One of the two may be left out (-1: a plan with RX or TX alone, the fixture's), not both
+  if ((rx < 0 && tx < 0) || rx > 63 || tx > 63) return false;
+  if ((rx >= 0 && !((platformUartRxMask(index) >> rx) & 1)) || (tx >= 0 && !((platformUartTxMask(index) >> tx) & 1)))
+    return false;
+  if (!serial.setRX(rx < 0 ? UART_PIN_NOT_DEFINED : static_cast<pin_size_t>(rx)) ||
+      !serial.setTX(tx < 0 ? UART_PIN_NOT_DEFINED : static_cast<pin_size_t>(tx)))
+    return false;
   serial.begin(baud, static_cast<uint16_t>(config));
   return true;
 #elif defined(ARDUINO_ARCH_ESP32)
