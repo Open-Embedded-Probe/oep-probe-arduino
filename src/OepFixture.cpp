@@ -103,7 +103,7 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
       for (uint8_t i = 0; i < n; ++i)
         if (!planned(getU16(payload + 1 + 2 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 2 * i), out, capacity);
       out[0] = n;
-      for (uint8_t i = 0; i < n; ++i) out[1 + i] = digitalRead(getU16(payload + 1 + 2 * i)) ? 1 : 0;
+      for (uint8_t i = 0; i < n; ++i) out[1 + i] = digitalRead(platformPad(getU16(payload + 1 + 2 * i))) ? 1 : 0;
       return completed(answer);
     }
     default:

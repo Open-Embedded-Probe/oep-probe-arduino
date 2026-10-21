@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ArduinoCore-CH32RV, the parts for the wires: platformPad (a channel as the core's pin: port x 24 + bit, the
+  core's pads being 64 and up) through platformGpio / platformPresetLevel and fixture.gpio's read; OepCh32BitBang.h
+  (BSHR / BSXR / BCR / INDR, SWDIO's turnaround through its CFG field) and the RVSWD PHY's CH32 backend. Built; the
+  full set (RVSWD, riscv-dm, console, gpio) links to ~70 KB, over the CH32X035's 62 KB - not in Ch32.h yet.
+- (JA) ArduinoCore-CH32RV の、デバッグ線のための部品。
+  - platformPad: チャネルをコアのピン番号にする（ポート × 24 ＋ ビット。コアのパッド番号は 64 から）。platformGpio、
+    platformPresetLevel、fixture.gpio の読みで使う。
+  - OepCh32BitBang.h（BSHR / BSXR / BCR / INDR、SWDIO の向きの切り替えは CFG の 4 ビット）と、RVSWD の PHY の CH32 用の経路。
+  - ビルドで確かめた。全部（RVSWD、riscv-dm、コンソール、gpio）を入れるとリンク後で約 70 KB になり、CH32X035 の 62 KB を
+    超えるので、Ch32.h にはまだ入れていない。
 - (EN) ArduinoCore-CH32RV (0.2.1), a first step: profile ch32x035 (sketch.yaml takes the core from its Board Manager
   URL); Ch32.h with fn 0 and the endpoint's own interfaces on the FS vendor bulk interface (VID:PID 1209:4F45, the
   unit id the chip's 64-bit unique id); OepPlatform.h's unit id, chip ("ch32x035") and restart from CH32RV;

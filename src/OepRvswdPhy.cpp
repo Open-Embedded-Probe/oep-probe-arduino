@@ -181,6 +181,41 @@ uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
 }  // namespace
 }  // namespace oep
 
+#elif defined(ARDUINO_ARCH_CH32RV)
+#define OEP_RVSWD_BACKEND 1
+#include "OepCh32BitBang.h"
+#include "OepPlatform.h"
+
+namespace oep {
+namespace {
+
+using Io = ch32::BitBang;
+Io gIo;
+
+// Interrupts off for one frame (as the RP2's): the core runs the USB stack from loop() / delay(), so nothing of the
+// probe's own is cut short.
+struct Critical {
+  Critical() { noInterrupts(); }
+  ~Critical() { interrupts(); }
+};
+
+bool ioBegin(int dio, int clk) { return gIo.setup(platformPad(dio), platformPad(clk)); }
+bool ioMove(int old_dio, int, int dio, int clk) {   // the old pins back to plain Hi-Z inputs
+  if (old_dio >= 0) gIo.freeBoth();
+  return gIo.setup(platformPad(dio), platformPad(clk));
+}
+// A gpio output or an output idle on the pair since the last connection: back to the wire's own state (the data
+// line's pull-up; CH32 pads have no strength to put back)
+void ioReclaim(int dio, int) { if (dio >= 0) gIo.releaseBoth(); }
+void ioDrive(int, int) { gIo.driveBoth(); }
+void ioRelease(int, int) { gIo.releaseBoth(); }
+void ioClkPull(int clk, int dir) { if (clk >= 0) gIo.clkPull(dir); }
+void ioFree(int, int) { gIo.freeBoth(); }
+uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
+
+}  // namespace
+}  // namespace oep
+
 #elif defined(OEP_HOST_FAKE_RVSWD)
 // Host tests (tests/host): the frames against a simulated target, which keeps the pins' state and the time.
 #define OEP_RVSWD_BACKEND 1
