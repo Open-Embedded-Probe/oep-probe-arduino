@@ -8,6 +8,16 @@
 // registry/oep-v1.toml); the names below are the library's aliases.
 #pragma once
 
+// A chip with little RAM (the CH32X035's 20 KiB): the endpoint's tables are cut to what a probe of a few interfaces on
+// one USB transport needs (OepEndpoint.h). A build may set it itself (-DOEP_SMALL_RAM=1).
+#if !defined(OEP_SMALL_RAM)
+#if defined(ARDUINO_CH32X035)
+#define OEP_SMALL_RAM 1
+#else
+#define OEP_SMALL_RAM 0
+#endif
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>

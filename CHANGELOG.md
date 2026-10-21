@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ArduinoCore-CH32RV (0.2.1), a first step: profile ch32x035 (sketch.yaml takes the core from its Board Manager
+  URL); Ch32.h with fn 0 and the endpoint's own interfaces on the FS vendor bulk interface (VID:PID 1209:4F45, the
+  unit id the chip's 64-bit unique id); OepPlatform.h's unit id, chip ("ch32x035") and restart from CH32RV;
+  OEP_SMALL_RAM (set for the CH32X035) cuts the endpoint's tables (10 interfaces, 2 transports, 8 events, 4 resend
+  records of a 512-byte frame): 33.9 KB of 62 KB flash, 9.3 KB of 20 KB RAM (was 19.6 KB). Built only; not on the bench.
+- (JA) ArduinoCore-CH32RV（0.2.1）への移植の最初の段階。
+  - プロファイル ch32x035 を足した（sketch.yaml が Board Manager の URL からコアを入れる）。
+  - Ch32.h: fn 0 と endpoint 自身のインターフェースを、FS の vendor bulk で出す（VID:PID 1209:4F45、unit id はチップの 64 bit の
+    固有 ID）。
+  - OepPlatform.h: unit id、チップ名（"ch32x035"）、再起動を CH32RV から取る。
+  - OEP_SMALL_RAM（CH32X035 で立つ）で、endpoint の表を小さくした（インターフェース 10、transport 2、イベント 8、再送の記録
+    4 件 × 512 バイト）。Flash 33.9 KB / 62 KB、RAM 9.3 KB / 20 KB（前は 19.6 KB）。
+  - ビルドだけで確かめた。実機ではまだ。
 - (EN) Reverted: the stages' frame chosen by the most in all (44c96ef). On the P4 it took 16 KiB x 8 and a 36 MHz
   stream fell to ~25 MB/s with ~11 losses in 10 s, where 16 KiB x 3 kept 36 MHz with none (wireskein, 2026-10-21);
   why more stages are slower there is not known yet. Back to the largest frame that gives two.

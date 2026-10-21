@@ -97,7 +97,7 @@ class Endpoint {
  public:
   // The fns a probe lists: the sketch's interfaces (at most kMaxInterfaces - 2) and the endpoint's own two (oep.probe.plan,
   // oep.probe.restart) after them.
-  static constexpr size_t kMaxInterfaces = 24;
+  static constexpr size_t kMaxInterfaces = OEP_SMALL_RAM ? 10 : 24;
   static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMinMs = reg::kLimitLeaseMinMs, kLeaseMaxMs = reg::kLimitLeaseMaxMs;
 
   // A transport's kind (core §7.5, registry transport_kind): the serial ports (UART bridge, USB CDC, USB-Serial/JTAG)
@@ -110,10 +110,10 @@ class Endpoint {
   };
   static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
   // Transports, a TCP listener's connection slots each counted (addTcpListener).
-  static constexpr size_t kMaxTransports = 8;
+  static constexpr size_t kMaxTransports = OEP_SMALL_RAM ? 2 : 8;
   // A serial port's frames are decoded here (one at a time): a serial port's max_frame is at most this (the
   // endpoint's own may be larger: its other transports use it, core §7.1).
-  static constexpr size_t kMaxSerialFrame = 2048;
+  static constexpr size_t kMaxSerialFrame = OEP_SMALL_RAM ? 512 : 2048;
 
   // usb_interface (describe transport, core §7.5): for USB CDC the bInterfaceNumber of the CDC communication interface
   // (the first of the function); for built-in USB serial that number as the hardware presents it, or 0xFF when the
@@ -407,7 +407,7 @@ class Endpoint {
   uint32_t holder_ = 0, last_ = 0;
   bool have_last_ = false;
   uint32_t lease_ms_ = kLeaseDefaultMs, expires_ms_ = 0;
-  uint8_t scratch_[768];   // one interface's full describe (after the ops tag) before paging
+  uint8_t scratch_[OEP_SMALL_RAM ? 512 : 768];   // one interface's full describe (after the ops tag) before paging
 
   uint32_t max_op_ms_ = kMaxOpMs;
 
@@ -438,7 +438,7 @@ class Endpoint {
   size_t draining_[kMaxInterfaces] = {};   // a batch due: the bytes still to send of what was pending then
   // events: fn (1 and up: fn 0 sends none, core §11.2), seq per fn shared with data frames
   struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[40]; };
-  static constexpr size_t kEvents = 32;
+  static constexpr size_t kEvents = OEP_SMALL_RAM ? 8 : 32;
   Event events_[kEvents];
   uint32_t event_head_ = 0, event_tail_ = 0;
   bool queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length);
@@ -452,7 +452,8 @@ class Endpoint {
   // alone; dropped at every successful open (kept over end, lapse, force). Results over kDedupBytes are not kept
   // (rejected result_lost): kDedupBytes covers a whole frame of the largest profile, so a 1 KiB read_block whose answer
   // was corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).
-  static constexpr size_t kDedupEntries = 8, kDedupBytes = 1024 + 5;
+  // A small-RAM build: 4 (over its max_inflight) of a 512-byte frame.
+  static constexpr size_t kDedupEntries = OEP_SMALL_RAM ? 4 : 8, kDedupBytes = (OEP_SMALL_RAM ? 512 : 1024) + 5;
   // The request is kept too, up to kDedupRequestBytes (core §5.1: a resent request is compared byte for byte with the
   // one recorded - a different one is malformed; one whose bytes are not kept is result_lost).
   static constexpr size_t kDedupRequestBytes = 64;

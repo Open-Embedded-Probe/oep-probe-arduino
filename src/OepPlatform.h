@@ -26,6 +26,8 @@
 #elif defined(ARDUINO_ARCH_ESP32)
 #include <driver/gpio.h>
 #include <freertos/semphr.h>
+#elif defined(ARDUINO_ARCH_CH32RV)
+#include <CH32RV.h>
 #endif
 
 namespace oep {
@@ -210,6 +212,10 @@ inline size_t platformUnitId(uint8_t *out, size_t capacity) {
   const uint64_t mac = ESP.getEfuseMac();
   n = 6;
   for (size_t i = 0; i < n; ++i) raw[i] = static_cast<uint8_t>(mac >> (8 * i));
+#elif defined(ARDUINO_ARCH_CH32RV)
+  const uint64_t uid = CH32RV.getUniqueId();   // the chip's unique id (ESIG), 64 bits
+  n = 8;
+  for (size_t i = 0; i < n; ++i) raw[i] = static_cast<uint8_t>(uid >> (8 * (7 - i)));
 #elif defined(OEP_UNIT_ID)
   static_assert(detail::unitIdTextOk(OEP_UNIT_ID), "OEP_UNIT_ID: 1 to 16 characters of a-z 0-9 - (oep-core §7.5)");
   (void)raw;
@@ -240,6 +246,14 @@ inline size_t platformChip(char *out, size_t room) {
 #else
   n = snprintf(out, room, "rp2040 v%u", static_cast<unsigned>(rp2040_chip_version()));
 #endif
+#elif defined(ARDUINO_ARCH_CH32RV)
+  // the part lowercase without its hyphens (core §7.5): "CH32X035" -> "ch32x035"
+  const char *model = CH32RV.getChipModel();
+  size_t at = 0;
+  for (const char *c = model; c && *c && at + 1 < room; ++c)
+    if (*c != '-') out[at++] = (*c >= 'A' && *c <= 'Z') ? static_cast<char>(*c - 'A' + 'a') : *c;
+  if (at < room) out[at] = 0;
+  n = static_cast<int>(at);
 #elif defined(ARDUINO_ARCH_ESP32)
   const unsigned rev = ESP.getChipRevision();   // major x 100 + minor
   // the part lowercase without its hyphens (core §7.5): "ESP32-P4" -> "esp32p4", "ESP32-D0WD-V3" -> "esp32d0wdv3"
@@ -266,7 +280,7 @@ inline bool describeChip(TlvWriter &w) {
 // (Endpoint::bootId).
 inline uint32_t platformRandom32() { return bootIdSource(); }
 
-#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_CH32RV)
 // The chip restarted as from power-on, for oep.probe.restart (oep-if-restart, Endpoint::setRestart). Does not return.
 // A device on USB goes off the bus first (the pull-up off), kRestartDetachMs before the reset (Oep.h): a reset with the
 // device still on the bus left the host failing its device descriptor request after the restart, until a replug.
@@ -279,6 +293,10 @@ inline void platformRestart() {
   BootGuard::planned();   // not a crash: the next boot does not count it (OepBootGuard.h)
 #if defined(ARDUINO_ARCH_ESP32)
   esp_restart();
+#elif defined(ARDUINO_ARCH_CH32RV)
+  // ArduinoCore-CH32RV: CH32RV.restart(), a clean software reset; a sketch whose USB device is on takes it off the bus
+  // first (USBDevice.end()) in its own handler
+  CH32RV.restart();
 #else
 #if !defined(USE_TINYUSB)
   mutex_enter_blocking(&USB.mutex);
