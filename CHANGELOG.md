@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) capture-drops ends with every byte the stream dropped since the start, whatever the way (u64): the copied way's
+  segments with no room to send were in no counter (wireskein, the P4 v1.3).
+- (JA) capture-drops の最後に、ストリームが落としたバイト数の合計（理由を問わない、u64）を足した。写す経路で、送る空きが
+  無くて区画を捨てた分は、どのカウンタにも出ていなかった（wireskein、P4 v1.3）。
 - (EN) Streaming's stages take smaller frames when the full one leaves no room for two: the largest of the frame limit,
   16 KiB and 8 KiB that gives two (48 KiB left over each, as before). The P4 v1.3 had no room for two of 27 KiB
   beside the DMA ring and streamed the copied way, 8.4 MB/s at most (wireskein, 2026-10-21); with smaller frames it may

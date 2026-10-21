@@ -2207,9 +2207,10 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       // zero-copy stages, 0 the store through the endpoint) and the stages held (u8); then the memory a capture draws
       // on now (u32 each): internal RAM's largest free block, DMA-capable internal RAM's, PSRAM's total (0: none); then
       // the most the DMA ring held not yet harvested since the start (u32, bytes; the stream's buffer in use); then the
-      // spill behind it: the most it held since the start and its size (u32 each, bytes; 0 0: none)
+      // spill behind it: the most it held since the start and its size (u32 each, bytes; 0 0: none); then every byte
+      // the stream dropped since the start, whatever the way (u64: the copied way's segments with no room to send too)
       static const char kDrops[] = "io.github.open-embedded-probe.capture-drops";
-      constexpr size_t kName = sizeof kDrops - 1, kValue = 1 + kName + 42;
+      constexpr size_t kName = sizeof kDrops - 1, kValue = 1 + kName + 50;
       if (used + kTlvHeader + kValue <= capacity) {
         putTlvHeader(out + used, reg::kTagNamedExtension, kValue);
         uint8_t *v = out + used + kTlvHeader;
@@ -2227,6 +2228,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 31 + kName, ring_peak_);
         putU32(v + 35 + kName, spill_peak_);
         putU32(v + 39 + kName, spill_ ? static_cast<uint32_t>(kSpillBytes) : 0);
+        putU64(v + 43 + kName, dropped_);
         used += kTlvHeader + kValue;
       }
       // the spill's diagnostics (named, as above; only with a spill): bytes in (u64), their copy's cycles (u64), bytes
