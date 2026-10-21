@@ -1,6 +1,51 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Every interface and every transport of Firmware/OepProbe is a choice, with no build option (OepFeatures.h,
+  OepChoice.h): a weak oepWithX() in the chip's header adds X with oepAddX() by default (or nothing, for an optional
+  one), and a .cpp of the sketch's own replaces it - an empty one leaves X out and links none of its code (measured: the
+  same bytes as compiling it out). X's objects are oep::Slots made by that one call; what needs two parts (the
+  settings' place / hold / uart / Wi-Fi, a group's tracks, the pass-throughs) is the user's code, the other only sets a
+  pointer. A weak bool around an if was measured and not taken: it is dropped only with -ffunction-sections at the
+  link, and an object it names still pulls in its archive member (0.8 KB more on the CH32X035). No transport is the
+  probe's by the spec: Endpoint has a constructor with none (the first added is transport 0) and setAnswerBuffer. The
+  classic ESP32's OEP_WIFI / OEP_PORT_SPEED build options are gone (oepWithWifi / oepWithPortSpeed). The CH32X035's
+  default set: vendor bulk, HID, RVSWD, console, gpio, link (62.0 KB of 62 KiB).
+- (JA) Firmware/OepProbe のインターフェースと transport を、すべてビルドオプションなしで選べるようにした（OepFeatures.h、
+  OepChoice.h）。
+  - 機種のヘッダーに weak の oepWithX() を置き、既定では oepAddX() で X を足す（任意のものは何もしない）。
+  - スケッチの .cpp で同じ関数を定義すると置き換わる。空にすると X は外れ、そのコードはリンクされない（コンパイルで外した場合と
+    同じバイト数になることを測った）。
+  - X のオブジェクトは、その 1 回の呼び出しで作る oep::Slot に置く。二つにまたがる部分（設定の place / hold / uart / Wi-Fi、
+    group の track、pass-through）は使う側のコードに書き、もう一方はポインタを置くだけにする。
+  - weak の bool と if で囲む形も測ったが採らなかった。リンク時に -ffunction-sections がないと消えず、名前を出したオブジェクトが
+    アーカイブのメンバーを引き込む（CH32X035 で 0.8 KB 多い）。
+  - 仕様の上でプローブ固定の transport はないので、Endpoint に transport なしのコンストラクタ（最初に足したものが transport 0）と
+    setAnswerBuffer を足した。
+  - classic ESP32 のビルドオプション OEP_WIFI / OEP_PORT_SPEED はなくした（oepWithWifi / oepWithPortSpeed）。
+  - CH32X035 の既定は vendor bulk、HID、RVSWD、console、gpio、link（62 KiB のうち 62.0 KB）。
+- (EN) Interfaces and transports ported, each a new fn after a chip's existing ones (the saved settings name fns by
+  number): CH32 oep.fixture.i2c-target (the core's Wire slave), oep.wire.swio (timed against SysTick) and the profiles
+  ch32v307 / ch32h417 (everything in; OEP_SMALL_RAM on every CH32 but the H41x; the channels the chip's pads less its
+  own USB / SWD); RP2 oep.fixture.i2c-target (arduino-pico's Wire slave), oep.wire.swio (SysTick, from RAM), USB vendor
+  bulk and HID (OepRp2Usb.h: this library's TinyUSB class drivers on arduino-pico's stack; bench: both answer on an
+  RP2040) and a UART bridge (Serial2, off by default); ESP32 / P4 oep.wire.swd (OepEspBitBang.h, the GPIO registers);
+  the classic ESP32 oep.wire.rvswd (the GPIO registers, through the sampler's gate; its console's ring from the heap);
+  P4 a UART bridge (UART3 on GPIO37 / 38, off by default). Not yet run on hardware unless said: the bench has no ARM
+  target, I2C controller, SWIO target on an RP2 / CH32, or CH32 probe. Fixed: a CH32's UART bridge pins were parked
+  after its begin.
+- (JA) 各機種に移植した（どれも既存の fn の後ろに新しい fn として足した。保存済みの設定は fn を番号で指すため）。
+  - CH32: oep.fixture.i2c-target（コアの Wire のスレーブ）、oep.wire.swio（SysTick で計時）、プロファイル ch32v307 / ch32h417
+    （全部入り。H41x 以外の CH32 は OEP_SMALL_RAM。チャンネルはチップのパッドから自身の USB / SWD を除いたもの）。
+  - RP2: oep.fixture.i2c-target（arduino-pico の Wire のスレーブ）、oep.wire.swio（SysTick で計時、RAM から実行）、USB の
+    vendor bulk と HID（OepRp2Usb.h: arduino-pico のスタックに載せたこのライブラリの TinyUSB クラスドライバ。RP2040 の実機で
+    両方応答した）、UART ブリッジ（Serial2、既定ではなし）。
+  - ESP32 / P4: oep.wire.swd（OepEspBitBang.h、GPIO レジスタ）。
+  - classic ESP32: oep.wire.rvswd（GPIO レジスタ、サンプラーのゲートを通す。コンソールのリングはヒープから取る）。
+  - P4: UART ブリッジ（UART3 を GPIO37 / 38 に出す、既定ではなし）。
+  - 特に書いたもの以外は実機で動かしていない。ベンチに ARM のターゲット、I2C のマスター、RP2 / CH32 につながった SWIO の相手、
+    CH32 のプローブがないため。
+  - 直したこと: CH32 の UART ブリッジのピンを、begin の後に park していた。
 - (EN) What a probe links is what its sketch uses, with no build option: the serial transports' part (COBS frames,
   port_speed / port_state, raw ports) comes in through Endpoint::useSerialTransports, which the constructor and
   addTransport (expanded where they are called, OEP_ALWAYS_INLINE) call for a serial kind, and setPortSpeed too; a TCP
