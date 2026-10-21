@@ -473,6 +473,208 @@ void SwioPhy::backgroundSent() {}
 
 }  // namespace oep
 
+#elif defined(ARDUINO_ARCH_CH32RV)
+#include "OepCh32BitBang.h"
+#include "OepPlatform.h"
+
+// A WCH CH32 as the probe (ArduinoCore-CH32RV): the ESP32-P4's frames and read recharge, every edge at a deadline from
+// the one before, against SysTick's count (HCLK; HCLK / 8 on a CH32V103) - the core zeroes it in its 1 ms interrupt,
+// which waits while a frame has interrupts off, so within a frame it only climbs. The line's direction is its 4-bit
+// CNF+MODE field: both words (driven, and an input with the pull-up) worked out once a frame, each switch one store.
+// Any channel (platformPad: port x 24 + bit). Driven high between frames while attached, as the ESP32s'.
+namespace oep {
+namespace {
+constexpr uint32_t kShortLowNs = 262, kLongLowNs = 862, kHighNs = 262;
+constexpr uint32_t kHalfNs = 131, kRechargeNs = 30, kZeroNs = 524;
+constexpr uint32_t kRiseTimeoutNs = 100000;   // a read frame's whole wait for the line to rise (the P4's)
+struct Times { uint32_t shortLow, longLow, high, half, recharge, zero, riseTimeout; };
+Times gT = {};
+int gPin = -1;   // the channel
+ch32::Pin gIo;
+bool gDriven = false;   // configured: the line an output, high between frames
+constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
+constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
+constexpr uint32_t kOutMode = CH32RV_GPIO_CFG_OUT_PP_10M, kInMode = CH32RV_GPIO_CFG_IN_PULL;
+constexpr uint32_t kTickHz = CH32RV_SYSTICK_V103 ? F_CPU / 8u : F_CPU;
+
+uint32_t ticksFor(uint32_t ns) { return static_cast<uint32_t>((uint64_t{ns} * kTickHz + 999999999u) / 1000000000u); }
+inline uint32_t now() { return CH32RV_SYSTICK_CNT; }
+inline void until(uint32_t deadline) { while (static_cast<int32_t>(now() - deadline) < 0) {} }
+
+// The pin's configuration register with its field driven / released (the other pins' fields as they are now)
+struct Words {
+  volatile uint32_t *reg;
+  uint32_t out, in;
+};
+inline Words words() {
+  const uint32_t rest = *gIo.cfg & ~(0xFu << gIo.cfg_shift);
+  return {gIo.cfg, rest | (kOutMode << gIo.cfg_shift), rest | (kInMode << gIo.cfg_shift)};
+}
+
+inline uint32_t sendBits(const Times &tm, uint64_t bits, int count, uint32_t t) {
+  for (uint64_t mask = uint64_t{1} << (count - 1); mask; mask >>= 1) {
+    const uint32_t lowFor = (bits & mask) ? tm.shortLow : tm.longLow;
+    until(t);
+    gIo.low();
+    until(t += lowFor);
+    gIo.high();
+    t += tm.high;
+  }
+  return t;
+}
+
+// One bit read, as the P4's: the low start, released (OUTDR 1: the pull-up), recharged high, sampled; a zero gets a
+// second recharge; 2 = the line never came back (left released).
+inline int readBit(const Words &w, const Times &tm, uint32_t &rise_left) {
+  uint32_t t = now();
+  gIo.low();
+  until(t += tm.shortLow);
+  *w.reg = w.in;
+  gIo.high();
+  until(t += tm.half);
+  *w.reg = w.out;
+  until(t += tm.recharge);
+  *w.reg = w.in;
+  until(t += tm.half);
+  const int sampled = gIo.read();
+  if (!sampled) {
+    until(t += tm.zero);
+    *w.reg = w.out;
+    until(t += tm.recharge);
+    *w.reg = w.in;
+  }
+  t = now();
+  do {
+    if (gIo.read()) {
+      *w.reg = w.out;
+      const uint32_t waited = now() - t;
+      rise_left = waited < rise_left ? rise_left - waited : 0;
+      until(now() + tm.half);
+      return sampled;
+    }
+  } while (now() - t < rise_left);
+  return 2;
+}
+
+void writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
+  const Times tm = gT;
+  const uint64_t bits = (uint64_t{1} << 40) | (uint64_t{address & 0x7fu} << 33) | (uint64_t{1} << 32) | value;
+  noInterrupts();
+  const Words w = words();
+  gIo.high();
+  *w.reg = w.out;
+  until(sendBits(tm, bits, 41, now()));
+  if (free_after) *w.reg = w.in;
+  interrupts();
+  delayMicroseconds(8);   // E135: LinkE frame gap median 6.7 us
+}
+
+void configureIo() {   // driven high
+  gIo.high();
+  gIo.config(kOutMode);
+  gDriven = true;
+}
+void unconfigureIo() {   // an input with the pull-up
+  if (gPin < 0) return;
+  gIo.high();
+  gIo.config(kInMode);
+  gDriven = false;
+}
+}  // namespace
+
+bool SwioPhy::begin(int swio) {
+  if (swio < 0 || swio > 63 || !gIo.resolve(platformPad(swio))) return false;
+  gPin = swio;
+  gT = {ticksFor(kShortLowNs), ticksFor(kLongLowNs), ticksFor(kHighNs), ticksFor(kHalfNs),
+        ticksFor(kRechargeNs), ticksFor(kZeroNs), ticksFor(kRiseTimeoutNs)};
+  gIo.config(CH32RV_GPIO_CFG_IN_FLOAT);   // free until a connection takes it (oep-core §8); attach pulls it up
+  gDriven = false;
+  ready_ = true;
+  return true;
+}
+
+bool SwioPhy::usePins(int swdio, int swclk) {
+  if (swdio == gPin && swclk < 0) return true;
+  if (attached_ || swclk >= 0 || swdio < 0 || swdio > 63) return false;
+  if (gPin >= 0) gIo.config(CH32RV_GPIO_CFG_IN_FLOAT);   // the old pin Hi-Z, without the pull-up it had
+  return begin(swdio);
+}
+
+bool SwioPhy::readRaw(uint8_t address, uint32_t &value) {
+  const Times tm = gT;
+  uint32_t result = 0;
+  const uint64_t bits = (1u << 8) | ((address & 0x7fu) << 1);   // start 1, address, 0 (read)
+  uint32_t rise_left = tm.riseTimeout;
+  noInterrupts();
+  const Words w = words();
+  gIo.high();
+  *w.reg = w.out;
+  until(sendBits(tm, bits, 9, now()));
+  for (int bit = 0; bit < 32; ++bit) {
+    result <<= 1;
+    const int decoded = readBit(w, tm, rise_left);
+    if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
+      *w.reg = w.in;
+      interrupts();
+      rest_free_ = true;
+      delayMicroseconds(8);
+      return false;
+    }
+    result |= decoded;
+  }
+  const DmiPhy::Outcome outcome = DmiPhy::outcomeOf(address, true, result);
+  if (outcome == DmiPhy::kAnswered) rest_free_ = false;
+  else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;   // a DMSTATUS of all ones: the line, no module
+  if (rest_free_) *w.reg = w.in;
+  interrupts();
+  delayMicroseconds(8);
+  value = result;
+  return true;
+}
+
+bool SwioPhy::readWire(uint8_t address, uint32_t &value) {
+  if (!ready_ || !gDriven) return false;
+  ++transactions_;
+  return readRetried(address, value);
+}
+
+void SwioPhy::write(uint8_t address, uint32_t value) {
+  if (!ready_ || !gDriven) return;
+  ++transactions_;
+  writeRaw(address, value, rest_free_);
+}
+
+// The line left to its pull-up for 2 ms first: no target if it then reads low (no pull-up, or the target is wedged)
+bool SwioPhy::lineUp() {
+  unconfigureIo();
+  delay(2);
+  if (!gIo.read()) return false;
+  configureIo();
+  return true;
+}
+
+void SwioPhy::release() {
+  attached_ = rest_free_ = false;
+  unconfigureIo();
+}
+
+void SwioPhy::hold() {
+  attached_ = rest_free_ = false;
+  if (gPin >= 0) configureIo();
+}
+
+// The free state (oep-core §8): Hi-Z, no pull. attach() puts the pull-up back before it looks.
+void SwioPhy::free() {
+  release();
+  if (gPin >= 0) gIo.config(CH32RV_GPIO_CFG_IN_FLOAT);
+}
+
+bool SwioPhy::backgroundTurn() { return true; }
+void SwioPhy::backgroundDone() {}
+void SwioPhy::backgroundSent() {}
+
+}  // namespace oep
+
 #elif defined(OEP_HOST_FAKE_SWIO)
 // Host tests (tests/host): whole frames against a simulated target (fake_swio_io.h). A read that the target leaves
 // unanswered reads all ones (the line stays at its pull-up); one that never comes back high fails.
@@ -537,8 +739,8 @@ void SwioPhy::free() { release(); }
 #endif
 
 #if (defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4))) || \
-    defined(OEP_HOST_FAKE_SWIO)
-// ---- shared by the classic ESP32 and the ESP32-P4 -------------------------------------------------------------
+    defined(ARDUINO_ARCH_CH32RV) || defined(OEP_HOST_FAKE_SWIO)
+// ---- shared by the classic ESP32, the ESP32-P4 and a CH32 -------------------------------------------------------------
 namespace oep {
 namespace {
 constexpr uint8_t kSwDmStatus = 0x11, kSwAbstractAuto = 0x18, kSwProgBuf0 = 0x20;

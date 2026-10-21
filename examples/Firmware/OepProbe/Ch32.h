@@ -22,7 +22,8 @@
 // with oepAddX() (or nothing, for CDC and the UART bridge); a sketch's own oepWithX() replaces it, an empty one leaving X out.
 // Each X's objects live in its oepAddX() and what X leaves to the others (its loop work, its part of the settings)
 // goes through the hooks below, so a left-out X links none of its code. The CH32 has: Rvswd (oep.wire.rvswd +
-// oep.target.riscv-dm), Console (oep.target.console on the RVSWD wire), Swd (oep.wire.swd + oep.target.arm-adi), Gpio,
+// oep.target.riscv-dm), Console (oep.target.console on the RVSWD wire), Swio (oep.wire.swio, CH32V00x; SwioConsole on
+// it), Swd (oep.wire.swd + oep.target.arm-adi), Gpio,
 // Uart, Config (oep.probe.config), Link (oep.probe.link); Bulk (the USB vendor bulk transport), Hid (the USB HID transport: usage page 0xFF4F, usage 0x45,
 // transports §1, §3), Cdc (a USB CDC port, COBS: a serial transport), Bridge (a UART bridge on Serial1's default pins,
 // 115200: a serial transport).
@@ -43,6 +44,7 @@
 #include <OepPlatform.h>
 #include <OepRvswdPhy.h>
 #include <OepSwd.h>
+#include <OepSwioPhy.h>
 #include <OepTarget.h>
 
 #include "OepFeatures.h"
@@ -133,13 +135,15 @@ static oep::PinTable pins(kChannels);
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the USB device, its loop work
 static oep::Hooks<void (*)(), 1> afterUsb;
-static oep::Hooks<void (*)(), 3> loopWork;
+static oep::Hooks<void (*)(), 4> loopWork;
 
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
-// settings'), so neither names the other's code: a serial transport (the settings' pass-throughs), the console, SWD's port
-// and the uart, for the settings
+// settings', the SWIO wire's), so neither names the other's code: a serial transport (the settings' pass-throughs), the
+// consoles (and the SWIO wire), SWD's port and the uart, for the settings; the riscv-dm target for the SWIO wire
 static bool serialPorts = false;
-static oep::TargetConsoleStream *consoleIn = nullptr;
+static oep::TargetConsoleStream *consoleIn = nullptr, *swioConsoleIn = nullptr;
+static oep::WireRvswd *swioWireIn = nullptr;
+static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the RVSWD wire's, the SWIO wire's connections too
 static oep::SwdPort *swdIn = nullptr;
 static oep::FixtureUart *uartIn = nullptr;
 
@@ -198,11 +202,13 @@ struct RvswdParts {
 };
 static oep::Slot<RvswdParts> rvswd;
 
+static oep::Slot<oep::TargetRiscvDm> riscvDm;
+
 void oepAddRvswd() {
-  static oep::Slot<oep::TargetRiscvDm> riscvDm;
   RvswdParts &r = rvswd.make();
   endpoint.add(r.wire);
-  endpoint.add(riscvDm.make(r.port, 0));
+  riscvDmIn = &riscvDm.make(r.port, 0);
+  endpoint.add(*riscvDmIn);
   oepWithConsole();
 }
 
@@ -211,6 +217,43 @@ void oepAddConsole() {
   static oep::Slot<oep::TargetConsoleStream> console;
   endpoint.add(console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0));
   consoleIn = &*console;
+  loopWork.add([] { console->poll(); });
+}
+
+// The one-wire link (CH32V00x): its own wire fn, its connections served by the RVSWD wire's riscv-dm target (or one of
+// its own without that wire), its console instance 1 (its choice made in the wire's)
+struct SwioParts {
+  oep::SwioPhy phy;
+  oep::Ch32Dm dm{phy};
+  oep::DebugPort port{dm, kUnset, 0xffff};   // one wire: swclk stays 0xffff
+  oep::WireRvswd wire{port, 0, "oep.wire.swio"};
+  SwioParts() {
+    port.pin_choice = kChannels;
+    port.pins = &pins;
+    port.pin_owner = 0xf2;
+    port.reset_allowed = kChannels;
+  }
+};
+static oep::Slot<SwioParts> swio;
+
+void oepAddSwio() {
+  SwioParts &w = swio.make();
+  endpoint.add(w.wire);
+  swioWireIn = &w.wire;
+  if (riscvDmIn) {
+    riscvDmIn->addPort(w.port);
+  } else {
+    riscvDmIn = &riscvDm.make(w.port, 0);
+    endpoint.add(*riscvDmIn);
+  }
+  oepWithSwioConsole();
+}
+
+void oepAddSwioConsole() {
+  static oep::Slot<oep::DmConsole> driver;
+  static oep::Slot<oep::TargetConsoleStream> console;
+  swioConsoleIn = &console.make(swio->port, driver.make(swio->dm, swio->phy), 1);   // the one-wire link's own console
+  endpoint.add(*swioConsoleIn);
   loopWork.add([] { console->poll(); });
 }
 
@@ -254,6 +297,7 @@ void oepAddConfig() {
   endpoint.add(c);
   if (serialPorts) c.usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
   if (consoleIn) c.addPlace(rvswd->wire, *consoleIn);
+  if (swioConsoleIn) c.addPlace(*swioWireIn, *swioConsoleIn);   // a slot on the one wire (CH32V00x): the second place
   if (swdIn) c.addHold(swdIn->hold, oep::checkSwdHold, swdIn);
   if (uartIn) c.addUart(*uartIn);
   c.setPins(&pins);
@@ -289,6 +333,10 @@ __attribute__((weak)) void oepWithUart() {
 __attribute__((weak)) void oepWithI2c() {
   if (kRoomy) oepAddI2c();
 }
+__attribute__((weak)) void oepWithSwio() {
+  if (kRoomy) oepAddSwio();
+}
+__attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
 __attribute__((weak)) void oepWithConfig() {
   if (kRoomy) oepAddConfig();
 }
@@ -335,6 +383,7 @@ void setup() {
   oepWithGpio();
   oepWithUart();
   oepWithI2c();
+  oepWithSwio();   // and its console's choice
   oepWithLink();
   oepWithConfig();
 }
