@@ -8,8 +8,8 @@
 // GPIO0-31 (begin, or usePins for host-chosen pins); the hot path keeps the
 // pin's mask in a register. The ESP32-P4 has the same frames on the CPU's
 // dedicated GPIO, timed in nanoseconds against the cycle counter (any
-// GPIO0-54); a WCH CH32 (ArduinoCore-CH32RV) the same against SysTick (any
-// channel). Other architectures get a stub.
+// GPIO0-54); a WCH CH32 (ArduinoCore-CH32RV) and an RP2 (GPIO0-29) the same
+// against SysTick (any channel). Other architectures get a stub.
 //
 // Interrupts are off for one frame at a time (portENTER_CRITICAL on the calling core, loop()'s): a write's 41 slots,
 // at most 41 x 1125 ns = 46 us; a read's 9 slots and 32 read bits, about 50 us, plus at most one wait for the line to
@@ -25,7 +25,7 @@ namespace oep {
 
 class SwioPhy final : public DmiPhy {
  public:
-  bool begin(int swio);   // GPIO0-31 (ESP32-P4: 0-54; a CH32: a channel, 0-63)
+  bool begin(int swio);   // GPIO0-31 (ESP32-P4: 0-54; a CH32: a channel, 0-63; an RP2: 0-29)
   bool usePins(int swdio, int swclk) override;   // swclk -1: one wire
   bool uncheckedReads() const override { return true; }   // no parity (oep-if-debug §3.2)
   void hold() override;   // the line driven high, its rest (oep-if-debug §2, §3.2)

@@ -675,6 +675,209 @@ void SwioPhy::backgroundSent() {}
 
 }  // namespace oep
 
+#elif defined(ARDUINO_ARCH_RP2040)
+#include <hardware/gpio.h>
+#include <hardware/structs/sio.h>
+#include <hardware/structs/systick.h>
+#include <hardware/sync.h>
+
+// RP2040 / RP2350 as the probe (arduino-pico): the ESP32-P4's frames and read recharge on the SIO, every edge at a
+// deadline from the one before, against SysTick's count (clk_sys, the 24-bit reload arduino-pico runs it with for
+// rp2040.getCycleCount: a frame is far shorter than its wrap). The frames run from RAM (__not_in_flash_func): a flash
+// cache miss would stretch a pulse. GPIO0-29.
+namespace oep {
+namespace {
+constexpr uint32_t kShortLowNs = 262, kLongLowNs = 862, kHighNs = 262;
+constexpr uint32_t kHalfNs = 131, kRechargeNs = 30, kZeroNs = 524;
+constexpr uint32_t kRiseTimeoutNs = 100000;   // a read frame's whole wait for the line to rise (the P4's)
+struct Times { uint32_t shortLow, longLow, high, half, recharge, zero, riseTimeout; };
+Times gT = {};
+int gPin = -1;
+uint32_t gMask = 0;
+bool gDriven = false;   // configured: the line an output, high between frames
+constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
+constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
+
+uint32_t ticksFor(uint32_t ns) { return static_cast<uint32_t>((uint64_t{ns} * rp2040.f_cpu() + 999999999u) / 1000000000u); }
+// SysTick counts down: its distance from the reload, climbing, in 24 bits; a deadline is passed once the difference,
+// as a signed 24-bit number, is not negative
+inline uint32_t now() { return (0u - systick_hw->cvr) & 0xffffffu; }
+inline bool before(uint32_t deadline) { return static_cast<int32_t>((now() - deadline) << 8) < 0; }
+inline void until(uint32_t deadline) { while (before(deadline)) {} }
+inline uint32_t since(uint32_t t) { return (now() - t) & 0xffffffu; }
+inline void low(uint32_t m) { sio_hw->gpio_clr = m; }
+inline void high(uint32_t m) { sio_hw->gpio_set = m; }
+inline void outputOn(uint32_t m) { sio_hw->gpio_oe_set = m; }
+inline void outputOff(uint32_t m) { sio_hw->gpio_oe_clr = m; }
+inline bool sample(uint32_t m) { return (sio_hw->gpio_in & m) != 0; }
+
+inline uint32_t sendBits(uint32_t m, const Times &tm, uint64_t bits, int count, uint32_t t) {
+  for (uint64_t mask = uint64_t{1} << (count - 1); mask; mask >>= 1) {
+    const uint32_t lowFor = (bits & mask) ? tm.shortLow : tm.longLow;
+    until(t);
+    low(m);
+    until(t = (t + lowFor) & 0xffffffu);
+    high(m);
+    t = (t + tm.high) & 0xffffffu;
+  }
+  return t;
+}
+
+// One bit read, as the P4's (2 = the line never came back: left released)
+inline int readBit(uint32_t m, const Times &tm, uint32_t &rise_left) {
+  uint32_t t = now();
+  low(m);
+  until(t = (t + tm.shortLow) & 0xffffffu);
+  outputOff(m);
+  high(m);
+  until(t = (t + tm.half) & 0xffffffu);
+  outputOn(m);
+  until(t = (t + tm.recharge) & 0xffffffu);
+  outputOff(m);
+  until(t = (t + tm.half) & 0xffffffu);
+  const int sampled = sample(m);
+  if (!sampled) {
+    until(t = (t + tm.zero) & 0xffffffu);
+    outputOn(m);
+    until(t = (t + tm.recharge) & 0xffffffu);
+    outputOff(m);
+  }
+  t = now();
+  do {
+    if (sample(m)) {
+      outputOn(m);
+      const uint32_t waited = since(t);
+      rise_left = waited < rise_left ? rise_left - waited : 0;
+      until((now() + tm.half) & 0xffffffu);
+      return sampled;
+    }
+  } while (since(t) < rise_left);
+  return 2;
+}
+
+void __not_in_flash_func(writeRaw)(uint8_t address, uint32_t value, bool free_after = false) {
+  const uint32_t m = gMask;
+  const Times tm = gT;
+  high(m);
+  outputOn(m);
+  const uint64_t bits = (uint64_t{1} << 40) | (uint64_t{address & 0x7fu} << 33) | (uint64_t{1} << 32) | value;
+  const uint32_t saved = save_and_disable_interrupts();
+  until(sendBits(m, tm, bits, 41, now()));
+  if (free_after) outputOff(m);
+  restore_interrupts(saved);
+  delayMicroseconds(8);   // E135: LinkE frame gap median 6.7 us
+}
+
+void configureIo() {   // driven high, the pull-up kept (the line's while it is released)
+  high(gMask);
+  outputOn(gMask);
+  gDriven = true;
+}
+void unconfigureIo() {   // an input with the pull-up
+  if (gPin < 0) return;
+  outputOff(gMask);
+  gpio_pull_up(gPin);
+  gDriven = false;
+}
+}  // namespace
+
+bool SwioPhy::begin(int swio) {
+  if (swio < 0 || swio > 29) return false;   // GPIO0-29
+  gPin = swio;
+  gMask = 1u << swio;
+  gT = {ticksFor(kShortLowNs), ticksFor(kLongLowNs), ticksFor(kHighNs), ticksFor(kHalfNs),
+        ticksFor(kRechargeNs), ticksFor(kZeroNs), ticksFor(kRiseTimeoutNs)};
+  gpio_init(swio);   // the SIO's, an input
+  gpio_disable_pulls(swio);   // free until a connection takes it (oep-core §8); attach pulls it up
+  gpio_set_drive_strength(swio, GPIO_DRIVE_STRENGTH_2MA);   // the weakest, as the RVSWD / SWD bit-bang's
+  high(gMask);
+  gDriven = false;
+  ready_ = true;
+  return true;
+}
+
+bool SwioPhy::usePins(int swdio, int swclk) {
+  if (swdio == gPin && swclk < 0) return true;
+  if (attached_ || swclk >= 0 || swdio < 0 || swdio > 29) return false;
+  if (gPin >= 0) { outputOff(gMask); gpio_disable_pulls(gPin); }   // the old pin Hi-Z, without the pull-up it had
+  return begin(swdio);
+}
+
+bool __not_in_flash_func(SwioPhy::readRaw)(uint8_t address, uint32_t &value) {
+  const uint32_t m = gMask;
+  const Times tm = gT;
+  high(m);
+  outputOn(m);
+  uint32_t result = 0;
+  const uint64_t bits = (1u << 8) | ((address & 0x7fu) << 1);   // start 1, address, 0 (read)
+  uint32_t rise_left = tm.riseTimeout;
+  const uint32_t saved = save_and_disable_interrupts();
+  until(sendBits(m, tm, bits, 9, now()));
+  for (int bit = 0; bit < 32; ++bit) {
+    result <<= 1;
+    const int decoded = readBit(m, tm, rise_left);
+    if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
+      outputOff(m);
+      restore_interrupts(saved);
+      rest_free_ = true;
+      delayMicroseconds(8);
+      return false;
+    }
+    result |= decoded;
+  }
+  const DmiPhy::Outcome outcome = DmiPhy::outcomeOf(address, true, result);
+  if (outcome == DmiPhy::kAnswered) rest_free_ = false;
+  else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;   // a DMSTATUS of all ones: the line, no module
+  if (rest_free_) outputOff(m);
+  restore_interrupts(saved);
+  delayMicroseconds(8);
+  value = result;
+  return true;
+}
+
+bool SwioPhy::readWire(uint8_t address, uint32_t &value) {
+  if (!ready_ || !gDriven) return false;
+  ++transactions_;
+  return readRetried(address, value);
+}
+
+void SwioPhy::write(uint8_t address, uint32_t value) {
+  if (!ready_ || !gDriven) return;
+  ++transactions_;
+  writeRaw(address, value, rest_free_);
+}
+
+// The line left to its pull-up for 2 ms first: no target if it then reads low (no pull-up, or the target is wedged)
+bool SwioPhy::lineUp() {
+  unconfigureIo();
+  delay(2);
+  if (!sample(gMask)) return false;
+  configureIo();
+  return true;
+}
+
+void SwioPhy::release() {
+  attached_ = rest_free_ = false;
+  unconfigureIo();
+}
+
+void SwioPhy::hold() {
+  attached_ = rest_free_ = false;
+  if (gPin >= 0) configureIo();
+}
+
+// The free state (oep-core §8): Hi-Z, no pull. attach() puts the pull-up back before it looks.
+void SwioPhy::free() {
+  release();
+  if (gPin >= 0) gpio_disable_pulls(gPin);
+}
+
+bool SwioPhy::backgroundTurn() { return true; }
+void SwioPhy::backgroundDone() {}
+void SwioPhy::backgroundSent() {}
+
+}  // namespace oep
+
 #elif defined(OEP_HOST_FAKE_SWIO)
 // Host tests (tests/host): whole frames against a simulated target (fake_swio_io.h). A read that the target leaves
 // unanswered reads all ones (the line stays at its pull-up); one that never comes back high fails.
@@ -739,8 +942,8 @@ void SwioPhy::free() { release(); }
 #endif
 
 #if (defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4))) || \
-    defined(ARDUINO_ARCH_CH32RV) || defined(OEP_HOST_FAKE_SWIO)
-// ---- shared by the classic ESP32, the ESP32-P4 and a CH32 -------------------------------------------------------------
+    defined(ARDUINO_ARCH_CH32RV) || defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWIO)
+// ---- shared by the classic ESP32, the ESP32-P4, a CH32 and an RP2 -------------------------------------------------------------
 namespace oep {
 namespace {
 constexpr uint8_t kSwDmStatus = 0x11, kSwAbstractAuto = 0x18, kSwProgBuf0 = 0x20;

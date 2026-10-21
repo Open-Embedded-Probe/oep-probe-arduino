@@ -11,7 +11,7 @@
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
 // oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and Console in it), Swd, Gpio, Uart,
-// Config, Analog, Link, I2c (oep.fixture.i2c-target), and Cdc (the transport), all in by default.
+// Config, Analog, Link, I2c (oep.fixture.i2c-target), Swio (oep.wire.swio, CH32V00x; SwioConsole in it), and Cdc (the transport), all in by default.
 // Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
@@ -40,6 +40,7 @@
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
 #include <OepSwd.h>
+#include <OepSwioPhy.h>
 #include <OepTarget.h>
 
 #include "OepFeatures.h"
@@ -73,13 +74,16 @@ static uint8_t probeTlv[256];   // with the firmware text's note of the boot bef
 
 // What a choice leaves to run later, each added only from its own oepAddX(): its loop work; the settings' fn at its place,
 // what comes last
-static oep::Hooks<void (*)(), 4> loopWork;
+static oep::Hooks<void (*)(), 5> loopWork;
 static oep::Hooks<void (*)(), 1> settingsFn;
 static oep::Hooks<void (*)(), 1> lastly;
 
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
-// settings'), so neither names the other's code: the console, SWD's port and the uart, for the settings
-static oep::TargetConsoleStream *consoleIn = nullptr;
+// settings', the SWIO wire's), so neither names the other's code: the consoles (and the SWIO wire), SWD's port and the
+// uart, for the settings; the riscv-dm target for the SWIO wire
+static oep::TargetConsoleStream *consoleIn = nullptr, *swioConsoleIn = nullptr;
+static oep::WireRvswd *swioWireIn = nullptr;
+static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the RVSWD wire's, the SWIO wire's connections too
 static oep::SwdPort *swdIn = nullptr;
 static oep::FixtureUart *uartIn = nullptr;
 
@@ -109,6 +113,7 @@ void oepAddCdc() {
 void oepAddRvswd() {
   RvswdParts &r = rvswd.make();
   endpoint.add(r.wire);
+  riscvDmIn = &r.riscvDm;
   endpoint.add(r.riscvDm);
   oepWithConsole();
 }
@@ -178,7 +183,10 @@ void oepAddConfig() {
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot,
   // 0.0.11-0.0.16). probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach
   // comes on config.poll(), so a target powered through an output idle is up before it.
-  lastly.add([] { config->applySaved(); });
+  lastly.add([] {
+    if (swioConsoleIn) config->addPlace(*swioWireIn, *swioConsoleIn);   // a slot on the one wire: the second place
+    config->applySaved();
+  });
 }
 
 // the ADC on GP26-28 (a Pico's GP29 reads VSYS), channels in turn, copied by DMA
@@ -194,6 +202,44 @@ void oepAddAnalog() {
 void oepAddI2c() {
   static oep::Slot<oep::P4I2cTarget> i2c;
   endpoint.add(i2c.make(pins));
+}
+
+// The one-wire link (CH32V00x) on the SIO (OepSwioPhy.cpp): its own wire fn, its connections served by the RVSWD wire's
+// riscv-dm target (or one of its own without that wire), its console instance 1 (its choice made in the wire's)
+struct SwioParts {
+  oep::SwioPhy phy;
+  oep::Ch32Dm dm{phy};
+  oep::DebugPort port{dm, kUnset, 0xffff};   // one wire: swclk stays 0xffff
+  oep::WireRvswd wire{port, 0, "oep.wire.swio"};
+  SwioParts() {
+    port.pin_choice = kChannels;
+    port.pins = &pins;
+    port.pin_owner = 0xf2;
+    port.reset_allowed = kChannels;
+  }
+};
+static oep::Slot<SwioParts> swio;
+
+void oepAddSwio() {
+  static oep::Slot<oep::TargetRiscvDm> riscvDm;
+  SwioParts &w = swio.make();
+  endpoint.add(w.wire);
+  swioWireIn = &w.wire;
+  if (riscvDmIn) {
+    riscvDmIn->addPort(w.port);
+  } else {
+    riscvDmIn = &riscvDm.make(w.port, 0);
+    endpoint.add(*riscvDmIn);
+  }
+  oepWithSwioConsole();
+}
+
+void oepAddSwioConsole() {
+  static oep::Slot<oep::DmConsole> driver;
+  static oep::Slot<oep::TargetConsoleStream> console;
+  swioConsoleIn = &console.make(swio->port, driver.make(swio->dm, swio->phy), 1);   // the one-wire link's own console
+  endpoint.add(*swioConsoleIn);
+  loopWork.add([] { console->poll(); });
 }
 
 void oepAddLink() {
@@ -212,6 +258,8 @@ __attribute__((weak)) void oepWithConfig() { oepAddConfig(); }
 __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 __attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
+__attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
+__attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
 
 // oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
 // rp2040.reboot(), a watchdog reset, oep::kRestartDetachMs later. restart_max_ms (its describe): the chip is running
@@ -267,6 +315,7 @@ void setup() {
   oepWithAnalog();   // after the settings: the fns before it keep their numbers
   oepWithLink();
   oepWithI2c();   // after the ones before: they keep their numbers (the saved settings name fns)
+  oepWithSwio();   // and its console's choice
   lastly.run();
 }
 
