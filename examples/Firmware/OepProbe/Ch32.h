@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// WCH CH32 on ArduinoCore-CH32RV (profile ch32x035; the core's 0.2.2, LTO by default).
+// WCH CH32 on ArduinoCore-CH32RV (profiles ch32x035, ch32v307, ch32h417; the core's 0.2.2, LTO by default).
 //
 // Transports, each a choice (below): the USB vendor bulk interface (class 0xFF, 'O', 'E': transports §3) and the USB HID
 // one at full speed, length-prefixed frames; a USB CDC port and a UART bridge (COBS) too if chosen. The USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id (the chip's 64-bit
@@ -15,8 +15,9 @@
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (any enabled USART's route; another pair is
 // refused at the UART's begin).
 //
-// The CH32X035 (62 KiB flash, 20 KiB RAM) builds with OEP_SMALL_RAM (Oep.h): the endpoint's tables cut, a 1 KiB
-// console ring.
+// A CH32 but the H41x builds with OEP_SMALL_RAM (Oep.h): the endpoint's tables cut, a 1 KiB console ring. Everything is
+// in by default but on the CH32X035 (62 KiB flash, 20 KiB RAM; kRoomy below): the V307 97.7 KB / 24.8 KB, the H417
+// 106 KB (0.2.2).
 //
 // Each interface and transport is a choice (OepFeatures.h, OepChoice.h): oepWithX() is weak here, its default adding X
 // with oepAddX() (or nothing, for CDC and the UART bridge); a sketch's own oepWithX() replaces it, an empty one leaving X out.
@@ -49,7 +50,17 @@
 
 #include "OepFeatures.h"
 
+// The chip the build is for (its board: the profiles ch32x035 / ch32v307 / ch32h417), a name for people and describe's
+// model
+#if defined(ARDUINO_CH32X035)
 static constexpr const char *kProduct = "OEP probe (CH32X035)", *kModel = "ch32x035";
+#elif defined(ARDUINO_CH32V307)
+static constexpr const char *kProduct = "OEP probe (CH32V307)", *kModel = "ch32v307";
+#elif defined(ARDUINO_CH32H417)
+static constexpr const char *kProduct = "OEP probe (CH32H417)", *kModel = "ch32h417";
+#else
+static constexpr const char *kProduct = "OEP probe (CH32)", *kModel = "ch32";
+#endif
 
 // The vendor class as the endpoint's Stream (it is a Print with available / read / peek, not a Stream)
 class VendorStream final : public Stream {
@@ -126,10 +137,21 @@ static oep::Endpoint endpoint(txBuffer, sizeof txBuffer, {512, 1024, 2});
 static uint8_t probeTlv[160];
 static char serial[17];
 
-// The channels (platformPad: port x 24 + bit): PA0-PA23, PB0-PB23, PC0-PC15. The CH32X035's USB pads (PC16 / PC17) and
-// its own SWD (PC18 / PC19) are past channel 63. Which of these a package brings out is the board's; a pad it does not
+// The channels (platformPad: port x 24 + bit): the pads PA, PB and PC have (CH32RV_GPIO_PORT_WIDTH a port; the
+// CH32X035's 24: PA0-PA23, PB0-PB23, PC0-PC15), less the chip's own: the X035's USB pads (PC16 / PC17) and SWD (PC18 /
+// PC19) are past channel 63; a V307's USBFS (PA11 / PA12, the core's controller there) and SWD (PA13 / PA14); an H417's
+// SWD (PB8 / PB9; its USBSS has pads of its own). Which of these a package brings out is the board's; a pad it does not
 // is left alone by the host.
-static constexpr uint64_t kChannels = ~0ull;
+static constexpr uint64_t kPortPads = (1ull << (CH32RV_GPIO_PORT_WIDTH < 24 ? CH32RV_GPIO_PORT_WIDTH : 24)) - 1;
+static constexpr uint64_t kPads = kPortPads | (kPortPads << 24) | (kPortPads << 48);
+#if defined(ARDUINO_CH32V307)
+static constexpr uint64_t kChipOwn = 0xfull << 11;   // PA11-PA14
+#elif defined(ARDUINO_CH32H417)
+static constexpr uint64_t kChipOwn = 0x3ull << (24 + 8);   // PB8 / PB9
+#else
+static constexpr uint64_t kChipOwn = 0;
+#endif
+static constexpr uint64_t kChannels = kPads & ~kChipOwn;
 static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
 static oep::PinTable pins(kChannels);
 

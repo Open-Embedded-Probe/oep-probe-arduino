@@ -11,8 +11,9 @@
 //   Esp32P4.h   ESP32-P4 / P4X (profiles esp32p4 / esp32p4x): HS vendor bulk, HID, CDC, USB-Serial/JTAG; RVSWD, SWIO, SWD,
 //               gpio, uart x2, capture, SPI / I2C devices, settings, analog, group, link (build_opt.h: the direct HS vendor
 //               build; compile with --clean)
-//   Ch32.h      WCH CH32 on ArduinoCore-CH32RV (profile ch32x035): FS vendor bulk, HID (CDC, UART bridge); RVSWD, console,
-//               gpio, link (SWD, uart, I2C device, settings without a store): the X035's 62 KiB taking the first set
+//   Ch32.h      WCH CH32 on ArduinoCore-CH32RV (profiles ch32x035 / ch32v307 / ch32h417): vendor bulk, HID (CDC, UART
+//               bridge); RVSWD, console, gpio, link, SWIO, SWD, uart, I2C device, settings without a store - the X035's
+//               62 KiB taking the first four
 //   Esp32.h     classic ESP32 (profile esp32): a UART bridge, TCP over Wi-Fi (the settings' networks); SWIO, SWD, gpio,
 //               uart, capture (sampler), SPI / I2C devices, settings, analog, group, link
 #if defined(ARDUINO_ARCH_RP2040)
