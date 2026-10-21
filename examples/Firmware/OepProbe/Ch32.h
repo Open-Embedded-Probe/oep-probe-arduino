@@ -27,13 +27,12 @@
 // transports §1, §3), Cdc (a USB CDC port, COBS: a serial transport), Bridge (a UART bridge on Serial1's default pins,
 // 115200: a serial transport).
 #pragma once
-#include <new>
-
 #include <CH32RV.h>
 #include <CH32RVUsbDevice.h>
 
 #include <OepBind.h>
 #include <OepCh32Dm.h>
+#include <OepChoice.h>
 #include <OepConfig.h>
 #include <OepConsole.h>
 #include <OepDmConsole.h>
@@ -138,42 +137,15 @@ static oep::PinTable pins(kChannels);
 
 // What one choice leaves to the others, each set only from its own oepAddX(): what waits for the USB device, its part
 // of the settings, its loop work
-template <typename F, uint8_t N>
-struct Hooks {
-  F f[N] = {};
-  uint8_t n = 0;
-  void add(F h) {
-    if (n < N) f[n++] = h;
-  }
-  template <typename... A>
-  void run(A &...a) const {
-    for (uint8_t i = 0; i < n; ++i) f[i](a...);
-  }
-};
-static Hooks<void (*)(), 1> afterUsb;
-static Hooks<void (*)(oep::ProbeConfig &), 5> settingsParts;
-static Hooks<void (*)(), 3> loopWork;
-
-// An oepAddX()'s object, made in place by its one call: no guard, no destructor
-template <typename T>
-class Slot {
- public:
-  template <typename... A>
-  T &make(A &&...a) {
-    return *new (bytes_) T(static_cast<A &&>(a)...);
-  }
-  T *operator->() { return reinterpret_cast<T *>(bytes_); }
-  T &operator*() { return *operator->(); }
-
- private:
-  alignas(T) uint8_t bytes_[sizeof(T)];
-};
+static oep::Hooks<void (*)(), 1> afterUsb;
+static oep::Hooks<void (*)(oep::ProbeConfig &), 5> settingsParts;
+static oep::Hooks<void (*)(), 3> loopWork;
 
 static void usePassthroughs(oep::ProbeConfig &c) { c.usePassthroughs(); }   // a serial port's raw stream carries them (probe.config §1.1)
 
 void oepAddHid() {
-  static Slot<CH32RVUsbDeviceHidVendor> usbHid;
-  static Slot<HidStream> stream;
+  static oep::Slot<CH32RVUsbDeviceHidVendor> usbHid;
+  static oep::Slot<HidStream> stream;
   static uint8_t rx[520];
   stream.make(usbHid.make(USBDevice, HidStream::kReport));
   usbHid->setUsage(oep::reg::kUsbHidUsagePage, oep::reg::kUsbHidUsage);   // 0xFF4F / 0x45 (registry usb)
@@ -197,7 +169,7 @@ void oepAddCdc() {
 }
 
 void oepAddBridge() {
-  static Slot<oep::OepUart> port;
+  static oep::Slot<oep::OepUart> port;
   static uint8_t rx[oep::cobsFrameMax(512) + 8];
   port.make(1).begin(115200);   // USART2 (Serial1's), its default route (transports §1: a UART bridge at its boot speed)
   endpoint.addTransport(*port, rx, sizeof rx, oep::Endpoint::kUartBridge);
@@ -216,10 +188,10 @@ struct RvswdParts {
     port.reset_allowed = kChannels;
   }
 };
-static Slot<RvswdParts> rvswd;
+static oep::Slot<RvswdParts> rvswd;
 
 void oepAddRvswd() {
-  static Slot<oep::TargetRiscvDm> riscvDm;
+  static oep::Slot<oep::TargetRiscvDm> riscvDm;
   RvswdParts &r = rvswd.make();
   endpoint.add(r.wire);
   endpoint.add(riscvDm.make(r.port, 0));
@@ -227,8 +199,8 @@ void oepAddRvswd() {
 }
 
 void oepAddConsole() {
-  static Slot<oep::DmConsole> driver;
-  static Slot<oep::TargetConsoleStream> console;
+  static oep::Slot<oep::DmConsole> driver;
+  static oep::Slot<oep::TargetConsoleStream> console;
   endpoint.add(console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0));
   settingsParts.add([](oep::ProbeConfig &c) { c.addPlace(rvswd->wire, *console); });
   loopWork.add([] { console->poll(); });
@@ -236,8 +208,8 @@ void oepAddConsole() {
 
 void oepAddSwd() {
   static oep::SwdPort swd{kUnset, kUnset};
-  static Slot<oep::WireSwd> wireSwd;
-  static Slot<oep::TargetArmAdi> adi;
+  static oep::Slot<oep::WireSwd> wireSwd;
+  static oep::Slot<oep::TargetArmAdi> adi;
   swd.pin_choice = kChannels;
   swd.pins = &pins;
   endpoint.add(wireSwd.make(swd, 0));
@@ -246,13 +218,13 @@ void oepAddSwd() {
 }
 
 void oepAddGpio() {
-  static Slot<oep::FixtureGpio> gpio;
+  static oep::Slot<oep::FixtureGpio> gpio;
   endpoint.add(gpio.make(pins, 0, 1));
 }
 
 void oepAddUart() {
-  static Slot<oep::OepUart> port;
-  static Slot<oep::FixtureUart> uart;
+  static oep::Slot<oep::OepUart> port;
+  static oep::Slot<oep::FixtureUart> uart;
   endpoint.add(uart.make(pins, port.make(0), 0, 2));   // USART1 (Serial's)
   uart->setRoleChannels(kChannels, kChannels);   // any enabled USART's route (its begin refuses another pair)
   settingsParts.add([](oep::ProbeConfig &c) { c.addUart(*uart); });
@@ -260,8 +232,8 @@ void oepAddUart() {
 }
 
 void oepAddConfig() {
-  static Slot<oep::Binds> binds;
-  static Slot<oep::ProbeConfig> config;
+  static oep::Slot<oep::Binds> binds;
+  static oep::Slot<oep::ProbeConfig> config;
   oep::ProbeConfig &c = config.make(endpoint, binds.make());
   c.setStorage(false);   // no store on this core yet (probe.config §4: no save / erase / state)
   endpoint.setRawPorts(&*binds);
@@ -273,7 +245,7 @@ void oepAddConfig() {
 }
 
 void oepAddLink() {
-  static Slot<oep::Link> link;
+  static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
 }
 
