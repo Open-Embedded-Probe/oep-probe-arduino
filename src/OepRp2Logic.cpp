@@ -25,7 +25,9 @@ enum : uint8_t { kTagMode = cap::kTlvConfigureMode, kTagRate = cap::kTlvConfigur
 
 // The program, every loop three cycles a sample (the comments: the label, what the loop waits for). X: the samples
 // after the trigger's less one; Y: the pretrigger's less one. The trigger's sample is the one before the jmp that saw
-// it; from it to the next sample is three cycles on every path (an extra jmp or nop where a taken jmp would be early).
+// it, one cycle before the look on both the rise's and the fall's (the fall's two put its index a sample late about
+// twice as often: bench, 4385db8); from it to the next sample is three cycles on every path (an extra jmp or nop where
+// a taken jmp would be early).
 enum : uint8_t {
   kPreRise = 0, kLowRise = 2, kHighRise = 4, kRiseHit = 7,   // rising: the pretrigger, then low, then high
   kPreFall = 8, kHighFall = 10, kFallTurn = 13, kLowFall = 14,   // falling: the pretrigger, then high, then low
@@ -51,8 +53,8 @@ void build() {
   p[11] = pio_encode_jmp_pin(kFallTurn);
   p[12] = pio_encode_jmp(kHighFall);
   p[13] = pio_encode_nop();               // the turn's third cycle
-  p[14] = in | pio_encode_delay(1);       // lo_f: while high; low falls through to the samples after it
-  p[15] = pio_encode_jmp_pin(kLowFall);
+  p[14] = in;                             // lo_f: while high; low falls through to the samples after it
+  p[15] = pio_encode_jmp_pin(kLowFall) | pio_encode_delay(1);   // the look one cycle after the sample, as hi_r's
   p[16] = in | pio_encode_delay(1);       // post
   p[17] = pio_encode_jmp_x_dec(kPost);
   p[18] = pio_encode_irq_set(true, 0);    // the flag of this state machine (rel)
