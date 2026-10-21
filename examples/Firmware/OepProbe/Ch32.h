@@ -15,55 +15,20 @@
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (any enabled USART's route; another pair is
 // refused at the UART's begin).
 //
-// The CH32X035 (62 KiB flash, 20 KiB RAM) builds with OEP_SMALL_RAM (Oep.h): the endpoint's tables cut, no serial
-// transport, a 1 KiB console ring.
+// The CH32X035 (62 KiB flash, 20 KiB RAM) builds with OEP_SMALL_RAM (Oep.h): the endpoint's tables cut, a 1 KiB
+// console ring.
 //
-// Each interface is a build choice (the sketch's build_opt.h: -DOEP_CH32_SWD=0 ...; 1 = in, the default), so a chip
-// takes the set that fits it (a serial transport brings the library's serial part in by itself):
-//   OEP_CH32_RVSWD    oep.wire.rvswd + oep.target.riscv-dm
-//   OEP_CH32_CONSOLE  oep.target.console on the RVSWD wire (needs OEP_CH32_RVSWD)
-//   OEP_CH32_SWD      oep.wire.swd + oep.target.arm-adi
-//   OEP_CH32_GPIO     oep.fixture.gpio
-//   OEP_CH32_UART     oep.fixture.uart
-//   OEP_CH32_CONFIG   oep.probe.config (no store yet)
-//   OEP_CH32_LINK     oep.probe.link
-//   OEP_CH32_HID      the USB HID transport too (usage page 0xFF4F, usage 0x45: transports §1, §3)
-//   OEP_CH32_CDC      a USB CDC port too (a serial transport, COBS); 0 by default
-//   OEP_CH32_BRIDGE   a UART bridge too (Serial1 on its default pins, 115200: a serial transport); 0 by default
+// Each interface and extra transport is a choice (OepFeatures.h): oepWithX() is weak here, its default adding X with
+// oepAddX() (or nothing, for CDC and the UART bridge); a sketch's own oepWithX() replaces it, an empty one leaving X out.
+// Each X's objects live in its oepAddX() and what X leaves to the others (its loop work, its part of the settings)
+// goes through the hooks below, so a left-out X links none of its code. The CH32 has: Rvswd (oep.wire.rvswd +
+// oep.target.riscv-dm), Console (oep.target.console on the RVSWD wire), Swd (oep.wire.swd + oep.target.arm-adi), Gpio,
+// Uart, Config (oep.probe.config), Link (oep.probe.link); Hid (the USB HID transport: usage page 0xFF4F, usage 0x45,
+// transports §1, §3), Cdc (a USB CDC port, COBS: a serial transport), Bridge (a UART bridge on Serial1's default pins,
+// 115200: a serial transport).
 #pragma once
-#ifndef OEP_CH32_BRIDGE
-#define OEP_CH32_BRIDGE 0
-#endif
-#ifndef OEP_CH32_HID
-#define OEP_CH32_HID 1
-#endif
-#ifndef OEP_CH32_RVSWD
-#define OEP_CH32_RVSWD 1
-#endif
-#ifndef OEP_CH32_CONSOLE
-#define OEP_CH32_CONSOLE OEP_CH32_RVSWD
-#endif
-#ifndef OEP_CH32_SWD
-#define OEP_CH32_SWD 1
-#endif
-#ifndef OEP_CH32_GPIO
-#define OEP_CH32_GPIO 1
-#endif
-#ifndef OEP_CH32_UART
-#define OEP_CH32_UART 1
-#endif
-#ifndef OEP_CH32_CONFIG
-#define OEP_CH32_CONFIG 1
-#endif
-#ifndef OEP_CH32_LINK
-#define OEP_CH32_LINK 1
-#endif
-#ifndef OEP_CH32_CDC
-#define OEP_CH32_CDC 0
-#endif
-#if OEP_CH32_CONSOLE && !OEP_CH32_RVSWD
-#error "OEP_CH32_CONSOLE needs OEP_CH32_RVSWD"
-#endif
+#include <new>
+
 #include <CH32RV.h>
 #include <CH32RVUsbDevice.h>
 
@@ -79,6 +44,8 @@
 #include <OepRvswdPhy.h>
 #include <OepSwd.h>
 #include <OepTarget.h>
+
+#include "OepFeatures.h"
 
 static constexpr const char *kProduct = "OEP probe (CH32X035)", *kModel = "ch32x035";
 
@@ -97,9 +64,6 @@ class VendorStream final : public Stream {
   CH32RVUsbDeviceVendor &vendor_;
 };
 
-static CH32RVUsbDeviceVendor usbVendor(USBDevice, 64);
-
-#if OEP_CH32_HID
 // The HID transport (transports §1): a report carries count(u16) and that many bytes of the length-prefixed stream, the
 // rest padding; the reports are the core's vendor HID ones (report ID 6, 63 bytes at full speed: 61 of the stream).
 class HidStream final : public Stream {
@@ -154,25 +118,14 @@ class HidStream final : public Stream {
   size_t fill_ = 0;
   bool stuck_ = false;
 };
-static CH32RVUsbDeviceHidVendor usbHid(USBDevice, HidStream::kReport);
-static HidStream hidStream(usbHid);
-static uint8_t hidRx[520];
-#endif
+
+static CH32RVUsbDeviceVendor usbVendor(USBDevice, 64);
 static VendorStream vendorStream(usbVendor);
 
 static uint8_t rxBuffer[520];
 static uint8_t txBuffer[512];
 static oep::Endpoint endpoint(vendorStream, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 1024, 2},
                               oep::Endpoint::kVendorBulk, 0);
-#if OEP_CH32_CDC
-static uint8_t cdcRx[oep::cobsFrameMax(512) + 8];   // the encoded candidate (transports §1)
-#endif
-#if OEP_CH32_BRIDGE
-static uint8_t bridgeRx[oep::cobsFrameMax(512) + 8];
-#endif
-#if OEP_CH32_LINK
-static oep::Link oepLink(endpoint);   // oep.probe.link (oep-if-link)
-#endif
 static uint8_t probeTlv[160];
 static char serial[17];
 
@@ -183,32 +136,170 @@ static constexpr uint64_t kChannels = ~0ull;
 static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
 static oep::PinTable pins(kChannels);
 
-#if OEP_CH32_RVSWD
-static oep::RvswdPhy phy;
-static oep::Ch32Dm dm(phy);
-static oep::DebugPort rvswd{dm, kUnset, kUnset};
-static oep::WireRvswd wireRvswd(rvswd, 0);
-static oep::TargetRiscvDm riscvDm(rvswd, 0);
+// What one choice leaves to the others, each set only from its own oepAddX(): what waits for the USB device, its part
+// of the settings, its loop work
+template <typename F, uint8_t N>
+struct Hooks {
+  F f[N] = {};
+  uint8_t n = 0;
+  void add(F h) {
+    if (n < N) f[n++] = h;
+  }
+  template <typename... A>
+  void run(A &...a) const {
+    for (uint8_t i = 0; i < n; ++i) f[i](a...);
+  }
+};
+static Hooks<void (*)(), 1> afterUsb;
+static Hooks<void (*)(oep::ProbeConfig &), 5> settingsParts;
+static Hooks<void (*)(), 3> loopWork;
+
+// An oepAddX()'s object, made in place by its one call: no guard, no destructor
+template <typename T>
+class Slot {
+ public:
+  template <typename... A>
+  T &make(A &&...a) {
+    return *new (bytes_) T(static_cast<A &&>(a)...);
+  }
+  T *operator->() { return reinterpret_cast<T *>(bytes_); }
+  T &operator*() { return *operator->(); }
+
+ private:
+  alignas(T) uint8_t bytes_[sizeof(T)];
+};
+
+static void usePassthroughs(oep::ProbeConfig &c) { c.usePassthroughs(); }   // a serial port's raw stream carries them (probe.config §1.1)
+
+void oepAddHid() {
+  static Slot<CH32RVUsbDeviceHidVendor> usbHid;
+  static Slot<HidStream> stream;
+  static uint8_t rx[520];
+  stream.make(usbHid.make(USBDevice, HidStream::kReport));
+  usbHid->setUsage(oep::reg::kUsbHidUsagePage, oep::reg::kUsbHidUsage);   // 0xFF4F / 0x45 (registry usb)
+  endpoint.addTransport(*stream, rx, sizeof rx, oep::Endpoint::kHid, 0xff, true);   // the device's one HID interface (the core numbers it)
+}
+
+// The ports are the firmware's own, not the core's SerialUSB / Serial1 / Serial: naming one of those links it (and its
+// registration with the device) whether or not it is chosen
+static CH32RVUsbDeviceCdcSerial &cdc() {
+  static CH32RVUsbDeviceCdcSerial port(USBDevice);
+  return port;
+}
+
+void oepAddCdc() {
+  cdc().begin(115200);   // before USBDevice.begin: its interface is laid out with the vendor one
+  afterUsb.add([] {   // its interface number, once laid out
+    static uint8_t rx[oep::cobsFrameMax(512) + 8];   // the encoded candidate (transports §1)
+    endpoint.addTransport(cdc(), rx, sizeof rx, oep::Endpoint::kUsbCdc, cdc().interfaceNumber(), true);
+  });
+  settingsParts.add(usePassthroughs);
+}
+
+void oepAddBridge() {
+  static Slot<oep::OepUart> port;
+  static uint8_t rx[oep::cobsFrameMax(512) + 8];
+  port.make(1).begin(115200);   // USART2 (Serial1's), its default route (transports §1: a UART bridge at its boot speed)
+  endpoint.addTransport(*port, rx, sizeof rx, oep::Endpoint::kUartBridge);
+  settingsParts.add(usePassthroughs);
+}
+
+// The RVSWD wire's parts, the console's too (its choice is made in the wire's: no wire, no console)
+struct RvswdParts {
+  oep::RvswdPhy phy;
+  oep::Ch32Dm dm{phy};
+  oep::DebugPort port{dm, kUnset, kUnset};
+  oep::WireRvswd wire{port, 0};
+  RvswdParts() {
+    port.pin_choice = kChannels;
+    port.pins = &pins;
+    port.reset_allowed = kChannels;
+  }
+};
+static Slot<RvswdParts> rvswd;
+
+void oepAddRvswd() {
+  static Slot<oep::TargetRiscvDm> riscvDm;
+  RvswdParts &r = rvswd.make();
+  endpoint.add(r.wire);
+  endpoint.add(riscvDm.make(r.port, 0));
+  oepWithConsole();
+}
+
+void oepAddConsole() {
+  static Slot<oep::DmConsole> driver;
+  static Slot<oep::TargetConsoleStream> console;
+  endpoint.add(console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0));
+  settingsParts.add([](oep::ProbeConfig &c) { c.addPlace(rvswd->wire, *console); });
+  loopWork.add([] { console->poll(); });
+}
+
+void oepAddSwd() {
+  static oep::SwdPort swd{kUnset, kUnset};
+  static Slot<oep::WireSwd> wireSwd;
+  static Slot<oep::TargetArmAdi> adi;
+  swd.pin_choice = kChannels;
+  swd.pins = &pins;
+  endpoint.add(wireSwd.make(swd, 0));
+  endpoint.add(adi.make(swd, 0));
+  settingsParts.add([](oep::ProbeConfig &c) { c.addHold(swd.hold, oep::checkSwdHold, &swd); });
+}
+
+void oepAddGpio() {
+  static Slot<oep::FixtureGpio> gpio;
+  endpoint.add(gpio.make(pins, 0, 1));
+}
+
+void oepAddUart() {
+  static Slot<oep::OepUart> port;
+  static Slot<oep::FixtureUart> uart;
+  endpoint.add(uart.make(pins, port.make(0), 0, 2));   // USART1 (Serial's)
+  uart->setRoleChannels(kChannels, kChannels);   // any enabled USART's route (its begin refuses another pair)
+  settingsParts.add([](oep::ProbeConfig &c) { c.addUart(*uart); });
+  loopWork.add([] { uart->poll(); });
+}
+
+void oepAddConfig() {
+  static Slot<oep::Binds> binds;
+  static Slot<oep::ProbeConfig> config;
+  oep::ProbeConfig &c = config.make(endpoint, binds.make());
+  c.setStorage(false);   // no store on this core yet (probe.config §4: no save / erase / state)
+  endpoint.setRawPorts(&*binds);
+  endpoint.add(c);
+  settingsParts.run(c);
+  c.setPins(&pins);
+  loopWork.add([] { config->poll(); });
+  c.applySaved();
+}
+
+void oepAddLink() {
+  static Slot<oep::Link> link;
+  endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
+}
+
+// This build's choices (OepFeatures.h: a sketch's own replaces one). The CH32X035's 62 KiB take the WCH set (RVSWD,
+// console, gpio, link, HID: 62.4 KB); SWD, uart and the settings are left out by default.
+#if defined(ARDUINO_CH32X035)
+static constexpr bool kRoomy = false;
+#else
+static constexpr bool kRoomy = true;
 #endif
-#if OEP_CH32_CONSOLE
-static oep::DmConsole consoleDriver(dm, phy);
-static oep::TargetConsoleStream console(rvswd, consoleDriver, 0);
-#endif
-#if OEP_CH32_SWD
-static oep::SwdPort swd{kUnset, kUnset};
-static oep::WireSwd wireSwd(swd, 0);
-static oep::TargetArmAdi adi(swd, 0);
-#endif
-#if OEP_CH32_GPIO
-static oep::FixtureGpio gpio(pins, 0, 1);
-#endif
-#if OEP_CH32_UART
-static oep::FixtureUart uart(pins, Serial, 0, 2);
-#endif
-#if OEP_CH32_CONFIG
-static oep::Binds binds;
-static oep::ProbeConfig config(endpoint, binds);
-#endif
+__attribute__((weak)) void oepWithHid() { oepAddHid(); }
+__attribute__((weak)) void oepWithCdc() {}
+__attribute__((weak)) void oepWithBridge() {}
+__attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
+__attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
+__attribute__((weak)) void oepWithSwd() {
+  if (kRoomy) oepAddSwd();
+}
+__attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
+__attribute__((weak)) void oepWithUart() {
+  if (kRoomy) oepAddUart();
+}
+__attribute__((weak)) void oepWithConfig() {
+  if (kRoomy) oepAddConfig();
+}
+__attribute__((weak)) void oepWithLink() { oepAddLink(); }
 
 // oep.probe.restart (oep-if-restart): off the bus first (kRestartDetachMs, Oep.h), then CH32RV.restart(). restart_max_ms:
 // an estimate (the boot, the host's enumeration), to be measured on the bench.
@@ -236,85 +327,25 @@ void setup() {
   usb.product = kProduct;
   usb.serialNumber = serial;   // the unit id, lowercase (transports §3)
   usbVendor.setInterfaceProtocol(oep::reg::kUsbVendorBulkSubclass, oep::reg::kUsbVendorBulkProtocol);
-#if OEP_CH32_HID
-  usbHid.setUsage(oep::reg::kUsbHidUsagePage, oep::reg::kUsbHidUsage);   // 0xFF4F / 0x45 (registry usb)
-#endif
-#if OEP_CH32_CDC
-  SerialUSB.begin(115200);   // before USBDevice.begin: its interface is laid out with the vendor one
-#endif
+  oepWithHid();   // the transports before USBDevice.begin (their interfaces laid out with the vendor one)
+  oepWithCdc();
+  oepWithBridge();
   USBDevice.begin(usb);
-#if OEP_CH32_HID
-  endpoint.addTransport(hidStream, hidRx, sizeof hidRx, oep::Endpoint::kHid, 0xff, true);   // the device's one HID interface (the core numbers it)
-#endif
-#if OEP_CH32_BRIDGE
-  Serial1.begin(115200);   // its default route (transports §1: a UART bridge at its boot speed)
-  endpoint.addTransport(Serial1, bridgeRx, sizeof bridgeRx, oep::Endpoint::kUartBridge);
-#endif
-#if OEP_CH32_CDC
-  endpoint.addTransport(SerialUSB, cdcRx, sizeof cdcRx, oep::Endpoint::kUsbCdc, SerialUSB.interfaceNumber(), true);
-#endif
+  afterUsb.run();
   oep::platformParkMask(kChannels);   // every channel a floating input until the host takes one (oep-core §8)
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(restartProbe, kRestartMaxMs);
-  // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name)
-#if OEP_CH32_RVSWD
-  rvswd.pin_choice = kChannels;
-  rvswd.pins = &pins;
-  rvswd.reset_allowed = kChannels;
-  endpoint.add(wireRvswd);
-  endpoint.add(riscvDm);
-#endif
-#if OEP_CH32_CONSOLE
-  endpoint.add(console);
-#endif
-#if OEP_CH32_SWD
-  swd.pin_choice = kChannels;
-  swd.pins = &pins;
-  endpoint.add(wireSwd);
-  endpoint.add(adi);
-#endif
-#if OEP_CH32_GPIO
-  endpoint.add(gpio);
-#endif
-#if OEP_CH32_UART
-  endpoint.add(uart);
-  uart.setRoleChannels(kChannels, kChannels);   // any enabled USART's route (its begin refuses another pair)
-#endif
-#if OEP_CH32_CONFIG
-  config.setStorage(false);   // no store on this core yet (probe.config §4: no save / erase / state)
-  endpoint.setRawPorts(&binds);
-  endpoint.add(config);
-#if OEP_CH32_CDC || OEP_CH32_BRIDGE
-  config.usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
-#endif
-#if OEP_CH32_CONSOLE
-  config.addPlace(wireRvswd, console);
-#endif
-#if OEP_CH32_SWD
-  config.addHold(swd.hold, oep::checkSwdHold, &swd);
-#endif
-#if OEP_CH32_UART
-  config.addUart(uart);
-#endif
-  config.setPins(&pins);
-#endif
-#if OEP_CH32_LINK
-  endpoint.add(oepLink);
-#endif
-#if OEP_CH32_CONFIG
-  config.applySaved();
-#endif
+  // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name); the settings last,
+  // after the ones they hold
+  oepWithRvswd();   // and the console's choice
+  oepWithSwd();
+  oepWithGpio();
+  oepWithUart();
+  oepWithLink();
+  oepWithConfig();
 }
 
 void loop() {
   endpoint.poll();
-#if OEP_CH32_CONSOLE
-  console.poll();
-#endif
-#if OEP_CH32_UART
-  uart.poll();
-#endif
-#if OEP_CH32_CONFIG
-  config.poll();
-#endif
+  loopWork.run();
 }
