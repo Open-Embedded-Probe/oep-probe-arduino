@@ -575,20 +575,12 @@ size_t LogicCapture::stagesPossible(size_t *frame_out) const {
     if (store_ && !esp_ptr_external_ram(store_)) largest += store_bytes_;
     if (buffer_ && !buffer_in_ring_ && !esp_ptr_external_ram(buffer_)) largest += bytes_;
     if (!ring_) largest = largest > kRingBytes ? largest - kRingBytes : 0;   // the DMA ring is taken first (openRepeat)
-    // the largest frame whose stages make kStreamFullStageBytes in all (a larger frame fills more of each host read:
-    // 27 KiB x 4 rather than 16 KiB x 7); none: the one that makes the most (2 x 27 KiB keeps 36 MB/s, 7 x 16 KiB 40 -
-    // the P4 took 2 x 27 KiB after a repeat, wireskein 2026-10-21)
-    bool full = false;
     for (const size_t f : {stageFrame(), size_t(16384), size_t(8192)}) {
       if (f > stageFrame()) continue;
       size_t n = 0, left = largest;
       while (n < kStagesMax && left >= f + 48 * 1024) { ++n; left -= f; }
-      const bool f_full = n >= 2 && n * f >= kStreamFullStageBytes;
-      if (f == stageFrame() || (!full && (f_full || (n >= 2 && (count < 2 || n * f > count * frame))))) {
-        count = n;
-        frame = f;
-        full = f_full;
-      }
+      if (n > count || f == stageFrame()) { count = n; frame = f; }
+      if (n >= 2) break;
     }
   }
   if (frame_out) *frame_out = frame;
