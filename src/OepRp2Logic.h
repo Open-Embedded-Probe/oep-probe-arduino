@@ -32,7 +32,7 @@ namespace oep {
 
 class Endpoint;
 
-class Rp2LogicCapture final : public Interface {
+class Rp2LogicCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 8;
   static constexpr uint8_t kTriggerOpts = 0;   // the defaults only: arm 1, when 0 (describe trigger opts)
@@ -66,8 +66,37 @@ class Rp2LogicCapture final : public Interface {
   bool notifies() const override { return true; }
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   void poll();   // from loop(): the trigger seen, a finished capture becomes the segment and its events
+  uint16_t boundTo() const override { return groupFn(); }   // bound: plan changes refused (capture §4.1)
+  // GroupTrack (oep.fixture.capture-group): the group starts and stops it; a triggered one is the group's trigger
+  // track (its trigger's time is known once the samples after it are in: their time plus a loop round late)
+  bool trackReady() const override { return state_ == reg::fixture_logic::kStateConfigured || state_ == reg::fixture_logic::kStateDone; }
+  bool trackCanStart() const override { return (trackReady() || state_ == reg::fixture_logic::kStateError) && ring_; }
+  uint8_t trackMode() const override { return reg::fixture_logic::kModeOneShot; }
+  bool trackTriggered() const override { return trig_type_ != 0; }
+  bool trackTriggerNs(uint64_t &ns) const override;
+  uint64_t trackLatencyNs() const override;
+  void trackForce() override { groupOp(reg::fixture_logic::kOpForce); }
+  uint32_t trackLoad() const override { return divider_ ? channels_ * (clk_hz_ / (kCyclesPerSample * divider_)) : 0; }
+  bool trackStart() override { return groupOp(reg::fixture_logic::kOpStart); }
+  void trackStop() override { groupOp(reg::fixture_logic::kOpStop); }
+  uint8_t trackState() const override { return state_; }
+  uint32_t trackGeneration() const override { return generation_; }
+  bool trackRate(uint32_t &num, uint32_t &den) const override {
+    num = clk_hz_;
+    den = kCyclesPerSample * divider_;
+    return divider_ != 0;
+  }
+  uint32_t trackPretrigger() const override { return pretrigger_; }
 
  private:
+  bool group_op_ = false;
+  bool groupOp(uint8_t op) {
+    uint8_t out[8];
+    group_op_ = true;
+    const Result r = handle(op, nullptr, 0, out, sizeof out);
+    group_op_ = false;
+    return r.resolution == kResolutionCompleted && r.detail == kOutcomeSuccess;
+  }
   Endpoint &endpoint_;
   const PinTable &table_;
   uint16_t instance_;

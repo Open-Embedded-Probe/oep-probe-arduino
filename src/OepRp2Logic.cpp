@@ -223,6 +223,18 @@ void Rp2LogicCapture::collect() {
   seg_start_ns_ = end_ns - static_cast<uint64_t>(ring - 1) * period_ns;
 }
 
+// The trigger's time: its sample's, once the capture is in (the halt's time less the samples after it)
+bool Rp2LogicCapture::trackTriggerNs(uint64_t &ns) const {
+  if (!trig_type_ || state_ != cap::kStateDone) return false;
+  ns = seg_start_ns_ + static_cast<uint64_t>(pretrigger_) * divider_ * kCyclesPerSample * 1000000000ull / clk_hz_;
+  return true;
+}
+
+uint64_t Rp2LogicCapture::trackLatencyNs() const {
+  const uint64_t post = samples_ > pretrigger_ ? samples_ - pretrigger_ - 1 : 0;
+  return (clk_hz_ ? post * divider_ * kCyclesPerSample * 1000000000ull / clk_hz_ : 0) + kLoopNs;
+}
+
 size_t Rp2LogicCapture::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   uint8_t roles[kMaxChannels];
@@ -327,6 +339,7 @@ Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size
     if (pretrigger >= samples) return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   }
   if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
+  if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   // a whole divider: the rate paced is clk_sys / (3 x it), the nearest to the one asked at or above kMinDivider
   uint32_t divider = (clk + kCyclesPerSample * rate / 2) / (kCyclesPerSample * rate);
@@ -415,6 +428,8 @@ void Rp2LogicCapture::poll() {
 }
 
 Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
+  // bound in a capture-group: the group starts and stops it (unavailable cause 4, after the request's form, core §4.3)
+  auto boundRefused = [&]() { return bound() && !group_op_; };
   Tail tail;
   switch (op) {
     case cap::kOpConfigure: return configure(p, n, out, capacity, false);
@@ -422,6 +437,7 @@ Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *
     case cap::kOpStart: {   // -> generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (boundRefused()) return boundInGroup(*this, out, capacity);
       if (state_ != cap::kStateConfigured && state_ != cap::kStateDone && state_ != cap::kStateError) return wrongState(out, capacity);
       if (capacity < 4) return failed();
       halt();
@@ -441,6 +457,7 @@ Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *
     case cap::kOpStop: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (boundRefused()) return boundInGroup(*this, out, capacity);
       poll();
       if (state_ == cap::kStateWaiting) {   // no trigger yet: nothing captured
         halt();
@@ -519,6 +536,7 @@ Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *
     case cap::kOpForce: {   // waiting for the trigger: the samples after it from the next one on
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
+      if (boundRefused()) return boundInGroup(*this, out, capacity);
       if (state_ == cap::kStateWaiting && sm_ >= 0 && !inPost())
         pio_sm_exec(pio_, static_cast<uint>(sm_), pio_encode_jmp(static_cast<uint>(offset_ + kPost)));
       return completed();
