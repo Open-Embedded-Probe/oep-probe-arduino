@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) probe.config's Wi-Fi (the wifi / ipv4 items, the network op, handing them to a WifiControl) compiles out where
+  there is no Wi-Fi (kWifiBuild: the ESP32 and the host tests only; elsewhere wifi() is a constant null and setWifi
+  refuses one): 1.2 KB on the CH32X035 (81.4 KB with the core's LTO).
+- (JA) probe.config の Wi-Fi（wifi / ipv4 の項目、network の op、WifiControl への受け渡し）を、Wi-Fi の無い機種ではコンパイルで
+  外す（kWifiBuild。ESP32 とホストの試験だけが持つ。ほかでは wifi() が定数の null で、setWifi も断る）。CH32X035 で 1.2 KB 減
+  （コアの LTO で 81.4 KB）。
 - (EN) CH32: the core 0.2.2 (LTO by default, the vendor class's peek(), stdout without Serial); the SWD timing math in
   32 bits (no 64-bit division linked); a small-RAM build's uart ring 1 KiB (driver 256), probe.config's item stores
   256 bytes, the binds' rings 256 bytes. The CH32X035's full set: flash 82.7 KB of 62 KB (was 92.6 KB without LTO),

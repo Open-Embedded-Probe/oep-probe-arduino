@@ -128,6 +128,7 @@ class ProbeConfig final : public Interface {
   // The Wi-Fi station: netif "wifi", the wifi and ipv4 items and the network op. false (and nothing declared) when a
   // transport's max_frame is below wifi_min_max_frame (§1.4: the longest wifi set must fit every transport).
   bool setWifi(WifiControl *wifi) {
+    if (!kWifiBuild && wifi) return false;   // no Wi-Fi on this platform
     if (wifi && endpoint_.maxFrame() < reg::kLimitWifiMinMaxFrame) return false;
     wifi_ = wifi;
     return true;
@@ -157,7 +158,7 @@ class ProbeConfig final : public Interface {
   bool offers(uint8_t op) const override {
     using namespace reg::probe_config;
     if (op == kOpGet || op == kOpSet || op == kOpUnset) return true;
-    if (op == kOpNetwork) return wifi_ != nullptr;
+    if (op == kOpNetwork) return wifi() != nullptr;
     return storage_ && (op == kOpSave || op == kOpErase || op == kOpState);
   }
   size_t describe(uint8_t *out, size_t capacity) override;
@@ -188,6 +189,14 @@ class ProbeConfig final : public Interface {
   FixtureUart *uarts_[kMaxUarts] = {};
   size_t uart_count_ = 0;
   WifiControl *wifi_ = nullptr;
+  // Wi-Fi is the ESP32's (the sketch hands a WifiControl): elsewhere wifi() is a constant null, and the wifi / ipv4 items
+  // and the network op compile out (a CH32X035's 62 KB)
+#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_CONFIG) || defined(OEP_WIFI_CONFIG)
+  static constexpr bool kWifiBuild = true;
+#else
+  static constexpr bool kWifiBuild = false;
+#endif
+  WifiControl *wifi() const { return kWifiBuild ? wifi_ : nullptr; }
   uint32_t wifi_applied_ = 0;    // CRC-32 of the wifi / ipv4 items last handed to wifi_ (0xFFFFFFFF: none yet)
   bool wifi_handed_ = false;
   Own own_[kMaxOwn];
