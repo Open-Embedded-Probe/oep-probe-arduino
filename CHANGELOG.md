@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) CH32: the core 0.2.2 (LTO by default, the vendor class's peek(), stdout without Serial); the SWD timing math in
+  32 bits (no 64-bit division linked); a small-RAM build's uart ring 1 KiB (driver 256), probe.config's item stores
+  256 bytes, the binds' rings 256 bytes. The CH32X035's full set: flash 82.7 KB of 62 KB (was 92.6 KB without LTO),
+  RAM 16.9 KB of 20 KB (fits; was 26.5 KB).
+- (JA) CH32: コアを 0.2.2 にした（LTO が既定、vendor クラスの peek()、stdout が Serial を引き込まない）。SWD の時間の計算を
+  32 bit にした（64 bit の割り算がリンクされない）。RAM の小さい機種のビルドでは、uart の溜めを 1 KiB（ドライバ 256）、
+  probe.config の表を 256 バイト、bind の溜めを 256 バイトにした。CH32X035 の全部入りは、Flash 82.7 KB / 62 KB（前は LTO なしで
+  92.6 KB）、RAM 16.9 KB / 20 KB（収まる。前は 26.5 KB）。
 - (EN) Ch32.h has every interface the RP2's has but the analog: RVSWD + riscv-dm + console, SWD + ARM ADI (OepSwd's
   bit-bang on OepCh32BitBang.h; the RP2 SDK's pull calls on the core's pinMode there), fixture gpio / uart (the core's
   begin(baud, config, rx, tx): any enabled USART's route, another pair refused), probe.config with no store

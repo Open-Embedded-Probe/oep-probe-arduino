@@ -108,7 +108,7 @@ class ProbeConfig final : public Interface {
   static constexpr size_t kMaxOwn = 4;    // the sketch's own settings (addSetting)
   // The items' bytes this probe holds and saves (describe storage max_bytes): every item with its 3-byte header, a wifi
   // item with its passphrase (§1.4).
-  static constexpr size_t kMaxItems = 800;
+  static constexpr size_t kMaxItems = OEP_SMALL_RAM ? 256 : 800;   // a small-RAM build: three of these
 
   ProbeConfig(Endpoint &endpoint, Binds &binds) : endpoint_(endpoint), binds_(binds) {
     for (size_t p = 0; p < kMaxPorts; ++p) pass_uart_[p] = pass_console_[p] = -1;

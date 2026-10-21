@@ -79,7 +79,9 @@ bool relink(SwdPort &port) {
 // (136 + 208 cells), TARGETSEL and DPIDR twice and the transfer (46 cells each), two half periods a cell.
 uint32_t roundUs(const SwdPort &port) {
   const uint32_t half = port.active_half_ns ? port.active_half_ns : port.half_ns;
-  return static_cast<uint32_t>((uint64_t{344 + 5 * 46} * 2u * half + 999) / 1000);
+  // in 32 bits (no 64-bit division linked): 1148 x half fits up to a half period of 3.7 ms (the slowest is 50 us)
+  const uint32_t h = half < 3700000u ? half : 3700000u;
+  return (uint32_t{344 + 5 * 46} * 2u * h + 999) / 1000;
 }
 
 // A transfer with the WAIT retries (kWaitRetries) and the request's wire retries (oep-if-debug §2, §5): a transfer that
@@ -327,7 +329,10 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (capacity < 2) return failed();
       // the scan's clock: the slowest this probe goes when no ceiling is given, else at or under max_speed (§1)
       uint32_t half = kSlowHalfNs;
-      if (max_hz && hzOf(half) > max_hz) half = static_cast<uint32_t>((500000000ull + max_hz - 1) / max_hz);
+      if (max_hz && hzOf(half) > max_hz) {   // 5e8 / max_hz rounded up, in 32 bits
+        half = 500000000u / max_hz;
+        if (half * max_hz < 500000000u) ++half;
+      }
       if (half < port_.half_ns) half = port_.half_ns;
       size_t at = 2;
       uint8_t tried = 0, found = 0;
@@ -393,7 +398,10 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (!move(d, c)) return unavailable(out, capacity, reg::core::kUnavailableCausePinInUse);
       // The slowest half period that keeps SWCLK at or under the ceiling (nominal: the loop overhead only slows it).
       uint32_t half = port_.half_ns;
-      if (hzOf(half) > max_hz) half = static_cast<uint32_t>((500000000ull + max_hz - 1) / max_hz);
+      if (hzOf(half) > max_hz) {   // 5e8 / max_hz rounded up, in 32 bits
+        half = 500000000u / max_hz;
+        if (half * max_hz < 500000000u) ++half;
+      }
       // The wake, tried again while the wire retries of oep-if-debug §2 last (each try the line reset, the dormant wake,
       // TARGETSEL: §5), a try started only when it still ends inside limits::kWireRetryMs.
       uint32_t dpidr = 0;

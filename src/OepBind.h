@@ -16,7 +16,7 @@ namespace oep {
 
 class Binds final : public RawPorts {
  public:
-  static constexpr size_t kMaxPorts = Endpoint::kMaxTransports, kRing = 512;
+  static constexpr size_t kMaxPorts = Endpoint::kMaxTransports, kRing = OEP_SMALL_RAM ? 256 : 512;
 
   // The pass-through of `port` adds bytes (the oldest go when the ring is full: a serial monitor sees the newest).
   void put(uint8_t port, const uint8_t *data, size_t length);

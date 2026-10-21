@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// WCH CH32 on ArduinoCore-CH32RV (profile ch32x035; the core's 0.2.1).
+// WCH CH32 on ArduinoCore-CH32RV (profile ch32x035; the core's 0.2.2, LTO by default).
 //
 // Transport: the USB vendor bulk interface (class 0xFF, 'O', 'E': transports §3) at full speed, length-prefixed frames;
 // the USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id (the chip's 64-bit
@@ -36,26 +36,19 @@
 
 static constexpr const char *kProduct = "OEP probe (CH32X035)", *kModel = "ch32x035";
 
-// The vendor class as the endpoint's Stream: it has no peek in the core's 0.2.1, so one byte is held back for it.
+// The vendor class as the endpoint's Stream (it is a Print with available / read / peek, not a Stream)
 class VendorStream final : public Stream {
  public:
   explicit VendorStream(CH32RVUsbDeviceVendor &vendor) : vendor_(vendor) {}
-  int available() override { return vendor_.available() + (held_ >= 0 ? 1 : 0); }
-  int read() override {
-    if (held_ >= 0) { const int c = held_; held_ = -1; return c; }
-    return vendor_.read();
-  }
-  int peek() override {
-    if (held_ < 0) held_ = vendor_.read();
-    return held_;
-  }
+  int available() override { return vendor_.available(); }
+  int read() override { return vendor_.read(); }
+  int peek() override { return vendor_.peek(); }
   size_t write(uint8_t c) override { return vendor_.write(c); }
   size_t write(const uint8_t *data, size_t length) override { return vendor_.write(data, length); }
   void flush() override { vendor_.flush(); }
 
  private:
   CH32RVUsbDeviceVendor &vendor_;
-  int held_ = -1;
 };
 
 static CH32RVUsbDeviceVendor usbVendor(USBDevice, 64);

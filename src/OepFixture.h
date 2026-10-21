@@ -131,6 +131,9 @@ class FixtureUart final : public Interface, public BindSource {
   // The UART driver's receive buffer: what loop() may be away for before the driver drops bytes (marked lost overflow)
   // - 16 KiB is 82 ms at 2000000 (4 KiB was 20 ms). Above 4 KiB malloc takes it from PSRAM where there is one.
   static constexpr size_t kDriverRx = 16384;
+#elif OEP_SMALL_RAM
+  static constexpr size_t kCapacity = 1024, kMarks = 8;    // a small-RAM build (the CH32X035's 20 KiB)
+  static constexpr size_t kDriverRx = 256;
 #else
   static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
   static constexpr size_t kDriverRx = 4096;                // 20 ms at 2000000 (see above)

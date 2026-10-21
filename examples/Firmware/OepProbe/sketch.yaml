@@ -39,7 +39,7 @@ profiles:
   ch32x035:
     fqbn: ch32-riscv-ug:ch32rv:CH32X035
     platforms:
-      - platform: ch32-riscv-ug:ch32rv (0.2.1)
+      - platform: ch32-riscv-ug:ch32rv (0.2.2)
         platform_index_url: https://ch32-riscv-ug.github.io/ArduinoCore-CH32RV/package_ch32-riscv-ug_index.json
     libraries:
       - dir: ../../..
