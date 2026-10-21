@@ -3,9 +3,10 @@
 
 // RP2040 / RP2350 (built for the Raspberry Pi Pico / Pico 2; profiles rp2040 / rp2350).
 //
-// Transport (the Cdc choice): USB CDC (Serial), a serial port: COBS frames (oep-transports §1). The USB device is the project's VID:PID
-// 1209:4F45 (registry usb; PID-USE.md), serial = the unit id; its iProduct "OEP probe (RP2040)" /
-// "(RP2350)" is a name for people.
+// Transports, each a choice: USB CDC (Cdc; Serial, transport 0), a serial port: COBS frames (oep-transports §1); USB
+// vendor bulk (Bulk) and HID (Hid), length-prefixed frames (OepRp2Usb.h: this library's class drivers on arduino-pico's
+// stack). The USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id; its
+// iProduct "OEP probe (RP2040)" / "(RP2350)" is a name for people.
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
@@ -38,6 +39,7 @@
 #include <OepP4I2cTarget.h>
 #include <OepLog.h>
 #include <OepPinTable.h>
+#include <OepRp2Usb.h>
 #include <OepRvswdPhy.h>
 #include <OepSwd.h>
 #include <OepSwioPhy.h>
@@ -75,6 +77,7 @@ static uint8_t probeTlv[256];   // with the firmware text's note of the boot bef
 // What a choice leaves to run later, each added only from its own oepAddX(): its loop work; the settings' fn at its place,
 // what comes last
 static oep::Hooks<void (*)(), 5> loopWork;
+static oep::Hooks<void (*)(), 2> afterCdc;   // the other transports, after the CDC port (transport 0: the binds' serial port 0)
 static oep::Hooks<void (*)(), 1> settingsFn;
 static oep::Hooks<void (*)(), 1> lastly;
 
@@ -108,6 +111,26 @@ void oepAddCdc() {
   Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
   Serial.begin(115200);
   endpoint.addTransport(Serial, rx, sizeof rx, oep::Endpoint::kUsbCdc, 0);
+}
+
+// The USB vendor bulk and HID interfaces (OepRp2Usb.h), in the descriptor before USB.connect(), their transports after
+// the CDC port's
+void oepAddBulk() {
+  static oep::rp2usb::VendorStream vendor;
+  vendor.begin();
+  afterCdc.add([] {
+    static uint8_t rx[1026];   // one frame of max_frame
+    endpoint.addTransport(vendor, rx, sizeof rx, oep::Endpoint::kVendorBulk, vendor.interfaceNumber(), true);
+  });
+}
+
+void oepAddHid() {
+  static oep::rp2usb::HidStream hid;
+  hid.begin();
+  afterCdc.add([] {
+    static uint8_t rx[1026];
+    endpoint.addTransport(hid, rx, sizeof rx, oep::Endpoint::kHid, hid.interfaceNumber(), true);
+  });
 }
 
 void oepAddRvswd() {
@@ -249,6 +272,8 @@ void oepAddLink() {
 
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
 __attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
+__attribute__((weak)) void oepWithBulk() { oepAddBulk(); }
+__attribute__((weak)) void oepWithHid() { oepAddHid(); }
 __attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
 __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
@@ -294,8 +319,11 @@ void setup() {
   static uint8_t serial[17];
   oep::platformUnitId(serial, sizeof serial);
   USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (transports §3)
+  oepWithBulk();   // their interfaces in the descriptor USB.connect() builds
+  oepWithHid();
   USB.connect();
   oepWithCdc();
+  afterCdc.run();
 #if OEP_DEBUG_LOG
   Serial2.setTX(OEP_DEBUG_LOG_TX);
   Serial2.begin(921600);
