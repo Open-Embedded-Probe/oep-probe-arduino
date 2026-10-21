@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Ch32.h has every interface the RP2's has but the analog: RVSWD + riscv-dm + console, SWD + ARM ADI (OepSwd's
+  bit-bang on OepCh32BitBang.h; the RP2 SDK's pull calls on the core's pinMode there), fixture gpio / uart (the core's
+  begin(baud, config, rx, tx): any enabled USART's route, another pair refused), probe.config with no store
+  (storeRead / storeWrite return nothing; setStorage(false)), probe.link. On the CH32X035 it does not fit yet: 92.6 KB of
+  62 KB flash, 26.5 KB of 20 KB RAM (the ch32x035 profile fails at the link until it does); optimizing comes next.
+- (JA) Ch32.h に、RP2 版にある機能をアナログ以外すべて入れた。
+  - RVSWD ＋ riscv-dm ＋ コンソール。
+  - SWD ＋ ARM ADI。OepSwd のビット操作を OepCh32BitBang.h で動かし、RP2 SDK のプルの呼び出しはコアの pinMode で置き換えた。
+  - fixture の gpio と uart。uart はコアの begin(baud, config, rx, tx) を使い、使える USART の経路なら取り、それ以外の組は断る。
+  - probe.config（保存なし。storeRead / storeWrite は何も返さず、setStorage(false)）と probe.link。
+  - CH32X035 にはまだ収まらない（Flash 92.6 KB / 62 KB、RAM 26.5 KB / 20 KB）。収まるまで ch32x035 のプロファイルはリンクで
+    失敗する。次に最適化する。
 - (EN) Code size, for the CH32X035 (62 KB flash): the RVSWD PHY's timing math in 32 bits (no 64-bit division linked,
   1.2 KB); TlvWriter::put / roleChannels kept whole (OEP_NOIPA: no per-file .isra copies, 0.6 KB); a small-RAM build
   takes no serial transport - COBS, port_speed and raw ports compiled out, a serial addTransport refused (2.4 KB); the

@@ -46,7 +46,7 @@ enum : uint8_t { kLabel = 1, kIdle, kDisable, kPass, kConsolePass, kWifi, kIpv4,
 
 }  // namespace oep
 
-#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_CONFIG)
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_CH32RV) || defined(OEP_HOST_FAKE_CONFIG)
 
 namespace oep {
 

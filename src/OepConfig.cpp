@@ -3,7 +3,7 @@
 
 #include "OepConfig.h"
 
-#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_CONFIG)
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_CH32RV) || defined(OEP_HOST_FAKE_CONFIG)
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <Preferences.h>
@@ -78,6 +78,11 @@ bool storeOld() { return false; }
 }  // namespace
 void fakeConfigStore(const uint8_t *blob, size_t length) { storeWrite(blob, length); }
 namespace {
+#elif defined(ARDUINO_ARCH_CH32RV)
+// ArduinoCore-CH32RV has no store yet: nothing saved, nothing read (the sketch also turns save off: setStorage(false))
+bool storeRead(uint8_t *, size_t, size_t &length) { length = 0; return false; }
+bool storeWrite(const uint8_t *, size_t) { return false; }
+bool storeOld() { return false; }
 #else
 // The flash's last sector (arduino-pico EEPROM): magic, length, the blob. A sector rewrite is not atomic under a power
 // loss; the CRC makes a torn one read as unreadable (reason 1) rather than as settings (probe.config §3).

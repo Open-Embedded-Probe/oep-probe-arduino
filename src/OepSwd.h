@@ -14,13 +14,20 @@
 //                        ACK, nvals, values), and MEM-AP block reads / writes through TAR / DRW
 //
 // Like the RISC-V side, the probe knows nothing about the target: power-up requests, SELECT, CSW, the AP layout, the
-// Cortex-M debug registers are all the host's. RP2040 / RP2350 SIO bit-bang only for now.
+// Cortex-M debug registers are all the host's. Bit-bang: the RP2040 / RP2350 SIO, a CH32's GPIO (ArduinoCore-CH32RV).
 #pragma once
 
-#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD)
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD) || defined(ARDUINO_ARCH_CH32RV)
 
 #if defined(OEP_HOST_FAKE_SWD)
 #include <fake_swd_io.h>   // host tests (tests/host): rp2::BitBang over a simulated SWD target
+#elif defined(ARDUINO_ARCH_CH32RV)
+#include "OepCh32BitBang.h"
+#include "OepPlatform.h"
+// The RP2 SDK's pull calls the SWD code makes, on a channel: a CH32 pin's pull goes with its input mode (the bit-bang's
+// released SWDIO is already an input with the pull-up; driven, the call is overridden by the output it becomes).
+inline void gpio_pull_up(int channel) { pinMode(oep::platformPad(channel), INPUT_PULLUP); }
+inline void gpio_disable_pulls(int channel) { pinMode(oep::platformPad(channel), INPUT); }
 #else
 #include "OepRp2BitBang.h"
 #endif
@@ -36,7 +43,11 @@ struct SwdPort {
   uint32_t half_ns = 500;      // SWCLK half period (the fastest this probe uses)
   bool connected = false;
   uint32_t number = 0;         // the live connection's number, from the probe's one space (core §9, ResourceNumbers)
+#if defined(ARDUINO_ARCH_CH32RV)
+  ch32::BitBang io{};
+#else
   rp2::BitBang io{};
+#endif
   uint32_t active_half_ns = 0; // the half period of the live connection (half_ns, or slower for a max_speed)
   bool active_targetsel = false;   // the live connection's TARGETSEL (part of its identity, oep-if-debug §5)
   uint32_t targetsel = 0;

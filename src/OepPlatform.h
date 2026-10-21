@@ -42,6 +42,8 @@ enum FixtureGpioMode : uint8_t {
 // on SerialUART, not on HardwareSerial.
 #if defined(ARDUINO_ARCH_RP2040)
 using OepUart = SerialUART;
+#elif defined(ARDUINO_ARCH_CH32RV)
+using OepUart = arduino::CH32RVHardwareSerial;   // begin() takes the pins (any enabled USART's route)
 #else
 using OepUart = HardwareSerial;
 #endif
@@ -428,6 +430,11 @@ inline bool platformUartBegin(OepUart &serial, uint32_t baud, int rx, int tx, ui
   }
   serial.setRxFIFOFull(kUartRxFifoFull);   // after begin(): begin() sets its own (120 above 57600 baud)
   return true;
+#elif defined(ARDUINO_ARCH_CH32RV)
+  // ArduinoCore-CH32RV: a pair that is no enabled USART's route (or a baud it cannot make) leaves the port closed
+  (void)irq_core;
+  serial.begin(baud, static_cast<uint16_t>(config), platformPad(rx), platformPad(tx));
+  return static_cast<bool>(serial);
 #elif defined(OEP_HOST_FAKE_UART)
   return serial.fakeBegin(baud, rx, tx, config, irq_core);
 #else

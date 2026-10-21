@@ -171,7 +171,7 @@ uint8_t FixtureUart::planCheck(const RoleAssignment *roles, size_t count) {
 // through platformGpio: on the RP2 a digitalWrite after INPUT_PULLUP leaves the latch low, and OUTPUT then drove a dip.
 void FixtureUart::idleHigh() {
   if (tx_ < 0) return;
-  pinMode(tx_, INPUT_PULLUP);
+  pinMode(platformPad(tx_), INPUT_PULLUP);
   platformGpio(tx_, kGpioOutputHigh);
 }
 
@@ -182,7 +182,7 @@ bool FixtureUart::passStart(uint16_t rx, uint32_t baud, uint8_t format, PassSink
   rx_ = rx;
   pass_sink_ = sink;
   pass_ctx_ = context;
-  pinMode(rx_, INPUT);
+  pinMode(platformPad(rx_), INPUT);
   if (!begin(baud, format)) { passStop(); return false; }
   return true;
 }
@@ -213,7 +213,7 @@ bool FixtureUart::planApply(const RoleAssignment *roles, size_t count) {
   if (rx_ >= 0) pins_.ownStrength(rx_);
   if (tx_ >= 0) pins_.ownStrength(tx_);
   session_configured_ = false;
-  if (rx_ >= 0) pinMode(rx_, INPUT);
+  if (rx_ >= 0) pinMode(platformPad(rx_), INPUT);
   idleHigh();   // TX rests high from the plan on, before any configure (fixture §2): the DUT's RX stays connected
   return true;   // nothing is received before a configure (fixture §2): the UART starts there
 }

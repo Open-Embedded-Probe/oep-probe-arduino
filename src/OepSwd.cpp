@@ -3,8 +3,9 @@
 
 #include "OepSwd.h"
 
-#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD)
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD) || defined(ARDUINO_ARCH_CH32RV)
 
+#include "OepPlatform.h"
 #include "OepSwdFrame.h"
 
 namespace oep {
@@ -241,7 +242,7 @@ bool WireSwd::xferDpidr(uint32_t &dpidr) {
 // Wake the port and read DPIDR: the legacy JTAG-to-SWD select first, then the dormant wake (an SWD v2 port with
 // dormant support - the RP2350's - only answers the latter). A multidrop port needs TARGETSEL after each line reset.
 bool WireSwd::wake(const uint32_t *targetsel, uint32_t half_ns, uint32_t &dpidr, bool &dormant) {
-  port_.io.setup(port_.swdio, port_.swclk);
+  port_.io.setup(platformPad(port_.swdio), platformPad(port_.swclk));   // the core's pins (RP2: the GPIO numbers)
   port_.io.setHalfNs(half_ns);
   port_.io.driveBoth();
   port_.io_driven = true;
