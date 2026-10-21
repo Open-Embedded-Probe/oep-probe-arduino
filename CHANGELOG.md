@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The spill: while it holds bytes, every chunk the queue has goes into it at each pass of the harvest, and the
+  drain comes before any wait. One chunk a pass beside a 16 KiB drain took the ring at ~17 MB/s: a 32 MB/s stream
+  ran it over with the spill not full (P4X ba87edd, the host's reader stopped 500 ms; 36 MB/s at 400 ms, 40 MB/s at
+  250 ms).
+- (JA) 待避 FIFO: 中身があるあいだは、収穫のループのたびにキューにあるチャンクを全部 FIFO に入れ、そのあとの吐き出しを、
+  キューを待つより先に行うようにした。前は 1 回のループで 1 チャンクしか取らず、16 KiB の吐き出しと合わせて、リングを
+  約 17 MB/s でしか取り込めなかった。そのため 32 MB/s でも、FIFO に空きがあるのにリングが溢れた（P4X ba87edd、
+  host の受け取りを 500 ms 止めたとき。36 MB/s は 400 ms、40 MB/s は 250 ms で溢れた）。
 - (EN) Reverted: the spill filled by the GDMA. On the bench (P4X 942f32c, the host's reader stopped 300 - 700 ms) each
   async memcpy call cost the CPU about what memcpy did (~57 MB/s), the drain out of the spill fell from ~104 to
   ~70 MB/s (the PSRAM shared with the GDMA), and the ring ran over ~1,700 times in 16 s against 3 - 24 with the CPU's

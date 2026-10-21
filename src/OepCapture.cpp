@@ -995,20 +995,34 @@ void LogicCapture::harvestTask(void *context) {
     bool &held = self->held_;   // members: a chunk waiting for a stage outlives a pass of the loop
     size_t &at = self->held_at_;
     Chunk &waiting = self->held_chunk_;
-    bool drained = false;   // the last drain moved bytes
+    bool drained = false;   // this pass's drain moved bytes
     self->harvest_last_ = esp_cpu_get_cycle_count();
     while (self->harvesting_) {
       const uint32_t now = esp_cpu_get_cycle_count();
       if (now - self->harvest_last_ > self->harvest_gap_max_) self->harvest_gap_max_ = now - self->harvest_last_;
       self->harvest_last_ = now;
-      // the spill to drain: no waiting on the queue while it moves (a tick when no stage took any: not spinning)
+      // While the spill holds bytes the ring comes first: every chunk waiting goes into it (where it must go now),
+      // the drain gets the time left. One chunk a pass beside a 16 KiB drain took the ring at ~17 MB/s, and a 32 MB/s
+      // stream ran it over with the spill not full (P4X ba87edd, the host's reader stopped 500 ms).
+      while (self->spill_used_ || self->spill_drop_) {
+        if (!held) {
+          if (xQueueReceive(self->queue_, &waiting, 0) != pdTRUE) break;
+          held = true;
+          at = 0;
+        }
+        at = self->spillIn(waiting, at);
+        held = at < waiting.length;
+        if (held) break;   // the spill full: the ring holds the rest
+      }
+      // then the drain, before any wait; no waiting on the queue while it moves (a tick when no stage took any: not
+      // spinning)
       const bool spilled = self->spill_used_ || self->spill_drop_;
+      drained = spilled && self->drainSpill();
       const TickType_t wait = !spilled ? pdMS_TO_TICKS(2) : drained ? 0 : 1;
       if (!held && xQueueReceive(self->queue_, &waiting, wait) == pdTRUE) {
         held = true;
         at = 0;
       }
-      drained = spilled && self->drainSpill();
       if (held) {
         // straight into the stages - after what the spill holds; none free: into the spill
         if (!self->spill_used_ && !self->spill_drop_) at = self->harvestDirect(waiting, at);
