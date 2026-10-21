@@ -58,7 +58,7 @@ A UART's 115200 baud is the one speed every board and bridge manages; a faster r
 (some bridges and boards do not run 921600 reliably), so a host stays at 115200 unless the probe and the host agree on more.
 The classic ESP32 firmware offers the optional `port_speed` (in `oep.probe.link`, oep-if-link §3): a host that asks tries a rate, checks it with
 a sized transfer both ways, and commits it for its session; the probe goes back to 115200 by itself when the check never
-comes, frames break, the line goes quiet or the session ends (build with `-DOEP_PORT_SPEED=0` to leave it out).
+comes, frames break, the line goes quiet or the session ends (a sketch defining `void oepWithPortSpeed() {}` leaves it out: Firmware/OepProbe's OepFeatures.h).
 
 This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into such a probe.
 

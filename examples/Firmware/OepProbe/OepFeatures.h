@@ -16,24 +16,38 @@
 void oepWithHid();
 void oepWithCdc();
 void oepWithBridge();
+void oepWithWifi();
 void oepAddHid();
 void oepAddCdc();
 void oepAddBridge();
+void oepAddWifi();
 
-// The interfaces
+// The interfaces, and fn 0's port_speed
+void oepWithPortSpeed();
 void oepWithRvswd();
+void oepWithSwio();
 void oepWithConsole();
 void oepWithSwd();
 void oepWithGpio();
 void oepWithUart();
+void oepWithI2c();
+void oepWithSpi();
+void oepWithCapture();
 void oepWithConfig();
 void oepWithAnalog();
+void oepWithGroup();
 void oepWithLink();
+void oepAddPortSpeed();
 void oepAddRvswd();
+void oepAddSwio();
 void oepAddConsole();
 void oepAddSwd();
 void oepAddGpio();
 void oepAddUart();
+void oepAddI2c();
+void oepAddSpi();
+void oepAddCapture();
 void oepAddConfig();
 void oepAddAnalog();
+void oepAddGroup();
 void oepAddLink();

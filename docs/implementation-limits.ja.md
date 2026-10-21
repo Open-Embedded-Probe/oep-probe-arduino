@@ -17,7 +17,7 @@ TCP と Wi-Fi（port、mDNS、Wi-Fi の設定の提案、測った値）は §6�
 | 値 | この実装 | 仕様 |
 |---|---|---|
 | max_op_ms（fn 0 の describe） | 10000 ms | 1〜600000 ms、値は probe が決める（core §7.5） |
-| restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。`-DOEP_WIFI=0` で 1500 ms）、RP2040 / RP2350 2000 ms | probe が決める（oep-if-restart §1） |
+| restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。Wi-Fi を外した build（`oepWithWifi`）で 1500 ms）、RP2040 / RP2350 2000 ms | probe が決める（oep-if-restart §1） |
 | lease の既定（open の lease_ms 0） | 3000 ms | 1000〜60000 ms（core §6.4） |
 | 送り直しの表 | 8 件、1 件の応答は 1029 byte まで（それより大きい応答の送り直しは result_lost） | max_inflight 件以上（core §5.2） |
 | コンソールの送りの列 | ストリームごとに 256 byte | 大きさは probe が決める（oep-if-console §2） |
@@ -470,7 +470,7 @@ oep-spec の probe.config §1.4、§3.3、§4（c2b8007 から）。この実装
   見つかっていない。遅れ（host の待ちを越えた）か、変換器までの間でバイトが壊れた（CRC の合わないフレームは host が雑音として捨て、失いに
   数える）かは、まだ分けていない。radio の電源や RF が原因なら、この firmware では消せない。シリアルの口を Wi-Fi と一緒に使うときは、
   host の送り直しで回復する前提にする。
-- build の大きさ: classic ESP32 の firmware は Wi-Fi で 1.07 MB（app の区画 1.31 MB の 81 %）、RAM 107 KB。`-DOEP_WIFI=0` で外せる
+- build の大きさ: classic ESP32 の firmware は Wi-Fi で 1.07 MB（app の区画 1.31 MB の 81 %）、RAM 107 KB。スケッチで `void oepWithWifi() {}` と定義すると外れ、0.54 MB、RAM 80 KB
   （0.42 MB）。Wi-Fi の無い build に wifi の項目は無い（describe の items に出ない）。
 - **ESP32-P4** は radio を持たない。arduino-esp32 には別のチップ（ESP32-C6 など）を SDIO で使う ESP-Hosted の道があるが、この firmware は
   使わない（`OepWifi.h` は SOC_WIFI_SUPPORTED のチップだけ）。手元の P4 のボードには co-processor が無く、試していない。
