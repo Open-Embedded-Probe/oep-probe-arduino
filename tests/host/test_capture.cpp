@@ -207,6 +207,32 @@ class FakeDirect final : public DirectTransport {
 // Streaming through a zero-copy transport takes stages of internal RAM; with too little left beside the DMA ring (a
 // trigger's ring and the firmware's own use, 0.0.28 on the bench: a streaming configure answered failed) it streams
 // the copied way through the store instead, and configure succeeds.
+// A stream's configure after a repeat's: the repeat's store (internal RAM here) is freed by that configure before the
+// stages are taken, so it counts as free for them - the P4 answered the copied way's 8.42 MHz there and then took 8
+// stages (wireskein, 2026-10-21).
+static void testStreamAfterRepeat() {
+  board(300 * 1024, 0);
+  static FakeDirect direct;
+  Rig rig(8);
+  rig.ep.setDirect(&direct);
+  rig.cap.setFrameLimit(16 * 1024);
+  Bytes out;
+  Config r;
+  r.mode = 2;
+  r.samples = 20000;
+  r.segments = 9;
+  CHECK(ok(configure(rig.cap, r, out)));
+  Config c;
+  c.mode = 3;
+  c.rate = 40000000;
+  CHECK(ok(configure(rig.cap, c, out)));
+  for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+    if (out[at] == cap::kTlvConfigureAnswerActualRate) {
+      const uint64_t num = getU32(out.data() + at + kTlvHeader), den = getU32(out.data() + at + kTlvHeader + 4);
+      CHECK(num / den > LogicCapture::kStreamSmallStagesMaxBytes);   // nor small stages' (w 8: bytes = samples)
+    }
+}
+
 static void testStreamingWithoutStages() {
   // 112 KiB: the DMA ring (64 KiB) and no room for two stages - the copied way (the P4 v1.3, 2026-10-21); 128 KiB:
   // room for two of 8 KiB only (48 KiB left over each) - the zero-copy way with smaller frames
@@ -1666,6 +1692,7 @@ int main() {
   testFormatAndTriggerOpts();
   testConfigureOrder();
   testStreamingWithoutStages();
+  testStreamAfterRepeat();
   testStreamRing();
   testLinkedGroup();
   testLinkedPretrigger();

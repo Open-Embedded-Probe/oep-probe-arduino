@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) A stream's configure after another configuration (a repeat on the P4: wireskein, 2026-10-21) answered the
+  copied way's 8.42 MHz and then took 8 stages. The stages' estimate counts what the configure frees first (the store,
+  a one-shot's segment, in internal RAM), as storeBudget does; and once the stages are taken, a rate cut below the one
+  asked is raised to what they keep and the unit opened again. Host-tested (testStreamAfterRepeat).
+- (JA) ほかの設定の後のストリームの configure（P4 で repeat の後。wireskein、2026-10-21）が、写す経路の 8.42 MHz を答え、そのあと
+  stage を 8 つ取っていた。
+  - stage の見積もりに、その configure が先に空ける内部 RAM（store、one-shot の区画）を足した。storeBudget と同じ数え方。
+  - stage を取った後、頼まれた rate より切り下げていたら、取れた stage で保てる rate まで上げて開き直す。
+  - ホストの試験（testStreamAfterRepeat）で確かめた。
 - (EN) Streaming over stages of less than 96 KiB in all is capped at 36 MB/s (kStreamSmallStagesMaxBytes; configure
   answers the nearest it keeps, a fractional divider): fewer bytes out to the host at once, the harvest fell behind
   past it and the spill never caught up. Measured with 8 lines, 30 s: the P4 v1.3 (3 x 16 KiB) and the P4X with

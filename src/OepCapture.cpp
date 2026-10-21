@@ -9,6 +9,7 @@
 #include <esp_cache.h>
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
+#include <esp_memory_utils.h>
 #include <esp_timer.h>
 #include <hal/hal_utils.h>
 #include <soc/hp_sys_clkrst_struct.h>
@@ -568,6 +569,11 @@ size_t LogicCapture::stagesPossible(size_t *frame_out) const {
   if (!endpoint_.directCapable()) count = 0;
   else if (!count) {
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    // what the configure frees first (close), as storeBudget counts it: the store, a one-shot's segment, in internal RAM
+    // (a repeat's store before a stream's configure: the P4 answered the copied way's 8.42 MHz and then took 8 stages,
+    // wireskein 2026-10-21)
+    if (store_ && !esp_ptr_external_ram(store_)) largest += store_bytes_;
+    if (buffer_ && !buffer_in_ring_ && !esp_ptr_external_ram(buffer_)) largest += bytes_;
     if (!ring_) largest = largest > kRingBytes ? largest - kRingBytes : 0;   // the DMA ring is taken first (openRepeat)
     for (const size_t f : {stageFrame(), size_t(16384), size_t(8192)}) {
       if (f > stageFrame()) continue;
@@ -1467,14 +1473,18 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   size_t stage_frame = 0;
   const size_t stage_count = copied ? 0 : stagesPossible(&stage_frame);
   const bool small_stages = !copied && stage_count * stage_frame < kStreamFullStageBytes;
+  // the most a stream keeps: the highest whole-divider rate at or below its ceiling (the nearest the divider picks never
+  // lands above); small stages the ceiling itself, a fractional divider (whole ones give 32 MHz at w 8 under 36 MB/s;
+  // the fractional 36 MHz was measured)
+  auto streamMost = [&](bool by_copy, bool small) -> uint64_t {
+    const uint64_t ceiling = by_copy ? kStreamCopiedMaxBytes : blocks_format ? kStreamBlocksMaxBytes
+                             : small ? kStreamSmallStagesMaxBytes : kStreamMaxBytes;
+    if (small && !by_copy && !blocks_format) return ceiling * 8ull / width;
+    return kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + ceiling * 8ull - 1) / (ceiling * 8ull));
+  };
+  const uint32_t asked_rate = rate;
   if (mode == cap::kModeStreaming) {
-    // the highest whole-divider rate at or below it: the nearest the divider picks never lands above
-    const uint64_t ceiling = copied ? kStreamCopiedMaxBytes : blocks_format ? kStreamBlocksMaxBytes
-                             : small_stages ? kStreamSmallStagesMaxBytes : kStreamMaxBytes;
-    uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + ceiling * 8ull - 1) / (ceiling * 8ull));
-    // small stages: the ceiling itself, a fractional divider (whole ones give 32 MHz at w 8 under 36 MB/s; the
-    // fractional 36 MHz was measured)
-    if (small_stages && !blocks_format) most = ceiling * 8ull / width;
+    const uint64_t most = streamMost(copied, small_stages);
     if (rate > most) rate = static_cast<uint32_t>(most);
     if (rate < kMinHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   }
@@ -1599,6 +1609,25 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
       close();
       fail(cap::kErrorPeripheral);
       return failed();
+    }
+    // The stages taken may be more than the estimate gave (what this configure freed first - the last configuration's
+    // queue, task and unit - joined the internal blocks: the P4 answered the copied way's 8.42 MHz after a repeat and
+    // then took 8 stages, wireskein 2026-10-21): the rate asked, up to what they keep, opened again
+    if (mode == 3 && !query && direct_ && rate < asked_rate) {
+      const uint64_t most = streamMost(false, static_cast<size_t>(stage_count_) * stage_frame_ < kStreamFullStageBytes);
+      const uint32_t better = asked_rate < most ? asked_rate : static_cast<uint32_t>(most);
+      if (better > rate) {
+        close();
+        direct_ = endpoint_.directCapable();
+        const Open again = openRepeat(better, width, samples, actual_segments, num, den, got_samples, got_segments);
+        if (again == Open::kNoMemory) return noStorage(out, capacity);
+        if (again != Open::kOk) {
+          close();
+          fail(cap::kErrorPeripheral);
+          return failed();
+        }
+        rate = better;
+      }
     }
     samples = got_samples;
     actual_segments = got_segments;
