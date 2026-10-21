@@ -115,9 +115,14 @@ bool Rp2LogicCapture::claim() {
 void Rp2LogicCapture::halt() {
   if (sm_ < 0) return;
   pio_sm_set_enabled(pio_, static_cast<uint>(sm_), false);
-  dma_channel_abort(static_cast<uint>(dma_ctrl_));
-  dma_channel_abort(static_cast<uint>(dma_data_));
-  dma_channel_abort(static_cast<uint>(dma_ctrl_));   // the data channel's abort may have chained it once more
+  // Both channels' enable off first, then both aborted at once: aborting the data channel alone set off its chain
+  // (RP2040-E13), the control channel started it again, and dma_channel_abort's wait for it to stop never ended - the
+  // probe's watchdog reset it (bench, 4385db8: every triggered capture, its ring mid-round)
+  hw_clear_bits(&dma_hw->ch[dma_ctrl_].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+  hw_clear_bits(&dma_hw->ch[dma_data_].al1_ctrl, DMA_CH0_CTRL_TRIG_EN_BITS);
+  const uint32_t both = (1u << dma_data_) | (1u << dma_ctrl_);
+  dma_hw->abort = both;
+  for (uint32_t t = micros(); (dma_hw->abort & both) && micros() - t < 1000;) {}
   pio_sm_clear_fifos(pio_, static_cast<uint>(sm_));
   pio_sm_restart(pio_, static_cast<uint>(sm_));
   pio_interrupt_clear(pio_, static_cast<uint>(sm_));
