@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) RP2: the logic capture takes when 1 for a level (one already at it counts) and is a capture-group track (the Group
+  choice: the logic with the analog, started at once; bench: both segments within 0.15 ms of the group's start). The
+  fixture uart begins with a plan of TX or RX alone (the other UART_PIN_NOT_DEFINED; it failed configure), and a write
+  takes the TX FIFO's 32 bytes when it is empty (arduino-pico's availableForWrite says 1 or 0: a write went out a byte a
+  request; bench: 64 bytes in 4.2 ms, every edge seen by the logic on the same pin).
+- (JA) RP2:
+  - logic capture: level の when 1（もうそのレベルなら立つ）に対応した。capture-group の track にもなった（Group の選択。
+    logic と analog を同時に始める。実機で、両方の segment が group の開始から 0.15 ms 以内に始まった）。
+  - fixture uart: plan が TX だけ、RX だけでも始まるようにした（もう一方は UART_PIN_NOT_DEFINED。今までは configure が
+    failed だった）。送信の FIFO が空なら、write は 32 バイトまで受け取る。arduino-pico の availableForWrite は 1 か 0 しか
+    返さず、1 回の要求で 1 バイトしか出ていなかった。実機で、64 バイトが 4.2 ms で出て、同じピンを取った logic で全エッジを
+    確かめた。
 - (EN) RP2: oep.fixture.logic, one-shot (OepRp2Logic.h, the Logic choice): a PIO state machine samples GPIO0-31 three
   cycles a sample (clk_sys / (3 x a whole divider), up to clk_sys / 6) into a DMA ring, its program the trigger (edge
   rising / falling / either, level as when 0; the pretrigger taken first: arm 1), the ring packed to a byte a sample
