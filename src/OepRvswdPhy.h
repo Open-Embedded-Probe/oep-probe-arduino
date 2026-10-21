@@ -55,8 +55,12 @@ class RvswdPhy final : public DmiPhy {
   // took 2.2 s, at 1 kHz 4.4 s), and a frame outlasts the 1 ms idle a CH32 keeps its link for.
   static constexpr uint32_t kMinClockHz = 50000;
   uint32_t minClockHz() const override { return kMinClockHz; }
+  // in 32 bits (no 64-bit division linked: 0.9 KB on the CH32X035): 1e9 / 2hz rounded up
   bool setMaxHz(uint32_t hz) override {
-    cap_half_ns_ = hz ? static_cast<uint32_t>((1000000000ull + 2ull * hz - 1) / (2ull * hz)) : 0;
+    if (!hz) { cap_half_ns_ = 0; return true; }
+    uint32_t half = 500000000u / hz;
+    if (half * hz < 500000000u) ++half;
+    cap_half_ns_ = half;
     return true;
   }
   // Rest the bus with SWCLK low between transactions instead of both lines high. Which one
@@ -74,7 +78,9 @@ class RvswdPhy final : public DmiPhy {
   // Measured during attach: wall time of one DMI read at the selected half period,
   // and the SWCLK rate it implies (53 clocked bits per transaction). 0 = not attached yet.
   uint32_t dmiNs() const override { return dmi_ns_; }
-  uint32_t clockHz() const override { return dmi_ns_ ? uint32_t(53000000000ull / dmi_ns_) : 0; }
+  uint32_t clockHz() const override {   // 53e9 / dmi_ns_, in 32 bits
+    return dmi_ns_ ? 53u * (1000000000u / dmi_ns_) + 53u * (1000000000u % dmi_ns_) / dmi_ns_ : 0;
+  }
   uint32_t retries() const override { return retries_; }
   uint32_t transactions() const override { return transactions_; }
   uint32_t revives() const override { return revives_; }

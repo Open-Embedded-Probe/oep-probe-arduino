@@ -82,6 +82,8 @@ void Endpoint::freeze() {
 bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
                             bool flush_after_burst) {
   if (transport_count_ >= kMaxTransports || listener_) return false;
+  // a small-RAM build has no serial transport (serialKind): one asked for is not added
+  if (OEP_SMALL_RAM && (kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag)) return false;
   Transport &t = transports_[transport_count_];
   t.max_frame = serialKind(kind) && limits_.max_frame > kMaxSerialFrame ? kMaxSerialFrame : limits_.max_frame;
   t.stream = &stream;
@@ -135,7 +137,7 @@ void Endpoint::rawSink(void *context, const uint8_t *data, size_t length) {
 // The binds' bytes out on every serial port not held, into the room the port has now beyond what a frame needs (a
 // result never waits behind raw bytes, and a port nobody reads holds its position instead of losing bytes).
 void Endpoint::rawOut() {
-  if (!raw_) return;
+  if (OEP_SMALL_RAM || !raw_) return;   // raw bytes go out on serial ports only
   raw_->poll(locked_);
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
@@ -780,6 +782,7 @@ bool Endpoint::speedWithin(uint32_t rate, uint32_t baud) {
 }
 
 void Endpoint::speedApply() {
+  if (OEP_SMALL_RAM) return;   // port_speed is a serial port's (no serial transport there)
   const uint8_t pending = speed_pending_;
   speed_pending_ = kSpeedNone;
   if (pending == kSpeedRevert) { speedRevert(); return; }
@@ -818,6 +821,7 @@ void Endpoint::speedFall() {
 }
 
 void Endpoint::speedRevert() {
+  if (OEP_SMALL_RAM) return;
   speed_fallback_ = false;
   if (speed_state_ == kSpeedBase) return;
   transports_[speed_port_].stream->flush();
@@ -828,6 +832,7 @@ void Endpoint::speedRevert() {
 }
 
 void Endpoint::speedPoll() {
+  if (OEP_SMALL_RAM) return;
   if (speed_pending_ == kSpeedRevert) { speed_pending_ = kSpeedNone; speedRevert(); }
   if (speed_fallback_) {   // phase 3: back once nothing is being received (a frame's answer reverts in handleMessage)
     if (!transports_[speed_port_].serial.receiving()) speedRevert();

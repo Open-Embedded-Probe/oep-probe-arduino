@@ -444,10 +444,18 @@ inline Result plainTail(Tail &tail, const uint8_t *p, size_t n, size_t fixed, ui
 }
 
 // Appends TLVs (tag, len(u16), value; core §2.2) to a fixed buffer; ok() stays false once something did not fit.
+// GCC: a function kept whole - no per-file clone of it (IPA-SRA's .isra copies of an inline function are local to
+// each file, so the linker cannot fold them: TlvWriter::put came 4 times, roleChannels twice, on the CH32X035).
+#if defined(__GNUC__) && !defined(__clang__)
+#define OEP_NOIPA __attribute__((noipa))
+#else
+#define OEP_NOIPA
+#endif
+
 class TlvWriter {
  public:
   TlvWriter(uint8_t *buffer, size_t capacity) : p_(buffer), cap_(capacity) {}
-  bool put(uint8_t tag, const void *value, size_t length) {
+  OEP_NOIPA bool put(uint8_t tag, const void *value, size_t length) {
     if (!ok_ || length > 0xFFFF || n_ + tlvSize(length) > cap_) return ok_ = false;
     putTlvHeader(p_ + n_, tag, static_cast<uint16_t>(length));
     n_ += kTlvHeader;
@@ -486,7 +494,7 @@ class TlvWriter {
     return put(kTagChannelGroup, group, swclk == 0xffff ? 5 : sizeof group);
   }
   // role_channels for each role: role(u8) base(u16 = 0) bitmap of the channels it may take.
-  bool roleChannels(const uint8_t *roles, size_t count, uint64_t mask) {
+  OEP_NOIPA bool roleChannels(const uint8_t *roles, size_t count, uint64_t mask) {
     uint8_t value[3 + 8];
     int top = 63;
     while (top >= 0 && !((mask >> top) & 1)) --top;

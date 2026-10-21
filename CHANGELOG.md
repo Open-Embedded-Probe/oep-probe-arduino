@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Code size, for the CH32X035 (62 KB flash): the RVSWD PHY's timing math in 32 bits (no 64-bit division linked,
+  1.2 KB); TlvWriter::put / roleChannels kept whole (OEP_NOIPA: no per-file .isra copies, 0.6 KB); a small-RAM build
+  takes no serial transport - COBS, port_speed and raw ports compiled out, a serial addTransport refused (2.4 KB); the
+  console's ring 1 KiB there (RAM). The full set (RVSWD, riscv-dm, console, gpio) went from 70.2 to 66.0 KB - still
+  over; fn 0 alone 31.5 KB. Other builds unchanged (host tests pass).
+- (JA) コードの大きさ（CH32X035 の Flash 62 KB のため）。
+  - RVSWD の PHY の時間の計算を 32 bit にした（64 bit の割り算がリンクされなくなり、1.2 KB 減）。
+  - TlvWriter::put / roleChannels を、ファイルごとに複製させないようにした（OEP_NOIPA。.isra の複製が消え、0.6 KB 減）。
+  - RAM の小さい機種のビルドでは、シリアルの transport を取らない（COBS、port_speed、raw ports をコンパイルで外し、シリアルの
+    addTransport は断る。2.4 KB 減）。コンソールの溜めはそこで 1 KiB にした（RAM のため）。
+  - 全部入り（RVSWD、riscv-dm、コンソール、gpio）は 70.2 KB → 66.0 KB で、まだ収まらない。fn 0 だけなら 31.5 KB。
+  - ほかの機種のビルドは変わらない（ホストの試験は通る）。
 - (EN) ArduinoCore-CH32RV, the parts for the wires: platformPad (a channel as the core's pin: port x 24 + bit, the
   core's pads being 64 and up) through platformGpio / platformPresetLevel and fixture.gpio's read; OepCh32BitBang.h
   (BSHR / BSXR / BCR / INDR, SWDIO's turnaround through its CFG field) and the RVSWD PHY's CH32 backend. Built; the

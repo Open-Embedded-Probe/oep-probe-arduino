@@ -102,7 +102,8 @@ class TargetConsoleStream final : public Interface, public BindSource {
   size_t bindInput(const uint8_t *data, size_t length) override;
 
  private:
-  static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
+  // both powers of two (wrapping positions / serials); a small-RAM build (OEP_SMALL_RAM) keeps 1 KiB of console
+  static constexpr size_t kCapacity = OEP_SMALL_RAM ? 1024 : 8192, kMarks = OEP_SMALL_RAM ? 8 : 16;
   DebugPort &port_;
   DmConsole &driver_;
   uint16_t instance_;

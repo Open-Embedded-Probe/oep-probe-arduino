@@ -26,7 +26,7 @@ inline uint32_t loopPicoseconds() {
     const uint32_t t0 = micros();
     nopLoop(kIterations);
     const uint32_t dt = micros() - t0;
-    ps = dt ? static_cast<uint32_t>(static_cast<uint64_t>(dt) * 1000000ull / kIterations) : 40000u;
+    ps = dt ? dt * (1000000u / kIterations) : 40000u;   // us x 1e6 / 1e5: in 32 bits
     if (!ps) ps = 1;
   }
   return ps;
@@ -112,7 +112,9 @@ struct BitBang {
   }
   uint32_t setHalfNs(uint32_t half_ns) {
     const uint32_t ps = loopPicoseconds();
-    loops = half_ns ? static_cast<uint32_t>((static_cast<uint64_t>(half_ns) * 1000ull + ps / 2) / ps) : 0;
+    // in 32 bits: a half period of up to 4.29 ms (the slowest link's is 10 us)
+    const uint32_t ns = half_ns < 4294967u ? half_ns : 4294966u;
+    loops = ns ? (ns * 1000u + ps / 2) / ps : 0;
     return loops;
   }
 };

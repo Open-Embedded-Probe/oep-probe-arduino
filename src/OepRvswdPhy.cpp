@@ -611,7 +611,8 @@ bool RvswdPhy::readsStable(uint32_t &first, uint8_t retries) {
     if (missed++ >= retries) return false;
     ++search_retries_;
   }
-  dmi_ns_ = static_cast<uint32_t>((uint64_t)(micros() - t0) * 1000u / reads);   // ns per read
+  const uint32_t elapsed_us = micros() - t0;   // ns per read, in 32 bits (the check's span: well under 4.29 s)
+  dmi_ns_ = elapsed_us < 4294967u ? elapsed_us * 1000u / reads : elapsed_us / reads * 1000u;
   return true;
 }
 

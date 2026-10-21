@@ -108,7 +108,10 @@ class Endpoint {
     kUsbSerialJtag = reg::core::kTransportKindUsbSerialJtag, kVendorBulk = reg::core::kTransportKindVendorBulk,
     kHid = reg::core::kTransportKindHid, kTcp = reg::core::kTransportKindTcp,
   };
-  static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
+  // A small-RAM build (OEP_SMALL_RAM) takes no serial transport (COBS, port_speed, raw ports): a USB vendor bulk one only.
+  static constexpr bool serialKind(uint8_t kind) {
+    return !OEP_SMALL_RAM && (kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag);
+  }
   // Transports, a TCP listener's connection slots each counted (addTcpListener).
   static constexpr size_t kMaxTransports = OEP_SMALL_RAM ? 2 : 8;
   // A serial port's frames are decoded here (one at a time): a serial port's max_frame is at most this (the
