@@ -5,7 +5,7 @@
 //
 // Transports, each a choice: USB CDC (Cdc; Serial, transport 0), a serial port: COBS frames (oep-transports §1); USB
 // vendor bulk (Bulk) and HID (Hid), length-prefixed frames (OepRp2Usb.h: this library's class drivers on arduino-pico's
-// stack). The USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id; its
+// stack); a UART bridge (Bridge, off by default: Serial2 on GP8 / GP9). The USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id; its
 // iProduct "OEP probe (RP2040)" / "(RP2350)" is a name for people.
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
@@ -77,7 +77,7 @@ static uint8_t probeTlv[256];   // with the firmware text's note of the boot bef
 // What a choice leaves to run later, each added only from its own oepAddX(): its loop work; the settings' fn at its place,
 // what comes last
 static oep::Hooks<void (*)(), 5> loopWork;
-static oep::Hooks<void (*)(), 2> afterCdc;   // the other transports, after the CDC port (transport 0: the binds' serial port 0)
+static oep::Hooks<void (*)(), 3> afterCdc;   // the other transports, after the CDC port (transport 0: the binds' serial port 0)
 static oep::Hooks<void (*)(), 1> settingsFn;
 static oep::Hooks<void (*)(), 1> lastly;
 
@@ -131,6 +131,19 @@ void oepAddHid() {
     static uint8_t rx[1026];
     endpoint.addTransport(hid, rx, sizeof rx, oep::Endpoint::kHid, hid.interfaceNumber(), true);
   });
+}
+
+// A UART bridge (transports §1: a serial transport, COBS): Serial2 = UART1 on its default pins, GP8 (TX) / GP9 (RX),
+// 115200 - those two then the probe's own (never offered, never parked)
+static uint64_t ownPins = 0;
+void oepAddBridge() {
+  static uint8_t rx[1100];   // the encoded candidate: cobsFrameMax(1024)
+  ownPins |= (1ull << PIN_SERIAL2_TX) | (1ull << PIN_SERIAL2_RX);
+  pins.forbid(ownPins);
+  Serial2.setTX(PIN_SERIAL2_TX);
+  Serial2.setRX(PIN_SERIAL2_RX);
+  Serial2.begin(115200);
+  afterCdc.add([] { endpoint.addTransport(Serial2, rx, sizeof rx, oep::Endpoint::kUartBridge); });
 }
 
 void oepAddRvswd() {
@@ -274,6 +287,7 @@ void oepAddLink() {
 __attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
 __attribute__((weak)) void oepWithBulk() { oepAddBulk(); }
 __attribute__((weak)) void oepWithHid() { oepAddHid(); }
+__attribute__((weak)) void oepWithBridge() {}
 __attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
 __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
@@ -321,6 +335,7 @@ void setup() {
   USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (transports §3)
   oepWithBulk();   // their interfaces in the descriptor USB.connect() builds
   oepWithHid();
+  oepWithBridge();
   USB.connect();
   oepWithCdc();
   afterCdc.run();
@@ -331,7 +346,7 @@ void setup() {
   OEP_LOGF("oep trace on (%s)", kProduct);
 #endif
   oepWithConfig();   // first: the saved settings read before the channels are parked
-  oep::platformParkMask(kChannels & ~pins.disabledMask());   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one
+  oep::platformParkMask(kChannels & ~pins.disabledMask() & ~ownPins);   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(oep::platformRestart, kRestartMaxMs);
   // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name)

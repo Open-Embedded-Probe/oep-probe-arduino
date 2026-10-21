@@ -389,13 +389,15 @@ void setup() {
   usb.manufacturer = "Open Embedded Probe";
   usb.product = kProduct;
   usb.serialNumber = serial;   // the unit id, lowercase (transports §3)
+  // every channel a floating input until the host takes one (oep-core §8): before the transports, a UART bridge's pins
+  // among them
+  oep::platformParkMask(kChannels);
   oepWithBulk();   // the transports before USBDevice.begin (their interfaces laid out in this order)
   oepWithHid();
   oepWithCdc();
   oepWithBridge();
   USBDevice.begin(usb);
   afterUsb.run();
-  oep::platformParkMask(kChannels);   // every channel a floating input until the host takes one (oep-core §8)
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(restartProbe, kRestartMaxMs);
   // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name); the settings last,

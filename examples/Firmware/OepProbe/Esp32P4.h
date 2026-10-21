@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// ESP32-P4 / P4X (profiles esp32p4 / esp32p4x). One endpoint, up to four transports, each a choice (the describe lists
+// ESP32-P4 / P4X (profiles esp32p4 / esp32p4x). One endpoint, up to five transports, each a choice (the describe lists
 // those in, in this order):
 //
 //   vendor bulk      HS port (Bulk; the direct build: build_opt.h, compile with --clean)     OEP only
 //   USB-Serial/JTAG  the P4's USJ (Usj; HWCDC Serial)                                         serial port: OEP + raw
 //   HID              HS port, vendor HID reports (Hid)                                        OEP only
 //   USB CDC          HS port (Cdc)                                                            serial port: OEP + raw
+//   UART bridge      UART3 on GPIO37 / 38 (Bridge, off by default)                            serial port: OEP + raw
 //
 //   (and a DFU interface on the HS port (Dfu): the probe's own firmware update, outside OEP, part of the same USB device)
 //
@@ -170,7 +171,7 @@ static char serial_[20];
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the HS device (the
 // transports, in the describe's order), its loop work; the settings' fn at its place, what comes last
-static oep::Hooks<void (*)(), 4> afterUsb;
+static oep::Hooks<void (*)(), 5> afterUsb;
 static oep::Hooks<void (*)(), 12> loopWork;
 static oep::Hooks<void (*)(), 1> settingsFn;
 static oep::Hooks<void (*)(), 1> lastly;
@@ -225,6 +226,18 @@ static oep::Slot<CdcStream> cdcStream;
 void oepAddCdc() {
   cdcStream.make(cdc.make(usbDevice, "OEP"));   // a name to show; every CDC of the probe speaks OEP
   afterUsb.add([] { endpoint.addTransport(*cdcStream, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbCdc, cdc->number, true); });
+}
+
+// A UART bridge (transports §1: a serial transport, COBS): UART3 on UART0's pads, GPIO37 (TX) / GPIO38 (RX), 115200 -
+// those two then the probe's own (never offered, never parked). Off by default.
+static constexpr int kBridgeTx = 37, kBridgeRx = 38;
+static uint64_t ownPins = 0;
+void oepAddBridge() {
+  static oep::Slot<HardwareSerial> port;
+  ownPins |= (1ull << kBridgeTx) | (1ull << kBridgeRx);
+  pins.forbid(ownPins);
+  port.make(3).begin(115200, SERIAL_8N1, kBridgeRx, kBridgeTx);
+  afterUsb.add([] { endpoint.addTransport(*port, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUartBridge); });
 }
 
 // Dfu. A DFU update's image is taken as working: it is confirmed as soon as it starts. The core's sdkconfig has the
@@ -469,6 +482,7 @@ __attribute__((weak)) void oepWithUsj() { oepAddUsj(); }
 __attribute__((weak)) void oepWithHid() { oepAddHid(); }
 __attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
 __attribute__((weak)) void oepWithDfu() { oepAddDfu(); }
+__attribute__((weak)) void oepWithBridge() {}
 __attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
 __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 __attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
@@ -526,6 +540,7 @@ void setup() {
   oepWithUsj();
   oepWithHid();
   oepWithCdc();
+  oepWithBridge();
   oepWithDfu();
   usbDevice.begin(usb);
   endpoint.setAnswerBuffer(frameBuffer(kAnswerBytes), kAnswerBytes);
@@ -549,7 +564,7 @@ void setup() {
   // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
   // disable items' channels, which are never touched (probe.config §2: disable before anything else; applySaved
   // gives them back if the settings are not applied).
-  oep::platformParkMask(kChannels & ~pins.disabledMask());
+  oep::platformParkMask(kChannels & ~pins.disabledMask() & ~ownPins);
   lastly.run();
 }
 
