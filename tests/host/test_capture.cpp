@@ -240,6 +240,11 @@ static void testStreamingWithoutStages() {
         // the copied way (no stages: the P4 v1.3): what the endpoint's loop keeps up with (2026-10-21, wireskein)
         if (copied) CHECK(num / den <= uint64_t(LogicCapture::kStreamCopiedMaxBytes) * 8 / 2);
         else CHECK(num / den > uint64_t(LogicCapture::kStreamCopiedMaxBytes) * 8 / 2);   // the zero-copy way's ceiling
+        // stages under kStreamFullStageBytes in all (2 x 8 KiB, 3 x 16 KiB): kStreamSmallStagesMaxBytes; 8 x 16 KiB: over
+        if (!copied && internal < (size_t(512) << 10))
+          CHECK(num / den <= uint64_t(LogicCapture::kStreamSmallStagesMaxBytes) * 8 / 2 * 1002 / 1000 &&   // the nearest
+                num / den > uint64_t(LogicCapture::kStreamSmallStagesMaxBytes) * 8 / 2 * 998 / 1000);    // fraction
+        if (internal == (size_t(512) << 10)) CHECK(num / den > uint64_t(LogicCapture::kStreamSmallStagesMaxBytes) * 8 / 2);
       }
     // format 1 goes over the stages only: without them refused unavailable cause 3 (it sent raw samples as blocks)
     Bytes p = request(c);
@@ -478,8 +483,8 @@ static void testRateLimit() {
       for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
         if (out[at] == cap::kTlvConfigureAnswerActualRate)
           rate.assign(out.begin() + at + kTlvHeader, out.begin() + at + kTlvHeader + getU16(out.data() + at + 1));
-      // the fake divider is a whole number: 160 / 2 = 80 MHz for 100 MHz, 160 / 3 = 53.3 MHz for 48 MHz
-      CHECK(rate.size() == 8 && getU32(rate.data()) / getU32(rate.data() + 4) == (channels == 8 ? 80000000u : 53333333u));
+      // the fake divider takes a fraction as PARLIO's does: 160 / 1.6 = 100 MHz, 160 / 3.333 = 48 MHz
+      CHECK(rate.size() == 8 && getU32(rate.data()) / getU32(rate.data() + 4) == (channels == 8 ? 100000000u : 48000000u));
     }
   }
 }

@@ -85,6 +85,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   // internal RAM for the stages) kept 8 lines at 8.42 MHz w 8 with no loss and lost 11 % at 16 MHz (wireskein,
   // 2026-10-21); the nearest whole divider at or below 8.5 MB/s
   static constexpr uint32_t kStreamCopiedMaxBytes = 8500000;
+  // streaming over stages of less than kStreamFullStageBytes in all: fewer bytes out to the host at once, the harvest
+  // falls behind past it and the spill never catches up - P4 v1.3 (3 x 16 KiB) and P4X (8 x 8 KiB) kept 8 lines at
+  // 36 MHz (fractional) with no loss and lost ~30 % at 40; P4X with 7 x 16 KiB and 4 x 27 KiB kept 40 (2026-10-21)
+  static constexpr uint32_t kStreamSmallStagesMaxBytes = 36000000;
+  static constexpr size_t kStreamFullStageBytes = 96 * 1024;
   // repeat / streaming: the DMA ring (internal). 64 KiB: at 40 MB/s 1.6 ms of the harvest's lag, and the internal RAM it
   // leaves goes to the zero-copy stages (27 KiB each)
   static constexpr size_t kRingBytes = 64 * 1024;

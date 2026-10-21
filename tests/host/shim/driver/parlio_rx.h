@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include <driver/gpio.h>
+#include <hal/hal_utils.h>
 #include <soc/hp_sys_clkrst_struct.h>
 
 #define PARLIO_RX_UNIT_MAX_DATA_WIDTH 16
@@ -46,11 +47,13 @@ typedef struct { parlio_rx_delimiter_handle_t delimiter; struct { uint32_t parti
 inline int g_fake_parlio_units = 0, g_fake_parlio_delimiters = 0, g_fake_parlio_reused = 0, g_fake_parlio_made = 0;
 inline esp_err_t parlio_new_rx_unit(const parlio_rx_unit_config_t *c, parlio_rx_unit_handle_t *unit) {
   if (g_fake_parlio_units) return ESP_FAIL;   // one RX unit
-  uint32_t n = (160000000u + c->exp_clk_freq_hz / 2) / c->exp_clk_freq_hz;
-  if (n > 255) n = 255;
-  HP_SYS_CLKRST.peri_clk_ctrl117.reg_parlio_rx_clk_div_num = n - 1;
-  HP_SYS_CLKRST.peri_clk_ctrl118.reg_parlio_rx_clk_div_numerator = 0;
-  HP_SYS_CLKRST.peri_clk_ctrl118.reg_parlio_rx_clk_div_denominator = 0;
+  // the divider as hal_utils' fake picks it (an integer and a fraction of it), as the driver does
+  hal_utils_clk_info_t info = {160000000u, c->exp_clk_freq_hz, 256, 1, 256};
+  hal_utils_clk_div_t div = {};
+  hal_utils_calc_clk_div_frac_accurate(&info, &div);
+  HP_SYS_CLKRST.peri_clk_ctrl117.reg_parlio_rx_clk_div_num = div.integer - 1;
+  HP_SYS_CLKRST.peri_clk_ctrl118.reg_parlio_rx_clk_div_numerator = div.numerator;
+  HP_SYS_CLKRST.peri_clk_ctrl118.reg_parlio_rx_clk_div_denominator = div.numerator ? div.denominator : 0;
   *unit = new FakeParlioUnit{c->max_recv_size, c->exp_clk_freq_hz};
   ++g_fake_parlio_units;
   ++g_fake_parlio_made;

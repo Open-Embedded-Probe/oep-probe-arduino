@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Streaming over stages of less than 96 KiB in all is capped at 36 MB/s (kStreamSmallStagesMaxBytes; configure
+  answers the nearest it keeps, a fractional divider): fewer bytes out to the host at once, the harvest fell behind
+  past it and the spill never caught up. Measured with 8 lines, 30 s: the P4 v1.3 (3 x 16 KiB) and the P4X with
+  8 x 8 KiB kept 36 MHz with no loss and lost ~30 % at 40; the P4X with 7 x 16 KiB and 4 x 27 KiB kept 40
+  (2026-10-21). Host tests: the fake divider takes a fraction, the nearest, as PARLIO's does (the query and the
+  configure now answer the same 100 / 48 MHz for a one-shot's 8 / 16-line ceiling).
+- (JA) stage の合計が 96 KiB 未満のストリームは、36 MB/s を上限にした（kStreamSmallStagesMaxBytes）。configure は、保てる一番近い
+  rate を分数分周で答える。
+  - 理由: 一度に host へ出せる量が少なく、それを超えると収穫が遅れ、待避 FIFO も取り戻せなかった。
+  - 実測（8 本、30 秒、2026-10-21）: P4 v1.3（16 KiB × 3）と、P4X の 8 KiB × 8 は、36 MHz で欠損 0、40 MHz で約 30 % 欠けた。
+    P4X の 16 KiB × 7 と 27 KiB × 4 は 40 MHz を保った。
+  - ホストの試験: 偽の分周を、PARLIO と同じく分数を含む一番近い値にした（one-shot の 8 本・16 本の上限で、query と configure が
+    同じ 100 / 48 MHz を答えるようになった）。
 - (EN) capture-drops ends with every byte the stream dropped since the start, whatever the way (u64): the copied way's
   segments with no room to send were in no counter (wireskein, the P4 v1.3).
 - (JA) capture-drops の最後に、ストリームが落としたバイト数の合計（理由を問わない、u64）を足した。写す経路で、送る空きが

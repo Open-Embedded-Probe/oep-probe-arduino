@@ -1462,10 +1462,19 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // the endpoint's loop: kStreamCopiedMaxBytes. Format 1 goes over the stages only: refused without them (cause 3).
   const bool copied = mode == cap::kModeStreaming && stagesPossible() < 2;
   if (blocks_format && copied) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
+  // Stages of less than kStreamFullStageBytes in all (small frames, few of them: the P4 v1.3's 3 x 16 KiB) keep
+  // kStreamSmallStagesMaxBytes: fewer bytes out to the host at once
+  size_t stage_frame = 0;
+  const size_t stage_count = copied ? 0 : stagesPossible(&stage_frame);
+  const bool small_stages = !copied && stage_count * stage_frame < kStreamFullStageBytes;
   if (mode == cap::kModeStreaming) {
     // the highest whole-divider rate at or below it: the nearest the divider picks never lands above
-    const uint64_t ceiling = copied ? kStreamCopiedMaxBytes : blocks_format ? kStreamBlocksMaxBytes : kStreamMaxBytes;
-    const uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + ceiling * 8ull - 1) / (ceiling * 8ull));
+    const uint64_t ceiling = copied ? kStreamCopiedMaxBytes : blocks_format ? kStreamBlocksMaxBytes
+                             : small_stages ? kStreamSmallStagesMaxBytes : kStreamMaxBytes;
+    uint64_t most = kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + ceiling * 8ull - 1) / (ceiling * 8ull));
+    // small stages: the ceiling itself, a fractional divider (whole ones give 32 MHz at w 8 under 36 MB/s; the
+    // fractional 36 MHz was measured)
+    if (small_stages && !blocks_format) most = ceiling * 8ull / width;
     if (rate > most) rate = static_cast<uint32_t>(most);
     if (rate < kMinHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   }
