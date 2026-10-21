@@ -175,6 +175,14 @@ class Endpoint {
     tx_capacity_ = tx_capacity;
     return true;
   }
+  // The answer buffer given later than the constructor (memory up only by setup()), for an endpoint whose transports are
+  // added later (none in the constructor): before the first poll. false: too small (nothing changed).
+  bool setAnswerBuffer(uint8_t *tx_buffer, size_t tx_capacity) {
+    if (polled_ || tx_capacity < 64) return false;
+    tx_ = tx_buffer;
+    tx_capacity_ = tx_capacity;
+    return true;
+  }
   // A TCP listening socket (transports §1): one entry in fn 0's describe (kind 6, interface 0xFF), added after every
   // other transport, with `count` connection slots - each its own transport here (rx[k]: max_frame + 2 bytes). A
   // connection's requests are answered on it, its subscriptions' notifications go to it alone, a length over

@@ -18,7 +18,7 @@
 // (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a choice (OepFeatures.h:
-// a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Swio (and Console in it), Gpio, Uart, I2c, Spi,
+// a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Swio (and SwioConsole in it), Gpio, Uart, I2c, Spi,
 // Capture, Config, Analog, Group, Link; Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
 // (the TCP transport); all in by default.
 //
@@ -180,10 +180,10 @@ void oepAddSwio() {
   SwioParts &w = swio.make(oep::platformUnusablePins());
   endpoint.add(w.wire);
   endpoint.add(w.riscvDm);
-  oepWithConsole();
+  oepWithSwioConsole();
 }
 
-void oepAddConsole() {
+void oepAddSwioConsole() {
   static oep::Slot<oep::DmConsole> driver;
   static oep::Slot<oep::TargetConsoleStream> console;
   console.make(swio->port, driver.make(swio->dm, swio->phy), 0).setMaxRead(480);   // 512-byte frames
@@ -333,7 +333,7 @@ __attribute__((weak)) void oepWithBridge() { oepAddBridge(); }
 __attribute__((weak)) void oepWithWifi() { oepAddWifi(); }
 __attribute__((weak)) void oepWithPortSpeed() { oepAddPortSpeed(); }
 __attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
-__attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
+__attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
 __attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
 __attribute__((weak)) void oepWithUart() { oepAddUart(); }
 __attribute__((weak)) void oepWithI2c() { oepAddI2c(); }

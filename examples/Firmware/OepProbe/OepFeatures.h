@@ -12,22 +12,27 @@
 // there to call).
 #pragma once
 
-// The transports (none is the probe's by the spec: transports §3)
+// The transports (none is the probe's by the spec: transports §3), and the P4's DFU (outside OEP)
 void oepWithBulk();
+void oepWithUsj();
 void oepWithHid();
 void oepWithCdc();
 void oepWithBridge();
 void oepWithWifi();
+void oepWithDfu();
 void oepAddBulk();
+void oepAddUsj();
 void oepAddHid();
 void oepAddCdc();
 void oepAddBridge();
 void oepAddWifi();
+void oepAddDfu();
 
 // The interfaces, and fn 0's port_speed
 void oepWithPortSpeed();
 void oepWithRvswd();
 void oepWithSwio();
+void oepWithSwioConsole();
 void oepWithConsole();
 void oepWithSwd();
 void oepWithGpio();
@@ -42,6 +47,7 @@ void oepWithLink();
 void oepAddPortSpeed();
 void oepAddRvswd();
 void oepAddSwio();
+void oepAddSwioConsole();
 void oepAddConsole();
 void oepAddSwd();
 void oepAddGpio();
