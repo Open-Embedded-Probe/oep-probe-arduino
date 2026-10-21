@@ -132,13 +132,20 @@ static oep::PinTable pins(kChannels);
 static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 // PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0, the analog 7)
 
-// What one choice leaves to the others, each set only from its own oepAddX(): its part of the settings, its track in the
-// group, its loop work; the settings' fn at its place, what comes last
-static oep::Hooks<void (*)(oep::ProbeConfig &), 4> settingsParts;
-static oep::Hooks<void (*)(oep::CaptureGroup &), 2> groupTracks;
+// What a choice leaves to run later, each added only from its own oepAddX(): its loop work; the settings' fn at its place,
+// what comes last
 static oep::Hooks<void (*)(), 10> loopWork;
 static oep::Hooks<void (*)(), 1> settingsFn;
 static oep::Hooks<void (*)(), 1> lastly;
+
+// What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
+// settings', the group's), so neither names the other's code: the console, the uart and the Wi-Fi station for the
+// settings, the sampler and the analog for the group
+static oep::TargetConsoleStream *consoleIn = nullptr;
+static oep::FixtureUart *uartIn = nullptr;
+static oep::WifiStation *wifiIn = nullptr;
+static oep::SamplerCapture *captureIn = nullptr;
+static oep::AnalogCapture *analogIn = nullptr;
 
 // The fixture UART's interrupt stays on loop()'s core (core 0): core 1 is the sampler's, with interrupts off for up to
 // SamplerCapture's 250 ms bursts. On core 0 the SWIO frames hold it off; its RX FIFO threshold (oep::kUartRxFifoFull,
@@ -183,7 +190,7 @@ void oepAddConsole() {
   static oep::Slot<oep::TargetConsoleStream> console;
   console.make(swio->port, driver.make(swio->dm, swio->phy), 0).setMaxRead(480);   // 512-byte frames
   endpoint.add(*console);
-  settingsParts.add([](oep::ProbeConfig &c) { c.addPlace(swio->wire, *console); });
+  consoleIn = &*console;
   loopWork.add([] { console->poll(); });
 }
 
@@ -202,7 +209,7 @@ static_assert((oep::kUartRxFifo - oep::kUartRxFifoFull) * 10ull * 1000000ull / o
 void oepAddUart() {
   static oep::Slot<oep::FixtureUart> uart;
   endpoint.add(uart.make(pins, Serial2, 0, 2));
-  settingsParts.add([](oep::ProbeConfig &c) { c.addUart(*uart); });
+  uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
 }
 
@@ -223,7 +230,7 @@ void oepAddSpi() {
 void oepAddCapture() {
   static oep::Slot<oep::SamplerCapture> capture;
   endpoint.add(capture.make(endpoint, pins));
-  groupTracks.add([](oep::CaptureGroup &g) { g.addTrack(*capture, *capture); });
+  captureIn = &*capture;
   loopWork.add([] { capture->poll(); });
 }
 
@@ -239,7 +246,9 @@ void oepAddConfig() {
   settingsFn.add([] {
     endpoint.add(*config);   // the fns before it keep their numbers
     config->usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
-    settingsParts.run(*config);
+    if (consoleIn) config->addPlace(swio->wire, *consoleIn);
+    if (uartIn) config->addUart(*uartIn);
+    if (wifiIn) config->setWifi(wifiIn);   // the wifi item: the networks to join (applied with the saved settings)
     config->setPins(&pins);
     loopWork.add([] { config->poll(); });
   });
@@ -261,7 +270,7 @@ void oepAddAnalog() {
   static oep::Slot<oep::AnalogCapture> analog;
   analog.make(endpoint, kAdc1, 0).setPins(&pins, 7);   // its pads go analog: claimed against wires and settings
   endpoint.add(*analog);
-  groupTracks.add([](oep::CaptureGroup &g) { g.addTrack(*analog, *analog); });
+  analogIn = &*analog;
   loopWork.add([] { analog->poll(); });
 }
 
@@ -269,7 +278,8 @@ void oepAddAnalog() {
 void oepAddGroup() {
   static oep::Slot<oep::CaptureGroup> group;
   endpoint.add(group.make(endpoint, 0));
-  groupTracks.run(*group);
+  if (captureIn) group->addTrack(*captureIn, *captureIn);
+  if (analogIn) group->addTrack(*analogIn, *analogIn);
   loopWork.add([] { group->poll(); });
 }
 
@@ -299,7 +309,7 @@ void oepAddWifi() {
   memcpy(unit, id, n < sizeof unit - 1 ? n : sizeof unit - 1);
   wifi.make(*tcp, kTcpPort).begin(unit);
   endpoint.setRestart(restartWifi, kRestartWifiMaxMs);
-  settingsParts.add([](oep::ProbeConfig &c) { c.setWifi(&*wifi); });   // the wifi item: the networks to join (applied with the saved settings)
+  wifiIn = &*wifi;
   loopWork.add([] {
     wifi->poll();
     tcp->poll();

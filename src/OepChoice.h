@@ -3,8 +3,10 @@
 
 // A firmware's choices without build options (examples/Firmware/OepProbe/OepFeatures.h): each part X is added by a
 // function of its own (oepAddX), the only code that names X's objects, so a firmware that never calls it links none of
-// X (LTO or not, -ffunction-sections or not). Its objects are Slots made by that one call; what X leaves to the others (a
-// loop poll, its part of the settings) goes through Hooks the others run.
+// X (LTO or not, -ffunction-sections or not). Its objects are Slots made by that one call; what X leaves to run later
+// (its loop poll) goes through Hooks. What needs two parts (the settings' place for the console, a group's track) is the
+// code of the one using it: X only sets a pointer to its object, the other checks it - a probe without the user links
+// none of it, one without X the user's own part only (folded away too where the link has -ffunction-sections and LTO).
 //
 // A part chosen by a constant instead (a weak bool and an if around its uses) is dropped only once the constant is
 // folded, after the link's code is laid out: without -ffunction-sections at the link it stays, and an object it names

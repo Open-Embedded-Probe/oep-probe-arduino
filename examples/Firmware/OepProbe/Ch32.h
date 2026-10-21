@@ -3,10 +3,10 @@
 
 // WCH CH32 on ArduinoCore-CH32RV (profile ch32x035; the core's 0.2.2, LTO by default).
 //
-// Transport: the USB vendor bulk interface (class 0xFF, 'O', 'E': transports §3) at full speed, length-prefixed frames;
-// the USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id (the chip's 64-bit
+// Transports, each a choice (below): the USB vendor bulk interface (class 0xFF, 'O', 'E': transports §3) and the USB HID
+// one at full speed, length-prefixed frames; a USB CDC port and a UART bridge (COBS) too if chosen. The USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id (the chip's 64-bit
 // unique id in hex); iProduct "OEP probe (CH32X035)" is a name for people. The core runs the USB stack from loop() and
-// delay(): no other context, so the vendor class is read and written from loop() as a Stream.
+// delay(): no other context, so the classes are read and written from loop() as Streams.
 //
 // Interfaces (revision 1), as the RP2's (Rp2.h): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm +
 // oep.target.console (WCH CH32, 2 wires); oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart;
@@ -18,12 +18,12 @@
 // The CH32X035 (62 KiB flash, 20 KiB RAM) builds with OEP_SMALL_RAM (Oep.h): the endpoint's tables cut, a 1 KiB
 // console ring.
 //
-// Each interface and extra transport is a choice (OepFeatures.h): oepWithX() is weak here, its default adding X with
-// oepAddX() (or nothing, for CDC and the UART bridge); a sketch's own oepWithX() replaces it, an empty one leaving X out.
+// Each interface and transport is a choice (OepFeatures.h, OepChoice.h): oepWithX() is weak here, its default adding X
+// with oepAddX() (or nothing, for CDC and the UART bridge); a sketch's own oepWithX() replaces it, an empty one leaving X out.
 // Each X's objects live in its oepAddX() and what X leaves to the others (its loop work, its part of the settings)
 // goes through the hooks below, so a left-out X links none of its code. The CH32 has: Rvswd (oep.wire.rvswd +
 // oep.target.riscv-dm), Console (oep.target.console on the RVSWD wire), Swd (oep.wire.swd + oep.target.arm-adi), Gpio,
-// Uart, Config (oep.probe.config), Link (oep.probe.link); Hid (the USB HID transport: usage page 0xFF4F, usage 0x45,
+// Uart, Config (oep.probe.config), Link (oep.probe.link); Bulk (the USB vendor bulk transport), Hid (the USB HID transport: usage page 0xFF4F, usage 0x45,
 // transports §1, §3), Cdc (a USB CDC port, COBS: a serial transport), Bridge (a UART bridge on Serial1's default pins,
 // 115200: a serial transport).
 #pragma once
@@ -118,13 +118,8 @@ class HidStream final : public Stream {
   bool stuck_ = false;
 };
 
-static CH32RVUsbDeviceVendor usbVendor(USBDevice, 64);
-static VendorStream vendorStream(usbVendor);
-
-static uint8_t rxBuffer[520];
 static uint8_t txBuffer[512];
-static oep::Endpoint endpoint(vendorStream, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {512, 1024, 2},
-                              oep::Endpoint::kVendorBulk, 0);
+static oep::Endpoint endpoint(txBuffer, sizeof txBuffer, {512, 1024, 2});
 static uint8_t probeTlv[160];
 static char serial[17];
 
@@ -135,13 +130,25 @@ static constexpr uint64_t kChannels = ~0ull;
 static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
 static oep::PinTable pins(kChannels);
 
-// What one choice leaves to the others, each set only from its own oepAddX(): what waits for the USB device, its part
-// of the settings, its loop work
+// What a choice leaves to run later, each added only from its own oepAddX(): what waits for the USB device, its loop work
 static oep::Hooks<void (*)(), 1> afterUsb;
-static oep::Hooks<void (*)(oep::ProbeConfig &), 5> settingsParts;
 static oep::Hooks<void (*)(), 3> loopWork;
 
-static void usePassthroughs(oep::ProbeConfig &c) { c.usePassthroughs(); }   // a serial port's raw stream carries them (probe.config §1.1)
+// What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
+// settings'), so neither names the other's code: a serial transport (the settings' pass-throughs), the console, SWD's port
+// and the uart, for the settings
+static bool serialPorts = false;
+static oep::TargetConsoleStream *consoleIn = nullptr;
+static oep::SwdPort *swdIn = nullptr;
+static oep::FixtureUart *uartIn = nullptr;
+
+void oepAddBulk() {
+  static oep::Slot<CH32RVUsbDeviceVendor> usbVendor;
+  static oep::Slot<VendorStream> stream;
+  static uint8_t rx[520];
+  usbVendor.make(USBDevice, 64).setInterfaceProtocol(oep::reg::kUsbVendorBulkSubclass, oep::reg::kUsbVendorBulkProtocol);
+  endpoint.addTransport(stream.make(*usbVendor), rx, sizeof rx, oep::Endpoint::kVendorBulk, 0);   // the first interface
+}
 
 void oepAddHid() {
   static oep::Slot<CH32RVUsbDeviceHidVendor> usbHid;
@@ -165,7 +172,7 @@ void oepAddCdc() {
     static uint8_t rx[oep::cobsFrameMax(512) + 8];   // the encoded candidate (transports §1)
     endpoint.addTransport(cdc(), rx, sizeof rx, oep::Endpoint::kUsbCdc, cdc().interfaceNumber(), true);
   });
-  settingsParts.add(usePassthroughs);
+  serialPorts = true;
 }
 
 void oepAddBridge() {
@@ -173,7 +180,7 @@ void oepAddBridge() {
   static uint8_t rx[oep::cobsFrameMax(512) + 8];
   port.make(1).begin(115200);   // USART2 (Serial1's), its default route (transports §1: a UART bridge at its boot speed)
   endpoint.addTransport(*port, rx, sizeof rx, oep::Endpoint::kUartBridge);
-  settingsParts.add(usePassthroughs);
+  serialPorts = true;
 }
 
 // The RVSWD wire's parts, the console's too (its choice is made in the wire's: no wire, no console)
@@ -202,7 +209,7 @@ void oepAddConsole() {
   static oep::Slot<oep::DmConsole> driver;
   static oep::Slot<oep::TargetConsoleStream> console;
   endpoint.add(console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0));
-  settingsParts.add([](oep::ProbeConfig &c) { c.addPlace(rvswd->wire, *console); });
+  consoleIn = &*console;
   loopWork.add([] { console->poll(); });
 }
 
@@ -214,7 +221,7 @@ void oepAddSwd() {
   swd.pins = &pins;
   endpoint.add(wireSwd.make(swd, 0));
   endpoint.add(adi.make(swd, 0));
-  settingsParts.add([](oep::ProbeConfig &c) { c.addHold(swd.hold, oep::checkSwdHold, &swd); });
+  swdIn = &swd;
 }
 
 void oepAddGpio() {
@@ -227,7 +234,7 @@ void oepAddUart() {
   static oep::Slot<oep::FixtureUart> uart;
   endpoint.add(uart.make(pins, port.make(0), 0, 2));   // USART1 (Serial's)
   uart->setRoleChannels(kChannels, kChannels);   // any enabled USART's route (its begin refuses another pair)
-  settingsParts.add([](oep::ProbeConfig &c) { c.addUart(*uart); });
+  uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
 }
 
@@ -238,7 +245,10 @@ void oepAddConfig() {
   c.setStorage(false);   // no store on this core yet (probe.config §4: no save / erase / state)
   endpoint.setRawPorts(&*binds);
   endpoint.add(c);
-  settingsParts.run(c);
+  if (serialPorts) c.usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
+  if (consoleIn) c.addPlace(rvswd->wire, *consoleIn);
+  if (swdIn) c.addHold(swdIn->hold, oep::checkSwdHold, swdIn);
+  if (uartIn) c.addUart(*uartIn);
   c.setPins(&pins);
   loopWork.add([] { config->poll(); });
   c.applySaved();
@@ -256,6 +266,7 @@ static constexpr bool kRoomy = false;
 #else
 static constexpr bool kRoomy = true;
 #endif
+__attribute__((weak)) void oepWithBulk() { oepAddBulk(); }
 __attribute__((weak)) void oepWithHid() { oepAddHid(); }
 __attribute__((weak)) void oepWithCdc() {}
 __attribute__((weak)) void oepWithBridge() {}
@@ -298,8 +309,8 @@ void setup() {
   usb.manufacturer = "Open Embedded Probe";
   usb.product = kProduct;
   usb.serialNumber = serial;   // the unit id, lowercase (transports §3)
-  usbVendor.setInterfaceProtocol(oep::reg::kUsbVendorBulkSubclass, oep::reg::kUsbVendorBulkProtocol);
-  oepWithHid();   // the transports before USBDevice.begin (their interfaces laid out with the vendor one)
+  oepWithBulk();   // the transports before USBDevice.begin (their interfaces laid out in this order)
+  oepWithHid();
   oepWithCdc();
   oepWithBridge();
   USBDevice.begin(usb);

@@ -175,6 +175,26 @@ static void testConfirmTransportEveryKind() {
   }
 }
 
+// An endpoint made with no transport (every transport the sketch's choice, transports §3): the first one added is
+// transport 0, whatever its kind - HID first here, then USB CDC - and each answers on its own entry.
+static void testTransportsAllChosen() {
+  struct Port { MemStream s; uint8_t kind; bool serial; };
+  static uint8_t rx[2][1200], tx[1100];
+  Port p[2] = {{{}, Endpoint::kHid, false}, {{}, Endpoint::kUsbCdc, true}};
+  Endpoint ep(tx, sizeof tx, {1024, 4096, 4});
+  CHECK(ep.addTransport(p[0].s, rx[0], sizeof rx[0], Endpoint::kHid, 0xff));
+  CHECK(ep.addTransport(p[1].s, rx[1], sizeof rx[1], Endpoint::kUsbCdc, 1));
+  CHECK(ep.isSerialPort(1) && !ep.isSerialPort(0));
+  uint16_t corr = 1;
+  for (uint8_t k = 0; k < 2; ++k) {
+    const Bytes r = exchange(ep, p[k].s, p[k].serial, request(corr++, 0, 0x01, confirmReq()));
+    CHECK(r.size() == 5 + kConfirmFixed + 4 && r[3] == kResolutionCompleted);
+    if (r.size() == 5 + kConfirmFixed + 4) CHECK(r[5 + 16] == reg::core::kTlvConfirmAnswerTransport && r[5 + 19] == k);
+    const Bytes d = exchange(ep, p[k].s, p[k].serial, request(corr++, 0, 0x03, {0, 0, 0, 0}));
+    CHECK(d.size() > 6 && d[3] == kResolutionCompleted && describedAs(d, k, p[k].kind));
+  }
+}
+
 // The ops an ops TLV's value declares (core §7.4: base(u8) bitmap): any base is a valid encoding.
 static std::vector<uint8_t> opsOf(const Bytes &d, size_t at) {
   std::vector<uint8_t> ops;
@@ -653,6 +673,7 @@ static void testRestart() {
 
 int main() {
   testConfirmTransportEveryKind();
+  testTransportsAllChosen();
   testOps();
   testUnknownTlvs();
   testResendByCorr();

@@ -124,6 +124,12 @@ class Endpoint {
     addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
     setPushQueue(1024);
   }
+  // No transport yet: each is a choice of the sketch's, added with addTransport (the first one transport 0) - none of
+  // them, vendor bulk, HID or a serial port, is the probe's by the spec (transports §3).
+  OEP_ALWAYS_INLINE Endpoint(uint8_t *tx_buffer, size_t tx_capacity, Limits limits)
+      : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(bounded(limits)) {
+    setPushQueue(1024);
+  }
   // How many requests the resend record keeps (core §5.1: the probe's choice).
   static constexpr size_t kDedupEntriesOf() { return kDedupEntries; }
   // The largest max_frame of this endpoint (the constructor's; a serial port's is at most kMaxSerialFrame - each

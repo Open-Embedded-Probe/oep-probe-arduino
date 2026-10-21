@@ -12,11 +12,13 @@
 // there to call).
 #pragma once
 
-// The transports past the chip's own
+// The transports (none is the probe's by the spec: transports §3)
+void oepWithBulk();
 void oepWithHid();
 void oepWithCdc();
 void oepWithBridge();
 void oepWithWifi();
+void oepAddBulk();
 void oepAddHid();
 void oepAddCdc();
 void oepAddBridge();

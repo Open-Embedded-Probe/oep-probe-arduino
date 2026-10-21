@@ -72,12 +72,17 @@ static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeo
 static oep::PinTable pins(kChannels);
 static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 
-// What one choice leaves to the others, each set only from its own oepAddX(): its part of the settings, its loop work;
-// the settings' fn at its place, what comes last
-static oep::Hooks<void (*)(oep::ProbeConfig &), 3> settingsParts;
+// What a choice leaves to run later, each added only from its own oepAddX(): its loop work; the settings' fn at its place,
+// what comes last
 static oep::Hooks<void (*)(), 4> loopWork;
 static oep::Hooks<void (*)(), 1> settingsFn;
 static oep::Hooks<void (*)(), 1> lastly;
+
+// What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
+// settings'), so neither names the other's code: the console, SWD's port and the uart, for the settings
+static oep::TargetConsoleStream *consoleIn = nullptr;
+static oep::SwdPort *swdIn = nullptr;
+static oep::FixtureUart *uartIn = nullptr;
 
 // The RVSWD wire's parts, the console's too (its choice is made in the wire's: no wire, no console)
 struct RvswdParts {
@@ -105,7 +110,7 @@ void oepAddConsole() {
   static oep::Slot<oep::DmConsole> driver;
   static oep::Slot<oep::TargetConsoleStream> console;
   endpoint.add(console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0));
-  settingsParts.add([](oep::ProbeConfig &c) { c.addPlace(rvswd->wire, *console); });
+  consoleIn = &*console;
   loopWork.add([] { console->poll(); });
 }
 
@@ -117,8 +122,7 @@ void oepAddSwd() {
   swd.pins = &pins;
   endpoint.add(wireSwd.make(swd, 0));
   endpoint.add(adi.make(swd, 0));
-  // oep.wire.swd's hold after a close (oep-if-debug §2): wire-hold
-  settingsParts.add([](oep::ProbeConfig &c) { c.addHold(swd.hold, oep::checkSwdHold, &swd); });
+  swdIn = &swd;
 }
 
 void oepAddGpio() {
@@ -130,7 +134,7 @@ void oepAddUart() {
   static oep::Slot<oep::FixtureUart> uart;
   endpoint.add(uart.make(pins, Serial1, 0, 2));
   uart->setRoleChannels(oep::platformUartRxMask(0), oep::platformUartTxMask(0));   // Serial1 = UART0: the pins it reaches
-  settingsParts.add([](oep::ProbeConfig &c) { c.addUart(*uart); });
+  uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
 }
 
@@ -157,7 +161,9 @@ void oepAddConfig() {
     endpoint.setRawPorts(&*binds);
     endpoint.add(*config);   // the fns before it keep their numbers
     config->usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
-    settingsParts.run(*config);
+    if (consoleIn) config->addPlace(rvswd->wire, *consoleIn);
+    if (swdIn) config->addHold(swdIn->hold, oep::checkSwdHold, swdIn);   // oep.wire.swd's hold after a close (oep-if-debug §2): wire-hold
+    if (uartIn) config->addUart(*uartIn);
     config->setPins(&pins);   // the idle item sets these pins' free state
     loopWork.add([] { config->poll(); });
   });
