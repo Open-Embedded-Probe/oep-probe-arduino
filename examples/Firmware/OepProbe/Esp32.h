@@ -19,7 +19,8 @@
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Swio (and SwioConsole in it), Gpio, Uart, I2c, Spi,
-// Capture, Config, Analog, Group, Link, Swd (oep.wire.swd + oep.target.arm-adi); Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
+// Capture, Config, Analog, Group, Link, Swd (oep.wire.swd + oep.target.arm-adi), Rvswd (oep.wire.rvswd, and Console:
+// its oep.target.console instance 1); Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
 // (the TCP transport); all in by default.
 //
 // Cores: loop() (all of OEP, the SWIO wire, every interrupt the sketch sets up: UART0, the fixture UART, the SPI / I2C
@@ -46,6 +47,7 @@
 #include <OepFixture.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
+#include <OepRvswdPhy.h>
 #include <OepPinTable.h>
 #include <OepSampler.h>
 #include <OepSwd.h>
@@ -141,7 +143,9 @@ static oep::Hooks<void (*)(), 1> lastly;
 // settings', the group's), so neither names the other's code: the console, the uart and the Wi-Fi station for the
 // settings, the sampler and the analog for the group
 static oep::SwdPort *swdIn = nullptr;
-static oep::TargetConsoleStream *consoleIn = nullptr;
+static oep::TargetConsoleStream *consoleIn = nullptr, *rvswdConsoleIn = nullptr;
+static oep::WireRvswd *rvswdWireIn = nullptr;
+static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the SWIO wire's, the RVSWD wire's connections too
 static oep::FixtureUart *uartIn = nullptr;
 static oep::WifiStation *wifiIn = nullptr;
 static oep::SamplerCapture *captureIn = nullptr;
@@ -181,6 +185,7 @@ static oep::Slot<SwioParts> swio;
 void oepAddSwio() {
   SwioParts &w = swio.make(oep::platformUnusablePins());
   endpoint.add(w.wire);
+  riscvDmIn = &w.riscvDm;
   endpoint.add(w.riscvDm);
   oepWithSwioConsole();
 }
@@ -261,6 +266,7 @@ void oepAddConfig() {
   lastly.add([] {
     // oep.wire.swd's hold after a close (oep-if-debug §2): its fn after the settings'
     if (swdIn) config->addHold(swdIn->hold, oep::checkSwdHold, swdIn);
+    if (rvswdConsoleIn) config->addPlace(*rvswdWireIn, *rvswdConsoleIn);   // a slot on the RVSWD wire: the second place
     if (oep::BootGuard::safe()) config->skipBootAttach();
     config->applySaved();
   });
@@ -296,6 +302,47 @@ void oepAddSwd() {
   endpoint.add(wireSwd.make(swd, 0));
   endpoint.add(adi.make(swd, 0));
   swdIn = &swd;
+}
+
+// oep.wire.rvswd (WCH CH32, 2 wires) on the GPIO registers (OepRvswdPhy.cpp), any output pair the host chooses (PinTable
+// owner 0xf2), its connections served by the SWIO wire's riscv-dm target (or one of its own without that wire), its
+// console instance 1 (its choice made in the wire's: Console)
+struct RvswdParts {
+  oep::RvswdPhy phy;
+  oep::Ch32Dm dm{phy};
+  oep::DebugPort port{dm, kUnset, kUnset};
+  oep::WireRvswd wire{port, 0};
+  explicit RvswdParts(uint64_t unusable) {
+    port.pin_choice = kChannels & ~unusable & ~kInputOnly;
+    port.pins = &pins;
+    port.pin_owner = 0xf2;
+    port.reset_allowed = kChannels & ~unusable & ~kInputOnly;
+  }
+};
+static oep::Slot<RvswdParts> rvswd;
+
+void oepAddRvswd() {
+  static oep::Slot<oep::TargetRiscvDm> riscvDm;
+  RvswdParts &r = rvswd.make(oep::platformUnusablePins());
+  endpoint.add(r.wire);
+  rvswdWireIn = &r.wire;
+  if (riscvDmIn) {
+    riscvDmIn->addPort(r.port);
+  } else {
+    riscvDmIn = &riscvDm.make(r.port, 0);
+    endpoint.add(*riscvDmIn);
+  }
+  oepWithConsole();
+}
+
+// Its ring (about 9 KB) from the heap, made once and kept: the static DRAM segment has no room for a second console (it
+// overflowed by 7.3 KB), the heap has (with Wi-Fi up too)
+void oepAddConsole() {
+  oep::DmConsole *driver = new oep::DmConsole(rvswd->dm, rvswd->phy);
+  rvswdConsoleIn = new oep::TargetConsoleStream(rvswd->port, *driver, 1);
+  rvswdConsoleIn->setMaxRead(480);   // 512-byte frames
+  endpoint.add(*rvswdConsoleIn);
+  loopWork.add([] { rvswdConsoleIn->poll(); });
 }
 
 void oepAddLink() {
@@ -361,6 +408,8 @@ __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
+__attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
+__attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 
 void setup() {
   oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
@@ -391,6 +440,7 @@ void setup() {
   oepWithGroup();
   oepWithLink();
   oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
+  oepWithRvswd();   // and its console's choice
   lastly.run();
 }
 

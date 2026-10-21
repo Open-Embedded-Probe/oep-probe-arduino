@@ -138,6 +138,71 @@ uint32_t ioSetHalf(uint32_t half_ns) {
 }  // namespace
 }  // namespace oep
 
+#elif defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
+// The classic ESP32 (no dedicated GPIO): the GPIO registers (OepEspBitBang.h, as its SWD wire), each frame through the
+// sampler's gate first (OepWireGate.h, as the SWIO wire's frames: the core-1 sampler stops reading GPIO.in for it).
+#define OEP_RVSWD_BACKEND 1
+#include "OepEspBitBang.h"
+#include "OepWireGate.h"
+
+namespace oep {
+namespace {
+
+using Io = esp::BitBang;
+Io gIo;
+portMUX_TYPE gMux = portMUX_INITIALIZER_UNLOCKED;
+
+struct Critical {
+  Critical() {
+    gWireGate.hold();
+    gWireGate.frameBegin();
+    portENTER_CRITICAL(&gMux);
+  }
+  ~Critical() {
+    gWireGate.frameEnd();
+    portEXIT_CRITICAL(&gMux);
+  }
+};
+
+bool ioBegin(int dio, int clk) { return gIo.setup(dio, clk); }
+bool ioMove(int old_dio, int old_clk, int dio, int clk) {   // the old pins back to plain Hi-Z inputs
+  if (old_dio >= 0) {
+    gIo.releaseBoth();
+    gpio_ll_pullup_dis(&GPIO, static_cast<uint32_t>(old_dio));
+    gpio_ll_pullup_dis(&GPIO, static_cast<uint32_t>(old_clk));
+    gpio_ll_pulldown_dis(&GPIO, static_cast<uint32_t>(old_clk));
+  }
+  return gIo.setup(dio, clk);
+}
+// The weakest strength put back (a fixture gpio output or an output idle on the pair since, oep-if-fixture §1.1), and
+// the data line's pull-up (ioFree took it off)
+void ioReclaim(int dio, int clk) {
+  if (dio < 0) return;
+  gpio_set_drive_capability(static_cast<gpio_num_t>(dio), GPIO_DRIVE_CAP_0);
+  gpio_set_drive_capability(static_cast<gpio_num_t>(clk), GPIO_DRIVE_CAP_0);
+  gpio_ll_pullup_en(&GPIO, static_cast<uint32_t>(dio));
+}
+void ioDrive(int, int) { gIo.driveBoth(); }
+void ioRelease(int, int) { gIo.releaseBoth(); }
+// SWCLK's pull: none, or toward its rest level while the wire does not answer (ioRestFree); SWDIO keeps its pull-up.
+void ioClkPull(int clk, int dir) {
+  if (clk < 0) return;
+  const uint32_t c = static_cast<uint32_t>(clk);
+  if (dir > 0) { gpio_ll_pulldown_dis(&GPIO, c); gpio_ll_pullup_en(&GPIO, c); }
+  else if (dir < 0) { gpio_ll_pullup_dis(&GPIO, c); gpio_ll_pulldown_en(&GPIO, c); }
+  else { gpio_ll_pullup_dis(&GPIO, c); gpio_ll_pulldown_dis(&GPIO, c); }
+}
+// The free state (oep-core §8): released, and SWDIO without the pull-up setup gave it (ioReclaim puts it back).
+void ioFree(int dio, int clk) {
+  gIo.releaseBoth();
+  if (dio >= 0) gpio_ll_pullup_dis(&GPIO, static_cast<uint32_t>(dio));
+  ioClkPull(clk, 0);
+}
+uint32_t ioSetHalf(uint32_t half_ns) { return gIo.setHalfNs(half_ns); }
+
+}  // namespace
+}  // namespace oep
+
 #elif defined(ARDUINO_ARCH_RP2040)
 #define OEP_RVSWD_BACKEND 1
 #include "OepRp2BitBang.h"

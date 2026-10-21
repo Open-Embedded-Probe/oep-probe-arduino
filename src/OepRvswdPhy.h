@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // RVSWD physical layer: push-pull SWDIO with explicit turnaround, per-session half-period margin
-// check, bounded retry on DMI parity failure. Backends: ESP32 dedicated GPIO (E151/E153/E156/E157)
-// and RP2040 / RP2350 SIO (OepRp2BitBang.h). Other architectures get a stub that reports
+// check, bounded retry on DMI parity failure. Backends: ESP32 dedicated GPIO (E151/E153/E156/E157), the classic
+// ESP32's GPIO registers (OepEspBitBang.h), RP2040 / RP2350 SIO (OepRp2BitBang.h) and a CH32's GPIO. Other architectures get a stub that reports
 // Unavailable, so the same services compile everywhere.
 #pragma once
 
