@@ -197,6 +197,9 @@ class ProbeConfig final : public Interface {
   static constexpr bool kWifiBuild = false;
 #endif
   WifiControl *wifi() const { return kWifiBuild ? wifi_ : nullptr; }
+  // The pass-throughs go to a serial port's raw bytes: a small-RAM build has none (OEP_SMALL_RAM: one USB vendor bulk
+  // transport), so the passthrough / console-passthrough items and their running compile out there
+  static constexpr bool kPassBuild = !OEP_SMALL_RAM;
   uint32_t wifi_applied_ = 0;    // CRC-32 of the wifi / ipv4 items last handed to wifi_ (0xFFFFFFFF: none yet)
   bool wifi_handed_ = false;
   Own own_[kMaxOwn];

@@ -337,8 +337,8 @@ void Endpoint::poll() {
       }
       t.serial.idle(rawSink, &t);
     } else {
-      if (t.conn) {   // a TCP slot: a new connection starts with a fresh reader (and none of the old one's pushes)
-        const uint32_t id = t.conn->connection();
+      if (Connection *conn = connOf(t)) {   // a TCP slot: a new connection starts with a fresh reader (and none of the old one's pushes)
+        const uint32_t id = conn->connection();
         if (id != t.seen) {
           t.seen = id;
           t.reader.consume();
@@ -358,8 +358,8 @@ void Endpoint::poll() {
           if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
           t.reader.consume();
         }
-        if (t.conn && t.reader.overlong()) {   // a length over max_frame: the connection closes (transports §1)
-          t.conn->drop();
+        if (connOf(t) && t.reader.overlong()) {   // a length over max_frame: the connection closes (transports §1)
+          connOf(t)->drop();
           break;
         }
       }
@@ -520,8 +520,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
     // oep.probe.restart (oep-if-restart §2): no notification after its answer - the session's end, and the zero-copy data
     // already queued (it would follow the answer) goes out before it
     endSubscriptions();
-    if (direct_)
-      for (const uint32_t start = millis(); direct_->queued() && static_cast<uint32_t>(millis() - start) < kRestartDrainMs;)
+    if (DirectTransport *d = directT())
+      for (const uint32_t start = millis(); d->queued() && static_cast<uint32_t>(millis() - start) < kRestartDrainMs;)
         delay(1);
   }
   OEP_LOGF("ans corr %u res %u detail %u len %u", corr, result.resolution, result.detail, static_cast<unsigned>(result.length));
@@ -735,7 +735,8 @@ size_t ProbeRestart::describe(uint8_t *out, size_t capacity) {
 // the port (counted from the last good frame and the last answer), revert. revert: answered (the boot speed) at the
 // speed now, then back. The session's end goes back too (sessionEnded).
 Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (!port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.probe.link's ops (Link::offers)
+  // a serial port's (no serial transport on a small-RAM build: not in oep.probe.link's ops there)
+  if (OEP_SMALL_RAM || !port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.probe.link's ops (Link::offers)
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 7, out, capacity);
   if (refused(parsed)) return parsed;
@@ -800,6 +801,7 @@ void Endpoint::speedApply() {
 // port_state (oep-if-link §1): [TLV] -> baud(u32) state(u8) [TLV], the port the request came on. A port that is no UART
 // bridge: unavailable cause 6.
 Result Endpoint::portState(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (OEP_SMALL_RAM) return rejected(kRejectUnknownOperation);   // with port_speed (Link::offers)
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
   if (refused(parsed)) return parsed;

@@ -317,10 +317,10 @@ class Endpoint {
   // its fn) with the fn and the subscriber's batching; takeSeq numbers a frame (shared with that fn's events).
   void setDirect(DirectTransport *direct) { direct_ = direct; }
   // A zero-copy path exists (whoever subscribes): a streaming configure can plan on it without a store of its own.
-  bool directCapable() const { return direct_ != nullptr && !serialKind(transports_[0].kind); }
+  bool directCapable() const { return directT() != nullptr && !serialKind(transports_[0].kind); }
   // the zero-copy path belongs to transport 0: pushes use it only while the subscriber came in on transport 0
   DirectTransport *direct() const {
-    return push_ == 0 && !serialKind(transports_[0].kind) ? direct_ : nullptr;
+    return push_ == 0 && !serialKind(transports_[0].kind) ? directT() : nullptr;
   }
   bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint32_t &max_delay_ms) const;
   uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&push_seq_[fn - 1], 1, __ATOMIC_RELAXED); }
@@ -357,7 +357,7 @@ class Endpoint {
   size_t push_ = 0;      // the transport the push subscriptions came in on
   uint32_t push_conn_ = 0;   // and its connection, on a TCP slot (another connection there gets none of them)
   void pushHere() { push_ = current_; push_conn_ = transports_[current_].seen; }
-  bool pushGone() const { return transports_[push_].conn && transports_[push_].conn->connection() != push_conn_; }
+  bool pushGone() const { return connOf(transports_[push_]) && connOf(transports_[push_])->connection() != push_conn_; }
   uint8_t *tx_;
   size_t tx_capacity_;
   Limits limits_;
@@ -433,6 +433,10 @@ class Endpoint {
   // Subscriptions, per fn (core §11.3: one per fn, the lock holder's).
   volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;
+  // A small-RAM build (OEP_SMALL_RAM: one USB vendor bulk transport) has no TCP listener and no zero-copy transport:
+  // these are constant nulls there, and what they lead to compiles out
+  DirectTransport *directT() const { return OEP_SMALL_RAM ? nullptr : direct_; }
+  static Connection *connOf(const Transport &t) { return OEP_SMALL_RAM ? nullptr : t.conn; }
   uint16_t push_seq_[kMaxInterfaces] = {};
   uint16_t min_bytes_[kMaxInterfaces] = {};
   uint32_t max_delay_ms_[kMaxInterfaces] = {};
@@ -494,7 +498,8 @@ class Link final : public Interface {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_link::kLockFreeOps, op); }
   bool offers(uint8_t op) const override {
     return op == reg::probe_link::kOpSource || op == reg::probe_link::kOpSink ||
-           ((op == reg::probe_link::kOpPortSpeed || op == reg::probe_link::kOpPortState) && endpoint_.port_speed_ != nullptr);
+           ((op == reg::probe_link::kOpPortSpeed || op == reg::probe_link::kOpPortState) && !OEP_SMALL_RAM &&
+            endpoint_.port_speed_ != nullptr);
   }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 

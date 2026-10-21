@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) A small-RAM build (one USB vendor bulk transport) compiles out what only another transport reaches: the TCP
+  listener's connections and the zero-copy transport (constant nulls there), probe.config's passthrough /
+  console-passthrough items and their running (a serial port's raw bytes), probe.link's port_speed / port_state (a
+  serial port's). 2.7 KB on the CH32X035 (77.8 KB).
+- (JA) RAM の小さい機種のビルド（USB の vendor bulk の transport 1 本）では、ほかの transport でしか通らない部分をコンパイルで外す。
+  TCP の受け口の接続と zero-copy の transport（そこでは定数の null）、probe.config の passthrough / console-passthrough の項目と
+  その流し込み（シリアルのポートの生のバイトのため）、probe.link の port_speed / port_state（シリアルのポートのため）。
+  CH32X035 で 2.7 KB 減（77.8 KB）。
 - (EN) Interface, GroupTrack and DmiPhy have a protected, non-virtual destructor (nothing is deleted through them): a
   static interface needs no destructor at exit, its registration nor two vtable slots; Interface::flags(), used
   nowhere, is gone. 0.95 KB on the CH32X035 (80.5 KB). A custom interface builds as before (CustomInterface).

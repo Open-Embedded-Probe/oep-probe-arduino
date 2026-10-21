@@ -216,8 +216,8 @@ bool ProbeConfig::declares(uint8_t kind) const {
   switch (kind) {
     case kLabel: return true;
     case kIdle: case kDisable: return pins_ != nullptr;
-    case kPass: return uart_count_ > 0;
-    case kConsolePass: return place_count_ > 0;
+    case kPass: return kPassBuild && uart_count_ > 0;
+    case kConsolePass: return kPassBuild && place_count_ > 0;
     case kWifi: case kIpv4: return wifi() != nullptr;
     case kRvswdRest: return rest_ports_ > 0;
     case kWireHold: return hold_count_ > 0;
@@ -347,9 +347,11 @@ Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, si
     case kDisable: if (n != 0) return rejected(kRejectMalformed); break;
     case kRvswdRest: case kWireHold: if (n != 1) return rejected(kRejectMalformed); break;
     case kPass:
+      if (!kPassBuild) return unsupportedTag(out, capacity, number);   // no serial port to pass to (never declared)
       if (n != kPassData || getU32(d + 4) == 0) return rejected(kRejectMalformed);   // baud 0 (fixture §2's rule)
       break;
     case kConsolePass:
+      if (!kPassBuild) return unsupportedTag(out, capacity, number);
       if (n != kConsolePassData || getU32(d + 6) == 0) return rejected(kRejectMalformed);   // max_speed 0 (debug §1)
       break;
     case kWifi:
@@ -918,6 +920,7 @@ void ProbeConfig::passIn(void *self, const uint8_t *data, size_t length) {
 }
 
 void ProbeConfig::runPassthroughs() {
+  if (!kPassBuild) return;
   size_t at = 0, vlen = 0;
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
@@ -990,7 +993,7 @@ void ProbeConfig::runPassthroughs() {
 }
 
 void ProbeConfig::runPassthroughsYield(uint8_t port) {
-  if (port >= kMaxPorts || pass_console_[port] < 0) return;
+  if (!kPassBuild || port >= kMaxPorts || pass_console_[port] < 0) return;
   places_[pass_console_[port]].console->passStop();
   residentRelease(places_[pass_console_[port]].wire->port());
   pass_console_[port] = -1;
