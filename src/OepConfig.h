@@ -128,9 +128,12 @@ class ProbeConfig final : public Interface {
   // The Wi-Fi station: netif "wifi", the wifi and ipv4 items and the network op. false (and nothing declared) when a
   // transport's max_frame is below wifi_min_max_frame (§1.4: the longest wifi set must fit every transport).
   bool setWifi(WifiControl *wifi) {
-    if (!kWifiBuild && wifi) return false;   // no Wi-Fi on this platform
     if (wifi && endpoint_.maxFrame() < reg::kLimitWifiMinMaxFrame) return false;
     wifi_ = wifi;
+    // the Wi-Fi's part reached only from here: a sketch that hands no WifiControl links none of it
+    wifi_hand_ = wifi ? &ProbeConfig::handWifi : nullptr;
+    wifi_net_ = wifi ? &ProbeConfig::network : nullptr;
+    wifi_form_ = wifi ? &ProbeConfig::wifiItemForm : nullptr;
     return true;
   }
   // A setting of the sketch's own (§1.6): a reverse-DNS name (1-48 bytes with a dot), form 1-5 (bytes, text, u32, ipv4,
@@ -144,7 +147,11 @@ class ProbeConfig final : public Interface {
   void load();
   uint64_t savedDisabled() const;
   void applySaved();
-  void poll();   // from loop(): the pass-throughs
+  void poll();   // from loop(): the pass-throughs, the holds
+  // The pass-throughs (passthrough / console-passthrough items, probe.config §1.1: a uart's or a console's bytes to a
+  // serial port's raw stream, binds): declared and run once this is called - a probe with a serial transport; one
+  // without links none of it.
+  void usePassthroughs() { pass_run_ = &ProbeConfig::runPassthroughs; }
   void setAttachGate(bool (*ready)()) { attach_gate_ = ready; }   // a console pass-through's attach waits on it
   void skipBootAttach() { skip_boot_attach_ = true; }
   bool bootAttachSkipped() const { return skip_boot_attach_; }
@@ -158,7 +165,7 @@ class ProbeConfig final : public Interface {
   bool offers(uint8_t op) const override {
     using namespace reg::probe_config;
     if (op == kOpGet || op == kOpSet || op == kOpUnset) return true;
-    if (op == kOpNetwork) return wifi() != nullptr;
+    if (op == kOpNetwork) return wifi_ != nullptr;
     return storage_ && (op == kOpSave || op == kOpErase || op == kOpState);
   }
   size_t describe(uint8_t *out, size_t capacity) override;
@@ -189,17 +196,11 @@ class ProbeConfig final : public Interface {
   FixtureUart *uarts_[kMaxUarts] = {};
   size_t uart_count_ = 0;
   WifiControl *wifi_ = nullptr;
-  // Wi-Fi is the ESP32's (the sketch hands a WifiControl): elsewhere wifi() is a constant null, and the wifi / ipv4 items
-  // and the network op compile out (a CH32X035's 62 KB)
-#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_CONFIG) || defined(OEP_WIFI_CONFIG)
-  static constexpr bool kWifiBuild = true;
-#else
-  static constexpr bool kWifiBuild = false;
-#endif
-  WifiControl *wifi() const { return kWifiBuild ? wifi_ : nullptr; }
-  // The pass-throughs go to a serial port's raw bytes: a small-RAM build has none (OEP_SMALL_RAM: one USB vendor bulk
-  // transport), so the passthrough / console-passthrough items and their running compile out there
-  static constexpr bool kPassBuild = !OEP_SMALL_RAM;
+  void (ProbeConfig::*wifi_hand_)() = nullptr;   // handWifi, once setWifi had one
+  Result (ProbeConfig::*wifi_net_)(const uint8_t *, size_t, uint8_t *, size_t) = nullptr;   // network, likewise
+  void (ProbeConfig::*pass_run_)() = nullptr;   // runPassthroughs, once usePassthroughs was called
+  bool (ProbeConfig::*wifi_form_)(uint8_t, uint16_t, const uint8_t *, size_t) const = nullptr;   // wifiItemForm
+  bool wifiItemForm(uint8_t kind, uint16_t key, const uint8_t *d, size_t n) const;
   uint32_t wifi_applied_ = 0;    // CRC-32 of the wifi / ipv4 items last handed to wifi_ (0xFFFFFFFF: none yet)
   bool wifi_handed_ = false;
   Own own_[kMaxOwn];

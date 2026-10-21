@@ -18,6 +18,7 @@
 #endif
 #endif
 
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -450,6 +451,13 @@ inline Result plainTail(Tail &tail, const uint8_t *p, size_t n, size_t fixed, ui
 #define OEP_NOIPA __attribute__((noipa))
 #else
 #define OEP_NOIPA
+#endif
+// A small entry expanded where it is called, so what it chooses by a constant argument is decided there (a transport's
+// kind: the serial part is linked only where a serial transport is added, Endpoint::addTransport)
+#if defined(__GNUC__)
+#define OEP_ALWAYS_INLINE inline __attribute__((always_inline))
+#else
+#define OEP_ALWAYS_INLINE inline
 #endif
 
 class TlvWriter {

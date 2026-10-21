@@ -108,10 +108,7 @@ class Endpoint {
     kUsbSerialJtag = reg::core::kTransportKindUsbSerialJtag, kVendorBulk = reg::core::kTransportKindVendorBulk,
     kHid = reg::core::kTransportKindHid, kTcp = reg::core::kTransportKindTcp,
   };
-  // A small-RAM build (OEP_SMALL_RAM) takes no serial transport (COBS, port_speed, raw ports): a USB vendor bulk one only.
-  static constexpr bool serialKind(uint8_t kind) {
-    return !OEP_SMALL_RAM && (kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag);
-  }
+  static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
   // Transports, a TCP listener's connection slots each counted (addTcpListener).
   static constexpr size_t kMaxTransports = OEP_SMALL_RAM ? 2 : 8;
   // A serial port's frames are decoded here (one at a time): a serial port's max_frame is at most this (the
@@ -121,8 +118,8 @@ class Endpoint {
   // usb_interface (describe transport, core §7.5): for USB CDC the bInterfaceNumber of the CDC communication interface
   // (the first of the function); for built-in USB serial that number as the hardware presents it, or 0xFF when the
   // probe cannot know it; for vendor bulk and HID that interface's number; 0xFF for a UART bridge and TCP.
-  Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
-           Limits limits, uint8_t kind, uint8_t usb_interface = 0xff)
+  OEP_ALWAYS_INLINE Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
+                             Limits limits, uint8_t kind, uint8_t usb_interface = 0xff)
       : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(bounded(limits)) {
     addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
     setPushQueue(1024);
@@ -149,8 +146,16 @@ class Endpoint {
   // transport the constructor took is transport 0 (the one a DirectTransport, if any, belongs to). The index is the
   // order of adding, as the describe lists them and the binds name the serial ports.
   // After a TCP listener (below) no transport is added: the serial ports' indexes are the describe entries' (binds).
-  bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface = 0xff,
-                    bool flush_after_burst = false);
+  // A serial kind brings the serial transports' part in (useSerialTransports): a sketch that adds none links none of it
+  // (the kind is a constant where it is called).
+  OEP_ALWAYS_INLINE bool addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind,
+                                      uint8_t usb_interface = 0xff, bool flush_after_burst = false) {
+    if (serialKind(kind)) useSerialTransports();
+    return addTransportOf(stream, rx_buffer, rx_capacity, kind, usb_interface, flush_after_burst);
+  }
+  // The serial transports (USB CDC, a UART bridge, USB-Serial/JTAG): their COBS frames, port_speed / port_state (with
+  // setPortSpeed) and raw ports (setRawPorts) - called by addTransport and the constructor for a serial kind.
+  void useSerialTransports();
   // Buffers given later than the constructor - memory that is up only by setup() (an ESP32's PSRAM): transport 0's
   // receive buffer (one whole frame of its max_frame, + 2) and the answer buffer (an answer is at most its size: a probe
   // may answer within less than its max_frame, core §4.4). Before the first poll. false: the receive buffer too small
@@ -254,7 +259,7 @@ class Endpoint {
   // runs at. `base` is the boot speed every revert goes back to. A rate further than port_speed_tolerance_pct from the
   // baud asked is refused unsupported (the endpoint checks it).
   using PortSpeedFn = uint32_t (*)(uint8_t port, uint32_t baud, bool apply);
-  void setPortSpeed(PortSpeedFn fn, uint32_t base) { port_speed_ = fn; speed_base_ = base; }
+  void setPortSpeed(PortSpeedFn fn, uint32_t base) { useSerialTransports(); port_speed_ = fn; speed_base_ = base; }
   // TEST HOOK (host tests): port `port` at `rate` in phase `phase` (1 trying, 2 committed, 3 a return pending after a
   // try - `committed` false - or a committed rate), as if a port_speed had got it there.
   void testSpeed(uint8_t port, uint32_t rate, uint8_t phase, bool committed = false) {
@@ -339,6 +344,26 @@ class Endpoint {
     int tx_room_max = 0;
     uint16_t max_frame = 0;       // confirm's max_frame on this transport (core §4.4, §7.1: each route its own)
   };
+  bool addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
+                      bool flush_after_burst);
+  // The serial transports' part, set by useSerialTransports (nullptr until then): reached only through it, so it is
+  // linked only where a serial transport is added
+  struct SerialOps {
+    void (*poll)(Endpoint &e, size_t index);   // a serial port's bytes: COBS frames, raw bytes
+    size_t (*write)(Stream &stream, const uint8_t *data, size_t length);   // a COBS frame
+    void (*after)(Endpoint &e, bool pushed);   // port_speed's timers (before and after the push), the raw bytes out
+    void (*answered)(Endpoint &e);             // port_speed's switch / revert after an answer
+    Result (*portSpeed)(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+    Result (*portState)(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  };
+  const SerialOps *serial_ = nullptr;
+  bool (*tcp_slot_)(Transport &t) = nullptr;   // slotOfTcp, once addTcpListener
+  static bool slotOfTcp(Transport &t);
+  static void pollSerial(Endpoint &e, size_t index);
+  static void afterSerial(Endpoint &e, bool pushed);
+  static void answeredSerial(Endpoint &e);
+  static Result portSpeedOf(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
+  static Result portStateOf(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   static void rawSink(void *context, const uint8_t *data, size_t length);
   void rawOut();
   void sessionEnded();
@@ -433,10 +458,8 @@ class Endpoint {
   // Subscriptions, per fn (core §11.3: one per fn, the lock holder's).
   volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;
-  // A small-RAM build (OEP_SMALL_RAM: one USB vendor bulk transport) has no TCP listener and no zero-copy transport:
-  // these are constant nulls there, and what they lead to compiles out
-  DirectTransport *directT() const { return OEP_SMALL_RAM ? nullptr : direct_; }
-  static Connection *connOf(const Transport &t) { return OEP_SMALL_RAM ? nullptr : t.conn; }
+  DirectTransport *directT() const { return direct_; }
+  static Connection *connOf(const Transport &t) { return t.conn; }
   uint16_t push_seq_[kMaxInterfaces] = {};
   uint16_t min_bytes_[kMaxInterfaces] = {};
   uint32_t max_delay_ms_[kMaxInterfaces] = {};
@@ -498,7 +521,7 @@ class Link final : public Interface {
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::probe_link::kLockFreeOps, op); }
   bool offers(uint8_t op) const override {
     return op == reg::probe_link::kOpSource || op == reg::probe_link::kOpSink ||
-           ((op == reg::probe_link::kOpPortSpeed || op == reg::probe_link::kOpPortState) && !OEP_SMALL_RAM &&
+           ((op == reg::probe_link::kOpPortSpeed || op == reg::probe_link::kOpPortState) && endpoint_.serial_ != nullptr &&
             endpoint_.port_speed_ != nullptr);
   }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;

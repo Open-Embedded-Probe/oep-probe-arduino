@@ -216,9 +216,9 @@ bool ProbeConfig::declares(uint8_t kind) const {
   switch (kind) {
     case kLabel: return true;
     case kIdle: case kDisable: return pins_ != nullptr;
-    case kPass: return kPassBuild && uart_count_ > 0;
-    case kConsolePass: return kPassBuild && place_count_ > 0;
-    case kWifi: case kIpv4: return wifi() != nullptr;
+    case kPass: return pass_run_ && uart_count_ > 0;
+    case kConsolePass: return pass_run_ && place_count_ > 0;
+    case kWifi: case kIpv4: return wifi_ != nullptr;
     case kRvswdRest: return rest_ports_ > 0;
     case kWireHold: return hold_count_ > 0;
     default: return kind >= kOwn && kind < kOwn + own_count_;
@@ -334,6 +334,13 @@ bool ipv4Form(const uint8_t *d, size_t n) {
 
 // One item by itself (probe.config §1): its form (another length is malformed), then what this probe takes
 // (unsupported with the number as received). v: key(u16) data.
+// A wifi / ipv4 item's form (§1.4, §1.5); pass_len 0xFF keeps the entry's passphrase: none there is malformed.
+bool ProbeConfig::wifiItemForm(uint8_t kind, uint16_t key, const uint8_t *d, size_t n) const {
+  if (kind == kIpv4) return ipv4Form(d, n);
+  size_t had = 0;
+  return wifiForm(d, n) && !(d[1 + d[0]] == kPassHidden && !find(items_, items_length_, kWifi, key, had));
+}
+
 Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, size_t len, uint8_t *out,
                               size_t capacity) const {
   if (len < 2) return rejected(kRejectMalformed);
@@ -347,22 +354,16 @@ Result ProbeConfig::checkItem(uint8_t kind, uint8_t number, const uint8_t *v, si
     case kDisable: if (n != 0) return rejected(kRejectMalformed); break;
     case kRvswdRest: case kWireHold: if (n != 1) return rejected(kRejectMalformed); break;
     case kPass:
-      if (!kPassBuild) return unsupportedTag(out, capacity, number);   // no serial port to pass to (never declared)
+      if (!pass_run_) return unsupportedTag(out, capacity, number);   // no pass-throughs here (never declared)
       if (n != kPassData || getU32(d + 4) == 0) return rejected(kRejectMalformed);   // baud 0 (fixture §2's rule)
       break;
     case kConsolePass:
-      if (!kPassBuild) return unsupportedTag(out, capacity, number);
+      if (!pass_run_) return unsupportedTag(out, capacity, number);
       if (n != kConsolePassData || getU32(d + 6) == 0) return rejected(kRejectMalformed);   // max_speed 0 (debug §1)
       break;
-    case kWifi:
-      if (!kWifiBuild) return unsupportedTag(out, capacity, number);   // no Wi-Fi here (wifi() is null: never declared)
-      if (!wifiForm(d, n)) return rejected(kRejectMalformed);
-      // pass_len 0xFF keeps the entry's passphrase: none there is malformed (§1.4)
-      if (d[1 + d[0]] == kPassHidden && !find(items_, items_length_, kWifi, key, had)) return rejected(kRejectMalformed);
-      break;
-    case kIpv4:
-      if (!kWifiBuild) return unsupportedTag(out, capacity, number);
-      if (!ipv4Form(d, n)) return rejected(kRejectMalformed);
+    case kWifi: case kIpv4:   // Wi-Fi's (setWifi): no Wi-Fi here, never declared
+      if (!wifi_form_) return unsupportedTag(out, capacity, number);
+      if (!(this->*wifi_form_)(kind, key, d, n)) return rejected(kRejectMalformed);
       break;
     default: {
       if (!declares(kind)) return unsupportedTag(out, capacity, number);
@@ -514,7 +515,7 @@ uint64_t ProbeConfig::savedDisabled() const { return disabledIn(saved_, saved_le
 void ProbeConfig::adopt(const uint8_t *items, size_t length) {
   if (items != items_) memmove(items_, items, length);
   items_length_ = length;
-  handWifi();
+  if (wifi_hand_) (this->*wifi_hand_)();
   if (!pins_) return;
   const uint64_t disabled = disabledIn(items_, items_length_);
   pins_->setDisabled(disabled);
@@ -530,7 +531,7 @@ void ProbeConfig::adopt(const uint8_t *items, size_t length) {
 
 // The wifi entries in key order and the netif's ipv4 to the station, when they differ from what it has (§1.3).
 void ProbeConfig::handWifi() {
-  if (!wifi()) return;
+  if (!wifi_) return;
   WifiEntry entries[kMaxWifi];
   size_t count = 0, at = 0, vlen = 0;
   Ipv4Setting ip;
@@ -562,7 +563,7 @@ void ProbeConfig::handWifi() {
   if (wifi_handed_ && crc == wifi_applied_) return;
   wifi_handed_ = true;
   wifi_applied_ = crc;
-  wifi()->apply(entries, count, ip);
+  wifi_->apply(entries, count, ip);
 }
 
 Result ProbeConfig::commit(const uint8_t *candidate, size_t length, uint8_t *out, size_t capacity) {
@@ -709,9 +710,9 @@ Result ProbeConfig::network(const uint8_t *payload, size_t length, uint8_t *out,
   const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
   if (refused(parsed)) return parsed;
   if (capacity < 3 + 19) return failed();
-  const WifiControl::Status s = wifi()->status();
+  const WifiControl::Status s = wifi_->status();
   const bool up = s.state == WifiControl::kStateConnected;
-  putU16(out, wifi()->tcpPort());
+  putU16(out, wifi_->tcpPort());
   out[2] = 1;
   uint8_t *r = out + 3;
   r[0] = 1;
@@ -745,7 +746,7 @@ size_t ProbeConfig::describe(uint8_t *out, size_t capacity) {
     memcpy(v + 5, n, strlen(n));
     w.put(cfg::kTlvDescribeSetting, v, 5 + strlen(n));
   }
-  if (wifi()) w.text(cfg::kTlvDescribeNetif, cfg::kNameNetifWifi);
+  if (wifi_) w.text(cfg::kTlvDescribeNetif, cfg::kNameNetifWifi);
   return w.ok() ? w.length() : 0;
 }
 
@@ -755,7 +756,7 @@ Result ProbeConfig::handle(uint8_t op, const uint8_t *payload, size_t length, ui
     case cfg::kOpGet: return get(payload, length, out, capacity);
     case cfg::kOpSet: return set(payload, length, out, capacity);
     case cfg::kOpUnset: return unset(payload, length, out, capacity);
-    case cfg::kOpNetwork: return wifi() ? network(payload, length, out, capacity) : rejected(kRejectUnknownOperation);
+    case cfg::kOpNetwork: return wifi_net_ ? (this->*wifi_net_)(payload, length, out, capacity) : rejected(kRejectUnknownOperation);
     case cfg::kOpState: {   // [TLV] -> storage_state(u8) saved_generation(u32) reason(u8) [TLV]
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
       if (refused(parsed)) return parsed;
@@ -920,7 +921,6 @@ void ProbeConfig::passIn(void *self, const uint8_t *data, size_t length) {
 }
 
 void ProbeConfig::runPassthroughs() {
-  if (!kPassBuild) return;
   size_t at = 0, vlen = 0;
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
@@ -993,7 +993,7 @@ void ProbeConfig::runPassthroughs() {
 }
 
 void ProbeConfig::runPassthroughsYield(uint8_t port) {
-  if (!kPassBuild || port >= kMaxPorts || pass_console_[port] < 0) return;
+  if (port >= kMaxPorts || pass_console_[port] < 0) return;
   places_[pass_console_[port]].console->passStop();
   residentRelease(places_[pass_console_[port]].wire->port());
   pass_console_[port] = -1;
@@ -1001,7 +1001,7 @@ void ProbeConfig::runPassthroughsYield(uint8_t port) {
 }
 
 void ProbeConfig::poll() {
-  runPassthroughs();
+  if (pass_run_) (this->*pass_run_)();
   for (size_t k = 0; k < hold_count_; ++k) holds_[k].check(holds_[k].port);   // holds whose pins were taken or settings changed
 }
 

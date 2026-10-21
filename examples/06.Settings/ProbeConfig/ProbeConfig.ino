@@ -87,6 +87,7 @@ void setup() {
   endpoint.add(gpio);
   endpoint.add(uart);
   endpoint.add(config);   // last, so the fns before it keep their numbers when the sketch grows
+  config.usePassthroughs();   // the passthrough / console-passthrough items (a serial port's raw stream carries them)
   config.addPlace(wire, console);   // a console-passthrough may name this wire (and its console)
   config.addUart(uart);             // a passthrough may carry this UART
   config.setPins(&pins);            // idle items set these pins, disable items take them away

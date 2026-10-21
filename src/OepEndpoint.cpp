@@ -79,11 +79,9 @@ void Endpoint::freeze() {
   for (size_t i = 0; i < count_; ++i) interfaces_[i]->setFrameLimits(smallest, limits_.max_frame);
 }
 
-bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
-                            bool flush_after_burst) {
+bool Endpoint::addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
+                              bool flush_after_burst) {
   if (transport_count_ >= kMaxTransports || listener_) return false;
-  // a small-RAM build has no serial transport (serialKind): one asked for is not added
-  if (OEP_SMALL_RAM && (kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag)) return false;
   Transport &t = transports_[transport_count_];
   t.max_frame = serialKind(kind) && limits_.max_frame > kMaxSerialFrame ? kMaxSerialFrame : limits_.max_frame;
   t.stream = &stream;
@@ -99,8 +97,22 @@ bool Endpoint::addTransport(Stream &stream, uint8_t *rx_buffer, size_t rx_capaci
   return true;
 }
 
+// A TCP slot at a poll: a new connection starts with a fresh reader (and none of the old one's pushes). false: no
+// connection on it now. Reached through tcp_slot_ only (set by addTcpListener): a probe with no listener links none of
+// it.
+bool Endpoint::slotOfTcp(Transport &t) {
+  const uint32_t id = t.conn->connection();
+  if (id != t.seen) {
+    t.seen = id;
+    t.reader.consume();
+    (void)t.reader.overlong();
+  }
+  return id != 0;
+}
+
 bool Endpoint::addTcpListener(Connection *const *slots, uint8_t *const *rx, size_t rx_capacity, size_t count) {
   if (!count || transport_count_ + count > kMaxTransports || rx_capacity < limits_.max_frame) return false;
+  tcp_slot_ = slotOfTcp;
   for (size_t k = 0; k < count; ++k) {
     Transport &t = transports_[transport_count_++];
     t.stream = slots[k];
@@ -123,8 +135,51 @@ bool Endpoint::addTcpListener(Connection *const *slots, uint8_t *const *rx, size
 void Endpoint::send(size_t length) {
   Transport &t = transports_[current_];
   t.wrote = true;
-  if (serialKind(t.kind)) writeCobsFrame(*t.stream, tx_, length);
+  if (serialKind(t.kind)) serial_->write(*t.stream, tx_, length);
   else writeFrame(*t.stream, tx_, length);
+}
+
+
+// A serial port's bytes this poll (transports §1, §4): COBS frames to handleMessage, raw bytes to the binds.
+void Endpoint::pollSerial(Endpoint &e, size_t i) {
+  Transport &t = e.transports_[i];
+  uint8_t chunk[512];
+  for (int avail; (avail = t.stream->available()) > 0;) {
+    size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
+    n = t.stream->readBytes(chunk, n);
+    if (!n) break;
+    const uint8_t *p = chunk;
+    while (n) {
+      const bool message = t.serial.feed(p, n, rawSink, &t);
+      // the sped-up port's good frame: port_speed_idle_ms runs from it again (oep-if-link §3)
+      if (message && i == e.speed_port_ && e.speed_state_ != kSpeedBase) e.speed_good_ms_ = millis();
+      if (message) e.handleMessage(t.serial.message(), t.serial.length());
+      if (e.restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
+    }
+  }
+  t.serial.idle(rawSink, &t);
+}
+
+void Endpoint::afterSerial(Endpoint &e, bool pushed) {
+  if (pushed) e.rawOut();
+  e.speedPoll();
+}
+
+void Endpoint::answeredSerial(Endpoint &e) {
+  e.speedApply();
+  if (e.speed_fallback_ && e.current_ == e.speed_port_) e.speedRevert();   // phase 3: this frame's answer is out (link §3)
+}
+
+Result Endpoint::portSpeedOf(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  return e.portSpeed(payload, length, out, capacity);
+}
+Result Endpoint::portStateOf(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  return e.portState(payload, length, out, capacity);
+}
+
+void Endpoint::useSerialTransports() {
+  static const SerialOps kOps = {pollSerial, writeCobsFrame, afterSerial, answeredSerial, portSpeedOf, portStateOf};
+  serial_ = &kOps;
 }
 
 // A serial port's raw bytes (transports §4): to the binds, unless a session holds the port (then dropped).
@@ -137,7 +192,7 @@ void Endpoint::rawSink(void *context, const uint8_t *data, size_t length) {
 // The binds' bytes out on every serial port not held, into the room the port has now beyond what a frame needs (a
 // result never waits behind raw bytes, and a port nobody reads holds its position instead of losing bytes).
 void Endpoint::rawOut() {
-  if (OEP_SMALL_RAM || !raw_) return;   // raw bytes go out on serial ports only
+  if (!raw_) return;
   raw_->poll(locked_);
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
@@ -321,31 +376,10 @@ void Endpoint::poll() {
     Transport &t = transports_[i];
     current_ = i;   // results go back on this transport
     if (serialKind(t.kind)) {
-      uint8_t chunk[512];
-      for (int avail; (avail = t.stream->available()) > 0;) {
-        size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
-        n = t.stream->readBytes(chunk, n);
-        if (!n) break;
-        const uint8_t *p = chunk;
-        while (n) {
-          const bool message = t.serial.feed(p, n, rawSink, &t);
-          // the sped-up port's good frame: port_speed_idle_ms runs from it again (oep-if-link §3)
-          if (message && i == speed_port_ && speed_state_ != kSpeedBase) speed_good_ms_ = millis();
-          if (message) handleMessage(t.serial.message(), t.serial.length());
-          if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
-        }
-      }
-      t.serial.idle(rawSink, &t);
+      serial_->poll(*this, i);
+      if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
     } else {
-      if (Connection *conn = connOf(t)) {   // a TCP slot: a new connection starts with a fresh reader (and none of the old one's pushes)
-        const uint32_t id = conn->connection();
-        if (id != t.seen) {
-          t.seen = id;
-          t.reader.consume();
-          (void)t.reader.overlong();
-        }
-        if (!id) continue;
-      }
+      if (t.conn && !tcp_slot_(t)) continue;   // a TCP slot (addTcpListener): no connection on it now
       uint8_t chunk[2048];
       for (int avail; (avail = t.stream->available()) > 0;) {
         size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
@@ -358,18 +392,18 @@ void Endpoint::poll() {
           if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
           t.reader.consume();
         }
-        if (connOf(t) && t.reader.overlong()) {   // a length over max_frame: the connection closes (transports §1)
-          connOf(t)->drop();
+        if (t.conn && t.reader.overlong()) {   // a length over max_frame: the connection closes (transports §1)
+          t.conn->drop();
           break;
         }
       }
     }
   }
-  speedPoll();
+  if (serial_) serial_->after(*this, false);   // port_speed's timers
   current_ = push_;
   push();   // after the results for everything that has arrived, on the subscriber's transport
-  rawOut();   // then the serial ports' raw bytes, never inside a frame
-  speedPoll();   // a lapse push() found: back to the boot speed
+  if (serial_) serial_->after(*this, true);   // then the serial ports' raw bytes (never inside a frame), and a lapse
+                                              // push() found: back to the boot speed
   for (size_t i = 0; i < transport_count_; ++i) {
     Transport &t = transports_[i];
     if (t.flush_after_burst && t.wrote) t.stream->flush();
@@ -527,8 +561,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   OEP_LOGF("ans corr %u res %u detail %u len %u", corr, result.resolution, result.detail, static_cast<unsigned>(result.length));
   send(total);
   if (restart_taken_) { restartNow(); return; }
-  speedApply();   // port_speed: the answer went out at the old speed; now switch (or revert)
-  if (speed_fallback_ && current_ == speed_port_) speedRevert();   // phase 3: this frame's answer is out (link §3)
+  if (serial_) serial_->answered(*this);   // port_speed: the answer went out at the old speed; now switch (or revert)
 }
 
 // After restart's answer (oep-if-restart §2): it leaves the probe, every line is let go of, and the chip restarts as from
@@ -736,7 +769,7 @@ size_t ProbeRestart::describe(uint8_t *out, size_t capacity) {
 // speed now, then back. The session's end goes back too (sessionEnded).
 Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // a serial port's (no serial transport on a small-RAM build: not in oep.probe.link's ops there)
-  if (OEP_SMALL_RAM || !port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.probe.link's ops (Link::offers)
+  if (!port_speed_) return rejected(kRejectUnknownOperation);   // not in oep.probe.link's ops (Link::offers)
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 7, out, capacity);
   if (refused(parsed)) return parsed;
@@ -783,7 +816,6 @@ bool Endpoint::speedWithin(uint32_t rate, uint32_t baud) {
 }
 
 void Endpoint::speedApply() {
-  if (OEP_SMALL_RAM) return;   // port_speed is a serial port's (no serial transport there)
   const uint8_t pending = speed_pending_;
   speed_pending_ = kSpeedNone;
   if (pending == kSpeedRevert) { speedRevert(); return; }
@@ -801,7 +833,6 @@ void Endpoint::speedApply() {
 // port_state (oep-if-link §1): [TLV] -> baud(u32) state(u8) [TLV], the port the request came on. A port that is no UART
 // bridge: unavailable cause 6.
 Result Endpoint::portState(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  if (OEP_SMALL_RAM) return rejected(kRejectUnknownOperation);   // with port_speed (Link::offers)
   Tail tail;
   const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
   if (refused(parsed)) return parsed;
@@ -823,7 +854,6 @@ void Endpoint::speedFall() {
 }
 
 void Endpoint::speedRevert() {
-  if (OEP_SMALL_RAM) return;
   speed_fallback_ = false;
   if (speed_state_ == kSpeedBase) return;
   transports_[speed_port_].stream->flush();
@@ -834,7 +864,6 @@ void Endpoint::speedRevert() {
 }
 
 void Endpoint::speedPoll() {
-  if (OEP_SMALL_RAM) return;
   if (speed_pending_ == kSpeedRevert) { speed_pending_ = kSpeedNone; speedRevert(); }
   if (speed_fallback_) {   // phase 3: back once nothing is being received (a frame's answer reverts in handleMessage)
     if (!transports_[speed_port_].serial.receiving()) speedRevert();
@@ -1215,8 +1244,12 @@ Result Link::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *
       if (refused(parsed)) return parsed;
       return completed();
     }
-    case reg::probe_link::kOpPortSpeed: return endpoint_.portSpeed(payload, length, out, capacity);
-    case reg::probe_link::kOpPortState: return endpoint_.portState(payload, length, out, capacity);
+    case reg::probe_link::kOpPortSpeed:   // a serial port's (useSerialTransports): unknown without one
+      return endpoint_.serial_ ? endpoint_.serial_->portSpeed(endpoint_, payload, length, out, capacity)
+                               : rejected(kRejectUnknownOperation);
+    case reg::probe_link::kOpPortState:
+      return endpoint_.serial_ ? endpoint_.serial_->portState(endpoint_, payload, length, out, capacity)
+                               : rejected(kRejectUnknownOperation);
     default: return rejected(kRejectUnknownOperation);
   }
 }

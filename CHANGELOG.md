@@ -1,6 +1,24 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) What a probe links is what its sketch uses, with no build option: the serial transports' part (COBS frames,
+  port_speed / port_state, raw ports) comes in through Endpoint::useSerialTransports, which the constructor and
+  addTransport (expanded where they are called, OEP_ALWAYS_INLINE) call for a serial kind, and setPortSpeed too; a TCP
+  listener's slot handling through addTcpListener; probe.config's pass-throughs once the sketch calls
+  usePassthroughs() (new: a sketch with passthrough / console-passthrough items calls it; the firmware's and the
+  ProbeConfig example do); its Wi-Fi (items, their form, network, handing) through setWifi. The temporary
+  OEP_SERIAL_TRANSPORT / OEP_TCP_TRANSPORT / OEP_DIRECT_TRANSPORT and kWifiBuild are gone. The CH32X035's full set with
+  HID: 82.9 KB.
+- (JA) プローブがリンクするのは、スケッチが使う分だけにした。ビルドオプションは使わない。
+  - シリアルの transport の部分（COBS のフレーム、port_speed / port_state、raw ports）は、Endpoint::useSerialTransports から
+    入る。コンストラクタと addTransport（呼び出し元で展開される。OEP_ALWAYS_INLINE）が、シリアルの種類のときに呼ぶ。
+    setPortSpeed も呼ぶ。
+  - TCP の受け口の扱いは addTcpListener から入る。
+  - probe.config の pass-through は、スケッチが usePassthroughs() を呼んだときだけ。新しい API で、passthrough /
+    console-passthrough の項目を使うスケッチは呼ぶ（ファームウェアと ProbeConfig の例は呼ぶ）。
+  - probe.config の Wi-Fi（項目、その形式、network、受け渡し）は setWifi から入る。
+  - 一時的なマクロ OEP_SERIAL_TRANSPORT / OEP_TCP_TRANSPORT / OEP_DIRECT_TRANSPORT と kWifiBuild は消した。CH32X035 の全部入り
+    （HID 込み）は 82.9 KB。
 - (EN) A small-RAM build (one USB vendor bulk transport) compiles out what only another transport reaches: the TCP
   listener's connections and the zero-copy transport (constant nulls there), probe.config's passthrough /
   console-passthrough items and their running (a serial port's raw bytes), probe.link's port_speed / port_state (a

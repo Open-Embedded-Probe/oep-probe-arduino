@@ -164,6 +164,7 @@ void setup() {
   uart.setRoleChannels(oep::platformUartRxMask(0), oep::platformUartTxMask(0));   // Serial1 = UART0: the pins it reaches
   endpoint.setRawPorts(&binds);
   endpoint.add(config);   // last: the fns before it keep their numbers
+  config.usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
   config.addPlace(wireRvswd, console);
   config.addHold(swd.hold, oep::checkSwdHold, &swd);   // oep.wire.swd's hold after a close (oep-if-debug §2): wire-hold
   config.addUart(uart);

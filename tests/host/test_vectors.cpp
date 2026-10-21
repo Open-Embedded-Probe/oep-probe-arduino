@@ -622,6 +622,7 @@ struct OpsProbe {
     ep.add(riscv);     // fn 6
     ep.add(console);   // fn 7
     ep.add(config);    // fn 8
+    config.usePassthroughs();
     ep.add(logic);     // fn 9
     ep.setRawPorts(&binds);
     // the settings the probe.config cases list: 1 label, 2 idle, 3 disable, 4 wifi, 5 ipv4, 6 com.example.ntp-server

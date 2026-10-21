@@ -318,6 +318,7 @@ void setup() {
   endpoint.add(i2c);
   endpoint.add(spi);
   endpoint.add(config);   // last: the fns before it keep their numbers
+  config.usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
   config.addPlace(wire, console);
   config.addUart(uart1);
   config.addUart(uart2);
