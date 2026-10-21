@@ -3,7 +3,7 @@
 
 // RP2040 / RP2350 (built for the Raspberry Pi Pico / Pico 2; profiles rp2040 / rp2350).
 //
-// Transport: USB CDC (Serial), a serial port: COBS frames (oep-transports §1). The USB device is the project's VID:PID
+// Transport (the Cdc choice): USB CDC (Serial), a serial port: COBS frames (oep-transports §1). The USB device is the project's VID:PID
 // 1209:4F45 (registry usb; PID-USE.md), serial = the unit id; its iProduct "OEP probe (RP2040)" /
 // "(RP2350)" is a name for people.
 //
@@ -11,7 +11,7 @@
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
 // oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and Console in it), Swd, Gpio, Uart,
-// Config, Analog, Link, all in by default.
+// Config, Analog, Link, and Cdc (the transport), all in by default.
 // Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
@@ -65,10 +65,8 @@ static constexpr uint64_t kChannels = kBoardChannels;
 static constexpr uint64_t kReserved = ((1ull << 30) - 1) & ~kChannels;
 static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
 
-static uint8_t rxBuffer[1100];   // the encoded candidate: cobsFrameMax(1024)
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {1024, 4096, 8},
-                              oep::Endpoint::kUsbCdc, 0);
+static oep::Endpoint endpoint(txBuffer, sizeof txBuffer, {1024, 4096, 8});
 static oep::PinTable pins(kChannels);
 static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 
@@ -98,6 +96,14 @@ struct RvswdParts {
   }
 };
 static oep::Slot<RvswdParts> rvswd;
+
+// The USB CDC port (Serial), the RP2's transport
+void oepAddCdc() {
+  static uint8_t rx[1100];   // the encoded candidate: cobsFrameMax(1024)
+  Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
+  Serial.begin(115200);
+  endpoint.addTransport(Serial, rx, sizeof rx, oep::Endpoint::kUsbCdc, 0);
+}
 
 void oepAddRvswd() {
   RvswdParts &r = rvswd.make();
@@ -189,6 +195,7 @@ void oepAddLink() {
 }
 
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
+__attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
 __attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
 __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
@@ -232,8 +239,7 @@ void setup() {
   oep::platformUnitId(serial, sizeof serial);
   USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (transports §3)
   USB.connect();
-  Serial.ignoreFlowControl(true);   // answer whatever DTR the host left (probe-development-guide §1)
-  Serial.begin(115200);
+  oepWithCdc();
 #if OEP_DEBUG_LOG
   Serial2.setTX(OEP_DEBUG_LOG_TX);
   Serial2.begin(921600);

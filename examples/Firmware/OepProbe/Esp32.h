@@ -3,7 +3,7 @@
 
 // Classic ESP32 (profile esp32), on a board with a USB-UART bridge (DevKitC and the like).
 //
-// Transport: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
+// Transports, each a choice: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
 // below) - serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-transports §4).
 // With Wi-Fi (the Wifi choice, in by default): TCP, transport 1 - port kTcpPort, up to three connections
 // at once, each a transport of its own (oep-transports §1); the networks come from oep.probe.config's wifi item (no
@@ -19,7 +19,8 @@
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Swio (and Console in it), Gpio, Uart, I2c, Spi,
-// Capture, Config, Analog, Group, Link; Wifi (the TCP transport) and PortSpeed (port_speed on UART0); all in by default.
+// Capture, Config, Analog, Group, Link; Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
+// (the TCP transport); all in by default.
 //
 // Cores: loop() (all of OEP, the SWIO wire, every interrupt the sketch sets up: UART0, the fixture UART, the SPI / I2C
 // devices, the ADC) and the Arduino events run on core 0, with the Wi-Fi driver and the TCP/IP stack (pinned to core 0
@@ -59,11 +60,8 @@
 // 58-65 -> 78 KB/s on an ATOM's FTDI); at 115200 it changes nothing (9.3 -> 9.5 KB/s, no more broken frames) (oep-spec
 // docs/uart-speed-negotiation.ja.md §3b, 2026-10-01).
 static constexpr uint16_t kMaxFrame = 512;   // confirm's max_frame on every transport (UART0 and each TCP connection)
-static uint8_t rxBuffer[1024];   // the encoded candidate: cobsFrameMax(512)
-static_assert(sizeof rxBuffer >= oep::cobsFrameMax(kMaxFrame), "UART0's encoded candidate");
 static uint8_t txBuffer[1024];
-static oep::Endpoint endpoint(Serial, rxBuffer, sizeof rxBuffer, txBuffer, sizeof txBuffer, {kMaxFrame, 1024, 2},
-                              oep::Endpoint::kUartBridge);
+static oep::Endpoint endpoint(txBuffer, sizeof txBuffer, {kMaxFrame, 1024, 2});
 
 // TCP (oep-transports §1): the port and the discovery are this implementation's (docs/implementation-limits).
 static constexpr uint16_t kTcpPort = 7450;
@@ -318,7 +316,20 @@ void oepAddWifi() {
 
 void oepAddPortSpeed() { endpoint.setPortSpeed(portSpeed, kBootBaud); }
 
+// UART0 through the bridge, port_speed's choice in it (no bridge, no port_speed)
+void oepAddBridge() {
+  static uint8_t rx[1024];   // the encoded candidate: cobsFrameMax(512)
+  static_assert(sizeof rx >= oep::cobsFrameMax(kMaxFrame), "UART0's encoded candidate");
+  Serial.setRxBufferSize(8192);
+  Serial.setTxBufferSize(8192);
+  Serial.begin(kBootBaud);
+  Serial.setRxFIFOFull(kRxFifoFull);   // after begin(): begin() sets its own (120 above 57600 baud)
+  endpoint.addTransport(Serial, rx, sizeof rx, oep::Endpoint::kUartBridge);
+  oepWithPortSpeed();
+}
+
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
+__attribute__((weak)) void oepWithBridge() { oepAddBridge(); }
 __attribute__((weak)) void oepWithWifi() { oepAddWifi(); }
 __attribute__((weak)) void oepWithPortSpeed() { oepAddPortSpeed(); }
 __attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
@@ -336,10 +347,7 @@ __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 void setup() {
   oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3): UART0 is the transport
-  Serial.setRxBufferSize(8192);
-  Serial.setTxBufferSize(8192);
-  Serial.begin(kBootBaud);
-  Serial.setRxFIFOFull(kRxFifoFull);   // after begin(): begin() sets its own (120 above 57600 baud)
+  oepWithBridge();   // and port_speed's choice
   // Every channel genuinely Hi-Z until the host takes it (a pull on a target's USB line breaks its enumeration, E132).
   // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
   const uint64_t unusable = oep::platformUnusablePins();
@@ -352,8 +360,7 @@ void setup() {
   oep::platformParkMask(kChannels & ~unusable & ~pins.disabledMask());
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(oep::platformRestart, kRestartMaxMs);
-  oepWithPortSpeed();
-  oepWithWifi();
+  oepWithWifi();   // after the UART: the listener's entry is the last
   // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name)
   oepWithSwio();   // and the console's choice
   oepWithGpio();
