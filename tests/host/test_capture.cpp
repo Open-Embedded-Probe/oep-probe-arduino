@@ -233,6 +233,28 @@ static void testStreamAfterRepeat() {
     }
 }
 
+// The stages' frame: the largest that makes kStreamFullStageBytes in all - with room for 3 of 27 KiB (81 KiB, small)
+// or 6 of 16 KiB (96 KiB) it takes 16 KiB and keeps 40 MB/s (it took 2 x 27 KiB on the P4, wireskein 2026-10-21).
+static void testStageFrameChoice() {
+  board((64 + 144) * 1024, 0);
+  static FakeDirect direct;
+  Rig rig(8);
+  rig.ep.setDirect(&direct);
+  rig.cap.setFrameLimit(32 * 1024);
+  Bytes out;
+  Config c;
+  c.mode = 3;
+  c.rate = 40000000;
+  CHECK(ok(configure(rig.cap, c, out)));
+  bool seen = false;
+  for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+    if (out[at] == cap::kTlvConfigureAnswerActualRate) {
+      seen = true;
+      CHECK(getU32(out.data() + at + kTlvHeader) / getU32(out.data() + at + kTlvHeader + 4) == 40000000u);
+    }
+  CHECK(seen);
+}
+
 static void testStreamingWithoutStages() {
   // 112 KiB: the DMA ring (64 KiB) and no room for two stages - the copied way (the P4 v1.3, 2026-10-21); 128 KiB:
   // room for two of 8 KiB only (48 KiB left over each) - the zero-copy way with smaller frames
@@ -1693,6 +1715,7 @@ int main() {
   testConfigureOrder();
   testStreamingWithoutStages();
   testStreamAfterRepeat();
+  testStageFrameChoice();
   testStreamRing();
   testLinkedGroup();
   testLinkedPretrigger();

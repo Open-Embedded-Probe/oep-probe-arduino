@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The stages' frame: the largest that makes 96 KiB in all (kStreamFullStageBytes), else the one that makes the
+  most - not the largest that gives two. The P4 took 2 x 27 KiB after a repeat (54 KiB: 36 MB/s at most) where
+  16 KiB frames made more (wireskein, 2026-10-21). The P4X keeps 4 x 27 KiB (each host read fuller than with 16 KiB).
+  Host-tested (testStageFrameChoice).
+- (JA) stage のフレームの選び方を変えた。合計が 96 KiB（kStreamFullStageBytes）以上になるフレームのうち一番大きいもの、無ければ
+  合計が一番大きくなるものを選ぶ。前は「2 つ取れる一番大きいもの」だった。
+  - P4 は repeat の後に 27 KiB × 2（54 KiB、上限 36 MB/s）を取っていたが、16 KiB にすればもっと取れた（wireskein、
+    2026-10-21）。
+  - P4X は 27 KiB × 4 のまま（host の 1 回の読みが、16 KiB より埋まる）。
+  - ホストの試験（testStageFrameChoice）で確かめた。
 - (EN) A stream's configure after another configuration (a repeat on the P4: wireskein, 2026-10-21) answered the
   copied way's 8.42 MHz and then took 8 stages. The stages' estimate counts what the configure frees first (the store,
   a one-shot's segment, in internal RAM), as storeBudget does; and once the stages are taken, a rate cut below the one
