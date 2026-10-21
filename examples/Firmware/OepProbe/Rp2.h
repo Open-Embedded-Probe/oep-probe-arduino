@@ -12,7 +12,7 @@
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
 // oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and Console in it), Swd, Gpio, Uart,
-// Config, Analog, Link, I2c (oep.fixture.i2c-target), Swio (oep.wire.swio, CH32V00x; SwioConsole in it), and Cdc (the transport), all in by default.
+// Config, Analog, Link, I2c (oep.fixture.i2c-target), Logic (oep.fixture.logic), Swio (oep.wire.swio, CH32V00x; SwioConsole in it), and Cdc (the transport), all in by default.
 // Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
@@ -39,6 +39,7 @@
 #include <OepP4I2cTarget.h>
 #include <OepLog.h>
 #include <OepPinTable.h>
+#include <OepRp2Logic.h>
 #include <OepRp2Usb.h>
 #include <OepRvswdPhy.h>
 #include <OepSwd.h>
@@ -76,7 +77,7 @@ static uint8_t probeTlv[256];   // with the firmware text's note of the boot bef
 
 // What a choice leaves to run later, each added only from its own oepAddX(): its loop work; the settings' fn at its place,
 // what comes last
-static oep::Hooks<void (*)(), 5> loopWork;
+static oep::Hooks<void (*)(), 6> loopWork;
 static oep::Hooks<void (*)(), 3> afterCdc;   // the other transports, after the CDC port (transport 0: the binds' serial port 0)
 static oep::Hooks<void (*)(), 1> settingsFn;
 static oep::Hooks<void (*)(), 1> lastly;
@@ -278,6 +279,13 @@ void oepAddSwioConsole() {
   loopWork.add([] { console->poll(); });
 }
 
+// oep.fixture.logic, one-shot, paced by a PIO state machine (OepRp2Logic.h): up to 8 lines on any channels
+void oepAddLogic() {
+  static oep::Slot<oep::Rp2LogicCapture> logic;
+  endpoint.add(logic.make(endpoint, pins, 0));
+  loopWork.add([] { logic->poll(); });
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
@@ -298,6 +306,7 @@ __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 __attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
 __attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
+__attribute__((weak)) void oepWithLogic() { oepAddLogic(); }
 __attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
 
 // oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
@@ -359,6 +368,7 @@ void setup() {
   oepWithLink();
   oepWithI2c();   // after the ones before: they keep their numbers (the saved settings name fns)
   oepWithSwio();   // and its console's choice
+  oepWithLogic();
   lastly.run();
 }
 
