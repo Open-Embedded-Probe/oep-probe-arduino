@@ -70,10 +70,10 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.roleChannels(kRoles, sizeof kRoles, pins_.outputMask());   // both lines are pulled low: no input-only pin
   w.u16(kTagMaxLength, kMaxFrame);
-  w.u32(kTagMaxClockHz, 1000000u);
+  w.u32(kTagMaxClockHz, kMaxClockHz);
   namespace i2c = reg::fixture_i2c_target;
   // bit2 the internal pull-ups start() enables (fixture §3); stretch is in the ops tag (offers)
-  w.u32(kTagFeatures, i2c::kFeaturesInternalPullups);
+  w.u32(kTagFeatures, kInternalPullups ? i2c::kFeaturesInternalPullups : 0);
   w.u8(i2c::kTlvDescribeQueueDepth, kQueueDepth);
   if (kStretch) w.u32(i2c::kTlvDescribeMaxStretchUs, kMaxStretchUs);
   return w.ok() ? w.length() : 0;
@@ -269,6 +269,55 @@ void P4I2cTarget::service() {
   }
   if (tx_stale_ && !i2c_ll_is_bus_busy(kDev)) reloadTx();
   unlock();
+}
+
+#elif defined(ARDUINO_ARCH_CH32RV)
+
+namespace {
+P4I2cTarget *running = nullptr;   // the one the Wire callbacks (plain functions) reach
+}
+
+void P4I2cTarget::lock() { noInterrupts(); }
+void P4I2cTarget::unlock() { interrupts(); }
+void P4I2cTarget::service() {}
+
+// After STOP (interrupt context): the write, its bytes past max_length dropped
+void P4I2cTarget::onReceiveIsr(int count) {
+  P4I2cTarget *t = running;
+  if (!t) return;
+  size_t n = 0;
+  for (int c; (c = t->wire_.read()) >= 0; ++n)
+    if (n < kMaxFrame) t->rx_[n] = static_cast<uint8_t>(c);
+  t->rx_count_ = count > 0 && static_cast<size_t>(count) > n ? static_cast<size_t>(count) : n;
+  t->onTransaction(false);
+}
+
+// At the address match of a read (interrupt context): the head slot (none: the controller reads 0xFF), used up
+void P4I2cTarget::onRequestIsr() {
+  P4I2cTarget *t = running;
+  if (!t) return;
+  for (size_t i = 0; t->slot_count_ && i < t->slot_length_[t->slot_head_]; ++i) t->wire_.write(t->txByte(i));
+  t->onTransaction(true);
+}
+
+bool P4I2cTarget::start() {
+  if (started_) return true;
+  running = this;
+  wire_.onReceive(onReceiveIsr);
+  wire_.onRequest(onRequestIsr);
+  if (!wire_.begin(address_, platformPad(sda_), platformPad(scl_), kMaxClockHz)) {   // the pair is no I2C's route
+    running = nullptr;
+    return false;
+  }
+  rx_count_ = 0;
+  started_ = true;
+  return true;
+}
+
+void P4I2cTarget::stop() {
+  if (started_) wire_.end();
+  running = nullptr;
+  started_ = false;
 }
 
 #else   // no hardware: the host test's fake controller, or nothing

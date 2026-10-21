@@ -38,6 +38,7 @@
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
 #include <OepFixture.h>
+#include <OepP4I2cTarget.h>
 #include <OepPinTable.h>
 #include <OepPlatform.h>
 #include <OepRvswdPhy.h>
@@ -238,6 +239,12 @@ void oepAddUart() {
   loopWork.add([] { uart->poll(); });
 }
 
+// oep.fixture.i2c-target on the core's Wire slave (PinTable owner 3)
+void oepAddI2c() {
+  static oep::Slot<oep::P4I2cTarget> i2c;
+  endpoint.add(i2c.make(pins));
+}
+
 void oepAddConfig() {
   static oep::Slot<oep::Binds> binds;
   static oep::Slot<oep::ProbeConfig> config;
@@ -278,6 +285,9 @@ __attribute__((weak)) void oepWithSwd() {
 __attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
 __attribute__((weak)) void oepWithUart() {
   if (kRoomy) oepAddUart();
+}
+__attribute__((weak)) void oepWithI2c() {
+  if (kRoomy) oepAddI2c();
 }
 __attribute__((weak)) void oepWithConfig() {
   if (kRoomy) oepAddConfig();
@@ -324,6 +334,7 @@ void setup() {
   oepWithSwd();
   oepWithGpio();
   oepWithUart();
+  oepWithI2c();
   oepWithLink();
   oepWithConfig();
 }

@@ -19,6 +19,11 @@
 // STOP the transaction's write becomes a frame (fixture §3), and a transaction that took bytes from the TX FIFO used up
 // the slot. The logic past the FIFOs (onTransaction, txByte) is portable and
 // host-tested through OEP_HOST_FAKE_I2C_SLAVE (tests/host).
+//
+// On a WCH CH32 (ArduinoCore-CH32RV) it is the core's Wire slave, an instance of this class's own (CH32RVTwoWire): its
+// receive callback (after STOP, the write readable) makes the frame, its request callback (at the address match) hands
+// the head slot over and uses it up. Frames are the core's Wire buffer (CH32RV_WIRE_BUFFER_SIZE: a longer write keeps
+// its head), at most 400 kHz (the CH32 I2C's fast mode), no internal pull-ups (the bus needs its own), no stretch.
 #pragma once
 
 #include <Arduino.h>
@@ -29,6 +34,8 @@
 #if defined(ARDUINO_ARCH_ESP32)
 #include <driver/i2c_slave.h>
 #include <esp_intr_alloc.h>
+#elif defined(ARDUINO_ARCH_CH32RV)
+#include <Wire.h>
 #endif
 
 namespace oep {
@@ -37,7 +44,15 @@ class P4I2cTarget final : public Interface {
  public:
   static constexpr uint8_t kOwnerId = 3;
   enum Role : uint8_t { kRoleSda = 1, kRoleScl = 2 };
+#if defined(ARDUINO_ARCH_CH32RV)
+  static constexpr size_t kMaxFrame = CH32RV_WIRE_BUFFER_SIZE;   // the core's Wire buffer
+  static constexpr uint32_t kMaxClockHz = 400000;
+  static constexpr bool kInternalPullups = false;
+#else
   static constexpr size_t kMaxFrame = 128;
+  static constexpr uint32_t kMaxClockHz = 1000000;
+  static constexpr bool kInternalPullups = true;
+#endif
   static constexpr size_t kQueueDepth = 4;   // received frames kept, and unread preload slots (fixture §3)
 #if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(OEP_HOST_FAKE_I2C_SLAVE)
   // stretch: the P4's slave holds SCL itself (slave_scl_stretch_en, with slave_byte_ack_ctl_en a hold at every
@@ -125,6 +140,10 @@ class P4I2cTarget final : public Interface {
   void reloadTx();
   void drainRx();
   void applyStretch();
+#elif defined(ARDUINO_ARCH_CH32RV)
+  arduino::CH32RVTwoWire wire_{0};
+  static void onReceiveIsr(int count);
+  static void onRequestIsr();
 #endif
   void lock();
   void unlock();
