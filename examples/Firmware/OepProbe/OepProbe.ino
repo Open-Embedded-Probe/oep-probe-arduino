@@ -6,13 +6,15 @@
 // its settings (oep.probe.config). The chip's own part is in its header; what it takes is a choice there (OepFeatures.h:
 // a sketch's own oepWithX() replaces the header's):
 //
-//   Rp2.h       RP2040 / RP2350 (profiles rp2040 / rp2350): USB CDC; RVSWD, SWD, gpio, uart
-//   Esp32P4.h   ESP32-P4 / P4X (profiles esp32p4 / esp32p4x): HS vendor bulk, HID, CDC, USB-Serial/JTAG; RVSWD, gpio, uart x2, capture,
-//               SPI / I2C devices (build_opt.h: the direct HS vendor build; compile with --clean)
+//   Rp2.h       RP2040 / RP2350 (profiles rp2040 / rp2350): USB CDC; RVSWD, SWD, gpio, uart, settings, analog, link, I2C
+//               device
+//   Esp32P4.h   ESP32-P4 / P4X (profiles esp32p4 / esp32p4x): HS vendor bulk, HID, CDC, USB-Serial/JTAG; RVSWD, SWIO, SWD,
+//               gpio, uart x2, capture, SPI / I2C devices, settings, analog, group, link (build_opt.h: the direct HS vendor
+//               build; compile with --clean)
 //   Ch32.h      WCH CH32 on ArduinoCore-CH32RV (profile ch32x035): FS vendor bulk, HID (CDC, UART bridge); RVSWD, console,
-//               gpio, link (SWD, uart, settings): each a choice (OepFeatures.h), the X035's 62 KiB taking the first set
-//   Esp32.h     classic ESP32 (profile esp32): a UART bridge, TCP over Wi-Fi (the settings' networks); SWIO, gpio, uart,
-//               capture (sampler), SPI / I2C devices
+//               gpio, link (SWD, uart, I2C device, settings without a store): the X035's 62 KiB taking the first set
+//   Esp32.h     classic ESP32 (profile esp32): a UART bridge, TCP over Wi-Fi (the settings' networks); SWIO, SWD, gpio,
+//               uart, capture (sampler), SPI / I2C devices, settings, analog, group, link
 #if defined(ARDUINO_ARCH_RP2040)
 #include "Rp2.h"
 #elif defined(CONFIG_IDF_TARGET_ESP32P4)
