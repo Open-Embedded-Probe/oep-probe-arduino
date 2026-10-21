@@ -35,8 +35,8 @@
 // oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Every GPIO but the
 // USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the SWIO pin, the reset line, or any fixture's pin - the host chooses.
 // Each is a choice (OepFeatures.h: a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and
-// Console in it), Gpio, Uart (both), Capture, I2c, Spi, Config, Analog, Group, Swio (and SwioConsole in it), Link; all in
-// by default.
+// Console in it), Gpio, Uart (both), Capture, I2c, Spi, Config, Analog, Group, Swio (and SwioConsole in it), Link, Swd
+// (oep.wire.swd + oep.target.arm-adi); all in by default.
 #pragma once
 #include <esp_mac.h>
 #include <esp_app_desc.h>
@@ -63,6 +63,7 @@
 #include <OepP4SpiTarget.h>
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
+#include <OepSwd.h>
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
 #include "OepFeatures.h"
@@ -177,6 +178,7 @@ static oep::Hooks<void (*)(), 1> lastly;
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
 // settings', the group's, the SWIO wire's), so neither names the other's code: the consoles (and the SWIO wire) and the
 // uarts for the settings, the logic and the analog for the group, the riscv-dm target for the SWIO wire
+static oep::SwdPort *swdIn = nullptr;
 static oep::TargetConsoleStream *consoleIn = nullptr, *swioConsoleIn = nullptr;
 static oep::WireRvswd *swioWireIn = nullptr;
 static oep::FixtureUart *uart1In = nullptr, *uart2In = nullptr;
@@ -378,6 +380,8 @@ void oepAddConfig() {
   // 0.0.11-0.0.16). probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach
   // comes on config.poll(), so a target powered through an output idle is up before it.
   lastly.add([] {
+    // oep.wire.swd's hold after a close (oep-if-debug §2): its fn after the settings'
+    if (swdIn) config->addHold(swdIn->hold, oep::checkSwdHold, swdIn);
     if (swioConsoleIn) config->addPlace(*swioWireIn, *swioConsoleIn);   // a slot on the one wire (CH32V00x): the second place
     if (oep::BootGuard::safe()) config->skipBootAttach();   // after BootGuard::kSafeAfter fast crash-boots
     config->setAttachGate(autoAttachReady);
@@ -441,6 +445,19 @@ void oepAddSwioConsole() {
   loopWork.add([] { console->poll(); });
 }
 
+// oep.wire.swd + oep.target.arm-adi on the GPIO registers (OepEspBitBang.h), any pair the host chooses (PinTable owner
+// 0xf1)
+void oepAddSwd() {
+  static oep::SwdPort swd{kUnset, kUnset};
+  static oep::Slot<oep::WireSwd> wireSwd;
+  static oep::Slot<oep::TargetArmAdi> adi;
+  swd.pin_choice = kChannels;
+  swd.pins = &pins;
+  endpoint.add(wireSwd.make(swd, 0));
+  endpoint.add(adi.make(swd, 0));
+  swdIn = &swd;
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
@@ -465,6 +482,7 @@ __attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
 __attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
 __attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
+__attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
 
 // oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
 // silent, waits oep::kRestartDetachMs for the host to see it (20 ms, as EspUsbDevice's own restarts wait, left the WeAct
@@ -526,7 +544,8 @@ void setup() {
   oepWithAnalog();
   oepWithGroup();
   oepWithSwio();   // and its console's choice
-  oepWithLink();   // last: the fns before it keep their numbers
+  oepWithLink();
+  oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
   // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
   // disable items' channels, which are never touched (probe.config §2: disable before anything else; applySaved
   // gives them back if the settings are not applied).

@@ -14,10 +14,11 @@
 //                        ACK, nvals, values), and MEM-AP block reads / writes through TAR / DRW
 //
 // Like the RISC-V side, the probe knows nothing about the target: power-up requests, SELECT, CSW, the AP layout, the
-// Cortex-M debug registers are all the host's. Bit-bang: the RP2040 / RP2350 SIO, a CH32's GPIO (ArduinoCore-CH32RV).
+// Cortex-M debug registers are all the host's. Bit-bang: the RP2040 / RP2350 SIO, a CH32's GPIO (ArduinoCore-CH32RV), an
+// ESP32's GPIO registers (OepEspBitBang.h).
 #pragma once
 
-#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD) || defined(ARDUINO_ARCH_CH32RV)
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD) || defined(ARDUINO_ARCH_CH32RV) || defined(ARDUINO_ARCH_ESP32)
 
 #if defined(OEP_HOST_FAKE_SWD)
 #include <fake_swd_io.h>   // host tests (tests/host): rp2::BitBang over a simulated SWD target
@@ -28,6 +29,17 @@
 // released SWDIO is already an input with the pull-up; driven, the call is overridden by the output it becomes).
 inline void gpio_pull_up(int channel) { pinMode(oep::platformPad(channel), INPUT_PULLUP); }
 inline void gpio_disable_pulls(int channel) { pinMode(oep::platformPad(channel), INPUT); }
+#elif defined(ARDUINO_ARCH_ESP32)
+#include "OepEspBitBang.h"
+// The RP2 SDK's pull calls the SWD code makes, on a channel (an ESP32's channel is its GPIO number)
+inline void gpio_pull_up(int channel) {
+  gpio_ll_pulldown_dis(&GPIO, static_cast<uint32_t>(channel));
+  gpio_ll_pullup_en(&GPIO, static_cast<uint32_t>(channel));
+}
+inline void gpio_disable_pulls(int channel) {
+  gpio_ll_pullup_dis(&GPIO, static_cast<uint32_t>(channel));
+  gpio_ll_pulldown_dis(&GPIO, static_cast<uint32_t>(channel));
+}
 #else
 #include "OepRp2BitBang.h"
 #endif
@@ -45,6 +57,8 @@ struct SwdPort {
   uint32_t number = 0;         // the live connection's number, from the probe's one space (core §9, ResourceNumbers)
 #if defined(ARDUINO_ARCH_CH32RV)
   ch32::BitBang io{};
+#elif defined(ARDUINO_ARCH_ESP32) && !defined(OEP_HOST_FAKE_SWD)
+  esp::BitBang io{};
 #else
   rp2::BitBang io{};
 #endif

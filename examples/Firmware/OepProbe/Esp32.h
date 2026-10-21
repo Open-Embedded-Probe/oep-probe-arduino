@@ -19,7 +19,7 @@
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Swio (and SwioConsole in it), Gpio, Uart, I2c, Spi,
-// Capture, Config, Analog, Group, Link; Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
+// Capture, Config, Analog, Group, Link, Swd (oep.wire.swd + oep.target.arm-adi); Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
 // (the TCP transport); all in by default.
 //
 // Cores: loop() (all of OEP, the SWIO wire, every interrupt the sketch sets up: UART0, the fixture UART, the SPI / I2C
@@ -48,6 +48,7 @@
 #include <OepP4SpiTarget.h>
 #include <OepPinTable.h>
 #include <OepSampler.h>
+#include <OepSwd.h>
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
 #include <OepWifi.h>
@@ -139,6 +140,7 @@ static oep::Hooks<void (*)(), 1> lastly;
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
 // settings', the group's), so neither names the other's code: the console, the uart and the Wi-Fi station for the
 // settings, the sampler and the analog for the group
+static oep::SwdPort *swdIn = nullptr;
 static oep::TargetConsoleStream *consoleIn = nullptr;
 static oep::FixtureUart *uartIn = nullptr;
 static oep::WifiStation *wifiIn = nullptr;
@@ -257,6 +259,8 @@ void oepAddConfig() {
   // bridge carries the UART): no gate on the at-boot attach. After BootGuard::kSafeAfter fast crash-boots the saved
   // at-boot slots wait for the host.
   lastly.add([] {
+    // oep.wire.swd's hold after a close (oep-if-debug §2): its fn after the settings'
+    if (swdIn) config->addHold(swdIn->hold, oep::checkSwdHold, swdIn);
     if (oep::BootGuard::safe()) config->skipBootAttach();
     config->applySaved();
   });
@@ -279,6 +283,19 @@ void oepAddGroup() {
   if (captureIn) group->addTrack(*captureIn, *captureIn);
   if (analogIn) group->addTrack(*analogIn, *analogIn);
   loopWork.add([] { group->poll(); });
+}
+
+// oep.wire.swd + oep.target.arm-adi on the GPIO registers (OepEspBitBang.h), any pair the host chooses (PinTable owner
+// 0xf1)
+void oepAddSwd() {
+  static oep::SwdPort swd{kUnset, kUnset};
+  static oep::Slot<oep::WireSwd> wireSwd;
+  static oep::Slot<oep::TargetArmAdi> adi;
+  swd.pin_choice = kChannels & ~oep::platformUnusablePins() & ~kInputOnly;
+  swd.pins = &pins;
+  endpoint.add(wireSwd.make(swd, 0));
+  endpoint.add(adi.make(swd, 0));
+  swdIn = &swd;
 }
 
 void oepAddLink() {
@@ -343,6 +360,7 @@ __attribute__((weak)) void oepWithConfig() { oepAddConfig(); }
 __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
+__attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
 
 void setup() {
   oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
@@ -371,7 +389,8 @@ void setup() {
   settingsFn.run();
   oepWithAnalog();   // after the settings: the fns before it keep their numbers
   oepWithGroup();
-  oepWithLink();   // last: the fns before it keep their numbers
+  oepWithLink();
+  oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
   lastly.run();
 }
 

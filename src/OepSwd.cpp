@@ -3,7 +3,7 @@
 
 #include "OepSwd.h"
 
-#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD) || defined(ARDUINO_ARCH_CH32RV)
+#if defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWD) || defined(ARDUINO_ARCH_CH32RV) || defined(ARDUINO_ARCH_ESP32)
 
 #include "OepPlatform.h"
 #include "OepSwdFrame.h"
