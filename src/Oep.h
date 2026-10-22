@@ -159,7 +159,7 @@ constexpr uint8_t kTagRoleChannels = reg::kDescribeRoleChannels, kTagMaxClockHz 
 // fn 0's own describe tags: the probe itself (core §7.5)
 constexpr uint8_t kCoreFirmware = reg::core::kTlvDescribeFirmware, kCoreModel = reg::core::kTlvDescribeModel,
                   kCoreUnitId = reg::core::kTlvDescribeUnitId, kCoreChannels = reg::core::kTlvDescribeChannels,
-                  kCoreLabel = reg::core::kTlvDescribeLabel, kCoreChip = reg::core::kTlvDescribeChip;
+                  kCoreChip = reg::core::kTlvDescribeChip;
 
 // TLV tag bits (core §2.2): bit 7 = critical (in requests); 0x00 is never a tag (the rejected unsupported payload's
 // "fixed-part value" marker); 0x7F is the named extension in every context (reg::kTagNamedExtension).
@@ -462,6 +462,68 @@ inline Result plainTail(Tail &tail, const uint8_t *p, size_t n, size_t fixed, ui
 #define OEP_ALWAYS_INLINE inline
 #endif
 
+// A describe's page (core §7.3): whole TLVs from the first-th, as many as fit after it; the ones before are counted and
+// dropped, so a describe made TLV by TLV needs no buffer for the whole.
+// Text without printf (a small part has no room for it): `s` at out, its length; a number in decimal likewise.
+inline size_t putText(char *out, const char *s) {
+  size_t n = 0;
+  while (s[n]) { out[n] = s[n]; ++n; }
+  out[n] = 0;
+  return n;
+}
+inline size_t putDecimal(char *out, unsigned v) {
+  char d[10];
+  size_t n = 0;
+  do { d[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v);
+  for (size_t i = 0; i < n; ++i) out[i] = d[n - 1 - i];
+  out[n] = 0;
+  return n;
+}
+
+class TlvPager {
+ public:
+  TlvPager(uint8_t *out, size_t capacity, uint16_t first) : p_(out), cap_(capacity), first_(first) {}
+  void put(uint8_t tag, const void *value, size_t length) {
+    if (index_++ < first_ || more_) return;
+    if (n_ + kTlvHeader + length > cap_) { more_ = true; return; }
+    putTlvHeader(p_ + n_, tag, static_cast<uint16_t>(length));
+    if (length) memcpy(p_ + n_ + kTlvHeader, value, length);
+    n_ += kTlvHeader + length;
+  }
+  void text(uint8_t tag, const char *s) { put(tag, s, strlen(s)); }
+  // Whole TLVs written elsewhere (an interface's describe).
+  void raw(const uint8_t *tlv, size_t length) {
+    size_t at = 0;
+    while (at + kTlvHeader <= length) {
+      const size_t n = getU16(tlv + at + 1);
+      if (at + kTlvHeader + n > length) break;
+      put(tlv[at], tlv + at + kTlvHeader, n);
+      at += kTlvHeader + n;
+    }
+  }
+  bool more() const { return more_; }
+  size_t length() const { return n_; }
+
+ private:
+  uint8_t *p_;
+  size_t cap_, n_ = 0;
+  uint16_t first_, index_ = 0;
+  bool more_ = false;
+};
+
+// What fn 0's settings ops reach the settings through (the endpoint knows no more of them; a probe without settings links
+// none of it).
+class SettingsCore {
+ public:
+  virtual bool offers(uint8_t op) const = 0;
+  virtual Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) = 0;
+  // The setting / setting_choice TLVs of the items `fn` owns (fn 0: the core's, with netif), through `put`.
+  virtual void describe(uint16_t fn, TlvPager &put) const = 0;
+
+ protected:
+  ~SettingsCore() = default;
+};
+
 class TlvWriter {
  public:
   TlvWriter(uint8_t *buffer, size_t capacity) : p_(buffer), cap_(capacity) {}
@@ -485,14 +547,6 @@ class TlvWriter {
     b[0] = static_cast<uint8_t>(count);
     memcpy(b + 1, values, count);
     return put(tag, b, 1 + count);
-  }
-  // fn 0's label (0x46): a channel name the firmware (the wiring) fixes; the settings' labels are probe.config's.
-  bool label(uint16_t channel, const char *name) {
-    uint8_t b[2 + 32];
-    const size_t n = strlen(name) < 32 ? strlen(name) : 32;
-    putU16(b, channel);
-    memcpy(b + 2, name, n);
-    return put(kCoreLabel, b, 2 + n);
   }
   // A wire's fixed pin set as a channel group: group 1, n roles, role 1 SWDIO (or SWIO), role 2 SWCLK (none on a one-wire
   // link). core §7.4: group(u8) n(u8) n x (role(u8) channel(u16)).

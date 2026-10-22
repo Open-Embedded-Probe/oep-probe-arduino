@@ -56,12 +56,12 @@ struct DebugPort {
   // live connection holds them in `pins` under pin_owner (core §8.1). A one-wire link keeps swclk 0xffff.
   uint64_t pin_choice = 0;
   uint8_t pin_owner = 0xf0;
-  // Who uses the connection (oep-if-common §2): the host through attach, a slot (oep.probe.config) through its
+  // Who uses the connection (oep-if-common §2): the host through attach, a slot (the settings (core §13)) through its
   // automatic attach or the console its bind opened. A host's detach drops only its own use; the link goes when nobody
   // uses it, or on a forced detach. The bits are the connections entry's users (registry connection_users).
   enum : uint8_t { kUserHost = legacy::kConnectionUsersHostSession, kUserSlot = legacy::kConnectionUsersSlot };
   uint8_t users = 0;
-  // probe.config §1.2: the link a console pass-through holds - no OEP connection (no number, not in connections, its
+  // console §2.1: the link a console pass-through holds - no OEP connection (no number, not in connections, its
   // pins not claimed); a session's attach makes it give way first (yield).
   bool resident = false;
   void (*yield)(void *) = nullptr;
@@ -70,16 +70,16 @@ struct DebugPort {
   bool has_tid = false;
   uint32_t tid = 0;
   // rvswd (oep-if-debug §3.1): how the live connection rests SWCLK - the attach's idle_clock, else the setting
-  // rvswd-rest of its SWCLK channel (rest_setting: oep.probe.config's lookup, reg::probe_config::kRvswdRestMode*), else
+  // rest.{} of its SWCLK channel (rest_setting: the settings' lookup, reg::wire_rvswd::kRest*), else
   // the probe's choice from the target_id. Answered in attach and connections.
   bool rest_low = false;
   // oep-if-debug §2: after a close that was not a lost line the lines stay driven at the rest (holding), until the pins
-  // are taken, the setting wire-hold goes off, an idle / disable item lands on them, or the probe restarts (checkHold).
+  // are taken, the setting hold.{} goes off, an idle / disable item lands on them, or the probe restarts (checkHold).
   WireHold hold;
   bool holding = false;
   uint8_t (*rest_setting)(const void *, uint16_t swclk) = nullptr;
   const void *rest_context = nullptr;
-  // The slot registered on this place (oep.probe.config), 0xff: none - the connections entry's slot.
+  // The slot registered on this place (the settings (core §13)), 0xff: none - the connections entry's slot.
   uint8_t slot = 0xff;
   // The connection's number: from the probe's one space (core §9, ResourceNumbers), taken when a connection comes up,
   // closed when it goes. A host holding an old number gets no_connection.
@@ -91,17 +91,17 @@ struct DebugPort {
 // (no_answer set: the wire got nothing back - status line), or no connection number was left.
 // A new connection takes the line settings given (oep-if-debug §3: a slot's max_speed / idle_clock); an existing one keeps
 // its own.
-// probe.config §1.2: the link up for a console pass-through on (swdio, swclk) - method 0, never a reset; false: no
+// console §2.1: the link up for a console pass-through on (swdio, swclk) - method 0, never a reset; false: no
 // answer (the pins go back to their free state). residentRelease: down again, the target untouched (debug §2).
 bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t max_hz);
 void residentRelease(DebugPort &port);
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
 // rvswd's rest when the attach gave no idle_clock (oep-if-debug §3.1), the link just up and resting high: the target_id
-// read now (has_tid / tid), then the setting rvswd-rest of the port's SWCLK, else low for a family in the registry's
+// read now (has_tid / tid), then the setting rest.{} of the port's SWCLK, else low for a family in the registry's
 // idle_low_family. Sets the PHY's rest and rest_low.
 void chooseRest(DebugPort &port);
 // A hold ended (debug §2): its pins taken by something else (the taker drives them now), or no longer allowed (the
-// lines go to their free state). For ProbeConfig::poll and the wire's own requests.
+// lines go to their free state). For Settings::poll and the wire's own requests.
 void checkHold(DebugPort &port);
 void checkHoldOf(void *port);   // the same, for WireHold's check (a DebugPort)
 // The attach result's target_id TLV (oep-if-debug §1) into out: its length, 0 when the target gives none.
@@ -111,7 +111,7 @@ size_t targetId(DebugPort &port, uint8_t *out, size_t room);
 void releaseConnection(DebugPort &port, uint8_t user, bool force, bool lost = false, bool detached = false);
 // No connection holds the wire's pins (closed, a scan's try, a failed attach): to their free state (oep-core §8).
 void freeWire(DebugPort &port);
-// An at-boot slot's liveness check (oep-if-probe-config §3.1): DMSTATUS read once; false = the wire is lost (no good
+// An at-boot slot's liveness check (console §2.1): DMSTATUS read once; false = the wire is lost (no good
 // exchange for limits::kWireLostMs, oep-if-debug §2) and the connection was closed. A single failed check keeps it.
 bool checkConnection(DebugPort &port);
 // Host-chosen pins (oep-if-debug §1). pairAllowed: a pair this wire may use at all; pairFree: none of its channels held

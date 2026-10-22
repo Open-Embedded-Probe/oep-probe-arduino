@@ -27,7 +27,7 @@ uint8_t platformMode(uint8_t mode) {
 
 // set / read refused for a channel not planned: unavailable with the channel and its position in the list (fixture §1:
 // TLV 0x40 index after core §4.3's)
-// A channel the settings disable says cause 5 (held by settings, probe.config §1).
+// A channel the settings disable says cause 5 (held by settings, core §13.8).
 Result refusedAt(const PinTable &pins, size_t index, uint16_t channel, uint8_t *out, size_t capacity) {
   const uint8_t extra[4] = {gp::kTlvUnavailablePayloadIndex, 1, 0, static_cast<uint8_t>(index)};   // tag len(u16) index
   const uint8_t cause = pins.disabled(channel) ? reg::core::kUnavailableCauseHeldBySettings : 0;
@@ -175,7 +175,7 @@ void FixtureUart::idleHigh() {
   platformGpio(tx_, kGpioOutputHigh);
 }
 
-// probe.config §1.1: the UART on `rx` alone (TX unused, nothing driven), its bytes to `sink` - while no plan of this fn is
+// fixture §2.1: the UART on `rx` alone (TX unused, nothing driven), its bytes to `sink` - while no plan of this fn is
 // there; the pin is not claimed (a session's plan or connection takes it at once: passStop first).
 bool FixtureUart::passStart(uint16_t rx, uint32_t baud, uint8_t format, PassSink sink, void *context) {
   if (rx_ >= 0 || tx_ >= 0) return false;
@@ -231,8 +231,8 @@ void FixtureUart::planRelease() {
   session_configured_ = false;   // the next plan starts from the item (or the default) again
 }
 
-// The settings the UART starts with when its plan gives it pins (oep-if-probe-config §1): a session's configure since
-// the plan, else the probe.config uart item, else 115200 8N1.
+// The settings the UART starts with when its plan gives it pins (core §13.8): a session's configure since
+// the plan, else the the settings uart item, else 115200 8N1.
 void FixtureUart::applySettings() {
   if (rx_ < 0 && tx_ < 0) return;
   if (session_configured_) {

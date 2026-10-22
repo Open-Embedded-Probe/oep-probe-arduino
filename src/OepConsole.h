@@ -87,7 +87,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   // Wire number (from 1) <-> driver mechanism; -1 / 0: not declared.
   int8_t driverOf(uint8_t number) const;
   uint8_t numberOf(uint8_t driver) const;
-  // probe.config §1.2: the console read for a pass-through on the port's resident link, its output to `sink` (no
+  // console §2.1: the console read for a pass-through on the port's resident link, its output to `sink` (no
   // stream, no number, no mark); false: a session's stream is open, or the mechanism did not start.
   using PassSink = void (*)(void *context, const uint8_t *data, size_t length);
   bool passStart(uint8_t number, PassSink sink, void *context);   // number: the wire's mechanism number

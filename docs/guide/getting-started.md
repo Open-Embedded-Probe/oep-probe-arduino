@@ -26,7 +26,7 @@ Flash before you use a board: you cannot tell what is on it.
 
 Updating an ESP32-P4 that runs OepProbe needs only its HS port: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the app
 image, not the merged one) writes the other app partition, checks it and restarts into it; the settings stay (clear
-them with `oep config erase <port>` when you want a fresh probe). The new firmware is kept as soon as it starts: no
+them with `oep settings unset --all <port>` and a save when you want a fresh probe). The new firmware is kept as soon as it starts: no
 later reset goes back to the one before. If the bootloader did not start it, the describe's firmware text says so
 after the version, e.g. `0.0.29 (update to app1 did not reach setup: software)`; any reset that was not a power-on or
 a restart the probe made shows there the same way (`brownout at 3 s`). A chip that was never flashed, or one that does
@@ -200,24 +200,28 @@ samples. The classic ESP32's sampler can be the trigger but not follow one (its 
 A jig is the firmware plus its settings. Write them once and save them; the probe applies them at every boot:
 
 ```sh
-oep config slot /dev/ttyACM0 --name dut --wire rvswd --pins 2,3 --attach at-boot --retry 1 --mechanism dmseq
-oep config bind /dev/ttyACM0 --port 0 --stream slot:dut      # the target's console on this port
-oep config idle /dev/ttyACM0 5 pull-up --save
-oep config disable /dev/ttyACM0 28 29 --save            # not on this board: never used or touched
-oep config show /dev/ttyACM0
+oep settings set /dev/ttyACM0 core channel.GPIO2.label=dut.swdio channel.GPIO3.label=dut.swclk   # port dut (oep://<probe>/dut)
+oep settings set /dev/ttyACM0 oep.target.console/0 passthrough.cdc0.wire=oep.wire.rvswd/0 passthrough.cdc0.swdio=GPIO2 \
+    passthrough.cdc0.swclk=GPIO3 passthrough.cdc0.mechanism=dmseq
+oep settings set /dev/ttyACM0 core channel.GPIO5.idle=pull-up channel.GPIO28.disable=true channel.GPIO29.disable=true --save
+oep settings show /dev/ttyACM0
+oep settings export /dev/ttyACM0 jig.oep-settings.json   # before a firmware update; import puts it back
 ```
 
 Now a terminal on the probe's serial port shows the target's console from boot, and a flash tool still talks OEP on the
-same port. `06.Settings/ProbeConfig` explains each item.
+same port. `06.Settings/Settings` explains each item.
 
 ## 6. Over Wi-Fi (classic ESP32)
 
 The classic ESP32 firmware also speaks OEP over TCP on port 7450, up to three connections at once, once it is on a
-network. The networks are a setting, not part of the build: oep.probe.config's wifi item (item 0x08, oep-spec probe.config §1.4;
-this implementation's values in [implementation limits §6.3](../implementation-limits.ja.md)) holds up to four entries
-(index, SSID, passphrase), tried in index order; set them over the serial port and save. The passphrase is write-only:
-`oep config show` and every answer leave it out. The `oep` command does not know this item yet; until it does, send it
-with oep-client-python's low-level request (`ProbeConfig(host)._call(ProbeConfig.SET, item_bytes)` then save).
+network. The networks are a setting, not part of the build: the core's settings `wifi.{}.ssid` and `wifi.{}.passphrase`
+(oep-spec transports §7.1; this implementation's values in [implementation limits §6.3](../implementation-limits.ja.md)) hold up to four
+entries, tried in key order; set them over the serial port and save. The passphrase is write-only: `oep settings show` and
+every answer leave it out:
+
+```sh
+oep settings set /dev/ttyUSB0 core wifi.0.ssid=lab wifi.0.passphrase=... --save
+```
 
 Then the probe announces itself by mDNS (`oep-<unit_id>.local`, service `_oep._tcp`, TXT `unit_id`), and the config
 state's wifi field gives its address too:

@@ -1,6 +1,24 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Settings move into the core (oep-spec 9fc6ad9 / ebc9c47, core §13): `oep.probe.config` and `OepConfig` are gone;
+  `OepSettings` (`oep::Settings`) answers fn 0's get / set / unset / save / state / network and lists every owner's items
+  in its describe (setting, setting_choice): fn 0's channel and Wi-Fi / IPv4 items, each wire's hold.{} (rvswd's rest.{}),
+  each fixture UART's and console's passthrough.{}.*, and a sketch's own under its interface (`addSetting(owner, ...)`).
+  Values carry their origin (`firmwareValue`, `fixedLabel`: fixed / default). The save is by name (category, item, key,
+  references as pin / route / interface names) and reads back when fn numbers move; a value the firmware cannot take is
+  left out (state 3) and dropped at the next save. fn 0's describe names every channel (channel_name: `GPIO14`, `PA5`) and
+  is paged TLV by TLV (no whole-describe buffer). The firmware's choice is now `oepWithSettings`; settings are no fn, so the
+  fns after them move down by one. CH32 (no store) links no save code: X035 62532 bytes (+428).
+- (JA) 設定を core へ移した（oep-spec 9fc6ad9 / ebc9c47、core §13）。`oep.probe.config` と `OepConfig` を無くし、`OepSettings`
+  （`oep::Settings`）が fn 0 の get / set / unset / save / state / network に答え、各持ち主の項目を describe に並べる（setting、
+  setting_choice）: fn 0 の channel と Wi-Fi / IPv4、各 wire の hold.{}（rvswd は rest.{} も）、fixture UART とコンソールの
+  passthrough.{}.*、スケッチ自身の項目はそのインターフェースの下（`addSetting(owner, ...)`）。値は出どころを持つ（`firmwareValue`、
+  `fixedLabel`: 固定か既定）。保存は名前（カテゴリ、項目、key、参照はピン・経路・インターフェースの名前）で持ち、fn の番号が
+  変わっても読み戻す。今の firmware が使えない値は使わず（state 3）、次の save で消える。fn 0 の describe は全 channel の名前
+  （channel_name: `GPIO14`、`PA5`）を持ち、TLV ごとにページングする（describe 全体のバッファは要らない）。firmware の選択は
+  `oepWithSettings` になった。設定は fn ではないので、その後ろの fn の番号が 1 つ下がる。保存先の無い CH32 は保存の処理を
+  リンクしない: X035 は 62532 byte（+428）。
 - (EN) RP2: the logic capture takes when 1 for a level (one already at it counts) and is a capture-group track (the Group
   choice: the logic with the analog, started at once; bench: both segments within 0.15 ms of the group's start). The
   fixture uart begins with a plan of TX or RX alone (the other UART_PIN_NOT_DEFINED; it failed configure), and a write

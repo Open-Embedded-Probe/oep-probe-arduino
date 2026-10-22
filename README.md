@@ -173,7 +173,7 @@ one of them against this endpoint).
 | `src/OepTcp.h`, `src/OepWifi.h` | TCP (a listener whose connections are each a transport; lwIP sockets) and Wi-Fi on an ESP32 (the settings' networks tried in order, mDNS `_oep._tcp`); header-only, so only a sketch that includes them links the network |
 | `src/OepBind.*` | what each serial port carries (a bind: one stream per port, held during a session and resumed where it stopped) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
-| `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepConfig.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture), `oep.probe.config` (named items: labels, idle, disable, pass-throughs, Wi-Fi / IPv4, the sketch's own; saved by name in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
+| `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepSettings.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture); the core's settings (core §13: the owners' items, values with their origin, saved by name in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1) on the ESP-IDF I2C / SPI slaves (custom `io.github.ch32-riscv-ug.esp32.*` until 2026-09-30) |
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
 | `examples/` | the board firmware and examples to learn from: see [Examples](#examples) |
@@ -202,7 +202,7 @@ uses it.
 | `04.Debug/SwioDebugProbe` | classic ESP32 | a CH32V00x debugger on the one-wire SWIO |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | an ARM debugger on SWD: wire, arm-adi |
 | `05.Capture/LogicCapture` | ESP32-P4 / P4X | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2), streaming over HS; `host/stream_test.py` |
-| `06.Settings/ProbeConfig` | RP2040 / RP2350 | a jig that keeps its settings: labels, idle states, disabled channels, pass-throughs (the target's console on the probe's port), saved in flash by name |
+| `06.Settings/Settings` | RP2040 / RP2350 | a jig that keeps its settings: pin labels, idle states, unused pins, pass-throughs (the target's console on the probe's port), saved by name in flash |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | a bring-up tool (text on Serial, not OEP): which pins are a debug port |
 
 ## Getting started
@@ -235,18 +235,18 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
    In Python, `oep_client.link.open_host(<port>)` gives a host session. A serial port (USB-Serial/JTAG, USB CDC, a UART bridge)
    carries OEP frames (`0x00 <COBS> 0x00`) and its bind's raw bytes on one line; the host opens it exclusively (TIOCEXCL)
    and skips the bytes outside frames as noise (oep-spec host guide §1, §2).
-3. **Settings.** To carry a target's console on a serial port while no session uses the probe, set a
-   console-passthrough (`oep.probe.config`, saved by name in NVS on ESP32, in flash on RP2040 / RP2350). Name the port with
-   `S.N` labels (a host names it `oep://<probe>/<port>`):
+3. **Settings.** To carry a target's console on a serial port while no session uses the probe, set the console's
+   pass-through (the core's settings, oep-spec core §13; saved by name in NVS on ESP32, in flash on RP2040 / RP2350). Pins
+   are named as in the datasheet (`GPIO2`), ports by their route name (`cdc0`). Name the port with `S.N` labels (a host
+   names it `oep://<probe>/<port>`):
 
    ```sh
-   oep config label <probe> 2 l103.swdio
-   oep config label <probe> 54 l103.swclk
-   oep config console-passthrough <probe> 1 oep.wire.rvswd 2 54 --console oep.target.console --mechanism dmseq \
-       --max-speed 1000000 --save
-   oep config show <probe>
+   oep settings set <probe> core channel.GPIO2.label=l103.swdio channel.PB6.label=l103.swclk
+   oep settings set <probe> oep.target.console/0 passthrough.cdc0.wire=oep.wire.rvswd/0 passthrough.cdc0.swdio=GPIO2 \
+       passthrough.cdc0.swclk=PB6 passthrough.cdc0.max-speed=1000000 passthrough.cdc0.mechanism=dmseq --save
+   oep settings show <probe>
+   oep settings export <probe> jig.oep-settings.json   # before a firmware update; import puts it back
    ```
-
 ## Known traps
 
 - Arduino.h makes `word(...)` a macro for `makeWord(...)`: a lambda or function named `word` returns its argument.

@@ -95,9 +95,9 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   失われることがある。重複も欠落も許されないなら dmseq を使う。
 - **max_frame はどの経路も同じ**: 1 つの `Endpoint` の max_frame / window / max_inflight は、シリアルの口、USB、TCP の接続のすべてで同じ値
   （`Limits`）。describe の TLV と max_length はその値から決めるので、どの経路の max_frame にも収まる（core §7.3、§7.4）。経路ごとに
-  違う max_frame は持たない。wifi の項目を持つ probe はどの経路でも max_frame 112（`wifi_min_max_frame`）以上を答える
-  （probe.config §1.4: いちばん長い wifi の項目 1 つの set が 10 + 3 + 3 + 32 + 64 = 112 byte）。`ProbeConfig::setWifi` は
-  `Endpoint` の max_frame が 112 未満なら false を返して wifi の項目を宣言せず、Wi-Fi を持つ sketch（classic ESP32 の firmware の
+  違う max_frame は持たない。Wi-Fi の項目を持つ probe はどの経路でも max_frame 83（`wifi_min_max_frame`）以上を答える
+  （transports §7: いちばん長い値 1 つの get の応答が 19 + 64 = 83 byte）。`Settings::setWifi` は
+  `Endpoint` の max_frame がそれ未満なら false を返して Wi-Fi の項目を宣言せず、Wi-Fi を持つ sketch（classic ESP32 の firmware の
   `kMaxFrame` 512、`03.Transports/WifiTcp` の 1024）は static_assert で確かめる。
 - **フレームは途中で止めずに書く**: 応答と通知は 1 つの `poll()` の中で 1 フレームずつ丸ごと書き、フレームの途中でほかの仕事をしない
   （transports §2）。ESP32-P4 の vendor bulk はフレームを丸ごと 1 つのバッファに入れ、入らなければ丸ごと捨てる。止まりうるのは、host が
@@ -172,8 +172,8 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   watchdog、task watchdog、CPU lockup）が、前の起動から 30 秒以内に来たら 1 つ数える。3 回続いたら、その 1 回の起動は safe boot: 保存した設定の at boot のスロットの attach と、それに乗るコンソールを始めない。
   30 秒動いた起動、firmware が自分でした再起動、ほかのリセット（電源投入、リセットのピン、外からのリセット）は数を 0 に戻す。
   RP2 では再起動はどれも watchdog のリセットで、印の無いもの（picotool、boot ROM、debugger）は外からの再起動として扱う。割り込みを
-  切ったまま止まった RP2（餌のタイマーも止まり、印を付ける前に watchdog が落とす）は、外からの再起動と区別できない（数えず、印も付けない）。仕様（oep-if-probe-config §3.1、
-  2026-10-07）は、at boot のスロットを「試せるときに」attach するとし、試さなかったことは slot_state 1 と last_try_at_ns（全ビット 1）で見える。
+  切ったまま止まった RP2（餌のタイマーも止まり、印を付ける前に watchdog が落とす）は、外からの再起動と区別できない（数えず、印も付けない）。（at boot のスロットは今の仕様に無い。コンソールの素通し、console §2.1、が
+  その後を継ぐ: 条件が成り立つときに attach し、safe boot の起動では試さない。）
 - **USB の門**: 自分の USB の device を transport にする probe は、host が device を 1000 ms 構成したままになってから、host が居なければ
   起動から 5000 ms 後に、at boot の attach を始める。
 
@@ -283,8 +283,8 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
 - **探索の中の背景の線**: 探索の中で番を取るのは、host の要求（線を待てば 64 サンプル以内）とコンソールの読み（区切りごとに 1 回）
   だけ。probe が自分で線を使う仕事で、待っている要求の無いもの（at-boot の slot の attach とその再試行、生存確認の DMSTATUS の読み
   （retry_ms ごと）、コンソールの attach のやり直し）は、sampler の窓（即時の窓とトリガの探索）が開いている間は線を取らず、番も
-  求めない。窓が閉じた後の最初の poll で行う。トリガを長く待つ間はその分遅れる（probe.config §3 の生存確認は「してよい」で、間隔は
-  決まっていない）。経緯: 873c8f0 までは、生存確認が要求と同じに線を待ち、探索はそれにすぐ番を譲った。そのフレーム（読み 1 つ約
+  求めない。窓が閉じた後の最初の poll で行う。トリガを長く待つ間はその分遅れる（素通しの生存確認の間隔は
+  仕様が決めない）。経緯: 873c8f0 までは、生存確認が要求と同じに線を待ち、探索はそれにすぐ番を譲った。そのフレーム（読み 1 つ約
   60 µs）の間 sampler は読まないので、区画に入れば slipped。ベンチ（V003 の台、slot の retry 1 s）では、force の区画が 400 kHz〜
   100 kHz のどの rate でも 64 回に 0〜11 回 slipped した（約 1 s ごと、続くキャプチャの 4 回に 1 回の並び。即時の窓では生存確認が窓の
   終わりを待つので 0）。
@@ -387,7 +387,7 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
 ## 6. TCP と Wi-Fi（classic ESP32）
 
 OEP を TCP で運ぶ（oep-spec transports §1、§2、§3）。待ち受ける port は probe が決める（この実装の値をここに書く）。見つけ方（DNS-SD の
-`_oep._tcp`、TXT `unit_id`）は transports §3、Wi-Fi の項目は probe.config §1.4 が定める。
+`_oep._tcp`、TXT `unit_id`）は transports §3、Wi-Fi の項目は transports §7 が定める。
 TCP の probe が自分を知らせるかは probe が選ぶ（transports §3）。この実装は知らせる。
 TCP は信頼できる手元のネットワークか、認証したトンネルの中でだけ使う（OEP は認証を持たない、transports §1、security §1）。
 
@@ -416,26 +416,23 @@ TCP は信頼できる手元のネットワークか、認証したトンネル�
 
 - host 名 `oep-<unit_id>.local`、service `_oep._tcp`（port 7450）、instance 名 `OEP <unit_id>`、TXT `unit_id=<unit_id>`。
   host は名指した unit_id の probe を、ほかの経路と同じく describe の unit_id で確かめる。
-- アドレスは、ほかの経路（シリアルの口）から probe.config の state の wifi の TLV（§6.3）でも分かる。
+- アドレスは、ほかの経路（シリアルの口）から fn 0 の network（transports §7.3）でも分かる。
 
-### 6.3 Wi-Fi の設定（probe.config の wifi の項目、probe.config §1.4）
+### 6.3 Wi-Fi の設定（core の設定の Wi-Fi の項目、transports §7）
 
 ビルドに認証情報は入れない。どのネットワークに入るかは probe の設定で、ほかの項目と同じく set / save / unset する。項目の形と規則は
-oep-spec の probe.config §1.4、§3.3、§4（c2b8007 から）。この実装の値と動きは次のとおり。
+oep-spec の transports §7。この実装の値と動きは次のとおり。
 
 | 何 | 値 |
 |---|---|
-| 項目 0x08 wifi | index(u8)、ssid_len(u8)、ssid、pass_len(u8)、passphrase。キーは index |
-| describe 0x46 wifi_max | u8: entry の数の上限（この実装は 4） |
-| state の TLV 0x01 wifi | state(u8: 0 切、1 接続中、2 接続、3 どれも失敗して待ち)、entry(u8: 使っている / 試している index、0xFF なし)、reason(u8: 0 なし、1 見つからない、2 認証、3 アドレスが来ない、4 そのほか)、rssi(i8、dBm)、ipv4(4 byte)。rssi と ipv4 は state 2 のときだけ、ほかは 0 |
+| `wifi.{}.ssid`、`wifi.{}.passphrase`（secret） | key は entry（index、0〜3。setting の keys が 4） |
+| `ipv4.{}.mode` / `address` / `prefix` / `gateway` / `dns` | key は netif（1 = `wifi`、この実装の唯一の口） |
+| network（fn 0 の op 0x25） | tcp_port と netif ごとの様子（state、entry、reason、rssi、アドレス）。transports §7.3 |
 
-- ssid は 1〜32 byte（0x00 を含むものは unsupported）。passphrase は無し（pass_len 0、開いたネットワーク）、8〜63 byte の 0x20〜0x7E、
-  または 16 進の 64 文字。ほかは malformed。index は wifi_max 未満（ほかは unsupported、受け取ったままの項目の tag）。
-- **passphrase は書くだけ**: get は passphrase を返さない（pass_len は、あれば 0xFF、無ければ 0、後ろに何も付けない）。set の pass_len 0xFF は
-  「その index の今の passphrase のまま」（その index が無ければ malformed）: get の形をそのまま送り返しても変わらない。hash は passphrase の
-  byte を含まず、passphrase が変わるたびに変わる乱数を含む（ロックなしの get から passphrase を推せないため）。state にも出ない。
+- ssid は 1〜32 byte。passphrase は 8〜63 byte の 0x20〜0x7E か 16 進の 64 文字（ほかは malformed）。値が無ければ開いたネットワーク。
+- **passphrase は secret**: get は data を返さない（len 0）。set の len 0 は今の値のまま（値が無ければ malformed）。network にも出ない。
 - 保存は NVS（ほかの設定と同じ、暗号化しない）。flash を読める人には読める。
-- 動き（時間はこの実装の選び方。仕様は間隔を probe に任せる、probe.config §1.4）: set か起動時の適用の 300 ms（`kApplyDelayMs`）後
+- 動き（時間はこの実装の選び方。仕様は間隔を probe に任せる、transports §7）: set か起動時の適用の 300 ms（`kApplyDelayMs`）後
   （set の応答が先に出る）に、entry を index の順にすべて試す（scan で飛ばさない: 隠した SSID は scan に出ないため）。1 つあたり最長 15 s
   （`kTryMs`。driver がネットワークが無い、認証の失敗と知らせればそこで次へ）。最初に IPv4 のアドレスが来たものを使う。全部だめなら 5 s
   （`kRetryMs`）待って初めからやり直す。つながった後に切れたら、すぐ初めからやり直す。使っている entry を変えるか消す set / unset は、応答を送ってから（300 ms 後）切って初めからやり直す。使っている entry が変わらない set では切らない（新しい並びは次にやり直すときに使う）。つながっていない間（試している、待っている）の変更は、300 ms 後に初めからやり直す。entry が 0 個なら

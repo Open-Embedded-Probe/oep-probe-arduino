@@ -23,27 +23,6 @@ Result lockedFor(uint32_t remaining_ms, const uint8_t *owner, size_t owner_lengt
   return {kResolutionRejected, kRejectLocked, n};
 }
 
-// Page a TLV stream by whole TLVs: skip `first`, then copy while they fit. Returns bytes, sets more.
-size_t pageTlv(const uint8_t *tlv, size_t length, uint16_t first, uint8_t *out, size_t capacity, bool &more) {
-  size_t at = 0, used = 0;
-  uint16_t index = 0;
-  more = false;
-  uint8_t tag = 0;
-  const uint8_t *value = nullptr;
-  size_t vlen = 0, next = 0;
-  while (tlvAt(tlv, length, at, tag, value, vlen, next)) {
-    const size_t size = next - at;
-    if (index >= first) {
-      if (used + size > capacity) { more = true; break; }
-      memcpy(out + used, tlv + at, size);
-      used += size;
-    }
-    at = next;
-    ++index;
-  }
-  return used;
-}
-
 }  // namespace
 
 bool Endpoint::add(Interface &interface) {
@@ -418,7 +397,7 @@ void Endpoint::lapse() {
 // The session's lock ends - end, lease expiry or force, all alike (core §6.4, §9): everything the session created is
 // released - its subscriptions, its shares of the interfaces' resources (a console's stream before the wire's
 // connection, so a stream it was the last user of closes with detail session_ended, oep-if-console §2), its plans (the
-// pins to their idle state). A plan set through oep.probe.config stays (probe settings, not a session's), as do a
+// pins to their idle state). A plan set through the settings (core §13) stays (probe settings, not a session's), as do a
 // slot's connection and a bind's stream. The owner is forgotten; the last id and the resend table stay (a resent end
 // is answered from it, core §5.2). Nothing passes to the next session: no resume.
 void Endpoint::releaseLock() {
@@ -597,13 +576,13 @@ void Endpoint::sendReject(uint16_t corr, uint8_t reason) {
   send(kResultHeader);
 }
 
-// The ops fn 0 offers (core §12): every one of them required, none optional - no plan, restart or subscription there.
+// The ops fn 0 offers (core §11): the required ones, and the settings' (core §13) when the probe has settings.
 bool Endpoint::coreOffers(uint8_t op) const {
   switch (op) {
     case kOpConfirm: case kOpList: case kOpDescribe: case kOpClock: case kOpOpen: case kOpEnd: case kOpKeepalive:
     case kOpLockState:
       return true;
-    default: return false;
+    default: return settings_ && settings_->offers(op);
   }
 }
 
@@ -697,7 +676,9 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       if (op == kOpEnd) releaseLock();   // the lock and everything the session created (core §6.4, §9); no resume
       return completed();
     }
-    default: return rejected(kRejectUnknownOperation);
+    default:
+      return settings_ && settings_->offers(op) ? settings_->handle(op, payload, length, out, capacity)
+                                                : rejected(kRejectUnknownOperation);
   }
 }
 
@@ -928,7 +909,7 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
 // oep.probe.plan plan_apply (oep-if-plan §2.1): role assignments as TLVs 0x10 = fn(u16) role(u8) channel(u16). The plan
 // is per fn: the fns the request names are replaced, every other fn keeps its plan. An unknown critical TLV refuses the
 // plan (unsupported), an unknown non-critical one is ignored. A session's plan goes when its lock ends (end, a lapse, a
-// takeover); a plan set through oep.probe.config (replacePlan, persistent) stays.
+// takeover); a plan set through the settings (core §13) (replacePlan, persistent) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   // Every check before anything changes (core §4.3, oep-if-plan §2.5): its form (every role_assignment 5 bytes, fn 0
   // malformed, at least one), the fns named inside it (unknown_function), an unknown critical tag and a fn with no plan
@@ -972,7 +953,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   for (size_t k = 0; k < nfns; ++k)
     if (persistent_[fns[k] - 1])
       return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings);
-  for (size_t r = 0; r < count; ++r)   // a channel the settings disable (probe.config §1)
+  for (size_t r = 0; r < count; ++r)   // a channel the settings disable (core §13.8)
     if (disabled(roles[r].channel))
       return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, roles[r].channel);
   const uint16_t reason = replaceFns(roles, count, fns, nfns, false);
@@ -1195,31 +1176,40 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
   if (capacity < 1) return failed();
   const uint16_t fn = getU16(payload);
   const uint16_t first = getU16(payload + 2);
-  const uint8_t *tlv = nullptr;
-  size_t tlv_length = 0;
   if (fn > count_) return rejected(kRejectUnknownFunction);
+  TlvPager page(out + 1, capacity - 1, first);
   // every fn's describe starts with its ops (core §1.2, §7.4)
-  const size_t ops = opsTlv(fn, scratch_, sizeof scratch_);
-  if (fn == 0) {   // the ops, the sketch's part, then the transports and max_op_ms (core §7.5)
-    const size_t sketch = probe_tlv_length_ <= sizeof scratch_ - ops ? probe_tlv_length_ : 0;
-    if (sketch) memcpy(scratch_ + ops, probe_tlv_, sketch);
-    TlvWriter w(scratch_ + ops + sketch, sizeof scratch_ - ops - sketch);
+  page.raw(scratch_, opsTlv(fn, scratch_, sizeof scratch_));
+  if (fn == 0) {   // the sketch's part, the channels' names, the settings, then the transports and max_op_ms (core §7.5)
+    page.raw(probe_tlv_, probe_tlv_length_);
+    size_t at = 0, vlen = 0, next = 0;
+    uint8_t tag = 0;
+    const uint8_t *v = nullptr;
+    uint16_t channels = 0;
+    while (tlvAt(probe_tlv_, probe_tlv_length_, at, tag, v, vlen, next)) {
+      if (tag == kCoreChannels && vlen == 2) channels = getU16(v);
+      at = next;
+    }
+    for (uint16_t ch = 0; ch < channels; ++ch) {   // channel_name, one a channel (core §7.5)
+      uint8_t name[2 + 8];
+      putU16(name, ch);
+      page.put(reg::core::kTlvDescribeChannelName, name, 2 + platformChannelName(ch, reinterpret_cast<char *>(name + 2)));
+    }
+    if (settings_) settings_->describe(0, page);
     for (size_t i = 0; i < transport_count_; ++i) {
       if (i && transports_[i].index == transports_[i - 1].index) continue;   // a listener's slots: one entry
-      const uint8_t v[3] = {transports_[i].index, transports_[i].kind, transports_[i].usb_interface};
-      w.put(reg::core::kTlvDescribeTransport, v, sizeof v);
+      const uint8_t t[3] = {transports_[i].index, transports_[i].kind, transports_[i].usb_interface};
+      page.put(reg::core::kTlvDescribeTransport, t, sizeof t);
     }
-    w.u32(reg::core::kTlvDescribeMaxOpMs, max_op_ms_);
-    tlv = scratch_;
-    tlv_length = ops + sketch + w.length();
+    uint8_t ms[4];
+    putU32(ms, max_op_ms_);
+    page.put(reg::core::kTlvDescribeMaxOpMs, ms, sizeof ms);
   } else {
-    tlv_length = ops + interfaces_[fn - 1]->describe(scratch_ + ops, sizeof scratch_ - ops);
-    tlv = scratch_;
+    page.raw(scratch_, interfaces_[fn - 1]->describe(scratch_, sizeof scratch_));
+    if (settings_) settings_->describe(fn, page);   // the items the interface owns (core §13.2)
   }
-  bool more = false;
-  const size_t used = tlv ? pageTlv(tlv, tlv_length, first, out + 1, capacity - 1, more) : 0;
-  out[0] = more;
-  return completed(1 + used);
+  out[0] = page.more();
+  return completed(1 + page.length());
 }
 
 // oep.probe.link source / sink / port_speed (oep-if-link §2, §3).

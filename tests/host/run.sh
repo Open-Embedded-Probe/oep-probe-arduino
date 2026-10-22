@@ -65,9 +65,6 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_UART -DOEP_
   -o "$out-fixture-uart-rp2" "$here/test_fixture_uart.cpp" "$src/OepFixture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" \
   "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out-fixture-uart-rp2"
-g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-lines" "$here/test_lines.cpp" \
-  "$src/OepConfig.cpp"
-"$out-lines"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-unit-id" "$here/test_unit_id.cpp"
 "$out-unit-id"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_BOOT -I"$here/shim" -I"$src" -o "$out-boot-guard" \
@@ -104,7 +101,7 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWD -I"$her
   "$here/test_swd.cpp" "$src/OepSwd.cpp" "$src/OepFrame.cpp"
 "$out-swd"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CONFIG -I"$here/shim" -I"$src" -o "$out-config" "$here/test_config.cpp" \
-  "$src/OepConfig.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" \
+  "$src/OepSettings.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" \
   "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepFixture.cpp"
 "$out-config"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -I"$here/shim" -I"$src" -o "$out-capture" \
@@ -131,7 +128,7 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RP2_ADC -I"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOEP_HOST_FAKE_I2C_SLAVE -DOEP_HOST_FAKE_CONFIG \
   -DOEP_HOST_FAKE_SPI_SLAVE -DOEP_HOST_FAKE_UART -DOEP_VECTORS_DIR="\"$here/../vectors\"" -I"$here/shim" -I"$src" -o "$out-vectors" "$here/test_vectors.cpp" \
   "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" "$src/OepCapture.cpp" \
-  "$src/OepConfig.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" \
+  "$src/OepSettings.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" \
   "$src/OepFixture.cpp" "$src/OepP4I2cTarget.cpp" "$src/OepP4SpiTarget.cpp"
 "$out-vectors"
 # A platform without a chip number does not build without OEP_UNIT_ID, nor with one outside a-z 0-9 - (core §7.5).

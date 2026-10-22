@@ -134,7 +134,7 @@ class Blink final : public oep::Interface {
 | `AnalogCapture` | `oep.fixture.analog` | ADC のチャネルを順に、ワンショット、生の値、しきい値のトリガ（ESP32 は連続変換、RP2 は FIFO + DMA）。frontend、基準電圧、出荷時の較正 |
 | `CaptureGroup`（+ `GroupTrack`） | `oep.fixture.capture-group` | トラックを一緒に始める。`GroupTrack` を持つ capture を束ねられる |
 | `P4I2cTarget`、`P4SpiTarget` | `oep.fixture.i2c-target` / `spi-target` | ESP-IDF の I2C / SPI スレーブで実装 |
-| `ProbeConfig` + `Binds` | `oep.probe.config` | flash に保存し、起動時に行う設定（§7） |
+| `Settings` + `Binds` | fn 0 の設定（core §13） | flash に名前で保存し、起動時に行う設定（§7） |
 
 各ソースファイルの冒頭に、従う仕様の節があります。
 
@@ -165,20 +165,23 @@ class Blink final : public oep::Interface {
 - シリアルの口は OEP のフレームと、その間の生のバイトを運びます。生のバイトは **bind** のとおり（スロットのコンソール、fixture の
   UART。口ごとに 1 本）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
   生の流れは止まり、終わった後に止めた位置から続きます（その間にあふれていれば残っている一番古いバイトから。transports §4、
-  probe.config §1.2）。
-- `ProbeConfig` はスロット、bind、plan、label、空きのときの状態、fixture UART の設定（uart の項目）、無効にした channel
-  （disable の項目）を持ち、保存し（ESP32 は NVS、RP2 は flash の最後の領域）、起動時に行います。`state`（op 0x06）がスロットと
-  bind の状態を、`unset`（0x05）がキーでの削除です。最後に `add(config)` し、`addPlace(wire, console)`、`addUart(uart)`、
-  `setPins(&pins)`、`applySaved()`（`06.Settings/ProbeConfig`）。`load()` はスケッチがピンを空きの状態にする前に呼び、保存が無効に
-  した channel を除きます: `config.load(); pins.setDisabled(config.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());`
-  （無効にした channel には起動時も触れない）。PinTable は設定の無効（外せる）と `forbid`（firmware のもの、ずっと）を分けて持ち、
-  どの項目も forbid したピンを使えるようにはしません。
+  console §2.1）。
+- `Settings` は core の設定（core §13）: fn 0 の get / set / unset / save / state と、各 fn の describe の項目。channel の項目
+  （label、idle、disable）は `setPins(&pins)`、ネットワークの項目は `setWifi(&wifi)`、素通しの項目は `usePassthroughs()` の後の
+  `addUart(uart)` と `addPlace(wire, console)`（wire の hold と rvswd の rest も）、SWD の hold は `addHold(wireSwd, swd.hold, checkSwdHold, &swd)`
+  で宣言します。スケッチ自身の項目は自分のインターフェースの下に `addSetting(owner, "name.{}", form, keys, max_len)`、firmware が決めた値は
+  `firmwareValue(...)`（固定か既定、`fixedLabel(channel, "LED")`）。保存（ESP32 は NVS、RP2 は flash の最後の領域）は名前で持つので、fn の
+  番号が変わっても読み戻せます。インターフェースではないので `endpoint.add` しません（作ると endpoint に付きます）。`load()` はスケッチが
+  ピンを空きの状態にする前に呼び、保存が無効にした channel を除きます: `settings.load(); pins.setDisabled(settings.savedDisabled());
+  platformParkMask(mask & ~pins.disabledMask());`（無効にした channel には起動時も触れない）。最後に、全部の `endpoint.add` と add* の後で
+  `applySaved()`（`06.Settings/Settings`）。PinTable は設定の無効（外せる）と `forbid`（firmware のもの、ずっと）を分けて持ち、
+  どの値も forbid したピンを使えるようにはしません。
 - 自分の USB デバイスを transport にする probe は、host がデバイスを構成し終えるまで at boot のスロットの attach を待たせます:
-  `applySaved()` の前に `config.setAttachGate([] { return BootGuard::attachReady(tud_mounted()); })`（P4 は `usbDevice.ready()`）。
+  `applySaved()` の前に `settings.setAttachGate([] { return BootGuard::attachReady(tud_mounted()); })`（P4 は `usbDevice.ready()`）。
   起動時から target を読むコンソールはフレームごとに割り込みを止め、host がデバイスを列挙している間に遅れた USB の割り込みが
   USB スタックを落とすことがあります（RP2: TinyUSB 0.18 の "Can't continue xfer on inactive ep" の panic）。`BootGuard`
   （`OepBootGuard.h`）: `setup()` の最初に `begin()`、`loop()` で `poll()`。watchdog を動かし、すぐに落ちた起動を数え、
-  `kSafeAfter` 回続いたら `safe()` が真になるので、その起動では `config.skipBootAttach()` を呼びます。RP2 では SDK の `_exit` と
+  `kSafeAfter` 回続いたら `safe()` が真になるので、その起動では `settings.skipBootAttach()` を呼びます。RP2 では SDK の `_exit` と
   `isr_hardfault` を `BootGuard::crashed()` に向けます（`Firmware/OepProbe/Rp2.h`）。panic で止まらず、チップを reset します。
   firmware 更新（bootloader の rollback がある ESP32）は動くものとして扱い、起動したときに確かなものにします: `verifyRollbackLater`
   を定義しなければ ESP32 の core が `setup()` の前に image を確定するので、その後のどのリセットでも前には戻りません

@@ -12,7 +12,7 @@
 | probe を作る人 | 自分の基板で probe を作る、独自のインターフェースを足す、別の経路で運ぶ | **1 つずつのことを示す短い sketch**（学ぶ順に並ぶ） |
 | host を作る人 | 道具、IDE、試験の枠組み | firmware は要らない: oep-client-python の偽の probe（`oep_client.fake_serve`）。実機では上の binary |
 
-治具（自分の試験台）は、上の binary に**設定**（probe.config の slot / bind / label / idle、`oep config`）を入れたものとして表す。
+治具（自分の試験台）は、上の binary に**設定**（core の設定の label / idle / disable / 素通し、`oep settings`）を入れたものとして表す。
 治具ごとの firmware は作らない。
 
 ## 2. 原則
@@ -33,8 +33,8 @@
 |---|---|---|---|---|---|
 | `OepProbe-rp2040` | Pico、RP2040-Zero ほか | USB CDC | rvswd、swd | gpio、uart | console |
 | `OepProbe-rp2350` | Pico 2、Pro Micro RP2350 ほか | USB CDC | rvswd、swd | gpio、uart | console |
-| `OepProbe-esp32` | ESP32 DevKitC ほか | UART bridge | swio | gpio、uart | console、probe.config |
-| `OepProbe-esp32p4` | ESP32-P4 | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | rvswd | gpio、uart、capture | console、probe.config、I2C / SPI target |
+| `OepProbe-esp32` | ESP32 DevKitC ほか | UART bridge | swio | gpio、uart | console、設定 |
+| `OepProbe-esp32p4` | ESP32-P4 | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | rvswd | gpio、uart、capture | console、設定、I2C / SPI target |
 
 USB の口を自分で持つもの（RP2、ESP32-P4 の HS）はプロジェクトの VID:PID `1209:4F45` で列挙し、serial は unit id（PID-USE.md）。iProduct は人のための名前。describe の probe の名前はボード
 （`raspberrypi-pico` など）で、治具の profile（`io.github.ch32-riscv-ug.rp2350-l103` など）は付けない。
@@ -50,7 +50,7 @@ profile を足す方法、ボードの予約ピン（§6 f）の足し方、焼�
 
 ## 4. sketch（学ぶ順）
 
-状態（2026-09-30）: 作った。03.Transports は MultipleTransports の 1 本（UartBridge は 01.Basics の classic ESP32、SharedConsolePort は 06.Settings/ProbeConfig に含めた）。LogicCapture は旧 Esp32P4CaptureProbe、SwdPinSurvey は旧 PicoDebugPortSurvey を移したもの。
+状態（2026-09-30）: 作った。03.Transports は MultipleTransports の 1 本（UartBridge は 01.Basics の classic ESP32、SharedConsolePort は 06.Settings/Settings に含めた）。LogicCapture は旧 Esp32P4CaptureProbe、SwdPinSurvey は旧 PicoDebugPortSurvey を移したもの。
 
 ```
 examples/
@@ -70,7 +70,7 @@ examples/
   05.Capture/
     LogicCapture        ESP32-P4 の PARLIO で 160 Msps（host/stream_test.py 付き）
   06.Settings/
-    ProbeConfig         slot / bind / label / idle を保存して起動時から使う
+    Settings            label / idle / disable / 素通しを保存して起動時から使う
   Tools/
     SwdPinSurvey        どのピンが debug port か探す（立ち上げ用）
   Firmware/
@@ -102,7 +102,7 @@ examples/
 a. **線がピンの組を host から受ける**（済: oep-spec 29990da / dfa46d2 / ad43e25、firmware。`Firmware/OepProbe` の rp2040 / rp2350 / esp32p4 / esp32。SWIO も実行中のピン。実機の確認は未）: 今は決まった 1 組だけ（`fixedPairScan` / `fixedPairPins`）。describe の role_channels で
    使えるピンを出し、scan / attach の pins で組を受ける（oep-if-debug §1）。RVSWD（ESP32 の dedicated GPIO、RP2 の SIO）、SWIO、SWD の
    それぞれで、ピンを実行中に替えられるようにする。
-b. **RP2040 / RP2350 の probe.config の保存**（済: flash の最後の領域、arduino-pico の EEPROM）（今は ESP32 の NVS だけ）。flash の最後の領域など。
+b. **RP2040 / RP2350 の設定の保存**（済: flash の最後の領域、arduino-pico の EEPROM）（今は ESP32 の NVS だけ）。flash の最後の領域など。
 c. **USB の名乗り**（RP2 と ESP32-P4 は済: `Firmware/OepProbe` がプロジェクトの VID:PID `1209:4F45` と unit id の serial を出す）: ESP32-S3 でも同じにする。
 d. **reset 線に既定は無い**（済: oep-spec 5bfe052、firmware 620594c）: attach_under_reset の channel は必須。probe は reset に使ってよい
    channel を describe の role_channels の role 3 で宣言し、plan が持つ channel は断る。

@@ -10,7 +10,8 @@
 //     UART bridge (index 0, interface 0xFF), unit_id "a1b2c3d4", max_op_ms 1000, max_frame 1024, window
 //     4096, max_inflight 4, boot_id 0x12345678;
 //   - the probe of refusals.json / ops.json: fn 1 oep.probe.link, 2 oep.fixture.gpio, 3 oep.fixture.i2c-target, 4
-//     oep.wire.rvswd, 5 oep.fixture.uart, 6 oep.target.riscv-dm, 7 oep.target.console, 8 oep.probe.config, 9
+//     oep.wire.rvswd, 5 oep.fixture.uart, 6 oep.target.riscv-dm, 7 oep.target.console, 8 io.example.board (a
+//     settings-only interface of the vectors': its item ntp-server), 9
 //     oep.fixture.logic, and the endpoint's own after them: 10 oep.probe.plan, 11 oep.probe.restart (in the cases that
 //     name it: the restart handler set), on a UART bridge (transport 0, the port a bind names) and a vendor bulk
 //     (transport 1, where the requests go), max_frame 1024; each case starts from boot (resource numbers from 1) in the
@@ -41,7 +42,7 @@
 #include "OepLogicBlocks.h"
 #include "test_ids.h"
 #include "OepCapture.h"
-#include "OepConfig.h"
+#include "OepSettings.h"
 #include "OepConsole.h"
 #include "OepDmConsole.h"
 #include "OepEndpoint.h"
@@ -581,7 +582,15 @@ struct OpsProbe {
   DmConsole driver{dm, phy};
   TargetConsoleStream console{port, driver, 0};
   Binds binds;
-  // The Wi-Fi the probe.config cases name: entry 0 connected, 192.168.1.23/24, gateway and dns 192.168.1.1, -52 dBm, TCP
+  // fn 8: the vectors' interface with an item of its own (ops.json's settings cases, core §13.1)
+  struct Board final : Interface {
+    const char *name() const override { return "io.example.board"; }
+    uint16_t instance() const override { return 0; }
+    uint8_t revision() const override { return 1; }
+    bool offers(uint8_t op) const override { return op == 0x10; }
+    Result handle(uint8_t, const uint8_t *, size_t, uint8_t *, size_t) override { return completed(); }
+  } board;
+  // The Wi-Fi the settings cases name: entry 0 connected, 192.168.1.23/24, gateway and dns 192.168.1.1, -52 dBm, TCP
   // on 4242 (when `up`).
   struct FakeWifi final : WifiControl {
     bool up = false;
@@ -601,7 +610,7 @@ struct OpsProbe {
     }
     uint16_t tcpPort() const override { return up ? 4242 : 0; }
   } wifi;
-  ProbeConfig config{ep, binds};
+  Settings settings{ep, binds};
   LogicCapture logic{ep, pins};
   uint16_t corr = 1;
   uint32_t actual_samples = 0;   // the logic configure's answer
@@ -621,20 +630,28 @@ struct OpsProbe {
     ep.add(uart);      // fn 5
     ep.add(riscv);     // fn 6
     ep.add(console);   // fn 7
-    ep.add(config);    // fn 8
-    config.usePassthroughs();
+    ep.add(board);     // fn 8
+    settings.usePassthroughs();
     ep.add(logic);     // fn 9
     ep.setRawPorts(&binds);
-    // the settings the probe.config cases list: 1 label, 2 idle, 3 disable, 4 wifi, 5 ipv4, 6 com.example.ntp-server
-    config.setPins(&pins);
-    config.setWifi(&wifi);
-    config.addSetting("com.example.ntp-server", reg::probe_config::kSettingFormText, 1, 32);
+    // the items the settings cases list: fn 0's channel and network items in the registry's order, fn 8's ntp-server
+    settings.setPins(&pins);
+    settings.setWifi(&wifi);
+    settings.addSetting(board, "ntp-server", reg::core::kSettingFormText, 0, 32);
   }
-  void passthroughs() {   // the pass-throughs' settings too (testPassthrough)
-    config.addPlace(wire, console);
-    config.addUart(uart);
+  void passthroughs() {   // the pass-throughs' items too (testPassthrough)
+    settings.addPlace(wire, console);
+    settings.addUart(uart);
   }
-  uint8_t number(uint8_t kind) const { return config.numberOf(kind); }   // a setting's number, by the probe's list
+  // A set value of item `id` (owner: its interface, nullptr fn 0's): fn number key len data (core §13.5)
+  Bytes value(uint8_t id, const void *owner, uint16_t key, const Bytes &data) const {
+    const uint8_t e = settings.entryOf(id, owner);
+    const uint16_t fn = settings.fnOfEntry(e);
+    Bytes b = {uint8_t(fn), uint8_t(fn >> 8), settings.numberOfEntry(e), uint8_t(key), uint8_t(key >> 8),
+               uint8_t(data.size()), uint8_t(data.size() >> 8)};
+    b.insert(b.end(), data.begin(), data.end());
+    return b;
+  }
   ~OpsProbe() { logic.planRelease(); }
   bool on_bridge = false;   // the case's requests come on the UART bridge (serial port 0, COBS): oep.probe.link's port_speed
   Bytes send(const Bytes &m) { return on_bridge ? serialMessage(ep, uart_bridge, m) : bulkMessage(ep, bulk, m); }
@@ -650,7 +667,7 @@ struct OpsProbe {
   bool ok(const Bytes &a) const { return a.size() >= 5 && a[3] == kResolutionCompleted && a[4] == kOutcomeSuccess; }
   // get's hash (lock-free, no session): the probe's hash of its settings now
   uint32_t hash() {
-    const Bytes a = request(8, reg::probe_config::kOpGet, {0, 0}, 0);
+    const Bytes a = request(0, reg::core::kOpGet, {0, 0}, 0);
     return ok(a) && a.size() >= 10 ? getU32(&a[6]) : 0;
   }
   bool open() { return ok(request(0, kOpOpen, {0xd0, 0x07, 0, 0, 0})); }   // session S, lease 2000 ms
@@ -828,38 +845,49 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
     }
     return true;
   }
-  if (names(fns, "oep.probe.config")) {   // probe.config's cases (oep-if-probe-config §1-§3): from what they say is there
+  if (names(fns, "io.example.board")) {   // the settings cases (core §13): from what they say is there
     fakeConfigStore(nullptr, 0);
-    auto set = [&](const Bytes &items) { return p.ok(p.request(8, reg::probe_config::kOpSet, items)); };
-    const Bytes idle4 = {1, p.number(config_kind::kIdle), 3, 0, 4, 0, 0};
-    const Bytes disable4 = {1, p.number(config_kind::kDisable), 2, 0, 4, 0};
-    if (has("CRC-valid saved blob")) {   // disable 5, idle 4 Hi-Z, a label on channel 40 (not this probe's): saved whole,
-      Bytes blob;                        // by name (name_len name count(u16), then len(u16) key data each)
-      auto group = [&](const char *n, const Bytes &value) {
+    using namespace setting_id;
+    auto set = [&](std::initializer_list<Bytes> values) {
+      Bytes m = {uint8_t(values.size())};
+      for (const Bytes &v : values) m.insert(m.end(), v.begin(), v.end());
+      return p.ok(p.request(0, reg::core::kOpSet, m));
+    };
+    const Bytes idle4 = p.value(kIdle, nullptr, 4, {reg::core::kChannelIdleHiZ});
+    const Bytes disable4 = p.value(kDisable, nullptr, 4, {1});
+    if (has("complete saved settings")) {   // disable GPIO5, idle GPIO4 Hi-Z, a label on GPIO40 (not this probe's)
+      Bytes blob = {1, 0, 0, 0, 3};          // the save's form (OepSettings.cpp): version, the core (no name, instance 0), 3 items
+      auto item = [&](const char *n, const char *key, const Bytes &value) {
         blob.push_back(uint8_t(strlen(n)));
         blob.insert(blob.end(), n, n + strlen(n));
-        blob.insert(blob.end(), {1, 0, uint8_t(value.size()), 0});
+        blob.insert(blob.end(), {1, 0, uint8_t(strlen(key))});
+        blob.insert(blob.end(), key, key + strlen(key));
+        blob.push_back(uint8_t(value.size()));
         blob.insert(blob.end(), value.begin(), value.end());
       };
-      group(reg::probe_config::kNameSettingLabel, {40, 0, 'x'});
-      group(reg::probe_config::kNameSettingIdle, {4, 0, 0});
-      group(reg::probe_config::kNameSettingDisable, {5, 0});
+      item(reg::core::kSettingChannelLabel, "GPIO40", {'x'});
+      item(reg::core::kSettingChannelIdle, "GPIO4", {'h', 'i', '-', 'z'});
+      item(reg::core::kSettingChannelDisable, "GPIO5", {1});
       const uint32_t crc = crc32Ieee(blob.data(), blob.size());
       blob.insert(blob.end(), {uint8_t(crc), uint8_t(crc >> 8), uint8_t(crc >> 16), uint8_t(crc >> 24)});
       fakeConfigStore(blob.data(), blob.size());
-      p.config.load();
-      p.config.applySaved();
+      p.settings.load();
+      p.settings.applySaved();
       return p.pins.disabled(5);
     }
-    if (has("no storage")) p.config.setStorage(false);
+    if (has("no storage")) p.settings.setStorage(false);
+    if (has("label fixed NRST")) p.settings.fixedLabel(0, "NRST");
     if (has("state offered") || has("no storage")) return true;   // lock-free / refused before any session
     if (!p.open()) return false;
-    if (has("one idle item") || has("one item generation2") || has("idle channel4 exists")) return set(idle4);
-    if (has("disable channel4")) return set(disable4);
-    if (has("wifi entry 0 ssid lab passphrase password1"))
-      return set({1, p.number(config_kind::kWifi), 16, 0, 0, 0, 3, 'l', 'a', 'b', 9, 'p', 'a', 's', 's', 'w', 'o', 'r', 'd', '1'});
+    if (has("one user idle value") || has("one value generation2") || has("idle channel4 exists")) return set({idle4});
+    if (has("disable channel4")) return set({disable4});
+    if (has("passphrase password1")) {
+      const char *pw = "password1";
+      return set({p.value(kSsid, nullptr, 0, {'l', 'a', 'b'}), p.value(kPassphrase, nullptr, 0, Bytes(pw, pw + 9))});
+    }
+    if (has("ssid lab")) return set({p.value(kSsid, nullptr, 0, {'l', 'a', 'b'})});
     if (has("entry 0 connected")) p.wifi.up = true;
-    if (has("generation0xFFFFFFFF")) p.config.testGeneration(0xFFFFFFFFu);
+    if (has("generation0xFFFFFFFF")) p.settings.testGeneration(0xFFFFFFFFu);
     return true;
   }
   if (has("riscv-dm run not offered")) { p.riscv.offerOptional(false); return true; }
@@ -1496,17 +1524,19 @@ static void testPassthrough() {
     OpsProbe p;
     p.passthroughs();
     CHECK(p.open());   // session S on the bulk port: port 0 not held
-    const Bytes item = {1, p.number(config_kind::kPass), 11, 0, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
-    CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
-    p.config.poll();
+    Bytes m = {2};   // rx channel 3 at 115200 on port 0 (format 8N1 by default, fixture §2.1)
+    for (const Bytes &v : {p.value(setting_id::kPassRx, &p.uart, 0, {3, 0}),
+                           p.value(setting_id::kPassBaud, &p.uart, 0, {0x00, 0xc2, 0x01, 0x00})}) m.insert(m.end(), v.begin(), v.end());
+    CHECK(p.ok(p.request(0, reg::core::kOpSet, m)));
+    p.settings.poll();
     CHECK(p.uart.passing());
     for (char c : std::string("hello\r\n")) p.serial.fakePush(uint8_t(c));
-    p.config.poll();
+    p.settings.poll();
     p.ep.poll();
     CHECK(p.uart_bridge.tx == Bytes({'h', 'e', 'l', 'l', 'o', '\r', '\n'}));
     p.uart_bridge.tx.clear();
     CHECK(p.plan(5, reg::fixture_uart::kRoleRx, 3));   // the session takes the fn's plan: the session's UART wins
-    p.config.poll();
+    p.settings.poll();
     CHECK(!p.uart.passing());
     p.ep.poll();
     CHECK(p.uart_bridge.tx.empty());
@@ -1517,16 +1547,18 @@ static void testPassthrough() {
     p.passthroughs();
     p.on_bridge = true;
     CHECK(p.open());
-    const Bytes item = {1, p.number(config_kind::kPass), 11, 0, 0, 0, 5, 0, 3, 0, 0x00, 0xc2, 0x01, 0x00, 0};
-    CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
-    p.config.poll();
+    Bytes m = {2};   // rx channel 3 at 115200 on port 0 (format 8N1 by default, fixture §2.1)
+    for (const Bytes &v : {p.value(setting_id::kPassRx, &p.uart, 0, {3, 0}),
+                           p.value(setting_id::kPassBaud, &p.uart, 0, {0x00, 0xc2, 0x01, 0x00})}) m.insert(m.end(), v.begin(), v.end());
+    CHECK(p.ok(p.request(0, reg::core::kOpSet, m)));
+    p.settings.poll();
     CHECK(!p.uart.passing());
     p.uart_bridge.tx.clear();   // (the UART is stopped: what came then was never received)
     CHECK(p.ok(p.request(0, kOpEnd, {})));
-    p.config.poll();
+    p.settings.poll();
     CHECK(p.uart.passing());
     for (char c : std::string("free")) p.serial.fakePush(uint8_t(c));
-    p.config.poll();
+    p.settings.poll();
     p.ep.poll();
     CHECK(rawOf(p.uart_bridge.tx) == Bytes({'f', 'r', 'e', 'e'}));   // nothing of the session's time kept
   }
@@ -1535,17 +1567,23 @@ static void testPassthrough() {
     OpsProbe p;
     p.passthroughs();
     CHECK(p.open());
-    const Bytes item = {1, p.number(config_kind::kConsolePass), 15, 0, 0, 0, 4, 0, 1, 0, 2, 0, 0x40, 0x42, 0x0f,
-                        0x00, 7, 0, p.console.numberOf(TargetConsoleStream::kDriverDmseq)};
-    CHECK(p.ok(p.request(8, reg::probe_config::kOpSet, item)));
-    p.config.poll();
+    const char *mech = TargetConsoleStream::kDriverNames[TargetConsoleStream::kDriverDmseq];
+    Bytes m = {5};   // wire fn 4, swdio 1, swclk 2, 1 MHz, dmseq on port 0 (console §2.1)
+    for (const Bytes &v : {p.value(setting_id::kConWire, &p.console, 0, {4, 0}),
+                           p.value(setting_id::kConSwdio, &p.console, 0, {1, 0}),
+                           p.value(setting_id::kConSwclk, &p.console, 0, {2, 0}),
+                           p.value(setting_id::kConSpeed, &p.console, 0, {0x40, 0x42, 0x0f, 0x00}),
+                           p.value(setting_id::kConMechanism, &p.console, 0, Bytes(mech, mech + strlen(mech)))})
+      m.insert(m.end(), v.begin(), v.end());
+    CHECK(p.ok(p.request(0, reg::core::kOpSet, m)));
+    p.settings.poll();
     CHECK(p.port.resident && !p.port.connected && !p.console.isOpen());
     p.say("hi");
-    p.config.poll();
+    p.settings.poll();
     p.ep.poll();
     CHECK(p.uart_bridge.tx == Bytes({'h', 'i'}));
     CHECK(p.attach());   // a session's attach takes the wire: the pass-through yields, the target untouched
-    p.config.poll();
+    p.settings.poll();
     CHECK(p.port.connected && !p.port.resident);
   }
 }

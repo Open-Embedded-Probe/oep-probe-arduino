@@ -161,7 +161,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `src/OepTcp.h`、`src/OepWifi.h` | TCP（受けた接続がそれぞれ経路になる待ち受け。lwIP の socket）と ESP32 の Wi-Fi（設定のネットワークを順に試す、mDNS `_oep._tcp`）。header だけなので、include したスケッチだけがネットワークを持つ |
 | `src/OepBind.*` | シリアルの口に流すもの（bind: 口ごとに 1 本のストリーム、セッション中の停止と止めた位置からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
-| `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepConfig.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）、`oep.probe.config`（スロット、bind。ESP32 は NVS、RP2040 / RP2350 は flash に保存）。各ファイルの冒頭に対応する仕様の節がある |
+| `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepSettings.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）。core の設定（core §13: 項目の宣言、値と出どころ、名前での保存。ESP32 は NVS、RP2040 / RP2350 は flash）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブで実装。2026-09-30 までは独自の `io.github.ch32-riscv-ug.esp32.*`） |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
 | `examples/` | ボードの firmware と学ぶための example: [Example](#example) を参照 |
@@ -189,7 +189,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | `04.Debug/SwioDebugProbe` | classic ESP32 | 1 本線の SWIO の CH32V00x のデバッガ |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | SWD の ARM のデバッガ: wire、arm-adi |
 | `05.Capture/LogicCapture` | ESP32-P4 / P4X | 全速のロジアナ（16 ch まで、2 ch で 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
-| `06.Settings/ProbeConfig` | RP2040 / RP2350 | 起動時に自分で準備する治具: スロット、bind（target のコンソールを probe の口に）、plan、空きのときの状態。flash に保存 |
+| `06.Settings/Settings` | RP2040 / RP2350 | 設定を持つ治具: ピンの呼び名、空きの状態、使わないピン、素通し（target のコンソールを probe の口に）。flash に名前で保存 |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | 立ち上げの道具（Serial に文字で出す。OEP ではない）: どのピンが debug port か |
 
 ## 使い始める
@@ -221,15 +221,16 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
    Python からは `oep_client.link.open_host(<port>)` でセッションを得る。シリアルの口（USB-Serial/JTAG、USB CDC、UART bridge）は
    OEP のフレーム（`0x00 <COBS> 0x00`）と bind の生のバイトを 1 本で運ぶ。host は排他（TIOCEXCL）で開き、フレームの外は雑音として
    捨てる（oep-spec の host 開発ガイド §1、§2）。
-3. **設定**: セッションの無い間、target のコンソールをシリアルの口に流すには、console-passthrough を設定する（`oep.probe.config`、
-   ESP32 は NVS、RP2040 / RP2350 は flash に名前で保存）。口の名前は label の `S.N` で付ける（host が `oep://<probe>/<口>` で名指す）:
+3. **設定**: セッションの無い間、target のコンソールをシリアルの口に流すには、コンソールの素通しを設定する（core の設定、oep-spec
+   core §13。ESP32 は NVS、RP2040 / RP2350 は flash に名前で保存）。ピンはデータシートの名前（`GPIO2`）、口は経路の名前（`cdc0`）で指す。
+   口の名前は label の `S.N` で付ける（host が `oep://<probe>/<口>` で名指す）:
 
    ```sh
-   oep config label <probe> 2 l103.swdio
-   oep config label <probe> 54 l103.swclk
-   oep config console-passthrough <probe> 1 oep.wire.rvswd 2 54 --console oep.target.console --mechanism dmseq \
-       --max-speed 1000000 --save
-   oep config show <probe>
+   oep settings set <probe> core channel.GPIO2.label=l103.swdio channel.PB6.label=l103.swclk
+   oep settings set <probe> oep.target.console/0 passthrough.cdc0.wire=oep.wire.rvswd/0 passthrough.cdc0.swdio=GPIO2 \
+       passthrough.cdc0.swclk=PB6 passthrough.cdc0.max-speed=1000000 passthrough.cdc0.mechanism=dmseq --save
+   oep settings show <probe>
+   oep settings export <probe> jig.oep-settings.json   # firmware を更新する前に。後で import で戻す
    ```
 
 ## 既知の罠

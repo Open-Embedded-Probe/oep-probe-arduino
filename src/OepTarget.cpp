@@ -94,14 +94,13 @@ bool readDpc(Ch32Dm &dm, uint32_t &dpc) { return dm.readDpc(dpc); }
 
 void chooseRest(DebugPort &port) {
   namespace rv = reg::wire_rvswd;
-  namespace pc = reg::probe_config;
   uint32_t id = 0;
   port.has_tid = port.dm.readDmiSure(0x7f, id) && id != 0 && id != 0xffffffffu;
   port.tid = port.has_tid ? id : 0;
-  const uint8_t mode = port.rest_setting ? port.rest_setting(port.rest_context, port.swclk) : pc::kRvswdRestModeAuto;
+  const uint8_t mode = port.rest_setting ? port.rest_setting(port.rest_context, port.swclk) : rv::kRestAuto;
   bool low = false;
-  if (mode == pc::kRvswdRestModeLow) low = true;
-  else if (mode == pc::kRvswdRestModeAuto && port.has_tid)
+  if (mode == rv::kRestLow) low = true;
+  else if (mode == rv::kRestAuto && port.has_tid)
     low = (port.tid >> rv::kTargetIdFamilyShift) == rv::kIdleLowFamilyCh32l103;   // registry idle_low_family
   port.rest_low = low;
   port.dm.phy().setIdleClockLow(low);
@@ -259,7 +258,7 @@ bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   return swclk <= 63 && swclk != swdio && ((port.pin_choice >> swclk) & 1);
 }
 
-// A channel of the pair the settings disable (probe.config §1), or 0xFFFF.
+// A channel of the pair the settings disable (core §13.8), or 0xFFFF.
 uint16_t pairDisabled(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   if (!port.pins) return 0xffff;
   if (port.pins->disabled(swdio)) return swdio;
@@ -267,7 +266,7 @@ uint16_t pairDisabled(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   return 0xffff;
 }
 
-// A channel of the pair that has an idle item in the settings (probe.config §1), or 0xFFFF. outputs: only an output
+// A channel of the pair that has an idle item in the settings (core §13.8), or 0xFFFF. outputs: only an output
 // idle (mode 3 / 4). oep-if-debug §1: count = 0 and an attach without pins leave out every channel with an idle item;
 // a request naming one is refused (cause 5) only when the idle is an output.
 uint16_t pairIdle(const DebugPort &port, uint16_t swdio, uint16_t swclk, bool outputs) {
@@ -436,7 +435,7 @@ Result WireRvswd::scan(const uint8_t *payload, size_t length, uint8_t *out, size
   // then whose pins nothing else holds, and - the one seat taken - the live one
   for (uint8_t k = 0; k < count; ++k) {
     const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
-    const uint16_t off = pairDisabled(port_, d, c);   // the settings disable it: cause 5 (probe.config §1)
+    const uint16_t off = pairDisabled(port_, d, c);   // the settings disable it: cause 5 (core §13.8)
     if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
     const uint16_t idle = pairIdle(port_, d, c, true);   // an output idle: cause 5 (debug §1)
     if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);

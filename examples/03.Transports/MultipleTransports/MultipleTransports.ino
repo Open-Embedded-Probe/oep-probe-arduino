@@ -11,7 +11,7 @@
 //
 // What each transport is goes into fn 0's describe (transport: index, kind, USB interface), so a host that found
 // the probe one way knows the others. The two serial ports carry OEP frames as 0x00 <COBS> 0x00; what else they carry
-// outside the frames is their bind (06.Settings/ProbeConfig). Vendor bulk and HID carry length-prefixed messages.
+// outside the frames is their bind (06.Settings/Settings). Vendor bulk and HID carry length-prefixed messages.
 //
 // The HS vendor bulk interface is written directly (build_opt.h: CFG_TUD_VENDOR_TXRX_BUFFERED=0 and friends; compile
 // with --clean after changing it): oep::DirectBulkStream hands whole frames to the USB stack. The HS device is the

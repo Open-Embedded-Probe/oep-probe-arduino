@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// What a serial port carries outside the frames (oep-spec transports §4, probe.config §1.1 / §1.2): a pass-through's
+// What a serial port carries outside the frames (oep-spec transports §4, fixture §2.1 / console §2.1): a pass-through's
 // bytes - what a fixture UART received, or a target's console output - sent between frames while no session uses the
 // port (the endpoint asks nothing of a port a session's requests came on). Each port has a small ring the
 // pass-through fills; what the port could not take before the pass-through stopped is dropped (config §1.1: not kept).

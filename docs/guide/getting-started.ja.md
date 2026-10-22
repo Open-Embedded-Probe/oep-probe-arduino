@@ -26,7 +26,7 @@ firmware には配線を焼き込んでいません。どのピンを使うか�
 
 OepProbe が動いている ESP32-P4 は、HS の口だけで更新できます: `dfu-util -D OepProbe-esp32p4-<version>.bin`（merged ではなく
 app の image）が、もう一方の app の領域に書き、確かめてから再起動します。設定は残ります（まっさらにしたいときは
-`oep config erase <port>`）。新しい firmware は起動したらそのまま残ります: その後のどのリセットでも前の firmware には戻りません。
+`oep settings unset --all <port>` の後に save）。新しい firmware は起動したらそのまま残ります: その後のどのリセットでも前の firmware には戻りません。
 bootloader が新しい firmware を起動しなかったときは、describe の firmware の文字列が版の後ろにそれを示します（例
 `0.0.29 (update to app1 did not reach setup: software)`）。電源の投入でも probe 自身の再起動でもないリセットも、同じように
 そこに出ます（`brownout at 3 s`）。一度も焼いていないチップや、起動しないチップは、上のとおり USB-Serial/JTAG で esptool
@@ -199,24 +199,27 @@ sampler はトリガのトラックにはなれますが、ほかのトリガに
 治具 = firmware + その設定です。一度書いて保存すれば、probe は起動のたびにそれを掛け直します。
 
 ```sh
-oep config label /dev/ttyACM0 2 dut.swdio                 # 口 dut（host は oep://<probe>/dut で名指す）
-oep config label /dev/ttyACM0 3 dut.swclk
-oep config console-passthrough /dev/ttyACM0 0 oep.wire.rvswd 2 3 --console oep.target.console --mechanism dmseq
-oep config idle /dev/ttyACM0 5 pull-up --save
-oep config disable /dev/ttyACM0 28 29 --save            # このボードに出ていない: 使わず、触れない
-oep config show /dev/ttyACM0
+oep settings set /dev/ttyACM0 core channel.GPIO2.label=dut.swdio channel.GPIO3.label=dut.swclk   # 口 dut（oep://<probe>/dut）
+oep settings set /dev/ttyACM0 oep.target.console/0 passthrough.cdc0.wire=oep.wire.rvswd/0 passthrough.cdc0.swdio=GPIO2 \
+    passthrough.cdc0.swclk=GPIO3 passthrough.cdc0.mechanism=dmseq
+oep settings set /dev/ttyACM0 core channel.GPIO5.idle=pull-up channel.GPIO28.disable=true channel.GPIO29.disable=true --save
+oep settings show /dev/ttyACM0
+oep settings export /dev/ttyACM0 jig.oep-settings.json   # firmware を更新する前に書き出し、更新の後に import で戻す
 ```
 
 これで、セッションの無い間、probe のシリアルの口のターミナルに target のコンソールが出ます。書き込みの道具は、同じ口で
-OEP を話し続けます（その間、素通しは止まります）。各項目の説明は `06.Settings/ProbeConfig` にあります。
+OEP を話し続けます（その間、素通しは止まります）。各項目の説明は `06.Settings/Settings` にあります。
 
 ## 6. Wi-Fi で（classic ESP32）
 
 classic ESP32 の firmware は、ネットワークに入ると TCP の port 7450 でも OEP を話します（同時に 3 つの接続まで）。どのネットワークに入るかは
-ビルドではなく設定です: oep.probe.config の wifi の項目（項目 0x08。oep-spec の probe.config §1.4。この実装の値は [implementation limits §6.3](../implementation-limits.ja.md)）
-に 4 つまでの entry（index、SSID、passphrase）を置き、index の順に試します。シリアルの口から set して save します。passphrase は書くだけで、
-`oep config show` にもどの応答にも出ません。`oep` コマンドはこの項目をまだ知らないので、それまでは oep-client-python の低い層の要求
-（`ProbeConfig(host)._call(ProbeConfig.SET, 項目のバイト)` と save）で送ります。
+ビルドではなく設定です: core の設定の `wifi.{}.ssid` と `wifi.{}.passphrase`（oep-spec transports §7.1。この実装の値は
+[implementation limits §6.3](../implementation-limits.ja.md)）に 4 つまでの entry を置き、番号の順に試します。シリアルの口から set して save
+します。passphrase は書くだけで、`oep settings show` にもどの応答にも出ません:
+
+```sh
+oep settings set /dev/ttyUSB0 core wifi.0.ssid=lab wifi.0.passphrase=... --save
+```
 
 つながると probe は mDNS（`oep-<unit_id>.local`、service `_oep._tcp`、TXT `unit_id`）で名乗り、設定の state の wifi でもアドレスが分かります:
 

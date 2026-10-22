@@ -19,7 +19,7 @@
 // interface takes no endpoint (EP0 only). A first flash of an empty chip, or a recovery, is esptool on USB-Serial/JTAG
 // with the merged image.
 //
-// A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (oep.probe.config:
+// A serial port always takes OEP frames (0x00 <COBS> 0x00); its other bytes are what its bind carries (the settings (core §13):
 // a slot's console, a fixture UART). The HS device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial =
 // the unit id (the MAC, lowercase hex); its iProduct "OEP probe (ESP32-P4)" / "OEP probe (ESP32-P4X)" is a name for people. USB-Serial/JTAG keeps the
 // chip's fixed ID: a host reaches it by the user choosing its port.
@@ -31,7 +31,7 @@
 // CH32V00x, one wire: its connections go through the same oep.target.riscv-dm, its console is oep.target.console instance 1,
 // and a slot may name it: the second place); oep.fixture.gpio /
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
-// devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
+// devices oep.fixture.spi-target / i2c-target; the settings (core §13) (saved in NVS); oep.fixture.analog
 // (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic);
 // oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Every GPIO but the
 // USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the SWIO pin, the reset line, or any fixture's pin - the host chooses.
@@ -54,7 +54,7 @@
 #include <OepCaptureGroup.h>
 #include <OepCh32Dm.h>
 #include <OepChoice.h>
-#include <OepConfig.h>
+#include <OepSettings.h>
 #include <OepConsole.h>
 #include <OepDirectBulkStream.h>
 #include <OepDmConsole.h>
@@ -180,6 +180,7 @@ static oep::Hooks<void (*)(), 1> lastly;
 // settings', the group's, the SWIO wire's), so neither names the other's code: the consoles (and the SWIO wire) and the
 // uarts for the settings, the logic and the analog for the group, the riscv-dm target for the SWIO wire
 static oep::SwdPort *swdIn = nullptr;
+static oep::WireSwd *swdWireIn = nullptr;   // its interface: the owner of its hold item (core §13.1)
 static oep::TargetConsoleStream *consoleIn = nullptr, *swioConsoleIn = nullptr;
 static oep::WireRvswd *swioWireIn = nullptr;
 static oep::FixtureUart *uart1In = nullptr, *uart2In = nullptr;
@@ -370,18 +371,17 @@ void oepAddSpi() {
 // one): their frames run on loop()'s core with its interrupts masked, as the RP2's did while its USB stack crashed.
 static bool autoAttachReady() { return oep::BootGuard::attachReady(usbDevice.ready()); }
 
-// oep.probe.config, saved in NVS: read first (its disable items' channels are never parked: probe.config §2, disable
+// the settings (core §13), saved in NVS: read first (its disable items' channels are never parked: core §13.7, disable
 // before anything else; applySaved gives them back if the settings are not applied), its fn after the SPI device's
-void oepAddConfig() {
+void oepAddSettings() {
   static oep::Slot<oep::Binds> binds;
-  static oep::Slot<oep::ProbeConfig> config;
-  oep::ProbeConfig &c = config.make(endpoint, binds.make());
+  static oep::Slot<oep::Settings> config;
+  oep::Settings &c = config.make(endpoint, binds.make());
   endpoint.setRawPorts(&*binds);
   c.load();
   pins.setDisabled(c.savedDisabled());
   settingsFn.add([] {
-    endpoint.add(*config);   // the fns before it keep their numbers
-    config->usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
+    config->usePassthroughs();   // a serial port's raw stream carries them (fixture §2.1)
     if (consoleIn) config->addPlace(rvswd->wire, *consoleIn);
     if (uart1In) config->addUart(*uart1In);
     if (uart2In) config->addUart(*uart2In);
@@ -390,11 +390,11 @@ void oepAddConfig() {
   });
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot,
-  // 0.0.11-0.0.16). probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach
+  // 0.0.11-0.0.16). core §13.7: disable and idle (outputs driven) before every other item; the at-boot slots' attach
   // comes on config.poll(), so a target powered through an output idle is up before it.
   lastly.add([] {
     // oep.wire.swd's hold after a close (oep-if-debug §2): its fn after the settings'
-    if (swdIn) config->addHold(swdIn->hold, oep::checkSwdHold, swdIn);
+    if (swdIn) config->addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);
     if (swioConsoleIn) config->addPlace(*swioWireIn, *swioConsoleIn);   // a slot on the one wire (CH32V00x): the second place
     if (oep::BootGuard::safe()) config->skipBootAttach();   // after BootGuard::kSafeAfter fast crash-boots
     config->setAttachGate(autoAttachReady);
@@ -469,6 +469,7 @@ void oepAddSwd() {
   endpoint.add(wireSwd.make(swd, 0));
   endpoint.add(adi.make(swd, 0));
   swdIn = &swd;
+  swdWireIn = &*wireSwd;
 }
 
 void oepAddLink() {
@@ -490,7 +491,7 @@ __attribute__((weak)) void oepWithUart() { oepAddUart(); }
 __attribute__((weak)) void oepWithCapture() { oepAddCapture(); }
 __attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
 __attribute__((weak)) void oepWithSpi() { oepAddSpi(); }
-__attribute__((weak)) void oepWithConfig() { oepAddConfig(); }
+__attribute__((weak)) void oepWithSettings() { oepAddSettings(); }
 __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
 __attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
@@ -547,7 +548,7 @@ void setup() {
   afterUsb.run();
   endpoint.setRestart(restartProbe, kRestartMaxMs);
   endpoint.setProbeDescription(probeTlv, describeProbe());
-  oepWithConfig();   // the saved settings read first (their fn below at its place)
+  oepWithSettings();   // the saved settings read first (their fn below at its place)
   // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name)
   oepWithRvswd();   // and the console's choice
   oepWithGpio();
@@ -562,7 +563,7 @@ void setup() {
   oepWithLink();
   oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
   // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
-  // disable items' channels, which are never touched (probe.config §2: disable before anything else; applySaved
+  // disable items' channels, which are never touched (core §13.7: disable before anything else; applySaved
   // gives them back if the settings are not applied).
   oep::platformParkMask(kChannels & ~pins.disabledMask() & ~ownPins);
   lastly.run();

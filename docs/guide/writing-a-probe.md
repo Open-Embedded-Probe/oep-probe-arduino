@@ -141,7 +141,7 @@ class Blink final : public oep::Interface {
 | `AnalogCapture` | `oep.fixture.analog` | ADC channels in turn, one-shot, raw values, a threshold trigger (ESP32 continuous mode, RP2 FIFO + DMA); frontends, reference, factory calibration |
 | `CaptureGroup` (+ `GroupTrack`) | `oep.fixture.capture-group` | tracks started together; a capture that implements `GroupTrack` can be bound |
 | `P4I2cTarget`, `P4SpiTarget` | `oep.fixture.i2c-target` / `spi-target` | on the ESP-IDF I2C / SPI slaves |
-| `ProbeConfig` + `Binds` | `oep.probe.config` | settings saved in flash, applied at boot (§7) |
+| `Settings` + `Binds` | fn 0's settings (core §13) | settings saved by name in flash, applied at boot (§7) |
 
 Each source file starts with the spec sections it follows.
 
@@ -175,22 +175,26 @@ Each source file starts with the spec sections it follows.
 - A serial port carries OEP frames and, between them, raw bytes: what its **bind** says (a slot's console, a fixture
   UART: one stream per port). `endpoint.setRawPorts(&binds)` turns it on; while a session holds the lock the raw
   transfer on the port it uses waits, and resumes afterwards where it stopped - from the oldest byte left if the stream
-  overflowed meanwhile (transports §4, probe.config §1.2).
-- `ProbeConfig` keeps slots, binds, plans, labels, idle states, the fixture UARTs' settings (the uart item) and the
-  disabled channels (the disable item), saves them (NVS on ESP32, the flash's last sector on RP2) and applies them at
-  boot; `state` (op 0x06) tells how the slots and binds are doing, `unset` (0x05) removes items by key. Add it last
-  (`add(config)`), then `addPlace(wire, console)`, `addUart(uart)`, `setPins(&pins)`, `applySaved()`
-  (`06.Settings/ProbeConfig`). Call `load()` before the sketch parks its pins and leave out what the saved settings
-  disable: `config.load(); pins.setDisabled(config.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());`
-  (a disabled channel is never touched, not even at boot). The PinTable keeps the settings' disabled channels apart
-  from `forbid` (the firmware's own, permanent): no item gives a forbidden pin back.
+  overflowed meanwhile (transports §4, console §2.1).
+- `Settings` is the core's settings (core §13): fn 0's get / set / unset / save / state and the items in every fn's
+  describe. The channel items (label, idle, disable) come with `setPins(&pins)`, the network's with `setWifi(&wifi)`, the
+  pass-throughs' with `addUart(uart)` and `addPlace(wire, console)` after `usePassthroughs()` (the wire's hold and rvswd's
+  rest too), SWD's hold with `addHold(wireSwd, swd.hold, checkSwdHold, &swd)`. A sketch's own items go under its own
+  interface: `addSetting(owner, "name.{}", form, keys, max_len)`; values the firmware gives: `firmwareValue(...)` (fixed or
+  by default; `fixedLabel(channel, "LED")`). The save (NVS on ESP32, the flash's last sector on RP2) is by name, so it reads
+  back when fn numbers move. It is no interface: no `endpoint.add` (making it attaches it to the endpoint). Call `load()`
+  before the sketch parks its pins and leave out what the saved settings disable: `settings.load();
+  pins.setDisabled(settings.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());` (a disabled channel is never
+  touched, not even at boot); `applySaved()` last, after every `endpoint.add` and add* (`06.Settings/Settings`). The
+  PinTable keeps the settings' disabled channels apart from `forbid` (the firmware's own, permanent): no value gives a
+  forbidden pin back.
 - A probe whose transport is its own USB device holds the at-boot slots' attach back until the host has configured
-  the device: `config.setAttachGate([] { return BootGuard::attachReady(tud_mounted()); })` before `applySaved()` (the
+  the device: `settings.setAttachGate([] { return BootGuard::attachReady(tud_mounted()); })` before `applySaved()` (the
   P4: `usbDevice.ready()`). A console polling its target from boot keeps interrupts off for each frame, and the USB
   interrupts it delays while the host enumerates the device can crash the USB stack (RP2: TinyUSB 0.18's "Can't
   continue xfer on inactive ep" panic). `BootGuard` (`OepBootGuard.h`): `begin()` first in `setup()`, `poll()` in
   `loop()`; it runs the watchdogs, counts fast crash-boots, and after `kSafeAfter` of them in a row `safe()` says to
-  call `config.skipBootAttach()` for that boot. On the RP2 point the SDK's `_exit` and `isr_hardfault` at
+  call `settings.skipBootAttach()` for that boot. On the RP2 point the SDK's `_exit` and `isr_hardfault` at
   `BootGuard::crashed()` (`Firmware/OepProbe/Rp2.h`): a panic then resets the chip instead of halting it. A firmware
   update (an ESP32 with bootloader rollback) is taken as working and confirmed as it starts: leave `verifyRollbackLater`
   undefined and the ESP32 core confirms the image before `setup()`, so no later reset goes back to the one before

@@ -3,7 +3,7 @@
 
 // OEP probe firmware, one per chip family: nothing is wired in - the host chooses every pin at run time (oep-spec
 // docs/oep-if-debug.ja.md §1, the plan of oep-core §8) - so one binary serves every jig; a jig is this firmware plus
-// its settings (oep.probe.config). The chip's own part is in its header; what it takes is a choice there (OepFeatures.h:
+// its settings (the settings (core §13)). The chip's own part is in its header; what it takes is a choice there (OepFeatures.h:
 // a sketch's own oepWithX() replaces the header's):
 //
 //   Rp2.h       RP2040 / RP2350 (profiles rp2040 / rp2350): USB CDC, vendor bulk, HID (UART bridge); RVSWD, SWD, SWIO,

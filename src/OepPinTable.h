@@ -6,7 +6,7 @@
 // interface that takes pins, so two of them never drive the same channel. Per-core pin modes live in OepPlatform.h.
 //
 // Two ways a channel is taken away: forbid (the firmware's: a pin the chip in this package uses itself; permanent,
-// describe never offers it) and setDisabled (oep.probe.config's disable item: the user's board does not wire it; the
+// describe never offers it) and setDisabled (the settings' disable item: the user's board does not wire it; the
 // settings can give it back). A channel taken by a plan is not touched by the claim: it keeps its idle state (an output
 // idle keeps driving) until its owner sets it (oep-if-fixture §1). A disabled channel is never claimed, parked or set to its idle state - the probe leaves
 // it as the reset left it - and describe still offers it (declarations only, core §7.3).
@@ -28,7 +28,7 @@ class PinTable {
   bool allowed(uint16_t channel) const { return channel < kChannels && (allowed_ >> channel) & 1; }
   // Channels taken away at start-up (pins the chip in this package uses itself: platformUnusablePins).
   void forbid(uint64_t mask) { allowed_ &= ~mask; }
-  // The settings' disabled channels (probe.config §1 disable). A channel enabled again is free: it goes to its idle
+  // The settings' disabled channels (core §13.8 disable). A channel enabled again is free: it goes to its idle
   // state now. One disabled is left as it is (the settings refuse to disable a channel in use).
   void setDisabled(uint64_t mask) {
     const uint64_t back = disabled_ & ~mask;
@@ -88,7 +88,7 @@ class PinTable {
   }
   uint64_t allowedMask() const { return allowed_; }
   uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
-  // Idle states (oep.probe.config idle: 0 Hi-Z, 1 pull-up, 2 pull-down, 3 output low, 4 output high; kIdleUnset =
+  // Idle states (the settings (core §13) idle: 0 Hi-Z, 1 pull-up, 2 pull-down, 3 output low, 4 output high; kIdleUnset =
   // Hi-Z). Applied now to a free channel (apply false: only kept, for a channel about to be disabled), and at every
   // release; an output idle drives its level for as long as the channel is free, at its strength `drive` (a level of
   // platformDriveLevels; kDriveDefault: the default level) - level and strength together. false: not a channel of this
@@ -153,13 +153,13 @@ class PinTable {
     level = value;
     return true;
   }
-  // Channels the probe can only read (the classic ESP32's GPIO34-39): no output idle on them (probe.config §1), and left
+  // Channels the probe can only read (the classic ESP32's GPIO34-39): no output idle on them (core §13.8), and left
   // out of the role_channels of the roles that drive a line (outputMask: UART TX, I2C SDA / SCL, SPI MISO).
   void setInputOnly(uint64_t mask) { input_only_ = mask; }
   bool canOutput(uint16_t channel) const { return allowed(channel) && !((input_only_ >> channel) & 1); }
   uint64_t outputMask() const { return allowed_ & ~input_only_; }
   // Channels without internal pull-up / pull-down (the classic ESP32's GPIO34-39): no idle with mode 1 / 2 on them
-  // (probe.config §1, rejected unsupported).
+  // (core §13.8, rejected unsupported).
   void setNoPull(uint64_t mask) { no_pull_ = mask; }
   bool canPull(uint16_t channel) const { return allowed(channel) && !((no_pull_ >> channel) & 1); }
 
@@ -195,8 +195,8 @@ class PinTable {
 };
 
 // oep-if-debug §2: whether a debug wire holds its lines at their rest after a close that is not a lost line - the
-// setting wire-hold of the port's SWDIO (oep.probe.config sets `on`; none: on) and no idle / disable item on its pins.
-// `check` (set by the wire) ends a hold whose pins were taken or whose settings changed; ProbeConfig::poll calls it.
+// setting hold.{} of the port's SWDIO (the settings (core §13) sets `on`; none: on) and no idle / disable item on its pins.
+// `check` (set by the wire) ends a hold whose pins were taken or whose settings changed; Settings::poll calls it.
 struct WireHold {
   bool (*on)(const void *, uint16_t swdio) = nullptr;
   const void *context = nullptr;

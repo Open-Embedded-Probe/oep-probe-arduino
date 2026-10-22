@@ -6,7 +6,7 @@
 // Transports, each a choice: UART0 through the bridge at 115200 (probe guide §5; a host may raise it for its session: port_speed,
 // below) - serial port 0: OEP frames (0x00 <COBS> 0x00) and the raw bytes of its bind on one line (oep-transports §4).
 // With Wi-Fi (the Wifi choice, in by default): TCP, transport 1 - port kTcpPort, up to three connections
-// at once, each a transport of its own (oep-transports §1); the networks come from oep.probe.config's wifi item (no
+// at once, each a transport of its own (oep-transports §1); the networks come from the settings' Wi-Fi items (no
 // network until one is set; no credentials in the build), announced by mDNS as _oep._tcp (OepWifi.h). The bridge's auto-reset
 // circuit resets the ESP32 when the port is opened with DTR / RTS in the wrong order: a host opens it with both on
 // (host guide §1). The bridge's USB ID is not the project's VID:PID: a host reaches this probe by the user choosing its
@@ -14,7 +14,7 @@
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.swio + oep.target.riscv-dm + oep.target.console (WCH CH32V00x, one wire);
 // oep.fixture.gpio / uart / capture (the core-1 GPIO sampler: up to 8 lines, 1-300 kHz, one-shot); the ESP-IDF SPI / I2C
-// devices oep.fixture.spi-target / i2c-target; oep.probe.config (saved in NVS); oep.fixture.analog
+// devices oep.fixture.spi-target / i2c-target; the settings (core §13) (saved in NVS); oep.fixture.analog
 // (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a choice (OepFeatures.h:
@@ -40,7 +40,7 @@
 #include <OepCaptureGroup.h>
 #include <OepCh32Dm.h>
 #include <OepChoice.h>
-#include <OepConfig.h>
+#include <OepSettings.h>
 #include <OepConsole.h>
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
@@ -71,7 +71,7 @@ static constexpr uint16_t kTcpPort = 7450;
 static constexpr size_t kTcpConnections = 3;
 static oep::Slot<oep::TcpListener<kTcpConnections>> tcp;
 static oep::Slot<oep::WifiStation> wifi;
-// probe.config §1.4: with the wifi item, every transport answers max_frame 112 or more (one set of the longest wifi item)
+// transports §7.1: with the wifi item, every transport answers max_frame 112 or more (one set of the longest wifi item)
 static_assert(kMaxFrame >= oep::reg::kLimitWifiMinMaxFrame, "a probe with the wifi item answers max_frame >= wifi_min_max_frame");
 // A slot's send buffer holds all a host within its window can have outstanding (OepTcp.h): two answers in flight, the
 // push queue (1024, the endpoint's default) and one push frame, the event queue (32 x 48 bytes)
@@ -143,6 +143,7 @@ static oep::Hooks<void (*)(), 1> lastly;
 // settings', the group's), so neither names the other's code: the console, the uart and the Wi-Fi station for the
 // settings, the sampler and the analog for the group
 static oep::SwdPort *swdIn = nullptr;
+static oep::WireSwd *swdWireIn = nullptr;   // its interface: the owner of its hold item (core §13.1)
 static oep::TargetConsoleStream *consoleIn = nullptr, *rvswdConsoleIn = nullptr;
 static oep::WireRvswd *rvswdWireIn = nullptr;
 static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the SWIO wire's, the RVSWD wire's connections too
@@ -239,18 +240,17 @@ void oepAddCapture() {
   loopWork.add([] { capture->poll(); });
 }
 
-// oep.probe.config, saved in NVS: read first (its disable items' channels are never parked: probe.config §2, disable
+// the settings (core §13), saved in NVS: read first (its disable items' channels are never parked: core §13.7, disable
 // before anything else; applySaved gives them back if the settings are not applied), its fn after the capture's
-void oepAddConfig() {
+void oepAddSettings() {
   static oep::Slot<oep::Binds> binds;
-  static oep::Slot<oep::ProbeConfig> config;
-  oep::ProbeConfig &c = config.make(endpoint, binds.make());
+  static oep::Slot<oep::Settings> config;
+  oep::Settings &c = config.make(endpoint, binds.make());
   c.load();
   pins.setDisabled(c.savedDisabled());
   endpoint.setRawPorts(&*binds);
   settingsFn.add([] {
-    endpoint.add(*config);   // the fns before it keep their numbers
-    config->usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
+    config->usePassthroughs();   // a serial port's raw stream carries them (fixture §2.1)
     if (consoleIn) config->addPlace(swio->wire, *consoleIn);
     if (uartIn) config->addUart(*uartIn);
     if (wifiIn) config->setWifi(wifiIn);   // the wifi item: the networks to join (applied with the saved settings)
@@ -259,13 +259,13 @@ void oepAddConfig() {
   });
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot,
-  // 0.0.11-0.0.16). probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach
+  // 0.0.11-0.0.16). core §13.7: disable and idle (outputs driven) before every other item; the at-boot slots' attach
   // comes on config.poll(), so a target powered through an output idle is up before it. No USB device of its own (a
   // bridge carries the UART): no gate on the at-boot attach. After BootGuard::kSafeAfter fast crash-boots the saved
   // at-boot slots wait for the host.
   lastly.add([] {
     // oep.wire.swd's hold after a close (oep-if-debug §2): its fn after the settings'
-    if (swdIn) config->addHold(swdIn->hold, oep::checkSwdHold, swdIn);
+    if (swdIn) config->addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);
     if (rvswdConsoleIn) config->addPlace(*rvswdWireIn, *rvswdConsoleIn);   // a slot on the RVSWD wire: the second place
     if (oep::BootGuard::safe()) config->skipBootAttach();
     config->applySaved();
@@ -302,6 +302,7 @@ void oepAddSwd() {
   endpoint.add(wireSwd.make(swd, 0));
   endpoint.add(adi.make(swd, 0));
   swdIn = &swd;
+  swdWireIn = &*wireSwd;
 }
 
 // oep.wire.rvswd (WCH CH32, 2 wires) on the GPIO registers (OepRvswdPhy.cpp), any output pair the host chooses (PinTable
@@ -403,7 +404,7 @@ __attribute__((weak)) void oepWithUart() { oepAddUart(); }
 __attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
 __attribute__((weak)) void oepWithSpi() { oepAddSpi(); }
 __attribute__((weak)) void oepWithCapture() { oepAddCapture(); }
-__attribute__((weak)) void oepWithConfig() { oepAddConfig(); }
+__attribute__((weak)) void oepWithSettings() { oepAddSettings(); }
 __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
@@ -419,11 +420,11 @@ void setup() {
   // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
   const uint64_t unusable = oep::platformUnusablePins();
   pins.forbid(unusable);
-  // GPIO34-39 are inputs without pulls (ESP32 datasheet, GPIO): no output idle, no pull-up / pull-down idle (probe.config
+  // GPIO34-39 are inputs without pulls (ESP32 datasheet, GPIO): no output idle, no pull-up / pull-down idle (the settings
   // §1, rejected unsupported), and not offered to a role that drives its line (UART TX, I2C SDA / SCL, SPI MISO, reset)
   pins.setInputOnly(kInputOnly);
   pins.setNoPull(kInputOnly);
-  oepWithConfig();   // the saved settings read before the channels are parked
+  oepWithSettings();   // the saved settings read before the channels are parked
   oep::platformParkMask(kChannels & ~unusable & ~pins.disabledMask());
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(oep::platformRestart, kRestartMaxMs);

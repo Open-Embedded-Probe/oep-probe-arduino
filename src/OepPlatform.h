@@ -11,6 +11,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <stdio.h>
 
 #include "Oep.h"
 #include "OepBootGuard.h"
@@ -66,6 +67,19 @@ inline int platformPad(int channel) {
 #endif
 }
 
+// A channel's name (core §7.5: the pin's name in the chip's datasheet; settings and their exports name channels by it):
+// "GPIO14" on an RP2 or an ESP32, "PA5" on a CH32 (channel = port x 24 + bit). out: 8 bytes or more. Its length.
+inline size_t platformChannelName(uint16_t channel, char *out) {
+#if defined(ARDUINO_ARCH_CH32RV)
+  out[0] = 'P';
+  out[1] = static_cast<char>('A' + channel / 24);
+  return 2 + putDecimal(out + 2, channel % 24u);
+#else
+  const size_t n = putText(out, "GPIO");
+  return n + putDecimal(out + n, channel);
+#endif
+}
+
 inline void platformPresetLevel(int pin, int level) {
 #if defined(ARDUINO_ARCH_ESP32)
   gpio_set_level(static_cast<gpio_num_t>(pin), level);
@@ -100,7 +114,7 @@ inline void platformGpio(int pin, uint8_t mode) {
     case kGpioInputPullUp: pinMode(pad, INPUT_PULLUP); break;
     case kGpioInputPullDown: pinMode(pad, INPUT_PULLDOWN); break;
     // The level into the output register first (gpio_set_level: digitalWrite refuses a pin not yet set up as a GPIO),
-    // then the output on: an output idle (probe.config §1) on a power switch comes up at its level, no pulse.
+    // then the output on: an output idle (core §13.8) on a power switch comes up at its level, no pulse.
     case kGpioOutputLow: platformPresetLevel(pin, LOW); pinMode(pad, OUTPUT); digitalWrite(pad, LOW); break;
     case kGpioOutputHigh: platformPresetLevel(pin, HIGH); pinMode(pad, OUTPUT); digitalWrite(pad, HIGH); break;
     case kGpioOpenDrainLow: pinMode(pad, OUTPUT_OPEN_DRAIN); digitalWrite(pad, LOW); break;

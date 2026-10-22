@@ -17,12 +17,12 @@
 //   interrupt / task watchdog or a CPU lockup) and that came within kStableMs of the boot before it counts one more; a boot
 //   up kStableMs, a restart the firmware makes on purpose (planned) or any other reset (power-on, the reset pin) starts
 //   again at 0. After kSafeAfter in a row the boot is a safe one (safe): the sketch does not start what the saved settings
-//   would start by themselves - the at-boot slots' attach and the consoles that ride it (ProbeConfig::skipBootAttach) -
+//   would start by themselves - the at-boot slots' attach and the consoles that ride it (Settings::skipBootAttach) -
 //   so a crash those set off at boot cannot bring the probe down again and again. One boot only: the next starts them.
 //   The count is kept where a reset leaves it (RP2: watchdog scratch 0 / 1; ESP: RTC memory not initialised at boot).
 //
 //   The USB gate. attachReady(configured) is the at-boot attach's gate on a probe whose transport is its own USB device
-//   (ProbeConfig::setAttachGate): open once the host has kept the device configured for kUsbSettleMs, or kAttachGraceMs
+//   (Settings::setAttachGate): open once the host has kept the device configured for kUsbSettleMs, or kAttachGraceMs
 //   after boot without a host (a probe on a charger still attaches).
 #pragma once
 

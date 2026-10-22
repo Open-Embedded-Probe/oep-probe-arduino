@@ -22,10 +22,11 @@
 namespace oep {
 
 // The raw side of the serial ports (transports §4): what a serial port carries outside the frames. The binds implement it
-// (oep.probe.config §1.2); the endpoint calls it from poll(), the one writer of every port.
+// (oep.console §2.1); the endpoint calls it from poll(), the one writer of every port.
 class PinTable;
 
 class Endpoint;
+class SettingsCore;
 
 // One accepted TCP connection at a time (transports §1): a Stream while it lasts. A listening socket is one transport
 // entry of fn 0's describe (kind 6, interface 0xFF); each connection accepted on it is a transport of its own -
@@ -220,7 +221,7 @@ class Endpoint {
   // lists its own interfaces after the sketch's, in this order: oep.probe.plan when an interface has plan roles,
   // oep.probe.restart when setRestart gave a handler - so the same firmware gives every interface the same fn and
   // instance at every boot, and a firmware that adds an interface moves only these two (the saved settings name their
-  // interfaces by name, instance and revision and are renumbered, oep-if-probe-config §2; they never name these two).
+  // interfaces by name, instance and revision and are renumbered, core §13.7; they never name these two).
   bool add(Interface &interface);
   bool anyPlanRoles() const {
     for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->planRoles()) return true;
@@ -235,7 +236,7 @@ class Endpoint {
     if (polled_) return fnOf(restart_iface_);
     return restart_ ? static_cast<uint16_t>(count_ + 1 + (anyPlanRoles() ? 1 : 0)) : 0;
   }
-  // The plan (oep-if-plan, per fn): the roles now applied (persistent_only: those set through oep.probe.config), and
+  // The plan (oep-if-plan, per fn): the roles now applied (persistent_only: those set through the settings (core §13)), and
   // a replacement of the fns listed that is all or nothing and outlives sessions (0: applied; else the reject reason,
   // with the plans before it applied again). A listed fn with no role is released.
   static constexpr size_t kMaxRoles = 64;   // the plan's role assignments, every fn together (describe plan_roles)
@@ -246,11 +247,20 @@ class Endpoint {
   Result planUnavailable(uint8_t *out, size_t capacity) const {
     return unavailable(out, capacity, plan_refusal_.cause, plan_refusal_.channel);
   }
-  // The channels oep.probe.config's disable items take away (channel < 64): a plan_apply naming one is refused
-  // unavailable cause 5 (held by settings) with the channel (probe.config §1).
+  // The channels the settings' channel.{}.disable takes away (channel < 64): a plan_apply naming one is refused
+  // unavailable cause 5 (held by settings) with the channel (core §13.8).
   void setDisabled(uint64_t mask) { disabled_ = mask; }
+  // The settings (core §13): fn 0's get / set / unset / save / state / network, and every fn's setting TLVs. Settings
+  // sets it itself; without one fn 0 offers none of them.
+  void setSettings(SettingsCore *settings) { settings_ = settings; }
+  // The kind of the transport with describe index `index` (core §7.5). false: none.
+  bool transportKindOf(uint16_t index, uint8_t &kind) const {
+    for (size_t i = 0; i < transport_count_; ++i)
+      if (transports_[i].index == index) { kind = transports_[i].kind; return true; }
+    return false;
+  }
   // The pin table the interfaces' plans claim from: a plan replacement releases only the channels leaving the plan
-  // (PinTable::deferIdle; oep-core §8). ProbeConfig::setPins sets it too.
+  // (PinTable::deferIdle; oep-core §8). Settings::setPins sets it too.
   void setPins(PinTable *pins) { pins_ = pins; }
   bool disabled(uint16_t channel) const { return channel < 64 && (disabled_ >> channel) & 1; }
   // fn 0's describe: the probe itself, as TLV bytes (kept by the caller). Declarations only (core §7.3).
@@ -409,6 +419,7 @@ class Endpoint {
   friend class ProbeRestart;
   void freeze();   // the first poll(): the endpoint's own interfaces after the sketch's, the list fixed
   const uint8_t *probe_tlv_ = nullptr;
+  SettingsCore *settings_ = nullptr;
   size_t probe_tlv_length_ = 0;
   uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
   PinTable *pins_ = nullptr;                     // setPins
@@ -468,7 +479,7 @@ class Endpoint {
   uint16_t replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns, bool persistent);
   void planRelease(const uint16_t *fns, size_t nfns);
   bool planned_[kMaxInterfaces] = {};
-  bool persistent_[kMaxInterfaces] = {};   // planned through replacePlan (oep.probe.config): a lapse does not release it
+  bool persistent_[kMaxInterfaces] = {};   // planned through replacePlan (the settings (core §13)): a lapse does not release it
   // Subscriptions, per fn (core §11.3: one per fn, the lock holder's).
   volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;

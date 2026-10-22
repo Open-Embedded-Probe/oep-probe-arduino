@@ -159,7 +159,7 @@ class PositionStream {
   }
 };
 
-// A stream a serial port's bind can carry (oep.probe.config §1.2): the target's console of a slot, a fixture UART's
+// A stream a serial port's bind can carry (oep.console §2.1): the target's console of a slot, a fixture UART's
 // receive side. The binds read it from positions of their own (it is never consumed) and hand the port's raw bytes to
 // its other end.
 class BindSource {

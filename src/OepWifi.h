@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Wi-Fi for OEP over TCP on an ESP32 with its own radio: joins the networks of oep.probe.config's wifi item with the
-// netif's ipv4 item (probe.config §1.3-§1.5, OepConfig.h; netif 1 "wifi"), listens on one TCP port (OepTcp.h) and
+// Wi-Fi for OEP over TCP on an ESP32 with its own radio: joins the networks of the settings' Wi-Fi items with the
+// netif's IPv4 items (transports §7, OepSettings.h; netif 1 "wifi"), listens on one TCP port (OepTcp.h) and
 // announces it by mDNS. Header-only: only a sketch that
 // includes it links the Wi-Fi stack.
 //
@@ -12,7 +12,7 @@
 //   wifi.begin(unitId);                    // mDNS names from the unit_id
 //   loop(): wifi.poll(); tcp.poll(); endpoint.poll(); ...
 //
-// The list is tried in entry order (probe.config §1.4: no entry skipped - a hidden SSID never shows in a scan), each
+// The list is tried in entry order (transports §7.1: no entry skipped - a hidden SSID never shows in a scan), each
 // entry for up to kTryMs (less when the driver reports a failure: network not found, authentication); the first that
 // gets an IPv4 address is kept. After every entry failed the probe waits kRetryMs and starts over; after the link goes
 // it starts over at once. A list changed while connected keeps the link when the entry in use is still there
@@ -26,7 +26,7 @@
 
 #include <Arduino.h>
 
-#include "OepConfig.h"
+#include "OepSettings.h"
 #include "OepTcp.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(SOC_WIFI_SUPPORTED) && SOC_WIFI_SUPPORTED
@@ -62,7 +62,7 @@ class WifiStation final : public WifiControl {
       for (size_t i = 0; i < count; ++i) keep |= entries[i] == list_[current_];
     ipv4_ = ipv4;
     const WifiEntry was = current_ < count_ ? list_[current_] : WifiEntry{};
-    count_ = count > ProbeConfig::kMaxWifi ? ProbeConfig::kMaxWifi : count;
+    count_ = count > Settings::kMaxWifi ? Settings::kMaxWifi : count;
     for (size_t i = 0; i < count_; ++i) list_[i] = entries[i];
     if (keep) {
       for (size_t i = 0; i < count_; ++i) if (list_[i] == was) current_ = i;
@@ -141,7 +141,7 @@ class WifiStation final : public WifiControl {
   void (*end_)(void *);
   void *tcp_;
   char unit_[40] = {};
-  WifiEntry list_[ProbeConfig::kMaxWifi];
+  WifiEntry list_[Settings::kMaxWifi];
   Ipv4Setting ipv4_;                // DHCP unless the ipv4 item says static
   size_t count_ = 0, current_ = 0;
   size_t tried_ = 0;   // the entries of list_ tried since the start over
@@ -231,7 +231,7 @@ class WifiStation final : public WifiControl {
     trying_length_ = 0;
     memcpy(trying_, e.ssid, e.ssid_length);
     trying_length_ = e.ssid_length;
-    if (ipv4_.mode == reg::probe_config::kIpv4ModeStatic) {   // §1.5: the fixed address, gateway and dns (0: none)
+    if (ipv4_.mode == reg::core::kIpv4ModeStatic) {   // transports §7.2: the fixed address, gateway and dns (0: none)
       const uint32_t mask = ipv4_.prefix >= 32 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu >> ipv4_.prefix);
       WiFi.config(IPAddress(ipv4_.address), IPAddress(ipv4_.gateway),
                   IPAddress(uint8_t(mask >> 24), uint8_t(mask >> 16), uint8_t(mask >> 8), uint8_t(mask)), IPAddress(ipv4_.dns));

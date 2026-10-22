@@ -10,7 +10,7 @@
 //
 // Interfaces (revision 1), as the RP2's (Rp2.h): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm +
 // oep.target.console (WCH CH32, 2 wires); oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart;
-// oep.probe.config (no store yet: nothing saved, setStorage(false)); oep.probe.link; oep.probe.plan and
+// the settings (core §13) (no store yet: nothing saved, setStorage(false)); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own). Every channel (platformPad: port x 24 + bit) may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (any enabled USART's route; another pair is
 // refused at the UART's begin).
@@ -25,7 +25,7 @@
 // goes through the hooks below, so a left-out X links none of its code. The CH32 has: Rvswd (oep.wire.rvswd +
 // oep.target.riscv-dm), Console (oep.target.console on the RVSWD wire), Swio (oep.wire.swio, CH32V00x; SwioConsole on
 // it), Swd (oep.wire.swd + oep.target.arm-adi), Gpio,
-// Uart, Config (oep.probe.config), Link (oep.probe.link); Bulk (the USB vendor bulk transport), Hid (the USB HID transport: usage page 0xFF4F, usage 0x45,
+// Uart, Config (the settings (core §13)), Link (oep.probe.link); Bulk (the USB vendor bulk transport), Hid (the USB HID transport: usage page 0xFF4F, usage 0x45,
 // transports §1, §3), Cdc (a USB CDC port, COBS: a serial transport), Bridge (a UART bridge on Serial1's default pins,
 // 115200: a serial transport).
 #pragma once
@@ -35,7 +35,7 @@
 #include <OepBind.h>
 #include <OepCh32Dm.h>
 #include <OepChoice.h>
-#include <OepConfig.h>
+#include <OepSettings.h>
 #include <OepConsole.h>
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
@@ -167,6 +167,7 @@ static oep::TargetConsoleStream *consoleIn = nullptr, *swioConsoleIn = nullptr;
 static oep::WireRvswd *swioWireIn = nullptr;
 static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the RVSWD wire's, the SWIO wire's connections too
 static oep::SwdPort *swdIn = nullptr;
+static oep::WireSwd *swdWireIn = nullptr;   // its interface: the owner of its hold item (core §13.1)
 static oep::FixtureUart *uartIn = nullptr;
 
 void oepAddBulk() {
@@ -288,6 +289,7 @@ void oepAddSwd() {
   endpoint.add(wireSwd.make(swd, 0));
   endpoint.add(adi.make(swd, 0));
   swdIn = &swd;
+  swdWireIn = &*wireSwd;
 }
 
 void oepAddGpio() {
@@ -310,17 +312,16 @@ void oepAddI2c() {
   endpoint.add(i2c.make(pins));
 }
 
-void oepAddConfig() {
+void oepAddSettings() {
   static oep::Slot<oep::Binds> binds;
-  static oep::Slot<oep::ProbeConfig> config;
-  oep::ProbeConfig &c = config.make(endpoint, binds.make());
-  c.setStorage(false);   // no store on this core yet (probe.config §4: no save / erase / state)
+  static oep::Slot<oep::Settings> config;
+  oep::Settings &c = config.make(endpoint, binds.make());
+  c.setStorage(false);   // no store on this core yet (core §13.7: no save / erase / state)
   endpoint.setRawPorts(&*binds);
-  endpoint.add(c);
-  if (serialPorts) c.usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
+  if (serialPorts) c.usePassthroughs();   // a serial port's raw stream carries them (fixture §2.1)
   if (consoleIn) c.addPlace(rvswd->wire, *consoleIn);
   if (swioConsoleIn) c.addPlace(*swioWireIn, *swioConsoleIn);   // a slot on the one wire (CH32V00x): the second place
-  if (swdIn) c.addHold(swdIn->hold, oep::checkSwdHold, swdIn);
+  if (swdIn) c.addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);
   if (uartIn) c.addUart(*uartIn);
   c.setPins(&pins);
   loopWork.add([] { config->poll(); });
@@ -359,8 +360,8 @@ __attribute__((weak)) void oepWithSwio() {
   if (kRoomy) oepAddSwio();
 }
 __attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
-__attribute__((weak)) void oepWithConfig() {
-  if (kRoomy) oepAddConfig();
+__attribute__((weak)) void oepWithSettings() {
+  if (kRoomy) oepAddSettings();
 }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 
@@ -409,7 +410,7 @@ void setup() {
   oepWithI2c();
   oepWithSwio();   // and its console's choice
   oepWithLink();
-  oepWithConfig();
+  oepWithSettings();
 }
 
 void loop() {

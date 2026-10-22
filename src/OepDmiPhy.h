@@ -159,7 +159,7 @@ class DmiPhy {
   virtual void backgroundSent() {}
   // The wire paused now for another user of the probe's bus (SwioPhy on the classic ESP32: a logic sampler's window, an
   // immediate one or a trigger search, OepWireGate.h). The probe's own work on the wire that no request waits for - an
-  // at-boot slot's attach retries and liveness checks (ProbeConfig) - waits while it is, without asking for a turn: a
+  // at-boot slot's attach retries and liveness checks (Settings) - waits while it is, without asking for a turn: a
   // frame inside a trigger search holds the sampler up (slipped), and an attach started in a turn goes on into the
   // segment.
   virtual bool wirePaused() const { return false; }

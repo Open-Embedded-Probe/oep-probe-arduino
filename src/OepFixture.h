@@ -13,7 +13,7 @@
 //     the classic ESP32 / ESP32-P4 and the RP2040 / RP2350): a set's drive, else the channel's idle drive, else the
 //     default level, kept until the channel is set again; a channel taken or released is at its idle state's (PinTable).
 //   oep.fixture.uart   plan roles 1 = RX, 2 = TX. A position stream like oep.target.console (without the stream
-//                      byte): the plan makes the stream and the UART runs from then on (the probe.config uart item's
+//                      byte): the plan makes the stream and the UART runs from then on (the the settings uart item's
 //                      settings, else 115200 8N1) until plan_release; reading does not consume. Positions and mark
 //                      serials never go back within a boot (a plan made again goes on from where the last left off).
 //                      TX idles high while planned (before configure too); released, it goes to its idle state
@@ -87,7 +87,7 @@ class FixtureUart final : public Interface, public BindSource {
   void planRelease() override;
   uint8_t planRefusalCause() const override { return refusal_cause_; }
   void planRefusalDetail(uint16_t &channel) const override { channel = refusal_channel_; }
-  // probe.config §1.1's pass-through: the UART on `rx` alone while no plan is there, its bytes to `sink`
+  // fixture §2.1's pass-through: the UART on `rx` alone while no plan is there, its bytes to `sink`
   using PassSink = void (*)(void *context, const uint8_t *data, size_t length);
   bool passStart(uint16_t rx, uint32_t baud, uint8_t format, PassSink sink, void *context);
   void passStop();
@@ -98,11 +98,11 @@ class FixtureUart final : public Interface, public BindSource {
   void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }   // reads sized by their route
   void poll();   // from loop(): moves what the UART received into the stream
   uint32_t baud() const { return running_ ? baud_ : 0; }
-  // The probe.config uart item (oep-if-probe-config §1): applied when the plan gives the UART its pins, unless a
+  // The the settings uart item (core §13.8): applied when the plan gives the UART its pins, unless a
   // session's configure came since (that wins until the plan is released). format: the configure TLV's byte.
   void setItem(uint32_t baud, uint8_t format);
   void clearItem();
-  // What probe.config checks before taking a uart item: the format's bits defined (else malformed), the baud this UART
+  // What the settings checks before taking a uart item: the format's bits defined (else malformed), the baud this UART
   // can run within 5 % (else unsupported).
   static bool formatDefined(uint8_t format);
   // The formats describe declares (fixture §2: 8N1 required): bit k = format value k. Every defined one by default.
@@ -117,7 +117,7 @@ class FixtureUart final : public Interface, public BindSource {
   // whose loop() turns its core's interrupts off for bit-banged frames puts it on the other core; -1 (the default):
   // loop()'s.
   void setInterruptCore(int core) { irq_core_ = core; }
-  // BindSource (oep.probe.config §1.2): the receive stream while the UART is planned; a port's raw bytes go out on TX,
+  // BindSource (oep.console §2.1): the receive stream while the UART is planned; a port's raw bytes go out on TX,
   // as much as the UART takes without waiting.
   const PositionStream *bindStream() const override { return rx_ >= 0 || tx_ >= 0 ? &stream_ : nullptr; }
   uint16_t bindStreamNumber() const override { return 1; }   // one stream for good: positions only grow

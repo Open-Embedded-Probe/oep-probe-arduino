@@ -17,7 +17,7 @@
 // Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
-// max_speed) comes from the host (oep-if-debug §3). oep.probe.config keeps a jig's settings in flash (slots on any pair,
+// max_speed) comes from the host (oep-if-debug §3). the settings (core §13) keeps a jig's settings in flash (slots on any pair,
 // a bind of the CDC port - the target's console on the same line as OEP -, labels, idle states).
 //
 // The bench's trace (off by default; never in a release): build with -DOEP_DEBUG_LOG=1 -DOEP_DEBUG_LOG_TX=<GP> (e.g.
@@ -33,7 +33,7 @@
 #include <OepCaptureGroup.h>
 #include <OepCh32Dm.h>
 #include <OepChoice.h>
-#include <OepConfig.h>
+#include <OepSettings.h>
 #include <OepConsole.h>
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
@@ -93,6 +93,7 @@ static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the RVSWD wire's, the SWIO 
 static oep::Rp2LogicCapture *logicIn = nullptr;   // the logic and the analog, for the group
 static oep::AnalogCapture *analogIn = nullptr;
 static oep::SwdPort *swdIn = nullptr;
+static oep::WireSwd *swdWireIn = nullptr;   // its interface: the owner of its hold item (core §13.1)
 static oep::FixtureUart *uartIn = nullptr;
 
 // The RVSWD wire's parts, the console's too (its choice is made in the wire's: no wire, no console)
@@ -176,6 +177,7 @@ void oepAddSwd() {
   endpoint.add(wireSwd.make(swd, 0));
   endpoint.add(adi.make(swd, 0));
   swdIn = &swd;
+  swdWireIn = &*wireSwd;
 }
 
 void oepAddGpio() {
@@ -196,13 +198,13 @@ void oepAddUart() {
 // interrupts it delayed and batched while the host enumerated the probe met the panic above.
 static bool autoAttachReady() { return oep::BootGuard::attachReady(tud_mounted()); }
 
-// oep.probe.config, keeping a jig's settings in flash: read first (its disable items' channels are never parked:
-// probe.config §2, disable before anything else; applySaved gives them back if the settings are not applied), its fn
+// the settings (core §13), keeping a jig's settings in flash: read first (its disable items' channels are never parked:
+// core §13.7, disable before anything else; applySaved gives them back if the settings are not applied), its fn
 // after the uart's
-void oepAddConfig() {
+void oepAddSettings() {
   static oep::Slot<oep::Binds> binds;
-  static oep::Slot<oep::ProbeConfig> config;
-  oep::ProbeConfig &c = config.make(endpoint, binds.make());
+  static oep::Slot<oep::Settings> config;
+  oep::Settings &c = config.make(endpoint, binds.make());
   if (oep::BootGuard::safe()) {   // after BootGuard::kSafeAfter fast crash-boots: the saved at-boot slots wait for the host
     c.skipBootAttach();
     OEP_LOGF("safe boot after %u fast crash-boots: at-boot slots not attached", unsigned(oep::BootGuard::crashes()));
@@ -212,17 +214,16 @@ void oepAddConfig() {
   pins.setDisabled(c.savedDisabled());
   settingsFn.add([] {
     endpoint.setRawPorts(&*binds);
-    endpoint.add(*config);   // the fns before it keep their numbers
-    config->usePassthroughs();   // a serial port's raw stream carries them (probe.config §1.1)
+    config->usePassthroughs();   // a serial port's raw stream carries them (fixture §2.1)
     if (consoleIn) config->addPlace(rvswd->wire, *consoleIn);
-    if (swdIn) config->addHold(swdIn->hold, oep::checkSwdHold, swdIn);   // oep.wire.swd's hold after a close (oep-if-debug §2): wire-hold
+    if (swdIn) config->addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);   // oep.wire.swd's hold after a close (oep-if-debug §2): hold.{}
     if (uartIn) config->addUart(*uartIn);
     config->setPins(&pins);   // the idle item sets these pins' free state
     loopWork.add([] { config->poll(); });
   });
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
   // (applied before the analog and the group were added, they never matched it: unreadable after every reboot,
-  // 0.0.11-0.0.16). probe.config §2: disable and idle (outputs driven) before every other item; the at-boot slots' attach
+  // 0.0.11-0.0.16). core §13.7: disable and idle (outputs driven) before every other item; the at-boot slots' attach
   // comes on config.poll(), so a target powered through an output idle is up before it.
   lastly.add([] {
     if (swioConsoleIn) config->addPlace(*swioWireIn, *swioConsoleIn);   // a slot on the one wire: the second place
@@ -316,7 +317,7 @@ __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
 __attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
 __attribute__((weak)) void oepWithUart() { oepAddUart(); }
-__attribute__((weak)) void oepWithConfig() { oepAddConfig(); }
+__attribute__((weak)) void oepWithSettings() { oepAddSettings(); }
 __attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 __attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
@@ -370,7 +371,7 @@ void setup() {
   oep::setLog(&Serial2);
   OEP_LOGF("oep trace on (%s)", kProduct);
 #endif
-  oepWithConfig();   // first: the saved settings read before the channels are parked
+  oepWithSettings();   // first: the saved settings read before the channels are parked
   oep::platformParkMask(kChannels & ~pins.disabledMask() & ~ownPins);   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(oep::platformRestart, kRestartMaxMs);

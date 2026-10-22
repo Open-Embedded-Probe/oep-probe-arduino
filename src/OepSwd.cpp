@@ -149,7 +149,7 @@ uint16_t WireSwd::idleOf(uint16_t swdio, uint16_t swclk, bool outputs) const {
 }
 
 bool WireSwd::free(uint16_t swdio, uint16_t swclk) const {
-  if (disabledOf(swdio, swclk) != 0xffff) return false;   // the settings disable it (probe.config §1): never used
+  if (disabledOf(swdio, swclk) != 0xffff) return false;   // the settings disable it (core §13.8): never used
   if (!port_.pin_choice || !port_.pins) return true;   // a fixed pair is the wire's own (kept out of the pin table)
   const bool mine = port_.connected && swdio == port_.swdio && swclk == port_.swclk;
   auto ok = [&](uint16_t c) { const uint8_t o = port_.pins->owner(c); return o == 0 || (mine && o == port_.pin_owner); };
@@ -316,7 +316,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
         if (!allowed(getU16(payload + 1 + 4 * k), getU16(payload + 3 + 4 * k))) return unsupportedIndex(out, capacity, k);
       for (uint8_t k = 0; k < count; ++k) {
         const uint16_t d = getU16(payload + 1 + 4 * k), c = getU16(payload + 3 + 4 * k);
-        const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
+        const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (core §13.8)
         if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
         const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5 (oep-if-debug §1)
         if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
@@ -385,7 +385,7 @@ Result WireSwd::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_
       if (refused(unknown)) return unknown;
       if (payload[0] != sw::kAttachMethodRun) return unsupportedValue(out, capacity);   // 0 only (oep-if-debug §5)
       if (max_hz < hzOf(kSlowHalfNs) || !allowed(d, c)) return unsupportedValue(out, capacity);   // fixed part: 0x00
-      const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (probe.config §1)
+      const uint16_t off = disabledOf(d, c);   // cause 5 with the channel (core §13.8)
       if (off != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, off);
       const uint16_t idle = idleOf(d, c, true);   // an output idle: cause 5
       if (idle != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, idle);
