@@ -44,7 +44,6 @@ static size_t describeProbe() {
   uint8_t id[17];
   oep::describeCore(w, "logic-capture", id, oep::platformUnitId(id, sizeof id), 55);
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
-  w.label(51, "LED");
   return w.ok() ? w.length() : 0;
 }
 
