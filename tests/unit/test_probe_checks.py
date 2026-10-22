@@ -5,8 +5,9 @@ from probe_checks import check_after, check_identity
 
 def snapshot():
     return {'unit_id': 'unit-a', 'model': 'esp32', 'firmware': 'candidate',
-            'missing_declarations': [], 'settings_items': [{'tag': 2, 'value_hex': '010061'}],
-            'state': {'storage': 'applied', 'slots': [{'slot': 0, 'state': 'connected'}]}}
+            'missing_declarations': [],
+            'settings_file': {'oep_settings': 1, 'settings': {'core': {'channel.GPIO1.label': 'a'}}},
+            'state': {'storage': 'applied', 'saved_generation': 1, 'reason': None}}
 
 
 def test_wrong_individual_is_rejected():
@@ -24,9 +25,8 @@ def test_same_individual_with_wrong_model_is_rejected():
 @pytest.mark.parametrize('change, error', [
     ({'firmware': 'old'}, 'unexpected firmware'),
     ({'missing_declarations': ['ops']}, 'missing declarations'),
-    ({'settings_items': []}, 'saved settings changed'),
-    ({'state': {'storage': 'needs_save', 'slots': []}}, 'not applied'),
-    ({'state': {'storage': 'applied', 'slots': []}}, 'did not reconnect'),
+    ({'settings_file': {'oep_settings': 1, 'settings': {}}}, 'saved settings changed'),
+    ({'state': {'storage': 'partial', 'saved_generation': 0, 'reason': 'item'}}, 'not applied'),
 ])
 def test_update_failure_is_detected(change, error):
     before = snapshot()

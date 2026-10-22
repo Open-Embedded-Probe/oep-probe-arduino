@@ -138,12 +138,6 @@ bool formatName(uint8_t format, char *out) {
 
 bool sameText(const uint8_t *a, size_t n, const char *b) { return strlen(b) == n && memcmp(a, b, n) == 0; }
 
-// The text rule (core §2.1): UTF-8 without control characters (the bytes checked here: no C0, no 0x7F).
-bool plainText(const uint8_t *d, size_t n) {
-  for (size_t i = 0; i < n; ++i) if (d[i] < 0x20 || d[i] == 0x7F) return false;
-  return true;
-}
-
 uint8_t gBlob[kMaxBlob];   // the save as written or read (save, readBlob: never at once)
 
 struct PassContext { Settings *settings; uint8_t port; };
@@ -585,7 +579,7 @@ Result Settings::checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_
   }
   switch (s.form) {
     case k::kSettingFormBytes: if (n > s.max_len) return rejected(kRejectMalformed); break;
-    case k::kSettingFormText: if (n < 1 || n > s.max_len || !plainText(d, n)) return rejected(kRejectMalformed); break;
+    case k::kSettingFormText: if (n < 1 || n > s.max_len) return rejected(kRejectMalformed); break;   // length only (§13.3)
     case k::kSettingFormU32: case k::kSettingFormIpv4: if (n != 4) return rejected(kRejectMalformed); break;
     case k::kSettingFormBool: if (n != 1 || d[0] > 1) return rejected(kRejectMalformed); break;
     case k::kSettingFormEnum: case k::kSettingFormTransport: if (n != 1) return rejected(kRejectMalformed); break;

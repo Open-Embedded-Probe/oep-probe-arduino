@@ -36,7 +36,7 @@ def check_identity(identity, unit, profile='esp32', *, before=False):
 
 
 def inspect(port, unit, profile='esp32', *, before=False, allow_unreadable=False):
-    from oep_client import config, core, dump, link, virtual_bench
+    from oep_client import core, dump, link, settings, virtual_bench
     h = link.open_host(port)
     try:
         values = dict(core.describe(h))
@@ -48,11 +48,11 @@ def inspect(port, unit, profile='esp32', *, before=False, allow_unreadable=False
         record = dict(identity)
         record['boot_id'] = h.limits['boot_id']
         try:
-            cfg = config.ProbeConfig(h)
-            cfg_hash, items = cfg.get()
-            record.update(settings_hash=cfg_hash,
-                          settings_items=[{'tag': tag, 'value_hex': value.hex()} for tag, value in items],
-                          state=dataclasses.asdict(cfg.state()))
+            st = settings.Settings(h)          # the core's settings (oep-spec core §13): the user's values by name
+            if st.offers('get'):
+                record['settings_file'] = st.export()
+                if st.offers('state'):
+                    record['state'] = dataclasses.asdict(st.state())
         except Exception as exc:
             if not allow_unreadable:
                 raise
@@ -75,19 +75,13 @@ def inspect(port, unit, profile='esp32', *, before=False, allow_unreadable=False
 
 
 def check_after(before, after, firmware):
-    from oep_client import config
     if 'boot_id' in before and before['boot_id'] == after.get('boot_id'):
         raise RuntimeError('probe did not reboot after transfer')
     if after['firmware'] != firmware:
         raise RuntimeError(f"unexpected firmware: {after['firmware']}")
     if after['missing_declarations']:
         raise RuntimeError(f"missing declarations: {after['missing_declarations']}")
-    unpack = lambda record: [(v['tag'], bytes.fromhex(v['value_hex'])) for v in record['settings_items']]
-    if 'settings_items' in before and not config.same_items(unpack(before), unpack(after)):
-        raise RuntimeError('saved settings changed')
-    if before.get('state', {}).get('storage') == 'applied' and after['state']['storage'] != 'applied':
+    if 'settings_file' in before and before['settings_file']['settings'] != after.get('settings_file', {}).get('settings'):
+        raise RuntimeError('saved settings changed')     # by name (core §13.7): the same values whatever moved
+    if before.get('state', {}).get('storage') == 'applied' and after.get('state', {}).get('storage') != 'applied':
         raise RuntimeError('saved settings were not applied')
-    expected = {s['slot'] for s in before.get('state', {}).get('slots', []) if s['state'] == 'connected'}
-    actual = {s['slot'] for s in after['state']['slots'] if s['state'] == 'connected'}
-    if not expected <= actual:
-        raise RuntimeError('previously connected slots did not reconnect')
