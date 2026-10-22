@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.37
 - (EN) riscv-dm run, resume and step lower haltreq in a DMCONTROL write of its own before the resumereq: the CH32V407 and
   CH32M030 ignore a resumereq while the haltreq held since the last stop is up, so every run of a connection after the
   first set its registers and ran nothing (stopped at its entry, status ok). Reported by ch32rv on the bench (2026-10-22).
