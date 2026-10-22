@@ -556,7 +556,8 @@ bool Ch32Dm::resume() {
   // asks again (the CH32 rule lives in the host, not in this generic operation). Nothing is kept across ops, so
   // nothing is given back here (§4).
   relink();                                                      // a change of state drops the CH32's link
-  phy_.write(kDmControl, 0x40000001);                            // resumereq, once (haltreq lowered)
+  phy_.write(kDmControl, 0x00000001);                            // haltreq lowered first (as run)
+  phy_.write(kDmControl, 0x40000001);                            // resumereq, once
   // Looked for in DMSTATUS for limits::kDmWaitMs of time (oep-if-debug §4, §4.2: not seen by then, status state).
   bool ok = false;
   const uint32_t started = millis();
@@ -931,6 +932,10 @@ bool Ch32Dm::runUntilHalt(uint32_t pc, const uint16_t *regnos, const uint32_t *v
     return millis() - started_ms >= timeout_ms;
   };
   report.not_run = false;
+  // haltreq lowered in a write of its own first: a resumereq is ignored while haltreq is set (RISC-V debug), and the
+  // CH32V407 / CH32M030 took the haltreq held since the last stop over the one written beside the resumereq - every run
+  // after the first set the registers and ran nothing (2026-10-22, ch32rv)
+  phy_.write(kDmControl, 0x00000001);
   phy_.write(kDmControl, 0x40000001);   // resumereq: run to the ebreak
   bool halted = false;
   uint32_t relinked_us = micros(), looks = 0, unanswered = 0, last_status = 0;
@@ -1061,6 +1066,7 @@ bool Ch32Dm::step(uint32_t &dpc_before, uint32_t &dpc_after, bool &moved, StepEn
   }
   phy_.write(kAbstractAuto, 0);
   if (!giveMailbox()) return false;        // the instruction runs on the target's own mailbox
+  phy_.write(kDmControl, 0x00000001);      // haltreq lowered first (as run)
   phy_.write(kDmControl, 0x40000001);      // resumereq, once
   // Back in debug mode by itself within limits::kDmWaitMs of time (oep-if-debug §4.2)?
   bool halted = false;

@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm run, resume and step lower haltreq in a DMCONTROL write of its own before the resumereq: the CH32V407 and
+  CH32M030 ignore a resumereq while the haltreq held since the last stop is up, so every run of a connection after the
+  first set its registers and ran nothing (stopped at its entry, status ok). Reported by ch32rv on the bench (2026-10-22).
+- (JA) riscv-dm の run・resume・step は、resumereq の前に、DMCONTROL の書き込み 1 回で haltreq だけを下ろすようにした。
+  CH32V407 と CH32M030 は、前の停止から立ったままの haltreq がある間の resumereq を無視するので、同じ接続の 2 回目以降の
+  run はレジスタを書くだけで 1 命令も実行されず、入口で止まったまま status ok を返していた（ch32rv がベンチで見つけた、2026-10-22）。
 - (EN) Settings move into the core (oep-spec 9fc6ad9 / ebc9c47, core §13): `oep.probe.config` and `OepConfig` are gone;
   `OepSettings` (`oep::Settings`) answers fn 0's get / set / unset / save / state / network and lists every owner's items
   in its describe (setting, setting_choice): fn 0's channel and Wi-Fi / IPv4 items, each wire's hold.{} (rvswd's rest.{}),

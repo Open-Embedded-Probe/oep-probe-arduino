@@ -204,6 +204,10 @@ class FakePhy final : public DmiPhy {
   // step_returns: a resumereq runs one instruction and the hart is back in debug mode at once (a step); each read takes
   // read_us of time
   bool ignore_halt = false, ignore_resume = false, step_returns = false;
+  // haltreq_blocks_resume: a resumereq is ignored while the haltreq of the previous DMCONTROL write is up, the one beside
+  // it notwithstanding (the CH32V407 / CH32M030); resumes_taken counts the resumereqs the hart took
+  bool haltreq_blocks_resume = false;
+  int resumes_taken = 0;
   uint32_t abstract_cmderr = 0;   // every abstract command fails with it (0: none)
   uint32_t hartsel = 0;           // DMCONTROL's hasel / hartsello / hartselhi as last written
   uint32_t dcsr_written = 0;      // the value of the last abstract command that wrote dcsr
@@ -292,11 +296,13 @@ class FakePhy final : public DmiPhy {
       else data0 = regs[0x7b0];
     }
     if (address == 0x10) {
+      const bool blocked = haltreq_blocks_resume && (dmcontrol & (1u << 31));
       dmcontrol = value;
       hartsel = value & 0x07ffffc0u;
       const bool was = halted;
       if ((value & (1u << 31)) && !ignore_halt) { halted = true; resumeack = false; }
-      if ((value & (1u << 30)) && !ignore_resume) {
+      if ((value & (1u << 30)) && !ignore_resume && !blocked) {
+        ++resumes_taken;
         halted = step_returns && !run_reads;
         resumeack = true;
         running_reads = run_reads;
@@ -976,6 +982,16 @@ int main() {
     r = call(riscv, TargetRiscvDm::kOpRun, {conn[0], conn[1], conn[2], conn[3], 0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 0, 0}, out);   // 1000 ms
     CHECK(ok(r) && out.size() >= 11 && out[0] == kStatusOk && out[1] == reg::target_riscv_dm::kRunStoppedStopped);
     CHECK(millis() - before_run < 50 && phy.halted);
+    // a module that ignores a resumereq while the haltreq held since the stop is up (CH32V407 / CH32M030): every run of
+    // the connection still runs (haltreq lowered in a write of its own first)
+    phy.haltreq_blocks_resume = true;
+    for (int i = 0; i < 3; ++i) {
+      const int taken = phy.resumes_taken;
+      r = call(riscv, TargetRiscvDm::kOpRun, {conn[0], conn[1], conn[2], conn[3], 0, 0, 0, 0x20, 0xe8, 0x03, 0, 0, 0, 0}, out);
+      CHECK(ok(r) && out.size() >= 11 && out[0] == kStatusOk && out[1] == reg::target_riscv_dm::kRunStoppedStopped &&
+            phy.resumes_taken == taken + 1);
+    }
+    phy.haltreq_blocks_resume = false;
     phy.run_reads = 0;
     // resume: the hart leaves debug mode; a stale "halted" read after it no longer hides that
     r = call(riscv, TargetRiscvDm::kOpResume, conn, out);
