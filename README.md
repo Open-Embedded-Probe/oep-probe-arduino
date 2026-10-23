@@ -285,9 +285,9 @@ string.
 | Field | Meaning |
 |---|---|
 | `schema` | 1. A reader refuses another number; fields are only added |
-| `kind` | `merged` (ESP32, the whole flash from `flash_offset` 0), `app` (ESP32, the app image: an update into the other app partition, the P4's DFU), `uf2` (RP2040 / RP2350) |
-| `model` | the probe's describe model this image reports (`esp32p4`, `esp32p4x`, `esp32`, `rp2040`, `rp2350`): the chip built for. The describe chip TLV reports `<part> v<rev>` of the running part (e.g. `esp32p4 v3.2` even for P4X) |
-| `fqbn`, `flash_offset` | what it was built with; where a `merged` image goes (`null` for the others) |
+| `kind` | `merged` (ESP32, the whole flash from `flash_offset` 0), `app` (ESP32, the app image: an update into the other app partition, the P4's DFU), `uf2` (RP2040 / RP2350), `flash` (CH32, the code flash from its start, 0x08000000: `flash_offset` 0) |
+| `model` | the probe's describe model this image reports (`esp32p4`, `esp32p4x`, `esp32`, `rp2040`, `rp2350`, `ch32x035`, `ch32v307`, `ch32h417`): the chip built for. The describe chip TLV reports `<part> v<rev>` of the running part (e.g. `esp32p4 v3.2` even for P4X) |
+| `fqbn`, `flash_offset` | what it was built with; where a `merged` or `flash` image goes (`null` for the others) |
 | `sha256` | of the file |
 
 The describe firmware string of every sketch built from this library is the library's release version (`0.0.20`,
