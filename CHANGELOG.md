@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.38
 - (EN) Names and initial values (oep-spec cc82b5e, core §13.4, §13.5, §13.8): a settings value carries no origin - get's
   value is fn number key len data, `firmwareValue` / `fixedLabel` give way to `initialValue` / `initialLabel`, put in on a
   boot without a save (every boot with no storage; an empty save keeps them out) and values like any other after it (the
