@@ -4,7 +4,9 @@
 // Host tests: the settings (oep-spec oep-core §13) beyond the shared vectors (test_vectors):
 // - fn 0's describe lists the core's items (setting, the idle's choices) and the netif, an interface's describe its own,
 //   and fn 0 names every channel (channel_name);
-// - get shows each value's origin: a fixed label refuses set and unset, a default one comes back after an unset;
+// - initial values go in on a boot without a save and are values like any other after it; a save, an empty one too,
+//   keeps them out; a probe of initial values only offers no set / unset (core §13.4, §13.5);
+// - labels are unique but for ASCII case and kept as written; a save with two such labels keeps the lower channel's (§13.8);
 // - a save is read back by name: a firmware whose fns moved applies the same values under its own numbers; a category
 //   it does not know leaves the rest applied (state 3, reason 2); a broken container applies nothing (state 2, reason 1);
 // - the Wi-Fi values go to the station only when they change; the passphrase is a secret: get shows no data, 0 bytes
@@ -145,7 +147,7 @@ static Bytes set(std::initializer_list<Bytes> values) {
 }
 static Bytes text(const char *t) { return Bytes(t, t + strlen(t)); }
 // get's values, every page from first 0.
-struct Value { uint16_t fn; uint8_t number; uint16_t key; uint8_t origin; Bytes data; };
+struct Value { uint16_t fn; uint8_t number; uint16_t key; Bytes data; };
 static std::vector<Value> values(Probe &p) {
   std::vector<Value> all;
   Bytes out;
@@ -154,19 +156,17 @@ static std::vector<Value> values(Probe &p) {
     if (!ok(r) || out.size() < 6) return all;
     size_t at = 6;
     for (uint8_t k = 0; k < out[5]; ++k) {
-      const size_t len = getU16(&out[at + 6]);
-      all.push_back({getU16(&out[at]), out[at + 2], getU16(&out[at + 3]), out[at + 5],
-                     Bytes(out.begin() + at + 8, out.begin() + at + 8 + len)});
-      at += 8 + len;
+      const size_t len = getU16(&out[at + 5]);   // fn number key len data (core §13.5)
+      all.push_back({getU16(&out[at]), out[at + 2], getU16(&out[at + 3]), Bytes(out.begin() + at + 7, out.begin() + at + 7 + len)});
+      at += 7 + len;
     }
     if (!out[0]) return all;
     first = static_cast<uint16_t>(first + out[5]);
   }
 }
-static bool has(const std::vector<Value> &all, uint16_t fn, uint8_t number, uint16_t key, const Bytes &data,
-                uint8_t origin = rc::kSettingOriginUser) {
+static bool has(const std::vector<Value> &all, uint16_t fn, uint8_t number, uint16_t key, const Bytes &data) {
   for (const Value &v : all)
-    if (v.fn == fn && v.number == number && v.key == key && v.data == data && v.origin == origin) return true;
+    if (v.fn == fn && v.number == number && v.key == key && v.data == data) return true;
   return false;
 }
 
@@ -190,24 +190,78 @@ static void testDescribe() {
   CHECK(q.items(0).size() == 3 && !q.settings.offers(rc::kOpNetwork) && p.settings.offers(rc::kOpNetwork));
 }
 
-// fixed and default values (core §13.4)
-static void testOrigins() {
+// Initial values (core §13.4): in on a boot without a save, then like any value (unset takes it away); a save - an empty
+// one too - keeps them out of the next boot; clashing ones are the firmware's mistake and stay out; a probe of initial
+// values only offers get alone (§13.5).
+static void testInitialValues() {
   fakeConfigStore(nullptr, 0);
+  Bytes out;
+  {
+    Probe p(false);
+    const uint8_t label = p.number(0, rc::kSettingChannelLabel);
+    CHECK(p.settings.initialLabel(3, "V003.swio") && !p.settings.initialLabel(99, "x"));   // 99: no channel of this probe
+    p.settings.load();
+    p.settings.applySaved();
+    CHECK(has(values(p), 0, label, 3, text("V003.swio")));
+    CHECK(ok(p.op(rc::kOpSet, set({value(0, label, 3, text("dut.swio"))}), out)) && has(values(p), 0, label, 3, text("dut.swio")));
+    CHECK(ok(p.op(rc::kOpUnset, {1, 0, 0, label, 3, 0}, out)) && values(p).empty());   // gone: no initial value comes back
+    CHECK(ok(p.op(rc::kOpSave, {}, out)));                                               // an empty save
+  }
+  {
+    Probe q(false);
+    CHECK(q.settings.initialLabel(3, "V003.swio"));
+    q.settings.load();
+    q.settings.applySaved();
+    CHECK(values(q).empty() && ok(q.op(rc::kOpState, {}, out)) && out[0] == rc::kStorageStateApplied);
+  }
+  fakeConfigStore(nullptr, 0);
+  Probe r(false);
+  r.settings.setChangeable(false);
+  const uint8_t label = r.number(0, rc::kSettingChannelLabel);
+  CHECK(r.settings.initialLabel(3, "V003.swio") && r.settings.initialLabel(4, "v003.SWIO"));   // each a value; together a clash
+  r.settings.load();
+  r.settings.applySaved();
+  CHECK(values(r).empty());
+  CHECK(r.settings.offers(rc::kOpGet) && !r.settings.offers(rc::kOpSet) && !r.settings.offers(rc::kOpUnset) &&
+        !r.settings.offers(rc::kOpSave) && !r.settings.offers(rc::kOpState));
+  const Result x = r.op(rc::kOpSet, set({value(0, label, 3, text("x"))}), out);
+  CHECK(x.resolution == kResolutionRejected && x.detail == kRejectUnknownOperation);
+}
+
+// Labels are unique but for ASCII case and kept as written (core §13.8); one set may move a label; a save with two such
+// labels (an older firmware's) keeps the lower channel's: state 3, reason 2 (§13.7).
+static void testLabelsUnique() {
+  fakeConfigStore(nullptr, 0);
+  Bytes out;
   Probe p(false);
   const uint8_t label = p.number(0, rc::kSettingChannelLabel);
-  CHECK(p.settings.fixedLabel(0, "LED"));
-  CHECK(p.settings.firmwareValue(nullptr, rc::kSettingChannelLabel, 1, text("RX").data(), 2, false));
-  std::vector<Value> got = values(p);
-  CHECK(has(got, 0, label, 0, text("LED"), rc::kSettingOriginFixed) && has(got, 0, label, 1, text("RX"), rc::kSettingOriginDefault));
-  Bytes out;
-  Result r = p.op(rc::kOpSet, set({value(0, label, 0, text("X"))}), out);
-  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
-  r = p.op(rc::kOpUnset, {1, 0, 0, label, 0, 0}, out);
-  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
-  CHECK(ok(p.op(rc::kOpSet, set({value(0, label, 1, text("UART RX"))}), out)));
-  CHECK(has(values(p), 0, label, 1, text("UART RX")));
-  CHECK(ok(p.op(rc::kOpUnset, {1, 0, 0, label, 1, 0}, out)));
-  CHECK(has(values(p), 0, label, 1, text("RX"), rc::kSettingOriginDefault));
+  CHECK(ok(p.op(rc::kOpSet, set({value(0, label, 0, text("V003.nrst"))}), out)));
+  Result r = p.op(rc::kOpSet, set({value(0, label, 4, text("v003.NRST"))}), out);
+  CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnavailable && out.size() >= 8 &&
+        out[3] == rc::kUnavailableCauseHeldBySettings && getU16(&out[7]) == 4);
+  CHECK(ok(p.op(rc::kOpSet, set({value(0, label, 0, text("LED")), value(0, label, 4, text("V003.nrst"))}), out)));
+  CHECK(has(values(p), 0, label, 4, text("V003.nrst")) && has(values(p), 0, label, 0, text("LED")));
+  Bytes blob = {1, 0, 0, 0, 1};   // the save's form (OepSettings.cpp): version, the core, one item with two values
+  const char *n = rc::kSettingChannelLabel;
+  blob.push_back(uint8_t(strlen(n)));
+  blob.insert(blob.end(), n, n + strlen(n));
+  blob.insert(blob.end(), {2, 0});
+  for (const char *kv : {"GPIO7\x05PORT1", "GPIO2\x05port1"}) {
+    const char *sep = strchr(kv, 5);
+    blob.push_back(uint8_t(sep - kv));
+    blob.insert(blob.end(), kv, sep);
+    blob.push_back(uint8_t(strlen(sep + 1)));
+    blob.insert(blob.end(), sep + 1, sep + 1 + strlen(sep + 1));
+  }
+  const uint32_t crc = crc32Ieee(blob.data(), blob.size());
+  blob.insert(blob.end(), {uint8_t(crc), uint8_t(crc >> 8), uint8_t(crc >> 16), uint8_t(crc >> 24)});
+  fakeConfigStore(blob.data(), blob.size());
+  Probe q(false);
+  q.settings.load();
+  q.settings.applySaved();
+  const std::vector<Value> got = values(q);
+  CHECK(got.size() == 1 && has(got, 0, label, 2, text("port1")));
+  CHECK(ok(q.op(rc::kOpState, {}, out)) && out[0] == rc::kStorageStatePartial && out[5] == rc::kStorageReasonItem);
 }
 
 // A save is read back by name (core §13.7): a firmware whose fns moved applies the same values under its own numbers.
@@ -362,7 +416,8 @@ static void testChannelNames() {
 
 int main() {
   testDescribe();
-  testOrigins();
+  testInitialValues();
+  testLabelsUnique();
   testSavedByName();
   testSavedDisabled();
   testBrokenContainer();

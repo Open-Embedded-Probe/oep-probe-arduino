@@ -169,8 +169,10 @@ class Blink final : public oep::Interface {
 - `Settings` は core の設定（core §13）: fn 0 の get / set / unset / save / state と、各 fn の describe の項目。channel の項目
   （label、idle、disable）は `setPins(&pins)`、ネットワークの項目は `setWifi(&wifi)`、素通しの項目は `usePassthroughs()` の後の
   `addUart(uart)` と `addPlace(wire, console)`（wire の hold と rvswd の rest も）、SWD の hold は `addHold(wireSwd, swd.hold, checkSwdHold, &swd)`
-  で宣言します。スケッチ自身の項目は自分のインターフェースの下に `addSetting(owner, "name.{}", form, keys, max_len)`、firmware が決めた値は
-  `firmwareValue(...)`（固定か既定、`fixedLabel(channel, "LED")`）。保存（ESP32 は NVS、RP2 は flash の最後の領域）は名前で持つので、fn の
+  で宣言します。スケッチ自身の項目は自分のインターフェースの下に `addSetting(owner, "name.{}", form, keys, max_len)`。初期値は
+  `initialValue(owner, "name", key, data, len)`、口の名前なら `initialLabel(channel, "V003.swio")`（host ガイド §5.3）で、保存の無い起動
+  （保存を持たない probe では毎回の起動）に入り、その後はほかの値と同じです（core §13.4）。`setChangeable(false)` で、初期値だけの
+  probe（set / unset なし、core §13.5）になります。保存（ESP32 は NVS、RP2 は flash の最後の領域）は名前で持つので、fn の
   番号が変わっても読み戻せます。インターフェースではないので `endpoint.add` しません（作ると endpoint に付きます）。`load()` はスケッチが
   ピンを空きの状態にする前に呼び、保存が無効にした channel を除きます: `settings.load(); pins.setDisabled(settings.savedDisabled());
   platformParkMask(mask & ~pins.disabledMask());`（無効にした channel には起動時も触れない）。最後に、全部の `endpoint.add` と add* の後で

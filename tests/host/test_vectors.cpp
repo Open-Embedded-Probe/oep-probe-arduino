@@ -876,10 +876,15 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
       return p.pins.disabled(5);
     }
     if (has("no storage")) p.settings.setStorage(false);
-    if (has("label fixed NRST")) p.settings.fixedLabel(0, "NRST");
+    if (has("get only")) p.settings.setChangeable(false);         // initial values only (core §13.5)
     if (has("state offered") || has("no storage")) return true;   // lock-free / refused before any session
     if (!p.open()) return false;
-    if (has("one user idle value") || has("one value generation2") || has("idle channel4 exists")) return set({idle4});
+    if (has("label V003.nrst")) {   // there at generation 1 (as an initial value would be)
+      const bool done = set({p.value(kLabel, nullptr, 0, {'V', '0', '0', '3', '.', 'n', 'r', 's', 't'})});
+      p.settings.testGeneration(1);
+      return done;
+    }
+    if (has("one idle value") || has("one value generation2") || has("idle channel4 exists")) return set({idle4});
     if (has("disable channel4")) return set({disable4});
     if (has("passphrase password1")) {
       const char *pw = "password1";

@@ -180,8 +180,10 @@ Each source file starts with the spec sections it follows.
   describe. The channel items (label, idle, disable) come with `setPins(&pins)`, the network's with `setWifi(&wifi)`, the
   pass-throughs' with `addUart(uart)` and `addPlace(wire, console)` after `usePassthroughs()` (the wire's hold and rvswd's
   rest too), SWD's hold with `addHold(wireSwd, swd.hold, checkSwdHold, &swd)`. A sketch's own items go under its own
-  interface: `addSetting(owner, "name.{}", form, keys, max_len)`; values the firmware gives: `firmwareValue(...)` (fixed or
-  by default; `fixedLabel(channel, "LED")`). The save (NVS on ESP32, the flash's last sector on RP2) is by name, so it reads
+  interface: `addSetting(owner, "name.{}", form, keys, max_len)`. Initial values: `initialValue(owner, "name", key, data, len)`,
+  `initialLabel(channel, "V003.swio")` (a port's name, host guide §5.3) - put in on a boot without a save (every boot when the
+  probe saves nothing) and values like any other after it (core §13.4); `setChangeable(false)` makes a probe of initial values
+  only (no set / unset, core §13.5). The save (NVS on ESP32, the flash's last sector on RP2) is by name, so it reads
   back when fn numbers move. It is no interface: no `endpoint.add` (making it attaches it to the endpoint). Call `load()`
   before the sketch parks its pins and leave out what the saved settings disable: `settings.load();
   pins.setDisabled(settings.savedDisabled()); platformParkMask(mask & ~pins.disabledMask());` (a disabled channel is never

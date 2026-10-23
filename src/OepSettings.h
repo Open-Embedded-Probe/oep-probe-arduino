@@ -5,8 +5,8 @@
 // item declared by its owner - the core (fn 0) or an interface (its fn) - and read and written through fn 0's ops.
 //
 //   0x20 get(first u16) [TLV] -> more(u8) generation(u32) count(u8) count x value [TLV]            (no lock)
-//        value: fn(u16) number(u8) key(u16) origin(u8) len(u16) data
-//   0x21 set(count u8, count x (fn u16, number u8, key u16, len u16, data)) [TLV] -> generation(u32) [TLV]
+//        value: fn(u16) number(u8) key(u16) len(u16) data (no origin, core §13.4)
+//   0x21 set(count u8, count x value) [TLV] -> generation(u32) [TLV]                  (a probe that lets values change)
 //   0x22 unset(count u8, count x (fn u16, number u8, key u16)) [TLV] -> generation(u32) [TLV]
 //   0x23 save [TLV] -> generation(u32) [TLV]                                         (with storage)
 //   0x24 state [TLV] -> storage_state(u8) saved_generation(u32) reason(u8) [TLV]      (no lock; with storage)
@@ -21,7 +21,7 @@
 //   a console         passthrough.{}.wire / swdio / swclk / max-speed / mechanism                             console §2.1
 //   the sketch's      addSetting(owner, name, ...)                                                            core §13.1
 // The values are kept as one store in (entry, key) order: tag = entry + 1, value = key(u16) data (the wire's data). The
-// firmware's values (fixed / default, core §13.4) are a second store, value = key(u16) origin(u8) data.
+// sketch's initial values (core §13.4) go into it before applySaved(), which keeps them only on a boot without a save.
 // generation: 1 at boot, +1 for every set / unset that changes the contents (never 0; at 0xFFFFFFFF a change is refused
 // cause 2 until a restart). Saved by name (core §13.7): the category (empty for the core, else the interface's name and
 // instance), the item's name, the key's name and the value with its references as names - to NVS on an ESP32
@@ -114,7 +114,6 @@ class Settings final : public SettingsCore {
   static constexpr size_t kMaxEntries = OEP_SMALL_RAM ? 20 : 40;
   // The values' bytes this probe holds (every value with its 3-byte header and key): a change past it is refused cause 2.
   static constexpr size_t kMaxItems = OEP_SMALL_RAM ? 256 : 800;   // a small-RAM build: two of these
-  static constexpr size_t kMaxFirm = OEP_SMALL_RAM ? 64 : 192;     // the firmware's fixed / default values
 
   // Attaches itself to the endpoint: fn 0's settings ops and the items in every fn's describe.
   Settings(Endpoint &endpoint, Binds &binds);
@@ -139,14 +138,16 @@ class Settings final : public SettingsCore {
   // key), max_len (bytes / text), flags (secret, restart). Before applySaved(). false: no room or not a valid one.
   bool addSetting(const Interface &owner, const char *name, uint8_t form, uint16_t keys = 0, uint8_t max_len = 0,
                   uint8_t flags = 0);
-  // A value the firmware gives an item (core §13.4): fixed (never changed) or by default (a user value replaces it,
-  // unset goes back to it). By the item's name and owner (nullptr: the core). false: no such item or no room.
-  bool firmwareValue(const Interface *owner, const char *name, uint16_t key, const uint8_t *data, size_t length,
-                     bool fixed = true);
-  bool fixedLabel(uint16_t channel, const char *text) {
-    return firmwareValue(nullptr, reg::core::kSettingChannelLabel, channel, reinterpret_cast<const uint8_t *>(text),
-                         strlen(text));
+  // An initial value (core §13.4): put in on a boot without a save (every boot with no storage), checked as a set's
+  // values are; after that like any other value. By the item's name and owner (nullptr: the core), after the item's
+  // add* / setPins / setWifi and before applySaved(). false: no such item, not a value it takes, or no room.
+  bool initialValue(const Interface *owner, const char *name, uint16_t key, const uint8_t *data, size_t length);
+  bool initialLabel(uint16_t channel, const char *text) {   // a port's name: "V003.swio" (host guide §5.3)
+    return initialValue(nullptr, reg::core::kSettingChannelLabel, channel, reinterpret_cast<const uint8_t *>(text),
+                        strlen(text));
   }
+  // A probe of initial values only (core §13.5): no set / unset (nor save / state) - its values never change.
+  void setChangeable(bool on) { changeable_ = on; }
   // An own item's value now (nullptr: none): its data and length.
   const uint8_t *setting(const Interface &owner, const char *name, uint16_t key, size_t &length) const;
   // load() reads the saved channel items early (savedDisabled: the disabled channels, for a sketch that parks its pins
@@ -169,7 +170,7 @@ class Settings final : public SettingsCore {
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   void describe(uint16_t fn, TlvPager &put) const override;
   uint32_t generation() const { return generation_; }
-  // The value now of an item (user, else the firmware's; nullptr: none): its data and length.
+  // The value now of an item (nullptr: none): its data and length.
   const uint8_t *value(uint8_t entry, uint16_t key, size_t &length) const;
   // The entry of an item (kMaxEntries: none) by id and owner (nullptr: the core).
   uint8_t entryOf(uint8_t id, const void *owner = nullptr) const;
@@ -211,12 +212,10 @@ class Settings final : public SettingsCore {
   void (Settings::*pass_run_)() = nullptr;   // runPassthroughs, once usePassthroughs was called
   uint32_t wifi_applied_ = 0;    // CRC-32 of the Wi-Fi values last handed to wifi_
   bool wifi_handed_ = false;
-  bool storage_ = true, skip_boot_attach_ = false;
+  bool storage_ = true, skip_boot_attach_ = false, changeable_ = true;
   bool (*attach_gate_)() = nullptr;
   uint8_t items_[kMaxItems];     // the user values, in (entry, key) order
   size_t items_length_ = 0;
-  uint8_t firm_[kMaxFirm];       // the firmware's values
-  size_t firm_length_ = 0;
   static uint8_t scratch_[kMaxItems];   // a change's candidate store
   uint32_t generation_ = 1;
   uint8_t storage_state_ = reg::core::kStorageStateNone, reason_ = 0;
@@ -238,12 +237,12 @@ class Settings final : public SettingsCore {
   static const uint8_t *find(const uint8_t *store, size_t length, uint8_t entry, uint16_t key, size_t &vlen);
   static bool insert(uint8_t *store, size_t &length, size_t capacity, uint8_t entry, const uint8_t *v, size_t len);
   static void remove(uint8_t *store, size_t &length, uint8_t entry, uint16_t key);
-  const uint8_t *firm(uint8_t entry, uint16_t key, uint8_t &origin, size_t &length) const;
   // one value by itself: its form (malformed), then what this probe takes (unsupported)
   Result checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_t n, uint8_t item, uint8_t *out, size_t capacity) const;
   Result checkWhole(const uint8_t *items, size_t length, uint8_t *out, size_t capacity) const;
   uint8_t idlePlainOf(const uint8_t *items, size_t length, uint16_t channel) const;   // PinTable::kIdleUnset: none
   uint64_t disabledIn(const uint8_t *items, size_t length) const;
+  uint16_t labelClash(const uint8_t *items, size_t length) const;   // 0xffff: the labels are unique (core §13.8)
   const uint8_t *in(const uint8_t *items, size_t length, uint8_t id, const void *owner, uint16_t key, size_t &n) const;
   void adopt(const uint8_t *items, size_t length);
   void handWifi();

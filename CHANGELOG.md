@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Names and initial values (oep-spec cc82b5e, core §13.4, §13.5, §13.8): a settings value carries no origin - get's
+  value is fn number key len data, `firmwareValue` / `fixedLabel` give way to `initialValue` / `initialLabel`, put in on a
+  boot without a save (every boot with no storage; an empty save keeps them out) and values like any other after it (the
+  firmware's second store is gone: 64-192 bytes of RAM less). The labels are unique in a probe but for ASCII case (a set that
+  would make two equal is unavailable cause 5 with the channel; a save with two keeps the lower channel's, state 3 reason 2)
+  and kept as written. `setChangeable(false)`: a probe of initial values only, with get alone (no set / unset / save / state).
+- (JA) 名前と初期値（oep-spec cc82b5e、core §13.4、§13.5、§13.8）: 設定の値は出どころを持たない。get の値は fn number key len data。
+  `firmwareValue` / `fixedLabel` は `initialValue` / `initialLabel` になり、保存の無い起動（保存を持たない probe では毎回。空の保存でも
+  入れない）に入って、その後はほかの値と同じ（firmware の値の第 2 の置き場を無くし、RAM が 64〜192 byte 減る）。label は probe の中で
+  ASCII の大小文字を区別せずに一意（等しくなる set は unavailable cause 5 と channel、等しい 2 つを持つ保存は channel の小さい方を使い
+  state 3 reason 2）で、書いたとおりに保つ。`setChangeable(false)` で初期値だけの probe（get だけ。set / unset / save / state なし）。
 
 ## 0.0.37
 - (EN) riscv-dm run, resume and step lower haltreq in a DMCONTROL write of its own before the resumereq: the CH32V407 and

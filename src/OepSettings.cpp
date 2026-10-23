@@ -327,31 +327,22 @@ bool Settings::addSetting(const Interface &owner, const char *name, uint8_t form
   return true;
 }
 
-bool Settings::firmwareValue(const Interface *owner, const char *name, uint16_t key, const uint8_t *data, size_t length,
-                             bool fixed) {
+bool Settings::initialValue(const Interface *owner, const char *name, uint16_t key, const uint8_t *data, size_t length) {
   const uint8_t e = entryNamed(owner, name, strlen(name));
-  if (e == kMaxEntries || length > 64) return false;
-  uint8_t v[3 + 64];
+  uint8_t sink[16];
+  if (e == kMaxEntries || length > 64 || refused(checkValue(e, key, data, length, 0, sink, sizeof sink))) return false;
+  uint8_t v[2 + 64];
   putU16(v, key);
-  v[2] = fixed ? reg::core::kSettingOriginFixed : reg::core::kSettingOriginDefault;
-  memcpy(v + 3, data, length);
-  return insert(firm_, firm_length_, sizeof firm_, e, v, 3 + length);
-}
-
-const uint8_t *Settings::firm(uint8_t entry, uint16_t key, uint8_t &origin, size_t &length) const {
-  size_t vlen = 0;
-  const uint8_t *v = find(firm_, firm_length_, entry, key, vlen);
-  if (!v) return nullptr;
-  origin = v[2];
-  length = vlen - 3;
-  return v + 3;
+  memcpy(v + 2, data, length);
+  return insert(items_, items_length_, kMaxItems, e, v, 2 + length);
 }
 
 const uint8_t *Settings::value(uint8_t entry, uint16_t key, size_t &length) const {
   size_t vlen = 0;
-  if (const uint8_t *v = find(items_, items_length_, entry, key, vlen)) { length = vlen - 2; return v + 2; }
-  uint8_t origin = 0;
-  return firm(entry, key, origin, length);
+  const uint8_t *v = find(items_, items_length_, entry, key, vlen);
+  if (!v) return nullptr;
+  length = vlen - 2;
+  return v + 2;
 }
 
 const uint8_t *Settings::setting(const Interface &owner, const char *name, uint16_t key, size_t &length) const {
@@ -404,16 +395,16 @@ void Settings::remove(uint8_t *store, size_t &length, uint8_t entry, uint16_t ke
   }
 }
 
-// A value of item `id` (owner: its interface, nullptr the core) and key in a store (user values only): its data.
+// A value of item `id` (owner: its interface, nullptr the core) and key in a store: its data.
 const uint8_t *Settings::in(const uint8_t *items, size_t length, uint8_t id, const void *owner, uint16_t key,
                             size_t &n) const {
   const uint8_t e = entryOf(id, owner);
   if (e == kMaxEntries) return nullptr;
   size_t vlen = 0;
   const uint8_t *v = find(items, length, e, key, vlen);
-  if (v) { n = vlen - 2; return v + 2; }
-  uint8_t origin = 0;
-  return firm(e, key, origin, n);
+  if (!v) return nullptr;
+  n = vlen - 2;
+  return v + 2;
 }
 
 uint64_t Settings::disabledIn(const uint8_t *items, size_t length) const {
@@ -426,6 +417,36 @@ uint64_t Settings::disabledIn(const uint8_t *items, size_t length) const {
   while (nextItem(items, length, at, tag, v, vlen))
     if (tag == e + 1 && vlen == 3 && v[2] && getU16(v) < 64) mask |= uint64_t{1} << getU16(v);
   return mask;
+}
+
+namespace {
+// Equal but for ASCII case (A-Z as a-z; other bytes as they are): core §13.8's comparison of labels
+bool sameFolded(const uint8_t *a, const uint8_t *b, size_t n) {
+  auto fold = [](uint8_t c) { return static_cast<uint8_t>(c >= 'A' && c <= 'Z' ? c + 32 : c); };
+  for (size_t i = 0; i < n; ++i)
+    if (fold(a[i]) != fold(b[i])) return false;
+  return true;
+}
+}  // namespace
+
+// Two channels whose labels are equal but for ASCII case (core §13.8): the later channel of the first such pair, 0xffff
+// when every label is unique.
+uint16_t Settings::labelClash(const uint8_t *items, size_t length) const {
+  const uint8_t e = entryOf(kLabel);
+  if (e == kMaxEntries) return 0xffff;
+  size_t at = 0, vlen = 0;
+  uint8_t tag = 0;
+  const uint8_t *v = nullptr;
+  while (nextItem(items, length, at, tag, v, vlen)) {
+    if (tag != e + 1 || vlen < 2) continue;
+    size_t at2 = at, wlen = 0;
+    uint8_t tag2 = 0;
+    const uint8_t *w = nullptr;
+    while (nextItem(items, length, at2, tag2, w, wlen)) {   // the later keys of the same item (the store is in key order)
+      if (tag2 == e + 1 && wlen == vlen && sameFolded(v + 2, w + 2, vlen - 2)) return getU16(w);
+    }
+  }
+  return 0xffff;
 }
 
 uint8_t Settings::idlePlainOf(const uint8_t *items, size_t length, uint16_t channel) const {
@@ -594,11 +615,8 @@ Result Settings::checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_
     case kPassBaud: case kConSpeed: if (getU32(d) == 0) return rejected(kRejectMalformed); break;
     default: break;
   }
-  // a fixed value cannot change (core §13.4); a key this probe has no value for (unsupported)
-  uint8_t origin = 0;
-  size_t fl = 0;
-  if (!keyValid(entry, key) || (firm(entry, key, origin, fl) && origin == k::kSettingOriginFixed))
-    return unsupportedItem(out, capacity, item);
+  // a key this probe has no value for (unsupported)
+  if (!keyValid(entry, key)) return unsupportedItem(out, capacity, item);
   uint8_t name[8];
   if (s.form == k::kSettingFormEnum && !storedValue(entry, d, 1, name)) return unsupportedItem(out, capacity, item);
   if (s.form == k::kSettingFormChannel && (pins_ ? !pins_->allowed(getU16(d)) : getU16(d) >= channels_))
@@ -634,10 +652,12 @@ Result Settings::checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_
   }
 }
 
-// The whole after the change (core §13.5, §13.8, fixture §2.1, console §2.1): a disable on a channel in use (cause 1), an
+// The whole after the change (core §13.5, §13.8, fixture §2.1, console §2.1): two labels equal but for case (cause 5), a disable on a channel in use (cause 1), an
 // idle and a disable on one channel (cause 5), a pass-through on a disabled pin or one with an output idle (cause 5),
 // two pass-throughs on a port (cause 5), a console pass-through's pins its wire does not allow (unsupported).
 Result Settings::checkWhole(const uint8_t *items, size_t length, uint8_t *out, size_t capacity) const {
+  const uint16_t clash = labelClash(items, length);   // two labels equal but for ASCII case (core §13.8): cause 5
+  if (clash != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, clash);
   const uint64_t disabled = disabledIn(items, length);
   auto isDisabled = [&](uint16_t ch) { return ch < 64 && ((disabled >> ch) & 1); };
   auto heldBy = [&](uint16_t ch) {
@@ -688,8 +708,10 @@ Result Settings::checkWhole(const uint8_t *items, size_t length, uint8_t *out, s
 
 bool Settings::offers(uint8_t op) const {
   namespace k = reg::core;
-  if (op == k::kOpGet || op == k::kOpSet || op == k::kOpUnset) return true;
+  if (op == k::kOpGet) return true;
   if (op == k::kOpNetwork) return wifi_ != nullptr;
+  if (!changeable_) return false;   // initial values only (core §13.5): no set / unset, nothing to save
+  if (op == k::kOpSet || op == k::kOpUnset) return true;
   return !kNoStore && storage_ && (op == k::kOpSave || op == k::kOpState);
 }
 
@@ -698,8 +720,8 @@ Result Settings::handle(uint8_t op, const uint8_t *payload, size_t length, uint8
   Tail tail;
   switch (op) {
     case k::kOpGet: return get(payload, length, out, capacity);
-    case k::kOpSet: return set(payload, length, out, capacity);
-    case k::kOpUnset: return unset(payload, length, out, capacity);
+    case k::kOpSet: return changeable_ ? set(payload, length, out, capacity) : rejected(kRejectUnknownOperation);
+    case k::kOpUnset: return changeable_ ? unset(payload, length, out, capacity) : rejected(kRejectUnknownOperation);
     case k::kOpSave: return kNoStore ? rejected(kRejectUnknownOperation) : save(payload, length, out, capacity);
     case k::kOpNetwork: return wifi_net_ ? (this->*wifi_net_)(payload, length, out, capacity) : rejected(kRejectUnknownOperation);
     case k::kOpState: {   // [TLV] -> storage_state(u8) saved_generation(u32) reason(u8) [TLV]
@@ -802,11 +824,7 @@ Result Settings::unset(const uint8_t *payload, size_t length, uint8_t *out, size
   for (uint8_t i = 0; i < count; ++i) {
     const uint8_t *r = payload + 1 + 5 * i;
     if (getU16(r) && !endpoint_.interfaceAt(getU16(r))) return rejected(kRejectUnknownFunction);
-    const uint8_t e = entryAt(getU16(r), r[2]);
-    uint8_t origin = 0;
-    size_t fl = 0;
-    if (e == kMaxEntries || (firm(e, getU16(r + 3), origin, fl) && origin == reg::core::kSettingOriginFixed))
-      return unsupportedItem(out, capacity, i);
+    if (entryAt(getU16(r), r[2]) == kMaxEntries) return unsupportedItem(out, capacity, i);
   }
   uint8_t *const candidate = scratch_;
   size_t clen = items_length_;
@@ -836,38 +854,21 @@ Result Settings::get(const uint8_t *payload, size_t length, uint8_t *out, size_t
       const uint8_t e = entryAt(fn, number);
       if (e == kMaxEntries) break;
       const bool secret = spec(e).flags & reg::core::kSettingFlagSecret;
-      // the keys of both stores, in order
-      for (uint32_t key = 0; key <= 0xFFFF && !more;) {
-        size_t un = 0, fnl = 0;
-        uint8_t origin = 0;
-        const uint8_t *u = find(items_, items_length_, e, static_cast<uint16_t>(key), un);
-        const uint8_t *f = firm(e, static_cast<uint16_t>(key), origin, fnl);
-        if (u || f) {
-          if (index++ >= first) {
-            const uint8_t *d = u ? u + 2 : f;
-            const size_t n = secret ? 0 : (u ? un - 2 : fnl);
-            if (put + 8 + n > capacity || count == 255) { more = true; break; }
-            putU16(out + put, fn);
-            out[put + 2] = number;
-            putU16(out + put + 3, static_cast<uint16_t>(key));
-            out[put + 5] = u ? reg::core::kSettingOriginUser : origin;
-            putU16(out + put + 6, static_cast<uint16_t>(n));
-            memcpy(out + put + 8, d, n);
-            put += 8 + n;
-            ++count;
-          }
-        }
-        // the next key either store has for this entry
-        uint32_t next = 0x10000;
-        for (const uint8_t *store : {static_cast<const uint8_t *>(items_), static_cast<const uint8_t *>(firm_)}) {
-          const size_t slen = store == items_ ? items_length_ : firm_length_;
-          size_t at = 0, vlen = 0;
-          uint8_t tag = 0;
-          const uint8_t *v = nullptr;
-          while (nextItem(store, slen, at, tag, v, vlen))
-            if (tag == e + 1 && getU16(v) > key && getU16(v) < next) next = getU16(v);
-        }
-        key = next;
+      // its values, in key order (the store keeps them so)
+      size_t at = 0, vlen = 0;
+      uint8_t tag = 0;
+      const uint8_t *v = nullptr;
+      while (!more && nextItem(items_, items_length_, at, tag, v, vlen)) {
+        if (tag != e + 1 || vlen < 2 || index++ < first) continue;
+        const size_t n = secret ? 0 : vlen - 2;
+        if (put + 7 + n > capacity || count == 255) { more = true; break; }
+        putU16(out + put, fn);            // fn number key len data (core §13.5)
+        out[put + 2] = number;
+        putU16(out + put + 3, getU16(v));
+        putU16(out + put + 5, static_cast<uint16_t>(n));
+        memcpy(out + put + 7, v + 2, n);
+        put += 7 + n;
+        ++count;
       }
     }
   }
@@ -1172,6 +1173,15 @@ void Settings::readBlob(bool all) {
           bool ok = e != kMaxEntries && keyNamed(e, key, kl, k) && wireValue(e, val, vl, w + 2, wl) &&
                     !refused(checkValue(e, k, w + 2, wl, 0, sink, sizeof sink));
           if (ok && entries_[e].id == kIdle && ((disabledIn(applied, alen) >> k) & 1)) ok = false;   // disable wins
+          if (ok && entries_[e].id == kLabel) {   // labels unique but for case (core §13.7): the lower channel's stays
+            for (uint16_t other = 0; ok && other < PinTable::kChannels; ++other) {
+              size_t ol = 0;
+              const uint8_t *o = find(applied, alen, e, other, ol);
+              if (!o || other == k || ol != 2 + wl || !sameFolded(o + 2, w + 2, wl)) continue;
+              if (other < k) ok = false;
+              else { remove(applied, alen, e, other); bad = true; }
+            }
+          }
           if (ok) {
             size_t had = 0;
             putU16(w, k);
@@ -1205,13 +1215,18 @@ void Settings::load() {
 
 // At boot (core §13.7): every saved value checked by itself against this firmware - disables first, then the rest (a
 // channel with a disable keeps no idle); one it cannot take (an item or a name it does not know too) is left out and the
-// rest applied (storage_state 3, reason 2). A key saved twice applies neither copy.
+// rest applied (storage_state 3, reason 2). A key saved twice applies neither copy; of two labels equal but for case the
+// lower channel's stays. Without a save the initial values stay (core §13.4).
 void Settings::applySaved() {
   storage_state_ = reg::core::kStorageStateNone;
   reason_ = 0;
   saved_generation_ = 0;
-  adopt(items_, 0);
-  readBlob(true);
+  readBlob(true);   // a save read whole replaces the initial values, even an empty one (core §13.4)
+  const bool saved = storage_state_ == reg::core::kStorageStateApplied || storage_state_ == reg::core::kStorageStatePartial;
+  uint8_t sink[16];
+  // no save (or one that cannot be read): the initial values, as a set takes them - firmware's mistake when they clash
+  if (!saved && refused(checkWhole(items_, items_length_, sink, sizeof sink))) items_length_ = 0;
+  adopt(items_, items_length_);
 }
 
 // ---- the pass-throughs (fixture §2.1, console §2.1) ----------------------------------------------------------------------

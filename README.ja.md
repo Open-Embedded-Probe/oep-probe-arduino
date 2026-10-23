@@ -161,7 +161,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `src/OepTcp.h`、`src/OepWifi.h` | TCP（受けた接続がそれぞれ経路になる待ち受け。lwIP の socket）と ESP32 の Wi-Fi（設定のネットワークを順に試す、mDNS `_oep._tcp`）。header だけなので、include したスケッチだけがネットワークを持つ |
 | `src/OepBind.*` | シリアルの口に流すもの（bind: 口ごとに 1 本のストリーム、セッション中の停止と止めた位置からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
-| `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepSettings.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）。core の設定（core §13: 項目の宣言、値と出どころ、名前での保存。ESP32 は NVS、RP2040 / RP2350 は flash）。各ファイルの冒頭に対応する仕様の節がある |
+| `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepSettings.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）。core の設定（core §13: 項目の宣言、初期値、大小文字を区別しない一意の label、名前での保存。ESP32 は NVS、RP2040 / RP2350 は flash）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブで実装。2026-09-30 までは独自の `io.github.ch32-riscv-ug.esp32.*`） |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
 | `examples/` | ボードの firmware と学ぶための example: [Example](#example) を参照 |
