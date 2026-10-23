@@ -1,13 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
-- (EN) The release's Firmware workflow attaches the CH32 builds (ch32x035 / ch32v307 / ch32h417) as
-  `OepProbe-<profile>-<version>.bin`, kind `flash` (the code flash from its start, `flash_offset` 0), model the part
-  (`ch32x035`): it looked for a merged.bin or a uf2 only, so the three CH32 jobs failed and nothing was attached (0.0.37,
-  0.0.38). Run it again by hand with the tag to attach a past release's.
-- (JA) リリースの Firmware ワークフローが CH32 のビルド（ch32x035 / ch32v307 / ch32h417）を `OepProbe-<profile>-<version>.bin`、kind
-  `flash`（コードのフラッシュの先頭から、`flash_offset` 0）、model は品番（`ch32x035`）で添付する。merged.bin か uf2 しか探さず CH32 の 3 つが
-  落ち、何も添付されていなかった（0.0.37、0.0.38）。過去のリリースはタグを指定して手で流し直すと添付される。
+- (EN) The release's Firmware workflow builds the CH32 profiles (ch32x035 / ch32v307 / ch32h417) to check them and
+  attaches none: it looked for a merged.bin or a uf2 in them, so the three CH32 jobs failed and no firmware was attached
+  (0.0.37, 0.0.38).
+- (JA) リリースの Firmware ワークフローは CH32 のプロファイル（ch32x035 / ch32v307 / ch32h417）を確かめるためだけにビルドし、添付しない。
+  merged.bin か uf2 を探して CH32 の 3 つが落ち、ファームウェアが何も添付されていなかった（0.0.37、0.0.38）。
 
 ## 0.0.38
 - (EN) Names and initial values (oep-spec cc82b5e, core §13.4, §13.5, §13.8): a settings value carries no origin - get's

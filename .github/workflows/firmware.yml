@@ -5,13 +5,12 @@
 # (workflow_run) and finds the tag from the version it committed; workflow_dispatch rebuilds any tag by hand.
 #
 # Every example (examples/**/sketch.yaml) is built from the tag's sources with each of its sketch.yaml profiles (the
-# platform and libraries pinned there), and those under examples/Firmware/ are attached; the library itself is the tag's
-# src/ (the release branch's sketch.yaml names it from the Library Manager, which may not have indexed the new version
-# yet). Files: <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool),
+# platform and libraries pinned there), and those under examples/Firmware/ are attached (but the CH32 profiles); the
+# library itself is the tag's src/ (the release branch's sketch.yaml names it from the Library Manager, which may not have
+# indexed the new version yet). Files: <Example>-<profile>-<version>.merged.bin (ESP32: flash at 0x0 with esptool),
 # <Example>-<profile>-<version>.bin (ESP32: the app image alone, for an update into the other app partition - the P4's
-# `dfu-util -D`), <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), <Example>-<profile>-<version>.bin (CH32: the code
-# flash from its start), and firmware-<version>.json ("schema": 1) listing them with their kind (merged / app / uf2 /
-# flash), model (the describe model: esp32p4, esp32p4x, esp32, rp2040, rp2350, ch32x035, ch32v307, ch32h417) and
+# `dfu-util -D`), <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), and firmware-<version>.json ("schema": 1)
+# listing them with their kind (merged / app / uf2), model (the describe model: esp32p4, esp32p4x, esp32, rp2040, rp2350) and
 # sha256 (the fields: README "Release assets").
 #
 # One job per (example, profile), all at once: `plan` lists them, `build` compiles one each (the platform's
@@ -82,7 +81,8 @@ jobs:
                   sketch = yaml.parent
                   builds.append({
                       "sketch": str(sketch), "name": sketch.name, "profile": head.group(1), "fqbn": head.group(2),
-                      "release": sketch.parts[1] == "Firmware",
+                      # CH32 (ArduinoCore-CH32RV): built to check it, not attached (not yet run on hardware)
+                      "release": sketch.parts[1] == "Firmware" and not head.group(2).startswith("ch32-riscv-ug:"),
                       "index_urls": ",".join(sorted(set(index_urls))),
                       "id": re.sub(r"[^A-Za-z0-9]+", "-", f"{sketch.relative_to('examples')}-{head.group(1)}"),
                       # the cache holds the platforms this profile installs, so it is keyed by them
@@ -149,9 +149,8 @@ jobs:
           # the chip the profile builds for (RP2: build.chip, ESP32: build.mcu): the Firmware sketches' describe model
           props = subprocess.run(["arduino-cli", "compile", "--profile", profile, "--show-properties", str(sketch)],
                                  check=True, capture_output=True, text=True).stdout
-          found = dict(re.findall(r"(?m)^build\.(chip|mcu|chip_variant|series)=(\S+)$", props))
-          # CH32 (ArduinoCore-CH32RV): build.series, the part the describe model lowercases ("CH32X035" -> "ch32x035")
-          chip = found.get("chip") or found.get("mcu") or found.get("series", profile).lower()
+          found = dict(re.findall(r"(?m)^build\.(chip|mcu|chip_variant)=(\S+)$", props))
+          chip = found.get("chip") or found.get("mcu") or profile
           # P4X has the same build.mcu as P4; distinguish the SDK selected by ChipVariant.
           if chip == "esp32p4" and found.get("chip_variant") == "esp32p4":
               chip = "esp32p4x"
@@ -164,21 +163,19 @@ jobs:
           files = []
           # the app image only with a merged one (ESP32): other cores' .bin is not an app for an OTA partition
           merged = (build / f"{sketch.name}.ino.merged.bin").exists()
-          # CH32: the .bin is the whole code flash from its start (0x08000000), kind flash
-          ch32 = chip.startswith("ch32")
           for suffix, ext, kind in ((".ino.merged.bin", "merged.bin", "merged"), (".ino.bin", "bin", "app"),
-                                    (".ino.bin", "bin", "flash"), (".ino.uf2", "uf2", "uf2")):
+                                    (".ino.uf2", "uf2", "uf2")):
               src = build / f"{sketch.name}{suffix}"
-              if src.exists() and (kind != "app" or merged) and ((kind == "flash") == ch32 or kind == "uf2"):
+              if src.exists() and (kind != "app" or merged):
                   dst = out / f"{sketch.name}-{profile}-{version}.{ext}"
                   shutil.copy(src, dst)
                   # model: the describe model the Firmware sketches report (the chip built for)
                   files.append({"example": str(sketch.relative_to("examples")), "profile": profile, "file": dst.name,
                                 "kind": kind, "model": chip, "fqbn": fqbn,
-                                "flash_offset": 0 if kind in ("merged", "flash") else None,
+                                "flash_offset": 0 if kind == "merged" else None,
                                 "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
-          if not any(f["kind"] in ("merged", "uf2", "flash") for f in files):
-              raise SystemExit(f"{sketch.name} ({profile}): no merged.bin, uf2 or CH32 bin in {build}")
+          if not any(f["kind"] in ("merged", "uf2") for f in files):
+              raise SystemExit(f"{sketch.name} ({profile}): no merged.bin or uf2 in {build}")
           (out / "files.json").write_text(json.dumps(files))
           print("\n".join(f["file"] for f in files))
           PY
