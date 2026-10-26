@@ -257,9 +257,22 @@ bool Settings::addPlace(WireRvswd &wire, TargetConsoleStream &console) {
     wire.port().rest_setting = &Settings::restOf;
     wire.port().rest_context = &gRestContext[gRestCount++];
   }
-  if (pass_run_ && entryOf(kConWire, &console) == kMaxEntries) {   // the console's pass-through (console §2.1)
-    for (uint8_t id = kConWire; id <= kConMechanism; ++id) addEntry(id, &console, &p);
+  // the console's pass-through (console §2.1): the items of the console the host sees (its front, common §2), once
+  if (pass_run_ && entryOf(kConWire, &console.front()) == kMaxEntries) {
+    for (uint8_t id = kConWire; id <= kConMechanism; ++id) addEntry(id, &console.front(), &p);
   }
+  return true;
+}
+
+int Settings::placeOf(const Interface *owner, uint16_t fn) const {
+  for (size_t k = 0; k < place_count_; ++k)
+    if (&places_[k].console->front() == owner && endpoint_.fnOf(*places_[k].wire) == fn) return static_cast<int>(k);
+  return -1;
+}
+
+bool Settings::firstOf(size_t k) const {
+  for (size_t j = 0; j < k; ++j)
+    if (&places_[j].console->front() == &places_[k].console->front()) return false;
   return true;
 }
 
@@ -638,9 +651,9 @@ Result Settings::checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_
       const FixtureUart *u = static_cast<const FixtureUart *>(entries_[entry].context);
       return u->formatDeclared(d[0]) ? completed() : unsupportedItem(out, capacity, item);
     }
-    case kConWire: {   // a wire this console reads through (a place's)
+    case kConWire: {   // a wire this console reads through (one of its places')
       const Place *p = static_cast<const Place *>(entries_[entry].context);
-      return endpoint_.fnOf(*p->wire) == getU16(d) ? completed() : unsupportedItem(out, capacity, item);
+      return placeOf(&p->console->front(), getU16(d)) >= 0 ? completed() : unsupportedItem(out, capacity, item);
     }
     case kConMechanism: {
       const Place *p = static_cast<const Place *>(entries_[entry].context);
@@ -682,11 +695,14 @@ Result Settings::checkWhole(const uint8_t *items, size_t length, uint8_t *out, s
       ++users;
       if (heldBy(getU16(rx))) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, getU16(rx));
     }
-    for (size_t k = 0; k < place_count_; ++k) {
-      const TargetConsoleStream *c = places_[k].console;
+    for (size_t j = 0; j < place_count_; ++j) {
+      const Interface *c = &places_[j].console->front();
+      if (!firstOf(j)) continue;   // each console once
       const uint8_t *wire = in(items, length, kConWire, c, port, n);
       if (!wire) continue;
       ++users;
+      const int k = placeOf(c, getU16(wire));
+      if (k < 0) return unsupportedValue(out, capacity);
       size_t m = 0;
       const uint8_t *io = in(items, length, kConSwdio, c, port, m);
       const uint8_t *ck = in(items, length, kConSwclk, c, port, m);
@@ -1265,8 +1281,11 @@ void Settings::runPassthroughs() {
     }
     // a console's: wire, swdio and mechanism given (and swclk on rvswd)
     int want_place = -1;
-    for (size_t k = 0; k < place_count_ && want_place < 0; ++k)
-      if (in(items_, items_length_, kConWire, places_[k].console, port, n)) want_place = static_cast<int>(k);
+    for (size_t k = 0; k < place_count_ && want_place < 0; ++k) {
+      const Interface *c = &places_[k].console->front();
+      const uint8_t *wire = firstOf(k) ? in(items_, items_length_, kConWire, c, port, n) : nullptr;
+      if (wire) want_place = placeOf(c, getU16(wire));
+    }
     if (want_place < 0) {
       if (pass_console_[port] >= 0) {
         places_[pass_console_[port]].console->passStop();
@@ -1280,11 +1299,12 @@ void Settings::runPassthroughs() {
     const Place &pl = places_[want_place];
     DebugPort &dp = pl.wire->port();
     TargetConsoleStream &console = *pl.console;
+    const Interface *owner = &console.front();
     size_t m = 0;
-    const uint8_t *io = in(items_, items_length_, kConSwdio, &console, port, m);
-    const uint8_t *ck = in(items_, items_length_, kConSwclk, &console, port, m);
-    const uint8_t *hz = in(items_, items_length_, kConSpeed, &console, port, m);
-    const uint8_t *mech = in(items_, items_length_, kConMechanism, &console, port, m);
+    const uint8_t *io = in(items_, items_length_, kConSwdio, owner, port, m);
+    const uint8_t *ck = in(items_, items_length_, kConSwclk, owner, port, m);
+    const uint8_t *hz = in(items_, items_length_, kConSpeed, owner, port, m);
+    const uint8_t *mech = in(items_, items_length_, kConMechanism, owner, port, m);
     uint8_t number = 0;
     for (uint8_t dr = 0; mech && dr < TargetConsoleStream::kDrivers; ++dr)
       if (sameText(mech, m, TargetConsoleStream::kDriverNames[dr])) number = console.numberOf(dr);

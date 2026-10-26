@@ -28,7 +28,7 @@
 // and 0xFF00 / 1 itself, so the two functions below patch their descriptors.
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console; oep.wire.swio (WCH
-// CH32V00x, one wire: its connections go through the same oep.target.riscv-dm, its console is oep.target.console instance 1,
+// CH32V00x, one wire: its connections go through the same oep.target.riscv-dm, its console a place of the one oep.target.console,
 // and a slot may name it: the second place); oep.fixture.gpio /
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; the settings (core §13) (saved in NVS); oep.fixture.analog
@@ -182,6 +182,14 @@ static oep::Hooks<void (*)(), 1> lastly;
 static oep::SwdPort *swdIn = nullptr;
 static oep::WireSwd *swdWireIn = nullptr;   // its interface: the owner of its hold item (core §13.1)
 static oep::TargetConsoleStream *consoleIn = nullptr, *swioConsoleIn = nullptr;
+// oep.target.console: the probe's one (common §2), each wire's console a place in it
+static oep::TargetConsole *consoles = nullptr;
+static void addConsolePlace(oep::TargetConsoleStream &place) {
+  if (consoles) { consoles->add(place); return; }
+  static oep::Slot<oep::TargetConsole> one;
+  consoles = &one.make(place);
+  endpoint.add(*consoles);
+}
 static oep::WireRvswd *swioWireIn = nullptr;
 static oep::FixtureUart *uart1In = nullptr, *uart2In = nullptr;
 static oep::LogicCapture *captureIn = nullptr;
@@ -314,7 +322,7 @@ void oepAddConsole() {
   static oep::Slot<oep::DmConsole> driver;   // the DM console framings (SDI / DMDATA / dmseq)
   static oep::Slot<oep::TargetConsoleStream> console;
   consoleIn = &console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0);
-  endpoint.add(*consoleIn);
+  addConsolePlace(*consoleIn);
   loopWork.add([] { console->poll(); });
 }
 
@@ -422,7 +430,7 @@ void oepAddGroup() {
 }
 
 // The one-wire link (CH32V00x): its own wire fn, its connections served by the RVSWD wire's riscv-dm target (or one of
-// its own without that wire), its console instance 1 (its choice made in the wire's)
+// its own without that wire), its console a place of the one oep.target.console (its choice made in the wire's)
 struct SwioParts {
   oep::SwioPhy phy;
   oep::Ch32Dm dm{phy};
@@ -453,8 +461,8 @@ void oepAddSwio() {
 void oepAddSwioConsole() {
   static oep::Slot<oep::DmConsole> driver;
   static oep::Slot<oep::TargetConsoleStream> console;
-  swioConsoleIn = &console.make(swio->port, driver.make(swio->dm, swio->phy), 1);   // the one-wire link's own console
-  endpoint.add(*swioConsoleIn);
+  swioConsoleIn = &console.make(swio->port, driver.make(swio->dm, swio->phy), 0);   // the one-wire link's place
+  addConsolePlace(*swioConsoleIn);
   loopWork.add([] { console->poll(); });
 }
 

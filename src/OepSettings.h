@@ -244,6 +244,10 @@ class Settings final : public SettingsCore {
   uint64_t disabledIn(const uint8_t *items, size_t length) const;
   uint16_t labelClash(const uint8_t *items, size_t length) const;   // 0xffff: the labels are unique (core §13.8)
   const uint8_t *in(const uint8_t *items, size_t length, uint8_t id, const void *owner, uint16_t key, size_t &n) const;
+  // The place of console `owner` (the front, common §2) on the wire of fn `fn`; -1: none of its places
+  int placeOf(const Interface *owner, uint16_t fn) const;
+  // places_[k] is the first of its console's places (the pass-through items are the console's, once)
+  bool firstOf(size_t k) const;
   void adopt(const uint8_t *items, size_t length);
   void handWifi();
   Result commit(const uint8_t *candidate, size_t length, uint8_t *out, size_t capacity);

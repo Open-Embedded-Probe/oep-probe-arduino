@@ -147,12 +147,8 @@ Result TargetConsoleStream::handle(uint8_t op, const uint8_t *payload, size_t le
     if (refused(parsed)) return parsed;
     if (capacity < 11) return failed();
     out[0] = 0;   // more: never (one stream at most); first at or past the count: none (core §7.3)
-    out[1] = open_ && getU16(payload) == 0 ? 1 : 0;
-    if (!out[1]) return completed(2);
-    putU32(out + 2, stream_number_);   // no element length (core §2.3)
-    putU32(out + 6, connection_);
-    out[10] = numberOf(mechanism_);
-    return completed(11);
+    out[1] = getU16(payload) == 0 && streamEntry(out + 2) ? 1 : 0;
+    return completed(out[1] ? 11 : 2);
   }
   if (length < 4) return rejected(kRejectMalformed);
   // The request's form and values first, nothing done, then the number it names (core §4.3: every check before
@@ -234,6 +230,54 @@ Result TargetConsoleStream::streamOp(uint8_t op, const uint8_t *p, size_t n, uin
     default:
       return rejected(kRejectUnknownOperation);
   }
+}
+
+bool TargetConsoleStream::streamEntry(uint8_t *out) const {
+  if (!open_) return false;
+  putU32(out, stream_number_);   // no element length (core §2.3)
+  putU32(out + 4, connection_);
+  out[8] = numberOf(mechanism_);
+  return true;
+}
+
+bool TargetConsole::add(TargetConsoleStream &place) {
+  if (count_ == kMaxPlaces) return false;
+  place.setFront(this);
+  places_[count_++] = &place;
+  return true;
+}
+
+Result TargetConsole::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
+  if (op == TargetConsoleStream::kOpStreams) {   // first(u16) [TLV] -> more(u8) count(u8) count x (stream, connection, mechanism)
+    Tail tail;
+    const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+    if (refused(parsed)) return parsed;
+    if (capacity < 2) return failed();
+    const size_t first = getU16(payload);
+    size_t index = 0, count = 0, n = 2;
+    out[0] = 0;
+    for (size_t k = 0; k < count_; ++k) {
+      uint8_t entry[9];
+      if (!places_[k]->streamEntry(entry) || index++ < first) continue;
+      if (n + sizeof entry > capacity) { out[0] = 1; break; }   // more: the rest from a later first (core §7.3)
+      memcpy(out + n, entry, sizeof entry);
+      n += sizeof entry;
+      ++count;
+    }
+    out[1] = static_cast<uint8_t>(count);
+    return completed(n);
+  }
+  // open names its connection, the other ops their stream: the place that holds it, or the first to refuse it
+  TargetConsoleStream *to = places_[0];
+  if (length >= 4) {
+    const uint32_t number = getU32(payload);
+    for (size_t k = 0; k < count_; ++k) {
+      TargetConsoleStream &p = *places_[k];
+      if (op == TargetConsoleStream::kOpOpen ? p.port().connected && p.port().number == number
+                                             : p.isOpen() && p.streamNumber() == number) to = &p;
+    }
+  }
+  return to->handle(op, payload, length, out, capacity);
 }
 
 }  // namespace oep

@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) One oep.target.console per probe (oep-spec 4a75ae1, common §2): `oep::TargetConsole` holds a place per wire (a
+  `TargetConsoleStream` each) and takes every wire's connections - open goes to the place of its connection, the stream
+  ops to the place of their stream, streams lists them all. The Firmware probes with two wires (RVSWD and SWIO: ESP32,
+  ESP32-P4, RP2, CH32) list one console where they listed two (the second wire's was instance 1, and a host could only
+  learn which wire each took by being refused). The console pass-through's settings belong to that one console, the
+  place chosen by `passthrough.{}.wire`. The X035 build grows by 588 bytes (63156 of 63488).
+- (JA) probe に oep.target.console は 1 つ（oep-spec 4a75ae1、common §2）: `oep::TargetConsole` が wire ごとの場所（それぞれ
+  `TargetConsoleStream`）を持ち、どの wire の connection も受ける。open はその connection の場所へ、ストリームの op はそのストリームの場所へ、
+  streams は全部を並べる。2 本の wire（RVSWD と SWIO）を持つ Firmware の probe（ESP32、ESP32-P4、RP2、CH32）は、console を 2 つでなく 1 つ出す
+  （2 本目の wire のものは instance 1 で、host はどちらの wire を受けるかを断られて知るしかなかった）。console の素通しの設定はその 1 つの console
+  のもので、場所は `passthrough.{}.wire` で選ぶ。X035 のビルドは 588 byte 増える（63488 のうち 63156）。
 - (EN) The release's Firmware workflow attaches the CH32 builds (ch32x035 / ch32v307 / ch32h417) as
   `OepProbe-<profile>-<version>.bin`, kind `flash` (the code flash from its start, `flash_offset` 0), model the part
   (`ch32x035`): it looked for a merged.bin or a uf2 only, so the three CH32 jobs failed and nothing was attached (0.0.37,

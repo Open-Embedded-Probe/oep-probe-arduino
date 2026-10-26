@@ -633,6 +633,38 @@ int main() {
     CHECK(phy5.turns > 0 && phy5.turns == phy5.turns_done);
   }
 
+  // ---- one oep.target.console over two wires (common §2): each wire's connection opens through it, streams lists both,
+  // a stream op goes to the place that holds the stream; a connection of neither place is refused as before ----
+  {
+    static FakePhy phyA, phyB;
+    static Ch32Dm dmA(phyA), dmB(phyB);
+    static DebugPort portA{dmA, 6, 7}, portB{dmB, 8, 9};
+    static WireRvswd wireA(portA, 3), wireB(portB, 4);
+    static DmConsole driverA(dmA, phyA), driverB(dmB, phyB);
+    static TargetConsoleStream placeA(portA, driverA, 0), placeB(portB, driverB, 0);
+    static TargetConsole one(placeA);
+    CHECK(one.add(placeB) && &placeB.front() == &one && &placeA.front() == &one);
+    CHECK(ok(call(wireA, WireRvswd::kOpAttach, attachRequest(6, 7), out)));
+    CHECK(ok(call(wireB, WireRvswd::kOpAttach, attachRequest(8, 9), out)));
+    const uint8_t dmseq = placeA.numberOf(TargetConsoleStream::kDriverDmseq);
+    CHECK(ok(call(one, TargetConsoleStream::kOpOpen, cat(le32(portB.number), {dmseq}), out)));   // the second wire's
+    const uint32_t sB = getU32(out.data());
+    CHECK(placeB.isOpen() && placeB.streamNumber() == sB && !placeA.isOpen());
+    CHECK(ok(call(one, TargetConsoleStream::kOpOpen, cat(le32(portA.number), {dmseq}), out)));
+    const uint32_t sA = getU32(out.data());
+    CHECK(placeA.isOpen() && sA != sB);
+    r = call(one, TargetConsoleStream::kOpStreams, le16(0), out);
+    CHECK(ok(r) && out.size() == 2 + 2 * 9 && out[0] == 0 && out[1] == 2);
+    CHECK(getU32(out.data() + 2) == sA && getU32(out.data() + 6) == portA.number);   // the places in order
+    CHECK(getU32(out.data() + 11) == sB && getU32(out.data() + 15) == portB.number);
+    r = call(one, TargetConsoleStream::kOpStreams, le16(1), out);   // from the second entry
+    CHECK(ok(r) && out[1] == 1 && getU32(out.data() + 2) == sB);
+    CHECK(ok(call(one, TargetConsoleStream::kOpClose, le32(sB), out)) && !placeB.isOpen() && placeA.isOpen());
+    r = call(one, TargetConsoleStream::kOpClose, le32(sB), out);   // closed: a number nobody holds
+    CHECK(rejectedWith(r, kRejectNoResource));
+    CHECK(ok(call(one, TargetConsoleStream::kOpClose, le32(sA), out)) && !placeA.isOpen());
+  }
+
   printf("console: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

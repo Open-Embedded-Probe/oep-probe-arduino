@@ -164,6 +164,14 @@ static oep::Hooks<void (*)(), 4> loopWork;
 // consoles (and the SWIO wire), SWD's port and the uart, for the settings; the riscv-dm target for the SWIO wire
 static bool serialPorts = false;
 static oep::TargetConsoleStream *consoleIn = nullptr, *swioConsoleIn = nullptr;
+// oep.target.console: the probe's one (common §2), each wire's console a place in it
+static oep::TargetConsole *consoles = nullptr;
+static void addConsolePlace(oep::TargetConsoleStream &place) {
+  if (consoles) { consoles->add(place); return; }
+  static oep::Slot<oep::TargetConsole> one;
+  consoles = &one.make(place);
+  endpoint.add(*consoles);
+}
 static oep::WireRvswd *swioWireIn = nullptr;
 static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the RVSWD wire's, the SWIO wire's connections too
 static oep::SwdPort *swdIn = nullptr;
@@ -238,13 +246,13 @@ void oepAddRvswd() {
 void oepAddConsole() {
   static oep::Slot<oep::DmConsole> driver;
   static oep::Slot<oep::TargetConsoleStream> console;
-  endpoint.add(console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0));
-  consoleIn = &*console;
+  consoleIn = &console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0);
+  addConsolePlace(*consoleIn);
   loopWork.add([] { console->poll(); });
 }
 
 // The one-wire link (CH32V00x): its own wire fn, its connections served by the RVSWD wire's riscv-dm target (or one of
-// its own without that wire), its console instance 1 (its choice made in the wire's)
+// its own without that wire), its console a place of the one oep.target.console (its choice made in the wire's)
 struct SwioParts {
   oep::SwioPhy phy;
   oep::Ch32Dm dm{phy};
@@ -275,8 +283,8 @@ void oepAddSwio() {
 void oepAddSwioConsole() {
   static oep::Slot<oep::DmConsole> driver;
   static oep::Slot<oep::TargetConsoleStream> console;
-  swioConsoleIn = &console.make(swio->port, driver.make(swio->dm, swio->phy), 1);   // the one-wire link's own console
-  endpoint.add(*swioConsoleIn);
+  swioConsoleIn = &console.make(swio->port, driver.make(swio->dm, swio->phy), 0);   // the one-wire link's place
+  addConsolePlace(*swioConsoleIn);
   loopWork.add([] { console->poll(); });
 }
 

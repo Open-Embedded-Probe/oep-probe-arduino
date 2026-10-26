@@ -96,6 +96,13 @@ class TargetConsoleStream final : public Interface, public BindSource {
   bool passLost() const { return pass_lost_; }
   bool offersMechanism(uint8_t number) const { return driverOf(number) >= 0; }   // a wire number
   DebugPort &port() const { return port_; }
+  // The interface the host sees it through: a TargetConsole that holds it as one of its places, or itself. The settings'
+  // pass-through items belong to that one (common §2: one oep.target.console per probe).
+  const Interface &front() const { return front_ ? *front_ : *this; }
+  void setFront(const Interface *front) { front_ = front; }
+  uint32_t streamNumber() const { return stream_number_; }
+  // Its streams entry (stream u32, connection u32, mechanism u8: 9 bytes) while a stream is open; false: none.
+  bool streamEntry(uint8_t *out) const;
   // BindSource: the stream while it exists (a closed one too, until another is opened), the target's input.
   const PositionStream *bindStream() const override { return exists_ ? &stream_ : nullptr; }
   uint16_t bindStreamNumber() const override { return static_cast<uint16_t>(stream_number_); }
@@ -107,6 +114,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   DebugPort &port_;
   DmConsole &driver_;
   uint16_t instance_;
+  const Interface *front_ = nullptr;
   bool exists_ = false;    // a stream was opened (and may be closed but still readable)
   uint32_t stream_number_ = 0;   // the live stream's number (the probe's one space, core §9)
   uint32_t connection_ = 0;      // the connection it was opened on (the streams entry)
@@ -136,6 +144,31 @@ class TargetConsoleStream final : public Interface, public BindSource {
     TargetConsoleStream *t = static_cast<TargetConsoleStream *>(self);
     if (!t->pass_sink_) t->stream_.mark(kind, detail);
   }
+};
+
+// oep.target.console as the probe's one (common §2: one per name, taking the connections of every wire mapped to it) over
+// a place per wire: each place a TargetConsoleStream on its own port. A request goes to the place it names - open by its
+// connection, the stream ops by their stream - and streams lists every place's. Add this one to the endpoint, not the
+// places; the places' poll() stays the sketch's. A probe with one wire may add its TargetConsoleStream alone.
+class TargetConsole final : public Interface {
+ public:
+  static constexpr size_t kMaxPlaces = 2;
+  explicit TargetConsole(TargetConsoleStream &first) { add(first); }
+  bool add(TargetConsoleStream &place);
+  const char *name() const override { return reg::target_console::kName; }
+  uint16_t instance() const override { return 0; }
+  uint8_t revision() const override { return reg::target_console::kRevision; }
+  size_t describe(uint8_t *out, size_t capacity) override { return places_[0]->describe(out, capacity); }
+  bool lockFree(uint8_t op) const override { return places_[0]->lockFree(op); }
+  bool offers(uint8_t op) const override { return places_[0]->offers(op); }
+  Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
+  void sessionOver() override { for (size_t k = 0; k < count_; ++k) places_[k]->sessionOver(); }
+  bool sessionOverFirst() const override { return true; }
+  void probeRestart() override { for (size_t k = 0; k < count_; ++k) places_[k]->probeRestart(); }
+
+ private:
+  TargetConsoleStream *places_[kMaxPlaces] = {};
+  size_t count_ = 0;
 };
 
 }  // namespace oep

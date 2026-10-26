@@ -20,7 +20,7 @@
 // pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a choice (OepFeatures.h:
 // a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Swio (and SwioConsole in it), Gpio, Uart, I2c, Spi,
 // Capture, Config, Analog, Group, Link, Swd (oep.wire.swd + oep.target.arm-adi), Rvswd (oep.wire.rvswd, and Console:
-// its oep.target.console instance 1); Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
+// a place of the one oep.target.console); Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
 // (the TCP transport); all in by default.
 //
 // Cores: loop() (all of OEP, the SWIO wire, every interrupt the sketch sets up: UART0, the fixture UART, the SPI / I2C
@@ -145,6 +145,14 @@ static oep::Hooks<void (*)(), 1> lastly;
 static oep::SwdPort *swdIn = nullptr;
 static oep::WireSwd *swdWireIn = nullptr;   // its interface: the owner of its hold item (core §13.1)
 static oep::TargetConsoleStream *consoleIn = nullptr, *rvswdConsoleIn = nullptr;
+// oep.target.console: the probe's one (common §2), each wire's console a place in it
+static oep::TargetConsole *consoles = nullptr;
+static void addConsolePlace(oep::TargetConsoleStream &place) {
+  if (consoles) { consoles->add(place); return; }
+  static oep::Slot<oep::TargetConsole> one;
+  consoles = &one.make(place);
+  endpoint.add(*consoles);
+}
 static oep::WireRvswd *rvswdWireIn = nullptr;
 static oep::TargetRiscvDm *riscvDmIn = nullptr;   // the SWIO wire's, the RVSWD wire's connections too
 static oep::FixtureUart *uartIn = nullptr;
@@ -195,8 +203,8 @@ void oepAddSwioConsole() {
   static oep::Slot<oep::DmConsole> driver;
   static oep::Slot<oep::TargetConsoleStream> console;
   console.make(swio->port, driver.make(swio->dm, swio->phy), 0).setMaxRead(480);   // 512-byte frames
-  endpoint.add(*console);
   consoleIn = &*console;
+  addConsolePlace(*consoleIn);
   loopWork.add([] { console->poll(); });
 }
 
@@ -307,7 +315,7 @@ void oepAddSwd() {
 
 // oep.wire.rvswd (WCH CH32, 2 wires) on the GPIO registers (OepRvswdPhy.cpp), any output pair the host chooses (PinTable
 // owner 0xf2), its connections served by the SWIO wire's riscv-dm target (or one of its own without that wire), its
-// console instance 1 (its choice made in the wire's: Console)
+// console a place of the one oep.target.console (its choice made in the wire's: Console)
 struct RvswdParts {
   oep::RvswdPhy phy;
   oep::Ch32Dm dm{phy};
@@ -340,9 +348,9 @@ void oepAddRvswd() {
 // overflowed by 7.3 KB), the heap has (with Wi-Fi up too)
 void oepAddConsole() {
   oep::DmConsole *driver = new oep::DmConsole(rvswd->dm, rvswd->phy);
-  rvswdConsoleIn = new oep::TargetConsoleStream(rvswd->port, *driver, 1);
+  rvswdConsoleIn = new oep::TargetConsoleStream(rvswd->port, *driver, 0);   // the RVSWD wire's place
   rvswdConsoleIn->setMaxRead(480);   // 512-byte frames
-  endpoint.add(*rvswdConsoleIn);
+  addConsolePlace(*rvswdConsoleIn);
   loopWork.add([] { rvswdConsoleIn->poll(); });
 }
 
