@@ -49,6 +49,8 @@
 #include <OepAnalog.h>   // its CH32 build not on the X035 (its flash)
 #include <OepCh32Logic.h>   // empty on the X035 (its flash)
 #include <OepCh32SpiTarget.h>   // empty on the X035 (its flash)
+#include <OepCounter.h>
+#include <OepDac.h>
 #include <OepI2cController.h>
 #include <OepSpiController.h>
 #include <OepSwd.h>
@@ -351,6 +353,30 @@ void oepAddLogic() {
 #endif
 }
 
+// oep.fixture.counter (it only listens: no owner)
+void oepAddCounter() {
+#if !defined(ARDUINO_CH32X035)
+  static oep::Slot<oep::FixtureCounter> counter;
+  endpoint.add(counter.make(pins));
+#endif
+}
+
+// oep.fixture.dac on the DAC pads the core names (CH32RV_DAC1_PIN / 2: PA4 / PA5 on a V307 / H417; PinTable owner 11)
+void oepAddDac() {
+#if defined(CH32RV_DAC1_PIN) && !defined(ARDUINO_CH32X035)
+  uint64_t dac = 0;
+  for (int c = 0; c < 64; ++c) {
+    const int pad = oep::platformPad(c);
+    if (pad == CH32RV_DAC1_PIN) dac |= uint64_t{1} << c;
+#if defined(CH32RV_DAC2_PIN)
+    if (pad == CH32RV_DAC2_PIN) dac |= uint64_t{1} << c;
+#endif
+  }
+  static oep::Slot<oep::FixtureDac> d;
+  endpoint.add(d.make(pins, dac));
+#endif
+}
+
 // oep.fixture.spi-target on the core's SPI slave (CH32RVSPISlave; PinTable owner 6)
 void oepAddSpi() {
 #if !defined(ARDUINO_CH32X035)
@@ -424,6 +450,12 @@ __attribute__((weak)) void oepWithAnalog() {
 __attribute__((weak)) void oepWithLogic() {
   if (kRoomy) oepAddLogic();
 }
+__attribute__((weak)) void oepWithCounter() {
+  if (kRoomy) oepAddCounter();
+}
+__attribute__((weak)) void oepWithDac() {
+  if (kRoomy) oepAddDac();
+}
 __attribute__((weak)) void oepWithSwio() {
   if (kRoomy) oepAddSwio();
 }
@@ -489,6 +521,8 @@ void setup() {
   oepWithSpi();
   oepWithAnalog();
   oepWithLogic();
+  oepWithCounter();
+  oepWithDac();
   oepWithSettings();
 }
 

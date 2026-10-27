@@ -51,7 +51,10 @@
 #include <OepPinTable.h>
 #include <OepSampler.h>
 #include <OepSwd.h>
+#include <OepCounter.h>
+#include <OepDac.h>
 #include <OepI2cController.h>
+#include <OepPwm.h>
 #include <OepSpiController.h>
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
@@ -223,7 +226,7 @@ static_assert((oep::kUartRxFifo - oep::kUartRxFifoFull) * 10ull * 1000000ull / o
                   2 * oep::SwioPhy::kIrqOffMaxUs,
               "the fixture UART's RX FIFO must outlast an interrupt-off SWIO frame twice over");
 void oepAddUart() {
-  static oep::Slot<oep::FixtureUart> uart;
+  static oep::HeapSlot<oep::FixtureUart> uart;   // 9.4 KB: on the heap, the DRAM segment's static part being full
   endpoint.add(uart.make(pins, Serial2, 0, 2));
   uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
@@ -414,6 +417,23 @@ void oepAddSpiController() {
   endpoint.add(spi.make(pins));
 }
 
+// oep.fixture.pwm (PinTable owner 10) / counter (it only listens: no owner)
+void oepAddPwm() {
+  static oep::Slot<oep::FixturePwm> pwm;
+  endpoint.add(pwm.make(pins));
+}
+
+void oepAddCounter() {
+  static oep::Slot<oep::FixtureCounter> counter;
+  endpoint.add(counter.make(pins));
+}
+
+// oep.fixture.dac: the DAC on GPIO25 / 26 (PinTable owner 11)
+void oepAddDac() {
+  static oep::Slot<oep::FixtureDac> dac;
+  endpoint.add(dac.make(pins, (1ull << 25) | (1ull << 26)));
+}
+
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
 __attribute__((weak)) void oepWithBridge() { oepAddBridge(); }
 __attribute__((weak)) void oepWithWifi() { oepAddWifi(); }
@@ -434,6 +454,9 @@ __attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
 __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 __attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
 __attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
+__attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
+__attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
+__attribute__((weak)) void oepWithDac() { oepAddDac(); }
 
 void setup() {
   oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
@@ -467,6 +490,9 @@ void setup() {
   oepWithRvswd();   // and its console's choice
   oepWithI2cController();
   oepWithSpiController();
+  oepWithPwm();
+  oepWithCounter();
+  oepWithDac();
   lastly.run();
 }
 

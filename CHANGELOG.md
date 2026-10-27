@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.fixture.pwm, oep.fixture.counter and oep.fixture.dac (oep-spec 02c08c9, fixture §7-§9), each a choice (Pwm,
+  Counter, Dac). pwm (`FixturePwm`): ESP32-P4 / P4X and classic ESP32 by LEDC, RP2 by its PWM slices (two roles on one
+  slice refused at the plan), 10 Hz - 10 MHz, the frequency and duty made answered; not on the CH32 (its PWM frequency is
+  one for the whole chip). counter (`FixtureCounter`): every board but the X035, a GPIO interrupt an edge (100 kHz
+  declared), sharing pins (a PWM counted on its own pin). dac (`FixtureDac`): the classic ESP32's GPIO25 / 26 (8 bits) and
+  the CH32's PA4 / PA5 where the core names a DAC (V307, H417; 12 bits). The classic ESP32's fixture UART goes to the heap
+  (`HeapSlot`): its DRAM segment's static part was full.
+- (JA) oep.fixture.pwm、oep.fixture.counter、oep.fixture.dac（oep-spec 02c08c9、fixture §7〜§9）。それぞれ選択肢（Pwm、Counter、Dac）。
+  pwm（`FixturePwm`）: ESP32-P4 / P4X と classic ESP32 は LEDC、RP2 は PWM のスライス（1 つのスライスに 2 つの role は plan で断る）、
+  10 Hz〜10 MHz、出した周波数とデューティを返す。CH32 には無い（PWM の周波数がチップ全体で 1 つ）。counter（`FixtureCounter`）: X035 以外の
+  全ボード、GPIO の割り込みでエッジを数える（宣言は 100 kHz）。ピンを共有する（PWM を同じピンで数えられる）。dac（`FixtureDac`）: classic
+  ESP32 の GPIO25 / 26（8 bit）と、コアが DAC を持つ CH32 の PA4 / PA5（V307、H417。12 bit）。classic ESP32 の fixture の UART はヒープへ
+  （`HeapSlot`）: DRAM の静的な部分が足りなかった。
 - (EN) oep.fixture.logic on the CH32 Firmware (V307, H417; not the X035; choice Logic): `Ch32LogicCapture` on
   ArduinoCore-CH32RV 0.4.0's CH32RVLogicCapture - one port's pins 0-15 by timer and DMA into two halves, taken out by
   poll: one-shot, immediate or an edge / a level (when 0 / 1) with a pretrigger, up to 8 channels, 8192 samples, up to

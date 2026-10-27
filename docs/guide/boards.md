@@ -22,6 +22,9 @@ no released firmware.
 | Tracks started together (capture-group) | logic + analog | logic + analog | logic (sampler) + analog | no | no |
 | SPI / I2C target (the DUT controller's peer) | I2C | yes | yes (SPI modes 0 / 2) | yes (not the X035; SPI up to 200 kHz) | yes (not checked) |
 | SPI / I2C controller (the DUT target's peer) | yes (GPIOs, up to 250 kHz) | yes (GPIOs, I2C 400 kHz / SPI 2 MHz) | yes (as the P4) | yes (not the X035; GPIOs, up to 250 kHz) | no (not built) |
+| PWM output | yes (PWM slices) | yes (LEDC) | yes (LEDC) | no | no (not built) |
+| Edge counter | yes (interrupts, up to 100 kHz) | yes (same) | yes (same) | yes (not the X035) | no (not built) |
+| Analog output (DAC) | no | no | GPIO25 / 26, 8 bits | PA4 / PA5, 12 bits (V307, H417) | no |
 | Settings saved | flash (last sector) | NVS | NVS | no (no store yet; the X035 has no settings) | NVS |
 
 "No" means the library has no backend for it on that chip yet, not that the chip cannot.

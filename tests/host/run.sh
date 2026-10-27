@@ -58,6 +58,11 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_I2C_BUS -I"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_BUS -I"$here/shim" -I"$src" -o "$out-spi-controller" \
   "$here/test_spi_controller.cpp" "$src/OepSpiController.cpp"
 "$out-spi-controller"
+# pwm / counter / dac on fakes (the plans, set's checks, the output made, measure's window, a counter on a pwm's pin)
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PWM -DOEP_HOST_FAKE_COUNTER -DOEP_HOST_FAKE_DAC \
+  -I"$here/shim" -I"$src" -o "$out-fixture-out" "$here/test_fixture_out.cpp" "$src/OepPwm.cpp" "$src/OepCounter.cpp" \
+  "$src/OepDac.cpp"
+"$out-fixture-out"
 # the CH32's spi-target on a fake of the core's SPI slave
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CH32_SPI_SLAVE -I"$here/shim" -I"$src" -o "$out-ch32-spi" \
   "$here/test_ch32_spi_target.cpp" "$src/OepCh32SpiTarget.cpp"

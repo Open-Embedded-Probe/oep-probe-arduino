@@ -63,7 +63,9 @@
 #include <OepFixture.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
+#include <OepCounter.h>
 #include <OepI2cController.h>
+#include <OepPwm.h>
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
 #include <OepSpiController.h>
@@ -494,6 +496,17 @@ void oepAddSpiController() {
   endpoint.add(spi.make(pins));
 }
 
+// oep.fixture.pwm (PinTable owner 10) / counter (it only listens: no owner)
+void oepAddPwm() {
+  static oep::Slot<oep::FixturePwm> pwm;
+  endpoint.add(pwm.make(pins));
+}
+
+void oepAddCounter() {
+  static oep::Slot<oep::FixtureCounter> counter;
+  endpoint.add(counter.make(pins));
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
@@ -522,6 +535,8 @@ __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
 __attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
 __attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
+__attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
+__attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
 
 // oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
 // silent, waits oep::kRestartDetachMs for the host to see it (20 ms, as EspUsbDevice's own restarts wait, left the WeAct
@@ -588,6 +603,8 @@ void setup() {
   oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
   oepWithI2cController();
   oepWithSpiController();
+  oepWithPwm();
+  oepWithCounter();
   // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
   // disable items' channels, which are never touched (core §13.7: disable before anything else; applySaved
   // gives them back if the settings are not applied).

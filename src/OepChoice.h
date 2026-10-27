@@ -35,6 +35,24 @@ class Slot {
   alignas(T) uint8_t bytes_[sizeof(T)];
 };
 
+// A Slot whose object is on the heap, taken by the call that makes it and never given back: for a large part on a chip
+// whose static RAM is the tight one (the classic ESP32's DRAM segment), the heap having room at boot. The parts it is
+// handed to keep pointing at it, as at a Slot's.
+template <typename T>
+class HeapSlot {
+ public:
+  template <typename... A>
+  T &make(A &&...a) {
+    p_ = new T(static_cast<A &&>(a)...);
+    return *p_;
+  }
+  T *operator->() { return p_; }
+  T &operator*() { return *p_; }
+
+ private:
+  T *p_ = nullptr;
+};
+
 // What the parts leave to run later, in the order added (N at most: a part past it is not run)
 template <typename F, uint8_t N>
 struct Hooks {
