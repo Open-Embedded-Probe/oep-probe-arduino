@@ -20,7 +20,7 @@ no released firmware.
 | Logic capture | PIO + DMA: 8 ch, one-shot, edge / level trigger | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 1-300 kHz, one-shot; level / edge trigger searched in bursts | one port's pins 0-15, 8 ch, up to 250 kS/s, one-shot, edge / level trigger (not the X035) | no |
 | Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | ADC1, 4 ch, the ADC's sample-time steps (V307 from about 47.6 k, H417 from 198 k); not the X035 | no (not built) |
 | Tracks started together (capture-group) | logic + analog | logic + analog | logic (sampler) + analog | no | no |
-| SPI / I2C target (the DUT controller's peer) | I2C | yes | yes (SPI modes 0 / 2) | yes (not the X035; SPI up to 200 kHz) | yes (not checked) |
+| SPI / I2C target (the DUT controller's peer) | I2C, SPI (PIO; not checked) | yes | yes (SPI modes 0 / 2) | yes (not the X035; SPI up to 200 kHz) | yes (not checked) |
 | SPI / I2C controller (the DUT target's peer) | yes (GPIOs, up to 250 kHz) | yes (GPIOs, I2C 400 kHz / SPI 2 MHz) | yes (as the P4) | yes (not the X035; GPIOs, up to 250 kHz) | no (not built) |
 | PWM output | yes (PWM slices) | yes (LEDC) | yes (LEDC) | no | no (not built) |
 | Edge counter | yes (interrupts, up to 100 kHz) | yes (same) | yes (same) | yes (not the X035) | no (not built) |

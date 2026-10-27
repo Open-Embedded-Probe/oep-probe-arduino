@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.fixture.spi-target on the RP2040 / RP2350 Firmware (choice Spi): `Rp2SpiTarget`, a PIO state machine as the
+  slave (a program a CPHA, SCK's input inverted for CPOL 1), MOSI and the armed tx by DMA, the bit count in Y, CS rising a
+  GPIO interrupt that ends the transfer. Built only: NOT YET RUN on hardware (no SPI master on the bench); modes 0-3, LSB
+  first, cs_setup_ns 20 us and 10 MHz declared until measured.
+- (JA) RP2040 / RP2350 の Firmware に oep.fixture.spi-target（選択肢 Spi）: PIO のステートマシンをスレーブにした `Rp2SpiTarget`（CPHA ごとの
+  プログラム、CPOL 1 は SCK の入力を反転）。MOSI と arm した tx は DMA、ビット数は Y、CS の立ち上がりの GPIO 割り込みで転送を終える。
+  ビルドのみ: 実機では未検証（ベンチに SPI のマスターが無い）。mode 0〜3、LSB が先、cs_setup_ns 20 µs と 10 MHz は測るまでの控えめな宣言。
 - (EN) The RP2's logic capture takes repeat with rearm 1 (capture §2.1): every segment a one-shot of its own trigger, the
   state machine started again once the last is packed into its slot (up to 16 slots; full: state 5 until release), each
   segment flagged rearm (bit3) and, after the first, gap (bit0); a trigger record each (§3.10, op triggers, 32 kept).

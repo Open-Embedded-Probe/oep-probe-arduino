@@ -47,6 +47,7 @@
 #include <OepCounter.h>
 #include <OepI2cController.h>
 #include <OepPwm.h>
+#include <OepRp2SpiTarget.h>
 #include <OepSpiController.h>
 #include <OepSwd.h>
 #include <OepSwioPhy.h>
@@ -330,6 +331,12 @@ void oepAddSpiController() {
   endpoint.add(spi.make(pins));
 }
 
+// oep.fixture.spi-target on a PIO state machine (Rp2SpiTarget; PinTable owner 6) - built, not yet run on hardware
+void oepAddSpi() {
+  static oep::Slot<oep::Rp2SpiTarget> spi;
+  endpoint.add(spi.make(pins));
+}
+
 // oep.fixture.pwm (PinTable owner 10) / counter (it only listens: no owner)
 void oepAddPwm() {
   static oep::Slot<oep::FixturePwm> pwm;
@@ -361,6 +368,7 @@ __attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
 __attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
 __attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
 __attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
+__attribute__((weak)) void oepWithSpi() { oepAddSpi(); }
 __attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
 __attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
 
@@ -429,6 +437,7 @@ void setup() {
   oepWithSpiController();
   oepWithPwm();
   oepWithCounter();
+  oepWithSpi();
   lastly.run();
 }
 
