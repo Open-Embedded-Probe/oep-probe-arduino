@@ -8,6 +8,7 @@
 #if defined(OEP_HOST_FAKE_PWM)
 #elif defined(ARDUINO_ARCH_ESP32)
 #define OEP_PWM_ESP 1
+#include <soc/soc_caps.h>
 #elif defined(ARDUINO_ARCH_RP2040)
 #define OEP_PWM_RP2 1
 #include <hardware/clocks.h>
@@ -19,16 +20,22 @@ namespace oep {
 
 namespace {
 
-#if defined(OEP_PWM_RP2)
-uint32_t gcd(uint32_t a, uint32_t b) {
-  while (b) { const uint32_t t = a % b; a = b; b = t; }
+#if defined(OEP_PWM_RP2) || defined(OEP_PWM_ESP)
+uint64_t gcd(uint64_t a, uint64_t b) {
+  while (b) { const uint64_t t = a % b; a = b; b = t; }
   return a;
 }
 #endif
 
 #if defined(OEP_PWM_ESP)
-constexpr uint32_t kClockHz = 80000000;   // LEDC's APB clock
+// The clock arduino-esp32 gives LEDC: the crystal where LEDC can take it (P4: 40 MHz), else the APB's 80 MHz
+#if defined(SOC_LEDC_SUPPORT_XTAL_CLOCK)
+constexpr uint32_t kClockHz = 40000000;
+#else
+constexpr uint32_t kClockHz = 80000000;
+#endif
 constexpr uint8_t kMaxBits = 14;
+constexpr uint32_t kFractionBits = 8;   // the divider's fraction (ESP-IDF's LEDC_LL_FRACTIONAL_BITS)
 #elif defined(OEP_PWM_RP2)
 #else
 constexpr uint8_t kFakeBits = 8;
@@ -47,10 +54,15 @@ bool startOutput(int pad, uint32_t hz, uint16_t duty, uint32_t &num, uint32_t &d
   if (!ledcAttach(static_cast<uint8_t>(pad), hz, bits)) return false;
   const uint32_t steps = 1u << bits, level = stepsOf(duty, steps);   // steps itself: always high (LEDC's full duty)
   ledcWrite(static_cast<uint8_t>(pad), level);
-  num = ledcReadFreq(static_cast<uint8_t>(pad));
-  den = 1;
+  // the frequency made, as ESP-IDF divides (ledc_timer_config: the divider rounded, 8 fraction bits) - not
+  // ledcReadFreq, which gives whole Hz (and 0 on the P4)
+  const uint64_t clk = static_cast<uint64_t>(kClockHz) << kFractionBits, per = static_cast<uint64_t>(hz) * steps;
+  const uint64_t div = (clk + per / 2) / per, n = clk, d = div * steps, g = gcd(n, d);
+  if (!div || n / g > 0xFFFFFFFFu || d / g > 0xFFFFFFFFu) return false;
+  num = static_cast<uint32_t>(n / g);
+  den = static_cast<uint32_t>(d / g);
   made = dutyOf(level, steps);
-  return num != 0;
+  return true;
 #elif defined(OEP_PWM_RP2)
   const uint32_t clk = clock_get_hz(clk_sys);
   // the smallest divider (1/16 steps) whose wrap fits 16 bits, then the wrap nearest the frequency
@@ -69,7 +81,8 @@ bool startOutput(int pad, uint32_t hz, uint16_t duty, uint32_t &num, uint32_t &d
   pwm_set_chan_level(slice, chan, static_cast<uint16_t>(level > 65535 ? 65535 : level));
   gpio_set_function(static_cast<uint>(pad), GPIO_FUNC_PWM);
   pwm_set_enabled(slice, true);
-  const uint32_t n = clk * 16u, d = static_cast<uint32_t>(div16 * top), g = gcd(n, d);   // clk_sys x 16 fits 32 bits
+  const uint32_t n = clk * 16u, d = static_cast<uint32_t>(div16 * top);   // clk_sys x 16 fits 32 bits
+  const uint32_t g = static_cast<uint32_t>(gcd(n, d));
   num = n / g;
   den = d / g;
   made = dutyOf(level, static_cast<uint32_t>(top));
