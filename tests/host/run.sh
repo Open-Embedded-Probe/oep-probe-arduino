@@ -58,6 +58,10 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_I2C_BUS -I"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_BUS -I"$here/shim" -I"$src" -o "$out-spi-controller" \
   "$here/test_spi_controller.cpp" "$src/OepSpiController.cpp"
 "$out-spi-controller"
+# the CH32's spi-target on a fake of the core's SPI slave
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CH32_SPI_SLAVE -I"$here/shim" -I"$src" -o "$out-ch32-spi" \
+  "$here/test_ch32_spi_target.cpp" "$src/OepCh32SpiTarget.cpp"
+"$out-ch32-spi"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_DRIVE -I"$here/shim" -I"$src" -o "$out-idle" "$here/test_idle.cpp" \
   "$src/OepFixture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out-idle"

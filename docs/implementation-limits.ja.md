@@ -159,6 +159,12 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   （87f6d40、V003 の master が CS を下げてすぐ SCK を始める、4 byte の転送を続けて 5 回）: 3 MHz で 0 / 5、1 MHz で 4 / 5。DUT が受けたのは
   3C96C30F のはずが BC / FC（最初の 1〜2 ビットが 1）で、arm は関係しない（どれも arm の後に載っていた）。ESP32-P4 は MISO を自分で
   駆動しない間を持たない（cs_setup_ns を宣言しない、ベンチ: 4 MHz の 5 回が 5 / 5）。
+- **CH32 の spi-target**（ArduinoCore-CH32RV 0.4.0 の CH32RVSPISlave）: slave は byte を数えるので、bits は byte 数 x 8（byte の途中で
+  CS が上がった転送の、来たビットの数は分からない）。CS と各 byte が割り込みなので、cs_setup_ns 5000 ns、max_clock_hz 200 kHz（コアの
+  自己試験の値。ハードウェアの master での上限は未測定）。SCK / MISO / MOSI は SPI の 1 つの経路でなければならず、違えば configure が
+  failed。X035 には入れない（コアの SPI slave を読むだけで割り込みのハンドラーが 640 byte リンクされる）。
+- **I2C / SPI の controller**: 線は GPIO で動かし、時間は ESP32 では CPU のサイクル、ほかでは micros()（1 µs 刻み、250 kHz まで）で数える。
+  割り込みは半周期や CS の時間を延ばすだけで縮めない。SPI の 2 MHz（ESP32）は控えめに置いた値で、SCK の実際の速さは未測定。
 
 ## 2. 起動と更新
 

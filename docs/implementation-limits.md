@@ -48,4 +48,9 @@ P4's force at the sample of its instant, copied
 streaming sending finished segments only, spi-target's bits at most length x 8 with no ns TLV, arm answering success once the slave holds the armed
 transaction (post_setup_cb; 2 ms at most, else failed) and preload_tx once the slot is in the TX FIFO (or at the STOP
 of the transfer under way), and the classic's cs_setup_ns (15 us: a master clocking sooner after CS falls cannot rely on
-the first bit - the bench's back-to-back 4-byte frames read BC / FC for 3C, 0 / 5 at 3 MHz).
+the first bit - the bench's back-to-back 4-byte frames read BC / FC for 3C, 0 / 5 at 3 MHz). The CH32's spi-target (the core's CH32RVSPISlave): bits are
+the bytes x 8 (the slave counts bytes: a byte cut short by CS is not told apart), cs_setup_ns 5000 ns and max_clock_hz
+200 kHz (the core's self test; a hardware master's limit not measured), SCK / MISO / MOSI one route of an SPI (configure
+fails otherwise), not on the X035 (including the core's slave links 640 bytes of interrupt handlers). The I2C / SPI
+controllers: GPIOs, timed on the CPU's cycles on an ESP32 and micros() elsewhere (1 us steps, up to 250 kHz); an
+interrupt only makes a half or a CS time longer; the ESP32's 2 MHz SPI is a cautious figure, its SCK not measured.

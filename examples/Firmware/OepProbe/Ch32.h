@@ -10,6 +10,7 @@
 //
 // Interfaces (revision 1), as the RP2's (Rp2.h): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm +
 // oep.target.console (WCH CH32, 2 wires); oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart;
+// oep.fixture.i2c-target / spi-target (the core's Wire and SPI slaves) / i2c-controller / spi-controller (GPIOs);
 // the settings (core §13) (no store yet: nothing saved, setStorage(false)); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own). Every channel (platformPad: port x 24 + bit) may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (any enabled USART's route; another pair is
@@ -44,6 +45,7 @@
 #include <OepPinTable.h>
 #include <OepPlatform.h>
 #include <OepRvswdPhy.h>
+#include <OepCh32SpiTarget.h>   // empty on the X035 (its flash)
 #include <OepI2cController.h>
 #include <OepSpiController.h>
 #include <OepSwd.h>
@@ -159,7 +161,7 @@ static oep::PinTable pins(kChannels);
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the USB device, its loop work
 static oep::Hooks<void (*)(), 1> afterUsb;
-static oep::Hooks<void (*)(), 4> loopWork;
+static oep::Hooks<void (*)(), 5> loopWork;
 
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
 // settings', the SWIO wire's), so neither names the other's code: a serial transport (the settings' pass-throughs), the
@@ -322,6 +324,15 @@ void oepAddI2c() {
   endpoint.add(i2c.make(pins));
 }
 
+// oep.fixture.spi-target on the core's SPI slave (CH32RVSPISlave; PinTable owner 6)
+void oepAddSpi() {
+#if !defined(ARDUINO_CH32X035)
+  static oep::Slot<oep::Ch32SpiTarget> spi;
+  endpoint.add(spi.make(pins));
+  loopWork.add([] { spi->service(); });
+#endif
+}
+
 void oepAddSettings() {
   static oep::Slot<oep::Binds> binds;
   static oep::Slot<oep::Settings> config;
@@ -376,6 +387,9 @@ __attribute__((weak)) void oepWithUart() {
 }
 __attribute__((weak)) void oepWithI2c() {
   if (kRoomy) oepAddI2c();
+}
+__attribute__((weak)) void oepWithSpi() {
+  if (kRoomy) oepAddSpi();
 }
 __attribute__((weak)) void oepWithSwio() {
   if (kRoomy) oepAddSwio();
@@ -439,6 +453,7 @@ void setup() {
   oepWithLink();
   oepWithI2cController();
   oepWithSpiController();
+  oepWithSpi();
   oepWithSettings();
 }
 

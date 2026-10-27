@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.fixture.spi-target on the CH32 Firmware (V307, H417; not the X035): `oep::Ch32SpiTarget` on ArduinoCore-CH32RV
+  0.4.0's CH32RVSPISlave - modes 0-3, LSB first, CS any EXTI pin, MISO let go while CS is high, cs_setup_ns 5 us, up to
+  200 kHz; bits are whole bytes x 8 (implementation-limits). Host tests on a fake of the core's slave.
+- (JA) CH32 の Firmware（V307、H417。X035 は除く）に oep.fixture.spi-target: ArduinoCore-CH32RV 0.4.0 の CH32RVSPISlave の上の
+  `oep::Ch32SpiTarget`。mode 0〜3、LSB が先、CS は EXTI のある任意の端子、CS が上がっている間は MISO を離す、cs_setup_ns 5 µs、200 kHz まで。
+  bits は byte 数 x 8（implementation-limits）。コアの slave の偽物での host テスト。
 - (EN) The I2C / SPI controllers on the classic ESP32, RP2040 / RP2350 and CH32 (V307, H417; not the X035) Firmware too
   (choices I2cController / SpiController). Elsewhere than an ESP32 the lines are the Arduino pin calls, open drain as an
   input with its pull-up or a low output, and the times micros(): 1 us steps, up to 250 kHz (time_step_ns 1000).
