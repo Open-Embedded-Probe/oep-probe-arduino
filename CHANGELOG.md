@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.fixture.logic on the CH32 Firmware (V307, H417; not the X035; choice Logic): `Ch32LogicCapture` on
+  ArduinoCore-CH32RV 0.4.0's CH32RVLogicCapture - one port's pins 0-15 by timer and DMA into two halves, taken out by
+  poll: one-shot, immediate or an edge / a level (when 0 / 1) with a pretrigger, up to 8 channels, 8192 samples, up to
+  250 kS/s (the CPU takes every sample out; a half lost is a hole: state 6, error 2). Host tests on a fake of the core's
+  class.
+- (JA) CH32 の Firmware（V307、H417。X035 は除く。選択肢 Logic）に oep.fixture.logic: ArduinoCore-CH32RV 0.4.0 の CH32RVLogicCapture の上の
+  `Ch32LogicCapture`。1 つのポートの 0〜15 番をタイマーと DMA で 2 つの半分に取り、poll で取り出す: one-shot、即時かエッジ / レベル
+  （when 0 / 1）とプリトリガ、8 チャネル、8192 サンプル、250 kS/s まで（CPU が全サンプルを取り出す。半分を失えば穴: state 6、error 2）。
+  コアのクラスの偽物での host テスト。
 - (EN) oep.fixture.analog on the CH32 Firmware (V307, H417; not the X035): `AnalogCapture`'s CH32 build on
   ArduinoCore-CH32RV 0.4.0's CH32RVAdcStream - ADC1 over 1-4 pins in turn, one-shot, immediate or a crossing with a
   pretrigger, 16 KiB a segment. The rate is one of the ADC's eight sample-time steps, measured once at boot (rate_range:

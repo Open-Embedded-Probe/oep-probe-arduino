@@ -11,7 +11,7 @@
 // Interfaces (revision 1), as the RP2's (Rp2.h): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm +
 // oep.target.console (WCH CH32, 2 wires); oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart;
 // oep.fixture.i2c-target / spi-target (the core's Wire and SPI slaves) / i2c-controller / spi-controller (GPIOs);
-// oep.fixture.analog (the core's CH32RVAdcStream: ADC1, the pins in turn);
+// oep.fixture.analog (the core's CH32RVAdcStream: ADC1, the pins in turn); oep.fixture.logic (CH32RVLogicCapture: one port);
 // the settings (core §13) (no store yet: nothing saved, setStorage(false)); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own). Every channel (platformPad: port x 24 + bit) may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (any enabled USART's route; another pair is
@@ -47,6 +47,7 @@
 #include <OepPlatform.h>
 #include <OepRvswdPhy.h>
 #include <OepAnalog.h>   // its CH32 build not on the X035 (its flash)
+#include <OepCh32Logic.h>   // empty on the X035 (its flash)
 #include <OepCh32SpiTarget.h>   // empty on the X035 (its flash)
 #include <OepI2cController.h>
 #include <OepSpiController.h>
@@ -163,7 +164,7 @@ static oep::PinTable pins(kChannels);
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the USB device, its loop work
 static oep::Hooks<void (*)(), 1> afterUsb;
-static oep::Hooks<void (*)(), 6> loopWork;
+static oep::Hooks<void (*)(), 7> loopWork;
 
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
 // settings', the SWIO wire's), so neither names the other's code: a serial transport (the settings' pass-throughs), the
@@ -341,6 +342,15 @@ void oepAddAnalog() {
 #endif
 }
 
+// oep.fixture.logic on the core's CH32RVLogicCapture: one port's pins 0-15, up to 8 channels (it only listens)
+void oepAddLogic() {
+#if defined(OEP_LOGIC_CH32)
+  static oep::Slot<oep::Ch32LogicCapture> logic;
+  endpoint.add(logic.make(endpoint, pins, 0));
+  loopWork.add([] { logic->poll(); });
+#endif
+}
+
 // oep.fixture.spi-target on the core's SPI slave (CH32RVSPISlave; PinTable owner 6)
 void oepAddSpi() {
 #if !defined(ARDUINO_CH32X035)
@@ -411,6 +421,9 @@ __attribute__((weak)) void oepWithSpi() {
 __attribute__((weak)) void oepWithAnalog() {
   if (kRoomy) oepAddAnalog();
 }
+__attribute__((weak)) void oepWithLogic() {
+  if (kRoomy) oepAddLogic();
+}
 __attribute__((weak)) void oepWithSwio() {
   if (kRoomy) oepAddSwio();
 }
@@ -475,6 +488,7 @@ void setup() {
   oepWithSpiController();
   oepWithSpi();
   oepWithAnalog();
+  oepWithLogic();
   oepWithSettings();
 }
 

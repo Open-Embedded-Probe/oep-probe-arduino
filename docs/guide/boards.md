@@ -17,7 +17,7 @@ no released firmware.
 | SWD (ARM) | yes | yes | yes | yes (not the X035) | no |
 | Target console (through the debug module) | yes | yes | yes | yes | yes |
 | GPIO, UART fixtures | yes | yes (2 UARTs) | yes | GPIO; UART not on the X035 | yes |
-| Logic capture | PIO + DMA: 8 ch, one-shot, edge / level trigger | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 1-300 kHz, one-shot; level / edge trigger searched in bursts | no | no |
+| Logic capture | PIO + DMA: 8 ch, one-shot, edge / level trigger | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 1-300 kHz, one-shot; level / edge trigger searched in bursts | one port's pins 0-15, 8 ch, up to 250 kS/s, one-shot, edge / level trigger (not the X035) | no |
 | Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | ADC1, 4 ch, the ADC's sample-time steps (V307 from about 47.6 k, H417 from 198 k); not the X035 | no (not built) |
 | Tracks started together (capture-group) | logic + analog | logic + analog | logic (sampler) + analog | no | no |
 | SPI / I2C target (the DUT controller's peer) | I2C | yes | yes (SPI modes 0 / 2) | yes (not the X035; SPI up to 200 kHz) | yes (not checked) |

@@ -141,6 +141,11 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CH32_ADC -I
   "$here/test_analog_ch32.cpp" "$src/OepAnalog.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
   "$src/OepCaptureGroup.cpp"
 "$out-analog-ch32"
+# the logic capture on a CH32 on a fake of the core's CH32RVLogicCapture (one port, the halves, the triggers, a hole)
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CH32_LOGIC -I"$here/shim" -I"$src" -o "$out-logic-ch32" \
+  "$here/test_logic_ch32.cpp" "$src/OepCh32Logic.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
+  "$src/OepCaptureGroup.cpp"
+"$out-logic-ch32"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOEP_HOST_FAKE_I2C_SLAVE -DOEP_HOST_FAKE_CONFIG \
   -DOEP_HOST_FAKE_SPI_SLAVE -DOEP_HOST_FAKE_UART -DOEP_VECTORS_DIR="\"$here/../vectors\"" -I"$here/shim" -I"$src" -o "$out-vectors" "$here/test_vectors.cpp" \
   "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" "$src/OepCapture.cpp" \
