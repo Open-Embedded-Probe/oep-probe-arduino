@@ -44,6 +44,8 @@
 #include <OepPinTable.h>
 #include <OepPlatform.h>
 #include <OepRvswdPhy.h>
+#include <OepI2cController.h>
+#include <OepSpiController.h>
 #include <OepSwd.h>
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
@@ -341,6 +343,17 @@ void oepAddLink() {
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
 }
 
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+void oepAddI2cController() {
+  static oep::Slot<oep::I2cController> i2c;
+  endpoint.add(i2c.make(pins));
+}
+
+void oepAddSpiController() {
+  static oep::Slot<oep::SpiController> spi;
+  endpoint.add(spi.make(pins));
+}
+
 // This build's choices (OepFeatures.h: a sketch's own replaces one). The CH32X035's 62 KiB take the WCH set (RVSWD,
 // console, gpio, link, HID: 62.4 KB); SWD, uart and the settings are left out by default.
 #if defined(ARDUINO_CH32X035)
@@ -372,6 +385,12 @@ __attribute__((weak)) void oepWithSettings() {
   if (kRoomy) oepAddSettings();
 }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
+__attribute__((weak)) void oepWithI2cController() {
+  if (kRoomy) oepAddI2cController();
+}
+__attribute__((weak)) void oepWithSpiController() {
+  if (kRoomy) oepAddSpiController();
+}
 
 // oep.probe.restart (oep-if-restart): off the bus first (kRestartDetachMs, Oep.h), then CH32RV.restart(). restart_max_ms:
 // an estimate (the boot, the host's enumeration), to be measured on the bench.
@@ -418,6 +437,8 @@ void setup() {
   oepWithI2c();
   oepWithSwio();   // and its console's choice
   oepWithLink();
+  oepWithI2cController();
+  oepWithSpiController();
   oepWithSettings();
 }
 

@@ -20,14 +20,23 @@
 namespace oep {
 
 namespace {
-#if defined(ARDUINO_ARCH_ESP32)
-uint32_t cpuHz() { return getCpuFrequencyMhz() * 1000000u; }
+// The clock the times are counted on: the CPU's cycles on an ESP32, micros() elsewhere; the host tests' a 160 MHz CPU
+#if defined(OEP_HOST_FAKE_SPI_BUS)
+constexpr uint32_t tickHz() { return 160000000u; }
+#elif defined(ARDUINO_ARCH_ESP32)
+uint32_t tickHz() { return getCpuFrequencyMhz() * 1000000u; }
+inline uint32_t ticks() { return ticks(); }
+inline void line(int pad, bool high) { gpio_ll_set_level(&GPIO, static_cast<uint32_t>(pad), high ? 1 : 0); }
+inline bool level(int pad) { return gpio_ll_get_level(&GPIO, static_cast<uint32_t>(pad)) != 0; }
 #else
-constexpr uint32_t cpuHz() { return 160000000u; }   // the host tests' clock: a CPU the times are counted on
+constexpr uint32_t tickHz() { return 1000000u; }
+inline uint32_t ticks() { return micros(); }
+inline void line(int pad, bool high) { digitalWrite(pad, high ? HIGH : LOW); }
+inline bool level(int pad) { return digitalRead(pad) != 0; }
 #endif
-// A time asked as whole cycles at or above it, and those cycles as ns rounded down: what the line kept at least
-uint32_t cyclesOf(uint32_t ns) { return static_cast<uint32_t>((static_cast<uint64_t>(ns) * cpuHz() + 999999999u) / 1000000000u); }
-uint32_t nsOf(uint32_t cycles) { return static_cast<uint32_t>(static_cast<uint64_t>(cycles) * 1000000000u / cpuHz()); }
+// A time asked as whole ticks at or above it, and those ticks as ns rounded down: what the line kept at least
+uint32_t cyclesOf(uint32_t ns) { return static_cast<uint32_t>((static_cast<uint64_t>(ns) * tickHz() + 999999999u) / 1000000000u); }
+uint32_t nsOf(uint32_t cycles) { return static_cast<uint32_t>(static_cast<uint64_t>(cycles) * 1000000000u / tickHz()); }
 constexpr size_t kItem = 14;   // gap_ns setup_ns hold_ns count: a transfer's fixed part, asked and answered
 }  // namespace
 
@@ -91,7 +100,7 @@ size_t SpiController::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagMaxClockHz, kMaxClockHz);
   w.u32(kTagMinClockHz, kMinClockHz);
   w.u32(kTagFeatures, spi::kFeaturesLsbFirst);
-  w.u32(spi::kTlvDescribeTimeStepNs, (1000000000u + cpuHz() - 1) / cpuHz());   // one CPU cycle, rounded up
+  w.u32(spi::kTlvDescribeTimeStepNs, (1000000000u + tickHz() - 1) / tickHz());   // one tick, rounded up
   w.u8(spi::kTlvDescribeModes, kModes);
   w.u32(spi::kTlvDescribeMaxDelayNs, kMaxDelayNs);
   return w.ok() ? w.length() : 0;
@@ -102,7 +111,7 @@ bool SpiController::start() {
   if (fake_fail_start) { fake_fail_start = false; return false; }
   started_ = host_bus != nullptr;
   return started_;
-#elif defined(ARDUINO_ARCH_ESP32)
+#else
   sck_pad_ = platformPad(sck_); mosi_pad_ = platformPad(mosi_); miso_pad_ = platformPad(miso_); cs_pad_ = platformPad(cs_);
   // the levels before the outputs are on: CS inactive (high), SCK at CPOL, MOSI low
   set(cs_pad_, true);
@@ -115,15 +124,13 @@ bool SpiController::start() {
   pinMode(miso_pad_, INPUT);   // no pull (fixture §6)
   started_ = true;
   return true;
-#else
-  return false;
 #endif
 }
 
 // state 0: the channels in core §8's free state
 void SpiController::stop() {
   if (started_) {
-#if defined(ARDUINO_ARCH_ESP32)
+#if !defined(OEP_HOST_FAKE_SPI_BUS)
     for (const int c : {cs_, sck_, mosi_, miso_}) platformGpio(c, kGpioInputFloating);
 #endif
   }
@@ -137,15 +144,15 @@ void SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint3
   host_bus->transfer(first, gap, setup, hold, tx, rx, count);
 }
 
-#elif defined(ARDUINO_ARCH_ESP32)
+#else
 
-void SpiController::set(int pad, bool high) const { gpio_ll_set_level(&GPIO, static_cast<uint32_t>(pad), high ? 1 : 0); }
-bool SpiController::miso() const { return gpio_ll_get_level(&GPIO, static_cast<uint32_t>(miso_pad_)) != 0; }
+void SpiController::set(int pad, bool high) const { line(pad, high); }
+bool SpiController::miso() const { return level(miso_pad_); }
 
-// Until `cycles` after the last edge; one an interrupt stretched starts the next from now
+// Until `cycles` ticks after the last edge
 void SpiController::waitFor(uint32_t cycles) {
   const uint32_t due = edge_ + cycles;
-  while (static_cast<int32_t>(esp_cpu_get_cycle_count() - due) < 0) {}
+  while (static_cast<int32_t>(ticks() - due) < 0) {}
 }
 
 // One CS-framed transfer. Mode = CPOL x 2 + CPHA (fixture §4): with CPHA 0 a bit is on MOSI before its leading edge
@@ -158,7 +165,7 @@ void SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint3
   auto bitOf = [&](size_t k) { return ((tx[k / 8] >> (lsb ? k % 8 : 7 - k % 8)) & 1) != 0; };
   if (!first) waitFor(gap);   // edge_: the CS rise that ended the transfer before
   set(cs_pad_, false);
-  edge_ = esp_cpu_get_cycle_count();
+  edge_ = ticks();
   if (!bits) {
     waitFor(setup + hold);
   } else {
@@ -168,12 +175,12 @@ void SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint3
     for (size_t k = 0; k < bits; ++k) {
       if (k) waitFor(half_);
       set(sck_pad_, !cpol);   // the leading edge
-      edge_ = esp_cpu_get_cycle_count();
+      edge_ = ticks();
       if (cpha) set(mosi_pad_, bitOf(k));
       bool in = cpha ? false : miso();
       waitFor(half_);
       set(sck_pad_, cpol);   // the trailing edge
-      edge_ = esp_cpu_get_cycle_count();
+      edge_ = ticks();
       if (cpha) in = miso();
       if (in) rx[k / 8] |= static_cast<uint8_t>(1u << (lsb ? k % 8 : 7 - k % 8));
       if (!cpha && k + 1 < bits) set(mosi_pad_, bitOf(k + 1));
@@ -181,13 +188,7 @@ void SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint3
     waitFor(hold);
   }
   set(cs_pad_, true);
-  edge_ = esp_cpu_get_cycle_count();
-}
-
-#else
-
-void SpiController::lineTransfer(bool, uint32_t, uint32_t, uint32_t, const uint8_t *, uint8_t *rx, size_t count) {
-  memset(rx, 0, count);
+  edge_ = ticks();
 }
 
 #endif
@@ -251,7 +252,7 @@ Result SpiController::handle(uint8_t operation, const uint8_t *payload, size_t l
       if (capacity < 4) return failed();
       stop();
       mode_ = payload[0]; bit_order_ = payload[1]; transfers_ = 0;
-      const uint32_t cpu = cpuHz();
+      const uint32_t cpu = tickHz();
       half_ = (cpu + 2 * clock - 1) / (2 * clock);   // the SCK used: the nearest at or below the one asked
       if (!start()) { stop(); mode_ = bit_order_ = 0; return failed(); }
       putU32(out, cpu / (2 * half_));

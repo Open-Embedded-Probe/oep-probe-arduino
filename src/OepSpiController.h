@@ -11,9 +11,9 @@
 // request run back to back, CS's gap / setup / hold each at least the time asked: the host's round trip never sits
 // between them, so a target's boundaries (CS to the first clock, CS to CS) are measured in one request.
 //
-// The lines are GPIOs, a transfer at a time (lineTransfer). On an ESP32 the GPIO registers, every edge timed on the CPU's
-// cycle counter from the edge before: a time is whole cycles at or above the one asked, and the value answered is
-// those cycles in ns, rounded down (an interrupt only makes a time longer, which the answer allows: at least what it
+// The lines are GPIOs, a transfer at a time (lineTransfer), every edge timed from the edge before: on an ESP32 the GPIO
+// registers and the CPU's cycle counter, elsewhere (RP2, CH32) the Arduino pin calls and micros() (1 us steps, up to
+// 250 kHz). A time is whole ticks at or above the one asked, and the value answered is those ticks in ns, rounded down (an interrupt only makes a time longer, which the answer allows: at least what it
 // says). An SCK half an interrupt stretched is longer too (the clock is the controller's). OEP_HOST_FAKE_SPI_BUS: a host
 // test's target answers the transfers (SpiHostBus).
 #pragma once
@@ -38,7 +38,11 @@ class SpiController final : public Interface {
   static constexpr uint8_t kOwnerId = 9;
   enum Role : uint8_t { kRoleSck = 1, kRoleMosi = 2, kRoleMiso = 3, kRoleCs = 4 };
   static constexpr size_t kMaxLength = 256;   // the bytes of one request's transfers
+#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_SPI_BUS)
   static constexpr uint32_t kMaxClockHz = 2000000;
+#else
+  static constexpr uint32_t kMaxClockHz = 250000;   // halves of whole microseconds (micros()): 2 us at the most
+#endif
   static constexpr uint32_t kMinClockHz = 1000;
   static constexpr uint32_t kMaxDelayNs = 100000000;   // 100 ms: gap, setup or hold, well inside max_op_ms
   static constexpr uint8_t kModes = 0x0f;   // all four
@@ -78,9 +82,9 @@ class SpiController final : public Interface {
   bool started_ = false;
   uint32_t half_ = 0;   // a half SCK period, CPU cycles
   uint32_t transfers_ = 0;
-#if defined(ARDUINO_ARCH_ESP32)
+#if !defined(OEP_HOST_FAKE_SPI_BUS)
   int sck_pad_ = -1, mosi_pad_ = -1, miso_pad_ = -1, cs_pad_ = -1;
-  uint32_t edge_ = 0;   // the cycle count at the last edge
+  uint32_t edge_ = 0;   // the tick count at the last edge
   void waitFor(uint32_t cycles);
   void set(int pad, bool high) const;
   bool miso() const;

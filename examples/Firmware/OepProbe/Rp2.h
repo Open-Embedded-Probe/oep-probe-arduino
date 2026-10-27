@@ -44,6 +44,8 @@
 #include <OepRp2Logic.h>
 #include <OepRp2Usb.h>
 #include <OepRvswdPhy.h>
+#include <OepI2cController.h>
+#include <OepSpiController.h>
 #include <OepSwd.h>
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
@@ -315,6 +317,17 @@ void oepAddLink() {
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
 }
 
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+void oepAddI2cController() {
+  static oep::Slot<oep::I2cController> i2c;
+  endpoint.add(i2c.make(pins));
+}
+
+void oepAddSpiController() {
+  static oep::Slot<oep::SpiController> spi;
+  endpoint.add(spi.make(pins));
+}
+
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
 __attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
 __attribute__((weak)) void oepWithBulk() { oepAddBulk(); }
@@ -333,6 +346,8 @@ __attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
 __attribute__((weak)) void oepWithLogic() { oepAddLogic(); }
 __attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
 __attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
+__attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
+__attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
 
 // oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
 // rp2040.reboot(), a watchdog reset, oep::kRestartDetachMs later. restart_max_ms (its describe): the chip is running
@@ -395,6 +410,8 @@ void setup() {
   oepWithSwio();   // and its console's choice
   oepWithLogic();
   oepWithGroup();
+  oepWithI2cController();
+  oepWithSpiController();
   lastly.run();
 }
 

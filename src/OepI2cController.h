@@ -12,11 +12,12 @@
 // go), and is the answer's result, not a failure.
 //
 // The lines are GPIOs driven open drain, a byte at a time (lineStart / lineWrite / lineRead / lineStop): the NACKed byte's
-// place and the transfer left without a STOP are the controller's own to see, which an I2C driver does not tell. On an
-// ESP32 the GPIO registers, each half period counted on the CPU's cycle counter from the edge before (an interrupt only
-// stretches a half, which I2C allows: the clock is the controller's); a high SCL is waited for (the target's stretch). The
-// pads' internal pull-ups are on while configured (features bit0), as the I2C target's. OEP_HOST_FAKE_I2C_BUS: a host
-// test's target answers the bytes (I2cHostBus).
+// place and the transfer left without a STOP are the controller's own to see, which an I2C driver does not tell. Each
+// half period is counted from the edge before (an interrupt only stretches a half, which I2C allows: the clock is the
+// controller's); a high SCL is waited for (the target's stretch). On an ESP32 the GPIO registers and the CPU's cycle
+// counter; elsewhere (RP2, CH32) the Arduino pin calls, open drain as an input with its pull-up or a low output, and
+// micros() (whole-microsecond halves, up to 250 kHz). The pads' internal pull-ups are on while configured (features
+// bit0), as the I2C target's. OEP_HOST_FAKE_I2C_BUS: a host test's target answers the bytes (I2cHostBus).
 #pragma once
 
 #include <Arduino.h>
@@ -42,7 +43,11 @@ class I2cController final : public Interface {
   static constexpr uint8_t kOwnerId = 8;
   enum Role : uint8_t { kRoleSda = 1, kRoleScl = 2 };
   static constexpr size_t kMaxLength = 256;   // the bytes written and read in one transfer
+#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_I2C_BUS)
   static constexpr uint32_t kMaxClockHz = 400000;   // fast mode, on the pads' pull-ups and the bus's own
+#else
+  static constexpr uint32_t kMaxClockHz = 250000;   // halves of whole microseconds (micros()): 2 us at the most
+#endif
   static constexpr uint32_t kMinClockHz = 1000;
   static constexpr uint32_t kMaxStretchTimeoutUs = 100000;   // one wait for SCL, well inside max_op_ms
   // What a line step ends with: the result values of the transfer's answer (fixture §5), 1 a NACK
@@ -87,11 +92,11 @@ class I2cController final : public Interface {
   bool started_ = false, held_ = false;
   uint32_t clock_hz_ = 0, stretch_timeout_us_ = 0;
   uint32_t transfers_ = 0, errors_ = 0;
-#if defined(ARDUINO_ARCH_ESP32)
+#if !defined(OEP_HOST_FAKE_I2C_BUS)
   int sda_pad_ = -1, scl_pad_ = -1;
-  uint32_t half_ = 0;       // a half SCL period, CPU cycles
-  uint32_t timeout_ = 0;    // stretch_timeout_us, CPU cycles
-  uint32_t edge_ = 0;       // the cycle count at the last edge
+  uint32_t half_ = 0;       // a half SCL period, ticks (CPU cycles on an ESP32, microseconds elsewhere)
+  uint32_t timeout_ = 0;    // stretch_timeout_us, ticks
+  uint32_t edge_ = 0;       // the tick count at the last edge
   void sda(bool high) const;
   void scl(bool high) const;
   bool sdaHigh() const;

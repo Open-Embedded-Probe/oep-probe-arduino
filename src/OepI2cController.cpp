@@ -20,10 +20,27 @@
 namespace oep {
 
 namespace {
-#if defined(ARDUINO_ARCH_ESP32)
-uint32_t cpuHz() { return getCpuFrequencyMhz() * 1000000u; }
+// The clock the halves are counted on: the CPU's cycles on an ESP32, micros() elsewhere; the host tests' a 160 MHz CPU
+#if defined(OEP_HOST_FAKE_I2C_BUS)
+constexpr uint32_t tickHz() { return 160000000u; }
+#elif defined(ARDUINO_ARCH_ESP32)
+uint32_t tickHz() { return getCpuFrequencyMhz() * 1000000u; }
+inline uint32_t ticks() { return ticks(); }
+// open drain: the pad's output enable stays on, its level 1 lets go
+inline void line(int pad, bool high) { gpio_ll_set_level(&GPIO, static_cast<uint32_t>(pad), high ? 1 : 0); }
+inline bool level(int pad) { return gpio_ll_get_level(&GPIO, static_cast<uint32_t>(pad)) != 0; }
 #else
-constexpr uint32_t cpuHz() { return 160000000u; }   // the host tests' clock: a CPU the halves are counted on
+constexpr uint32_t tickHz() { return 1000000u; }
+inline uint32_t ticks() { return micros(); }
+// open drain from a GPIO without it (the X035 has none): let go = an input with its pull-up, low = an output at 0 (the
+// level set before the output is on)
+inline void line(int pad, bool high) {
+  if (high) { pinMode(pad, INPUT_PULLUP); return; }
+  digitalWrite(pad, LOW);
+  pinMode(pad, OUTPUT);
+  digitalWrite(pad, LOW);
+}
+inline bool level(int pad) { return digitalRead(pad) != 0; }
 #endif
 // An I2C bit on the bus: SCL at least twice, the segments' START and the ACK bit counted in
 constexpr uint32_t kBitsPerByte = 9;
@@ -94,21 +111,21 @@ bool I2cController::start() {
   if (fake_fail_start) { fake_fail_start = false; return false; }
   started_ = host_bus != nullptr;
   return started_;
-#elif defined(ARDUINO_ARCH_ESP32)
+#else
   sda_pad_ = platformPad(sda_);
   scl_pad_ = platformPad(scl_);
   for (const int pad : {sda_pad_, scl_pad_}) {
-    gpio_ll_set_level(&GPIO, static_cast<uint32_t>(pad), 1);   // let go before the output is on
+#if defined(ARDUINO_ARCH_ESP32)
+    line(pad, true);   // let go before the output is on
     pinMode(pad, OUTPUT_OPEN_DRAIN | PULLUP);   // open drain, its input on, the pad's pull-up (features bit0)
-    gpio_ll_set_level(&GPIO, static_cast<uint32_t>(pad), 1);
+#endif
+    line(pad, true);
   }
-  const uint32_t cpu = cpuHz();
-  half_ = (cpu + 2 * clock_hz_ - 1) / (2 * clock_hz_);
-  timeout_ = static_cast<uint32_t>(static_cast<uint64_t>(stretch_timeout_us_) * (cpu / 1000000u));
+  const uint32_t hz = tickHz();
+  half_ = (hz + 2 * clock_hz_ - 1) / (2 * clock_hz_);
+  timeout_ = static_cast<uint32_t>(static_cast<uint64_t>(stretch_timeout_us_) * (hz / 1000000u));
   started_ = true;
   return true;
-#else
-  return false;
 #endif
 }
 
@@ -117,7 +134,7 @@ void I2cController::stop() {
   if (held_) lineStop();
   held_ = false;
   if (started_) {
-#if defined(ARDUINO_ARCH_ESP32)
+#if !defined(OEP_HOST_FAKE_I2C_BUS)
     platformGpio(sda_, kGpioInputFloating);
     platformGpio(scl_, kGpioInputFloating);
 #endif
@@ -133,28 +150,28 @@ uint8_t I2cController::lineRead(uint8_t &byte, bool ack) { return host_bus->read
 void I2cController::lineStop() { host_bus->stop(); }
 void I2cController::lineRelease() { host_bus->release(); }
 
-#elif defined(ARDUINO_ARCH_ESP32)
+#else
 
-void I2cController::sda(bool high) const { gpio_ll_set_level(&GPIO, static_cast<uint32_t>(sda_pad_), high ? 1 : 0); }
-void I2cController::scl(bool high) const { gpio_ll_set_level(&GPIO, static_cast<uint32_t>(scl_pad_), high ? 1 : 0); }
-bool I2cController::sdaHigh() const { return gpio_ll_get_level(&GPIO, static_cast<uint32_t>(sda_pad_)) != 0; }
-bool I2cController::sclHigh() const { return gpio_ll_get_level(&GPIO, static_cast<uint32_t>(scl_pad_)) != 0; }
+void I2cController::sda(bool high) const { line(sda_pad_, high); }
+void I2cController::scl(bool high) const { line(scl_pad_, high); }
+bool I2cController::sdaHigh() const { return level(sda_pad_); }
+bool I2cController::sclHigh() const { return level(scl_pad_); }
 
 // Until half a period after the last edge; a half an interrupt stretched starts the next one from now
 void I2cController::waitHalf() {
   const uint32_t due = edge_ + half_;
-  while (static_cast<int32_t>(esp_cpu_get_cycle_count() - due) < 0) {}
-  const uint32_t now = esp_cpu_get_cycle_count();
+  while (static_cast<int32_t>(ticks() - due) < 0) {}
+  const uint32_t now = ticks();
   edge_ = now - due > half_ ? now : due;
 }
 
 bool I2cController::sclRelease() {
   scl(true);
-  const uint32_t from = esp_cpu_get_cycle_count();
+  const uint32_t from = ticks();
   while (!sclHigh()) {
-    if (esp_cpu_get_cycle_count() - from > timeout_) return false;
+    if (ticks() - from > timeout_) return false;
   }
-  edge_ = esp_cpu_get_cycle_count();
+  edge_ = ticks();
   return true;
 }
 
@@ -187,7 +204,7 @@ uint8_t I2cController::lineStart(bool repeated) {
     if (!sclRelease()) return kLineStretch;
     waitHalf();
   } else {
-    edge_ = esp_cpu_get_cycle_count();
+    edge_ = ticks();
     if (!sclRelease()) return kLineStretch;   // a target still holding SCL low
   }
   if (!sdaHigh()) return kLineBusError;   // SDA held low: no START can be made
@@ -232,14 +249,6 @@ void I2cController::lineRelease() {
   sda(true);
   scl(true);
 }
-
-#else
-
-uint8_t I2cController::lineStart(bool) { return kLineBusError; }
-uint8_t I2cController::lineWrite(uint8_t, bool &ack) { ack = false; return kLineBusError; }
-uint8_t I2cController::lineRead(uint8_t &byte, bool) { byte = 0xFF; return kLineBusError; }
-void I2cController::lineStop() {}
-void I2cController::lineRelease() {}
 
 #endif
 
@@ -336,7 +345,7 @@ Result I2cController::handle(uint8_t operation, const uint8_t *payload, size_t l
       stretch_timeout_us_ = timeout;
       if (!start()) { stop(); return failed(); }
       // the SCL used: the nearest at or below the one asked, whole CPU cycles a half
-      const uint32_t cpu = cpuHz(), half = (cpu + 2 * clock - 1) / (2 * clock);
+      const uint32_t cpu = tickHz(), half = (cpu + 2 * clock - 1) / (2 * clock);
       putU32(out, cpu / (2 * half));
       return completed(4);
     }

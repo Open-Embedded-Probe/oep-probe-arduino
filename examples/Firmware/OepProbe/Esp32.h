@@ -51,6 +51,8 @@
 #include <OepPinTable.h>
 #include <OepSampler.h>
 #include <OepSwd.h>
+#include <OepI2cController.h>
+#include <OepSpiController.h>
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
 #include <OepWifi.h>
@@ -401,6 +403,17 @@ void oepAddBridge() {
   oepWithPortSpeed();
 }
 
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+void oepAddI2cController() {
+  static oep::Slot<oep::I2cController> i2c;
+  endpoint.add(i2c.make(pins));
+}
+
+void oepAddSpiController() {
+  static oep::Slot<oep::SpiController> spi;
+  endpoint.add(spi.make(pins));
+}
+
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
 __attribute__((weak)) void oepWithBridge() { oepAddBridge(); }
 __attribute__((weak)) void oepWithWifi() { oepAddWifi(); }
@@ -419,6 +432,8 @@ __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
 __attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
 __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
+__attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
+__attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
 
 void setup() {
   oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
@@ -450,6 +465,8 @@ void setup() {
   oepWithLink();
   oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
   oepWithRvswd();   // and its console's choice
+  oepWithI2cController();
+  oepWithSpiController();
   lastly.run();
 }
 

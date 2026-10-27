@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The I2C / SPI controllers on the classic ESP32, RP2040 / RP2350 and CH32 (V307, H417; not the X035) Firmware too
+  (choices I2cController / SpiController). Elsewhere than an ESP32 the lines are the Arduino pin calls, open drain as an
+  input with its pull-up or a low output, and the times micros(): 1 us steps, up to 250 kHz (time_step_ns 1000).
+- (JA) I2C / SPI の controller を classic ESP32、RP2040 / RP2350、CH32（V307、H417。X035 は除く）の Firmware にも（選択肢
+  I2cController / SpiController）。ESP32 以外では線を Arduino のピンの関数で動かし（オープンドレインは、プルアップ付きの入力と low の出力の
+  切り替え）、時間は micros() で数える: 1 µs 刻み、250 kHz まで（time_step_ns 1000）。
 - (EN) oep.fixture.i2c-controller and oep.fixture.spi-controller (oep-spec 71f3feb, fixture §5, §6) on the ESP32-P4 /
   P4X Firmware (choices I2cController / SpiController, in by default): `oep::I2cController` and `oep::SpiController`
   drive GPIOs a byte / a transfer at a time, every edge timed on the CPU's cycle counter. I2C: segments joined by
