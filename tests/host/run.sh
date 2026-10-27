@@ -51,6 +51,13 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_SLAVE -
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_I2C_SLAVE -I"$here/shim" -I"$src" -o "$out-i2c" \
   "$here/test_i2c_target.cpp" "$src/OepP4I2cTarget.cpp"
 "$out-i2c"
+# the I2C / SPI controllers on fake buses (a target answering the bytes; the transfers and their times)
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_I2C_BUS -I"$here/shim" -I"$src" -o "$out-i2c-controller" \
+  "$here/test_i2c_controller.cpp" "$src/OepI2cController.cpp"
+"$out-i2c-controller"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_BUS -I"$here/shim" -I"$src" -o "$out-spi-controller" \
+  "$here/test_spi_controller.cpp" "$src/OepSpiController.cpp"
+"$out-spi-controller"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_DRIVE -I"$here/shim" -I"$src" -o "$out-idle" "$here/test_idle.cpp" \
   "$src/OepFixture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
 "$out-idle"

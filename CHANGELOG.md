@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.fixture.i2c-controller and oep.fixture.spi-controller (oep-spec 71f3feb, fixture §5, §6) on the ESP32-P4 /
+  P4X Firmware (choices I2cController / SpiController, in by default): `oep::I2cController` and `oep::SpiController`
+  drive GPIOs a byte / a transfer at a time, every edge timed on the CPU's cycle counter. I2C: segments joined by
+  repeated STARTs, the bus held without a STOP, the NACKed byte's place, a stretch timeout, the pads' pull-ups, 1 kHz -
+  400 kHz. SPI: modes 0-3, LSB first, 1 kHz - 2 MHz, a request's transfers back to back with CS's gap / setup / hold at
+  least the times asked (whole cycles, answered in ns). Host tests on fake buses.
+- (JA) oep.fixture.i2c-controller と oep.fixture.spi-controller（oep-spec 71f3feb、fixture §5、§6）を ESP32-P4 / P4X の Firmware に
+  （選択肢 I2cController / SpiController、既定で入る）。`oep::I2cController` と `oep::SpiController` は GPIO を 1 byte / 1 転送ずつ動かし、
+  エッジの時間は CPU のサイクルカウンタで数える。I2C: repeated START でつなぐ区切り、STOP を出さずにバスを持つ、NACK された byte の位置、
+  stretch の打ち切り、パッドのプルアップ、1 kHz〜400 kHz。SPI: mode 0〜3、LSB が先、1 kHz〜2 MHz、1 回の要求の転送を続けて行い、CS の
+  gap / setup / hold は頼んだ時間以上（サイクル単位、ns で返す）。偽のバスでの host テスト。
 - (EN) The CH32 Firmware builds move to ArduinoCore-CH32RV 0.4.0 (from 0.3.0): ch32x035 59460 of 63488 (440 less),
   ch32v307 97176, ch32h417 108388.
 - (JA) CH32 の Firmware のビルドは ArduinoCore-CH32RV 0.4.0 に（0.3.0 から）: ch32x035 は 63488 のうち 59460（440 減）、ch32v307 は 97176、

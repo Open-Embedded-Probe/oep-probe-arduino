@@ -33,11 +33,12 @@
 // uart (x2) / capture (PARLIO: up to 16 channels, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps); the ESP-IDF SPI / I2C
 // devices oep.fixture.spi-target / i2c-target; the settings (core §13) (saved in NVS); oep.fixture.analog
 // (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic);
-// oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Every GPIO but the
+// oep.probe.link; oep.fixture.i2c-controller / spi-controller (GPIOs, OepI2cController.h / OepSpiController.h);
+// oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Every GPIO but the
 // USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the SWIO pin, the reset line, or any fixture's pin - the host chooses.
 // Each is a choice (OepFeatures.h: a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and
 // Console in it), Gpio, Uart (both), Capture, I2c, Spi, Config, Analog, Group, Swio (and SwioConsole in it), Link, Swd
-// (oep.wire.swd + oep.target.arm-adi); all in by default.
+// (oep.wire.swd + oep.target.arm-adi), I2cController, SpiController; all in by default.
 #pragma once
 #include <esp_mac.h>
 #include <esp_app_desc.h>
@@ -62,8 +63,10 @@
 #include <OepFixture.h>
 #include <OepP4I2cTarget.h>
 #include <OepP4SpiTarget.h>
+#include <OepI2cController.h>
 #include <OepPinTable.h>
 #include <OepRvswdPhy.h>
+#include <OepSpiController.h>
 #include <OepSwd.h>
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
@@ -167,7 +170,7 @@ static oep::PinTable pins(kChannels);
 static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 static char serial_[20];
 // PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the SWIO wire
-// 0xf2, the analog 7)
+// 0xf2, the analog 7, the I2C controller 8, the SPI controller 9)
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the HS device (the
 // transports, in the describe's order), its loop work; the settings' fn at its place, what comes last
@@ -480,6 +483,17 @@ void oepAddSwd() {
   swdWireIn = &*wireSwd;
 }
 
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+void oepAddI2cController() {
+  static oep::Slot<oep::I2cController> i2c;
+  endpoint.add(i2c.make(pins));
+}
+
+void oepAddSpiController() {
+  static oep::Slot<oep::SpiController> spi;
+  endpoint.add(spi.make(pins));
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
@@ -506,6 +520,8 @@ __attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
 __attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
 __attribute__((weak)) void oepWithLink() { oepAddLink(); }
 __attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
+__attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
+__attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
 
 // oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
 // silent, waits oep::kRestartDetachMs for the host to see it (20 ms, as EspUsbDevice's own restarts wait, left the WeAct
@@ -570,6 +586,8 @@ void setup() {
   oepWithSwio();   // and its console's choice
   oepWithLink();
   oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
+  oepWithI2cController();
+  oepWithSpiController();
   // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
   // disable items' channels, which are never touched (core §13.7: disable before anything else; applySaved
   // gives them back if the settings are not applied).
