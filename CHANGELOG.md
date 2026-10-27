@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The RP2's logic capture takes repeat with rearm 1 (capture §2.1): every segment a one-shot of its own trigger, the
+  state machine started again once the last is packed into its slot (up to 16 slots; full: state 5 until release), each
+  segment flagged rearm (bit3) and, after the first, gap (bit0); a trigger record each (§3.10, op triggers, 32 kept).
+  Repeat with rearm 0 or without a trigger (gapless) is refused unsupported.
+- (JA) RP2 のロジックのキャプチャが、rearm 1 のリピートを受ける（capture §2.1）: 区画ごとに自分のトリガの one-shot で、前の区画を置き場に
+  詰めたらステートマシンをかけ直す（置き場は 16 まで。埋まれば release まで state 5）。区画は rearm（bit3）、2 つ目からは gap（bit0）を持つ。
+  トリガごとに記録（§3.10、op triggers、32 個）。rearm 0 やトリガ無しのリピート（隙間なし）は unsupported で断る。
 - (EN) oep.fixture.pwm, oep.fixture.counter and oep.fixture.dac (oep-spec 02c08c9, fixture §7-§9), each a choice (Pwm,
   Counter, Dac). pwm (`FixturePwm`): ESP32-P4 / P4X and classic ESP32 by LEDC, RP2 by its PWM slices (two roles on one
   slice refused at the plan), 10 Hz - 10 MHz, the frequency and duty made answered; not on the CH32 (its PWM frequency is
