@@ -25,7 +25,7 @@ namespace {
 constexpr uint32_t tickHz() { return 160000000u; }
 #elif defined(ARDUINO_ARCH_ESP32)
 uint32_t tickHz() { return getCpuFrequencyMhz() * 1000000u; }
-inline uint32_t ticks() { return ticks(); }
+inline uint32_t ticks() { return esp_cpu_get_cycle_count(); }
 inline void line(int pad, bool high) { gpio_ll_set_level(&GPIO, static_cast<uint32_t>(pad), high ? 1 : 0); }
 inline bool level(int pad) { return gpio_ll_get_level(&GPIO, static_cast<uint32_t>(pad)) != 0; }
 #else
