@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.39
 - (EN) The CH32 Firmware builds move to ArduinoCore-CH32RV 0.3.0 (from 0.2.2). Its USB callbacks run only from
   `deliverEvents()`, so `loop()` calls it (the HID transport's output reports are taken there). 0.3.0 grows the X035
   build by 756 bytes, past its flash (436 over); the ch32x035 profile takes the core's `-msave-restore` entry
