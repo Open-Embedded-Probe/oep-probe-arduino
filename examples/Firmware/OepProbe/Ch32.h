@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// WCH CH32 on ArduinoCore-CH32RV (profiles ch32x035, ch32v307, ch32h417; the core's 0.3.0, LTO by default).
+// WCH CH32 on ArduinoCore-CH32RV (profiles ch32x035, ch32v307, ch32h417; the core's 0.4.0, LTO by default).
 //
 // Transports, each a choice (below): the USB vendor bulk interface (class 0xFF, 'O', 'E': transports §3) and the USB HID
 // one at full speed, length-prefixed frames; a USB CDC port and a UART bridge (COBS) too if chosen. The USB device is the project's VID:PID 1209:4F45 (registry usb; PID-USE.md), serial = the unit id (the chip's 64-bit

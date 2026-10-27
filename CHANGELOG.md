@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The CH32 Firmware builds move to ArduinoCore-CH32RV 0.4.0 (from 0.3.0): ch32x035 59460 of 63488 (440 less),
+  ch32v307 97176, ch32h417 108388.
+- (JA) CH32 の Firmware のビルドは ArduinoCore-CH32RV 0.4.0 に（0.3.0 から）: ch32x035 は 63488 のうち 59460（440 減）、ch32v307 は 97176、
+  ch32h417 は 108388。
 
 ## 0.0.39
 - (EN) The CH32 Firmware builds move to ArduinoCore-CH32RV 0.3.0 (from 0.2.2). Its USB callbacks run only from
