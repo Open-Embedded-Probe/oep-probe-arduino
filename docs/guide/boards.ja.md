@@ -7,24 +7,24 @@
 
 ## チップごとにできること
 
-| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | ほかの ESP32（S3、C3、C6 など） |
-|---|---|---|---|---|
-| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | 無し: 自分でビルド（下） |
-| ベンチでの確認 | Pico 2 で確認（CH32L103） | P4: 済み（CH32X035 の治具）。P4X: ビルドのみ | 済み（CH32V003 の治具） | 無し |
-| 経路 | USB CDC | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB-Serial/JTAG か USB CDC |
-| RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | 無し | あり（dedicated GPIO。ビルドのみ、未確認） |
-| SWIO（CH32V00x の 1 線） | 無し | 無し | あり | 無し |
-| SWD（ARM） | あり | 無し | 無し | 無し |
-| target のコンソール（debug module 経由） | あり | あり | あり | あり |
-| GPIO、UART の fixture | あり | あり（UART 2 つ） | あり | あり |
-| ロジックのキャプチャ | 無し | PARLIO: 16 ch まで、2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps。ワンショットのレベル / エッジのトリガ、プリトリガは 32 Ki サンプルまで（16 ch） | GPIO の sampler: 8 ch、1〜300 kHz、ワンショット。レベル / エッジのトリガを区切りごとに探す | 無し |
-| アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | 無し（ビルドしていない） |
-| トラックを一緒に始める（capture-group） | 無し | ロジック + アナログ | ロジック（sampler）+ アナログ | 無し |
-| SPI / I2C のデバイス（target の相手） | 無し | あり | あり | あり（未確認） |
-| 設定の保存 | flash（最後の領域） | NVS | NVS | NVS |
+| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32（X035 / V307 / H417） | ほかの ESP32（S3、C3、C6 など） |
+|---|---|---|---|---|---|
+| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | 無し: 自分でビルド（下） |
+| ベンチでの確認 | Pico 2 で確認（CH32L103） | P4: 済み（CH32X035 の治具）。P4X: キャプチャ（wireskein のベンチ） | 済み（CH32V003 の治具） | 無し（ビルドと host テストのみ） | 無し |
+| 経路 | USB CDC、vendor bulk、HID | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID | USB-Serial/JTAG か USB CDC |
+| RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | あり | あり | あり（dedicated GPIO。ビルドのみ、未確認） |
+| SWIO（CH32V00x の 1 線） | あり | あり | あり | あり（X035 以外） | 無し |
+| SWD（ARM） | あり | あり | あり | あり（X035 以外） | 無し |
+| target のコンソール（debug module 経由） | あり | あり | あり | あり | あり |
+| GPIO、UART の fixture | あり | あり（UART 2 つ） | あり | GPIO。UART は X035 以外 | あり |
+| ロジックのキャプチャ | PIO + DMA: 8 ch、ワンショット、エッジ / レベルのトリガ | PARLIO: 16 ch まで、2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps。ワンショットのレベル / エッジのトリガ、プリトリガは 32 Ki サンプルまで（16 ch） | GPIO の sampler: 8 ch、1〜300 kHz、ワンショット。レベル / エッジのトリガを区切りごとに探す | 無し | 無し |
+| アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | ADC1、4 ch、ADC のサンプル時間の段（V307 約 47.6 k〜、H417 約 198 k〜）。X035 以外 | 無し（ビルドしていない） |
+| トラックを一緒に始める（capture-group） | ロジック + アナログ | ロジック + アナログ | ロジック（sampler）+ アナログ | 無し | 無し |
+| SPI / I2C の target（DUT の controller の相手） | I2C | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | あり（未確認） |
+| SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 2 MHz まで） | あり（P4 と同じ） | あり（X035 以外。GPIO、250 kHz まで） | 無し（ビルドしていない） |
+| 設定の保存 | flash（最後の領域） | NVS | NVS | 無し（保存の場所がまだ無い。X035 は設定そのものが無い） | NVS |
 
-「無し」は、そのチップ向けの実装がライブラリにまだ無いという意味で、チップにできないという意味ではありません。SWIO は classic
-ESP32 のサイクル数でビットの時間を数え、SWD の bit-bang は RP2 のもの、キャプチャは P4 の PARLIO と classic ESP32 の sampler です。
+「無し」は、そのチップ向けの実装がライブラリにまだ無いという意味で、チップにできないという意味ではありません。
 
 アナログのキャプチャは、取っている間その pad をアナログの機能に切り替え、デジタルの入出力を切ります。そのためアナログの
 チャネルは誰とも共有しません。そこにロジックのキャプチャ、fixture、線を載せる plan も、それらのピンにアナログを載せる plan も

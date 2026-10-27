@@ -7,25 +7,24 @@ no released firmware.
 
 ## What each chip does
 
-| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | other ESP32 (S3, C3, C6, ...) |
-|---|---|---|---|---|
-| Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | none: build it (below) |
-| Checked on a bench | on a Pico 2 (CH32L103) | P4: yes (CH32X035 jig); P4X: built only | yes (CH32V003 jig) | no |
-| Transports | USB CDC | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB-Serial/JTAG or USB CDC |
-| RVSWD (CH32 2-wire) | yes (SIO) | yes (dedicated GPIO) | no | yes (dedicated GPIO; built, not checked) |
-| SWIO (CH32V00x 1-wire) | no | no | yes | no |
-| SWD (ARM) | yes | no | no | no |
-| Target console (through the debug module) | yes | yes | yes | yes |
-| GPIO, UART fixtures | yes | yes (2 UARTs) | yes | yes |
-| Logic capture | no | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 1-300 kHz, one-shot; level / edge trigger searched in bursts | no |
-| Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | no (not built) |
-| Tracks started together (capture-group) | no | logic + analog | logic (sampler) + analog | no |
-| SPI / I2C device (the target's peer) | no | yes | yes | yes (not checked) |
-| Settings saved | flash (last sector) | NVS | NVS | NVS |
+| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32 (X035 / V307 / H417) | other ESP32 (S3, C3, C6, ...) |
+|---|---|---|---|---|---|
+| Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | none: build it (below) |
+| Checked on a bench | on a Pico 2 (CH32L103) | P4: yes (CH32X035 jig); P4X: captures (wireskein's bench) | yes (CH32V003 jig) | no (built and host-tested only) | no |
+| Transports | USB CDC, vendor bulk, HID | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB vendor bulk, HID | USB-Serial/JTAG or USB CDC |
+| RVSWD (CH32 2-wire) | yes (SIO) | yes (dedicated GPIO) | yes | yes | yes (dedicated GPIO; built, not checked) |
+| SWIO (CH32V00x 1-wire) | yes | yes | yes | yes (not the X035) | no |
+| SWD (ARM) | yes | yes | yes | yes (not the X035) | no |
+| Target console (through the debug module) | yes | yes | yes | yes | yes |
+| GPIO, UART fixtures | yes | yes (2 UARTs) | yes | GPIO; UART not on the X035 | yes |
+| Logic capture | PIO + DMA: 8 ch, one-shot, edge / level trigger | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 1-300 kHz, one-shot; level / edge trigger searched in bursts | no | no |
+| Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | ADC1, 4 ch, the ADC's sample-time steps (V307 from about 47.6 k, H417 from 198 k); not the X035 | no (not built) |
+| Tracks started together (capture-group) | logic + analog | logic + analog | logic (sampler) + analog | no | no |
+| SPI / I2C target (the DUT controller's peer) | I2C | yes | yes (SPI modes 0 / 2) | yes (not the X035; SPI up to 200 kHz) | yes (not checked) |
+| SPI / I2C controller (the DUT target's peer) | yes (GPIOs, up to 250 kHz) | yes (GPIOs, I2C 400 kHz / SPI 2 MHz) | yes (as the P4) | yes (not the X035; GPIOs, up to 250 kHz) | no (not built) |
+| Settings saved | flash (last sector) | NVS | NVS | no (no store yet; the X035 has no settings) | NVS |
 
-"No" means the library has no backend for it on that chip yet, not that the chip cannot: SWIO times its bits by counting
-classic-ESP32 cycles, SWD's bit-bang is the RP2's, the capture drivers are the P4's PARLIO and the classic ESP32's
-sampler.
+"No" means the library has no backend for it on that chip yet, not that the chip cannot.
 
 An analog capture takes its pads to their analog function while it runs, which cuts their digital input and output, so
 an analog channel is shared with nothing: a plan that puts a logic capture, a fixture or a wire on it (or the analog on
