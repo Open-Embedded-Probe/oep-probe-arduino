@@ -37,23 +37,23 @@ profiles:
     libraries:
       - dir: ../../..
   ch32x035:
-    fqbn: ch32-riscv-ug:ch32rv:CH32X035
+    fqbn: ch32-riscv-ug:ch32rv:CH32X035:opt=osltosr
     platforms:
-      - platform: ch32-riscv-ug:ch32rv (0.2.2)
+      - platform: ch32-riscv-ug:ch32rv (0.3.0)
         platform_index_url: https://ch32-riscv-ug.github.io/ArduinoCore-CH32RV/package_ch32-riscv-ug_index.json
     libraries:
       - dir: ../../..
   ch32v307:
     fqbn: ch32-riscv-ug:ch32rv:CH32V307
     platforms:
-      - platform: ch32-riscv-ug:ch32rv (0.2.2)
+      - platform: ch32-riscv-ug:ch32rv (0.3.0)
         platform_index_url: https://ch32-riscv-ug.github.io/ArduinoCore-CH32RV/package_ch32-riscv-ug_index.json
     libraries:
       - dir: ../../..
   ch32h417:
     fqbn: ch32-riscv-ug:ch32rv:CH32H417
     platforms:
-      - platform: ch32-riscv-ug:ch32rv (0.2.2)
+      - platform: ch32-riscv-ug:ch32rv (0.3.0)
         platform_index_url: https://ch32-riscv-ug.github.io/ArduinoCore-CH32RV/package_ch32-riscv-ug_index.json
     libraries:
       - dir: ../../..

@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The CH32 Firmware builds move to ArduinoCore-CH32RV 0.3.0 (from 0.2.2). Its USB callbacks run only from
+  `deliverEvents()`, so `loop()` calls it (the HID transport's output reports are taken there). 0.3.0 grows the X035
+  build by 756 bytes, past its flash (436 over); the ch32x035 profile takes the core's `-msave-restore` entry
+  (`opt=osltosr`, 4 KB less, calls slower): 59900 of 63488.
+- (JA) CH32 の Firmware のビルドは ArduinoCore-CH32RV 0.3.0 に（0.2.2 から）。USB のコールバックは `deliverEvents()` からしか呼ばれないので、
+  `loop()` がそれを呼ぶ（HID の transport の output report はそこで受ける）。0.3.0 で X035 のビルドは 756 byte 増えてフラッシュを越える（436 超過）
+  ので、ch32x035 のプロファイルはコアの `-msave-restore` の項目（`opt=osltosr`、4 KB 減、呼び出しは遅くなる）を使う: 63488 のうち 59900。
 - (EN) One oep.target.console per probe (oep-spec 4a75ae1, common §2): `oep::TargetConsole` holds a place per wire (a
   `TargetConsoleStream` each) and takes every wire's connections - open goes to the place of its connection, the stream
   ops to the place of their stream, streams lists them all. The Firmware probes with two wires (RVSWD and SWIO: ESP32,
