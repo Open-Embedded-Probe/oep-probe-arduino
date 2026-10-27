@@ -11,6 +11,7 @@
 // Interfaces (revision 1), as the RP2's (Rp2.h): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm +
 // oep.target.console (WCH CH32, 2 wires); oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart;
 // oep.fixture.i2c-target / spi-target (the core's Wire and SPI slaves) / i2c-controller / spi-controller (GPIOs);
+// oep.fixture.analog (the core's CH32RVAdcStream: ADC1, the pins in turn);
 // the settings (core §13) (no store yet: nothing saved, setStorage(false)); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own). Every channel (platformPad: port x 24 + bit) may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (any enabled USART's route; another pair is
@@ -45,6 +46,7 @@
 #include <OepPinTable.h>
 #include <OepPlatform.h>
 #include <OepRvswdPhy.h>
+#include <OepAnalog.h>   // its CH32 build not on the X035 (its flash)
 #include <OepCh32SpiTarget.h>   // empty on the X035 (its flash)
 #include <OepI2cController.h>
 #include <OepSpiController.h>
@@ -161,7 +163,7 @@ static oep::PinTable pins(kChannels);
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the USB device, its loop work
 static oep::Hooks<void (*)(), 1> afterUsb;
-static oep::Hooks<void (*)(), 5> loopWork;
+static oep::Hooks<void (*)(), 6> loopWork;
 
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
 // settings', the SWIO wire's), so neither names the other's code: a serial transport (the settings' pass-throughs), the
@@ -324,6 +326,21 @@ void oepAddI2c() {
   endpoint.add(i2c.make(pins));
 }
 
+// oep.fixture.analog on the core's CH32RVAdcStream: ADC1's inputs among the channels (PinTable owner 7). Its rates
+// measured now, before a host: the first ADC input's pad goes analog for it, then floats again.
+void oepAddAnalog() {
+#if defined(OEP_ANALOG_CH32)
+  uint64_t adc = 0;
+  for (int c = 0; c < 64; ++c)
+    if (((kChannels >> c) & 1) && digitalPinHasADC(oep::platformPad(c))) adc |= uint64_t{1} << c;
+  static oep::Slot<oep::AnalogCapture> analog;
+  analog.make(endpoint, adc, 0).setPins(&pins, 7);
+  analog->measureRates();
+  endpoint.add(*analog);
+  loopWork.add([] { analog->poll(); });
+#endif
+}
+
 // oep.fixture.spi-target on the core's SPI slave (CH32RVSPISlave; PinTable owner 6)
 void oepAddSpi() {
 #if !defined(ARDUINO_CH32X035)
@@ -391,6 +408,9 @@ __attribute__((weak)) void oepWithI2c() {
 __attribute__((weak)) void oepWithSpi() {
   if (kRoomy) oepAddSpi();
 }
+__attribute__((weak)) void oepWithAnalog() {
+  if (kRoomy) oepAddAnalog();
+}
 __attribute__((weak)) void oepWithSwio() {
   if (kRoomy) oepAddSwio();
 }
@@ -454,6 +474,7 @@ void setup() {
   oepWithI2cController();
   oepWithSpiController();
   oepWithSpi();
+  oepWithAnalog();
   oepWithSettings();
 }
 

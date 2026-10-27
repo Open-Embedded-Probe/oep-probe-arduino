@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) oep.fixture.analog on the CH32 Firmware (V307, H417; not the X035): `AnalogCapture`'s CH32 build on
+  ArduinoCore-CH32RV 0.4.0's CH32RVAdcStream - ADC1 over 1-4 pins in turn, one-shot, immediate or a crossing with a
+  pretrigger, 16 KiB a segment. The rate is one of the ADC's eight sample-time steps, measured once at boot (rate_range:
+  the slowest and the fastest); configure takes the fastest at or below the rate asked and refuses one below the slowest.
+  Host tests on a fake of the core's class.
+- (JA) CH32 の Firmware（V307、H417。X035 は除く）に oep.fixture.analog: ArduinoCore-CH32RV 0.4.0 の CH32RVAdcStream の上の
+  `AnalogCapture` の CH32 の版。ADC1 で 1〜4 本を順に、one-shot、即時か、プリトリガ付きの横切り、1 区画 16 KiB。レートは ADC の
+  8 段のサンプル時間のどれかで、起動時に一度測る（rate_range は一番遅い段と速い段）。configure は頼んだレート以下で一番速い段を取り、
+  一番遅い段より遅いものは断る。コアのクラスの偽物での host テスト。
 - (EN) oep.fixture.spi-target on the CH32 Firmware (V307, H417; not the X035): `oep::Ch32SpiTarget` on ArduinoCore-CH32RV
   0.4.0's CH32RVSPISlave - modes 0-3, LSB first, CS any EXTI pin, MISO let go while CS is high, cs_setup_ns 5 us, up to
   200 kHz; bits are whole bytes x 8 (implementation-limits). Host tests on a fake of the core's slave.

@@ -20,7 +20,7 @@
 #include <hardware/dma.h>
 #endif
 
-#if defined(OEP_ANALOG_ESP) || defined(OEP_ANALOG_RP2)
+#if defined(OEP_ANALOG_ESP) || defined(OEP_ANALOG_RP2) || defined(OEP_ANALOG_CH32)
 
 namespace oep {
 namespace ana = reg::fixture_analog;
@@ -45,6 +45,11 @@ constexpr bool kFirstFrameLost = true;                           // measured on 
 // Triggered, the segment's buffer is the ring: one channel's values can run up to a driver read (128 records) ahead
 // of the frame being looked at, into the ring's slots of older frames; the pretrigger leaves them out.
 constexpr uint32_t kPretriggerRoom = 129;
+#elif defined(OEP_ANALOG_CH32)
+constexpr Frontend kFrontends[] = {{0, 0, 3300, 0}};             // VDDA: the supply (3.3 V)
+// Triggered, the buffer is the ring and each frame is looked at as it is copied in: the newest frame is never more than
+// one ahead of the one looked at
+constexpr uint32_t kPretriggerRoom = 2;
 #else
 constexpr Frontend kFrontends[] = {{0, 0, 3300, 0}};             // ADC_VREF: the supply (3.3 V on a Pico)
 constexpr uint32_t kAdcClockHz = 48000000;
@@ -53,7 +58,11 @@ constexpr uint32_t kPretriggerRoom = 1;
 #endif
 constexpr size_t kFrontendCount = sizeof kFrontends / sizeof kFrontends[0];
 constexpr uint8_t kWidest = kFrontends[kFrontendCount - 1].number;
+#if defined(OEP_ANALOG_CH32)
+constexpr uint16_t kFull = (1u << CH32RV_ADC_BITS) - 1;          // the converter's own values (12 bits, 10 on some)
+#else
 constexpr uint16_t kFull = 4095;
+#endif
 #if defined(OEP_ANALOG_ESP)
 constexpr size_t kFrameBytes = 256;                              // a conversion frame: the time's correction is one
 constexpr uint32_t kFrameConversions = kFrameBytes / kRecordBytes;
@@ -63,6 +72,17 @@ const Frontend *frontendOf(uint8_t number) {
   for (const Frontend &f : kFrontends) if (f.number == number) return &f;
   return nullptr;
 }
+
+#if defined(OEP_ANALOG_CH32)
+// The conversions a second of each sample-time step, fastest first (measureRates; none before it ran)
+uint32_t gSteps[8] = {};
+uint8_t gStepCount = 0;
+// The rounds a second of `count` channels at the fastest step at or below `asked` a channel; 0: none is that slow
+uint32_t stepRounds(uint32_t asked, uint8_t count) {
+  for (uint8_t k = 0; k < gStepCount; ++k) if (gSteps[k] / count <= asked) return gSteps[k] / count;
+  return 0;
+}
+#endif
 
 #if defined(OEP_ANALOG_RP2)
 bool gAdcReady = false;
@@ -95,8 +115,13 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   w.put(ana::kTlvDescribeMode, mode, sizeof mode);
 #endif
   uint8_t range[9];
+#if defined(OEP_ANALOG_CH32)
+  putU32(range, gStepCount ? gSteps[gStepCount - 1] : 0);   // the slowest and the fastest step, measured at boot
+  putU32(range + 4, gStepCount ? gSteps[0] : 0);
+#else
   putU32(range, kMinTotalHz);
   putU32(range + 4, kMaxTotalHz);
+#endif
   range[8] = 0;
   w.put(ana::kTlvDescribeRateRange, range, sizeof range);   // one channel (more share the ADC: configure says)
   w.u8(ana::kTlvDescribeChannels, kMaxChannels);             // max(u8)
@@ -176,7 +201,7 @@ void AnalogCapture::forget() {
   trig_type_ = 0;
   pretrigger_ = 0;
   phase_ = 0;
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
   overflow_ = overflow_seen_ = false;
 #endif
 }
@@ -237,10 +262,16 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   // a rate outside rate_range is refused (capture §3.3); inside it, more channels share the ADC: the nearest its
   // conversions a second allow for the channel count
   const uint32_t asked = getU32(rate_tlv.v);
+#if defined(OEP_ANALOG_CH32)
+  // the steps are the ADC's: the fastest at or below the rate asked for these channels; none that slow is refused
+  const uint32_t rounds = stepRounds(asked, count);
+  if (!rounds || asked > gSteps[0]) return Tail::refuse(ana::kTlvConfigureRate, rate_tlv.critical, out, capacity);
+#else
   if (asked < kMinTotalHz || asked > kMaxTotalHz)
     return Tail::refuse(ana::kTlvConfigureRate, rate_tlv.critical, out, capacity);
   uint64_t total = static_cast<uint64_t>(asked) * count;
   if (total > kMaxTotalHz) total = kMaxTotalHz;
+#endif
   // segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
   const Result misplaced = captureMisplaced(mode_tlv.v[0], ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv),
                                             ask(pretrigger_tlv), out, capacity);
@@ -300,6 +331,10 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   total_hz = kAdcClockHz / cycles;
   num = kAdcClockHz;
   den = cycles * channels_;
+#elif defined(OEP_ANALOG_CH32)
+  total_hz = rounds * channels_;
+  num = rounds;
+  den = 1;
 #else
   total_hz = static_cast<uint32_t>(total);
   num = total_hz;
@@ -341,6 +376,8 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     memcpy(frontend_, chosen, sizeof frontend_);
 #if defined(OEP_ANALOG_RP2)
     cycles_ = cycles;
+#elif defined(OEP_ANALOG_CH32)
+    rounds_asked_ = rounds;
 #endif
     memcpy(order_, order, sizeof order_);
     for (uint8_t m = 0; m < channels_; ++m) if (order_[m] == trig_role) trig_slot_ = m;
@@ -538,6 +575,23 @@ bool AnalogCapture::startNow() {
     uncertainty_ns_ = static_cast<uint32_t>(frame_ns + 100000);
 #endif
   }
+#elif defined(OEP_ANALOG_CH32)
+  // the step configure chose (a hair above its rounds: begin() measures again, the next step is far off), the pins in
+  // role order (frame slot m = role m); the DMA fills a half of whole frames at a time
+  pin_size_t pads[kMaxChannels];
+  for (uint8_t k = 0; k < channels_; ++k) pads[k] = static_cast<pin_size_t>(platformPad(pins_[k]));
+  half_ = kHalfValues / channels_ * channels_;
+  conv_ = 0;
+  overflow_ = overflow_seen_ = false;
+  if (!adc_.begin(pads, channels_, rounds_asked_ + rounds_asked_ / 100 + 1) ||
+      !adc_.startContinuous(stage_, static_cast<uint16_t>(half_))) {
+    adc_.end();
+    fail(ana::kErrorPeripheral);
+    return false;
+  }
+  overruns_ = adc_.overruns();
+  start_ns_ = nowNs();
+  uncertainty_ns_ = static_cast<uint32_t>(static_cast<uint64_t>(channels_) * 1000000000u / total_hz_ + 20000);
 #else
   if (!gAdcReady) { adc_init(); gAdcReady = true; }
   for (uint8_t k = 0; k < channels_; ++k) adc_gpio_init(pins_[k]);
@@ -594,6 +648,8 @@ void AnalogCapture::finish() {
 #if defined(OEP_ANALOG_DRAIN_TASK)
   if (lock_) xSemaphoreGive(lock_);
 #endif
+#elif defined(OEP_ANALOG_CH32)
+  adc_.end();   // the ADC back to analogRead()
 #else
   adc_run(false);
   if (dma_ >= 0) {
@@ -631,7 +687,7 @@ void AnalogCapture::stopNow() {
   poll();   // what has come in
   if (state_ != ana::kStateWaiting && state_ != ana::kStateCapturing) return;
   if (state_ == ana::kStateWaiting) {   // no trigger yet: no segment
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
     finish();
 #else
     adc_run(false);
@@ -644,7 +700,7 @@ void AnalogCapture::stopNow() {
   } else if (ringMode()) {
     finishTriggered(true);
   } else {
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
     drain();
 #endif
     finish();
@@ -742,6 +798,53 @@ void AnalogCapture::drainNow() {
       if (frames_ >= samples_) break;
     }
   }
+}
+#endif
+
+#if defined(OEP_ANALOG_CH32)
+void AnalogCapture::drain() { drainNow(); }
+
+// The halves the DMA filled, in order: value i of the run is frame i / channels' slot i % channels (the pins in turn).
+// Triggered, they go round the buffer (end_frame_: none after the segment's last frame); immediate, the buffer is the
+// segment. A half the DMA came back to before it was taken is lost (overruns): the values after it come later than
+// their count says.
+void AnalogCapture::drainNow() {
+  if (adc_.overruns() != overruns_) { overruns_ = adc_.overruns(); overflow_ = true; }
+  while (const uint16_t *half = adc_.readBuffer()) {
+    if (ringMode() && overflow_) { overflow_ = false; overflow_seen_ = true; overflow_frame_ = got_; }
+    for (uint32_t i = 0; i < half_; ++i) {
+      const uint32_t frame = conv_ / channels_;
+      if (frame < end_frame_) buffer_[(static_cast<size_t>(frame) * channels_ + conv_ % channels_) % ring_len_] = half[i];
+      if (++conv_ % channels_) continue;
+      got_ = conv_ / channels_;   // a frame complete: looked at before the next goes over the ring
+      if (ringMode() && phase_ == 0) search();
+      if (ringMode() ? phase_ == 1 && got_ >= end_frame_ : got_ >= samples_) break;
+    }
+    if (!ringMode()) frames_ = got_ < samples_ ? got_ : samples_;
+    if (ringMode() ? phase_ == 1 && got_ >= end_frame_ : frames_ >= samples_) break;
+  }
+}
+
+// Each step's conversions a second on the first ADC channel, fastest first: begin() takes the fastest step at or below
+// the rate asked and says what it measured, so asking just below each finds the next. The pad is analog meanwhile, then
+// a floating input again (core §8's free state).
+bool AnalogCapture::measureRates() {
+  int channel = -1;
+  for (int c = 0; c < 64 && channel < 0; ++c) if ((adc_pins_ >> c) & 1) channel = c;
+  if (channel < 0) return false;
+  const pin_size_t pad = static_cast<pin_size_t>(platformPad(channel));
+  gStepCount = 0;
+  uint32_t ask = UINT32_MAX;
+  while (gStepCount < 8 && adc_.begin(pad, ask)) {
+    const uint32_t rate = adc_.sampleRate();
+    if (gStepCount && rate >= gSteps[gStepCount - 1]) break;   // the slowest step again: no slower one
+    gSteps[gStepCount++] = rate;
+    if (rate <= 1) break;
+    ask = rate - 1;
+  }
+  adc_.end();
+  platformGpio(channel, kGpioInputFloating);
+  return gStepCount > 0;
 }
 #endif
 
@@ -888,7 +991,7 @@ void AnalogCapture::hitAt(uint32_t t) {
   if (!follow_) eventFound(start_ns_ + framesNs(t));   // judging a group's condition: the followers take it now
   seg_first_ = t > pre() ? t - pre() : 0;
   end_frame_ = t + (samples_ - pre());   // short when fewer than pre() came before it (pre() < samples_)
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
   // the buffer is the ring (the segment's frames, a follower's latency's more): frames already come a ring past the
   // segment's first have taken its slots - a value of another channel up to a driver read (the room) ahead
   if (static_cast<uint64_t>(got_) + kPretriggerRoom > static_cast<uint64_t>(seg_first_) + ring_len_ / channels_) trig_slipped_ = true;
@@ -926,6 +1029,8 @@ uint64_t AnalogCapture::trackLatencyNs() const { return latencyNs(total_hz_); }
 uint64_t AnalogCapture::latencyNs(uint32_t total_hz) {
 #if defined(OEP_ANALOG_ESP)   // a conversion frame, and the drain (the task's round; loop()'s in the host fake)
   return kTaskNs + (total_hz ? static_cast<uint64_t>(kFrameConversions) * 1000000000u / total_hz : 0);
+#elif defined(OEP_ANALOG_CH32)   // a half, and loop()'s round
+  return kLoopNs + (total_hz ? static_cast<uint64_t>(kHalfValues) * 1000000000u / total_hz : 0);
 #else
   (void)total_hz;
   return kLoopNs;
@@ -945,7 +1050,7 @@ bool AnalogCapture::trackStartFollowing() {
   if (!ring_) ring_ = static_cast<uint16_t *>(aligned_alloc(kRingBytes, kRingBytes));
   if (!ring_) return false;
 #endif
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
   // the segment's buffer is the ring: long enough for the trigger's latency too (trackCanKeep checked it at bind)
   const uint32_t frames = ringFrames(follow_late_ns_);
   if (frames > ringCapacity(channels_)) return false;
@@ -996,7 +1101,7 @@ bool AnalogCapture::trackTriggerNs(uint64_t &ns) const {
 }
 
 void AnalogCapture::pollTriggered() {
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
   drain();
 #else
   const bool running = dma_channel_is_busy(dma_);
@@ -1033,7 +1138,7 @@ void AnalogCapture::pollTriggered() {
 void AnalogCapture::finishTriggered(bool cut) {
   const uint32_t s0 = seg_first_;
   uint32_t n = end_frame_ - s0;   // the segment's frames (fewer than samples_ after an early trigger)
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
   if (cut) n = got_ > s0 ? std::min(got_ - s0, n) : 0;   // drained just before (poll)
   const bool lost = overflow_;
   finish();
@@ -1061,7 +1166,7 @@ void AnalogCapture::finishTriggered(bool cut) {
 // segment - the bits that marked it slipped (bit2) before.
 bool AnalogCapture::hole() const {
   if (ringMode()) return trig_slipped_;
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
   return overflow_;
 #else
   return false;   // the RP2's immediate segment: the DMA writes it in place
@@ -1095,7 +1200,7 @@ void AnalogCapture::fail(uint8_t error) {
 void AnalogCapture::poll() {
   if (ringMode() && (state_ == ana::kStateWaiting || state_ == ana::kStateCapturing)) pollTriggered();
   else if (state_ == ana::kStateCapturing) {
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
     drain();
     if (streaming()) return;   // on until stop: the pushes take the ring
     if (frames_ >= samples_) finish();
@@ -1130,7 +1235,7 @@ size_t AnalogCapture::segmentInfo(uint8_t *out) const {   // the segment record 
   // bit2 (capture §2.2): a value taken one sample period or more after its time - conversions lost or overwritten
   // inside the segment put the values after them later than their count says
   if (ringMode() && trig_slipped_) flags |= ana::kSegmentFlagSlipped;
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
   if (!ringMode() && overflow_) flags |= ana::kSegmentFlagSlipped;   // conversions were lost
 #endif
   out[32] = flags;
@@ -1174,7 +1279,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       // streaming: the segments finished (dropped ones counted) and every frame's bytes; else the one segment
       putU32(out + 1, streaming() ? (seg_frames_ ? frames_ / seg_frames_ : 0) : segment_ ? 1 : 0);
       putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
-#if defined(OEP_ANALOG_ESP)
+#if defined(OEP_ANALOG_DRAINED)
       out[13] = (overflow_ || overflow_seen_ || trig_slipped_ || lost_ || stream_dropped_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions or a segment lost
 #else
       out[13] = (trig_slipped_ || lost_) ? ana::kStatusFlagDropped : 0;

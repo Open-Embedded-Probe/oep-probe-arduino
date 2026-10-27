@@ -136,6 +136,11 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_RP2_ADC -I"
   "$here/test_analog.cpp" "$src/OepAnalog.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
   "$src/OepCaptureGroup.cpp"
 "$out-analog"
+# the analog capture's CH32 build on a fake of the core's CH32RVAdcStream (the steps, the halves, a crossing, a hole)
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CH32_ADC -I"$here/shim" -I"$src" -o "$out-analog-ch32" \
+  "$here/test_analog_ch32.cpp" "$src/OepAnalog.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
+  "$src/OepCaptureGroup.cpp"
+"$out-analog-ch32"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOEP_HOST_FAKE_I2C_SLAVE -DOEP_HOST_FAKE_CONFIG \
   -DOEP_HOST_FAKE_SPI_SLAVE -DOEP_HOST_FAKE_UART -DOEP_VECTORS_DIR="\"$here/../vectors\"" -I"$here/shim" -I"$src" -o "$out-vectors" "$here/test_vectors.cpp" \
   "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" "$src/OepCapture.cpp" \

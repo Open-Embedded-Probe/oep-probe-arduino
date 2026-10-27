@@ -51,6 +51,9 @@ of the transfer under way), and the classic's cs_setup_ns (15 us: a master clock
 the first bit - the bench's back-to-back 4-byte frames read BC / FC for 3C, 0 / 5 at 3 MHz). The CH32's spi-target (the core's CH32RVSPISlave): bits are
 the bytes x 8 (the slave counts bytes: a byte cut short by CS is not told apart), cs_setup_ns 5000 ns and max_clock_hz
 200 kHz (the core's self test; a hardware master's limit not measured), SCK / MISO / MOSI one route of an SPI (configure
-fails otherwise), not on the X035 (including the core's slave links 640 bytes of interrupt handlers). The I2C / SPI
+fails otherwise), not on the X035 (including the core's slave links 640 bytes of interrupt handlers). The CH32's analog (the core's CH32RVAdcStream): the ADC free-runs, so the rate is one of its eight
+sample-time steps (measured at boot on the first ADC pin, which floats again after) and nothing slower than the slowest
+(about 47,600 a second on a V307, 198,000 on an H417); values come out 512 at a time, and a half filled again before
+loop() took it is a hole (not handed out: state 6, error 2); 16 KiB a segment. The I2C / SPI
 controllers: GPIOs, timed on the CPU's cycles on an ESP32 and micros() elsewhere (1 us steps, up to 250 kHz); an
 interrupt only makes a half or a CS time longer; the ESP32's 2 MHz SPI is a cautious figure, its SCK not measured.

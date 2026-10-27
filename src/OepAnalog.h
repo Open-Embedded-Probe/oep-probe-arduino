@@ -11,6 +11,11 @@
 //                              46 kHz in all the P4 gives each value twice, so that is the ceiling declared.
 //   RP2040 / RP2350            the ADC's round robin into its FIFO, copied by DMA: 48 MHz / 96 cycles a conversion at
 //                              most (500 kS/s in all), one frontend (0 - ADC_VREF = the supply).
+//   WCH CH32 (not the X035)    ArduinoCore-CH32RV's CH32RVAdcStream: ADC1 free-running over the pins in turn into two
+//                              halves by DMA, copied out by poll(); one frontend (0 - the supply). The rate is one of
+//                              eight sample-time steps the core measures: rate_range is the slowest and the fastest,
+//                              measured once at boot (measureRates), and configure takes the fastest at or below the
+//                              rate asked (one above it is refused).
 //
 // A trigger keeps the ADC converting into a ring while it is looked for (ESP32: the segment's buffer, filled by the
 // driver's reads; RP2: a 32 KiB DMA write ring) and takes the segment from pretrigger frames before the crossing.
@@ -49,6 +54,17 @@
 #if defined(ARDUINO_ARCH_RP2040) || (defined(OEP_HOST_FAKE_RP2_ADC) && !defined(OEP_ANALOG_ESP))
 #define OEP_ANALOG_RP2 1
 #endif
+// The CH32's build (the core's CH32RVAdcStream; not the X035, whose flash has no room); OEP_HOST_FAKE_CH32_ADC: a host
+// test with a fake of it (tests/host/shim)
+#if (defined(ARDUINO_ARCH_CH32RV) && !defined(ARDUINO_CH32X035)) || defined(OEP_HOST_FAKE_CH32_ADC)
+#define OEP_ANALOG_CH32 1
+#include <CH32RVAdcStream.h>
+#endif
+// The builds whose values are taken out and put into the segment's buffer, round it while a trigger is looked for (the
+// ESP32's driver reads, the CH32's halves): not the RP2's, whose DMA writes its ring itself
+#if defined(OEP_ANALOG_ESP) || defined(OEP_ANALOG_CH32)
+#define OEP_ANALOG_DRAINED 1
+#endif
 
 namespace oep {
 
@@ -69,7 +85,12 @@ class AnalogCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 4;
   static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0;   // describe trigger opts: what trigger_opts may ask
+#if defined(OEP_ANALOG_CH32)
+  static constexpr size_t kMaxBytes = 16384;   // one segment: samples x channels x 2 (a V307's 64 KiB RAM)
+  static constexpr uint32_t kHalfValues = 512;   // a half the core's DMA fills: 2 ms at 250 kS/s between two polls
+#else
   static constexpr size_t kMaxBytes = 32768;   // one segment: samples x channels x 2
+#endif
   AnalogCapture(Endpoint &endpoint, uint64_t adc_pins, uint16_t instance = 0)
       : endpoint_(endpoint), adc_pins_(adc_pins), instance_(instance) {}
   const char *name() const override { return reg::fixture_analog::kName; }
@@ -99,6 +120,14 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void poll();   // from loop(): collects the conversions, a finished capture becomes the segment and stopped events
   bool planShares() const override { return false; }
   void setPins(PinTable *pins, uint8_t owner) { table_ = pins; owner_ = owner; }
+#if defined(OEP_ANALOG_CH32)
+  // The conversions a second the ADC takes, slowest and fastest step, measured on the first ADC channel: at boot, before
+  // a host (the pad goes analog for the measurement, then back to a floating input). false: no ADC channel answered.
+  bool measureRates();
+#endif
+#if defined(OEP_HOST_FAKE_CH32_ADC)
+  CH32RVAdcStream &hostAdc() { return adc_; }
+#endif
 
   // GroupTrack (oep.fixture.capture-group)
   bool trackReady() const override;
@@ -218,16 +247,26 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void finish();
   void forget();   // the plan released or replaced: no configuration, data or segment
   size_t segmentInfo(uint8_t *out) const;
+#if defined(OEP_ANALOG_DRAINED)
+  volatile bool overflow_ = false;           // conversions were lost (the pool's overflow, a half not taken; flags bit2)
+  bool overflow_seen_ = false;               // triggered: an overflow was seen ...
+  uint32_t overflow_frame_ = 0;              // ... when this many frames had come (the loss was before)
+  void drain();      // the values into the buffer (the drain task's or loop()'s; under lock_ on the ESP32)
+  void drainNow();
+#endif
+#if defined(OEP_ANALOG_CH32)
+  CH32RVAdcStream adc_;
+  uint16_t stage_[2 * kHalfValues];
+  uint32_t half_ = 0;            // the values of a half: a whole number of frames
+  uint32_t conv_ = 0;            // values taken out since the start
+  uint32_t rounds_asked_ = 0;    // configure's rate: begin() takes the same step again at the start
+  uint32_t overruns_ = 0;        // the core's overruns() already seen
+#endif
 #if defined(OEP_ANALOG_ESP)
   adc_continuous_handle_t handle_ = nullptr;
-  volatile bool overflow_ = false;           // the driver's pool overflowed: conversions were lost (flags bit2)
   static bool IRAM_ATTR onOverflow(adc_continuous_handle_t, const adc_continuous_evt_data_t *, void *context);
   uint8_t adc_channel_[kMaxChannels] = {};   // by frame slot
   uint32_t counts_[kMaxChannels] = {};       // values stored, by frame slot
-  bool overflow_seen_ = false;               // triggered: an overflow was seen ...
-  uint32_t overflow_frame_ = 0;              // ... when this many frames had come (the loss was before)
-  void drain();      // the driver's pool into the buffer (the drain task's or loop()'s; under lock_ on the chip)
-  void drainNow();
 #if defined(OEP_ANALOG_DRAIN_TASK)
   SemaphoreHandle_t lock_ = nullptr;         // the driver and the buffer's filling: the drain task or loop()
   TaskHandle_t drain_task_ = nullptr;
