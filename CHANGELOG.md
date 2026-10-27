@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The classic ESP32's logic sampler takes repeat with rearm 1 (capture §2.1), as the RP2's: every segment a window of
+  its own trigger (arm 1) into a slot, the sampling task started again once one is free (up to 16 slots; state 5 until
+  release), rearm / gap flags, trigger records (§3.10, op triggers). Built only: NOT YET RUN on hardware (the bench's classic
+  ESP32 has no free channel). Repeat with rearm 0, no trigger or arm 0 is refused unsupported.
+- (JA) classic ESP32 のロジックの sampler が、RP2 と同じく rearm 1 のリピートを受ける（capture §2.1）: 区画ごとに自分のトリガ（arm 1）の窓を
+  置き場へ取り、空きができたら取るタスクをかけ直す（置き場は 16 まで。埋まれば release まで state 5）。rearm / gap の印、トリガの記録
+  （§3.10、op triggers）。ビルドのみ: 実機では未検証（ベンチの classic ESP32 に空いた端子が無い）。rearm 0、トリガ無し、arm 0 のリピートは
+  unsupported で断る。
 - (EN) oep.fixture.spi-target on the RP2040 / RP2350 Firmware (choice Spi): `Rp2SpiTarget`, a PIO state machine as the
   slave (a program a CPHA, SCK's input inverted for CPOL 1), MOSI and the armed tx by DMA, the bit count in Y, CS rising a
   GPIO interrupt that ends the transfer. Built only: NOT YET RUN on hardware (no SPI master on the bench); modes 0-3, LSB

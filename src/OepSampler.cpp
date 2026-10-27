@@ -67,7 +67,7 @@ inline __attribute__((always_inline)) void SamplerCapture::run() {
   EspIo<kHigh> io;
   io.packer = &packer_;
   sampler::Plan plan;
-  plan.out = buffer_;
+  plan.out = out_;
   plan.size = samples_;
   plan.step = cycles_;
   plan.cpu_hz = cpu_hz_;
@@ -128,6 +128,10 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   putU32(mode + 1, kBufferBytes);                  // one byte per sample (one core samples, OEP answers on the other)
   putU32(mode + 5, 1);
   w.put(cap::kTlvDescribeMode, mode, sizeof mode);
+  mode[0] = cap::kModeRepeat;                      // rearm 1 only (configure refuses rearm 0): the slots share the buffer
+  putU32(mode + 1, kBufferBytes / 2);
+  putU32(mode + 5, kMaxSegments);
+  w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   uint8_t range[9];
   putU32(range, kMinHz);
   putU32(range + 4, kMaxHz);
@@ -138,6 +142,7 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge),
                  kBufferBytes - 1, kTriggerOpts);  // the pretrigger: less than the segment's samples
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
+  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.10)
   return w.ok() ? w.length() : 0;
 }
 
@@ -205,8 +210,8 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   auto ask = [](const Item &it) { return CaptureAsk{it.v, it.critical}; };
   if (captureMalformed(ask(mode_tlv), ask(rate_tlv), ask(samples_tlv), ask(segments_tlv))) return rejected(kRejectMalformed);
   if (refused(unknown_critical)) return unknown_critical;
-  if (mode_tlv.v[0] != cap::kModeOneShot)   // one-shot only
-    return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
+  const uint8_t mode = mode_tlv.v[0];
+  if (mode != cap::kModeOneShot && mode != cap::kModeRepeat) return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
   uint32_t rate = getU32(rate_tlv.v);   // outside rate_range (capture §3.3)
   if (rate < kMinHz || rate > kMaxHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   // segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
@@ -228,6 +233,10 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   }
   TriggerOpts opts;   // arm 0 and when 1 as well as the defaults (kTriggerOpts)
   if (!triggerOpts(opts_tlv.v, kTriggerOpts, opts)) return Tail::refuse(capture_tag::kTriggerOpts, opts_tlv.critical, out, capacity);
+  // repeat: every segment a window of its own trigger, its pretrigger in first (arm 1: every segment samples long);
+  // gapless segments (rearm 0, no trigger) a window at a time cannot give
+  if (mode == cap::kModeRepeat && (trig_type == cap::kTriggerImmediate || !opts.rearm || !opts.arm))
+    return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
   // The answer carries the rate that is really paced (whole cycles a sample). GPIO32..39 in the plan add a register read
   // a sample: it kept 1 MHz (1.52 MHz actually sampled at 2 MHz, 2026-09-29), far above kMaxHz.
   const uint32_t cpu_hz = getCpuFrequencyMhz() * 1000000u;
@@ -239,6 +248,14 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   // burst. At kMaxHz that is the whole buffer.
   const uint64_t window = static_cast<uint64_t>(cpu_hz) / 1000u * (kWindowNs / 1000000u) / cycles;
   if (samples > window) samples = static_cast<uint32_t>(window);
+  uint32_t segs = 1;
+  if (mode == cap::kModeRepeat) {   // the slots share the buffer
+    if (samples > kBufferBytes / 2) samples = kBufferBytes / 2;
+    segs = segments_tlv.v ? getU32(segments_tlv.v) : kMaxSegments;
+    if (segs > kMaxSegments) segs = kMaxSegments;
+    if (segs > kBufferBytes / samples) segs = static_cast<uint32_t>(kBufferBytes / samples);
+    if (segs < 1) segs = 1;
+  }
   uint32_t pretrigger = 0;
   if (const uint8_t *v = pretrigger_tlv.v) {   // only with a trigger (above), inside the segment: less than samples
     pretrigger = getU32(v);
@@ -260,6 +277,8 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
     }
     packer_.build(pins_, channels_);
     samples_ = samples;
+    mode_ = mode;
+    seg_count_ = segs;
     trig_type_ = trig_type;
     trig_role_ = trig_role;
     trig_value_ = trig_value;
@@ -278,46 +297,89 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   uint8_t layout[2 + kMaxChannels] = {8, channels_};
   for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
   w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + channels_);
-  w.u32(cap::kTlvConfigureAnswerActualSamples, samples);   // one-shot: no actual_segments (capture §3.3)
+  w.u32(cap::kTlvConfigureAnswerActualSamples, samples);
+  if (mode == cap::kModeRepeat) w.u32(cap::kTlvConfigureAnswerActualSegments, segs);
   return w.ok() ? completed(w.length()) : failed();
 }
 
-size_t SamplerCapture::segmentInfo(uint8_t *out) const {   // the segment record (oep-if-capture §2), 37 bytes
-  putU32(out, 0);                  // serial
-  putU64(out + 4, 0);              // position
-  putU32(out + 12, seg_samples_);
-  putU64(out + 16, trig_type_ ? seg_start_ns_ : start_ns_);
+// The segment record (oep-if-capture §2), 37 bytes. Repeat: every segment started by its own trigger (bit3), and after
+// the first not straight after the one before (bit0: rearm 1's wait, §2.2).
+size_t SamplerCapture::segmentInfo(uint8_t *out, uint32_t serial) const {
+  const SlotInfo &slot = slots_[serial % seg_count_];
+  putU32(out, serial);
+  putU64(out + 4, static_cast<uint64_t>(serial) * samples_);
+  putU32(out + 12, slot.samples);
+  putU64(out + 16, slot.start_ns);
   putU32(out + 24, 2000);          // the software pace's first sample against the clock read: +-2 us
-  putU32(out + 28, trig_type_ ? trig_kept_ : 0xFFFFFFFFu);   // immediate: no trigger inside; early: fewer before it
-  out[32] = slipped_ ? cap::kSegmentFlagSlipped : 0;   // bit2: a sample taken a period or more late (OepSamplerRun.h)
+  putU32(out + 28, trig_type_ ? slot.kept : 0xFFFFFFFFu);   // immediate: no trigger inside; early: fewer before it
+  uint8_t flags = slot.slipped ? cap::kSegmentFlagSlipped : 0;   // bit2: a sample a period or more late (OepSamplerRun.h)
+  if (repeat()) flags |= cap::kSegmentFlagRearm | (serial ? cap::kSegmentFlagGap : 0);
+  out[32] = flags;
   putU32(out + 33, generation_);
   return 37;
 }
 
+// A window (or a trigger's search, then the window) into the next segment's slot, on the core loop() is not on (this
+// call's): its windows mask that core, and loop()'s keeps answering
+bool SamplerCapture::startRun() {
+  done_ = trig_seen_ = aborted_ = false;
+  control_ = 0;
+  out_ = buffer_ + static_cast<size_t>(completed_ % seg_count_) * samples_;
+  memset(out_, 0, samples_);
+  if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, kTaskPriority, &sampler_,
+                              static_cast<BaseType_t>(xPortGetCoreID() ^ 1)) != pdPASS) {
+    sampler_ = nullptr;
+    return false;
+  }
+  return true;
+}
+
+// The window's segment kept (its slot's info, the event); then one-shot is done, repeat arms the next segment when a slot
+// is free (`rearm`: not when stopping) or waits for release in state 5
+void SamplerCapture::segmentDone(bool rearm) {
+  slots_[completed_ % seg_count_] = {trig_type_ ? seg_start_ns_ : start_ns_, seg_samples_, trig_kept_, slipped_};
+  const uint32_t serial = completed_++;
+  if (subscribed_) {
+    uint8_t seg[37];
+    endpoint_.event(*this, cap::kEventSegment, seg, segmentInfo(seg, serial));
+  }
+  if (!repeat()) {
+    state_ = cap::kStateDone;
+    if (subscribed_) {
+      uint8_t stopped[6] = {cap::kStoppedReasonComplete, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
+      putU32(stopped + 2, generation_);
+      endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
+    }
+    return;
+  }
+  if (!rearm) return;
+  if (completed_ - released_ < seg_count_ && startRun()) rep_wait_ = true;   // state 3, flags bit2 (§2.1)
+  else state_ = cap::kStatePaused;   // every slot waits for the host (no stopped event)
+}
+
 void SamplerCapture::poll() {
   gWireGate.release();   // loop() came round: the SWIO wire's request has ended, a window may open (OepWireGate.h)
-  if (state_ == cap::kStateWaiting && trig_seen_) {
+  if (state_ == cap::kStatePaused && completed_ - released_ < seg_count_ && startRun()) {   // a slot released
     state_ = cap::kStateCapturing;
-    if (subscribed_) {   // capture §3.4: no record (rearm 0); +- a sample. The search runs in bursts with gaps between
-      // them, so the sample from the generation's start is its time from start at the rate (what a sampler that never
-      // paused would have counted)
+    rep_wait_ = true;
+  }
+  if ((state_ == cap::kStateWaiting || (state_ == cap::kStateCapturing && rep_wait_)) && trig_seen_) {
+    state_ = cap::kStateCapturing;
+    rep_wait_ = false;
+    // +- a sample. The search runs in bursts with gaps between them, so the sample from the generation's start is its
+    // time from start at the rate (what a sampler that never paused would have counted)
+    const uint64_t ns = trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_;
+    const uint64_t sample = ns > start_ns_ ? (ns - start_ns_) * (cpu_hz_ / 1000u) / cycles_ / 1000000u : 0;
+    const uint32_t record = repeat() ? record_next_++ : 0;
+    if (repeat()) records_[record % kTriggerRecords] = {sample, ns, record, periodNs(cpu_hz_, cycles_)};   // §3.10
+    if (subscribed_) {   // capture §3.4
       uint8_t e[kTriggeredBytes];
-      const uint64_t ns = trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_;
-      const uint64_t sample = ns > start_ns_ ? (ns - start_ns_) * (cpu_hz_ / 1000u) / cycles_ / 1000000u : 0;
-      putTriggered(e, 0, trig_kept_, sample, ns,
-                   periodNs(cpu_hz_, cycles_), generation_);
+      putTriggered(e, record, trig_kept_, sample, ns, periodNs(cpu_hz_, cycles_), generation_);
       endpoint_.event(*this, cap::kEventTriggered, e, sizeof e);
     }
   }
-  if (state_ != cap::kStateCapturing || !done_) return;
-  state_ = cap::kStateDone;
-  if (subscribed_) {
-    uint8_t seg[37];
-    endpoint_.event(*this, cap::kEventSegment, seg, segmentInfo(seg));
-    uint8_t stopped[6] = {cap::kStoppedReasonComplete, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
-    putU32(stopped + 2, generation_);
-    endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
-  }
+  if (state_ != cap::kStateCapturing || rep_wait_ || !done_ || aborted_) return;
+  segmentDone(true);
 }
 
 Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
@@ -335,14 +397,11 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (capacity < 4) return failed();
       waitIdle();
       listen(pins_, channels_);
-      done_ = trig_seen_ = aborted_ = false;
-      control_ = 0;
-      memset(buffer_, 0, samples_);
+      completed_ = released_ = record_next_ = 0;
+      rep_wait_ = false;
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-      // on the core loop() is not on (this call's): its windows mask that core, and loop()'s keeps answering
-      if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, kTaskPriority, &sampler_,
-                                  static_cast<BaseType_t>(xPortGetCoreID() ^ 1)) != pdPASS) {
-        sampler_ = nullptr;
+      generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
+      if (!startRun()) {
         state_ = cap::kStateError;   // every entry to state 6 sends stopped reason 3 (capture §3.2)
         if (subscribed_) {
           uint8_t stopped[6] = {cap::kStoppedReasonError, cap::kErrorPeripheral};
@@ -352,7 +411,6 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
         return failed();
       }
       state_ = trig_type_ ? cap::kStateWaiting : cap::kStateCapturing;
-      generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
       putU32(out, generation_);
       return completed(4);
     }
@@ -361,33 +419,33 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (refused(parsed)) return parsed;
       if (boundRefused()) return boundInGroup(*this, out, capacity);
       poll();
-      if (state_ == cap::kStateWaiting) {   // no trigger yet: nothing captured
-        waitIdle();
-        poll();                             // it may have come while the search ended
-      }
       uint8_t stopped[6] = {cap::kStoppedReasonHost, 0};   // reason(u8) error(u8) generation(u32) (capture §3.4)
       putU32(stopped + 2, generation_);
-      if (state_ == cap::kStateWaiting) {
-        state_ = cap::kStateConfigured;
-        if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
-      } else if (state_ == cap::kStateCapturing) {
-        // the window cannot be cut short (interrupts are off on the sampler's core) and ends by itself: the capture completes
-        // (state 4, its segment and stopped 0 - capture §3.2's "complete -> 4"), not a short segment in state 1
+      const bool searching = state_ == cap::kStateWaiting || (state_ == cap::kStateCapturing && rep_wait_);
+      if (searching || state_ == cap::kStateCapturing) {
+        // a search ends at its next sample; a window cannot be cut short (interrupts are off on the sampler's core) and
+        // ends by itself: its segment is kept (one-shot: complete, state 4 - capture §3.2's "complete -> 4")
         waitIdle();
-        poll();
+        if (done_ && !aborted_ && (trig_seen_ || !trig_type_)) segmentDone(false);
+      }
+      if (state_ == cap::kStateWaiting || state_ == cap::kStateCapturing || state_ == cap::kStatePaused) {
+        state_ = cap::kStateConfigured;
+        rep_wait_ = false;
+        if (subscribed_) endpoint_.event(*this, cap::kEventStopped, stopped, sizeof stopped);
       }
       return completed();
     }
     case cap::kOpStatus: {   // -> state(u8) serial_done(u32) write_pos(u64) flags(u8) generation(u32) [TLV]
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 21) return failed();
+      if (capacity < 22) return failed();
       poll();
       out[0] = state_;
-      const bool finished = state_ == cap::kStateDone;
-      putU32(out + 1, finished ? 1 : 0);
-      putU64(out + 5, finished ? seg_samples_ : 0);
+      putU32(out + 1, completed_);
+      // one-shot: the segment's samples (fewer after an early trigger); repeat: every slot samples long (arm 1)
+      putU64(out + 5, repeat() ? static_cast<uint64_t>(completed_) * samples_ : completed_ ? slots_[0].samples : 0);
       out[13] = slipped_ ? cap::kStatusFlagSlipped : 0;   // bit1: a sample taken a period or more late (OepSamplerRun.h)
+      if (repeat() && rep_wait_ && state_ == cap::kStateCapturing) out[13] |= cap::kStatusFlagRearmWaiting;   // §3.2
       putU32(out + 14, generation_);
       size_t used = 18;
       if (state_ == cap::kStateError) {   // why (TLV 0x01 error, capture §3.2): the sampling task would not start
@@ -403,46 +461,85 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)
       if (capacity < 11) return failed();
       poll();
-      const uint64_t have = state_ == cap::kStateDone ? seg_samples_ : 0;
+      // the segments kept: one-shot's, or repeat's last seg_count_ (a released one readable until its slot is used again)
+      const uint64_t have = repeat() ? static_cast<uint64_t>(completed_) * samples_ : completed_ ? slots_[0].samples : 0;
+      const uint64_t low = repeat() && completed_ > seg_count_ ? static_cast<uint64_t>(completed_ - seg_count_) * samples_ : 0;
       uint64_t position = getU64(p + 4);
-      uint32_t max = getU16(p + 12);
+      uint8_t flags = 0;
+      if (position < low) { position = low; flags |= reg::common::kReadFlagsGap; }   // used again (§3.2)
       if (position > have) position = have;
+      uint32_t max = getU16(p + 12);
       uint32_t count = static_cast<uint32_t>(have - position);
       size_t room = capacity - 11;   // how much read returns is the probe's (capture §3.2): max_read_ and the frame
       if (room > max_read_) room = max_read_;
       if (max > room) max = static_cast<uint32_t>(room);
-      uint8_t flags = 0;
       if (count > max) { count = max; flags |= reg::common::kReadFlagsMore; }
       putU64(out, position);
       out[8] = flags;
       putU16(out + 9, static_cast<uint16_t>(count));
-      if (count) memcpy(out + 11, buffer_ + position, count);
+      for (uint32_t i = 0; i < count;) {   // across the slots
+        const uint64_t at = position + i;
+        const uint32_t serial = static_cast<uint32_t>(at / samples_), off = static_cast<uint32_t>(at % samples_);
+        const uint32_t take = samples_ - off < count - i ? samples_ - off : count - i;
+        memcpy(out + 11 + i, buffer_ + static_cast<size_t>(serial % seg_count_) * samples_ + off, take);
+        i += take;
+      }
       return completed(11 + count);
     }
     case cap::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x segment [TLV]
       const Result parsed = plainTail(tail, p, n, 4, out, capacity);
       if (refused(parsed)) return parsed;
-      if (capacity < 3 + 37) return failed();
+      if (capacity < 2) return failed();
       poll();
-      // common §1.3's serial paging over the one segment (serial 0, once there): every from_serial but next (1) gets it
-      const bool one = state_ == cap::kStateDone && serialPageStart(getU32(p), 0, 1) == 0;
-      out[0] = 0;
-      out[1] = one ? 1 : 0;
-      const size_t info = one ? segmentInfo(out + 2) : 0;   // no element length (core §2.3)
-      return completed(2u + info);
+      const uint32_t next = completed_, oldest = completed_ > seg_count_ ? completed_ - seg_count_ : 0;
+      uint32_t k = serialPageStart(getU32(p), oldest, next);   // common §1.3's serial paging
+      uint8_t count = 0;
+      size_t used = 2;
+      for (; k != next && used + 37 <= capacity && count < 255; ++k, ++count) used += segmentInfo(out + used, k);
+      out[0] = k != next ? 1 : 0;
+      out[1] = count;
+      return completed(used);
     }
-    case cap::kOpRelease: {   // generation(u32) serial(u32): nothing to release in one-shot (success)
+    case cap::kOpRelease: {   // generation(u32) serial(u32): the finished segments up to serial may be reused
       const Result parsed = plainTail(tail, p, n, 8, out, capacity);
       if (refused(parsed)) return parsed;
       if (getU32(p) != generation_) return wrongState(out, capacity);
+      if (!repeat()) return completed();   // one-shot: nothing to release
+      const uint32_t serial = getU32(p + 4);
+      if (!serialBefore(serial, released_)) released_ = serialBefore(serial, completed_) ? serial + 1 : completed_;
+      poll();   // state 5 with a slot free again: the next segment armed
       return completed();
     }
-    case cap::kOpForce: {          // waiting for the trigger: take the segment from the next sample on
+    case cap::kOpForce: {          // waiting for a trigger (the first, or rearm 1's between segments): the next sample
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
       if (boundRefused()) return boundInGroup(*this, out, capacity);
-      if (state_ == cap::kStateWaiting) control_ = sampler::kControlForce;
+      if (state_ == cap::kStateWaiting || (state_ == cap::kStateCapturing && rep_wait_)) control_ = sampler::kControlForce;
       return completed();
+    }
+    case cap::kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.10)
+      const Result parsed = plainTail(tail, p, n, 8, out, capacity);
+      if (refused(parsed)) return parsed;
+      if (getU32(p) != generation_) return wrongState(out, capacity);
+      if (capacity < 2) return failed();
+      poll();
+      constexpr size_t kRecordBytes = 24;   // serial(u32) sample(u64) trigger_ns(u64) uncertainty_ns(u32)
+      const uint32_t next = repeat() ? record_next_ : 0;
+      const uint32_t kept = next < kTriggerRecords ? next : kTriggerRecords;
+      uint32_t k = serialPageStart(getU32(p + 4), next - kept, next);
+      uint8_t count = 0;
+      size_t used = 2;
+      for (; k != next && used + kRecordBytes <= capacity && count < 255; ++k, ++count) {
+        const TriggerRecord &r = records_[k % kTriggerRecords];
+        putU32(out + used, r.serial);
+        putU64(out + used + 4, r.sample);
+        putU64(out + used + 12, r.ns);
+        putU32(out + used + 20, r.uncertainty);
+        used += kRecordBytes;
+      }
+      out[0] = k != next ? 1 : 0;
+      out[1] = count;
+      return completed(used);
     }
     default:
       return rejected(kRejectUnknownOperation);

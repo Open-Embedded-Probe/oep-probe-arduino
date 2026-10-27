@@ -2,7 +2,9 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // OEP v1 logic capture (oep.fixture.logic revision 1, oep-spec logic-capture.ja.md §5) on the classic ESP32: the
-// software GPIO sampler of the v0 FixtureCapture, one-shot only. It samples on the core that loop() is not on (the one
+// software GPIO sampler of the v0 FixtureCapture: one-shot, and repeat with rearm 1 (every segment its own triggered
+// window into a slot, the task started again for the next once a slot is free: up to kMaxSegments, state 5 when full;
+// not yet run on hardware - the bench's classic ESP32 has no free channel). Repeat with rearm 0 (gapless) is refused. It samples on the core that loop() is not on (the one
 // start is called from), with interrupts off, paced by the cycle counter (one register read per sample); OEP keeps
 // answering on loop()'s core. The firmware with Wi-Fi puts loop(), the Arduino events, the Wi-Fi driver and the TCP/IP
 // stack on core 0 (LoopCore=0, EventsCore=0; the driver and the stack are pinned there by the core's build) and leaves
@@ -34,7 +36,9 @@ class Endpoint;
 class SamplerCapture final : public Interface, public GroupTrack {
  public:
   static constexpr uint8_t kMaxChannels = 8;
-  static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsWhen1;   // describe trigger opts
+  static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsWhen1 | kTriggerOptsRearm;   // describe trigger opts
+  static constexpr uint32_t kMaxSegments = 16;      // repeat's slots
+  static constexpr uint16_t kTriggerRecords = 32;   // rearm 1's records kept (capture §3.10)
   // The declared ceiling, from the bench (0.0.29-dev 873c8f0, V003 jig, 64 captures a row, 1 and 4 lines, serial and
   // TCP, with and without Wi-Fi): 400 kHz was the fastest rate at which no immediate window and no forced capture
   // without SWIO traffic slipped; 500 kHz slipped (immediate 1 - 4 / 64, forced 10 - 15 / 64), 750 kHz always. 300 kHz
@@ -56,7 +60,9 @@ class SamplerCapture final : public Interface, public GroupTrack {
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
   // every op of capture §3.2 (query and force optional, offered: the ops tag declares them; calibration is analog's)
-  bool offers(uint8_t op) const override { return opIn(op, reg::fixture_logic::kOpConfigure, reg::fixture_logic::kOpQuery); }
+  bool offers(uint8_t op) const override {
+    return opIn(op, reg::fixture_logic::kOpConfigure, reg::fixture_logic::kOpQuery) || op == reg::fixture_logic::kOpTriggers;
+  }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
   uint8_t planCheck(const RoleAssignment *roles, size_t count) override;
@@ -77,7 +83,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   // GroupTrack (oep.fixture.capture-group): the group drives start / stop through handle(); bound, the host cannot
   bool trackReady() const override { return state_ == reg::fixture_logic::kStateConfigured || state_ == reg::fixture_logic::kStateDone; }
   bool trackCanStart() const override { return (trackReady() || state_ == reg::fixture_logic::kStateError) && buffer_; }
-  uint8_t trackMode() const override { return reg::fixture_logic::kModeOneShot; }
+  uint8_t trackMode() const override { return mode_; }
   bool trackTriggered() const override { return trig_type_ != 0; }
   // the trigger track of a group (it cannot follow one: its search runs in bursts, with gaps)
   bool trackTriggerNs(uint64_t &ns) const override {
@@ -148,7 +154,21 @@ class SamplerCapture final : public Interface, public GroupTrack {
   void runLow();
   void runHigh();
   void waitIdle();
-  size_t segmentInfo(uint8_t *out) const;
+  size_t segmentInfo(uint8_t *out, uint32_t serial) const;
+  // repeat with rearm 1 (capture §2.1)
+  uint8_t mode_ = reg::fixture_logic::kModeOneShot;
+  uint32_t seg_count_ = 1;
+  uint8_t *out_ = nullptr;   // the window's slot (buffer_ + slot x samples_)
+  uint32_t completed_ = 0, released_ = 0;
+  struct SlotInfo { uint64_t start_ns; uint32_t samples, kept; bool slipped; };
+  SlotInfo slots_[kMaxSegments] = {};
+  bool rep_wait_ = false;   // between segments, waiting for the next one's trigger (status flags bit2)
+  struct TriggerRecord { uint64_t sample; uint64_t ns; uint32_t serial; uint32_t uncertainty; };
+  TriggerRecord records_[kTriggerRecords] = {};
+  uint32_t record_next_ = 0;
+  bool repeat() const { return mode_ == reg::fixture_logic::kModeRepeat; }
+  bool startRun();     // a window (or a trigger's search) into the next slot, on the other core
+  void segmentDone(bool rearm);   // the window's segment kept; then repeat arms the next or waits (state 5)
 };
 
 }  // namespace oep
