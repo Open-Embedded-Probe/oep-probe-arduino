@@ -423,7 +423,10 @@ static void testDescribe() {
     if (tag == cap::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == LogicCapture::kMaxChannels); }
     CHECK(tag < 0x40 || tag == cap::kTlvDescribeMode || tag == cap::kTlvDescribeRateRange ||
           tag == cap::kTlvDescribeChannels || tag == cap::kTlvDescribeTrigger || tag == cap::kTlvDescribeFormats ||
-          tag == cap::kTlvDescribeCarriage || tag == cap::kTlvDescribeTriggerRecords);
+          tag == cap::kTlvDescribeCarriage || tag == cap::kTlvDescribeTriggerRecords ||
+          tag == cap::kTlvDescribeExternalClock || tag == cap::kTlvDescribeGlitchFilter);
+    if (tag == cap::kTlvDescribeExternalClock) CHECK(len == 6 && d[at + kTlvHeader + 4] == 0b011 && d[at + kTlvHeader + 5] == 1);
+    if (tag == cap::kTlvDescribeGlitchFilter) CHECK(len == 13 && d[at + kTlvHeader] == 0);
     if (tag == cap::kTlvDescribeTriggerRecords)   // rearm 1's records (§3.10: with the opts' rearm bit)
       CHECK(len == 2 && getU16(d.data() + at + kTlvHeader) == LogicCapture::kTriggerRecords);
     if (tag == cap::kTlvDescribeTrigger)   // types max_pretrigger opts (capture §3.5): arm 0, rearm 1, when 1 beyond the defaults
@@ -1666,7 +1669,74 @@ static void testRepeatTriggerBusyLine() {
   }
 }
 
+// capture §3.8: the external clock - the clock's role is no sample line (the unit's data lines the others, its clock
+// input the role's pin), actual_rate 0 / 1, the edge; a qualifier as a level delimiter on its valid line; only a
+// one-shot with an immediate trigger, up to max_hz. The glitch filter: a flex filter on each data line at the nearest
+// 25 ns, glitch_used, off again at the plan's release.
+static void testExternalClockAndGlitch() {
+  board(512 * 1024, size_t(32) << 20);
+  Rig rig(4);
+  Bytes out;
+  auto with = [](Bytes p, uint8_t tag, Bytes v) { tlv(p, kCrit | tag, v); return p; };
+  Config c;
+  c.samples = 4096;
+  c.rate = 1000000;
+  Bytes p = with(request(c), cap::kTlvConfigureClock, {3, 1, 0xFF, 0});   // role 3 the clock, falling, no qualifier
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)));
+  uint32_t num = 1;
+  for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1)) {
+    if (out[at] == cap::kTlvConfigureAnswerActualRate) num = getU32(out.data() + at + kTlvHeader);
+    if (out[at] == cap::kTlvConfigureAnswerLayout) CHECK(out[at + kTlvHeader + 1] == 3);   // C 3: the clock's role is none
+  }
+  CHECK(num == 0);
+  CHECK(g_fake_parlio_config.clk_src == PARLIO_CLK_SRC_EXTERNAL && g_fake_parlio_config.clk_in_gpio_num == 3);
+  CHECK(g_fake_parlio_config.data_gpio_nums[2] == 2 && g_fake_parlio_config.data_gpio_nums[3] == GPIO_NUM_NC);
+  CHECK(!g_fake_parlio_delimiter.level && g_fake_parlio_delimiter.edge == PARLIO_SAMPLE_EDGE_NEG);
+  p = with(request(c), cap::kTlvConfigureClock, {3, 0, 1, 0});   // a qualifier on role 1, active low
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)));
+  CHECK(g_fake_parlio_config.valid_gpio_num == 1 && g_fake_parlio_delimiter.level && g_fake_parlio_delimiter.active_low);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStop, {}, out)));
+  // refused: both edges, the clock its own qualifier, a repeat, a trigger, past max_hz; a role not in the plan
+  for (const Bytes &v : {Bytes{3, 2, 0xFF, 0}, Bytes{3, 0, 3, 1}})
+    CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureClock, v), out),
+                     kRejectUnsupported) && out[0] == (kCrit | cap::kTlvConfigureClock));
+  Config rep = c;
+  rep.mode = 2;
+  rep.segments = 2;
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(rep), cap::kTlvConfigureClock, {3, 0, 0xFF, 0}), out),
+                   kRejectUnsupported));
+  Config trig = c;
+  trig.trigger = true;
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(trig), cap::kTlvConfigureClock, {3, 0, 0xFF, 0}), out),
+                   kRejectUnsupported));
+  Config fast = c;
+  fast.rate = LogicCapture::kExtClockMaxHz + 1;
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(fast), cap::kTlvConfigureClock, {3, 0, 0xFF, 0}), out),
+                   kRejectUnsupported) && out[0] == (kCrit | cap::kTlvConfigureRate));
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureClock, {9, 0, 0xFF, 0}), out),
+                   kRejectUnavailable));
+  // the glitch filter: 1234 ns -> 1225, on the 4 lines; past 1600 refused; 0 takes them off
+  Bytes g = {0};
+  const Bytes ns = u32(1234);
+  g.insert(g.end(), ns.begin(), ns.end());
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureGlitchFilter, g), out)));
+  CHECK(g_fake_glitch_filters == 4 && g_fake_glitch_last && g_fake_glitch_last->enabled &&
+        g_fake_glitch_last->thres_ns == 1225);
+  bool used = false;
+  for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+    if (out[at] == cap::kTlvConfigureAnswerGlitchUsed) used = getU32(out.data() + at + kTlvHeader + 1) == 1225;
+  CHECK(used);
+  const Bytes far = u32(1700);
+  Bytes g2 = {0};
+  g2.insert(g2.end(), far.begin(), far.end());
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureGlitchFilter, g2), out),
+                   kRejectUnsupported));
+  CHECK(ok(configure(rig.cap, c, out)) && g_fake_glitch_filters == 0);
+}
+
 int main() {
+  testExternalClockAndGlitch();
   testForcedAfterWrap();
   testRepeatTriggerBusyLine();
   testRepeatTrigger();

@@ -17,13 +17,13 @@
 #ifndef GPIO_NUM_NC
 #define GPIO_NUM_NC (-1)
 #endif
-enum parlio_clock_source_t { PARLIO_CLK_SRC_PLL_F160M = 1 };
+enum parlio_clock_source_t { PARLIO_CLK_SRC_PLL_F160M = 1, PARLIO_CLK_SRC_EXTERNAL = 2 };
 enum parlio_sample_edge_t { PARLIO_SAMPLE_EDGE_NEG = 0, PARLIO_SAMPLE_EDGE_POS = 1 };
 enum parlio_bit_pack_order_t { PARLIO_BIT_PACK_ORDER_LSB = 0, PARLIO_BIT_PACK_ORDER_MSB = 1 };
 // receives: the transactions mounted on the unit. A real unit that has run keeps what its last transaction left (the
 // DMA's progress, the FIFO's bytes): g_fake_parlio_reused counts receives on a unit that had one already.
 struct FakeParlioUnit { size_t max_recv_size; uint32_t rate; int receives = 0; };
-struct FakeParlioDelimiter { size_t eof_data_len; };
+struct FakeParlioDelimiter { size_t eof_data_len; bool level = false; uint32_t valid_line = 0; bool active_low = false; int edge = 1; };
 typedef FakeParlioUnit *parlio_rx_unit_handle_t;
 typedef FakeParlioDelimiter *parlio_rx_delimiter_handle_t;
 typedef struct {
@@ -43,10 +43,21 @@ typedef struct {
   uint32_t timeout_ticks;
 } parlio_rx_soft_delimiter_config_t;
 typedef struct { parlio_rx_delimiter_handle_t delimiter; struct { uint32_t partial_rx_en : 1, indirect_mount : 1; } flags; } parlio_receive_config_t;
+typedef struct {
+  uint32_t valid_sig_line_id;
+  parlio_sample_edge_t sample_edge;
+  parlio_bit_pack_order_t bit_pack_order;
+  uint32_t eof_data_len;
+  uint32_t timeout_ticks;
+  struct { uint32_t active_low_en : 1; } flags;
+} parlio_rx_level_delimiter_config_t;
 
 inline int g_fake_parlio_units = 0, g_fake_parlio_delimiters = 0, g_fake_parlio_reused = 0, g_fake_parlio_made = 0;
+inline parlio_rx_unit_config_t g_fake_parlio_config = {};   // the last unit's configuration
+inline FakeParlioDelimiter g_fake_parlio_delimiter = {0};   // the last delimiter's
 inline esp_err_t parlio_new_rx_unit(const parlio_rx_unit_config_t *c, parlio_rx_unit_handle_t *unit) {
   if (g_fake_parlio_units) return ESP_FAIL;   // one RX unit
+  g_fake_parlio_config = *c;
   // the divider as hal_utils' fake picks it (an integer and a fraction of it), as the driver does
   hal_utils_clk_info_t info = {160000000u, c->exp_clk_freq_hz, 256, 1, 256};
   hal_utils_clk_div_t div = {};
@@ -62,6 +73,14 @@ inline esp_err_t parlio_new_rx_unit(const parlio_rx_unit_config_t *c, parlio_rx_
 inline esp_err_t parlio_del_rx_unit(parlio_rx_unit_handle_t unit) { delete unit; --g_fake_parlio_units; return ESP_OK; }
 inline esp_err_t parlio_new_rx_soft_delimiter(const parlio_rx_soft_delimiter_config_t *c, parlio_rx_delimiter_handle_t *d) {
   *d = new FakeParlioDelimiter{c->eof_data_len};
+  (*d)->edge = c->sample_edge;
+  g_fake_parlio_delimiter = **d;
+  ++g_fake_parlio_delimiters;
+  return ESP_OK;
+}
+inline esp_err_t parlio_new_rx_level_delimiter(const parlio_rx_level_delimiter_config_t *c, parlio_rx_delimiter_handle_t *d) {
+  *d = new FakeParlioDelimiter{c->eof_data_len, true, c->valid_sig_line_id, c->flags.active_low_en != 0, c->sample_edge};
+  g_fake_parlio_delimiter = **d;
   ++g_fake_parlio_delimiters;
   return ESP_OK;
 }

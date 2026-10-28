@@ -1155,6 +1155,16 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   putU32(carriage + 1, 1);
   putU32(carriage + 5, blocks::kMaxBlock);
   w.put(cap::kTlvDescribeCarriage, carriage, sizeof carriage);
+  uint8_t clock[6];   // external_clock: max_hz(u32) edges(u8: rising, falling) qualifier(u8) (capture §3.8)
+  putU32(clock, kExtClockMaxHz);
+  clock[4] = 0b011;
+  clock[5] = 1;
+  w.put(cap::kTlvDescribeExternalClock, clock, sizeof clock);
+  uint8_t glitch[13] = {0};   // glitch_filter: group 0 (every channel) min_ns max_ns step_ns
+  putU32(glitch + 1, kGlitchStepNs);
+  putU32(glitch + 5, kGlitchMaxNs);
+  putU32(glitch + 9, kGlitchStepNs);
+  w.put(cap::kTlvDescribeGlitchFilter, glitch, sizeof glitch);
   return w.ok() ? w.length() : 0;
 }
 
@@ -1198,6 +1208,8 @@ void LogicCapture::planRelease() {
 // read finds nothing, status and segments count none.
 void LogicCapture::forget() {
   mode_ = cap::kModeOneShot;
+  clock_pin_ = qual_pin_ = -1;
+  setGlitch(0);
   triggered_ = follow_ = linked_ = rep_trig_ = false;
   rearm_ = 0;
   trig_type_ = 0;
@@ -1252,14 +1264,19 @@ bool LogicCapture::open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t 
   c.trans_queue_depth = 1;
   c.max_recv_size = bytes;
   c.data_width = width;
-  c.clk_src = PARLIO_CLK_SRC_PLL_F160M;
-  c.exp_clk_freq_hz = rate_hz;
-  c.clk_in_gpio_num = GPIO_NUM_NC;
+  c.clk_src = clock_pin_ >= 0 ? PARLIO_CLK_SRC_EXTERNAL : PARLIO_CLK_SRC_PLL_F160M;
+  c.exp_clk_freq_hz = rate_hz;   // external: the fastest clock that may come
+  c.clk_in_gpio_num = clock_pin_ >= 0 ? static_cast<gpio_num_t>(clock_pin_) : GPIO_NUM_NC;
   c.clk_out_gpio_num = GPIO_NUM_NC;
-  c.valid_gpio_num = GPIO_NUM_NC;
+  c.valid_gpio_num = qual_pin_ >= 0 ? static_cast<gpio_num_t>(qual_pin_) : GPIO_NUM_NC;
   for (size_t i = 0; i < PARLIO_RX_UNIT_MAX_DATA_WIDTH; ++i)
-    c.data_gpio_nums[i] = i < channels_ ? static_cast<gpio_num_t>(pins_[i]) : GPIO_NUM_NC;
+    c.data_gpio_nums[i] = i < data_lines_ ? static_cast<gpio_num_t>(data_pins_[i]) : GPIO_NUM_NC;
   if (parlio_new_rx_unit(&c, &unit_) != ESP_OK) { unit_ = nullptr; return false; }
+  if (clock_pin_ >= 0) {   // no time: the answer's actual_rate 0 / 1 (capture §3.8)
+    num = 0;
+    den = 1;
+    return true;
+  }
   // The rate actually set: 160 MHz / (int + numerator / denominator), read back from the divider.
   const uint32_t n = HP_SYS_CLKRST.peri_clk_ctrl117.reg_parlio_rx_clk_div_num + 1;
   const uint32_t fn = HP_SYS_CLKRST.peri_clk_ctrl118.reg_parlio_rx_clk_div_numerator;
@@ -1282,17 +1299,29 @@ bool LogicCapture::openUnit(uint32_t rate_hz, uint8_t width, bool ring, uint32_t
     cb.on_receive_done = receiveDone;
     cb.on_partial_receive = oneShotProgress;   // how far it got, for a stop that cuts it short
   }
-  parlio_rx_soft_delimiter_config_t d = {};
-  d.sample_edge = PARLIO_SAMPLE_EDGE_POS;
-  d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
-  d.eof_data_len = ring ? kSegmentBytes : bytes;
-  return parlio_rx_unit_register_event_callbacks(unit_, &cb, this) == ESP_OK &&
-         parlio_new_rx_soft_delimiter(&d, &delimiter_) == ESP_OK && parlio_rx_unit_enable(unit_, true) == ESP_OK;
+  if (parlio_rx_unit_register_event_callbacks(unit_, &cb, this) != ESP_OK) return false;
+  const parlio_sample_edge_t edge = clock_pin_ >= 0 && clock_edge_ == 1 ? PARLIO_SAMPLE_EDGE_NEG : PARLIO_SAMPLE_EDGE_POS;
+  if (qual_pin_ >= 0) {   // the qualifier: samples only while its line is at its level (the valid line past the data)
+    parlio_rx_level_delimiter_config_t d = {};
+    d.valid_sig_line_id = PARLIO_RX_UNIT_MAX_DATA_WIDTH - 1;
+    d.sample_edge = edge;
+    d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
+    d.eof_data_len = ring ? kSegmentBytes : bytes;
+    d.flags.active_low_en = qual_level_ == 0;
+    if (parlio_new_rx_level_delimiter(&d, &delimiter_) != ESP_OK) return false;
+  } else {
+    parlio_rx_soft_delimiter_config_t d = {};
+    d.sample_edge = edge;
+    d.bit_pack_order = PARLIO_BIT_PACK_ORDER_LSB;
+    d.eof_data_len = ring ? kSegmentBytes : bytes;
+    if (parlio_new_rx_soft_delimiter(&d, &delimiter_) != ESP_OK) return false;
+  }
+  return parlio_rx_unit_enable(unit_, true) == ESP_OK;
 }
 
 void LogicCapture::closeUnit() {
   if (unit_) {
-    if (delimiter_) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
+    if (delimiter_ && qual_pin_ < 0) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
     parlio_rx_unit_disable(unit_);
   }
   if (delimiter_) { parlio_del_rx_delimiter(delimiter_); delimiter_ = nullptr; }
@@ -1354,6 +1383,31 @@ Result LogicCapture::noStorage(uint8_t *out, size_t capacity) {
   return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
 }
 
+// The GPIO flex glitch filters on the data pins (capture §3.8): a pulse shorter than ns is not seen, by the data and so
+// by the trigger. The filter is the pad's: another fn reading the pin sees it filtered as well while it is on.
+void LogicCapture::setGlitch(uint32_t ns) {
+  for (gpio_glitch_filter_handle_t &f : filters_) {
+    if (!f) continue;
+    gpio_glitch_filter_disable(f);
+    gpio_del_glitch_filter(f);
+    f = nullptr;
+  }
+  glitch_ns_ = 0;
+  if (!ns) return;
+  for (uint8_t k = 0; k < data_lines_ && k < kGlitchFilters; ++k) {
+    gpio_flex_glitch_filter_config_t c = {};
+    c.clk_src = GLITCH_FILTER_CLK_SRC_XTAL;
+    c.gpio_num = static_cast<gpio_num_t>(data_pins_[k]);
+    c.window_width_ns = ns;
+    c.window_thres_ns = ns;
+    if (gpio_new_flex_glitch_filter(&c, &filters_[k]) != ESP_OK || gpio_glitch_filter_enable(filters_[k]) != ESP_OK) {
+      setGlitch(0);
+      return;
+    }
+  }
+  glitch_ns_ = ns;
+}
+
 Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query) {
   // core §2.3: each TLV this configure implements is checked the same with or without bit 7 - a length other than its
   // definition or a value the definition excludes is malformed; a value the definition leaves unused or this probe
@@ -1362,7 +1416,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // the values, then the plan, the group and the state (unavailable).
   static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger,
                                    capture_tag::kTriggerOpts, cap::kTlvConfigureFormat, cap::kTlvConfigureCarriage,
-                                   cap::kTlvConfigureBlockMax};
+                                   cap::kTlvConfigureBlockMax, cap::kTlvConfigureClock, cap::kTlvConfigureGlitchFilter};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
@@ -1371,10 +1425,10 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
                   {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false},
                   {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}, {cap::kTlvConfigureFormat, 1, nullptr, false},
-                  {cap::kTlvConfigureBlockMax, 4, nullptr, false}};
+                  {cap::kTlvConfigureBlockMax, 4, nullptr, false}, {cap::kTlvConfigureClock, 4, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
        &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &format_tlv = items[7],
-       &block_max_tlv = items[8];
+       &block_max_tlv = items[8], &clock_tlv = items[9];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -1382,20 +1436,56 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // capture §3.3's contract: mode and rate required, samples in mode 1 / 2; none of them 0 (malformed)
   auto ask = [](const Item &it) { return CaptureAsk{it.v, it.critical}; };
   if (captureMalformed(ask(mode_tlv), ask(rate_tlv), ask(samples_tlv), ask(segments_tlv))) return rejected(kRejectMalformed);
+  {   // glitch_filter(group u8, ns u32), one per group: another length, a group twice - malformed (core §2.3, §3.8)
+    size_t at = 0, vlen = 0;
+    uint8_t raw = 0;
+    const uint8_t *v = nullptr;
+    uint32_t groups = 0;
+    while (tail.next(at, raw, v, vlen)) {
+      if ((raw & ~kTagCritical) != cap::kTlvConfigureGlitchFilter) continue;
+      if (vlen != 5 || (v[0] < 32 && ((groups >> v[0]) & 1))) return rejected(kRejectMalformed);
+      if (v[0] < 32) groups |= 1u << v[0];
+    }
+  }
   if (refused(unknown_critical)) return unknown_critical;
   const uint8_t mode = mode_tlv.v[0];
   if (mode != cap::kModeOneShot && mode != cap::kModeRepeat && mode != cap::kModeStreaming)
     return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
-  uint32_t rate = getU32(rate_tlv.v);   // outside rate_range (capture §3.3); the driver would silently run at 160 MHz
-  if (rate < kMinHz || rate > kSourceHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  // the external clock (§3.8): role edge(0 / 1 here) qualifier_role(0xFF none) qualifier_level; a one-shot with an
+  // immediate trigger in format 0 or 4 (its own limits: unsupported, the clock's tag)
+  const uint8_t *clk = clock_tlv.v;
+  if (clk && (clk[1] > 1 || clk[3] > 1 || clk[2] == clk[0] || mode != cap::kModeOneShot ||
+              (trigger_tlv.v && trigger_tlv.v[0] != cap::kTriggerImmediate) ||
+              (format_tlv.v && format_tlv.v[0] != cap::kDataFormatPacked && format_tlv.v[0] != cap::kDataFormatTestCounter)))
+    return Tail::refuse(cap::kTlvConfigureClock, clock_tlv.critical, out, capacity);
+  uint32_t rate = getU32(rate_tlv.v);   // outside rate_range (capture §3.3); the driver would silently run at 160 MHz;
+  // with the clock the fastest that may come, up to external_clock's max_hz
+  if (clk ? rate > kExtClockMaxHz : (rate < kMinHz || rate > kSourceHz))
+    return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  uint32_t glitch = 0;
+  bool glitch_asked = false;
+  {   // group 0 only (every channel); 0 none, else 25 .. 1600 ns, the nearest step
+    size_t at = 0, vlen = 0;
+    uint8_t raw = 0;
+    const uint8_t *v = nullptr;
+    while (tail.next(at, raw, v, vlen)) {
+      if ((raw & ~kTagCritical) != cap::kTlvConfigureGlitchFilter) continue;
+      const uint32_t ns = getU32(v + 1);
+      if (v[0] != 0 || (ns && (ns < kGlitchStepNs || ns > kGlitchMaxNs))) return unsupportedTag(out, capacity, raw);
+      glitch = (ns + kGlitchStepNs / 2) / kGlitchStepNs * kGlitchStepNs;
+      glitch_asked = true;
+    }
+  }
   // samples in streaming, segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
   const Result misplaced = captureMisplaced(mode, ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv), ask(pretrigger_tlv), out, capacity);
   if (refused(misplaced)) return misplaced;
   // inside the range, one-shot's ceiling for the channel count: above it, the nearest it allows (capture §3.3)
-  if (mode == cap::kModeOneShot) {
+  if (mode == cap::kModeOneShot && !clk) {
     const uint32_t limit = channels_ <= kLimitLines8 ? kLimitHz8 : kLimitHz16;
     if (rate > limit) rate = limit;
   }
+  // the lines sampled: every planned role but the clock's (no channel of the sample, §3.8)
+  const uint8_t lines = clk && clk[0] < channels_ ? channels_ - 1 : channels_;
   uint32_t samples = samples_tlv.v ? getU32(samples_tlv.v) : 0, segments = segments_tlv.v ? getU32(segments_tlv.v) : 0;
   // type(u8) role(u8) value(u32): level and edge in a one-shot and a repeat (streaming starts at once: immediate only).
   // A role outside the plan is refused unavailable cause 6 below, after every unsupported value (core §4.3).
@@ -1458,7 +1548,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // with a trigger, whose segments start at any sample (pretrigger before the trigger exactly, §3.3: a byte a sample
   // needs no shift)
   const bool rep_trig = mode == cap::kModeRepeat && trig_type != cap::kTriggerImmediate;
-  const uint8_t width = (blocks_format || rep_trig) && widthFor(channels_) < 8 ? 8 : widthFor(channels_);
+  const uint8_t width = (blocks_format || rep_trig) && widthFor(lines) < 8 ? 8 : widthFor(lines);
   // streaming's ceiling: the harvest copies the DMA ring into stages (or the FIFO) at about kStreamMaxBytes a second;
   // above it the ring is rewritten before it is copied (a hole, state 6). The nearest rate it keeps is used (capture
   // §3.3), as the one-shot's ceiling above (P4X, 2026-10-20: 40 MHz w 8 kept, formats 0 and 4, 40.15 MB/s on the wire
@@ -1541,6 +1631,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   const bool roled = trig_type != cap::kTriggerImmediate && trig_type != cap::kTriggerLinked;
   if (channels_ == 0 || (roled && trig_role >= channels_)) return wrongState(out, capacity);
   if (events_roles >> channels_) return wrongState(out, capacity);   // a carriage role not in the plan (§3.3)
+  if (clk && (clk[0] >= channels_ || (clk[2] != 0xFF && clk[2] >= channels_))) return wrongState(out, capacity);
+  // nothing to sample but the clock; the qualifier's valid line past 15 data lines: this probe's own limits
+  if (clk && (lines == 0 || (clk[2] != 0xFF && width >= PARLIO_RX_UNIT_MAX_DATA_WIDTH)))
+    return Tail::refuse(cap::kTlvConfigureClock, clock_tlv.critical, out, capacity);
+  if (glitch && lines > kGlitchFilters) return Tail::refuse(cap::kTlvConfigureGlitchFilter, false, out, capacity);
   // format 1's block (§1.3): L a multiple of 8 and of every D, at most block_max and kMaxBlock, its worst within a stage
   blocks::Plan plan;
   if (blocks_format) {
@@ -1579,8 +1674,21 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (!records_) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
   }
 
+  if (!query) {   // the lines and the clock the unit is made with (open), the filters on the lines
+    data_lines_ = 0;
+    for (uint8_t k = 0; k < channels_; ++k)
+      if (!clk || k != clk[0]) data_pins_[data_lines_++] = pins_[k];
+    clock_pin_ = clk ? pins_[clk[0]] : -1;
+    clock_edge_ = clk ? clk[1] : 0;
+    qual_pin_ = clk && clk[2] != 0xFF ? pins_[clk[2]] : -1;
+    qual_level_ = clk ? clk[3] : 1;
+    setGlitch(glitch);
+    if (glitch && !glitch_ns_) return failed();   // the filters would not start
+  }
   uint32_t num = 0, den = 1;
-  if (query) {
+  if (query && clk) {
+    num = 0;   // no time (§3.8)
+  } else if (query) {
     // Answered without touching the one PARLIO RX unit (a configured capture and its data stay): the divider the
     // driver would pick, from the same HAL helper. configure reads the real divider back, so a mismatch shows.
     hal_utils_clk_info_t info = {};
@@ -1693,8 +1801,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   putU32(r, num);
   putU32(r + 4, den);
   w.put(kTagActualRate, r, sizeof r);
-  // format 1: w = C = R, the raw channels (§1.3); else every channel at its bit
-  const uint8_t shown = blocks_format ? plan.raw : channels_;
+  // format 1: w = C = R, the raw channels (§1.3); else every channel at its bit (the clock's role is none)
+  const uint8_t shown = blocks_format ? plan.raw : lines;
   uint8_t layout[2 + kMaxChannels] = {blocks_format ? plan.raw : width, shown};
   for (uint8_t k = 0; k < shown; ++k) layout[2 + k] = k;
   w.put(kTagLayout, layout, 2 + shown);
@@ -1703,6 +1811,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (mode == cap::kModeRepeat) w.u32(kTagActualSegments, actual_segments);
   if (format != cap::kDataFormatPacked) w.u8(cap::kTlvConfigureAnswerFormat, format);   // always when not 0 (§3.3)
   if (blocks_format) w.u32(cap::kTlvConfigureAnswerBlock, plan.block);                     // L (§1.3, §3.3)
+  if (glitch_asked) {   // the value in use (§3.8)
+    uint8_t g[5] = {0};
+    putU32(g + 1, glitch);
+    w.put(cap::kTlvConfigureAnswerGlitchUsed, g, sizeof g);
+  }
   // streaming: what it holds unsent (capture §3.3 stream_buffer) - the zero-copy stages (those held, or what internal
   // RAM gives now), else the store
   if (mode == cap::kModeStreaming) w.u32(cap::kTlvConfigureAnswerStreamBuffer, streamBuffer(samples, width, actual_segments));
@@ -1949,7 +2062,8 @@ size_t LogicCapture::segmentInfo(uint8_t *out) const {
   putU64(out + 4, 0);              // position
   putU32(out + 12, kept_samples_);
   putU64(out + 16, triggered_ ? start_ns_ + nsOf(seg_first_sample_) : start_ns_);
-  putU32(out + 24, kStartUncertaintyNs);
+  // external clock: the first edge came between the start and the segment's end, as far as the probe knows
+  putU32(out + 24, clock_pin_ >= 0 ? clock_unc_ns_ : kStartUncertaintyNs);
   // immediate (also through the ring a group's following left): no trigger inside
   putU32(out + 28, triggered_ && (trig_type_ != cap::kTriggerImmediate || follow_) ? trigger_index_ : 0xFFFFFFFFu);
   out[32] = static_cast<uint8_t>((triggered_ && trig_overrun_ ? cap::kSegmentFlagGap : 0) |   // bit0: part of it was lost
@@ -2017,6 +2131,10 @@ void LogicCapture::poll() {
   if (triggered_) { pollTriggered(); return; }
   if (state_ != kStateCapturing || !done_) return;
   esp_cache_msync(buffer_, bytes_, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+  if (clock_pin_ >= 0) {
+    const uint64_t now = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
+    clock_unc_ns_ = now - start_ns_ > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<uint32_t>(now - start_ns_);
+  }
   state_ = kStateDone;
   kept_samples_ = samples_;
   if (subscribed_) {
@@ -2132,7 +2250,10 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       rc.delimiter = delimiter_;
       if (parlio_rx_unit_receive(unit_, buffer_, bytes_, &rc) != ESP_OK) { fail(cap::kErrorPeripheral); return failed(); }
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
-      if (parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) { fail(cap::kErrorPeripheral); return failed(); }
+      if (qual_pin_ < 0 && parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, true) != ESP_OK) {   // level: by itself
+        fail(cap::kErrorPeripheral);
+        return failed();
+      }
       state_ = kStateCapturing;
       generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
       putU32(out, generation_);
@@ -2179,7 +2300,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         // next start mounts its own (it stayed with the driver, which went on filling the old one).
         poll();
         if (state_ == kStateDone) return completed();
-        parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
+        if (qual_pin_ < 0) parlio_rx_soft_delimiter_start_stop(unit_, delimiter_, false);
         parlio_rx_unit_disable(unit_);
         if (done_) {   // it completed while it was being stopped
           parlio_rx_unit_enable(unit_, true);

@@ -103,6 +103,9 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWIO -I"$he
   "$here/test_swio.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepSwioPhy.cpp" "$src/OepFrame.cpp" \
   "$src/OepDmConsole.cpp"
 "$out-swio"
+# the classic sampler's external-clock window (a sample at each edge asked, a qualifier, format 3's deltas, the span)
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-sampler-clock" "$here/test_sampler_clock.cpp"
+"$out-sampler-clock"
 # the classic's gate between the sampler and the SWIO frames (no frame meets a read; an immediate window exclusive; a
 # trigger search's turns inside its bursts, on the sampler's own loop OepSamplerRun.h: what a command makes the target
 # do fires the trigger)

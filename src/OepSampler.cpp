@@ -66,6 +66,25 @@ template <bool kHigh>
 inline __attribute__((always_inline)) void SamplerCapture::run() {
   EspIo<kHigh> io;
   io.packer = &packer_;
+  if (clocked_) {   // the external clock: one window, a sample at each edge (OepSamplerRun.h runClocked)
+    sampler::ClockPlan plan;
+    plan.out = out_;
+    plan.size = samples_;
+    plan.edge = clock_edge_;
+    plan.qual_bit = qual_bit_;
+    plan.qual_level = qual_level_;
+    plan.timed = timed_;
+    plan.span = static_cast<uint32_t>(static_cast<uint64_t>(cpu_hz_) / 1000u * (kWindowNs / 1000000u));
+    const sampler::ClockOutcome r = sampler::runClocked(io, plan, control_);
+    if (r.aborted) { aborted_ = true; return; }
+    seg_samples_ = r.samples;
+    // the first edge's time; format 3's first delta counted from the start, not the window's (capture §3.8)
+    const uint64_t lead = r.window_ns > start_ns_ ? (r.window_ns - start_ns_) * (cpu_hz_ / 1000000u) / 1000u : 0;
+    seg_start_ns_ = r.window_ns + static_cast<uint64_t>(r.first_cycles) * 1000u / (cpu_hz_ / 1000000u);
+    if (timed_ && r.samples) putU32(out_, getU32(out_) + static_cast<uint32_t>(lead));
+    slipped_ = false;
+    return;
+  }
   sampler::Plan plan;
   plan.out = out_;
   plan.size = samples_;
@@ -142,6 +161,13 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
                  kBufferBytes - 1, kTriggerOpts);  // the pretrigger: less than the segment's samples
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
   w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.10)
+  const uint8_t formats[] = {cap::kDataFormatStateTimed};    // format 3, on the external clock (§3.8)
+  w.put(cap::kTlvDescribeFormats, formats, sizeof formats);
+  uint8_t clock[6];   // external_clock: max_hz(u32) edges(u8: rising, falling, both) qualifier(u8)
+  putU32(clock, kExtClockMaxHz);
+  clock[4] = 0b111;
+  clock[5] = 1;
+  w.put(cap::kTlvDescribeExternalClock, clock, sizeof clock);
   return w.ok() ? w.length() : 0;
 }
 
@@ -190,7 +216,7 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   // an unknown non-critical one passed over. Everything is checked before anything changes (core §4.3): the form, then
   // the values, then the plan, the group and the state (unavailable).
   static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger,
-                                   capture_tag::kTriggerOpts};
+                                   capture_tag::kTriggerOpts, cap::kTlvConfigureClock, cap::kTlvConfigureFormat};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
@@ -198,9 +224,11 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   struct Item { uint8_t tag; size_t size; const uint8_t *v; bool critical; };
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
                   {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false},
-                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}};
+                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}, {cap::kTlvConfigureClock, 4, nullptr, false},
+                  {cap::kTlvConfigureFormat, 1, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
-       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6];
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &clock_tlv = items[7],
+       &format_tlv = items[8];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -211,8 +239,18 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   if (refused(unknown_critical)) return unknown_critical;
   const uint8_t mode = mode_tlv.v[0];
   if (mode != cap::kModeOneShot && mode != cap::kModeRepeat) return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
-  uint32_t rate = getU32(rate_tlv.v);   // outside rate_range (capture §3.3)
-  if (rate < kMinHz || rate > kMaxHz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  // the external clock (§3.8): role edge qualifier_role(0xFF none) qualifier_level; a one-shot with an immediate trigger
+  const uint8_t *ext = clock_tlv.v;
+  if (ext && (ext[1] > 2 || ext[3] > 1 || ext[2] == ext[0] || mode != cap::kModeOneShot ||
+              (trigger_tlv.v && trigger_tlv.v[0] != cap::kTriggerImmediate)))
+    return Tail::refuse(cap::kTlvConfigureClock, clock_tlv.critical, out, capacity);
+  // the data format: 0, or 3 (the timed states) on the external clock
+  const uint8_t format = format_tlv.v ? format_tlv.v[0] : cap::kDataFormatPacked;
+  if (format != cap::kDataFormatPacked && !(format == cap::kDataFormatStateTimed && ext))
+    return Tail::refuse(cap::kTlvConfigureFormat, format_tlv.critical, out, capacity);
+  uint32_t rate = getU32(rate_tlv.v);   // outside rate_range (capture §3.3); with the clock the fastest that may come
+  if (ext ? rate > kExtClockMaxHz : (rate < kMinHz || rate > kMaxHz))
+    return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   // segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
   const Result misplaced = captureMisplaced(mode_tlv.v[0], ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv),
                                             ask(pretrigger_tlv), out, capacity);
@@ -240,7 +278,8 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   // a sample: it kept 1 MHz (1.52 MHz actually sampled at 2 MHz, 2026-09-29), far above kMaxHz.
   const uint32_t cpu_hz = getCpuFrequencyMhz() * 1000000u;
   const uint32_t cycles = cpu_hz / rate;
-  if (samples > kBufferBytes) samples = kBufferBytes;
+  const uint32_t per = format == cap::kDataFormatStateTimed ? 5 : 1;   // delta(u32) and the byte, or the byte
+  if (samples > kBufferBytes / per) samples = kBufferBytes / per;
   // A window lasts samples x the period with interrupts off on the sampling core, and every such span ends by the
   // clock at kOffNs: samples are rounded down to what kWindowNs holds at this rate (actual_samples, capture §3.3), so a
   // window is never cut short by the clock at its nominal pace and a search keeps kOffNs - kWindowNs or more of a
@@ -262,6 +301,9 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   }
   // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
   if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
+  if (ext && (ext[0] >= channels_ || (ext[2] != 0xFF && ext[2] >= channels_))) return wrongState(out, capacity);
+  const uint8_t lines = ext ? channels_ - 1 : channels_;   // the clock's role is no sample line
+  if (ext && (lines == 0 || lines > 7)) return Tail::refuse(cap::kTlvConfigureClock, clock_tlv.critical, out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   const uint32_t g = gcd(cpu_hz, cycles);
@@ -274,7 +316,25 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
       masks0_[l] = pins_[l] < 32 ? 1u << pins_[l] : 0;
       masks1_[l] = pins_[l] >= 32 ? 1u << (pins_[l] - 32) : 0;
     }
-    packer_.build(pins_, channels_);
+    clocked_ = ext != nullptr;
+    timed_ = format == cap::kDataFormatStateTimed;
+    lines_ = lines;
+    if (ext) {   // the data lines in role order, the clock's line on bit 7 (sampler::kClockBit)
+      int packed[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+      uint8_t l = 0;
+      for (uint8_t k = 0; k < channels_; ++k) {
+        if (k == ext[0]) continue;
+        if (k == ext[2]) qual_bit_ = static_cast<uint8_t>(1u << l);
+        packed[l++] = pins_[k];
+      }
+      packed[7] = pins_[ext[0]];
+      if (ext[2] == 0xFF) qual_bit_ = 0;
+      clock_edge_ = ext[1];
+      qual_level_ = ext[3];
+      packer_.build(packed, 8);
+    } else {
+      packer_.build(pins_, channels_);
+    }
     samples_ = samples;
     mode_ = mode;
     seg_count_ = segs;
@@ -290,13 +350,20 @@ Result SamplerCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_
   }
   TlvWriter w(out, capacity);
   uint8_t r[8];
-  putU32(r, num);
-  putU32(r + 4, den);
+  putU32(r, ext ? 0 : num);   // the clock's: 0 / 1, no time (§3.8)
+  putU32(r + 4, ext ? 1 : den);
   w.put(cap::kTlvConfigureAnswerActualRate, r, sizeof r);
-  uint8_t layout[2 + kMaxChannels] = {8, channels_};
-  for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
-  w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + channels_);
+  uint8_t layout[2 + kMaxChannels] = {8, lines};
+  for (uint8_t k = 0; k < lines; ++k) layout[2 + k] = k;
+  w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + lines);
   w.u32(cap::kTlvConfigureAnswerActualSamples, samples);
+  if (format == cap::kDataFormatStateTimed) {   // format 3 and its delta's tick: the CPU's cycles
+    w.u8(cap::kTlvConfigureAnswerFormat, format);
+    uint8_t tb[8];
+    putU32(tb, cpu_hz);
+    putU32(tb + 4, 1);
+    w.put(cap::kTlvConfigureAnswerTimebase, tb, sizeof tb);
+  }
   if (mode == cap::kModeRepeat) w.u32(cap::kTlvConfigureAnswerActualSegments, segs);
   return w.ok() ? completed(w.length()) : failed();
 }
@@ -312,6 +379,7 @@ size_t SamplerCapture::segmentInfo(uint8_t *out, uint32_t serial) const {
   putU32(out + 24, 2000);          // the software pace's first sample against the clock read: +-2 us
   putU32(out + 28, trig_type_ ? slot.kept : 0xFFFFFFFFu);   // immediate: no trigger inside; early: fewer before it
   uint8_t flags = slot.slipped ? cap::kSegmentFlagSlipped : 0;   // bit2: a sample a period or more late (OepSamplerRun.h)
+  if (clocked_ && slot.samples < samples_) flags |= cap::kSegmentFlagShort;   // the window ended before every edge came
   if (repeat()) flags |= cap::kSegmentFlagRearm | (serial ? cap::kSegmentFlagGap : 0);
   out[32] = flags;
   putU32(out + 33, generation_);
@@ -323,8 +391,8 @@ size_t SamplerCapture::segmentInfo(uint8_t *out, uint32_t serial) const {
 bool SamplerCapture::startRun() {
   done_ = trig_seen_ = aborted_ = false;
   control_ = 0;
-  out_ = buffer_ + static_cast<size_t>(completed_ % seg_count_) * samples_;
-  memset(out_, 0, samples_);
+  out_ = buffer_ + static_cast<size_t>(completed_ % seg_count_) * bytesOf(samples_);
+  memset(out_, 0, bytesOf(samples_));
   if (xTaskCreatePinnedToCore(samplerTask, "oep_sampler", 4096, this, kTaskPriority, &sampler_,
                               static_cast<BaseType_t>(xPortGetCoreID() ^ 1)) != pdPASS) {
     sampler_ = nullptr;
@@ -336,7 +404,7 @@ bool SamplerCapture::startRun() {
 // The window's segment kept (its slot's info, the event); then one-shot is done, repeat arms the next segment when a slot
 // is free (`rearm`: not when stopping) or waits for release in state 5
 void SamplerCapture::segmentDone(bool rearm) {
-  slots_[completed_ % seg_count_] = {trig_type_ ? seg_start_ns_ : start_ns_, seg_samples_, trig_kept_, slipped_};
+  slots_[completed_ % seg_count_] = {trig_type_ || clocked_ ? seg_start_ns_ : start_ns_, seg_samples_, trig_kept_, slipped_};
   const uint32_t serial = completed_++;
   if (subscribed_) {
     uint8_t seg[37];
@@ -442,7 +510,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       out[0] = state_;
       putU32(out + 1, completed_);
       // one-shot: the segment's samples (fewer after an early trigger); repeat: every slot samples long (arm 1)
-      putU64(out + 5, repeat() ? static_cast<uint64_t>(completed_) * samples_ : completed_ ? slots_[0].samples : 0);
+      putU64(out + 5, repeat() ? static_cast<uint64_t>(completed_) * samples_ : completed_ ? bytesOf(slots_[0].samples) : 0);
       out[13] = slipped_ ? cap::kStatusFlagSlipped : 0;   // bit1: a sample taken a period or more late (OepSamplerRun.h)
       if (repeat() && rep_wait_ && state_ == cap::kStateCapturing) out[13] |= cap::kStatusFlagRearmWaiting;   // §3.2
       putU32(out + 14, generation_);
@@ -461,7 +529,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (capacity < 11) return failed();
       poll();
       // the segments kept: one-shot's, or repeat's last seg_count_ (a released one readable until its slot is used again)
-      const uint64_t have = repeat() ? static_cast<uint64_t>(completed_) * samples_ : completed_ ? slots_[0].samples : 0;
+      const uint64_t have = repeat() ? static_cast<uint64_t>(completed_) * samples_ : completed_ ? bytesOf(slots_[0].samples) : 0;
       const uint64_t low = repeat() && completed_ > seg_count_ ? static_cast<uint64_t>(completed_ - seg_count_) * samples_ : 0;
       uint64_t position = getU64(p + 4);
       uint8_t flags = 0;
@@ -478,9 +546,10 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       putU16(out + 9, static_cast<uint16_t>(count));
       for (uint32_t i = 0; i < count;) {   // across the slots
         const uint64_t at = position + i;
-        const uint32_t serial = static_cast<uint32_t>(at / samples_), off = static_cast<uint32_t>(at % samples_);
-        const uint32_t take = samples_ - off < count - i ? samples_ - off : count - i;
-        memcpy(out + 11 + i, buffer_ + static_cast<size_t>(serial % seg_count_) * samples_ + off, take);
+        const uint32_t slot = bytesOf(samples_);   // one-shot's format 3: 5 bytes a sample
+        const uint32_t serial = static_cast<uint32_t>(at / slot), off = static_cast<uint32_t>(at % slot);
+        const uint32_t take = slot - off < count - i ? slot - off : count - i;
+        memcpy(out + 11 + i, buffer_ + static_cast<size_t>(serial % seg_count_) * slot + off, take);
         i += take;
       }
       return completed(11 + count);

@@ -47,6 +47,10 @@ class SamplerCapture final : public Interface, public GroupTrack {
   // watchdog (it was 400 kHz, which kept a full 65408-sample window under the watchdog before every interrupts-off
   // span ended by the clock).
   static constexpr uint32_t kMaxHz = 300000, kMinHz = 1000;
+  // The external clock (capture §3.8): the window watches its line and samples at its edges, a one-shot with an immediate
+  // trigger only, up to 7 data lines (the clock is the packed sample's bit 7). The fastest clock declared is the loop's
+  // margin, not a measured ceiling; format 3 times each sample in CPU cycles (timebase: the CPU clock).
+  static constexpr uint32_t kExtClockMaxHz = 1000000;
   static constexpr uint64_t kWindowNs = 200000000;   // a window's samples at most this long (kOffNs less a search)
   // One byte per sample: kWindowNs at kMaxHz, the most a window holds at any rate it takes.
   static constexpr size_t kBufferBytes = static_cast<size_t>(kMaxHz / 1000u * (kWindowNs / 1000000u));
@@ -120,6 +124,9 @@ class SamplerCapture final : public Interface, public GroupTrack {
   uint8_t state_ = reg::fixture_logic::kStateUnconfigured;
   uint32_t samples_ = 0, cycles_ = 0, cpu_hz_ = 0;
   uint64_t start_ns_ = 0;   // the probe's clock (esp_timer x 1000)
+  bool clocked_ = false, timed_ = false;   // the external clock; format 3
+  uint8_t clock_edge_ = 0, qual_bit_ = 0, qual_level_ = 1, lines_ = 0;
+  uint32_t bytesOf(uint32_t samples) const { return samples * (timed_ ? 5u : 1u); }
   uint8_t *buffer_ = nullptr;
   uint32_t masks0_[kMaxChannels] = {}, masks1_[kMaxChannels] = {};
   sampler::Packer packer_;               // the lines' bits out of GPIO.in / in1 (configure builds it)

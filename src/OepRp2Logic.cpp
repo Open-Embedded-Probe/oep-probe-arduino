@@ -88,7 +88,98 @@ void onFlag() {
   }
 }
 
+// The external clock's program (capture §3.8): X the samples less one; a sample at each edge taken (a qualifier: only
+// while its jmp pin is at its level); then a halt at the end
+constexpr uint8_t kClockLength = 8;
+uint16_t gClockProgram[kClockLength];
+uint8_t buildClock(uint8_t clock, uint8_t edge, bool qualifier, uint8_t level) {
+  uint16_t *p = gClockProgram;
+  uint8_t n = 0;
+  const uint16_t in = pio_encode_in(pio_pins, 32);
+  if (edge == 2) {   // both: a sample at the rise and at the fall
+    p[0] = pio_encode_wait_gpio(true, clock);
+    p[1] = in;
+    p[2] = pio_encode_jmp_x_dec(4);                // samples left: on to the fall
+    p[3] = pio_encode_jmp(7);
+    p[4] = pio_encode_wait_gpio(false, clock);
+    p[5] = in;
+    p[6] = pio_encode_jmp_x_dec(0);
+    p[7] = pio_encode_jmp(7);                      // the end: stays here
+    return 7;
+  }
+  const bool rise = edge == 0;
+  p[n++] = pio_encode_wait_gpio(!rise, clock);     // 0: the other level first
+  p[n++] = pio_encode_wait_gpio(rise, clock);      // 1: the edge
+  if (qualifier) {                                 // 2: skip unless the qualifier is at its level
+    p[n++] = level ? pio_encode_jmp_pin(4) : pio_encode_jmp_pin(0);
+    if (level) p[n++] = pio_encode_jmp(0);         // 3
+  }
+  p[n++] = in;
+  p[n++] = pio_encode_jmp_x_dec(0);
+  p[n] = pio_encode_jmp(n);                        // the end: stays here
+  return n;
+}
+
 }  // namespace
+
+bool Rp2LogicCapture::claimClock() {
+  if (clk_sm_ >= 0) return true;
+  pio_program_t program = {};
+  program.instructions = gClockProgram;
+  program.length = kClockLength;
+  program.origin = -1;
+  uint sm = 0, offset = 0;
+  PIO pio = nullptr;
+  if (!pio_claim_free_sm_and_add_program(&program, &pio, &sm, &offset)) return false;
+  clk_pio_ = pio;
+  clk_sm_ = static_cast<int>(sm);
+  clk_offset_ = static_cast<int>(offset);
+  return true;
+}
+
+void Rp2LogicCapture::releaseClock() {
+  if (clk_sm_ < 0) return;
+  pio_sm_set_enabled(clk_pio_, static_cast<uint>(clk_sm_), false);
+  pio_program_t program = {};
+  program.instructions = gClockProgram;
+  program.length = kClockLength;
+  program.origin = -1;
+  pio_remove_program_and_unclaim_sm(&program, clk_pio_, static_cast<uint>(clk_sm_), static_cast<uint>(clk_offset_));
+  clk_sm_ = -1;
+}
+
+// The clock's program written for this configuration and run; the DMA writes the samples straight into the ring
+bool Rp2LogicCapture::beginClock() {
+  const uint8_t end = buildClock(static_cast<uint8_t>(clock_pin_), clock_edge_, qual_pin_ >= 0, qual_level_);
+  const uint sm = static_cast<uint>(clk_sm_);
+  pio_sm_set_enabled(clk_pio_, sm, false);
+  for (uint8_t i = 0; i < kClockLength; ++i) {   // relocated to where the program sits
+    uint16_t op = gClockProgram[i];
+    if ((op & 0xE000) == 0x0000) op = static_cast<uint16_t>((op & ~0x1Fu) | ((op & 0x1F) + clk_offset_));   // jmp
+    clk_pio_->instr_mem[clk_offset_ + i] = op;
+  }
+  clk_end_ = clk_offset_ + end;
+  pio_sm_config c = pio_get_default_sm_config();
+  sm_config_set_wrap(&c, static_cast<uint>(clk_offset_), static_cast<uint>(clk_offset_ + kClockLength - 1));
+  sm_config_set_in_pins(&c, 0);
+  sm_config_set_in_shift(&c, false, true, 32);
+  if (qual_pin_ >= 0) sm_config_set_jmp_pin(&c, static_cast<uint>(qual_pin_));
+  pio_sm_init(clk_pio_, sm, static_cast<uint>(clk_offset_), &c);
+  pio_sm_put_blocking(clk_pio_, sm, samples_ - 1);
+  pio_sm_exec(clk_pio_, sm, pio_encode_pull(false, true));
+  pio_sm_exec(clk_pio_, sm, pio_encode_mov(pio_x, pio_osr));
+  clk_pio_->sm[sm].shiftctrl |= PIO_SM0_SHIFTCTRL_FJOIN_RX_BITS;
+  pio_sm_clear_fifos(clk_pio_, sm);
+  pio_sm_exec(clk_pio_, sm, pio_encode_jmp(static_cast<uint>(clk_offset_)));
+  dma_channel_config d = dma_channel_get_default_config(static_cast<uint>(dma_data_));
+  channel_config_set_transfer_data_size(&d, DMA_SIZE_32);
+  channel_config_set_read_increment(&d, false);
+  channel_config_set_write_increment(&d, true);
+  channel_config_set_dreq(&d, pio_get_dreq(clk_pio_, sm, false));
+  dma_channel_configure(static_cast<uint>(dma_data_), &d, ring_, &clk_pio_->rxf[sm], samples_, true);
+  pio_sm_set_enabled(clk_pio_, sm, true);
+  return true;
+}
 
 bool Rp2LogicCapture::claim() {
   if (sm_ >= 0) return true;
@@ -122,6 +213,11 @@ bool Rp2LogicCapture::claim() {
 }
 
 void Rp2LogicCapture::halt() {
+  if (clk_sm_ >= 0) {
+    pio_sm_set_enabled(clk_pio_, static_cast<uint>(clk_sm_), false);
+    pio_sm_clear_fifos(clk_pio_, static_cast<uint>(clk_sm_));
+    pio_sm_restart(clk_pio_, static_cast<uint>(clk_sm_));
+  }
   if (sm_ < 0) return;
   pio_sm_set_enabled(pio_, static_cast<uint>(sm_), false);
   // Both channels' enable off first, then both aborted at once: aborting the data channel alone set off its chain
@@ -144,6 +240,7 @@ static uint32_t ringOf(uint32_t samples, uint8_t trig_type, uint32_t pre) {
 }
 
 bool Rp2LogicCapture::begin() {
+  if (clock_pin_ >= 0) return beginClock();
   const uint sm = static_cast<uint>(sm_);
   const uint32_t ring = ringOf(samples_, trig_type_, pretrigger_);
   const uint32_t post = trig_type_ ? samples_ - pretrigger_ - 1 : samples_;
@@ -200,6 +297,9 @@ bool Rp2LogicCapture::begin() {
 }
 
 bool Rp2LogicCapture::finished() const {
+  if (clock_pin_ >= 0)   // every sample in: the program at its end, the DMA done
+    return clk_sm_ >= 0 && pio_sm_get_pc(clk_pio_, static_cast<uint>(clk_sm_)) == static_cast<uint>(clk_end_) &&
+           !dma_channel_is_busy(static_cast<uint>(dma_data_));
   return sm_ >= 0 && pio_sm_get_pc(pio_, static_cast<uint>(sm_)) == static_cast<uint>(offset_ + kEnd);
 }
 
@@ -213,6 +313,23 @@ bool Rp2LogicCapture::inPost() const {
 // when there is one), packed to a byte a sample
 void Rp2LogicCapture::collect() {
   uint8_t *const segment = segment_ + static_cast<size_t>(completed_ % seg_count_) * samples_;
+  if (clock_pin_ >= 0) {   // the samples the DMA wrote (a stop: fewer), from the ring's start
+    const uint32_t got = samples_ - dma_hw->ch[dma_data_].transfer_count;
+    halt();
+    dma_channel_abort(static_cast<uint>(dma_data_));
+    for (uint32_t i = 0; i < got; ++i) {
+      uint8_t b = 0;
+      for (uint8_t l = 0; l < lines_; ++l) b |= static_cast<uint8_t>(((ring_[i] >> line_pins_[l]) & 1u) << l);
+      segment[i] = b;
+    }
+    kept_ = got;
+    seg_start_ns_ = start_ns_;   // the first edge's time: between the start and now
+    const uint64_t now = time_us_64() * 1000ull;
+    clock_unc_ns_ = now - start_ns_ > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<uint32_t>(now - start_ns_);
+    slots_[completed_ % seg_count_] = {seg_start_ns_, false};
+    return;
+  }
+  kept_ = samples_;
   const uint sm = static_cast<uint>(sm_);
   for (uint32_t t = micros(); !pio_sm_is_rx_fifo_empty(pio_, sm) && micros() - t < 1000;) {}
   busy_wait_us(2);   // the DMA's last word in
@@ -248,6 +365,11 @@ uint64_t Rp2LogicCapture::trackLatencyNs() const {
 
 size_t Rp2LogicCapture::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
+  uint8_t clock[6];   // external_clock (capture §3.8): max_hz(u32) edges(u8: rising, falling, both) qualifier(u8)
+  putU32(clock, kExtClockMaxHz);
+  clock[4] = 0b111;
+  clock[5] = 1;
+  w.put(cap::kTlvDescribeExternalClock, clock, sizeof clock);
   uint8_t roles[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
   w.roleChannels(roles, kMaxChannels, table_.allowedMask());
@@ -307,7 +429,7 @@ void Rp2LogicCapture::planRelease() {
 Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query) {
   // as the classic ESP32's sampler (OepSampler.cpp): the form, then the values, then the plan and the state
   static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger,
-                                   capture_tag::kTriggerOpts};
+                                   capture_tag::kTriggerOpts, cap::kTlvConfigureClock};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
@@ -315,9 +437,9 @@ Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size
   struct Item { uint8_t tag; size_t size; const uint8_t *v; bool critical; };
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
                   {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false},
-                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}};
+                  {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}, {cap::kTlvConfigureClock, 4, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
-       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6];
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &clock_tlv = items[7];
   for (Item &it : items) {
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -327,10 +449,16 @@ Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size
   if (refused(unknown_critical)) return unknown_critical;
   const uint8_t mode = mode_tlv.v[0];
   if (mode != cap::kModeOneShot && mode != cap::kModeRepeat) return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
+  // the external clock (§3.8): role edge qualifier_role(0xFF none) qualifier_level; a one-shot with an immediate trigger
+  const uint8_t *ext = clock_tlv.v;
+  if (ext && (ext[1] > 2 || ext[3] > 1 || ext[2] == ext[0] || mode != cap::kModeOneShot || (ext[1] == 2 && ext[2] != 0xFF) ||
+              (trigger_tlv.v && trigger_tlv.v[0] != cap::kTriggerImmediate)))
+    return Tail::refuse(cap::kTlvConfigureClock, clock_tlv.critical, out, capacity);
   const uint32_t clk = clock_get_hz(clk_sys);
   const uint32_t max_hz = clk / (kCyclesPerSample * kMinDivider);
-  const uint32_t rate = getU32(rate_tlv.v);
-  if (rate < kMinHz || rate > max_hz) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  const uint32_t rate = getU32(rate_tlv.v);   // with the clock: the fastest that may come, up to external_clock's max_hz
+  if (ext ? rate > kExtClockMaxHz : (rate < kMinHz || rate > max_hz))
+    return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   const Result misplaced = captureMisplaced(mode_tlv.v[0], ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv),
                                             ask(pretrigger_tlv), out, capacity);
   if (refused(misplaced)) return misplaced;
@@ -367,6 +495,9 @@ Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size
     if (pretrigger >= samples) return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
   }
   if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
+  if (ext && (ext[0] >= channels_ || (ext[2] != 0xFF && ext[2] >= channels_))) return wrongState(out, capacity);
+  const uint8_t lines = ext ? channels_ - 1 : channels_;   // the clock's role is no sample line
+  if (!lines) return Tail::refuse(cap::kTlvConfigureClock, clock_tlv.critical, out, capacity);
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
   // a whole divider: the rate paced is clk_sys / (3 x it), the nearest to the one asked at or above kMinDivider
@@ -377,6 +508,15 @@ Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size
   if (!query) {
     halt();
     if (!claim()) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // no PIO state machine / DMA
+    if (!ext) releaseClock();   // its state machine back while no clock is asked for
+    if (ext && !claimClock()) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);
+    lines_ = 0;
+    for (uint8_t k = 0; k < channels_; ++k)
+      if (!ext || k != ext[0]) line_pins_[lines_++] = pins_[k];
+    clock_pin_ = ext ? pins_[ext[0]] : -1;
+    clock_edge_ = ext ? ext[1] : 0;
+    qual_pin_ = ext && ext[2] != 0xFF ? pins_[ext[2]] : -1;
+    qual_level_ = ext ? ext[3] : 1;
     const uint32_t ring = samples + 1;   // the most a ring of this segment takes
     const uint32_t bytes = segs * samples;   // the slots
     if (capacity_ < ring || seg_capacity_ < bytes) {
@@ -408,12 +548,12 @@ Result Rp2LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size
   }
   TlvWriter w(out, capacity);
   uint8_t r[8];
-  putU32(r, clk / g);
-  putU32(r + 4, den_full / g);
+  putU32(r, ext ? 0 : clk / g);   // the clock's: 0 / 1, no time (§3.8)
+  putU32(r + 4, ext ? 1 : den_full / g);
   w.put(cap::kTlvConfigureAnswerActualRate, r, sizeof r);
-  uint8_t layout[2 + kMaxChannels] = {8, channels_};
-  for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = k;
-  w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + channels_);
+  uint8_t layout[2 + kMaxChannels] = {8, lines};
+  for (uint8_t k = 0; k < lines; ++k) layout[2 + k] = k;
+  w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + lines);
   w.u32(cap::kTlvConfigureAnswerActualSamples, samples);
   if (mode == cap::kModeRepeat) w.u32(cap::kTlvConfigureAnswerActualSegments, segs);
   return w.ok() ? completed(w.length()) : failed();
@@ -425,11 +565,12 @@ size_t Rp2LogicCapture::segmentInfo(uint8_t *out, uint32_t serial) const {
   const SlotInfo &slot = slots_[serial % seg_count_];
   putU32(out, serial);
   putU64(out + 4, static_cast<uint64_t>(serial) * samples_);
-  putU32(out + 12, samples_);
+  putU32(out + 12, clock_pin_ >= 0 ? kept_ : samples_);
   putU64(out + 16, slot.start_ns);
-  putU32(out + 24, 2000);   // the halt's interrupt against the clock read: a few us
+  putU32(out + 24, clock_pin_ >= 0 ? clock_unc_ns_ : 2000);   // the halt's interrupt against the clock read: a few us
   putU32(out + 28, trig_type_ ? pretrigger_ : 0xFFFFFFFFu);
   uint8_t flags = slot.slipped ? cap::kSegmentFlagSlipped : 0;
+  if (clock_pin_ >= 0 && kept_ < samples_) flags |= cap::kSegmentFlagShort;   // cut short by stop
   if (repeat()) flags |= cap::kSegmentFlagRearm | (serial ? cap::kSegmentFlagGap : 0);
   out[32] = flags;
   putU32(out + 33, generation_);
@@ -517,9 +658,10 @@ Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       if (boundRefused()) return boundInGroup(*this, out, capacity);
       poll();
       if (state_ == cap::kStateCapturing && !rep_wait_) {
-        // the samples after the trigger are a few ms at most: wait them out, the segment completes (capture §3.2)
-        for (uint32_t t = millis(); !finished() && millis() - t < 2000;) delay(1);
-        if (finished()) {
+        // the samples after the trigger are a few ms at most: wait them out, the segment completes (capture §3.2);
+        // on an external clock it may never come: what came is kept, cut short
+        for (uint32_t t = millis(); clock_pin_ < 0 && !finished() && millis() - t < 2000;) delay(1);
+        if (finished() || (clock_pin_ >= 0 && samples_ != dma_hw->ch[dma_data_].transfer_count)) {
           collect();
           const uint32_t serial = completed_++;
           if (subscribed_) {
@@ -548,7 +690,7 @@ Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       poll();
       out[0] = state_;
       putU32(out + 1, completed_);
-      putU64(out + 5, static_cast<uint64_t>(completed_) * samples_);
+      putU64(out + 5, clock_pin_ >= 0 && completed_ ? kept_ : static_cast<uint64_t>(completed_) * samples_);
       out[13] = slipped_ ? cap::kStatusFlagSlipped : 0;
       if (repeat() && rep_wait_ && state_ == cap::kStateCapturing) out[13] |= cap::kStatusFlagRearmWaiting;   // §3.2
       putU32(out + 14, generation_);
@@ -567,7 +709,7 @@ Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *
       if (capacity < 11) return failed();
       poll();
       // the segments kept: the last seg_count_ finished (a released one stays readable until its slot is used again)
-      const uint64_t have = static_cast<uint64_t>(completed_) * samples_;
+      const uint64_t have = clock_pin_ >= 0 && completed_ ? kept_ : static_cast<uint64_t>(completed_) * samples_;
       const uint64_t low = static_cast<uint64_t>(completed_ > seg_count_ ? completed_ - seg_count_ : 0) * samples_;
       uint64_t position = getU64(p + 4);
       uint8_t flags = 0;

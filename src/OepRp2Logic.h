@@ -124,6 +124,19 @@ class Rp2LogicCapture final : public Interface, public GroupTrack {
   uint32_t capacity_ = 0;   // the samples ring_ holds
   uint32_t seg_capacity_ = 0;   // the bytes segment_ holds
   uint64_t start_ns_ = 0, seg_start_ns_ = 0;
+  // The external clock (capture §3.8): a program of its own in another PIO, sampling on the clock's edges (one or both)
+  // with a qualifier as a jmp pin; a one-shot with an immediate trigger only
+  static constexpr uint32_t kExtClockMaxHz = 10000000;   // declared: the loop's cycles allow more; the bench's PWM
+  int clock_pin_ = -1, qual_pin_ = -1;
+  uint8_t clock_edge_ = 0, qual_level_ = 1;
+  int line_pins_[kMaxChannels] = {};   // the sampled lines: every planned role but the clock's
+  uint8_t lines_ = 0;
+  uint32_t clock_unc_ns_ = 0, kept_ = 0;   // the first edge's time known within this; the samples kept (a stop: fewer)
+  PIO clk_pio_ = nullptr;
+  int clk_sm_ = -1, clk_offset_ = -1, clk_end_ = 0;
+  bool claimClock();
+  void releaseClock();
+  bool beginClock();
   bool slipped_ = false, trig_seen_ = false;
   // repeat: the segments finished and released since the start (u32 serials, core §2.6), each slot's info
   uint32_t completed_ = 0, released_ = 0;

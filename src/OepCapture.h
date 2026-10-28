@@ -30,6 +30,7 @@
 
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
 #if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
+#include <driver/gpio_filter.h>
 #include <driver/parlio_rx.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
@@ -45,6 +46,14 @@ class LogicCapture final : public Interface, public GroupTrack {
   // A segment's start_uncertainty_ns (capture §2.2): PARLIO's first sample against the start's clock read - an edge
   // landed within 5 us of the GPIO write that made it (logic-capture §7.4), so +-5 us
   static constexpr uint32_t kStartUncertaintyNs = 5000;
+  // The external clock (capture §3.8): PARLIO's clock input, one edge (rising or falling), a qualifier as its level
+  // delimiter's valid line; a one-shot with an immediate trigger only. The fastest clock declared: not measured beyond
+  // the bench's (PWM on the same pin).
+  static constexpr uint32_t kExtClockMaxHz = 40000000;
+  // The glitch filter (capture §3.8): the GPIO flex filters (8) on the data pins, clocked by XTAL - 25 ns steps, a
+  // 6-bit window: 25 .. 1600 ns
+  static constexpr uint32_t kGlitchStepNs = 25, kGlitchMaxNs = 64 * kGlitchStepNs;
+  static constexpr uint8_t kGlitchFilters = 8;
   enum : uint8_t {
     kOpConfigure = reg::fixture_logic::kOpConfigure, kOpStart = reg::fixture_logic::kOpStart,
     kOpStop = reg::fixture_logic::kOpStop, kOpForce = reg::fixture_logic::kOpForce,
@@ -195,6 +204,15 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint16_t instance_;
   int pins_[kMaxChannels];
   uint8_t channels_ = 0;
+  // the lines PARLIO samples: every planned role but the external clock's, in role order
+  int data_pins_[kMaxChannels];
+  uint8_t data_lines_ = 0;
+  int clock_pin_ = -1, qual_pin_ = -1;   // the external clock and its qualifier (-1: none)
+  uint8_t clock_edge_ = 0, qual_level_ = 1;
+  uint32_t clock_unc_ns_ = 0;            // external clock: the first edge's time is known only within this
+  uint32_t glitch_ns_ = 0;               // the glitch filter in use (0: none)
+  gpio_glitch_filter_handle_t filters_[kGlitchFilters] = {};
+  void setGlitch(uint32_t ns);           // the filters on the data pins (0: off)
   size_t max_read_ = 1000;
   bool subscribed_ = false;
   // configured

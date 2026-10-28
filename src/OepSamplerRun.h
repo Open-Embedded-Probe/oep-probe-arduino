@@ -248,6 +248,75 @@ OEP_SAMPLER_INLINE Outcome run(Io &io, const Plan &plan, const volatile uint8_t 
   }
 }
 
+// The external clock (capture §3.8): the packed sample's bit 7 is the clock's line (the data lines below it); a sample
+// at each of its edges asked (0 rising, 1 falling, 2 both), with a qualifier (`qual_bit`, its level) only while that line
+// is at it. One exclusive window with interrupts off, ended by the clock at `span` cycles (the edges that came by then:
+// fewer samples than asked) or by abort. Format 3 (`timed`): each sample's entry is its delta in CPU cycles (the first
+// from the window's start) then its byte; else the byte alone.
+constexpr uint8_t kClockBit = 0x80;
+
+struct ClockPlan {
+  uint8_t *out;
+  uint32_t size;        // samples at most
+  uint8_t edge;         // 0 rising, 1 falling, 2 both
+  uint8_t qual_bit;     // 0: no qualifier
+  uint8_t qual_level;
+  bool timed;
+  uint32_t span;        // CPU cycles the window lasts at most
+};
+
+struct ClockOutcome {
+  bool aborted = false;
+  uint32_t samples = 0;
+  uint32_t first_cycles = 0;   // the first sample's cycles from the window's start
+  uint64_t window_ns = 0;      // the window's start
+};
+
+template <class Io>
+OEP_SAMPLER_INLINE ClockOutcome runClocked(Io &io, const ClockPlan &plan, const volatile uint8_t &control) {
+  ClockOutcome r;
+  gWireGate.beginWindow([&] { io.yield(); });
+  io.interruptsOff();
+  gWireGate.beginReading();
+  r.window_ns = io.nowNs();
+  const uint32_t start = io.cycles();
+  uint32_t before = start, i = 0, at = 0, looks = 0;
+  uint8_t last = io.read() & kClockBit;
+  while (i < plan.size) {
+    gWireGate.yieldFrame();
+    const uint8_t b = io.read();
+    const uint32_t t = io.cycles();
+    const uint8_t clk = b & kClockBit;
+    if (clk != last) {
+      last = clk;
+      if ((plan.edge == 2 || (plan.edge == 0) == (clk != 0)) &&
+          (!plan.qual_bit || ((b & plan.qual_bit) != 0) == (plan.qual_level != 0))) {
+        if (plan.timed) {
+          const uint32_t delta = t - before;
+          plan.out[at] = static_cast<uint8_t>(delta);
+          plan.out[at + 1] = static_cast<uint8_t>(delta >> 8);
+          plan.out[at + 2] = static_cast<uint8_t>(delta >> 16);
+          plan.out[at + 3] = static_cast<uint8_t>(delta >> 24);
+          at += 4;
+          before = t;
+        }
+        if (i == 0) r.first_cycles = t - start;
+        plan.out[at++] = static_cast<uint8_t>(b & ~kClockBit);
+        ++i;
+      }
+    }
+    if ((++looks & (kSpanCheck - 1)) == 0 && ((plan.span && t - start >= plan.span) || (control & kControlAbort))) {
+      r.aborted = (control & kControlAbort) != 0;
+      break;
+    }
+  }
+  gWireGate.endReading();
+  io.interruptsOn();
+  gWireGate.endWindow();
+  r.samples = i;
+  return r;
+}
+
 #undef OEP_SAMPLER_INLINE
 
 }  // namespace sampler
