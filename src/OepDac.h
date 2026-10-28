@@ -20,7 +20,7 @@ namespace oep {
 
 class FixtureDac final : public Interface {
  public:
-  static constexpr uint8_t kOwnerId = 11;
+  static constexpr uint8_t kOwnerId = owners::kDac;
   static constexpr uint8_t kMaxChannels = 2;
 #if defined(ARDUINO_ARCH_ESP32)
   static constexpr uint8_t kBits = 8;

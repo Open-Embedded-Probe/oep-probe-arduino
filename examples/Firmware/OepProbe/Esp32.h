@@ -136,7 +136,7 @@ static constexpr uint16_t kUnset = 0xfffe;                           // no pin c
 
 static oep::PinTable pins(kChannels);
 static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
-// PinTable owners: gpio 1, uart 2 (the I2C device is 3, the SPI device 6, the SWIO wire 0xf0, the analog 7)
+// Who holds a channel in pins: oep::owners (OepPinTable.h), the RVSWD wire beside SWIO kSecondWire
 
 // What a choice leaves to run later, each added only from its own oepAddX(): its loop work; the settings' fn at its place,
 // what comes last
@@ -215,7 +215,7 @@ void oepAddSwioConsole() {
 
 void oepAddGpio() {
   static oep::Slot<oep::FixtureGpio> gpio;
-  endpoint.add(gpio.make(pins, 0, 1));
+  endpoint.add(gpio.make(pins, 0, oep::owners::kGpio));
 }
 
 // The fixture UART's interrupt stays on loop()'s core (core 0): core 1 is the sampler's, with interrupts off for up to
@@ -227,7 +227,7 @@ static_assert((oep::kUartRxFifo - oep::kUartRxFifoFull) * 10ull * 1000000ull / o
               "the fixture UART's RX FIFO must outlast an interrupt-off SWIO frame twice over");
 void oepAddUart() {
   static oep::HeapSlot<oep::FixtureUart> uart;   // 9.4 KB: on the heap, the DRAM segment's static part being full
-  endpoint.add(uart.make(pins, Serial2, 0, 2));
+  endpoint.add(uart.make(pins, Serial2, 0, oep::owners::kUart));
   uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
 }
@@ -289,7 +289,7 @@ void oepAddSettings() {
 static constexpr uint64_t kAdc1 = kChannels & (0xffull << 32);
 void oepAddAnalog() {
   static oep::Slot<oep::AnalogCapture> analog;
-  analog.make(endpoint, kAdc1, 0).setPins(&pins, 7);   // its pads go analog: claimed against wires and settings
+  analog.make(endpoint, kAdc1, 0).setPins(&pins, oep::owners::kAnalog);   // its pads go analog: claimed against wires and settings
   endpoint.add(*analog);
   analogIn = &*analog;
   loopWork.add([] { analog->poll(); });
@@ -304,8 +304,7 @@ void oepAddGroup() {
   loopWork.add([] { group->poll(); });
 }
 
-// oep.wire.swd + oep.target.arm-adi on the GPIO registers (OepEspBitBang.h), any pair the host chooses (PinTable owner
-// 0xf1)
+// oep.wire.swd + oep.target.arm-adi on the GPIO registers (OepEspBitBang.h), any pair the host chooses (owners::kSwdWire)
 void oepAddSwd() {
   static oep::SwdPort swd{kUnset, kUnset};
   static oep::Slot<oep::WireSwd> wireSwd;
@@ -318,8 +317,8 @@ void oepAddSwd() {
   swdWireIn = &*wireSwd;
 }
 
-// oep.wire.rvswd (WCH CH32, 2 wires) on the GPIO registers (OepRvswdPhy.cpp), any output pair the host chooses (PinTable
-// owner 0xf2), its connections served by the SWIO wire's riscv-dm target (or one of its own without that wire), its
+// oep.wire.rvswd (WCH CH32, 2 wires) on the GPIO registers (OepRvswdPhy.cpp), any output pair the host chooses
+// (owners::kSecondWire), its connections served by the SWIO wire's riscv-dm target (or one of its own without that wire), its
 // console a place of the one oep.target.console (its choice made in the wire's: Console)
 struct RvswdParts {
   oep::RvswdPhy phy;
@@ -329,7 +328,7 @@ struct RvswdParts {
   explicit RvswdParts(uint64_t unusable) {
     port.pin_choice = kChannels & ~unusable & ~kInputOnly;
     port.pins = &pins;
-    port.pin_owner = 0xf2;
+    port.pin_owner = oep::owners::kSecondWire;
     port.reset_allowed = kChannels & ~unusable & ~kInputOnly;
   }
 };
@@ -406,7 +405,7 @@ void oepAddBridge() {
   oepWithPortSpeed();
 }
 
-// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (owners::kI2cController / kSpiController)
 void oepAddI2cController() {
   static oep::Slot<oep::I2cController> i2c;
   endpoint.add(i2c.make(pins));
@@ -417,7 +416,7 @@ void oepAddSpiController() {
   endpoint.add(spi.make(pins));
 }
 
-// oep.fixture.pwm (PinTable owner 10) / counter (it only listens: no owner)
+// oep.fixture.pwm (owners::kPwm) / counter (it only listens: no owner)
 void oepAddPwm() {
   static oep::Slot<oep::FixturePwm> pwm;
   endpoint.add(pwm.make(pins));
@@ -428,11 +427,15 @@ void oepAddCounter() {
   endpoint.add(counter.make(pins));
 }
 
-// oep.fixture.dac: the DAC on GPIO25 / 26 (PinTable owner 11)
+// oep.fixture.dac: the DAC on GPIO25 / 26 (owners::kDac)
 void oepAddDac() {
   static oep::Slot<oep::FixtureDac> dac;
   endpoint.add(dac.make(pins, (1ull << 25) | (1ull << 26)));
 }
+
+// The sketch's own parts (OepFeatures.h): none here; a sketch's oepUserSetup / oepUserLoop replace these
+__attribute__((weak)) void oepUserSetup(oep::Endpoint &, oep::PinTable &) {}
+__attribute__((weak)) void oepUserLoop() {}
 
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
 __attribute__((weak)) void oepWithBridge() { oepAddBridge(); }
@@ -493,6 +496,7 @@ void setup() {
   oepWithPwm();
   oepWithCounter();
   oepWithDac();
+  oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();
 }
 
@@ -508,4 +512,5 @@ void loop() {
   oep::BootGuard::poll();
   endpoint.poll();
   loopWork.run();
+  oepUserLoop();
 }

@@ -57,7 +57,7 @@ namespace oep {
 
 class P4SpiTarget final : public Interface {
  public:
-  static constexpr uint8_t kOwnerId = 6;
+  static constexpr uint8_t kOwnerId = owners::kSpiTarget;
   enum Role : uint8_t { kRoleSck = 1, kRoleMosi = 2, kRoleMiso = 3, kRoleCs = 4 };
   static constexpr size_t kMaxFrame = 64;
   static constexpr size_t kQueueDepth = 4;

@@ -130,7 +130,7 @@ class Blink final : public oep::Interface {
   }
 
  private:
-  static constexpr uint8_t kOwner = 1;   // this interface's id in the pin table
+  static constexpr uint8_t kOwner = oep::owners::kSketch;   // this interface's id in the pin table (a sketch's own: 0x80 and up)
   oep::PinTable &pins_;
   int pin_ = -1;
   uint8_t level_ = 0;

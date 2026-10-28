@@ -6,6 +6,15 @@ How the library is put together, and how to build your own probe or your own int
 examples open: `01.Basics/MinimalProbe` is the frame, `02.Interfaces/CustomInterface` the interface, and
 `Firmware/OepProbe` everything together.
 
+This is the full reference. Where to start instead:
+
+- New to it: [your first interface](your-first-interface.md) - an interface step by step, from one with no pins.
+- Adding your interface to the ready-made firmware, or leaving parts out of it: [firmware features](firmware-features.md).
+- Adding an `oep.*` interface to this library: [adding a standard interface](adding-a-standard-interface.md).
+
+Sections 1-5 and 8 are what every probe needs; 6, 7 and 11 are details for debug wires, shared serial ports and the
+chips' quirks - read them when you build those.
+
 ## 1. The shape of a probe
 
 ```text
@@ -125,7 +134,8 @@ class Blink final : public oep::Interface {
   holds with `kRejectUnavailable`. planApply changes nothing on the pin (an output idle keeps driving); the interface's
   first operation does. A debug wire's pins go to their free state whenever no connection holds them
   (`DmiPhy::free`).
-- Owner ids must differ between interfaces sharing a table (the Firmware sketches list theirs).
+- Owner ids must differ between interfaces sharing a table. The library's are one list, `oep::owners` (`OepPinTable.h`);
+  an interface of the sketch's own takes `oep::owners::kSketch` (0x80) and up.
 
 ## 5. The standard interfaces in this library
 
@@ -140,7 +150,10 @@ class Blink final : public oep::Interface {
 | `LogicCapture` / `SamplerCapture` | `oep.fixture.logic` | ESP32-P4 PARLIO / classic ESP32 GPIO sampler; level / edge triggers |
 | `AnalogCapture` | `oep.fixture.analog` | ADC channels in turn, one-shot, raw values, a threshold trigger (ESP32 continuous mode, RP2 FIFO + DMA); frontends, reference, factory calibration |
 | `CaptureGroup` (+ `GroupTrack`) | `oep.fixture.capture-group` | tracks started together; a capture that implements `GroupTrack` can be bound |
-| `P4I2cTarget`, `P4SpiTarget` | `oep.fixture.i2c-target` / `spi-target` | on the ESP-IDF I2C / SPI slaves |
+| `P4I2cTarget`, `P4SpiTarget`, `Rp2SpiTarget`, `Ch32SpiTarget` | `oep.fixture.i2c-target` / `spi-target` | on the ESP-IDF I2C / SPI slaves (the I2C one on the core's Wire slave elsewhere), an RP2 PIO state machine, the CH32 core's SPI slave |
+| `Rp2LogicCapture`, `Ch32LogicCapture` | `oep.fixture.logic` | an RP2 PIO state machine + DMA (repeat with rearm); the CH32 core's logic capture |
+| `I2cController`, `SpiController` | `oep.fixture.i2c-controller` / `spi-controller` | bit-banged on any GPIOs the host plans |
+| `FixturePwm`, `FixtureCounter`, `FixtureDac` | `oep.fixture.pwm` / `counter` / `dac` | LEDC / RP2 PWM slices; edges counted by GPIO interrupts (only listens, shares pins); the classic ESP32's and the CH32's DACs |
 | `Settings` + `Binds` | fn 0's settings (core §13) | settings saved by name in flash, applied at boot (§7) |
 
 Each source file starts with the spec sections it follows.

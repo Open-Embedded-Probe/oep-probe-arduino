@@ -270,7 +270,7 @@ struct SwioParts {
   SwioParts() {
     port.pin_choice = kChannels;
     port.pins = &pins;
-    port.pin_owner = 0xf2;
+    port.pin_owner = oep::owners::kSecondWire;
     port.reset_allowed = kChannels;
   }
 };
@@ -311,25 +311,25 @@ void oepAddSwd() {
 
 void oepAddGpio() {
   static oep::Slot<oep::FixtureGpio> gpio;
-  endpoint.add(gpio.make(pins, 0, 1));
+  endpoint.add(gpio.make(pins, 0, oep::owners::kGpio));
 }
 
 void oepAddUart() {
   static oep::Slot<oep::OepUart> port;
   static oep::Slot<oep::FixtureUart> uart;
-  endpoint.add(uart.make(pins, port.make(0), 0, 2));   // USART1 (Serial's)
+  endpoint.add(uart.make(pins, port.make(0), 0, oep::owners::kUart));   // USART1 (Serial's)
   uart->setRoleChannels(kChannels, kChannels);   // any enabled USART's route (its begin refuses another pair)
   uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
 }
 
-// oep.fixture.i2c-target on the core's Wire slave (PinTable owner 3)
+// oep.fixture.i2c-target on the core's Wire slave (owners::kI2cTarget)
 void oepAddI2c() {
   static oep::Slot<oep::P4I2cTarget> i2c;
   endpoint.add(i2c.make(pins));
 }
 
-// oep.fixture.analog on the core's CH32RVAdcStream: ADC1's inputs among the channels (PinTable owner 7). Its rates
+// oep.fixture.analog on the core's CH32RVAdcStream: ADC1's inputs among the channels (owners::kAnalog). Its rates
 // measured now, before a host: the first ADC input's pad goes analog for it, then floats again.
 void oepAddAnalog() {
 #if defined(OEP_ANALOG_CH32)
@@ -337,7 +337,7 @@ void oepAddAnalog() {
   for (int c = 0; c < 64; ++c)
     if (((kChannels >> c) & 1) && digitalPinHasADC(oep::platformPad(c))) adc |= uint64_t{1} << c;
   static oep::Slot<oep::AnalogCapture> analog;
-  analog.make(endpoint, adc, 0).setPins(&pins, 7);
+  analog.make(endpoint, adc, 0).setPins(&pins, oep::owners::kAnalog);
   analog->measureRates();
   endpoint.add(*analog);
   loopWork.add([] { analog->poll(); });
@@ -361,7 +361,7 @@ void oepAddCounter() {
 #endif
 }
 
-// oep.fixture.dac on the DAC pads the core names (CH32RV_DAC1_PIN / 2: PA4 / PA5 on a V307 / H417; PinTable owner 11)
+// oep.fixture.dac on the DAC pads the core names (CH32RV_DAC1_PIN / 2: PA4 / PA5 on a V307 / H417; owners::kDac)
 void oepAddDac() {
 #if defined(CH32RV_DAC1_PIN) && !defined(ARDUINO_CH32X035)
   uint64_t dac = 0;
@@ -377,7 +377,7 @@ void oepAddDac() {
 #endif
 }
 
-// oep.fixture.spi-target on the core's SPI slave (CH32RVSPISlave; PinTable owner 6)
+// oep.fixture.spi-target on the core's SPI slave (CH32RVSPISlave; owners::kSpiTarget)
 void oepAddSpi() {
 #if !defined(ARDUINO_CH32X035)
   static oep::Slot<oep::Ch32SpiTarget> spi;
@@ -407,7 +407,7 @@ void oepAddLink() {
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
 }
 
-// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (owners::kI2cController / kSpiController)
 void oepAddI2cController() {
   static oep::Slot<oep::I2cController> i2c;
   endpoint.add(i2c.make(pins));
@@ -417,6 +417,10 @@ void oepAddSpiController() {
   static oep::Slot<oep::SpiController> spi;
   endpoint.add(spi.make(pins));
 }
+
+// The sketch's own parts (OepFeatures.h): none here; a sketch's oepUserSetup / oepUserLoop replace these
+__attribute__((weak)) void oepUserSetup(oep::Endpoint &, oep::PinTable &) {}
+__attribute__((weak)) void oepUserLoop() {}
 
 // This build's choices (OepFeatures.h: a sketch's own replaces one). The CH32X035's 62 KiB take the WCH set (RVSWD,
 // console, gpio, link, HID: 62.4 KB); SWD, uart and the settings are left out by default.
@@ -523,6 +527,7 @@ void setup() {
   oepWithLogic();
   oepWithCounter();
   oepWithDac();
+  oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   oepWithSettings();
 }
 
@@ -530,4 +535,5 @@ void loop() {
   deliverEvents();   // the HID output reports' callback runs only here (the core's 0.3.0)
   endpoint.poll();
   loopWork.run();
+  oepUserLoop();
 }

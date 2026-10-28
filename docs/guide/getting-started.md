@@ -236,6 +236,8 @@ working alongside, and every connection shares the one lock. `03.Transports/Wifi
 
 ## Next
 
-- [Writing a probe](writing-a-probe.md): the library from the inside, your own interfaces.
+- [Firmware features](firmware-features.md): leave parts out of the released firmware, add your own interface to it.
+- [Your first interface](your-first-interface.md): your own interface, step by step.
+- [Writing a probe](writing-a-probe.md): the full reference to the library from the inside.
 - [Boards](boards.md): what each chip can do, building for a board with no released firmware.
 - The protocol: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec).

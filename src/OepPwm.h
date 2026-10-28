@@ -23,7 +23,7 @@ namespace oep {
 
 class FixturePwm final : public Interface {
  public:
-  static constexpr uint8_t kOwnerId = 10;
+  static constexpr uint8_t kOwnerId = owners::kPwm;
   static constexpr uint8_t kMaxChannels = 4;
   static constexpr uint32_t kMaxHz = 10000000;
   static constexpr uint32_t kMinHz = 10;

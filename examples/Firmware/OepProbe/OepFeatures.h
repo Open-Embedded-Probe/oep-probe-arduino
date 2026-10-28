@@ -10,7 +10,26 @@
 //
 // A left-out X links none of its code. Which X a chip has is its header's (an oepAddX() it does not define is not
 // there to call).
+//
+// The sketch's own interfaces go in the same way: a file of the sketch's own defines oepUserSetup (called once, after
+// the build's interfaces and before the saved settings are applied: add yours to the endpoint there, taking pins under
+// oep::owners::kSketch and up) and oepUserLoop (called each loop(), after the build's own work), e.g.
+//
+//   #include <OepEndpoint.h>
+//   #include "OepFeatures.h"
+//   static MyThing thing;                  // your oep::Interface (examples/02.Interfaces)
+//   void oepUserSetup(oep::Endpoint &endpoint, oep::PinTable &pins) { endpoint.add(thing); }
+//   void oepUserLoop() { thing.poll(); }
 #pragma once
+
+namespace oep {
+class Endpoint;
+class PinTable;
+}  // namespace oep
+
+// The sketch's own parts (none unless the sketch defines them)
+void oepUserSetup(oep::Endpoint &endpoint, oep::PinTable &pins);
+void oepUserLoop();
 
 // The transports (none is the probe's by the spec: transports §3), and the P4's DFU (outside OEP)
 void oepWithBulk();

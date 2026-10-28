@@ -233,6 +233,8 @@ oep linktest tcp://192.168.1.128:7450
 
 ## 次に
 
-- [probe を書く](writing-a-probe.ja.md): ライブラリの中身と、自分のインターフェース。
+- [firmware の機能](firmware-features.ja.md): 配布の firmware から機能を外す、自分のインターフェースを足す。
+- [はじめてのインターフェース](your-first-interface.ja.md): 自分のインターフェースを一歩ずつ。
+- [probe を書く](writing-a-probe.ja.md): ライブラリの中身の詳しい手引き。
 - [ボード](boards.ja.md): チップごとにできること、リリースされた firmware の無いボード向けのビルド。
 - プロトコル: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)。

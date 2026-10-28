@@ -6,6 +6,15 @@
 `01.Basics/MinimalProbe` が骨組み、`02.Interfaces/CustomInterface` がインターフェース、`Firmware/OepProbe` が全部を組み合わせた
 ものです。
 
+これは詳しい手引き（全体の参照）です。目的によっては、次から始めてください。
+
+- 初めての人: [はじめてのインターフェース](your-first-interface.ja.md)。ピンを使わないものから、一歩ずつ。
+- できあいの firmware に自分のインターフェースを足す、firmware から機能を外す: [firmware の機能](firmware-features.ja.md)。
+- このライブラリに `oep.*` のインターフェースを足す: [標準インターフェースを足す](adding-a-standard-interface.ja.md)。
+
+§1〜§5 と §8 はどの probe にも要ります。§6、§7、§11 は debug の線、共用するシリアルの口、チップごとの癖の詳しい話で、
+それらを作るときに読んでください。
+
 ## 1. probe の形
 
 ```text
@@ -118,7 +127,8 @@ class Blink final : public oep::Interface {
   `kRejectUnavailable` で断ります。planApply はピンを何も変えません（出力の idle は駆動を続けます）。変えるのは
   そのインターフェースの最初の操作です。debug wire のピンは、接続が持っていない間は空きの状態に戻ります
   （`DmiPhy::free`）。
-- 1 つの表を共有するインターフェースの持ち主の番号は、重ならないようにします（Firmware のスケッチに一覧があります）。
+- 1 つの表を共有するインターフェースの持ち主の番号は、重ならないようにします。ライブラリのものは `oep::owners`（`OepPinTable.h`）に
+  一覧があります。スケッチ自身のインターフェースは `oep::owners::kSketch`（0x80）から上を使います。
 
 ## 5. このライブラリの標準インターフェース
 
@@ -133,7 +143,10 @@ class Blink final : public oep::Interface {
 | `LogicCapture` / `SamplerCapture` | `oep.fixture.logic` | ESP32-P4 の PARLIO / classic ESP32 の GPIO の sampler。レベル / エッジのトリガ |
 | `AnalogCapture` | `oep.fixture.analog` | ADC のチャネルを順に、ワンショット、生の値、しきい値のトリガ（ESP32 は連続変換、RP2 は FIFO + DMA）。frontend、基準電圧、出荷時の較正 |
 | `CaptureGroup`（+ `GroupTrack`） | `oep.fixture.capture-group` | トラックを一緒に始める。`GroupTrack` を持つ capture を束ねられる |
-| `P4I2cTarget`、`P4SpiTarget` | `oep.fixture.i2c-target` / `spi-target` | ESP-IDF の I2C / SPI スレーブで実装 |
+| `P4I2cTarget`、`P4SpiTarget`、`Rp2SpiTarget`、`Ch32SpiTarget` | `oep.fixture.i2c-target` / `spi-target` | ESP-IDF の I2C / SPI スレーブ（I2C はほかのチップでは core の Wire のスレーブ）、RP2 の PIO、CH32 の core の SPI スレーブで実装 |
+| `Rp2LogicCapture`、`Ch32LogicCapture` | `oep.fixture.logic` | RP2 の PIO + DMA（rearm 付きの repeat）、CH32 の core のロジックキャプチャ |
+| `I2cController`、`SpiController` | `oep.fixture.i2c-controller` / `spi-controller` | host が plan で決めたどの GPIO でもビットを刻む |
+| `FixturePwm`、`FixtureCounter`、`FixtureDac` | `oep.fixture.pwm` / `counter` / `dac` | LEDC / RP2 の PWM スライス。GPIO の割り込みでエッジを数える（聞くだけで、ピンを共有する）。classic ESP32 と CH32 の DAC |
 | `Settings` + `Binds` | fn 0 の設定（core §13） | flash に名前で保存し、起動時に行う設定（§7） |
 
 各ソースファイルの冒頭に、従う仕様の節があります。

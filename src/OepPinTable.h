@@ -18,6 +18,25 @@
 
 namespace oep {
 
+// Who holds a channel (PinTable::claim's owner; 0 = nobody): one list for every part of this library, so no two parts in
+// one firmware share an id. A part of the sketch's own takes kSketch and up (to 0xef).
+namespace owners {
+constexpr uint8_t kGpio = 1;            // oep.fixture.gpio
+constexpr uint8_t kUart = 2;            // oep.fixture.uart (the first; kUart2 a second instance)
+constexpr uint8_t kI2cTarget = 3;       // oep.fixture.i2c-target
+constexpr uint8_t kUart2 = 5;
+constexpr uint8_t kSpiTarget = 6;       // oep.fixture.spi-target
+constexpr uint8_t kAnalog = 7;          // oep.fixture.analog (its pads go analog)
+constexpr uint8_t kI2cController = 8;   // oep.fixture.i2c-controller
+constexpr uint8_t kSpiController = 9;   // oep.fixture.spi-controller
+constexpr uint8_t kPwm = 10;            // oep.fixture.pwm
+constexpr uint8_t kDac = 11;            // oep.fixture.dac
+constexpr uint8_t kSketch = 0x80;       // the sketch's own: 0x80 - 0xef
+constexpr uint8_t kRiscvWire = 0xf0;    // a debug wire's live connection (DebugPort::pin_owner's default)
+constexpr uint8_t kSwdWire = 0xf1;      // SwdPort::pin_owner's default
+constexpr uint8_t kSecondWire = 0xf2;   // a second DebugPort beside the first (the SWIO wire next to RVSWD)
+}  // namespace owners
+
 class PinTable {
  public:
   static constexpr uint8_t kChannels = 64;

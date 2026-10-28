@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Adding interfaces made easier to get right. `oep::owners` (`OepPinTable.h`): every PinTable owner id of the library in
+  one list, the classes and the Firmware taking theirs from it (no id changed); a sketch's own take `owners::kSketch` (0x80)
+  and up (CustomInterface had used 1, gpio's). The Firmware takes the sketch's own interfaces: `oepUserSetup(endpoint,
+  pins)` / `oepUserLoop()` defined in a file beside OepProbe.ino (OepFeatures.h; weak and empty by default, no size
+  change). New example `02.Interfaces/HelloInterface` (an interface with no pins). Guides by reader: your first interface,
+  firmware features (choosing parts, adding your own), adding a standard interface (the contributors' checklist);
+  writing a probe points to them, its table of interfaces and the README's layout brought up to date, the README's spec
+  commit now the one in tests/vectors/SPEC_COMMIT.
+- (JA) インターフェースを足しやすく、間違えにくくした。`oep::owners`（`OepPinTable.h`）: ライブラリの PinTable の持ち主の番号を 1 つの
+  一覧にし、クラスと Firmware はそこから取る（番号は変えていない）。スケッチ自身のものは `owners::kSketch`（0x80）から上
+  （CustomInterface は gpio と同じ 1 を使っていた）。Firmware がスケッチ自身のインターフェースを受ける: OepProbe.ino の隣のファイルで
+  `oepUserSetup(endpoint, pins)` / `oepUserLoop()` を定義する（OepFeatures.h。既定は weak で空、大きさは変わらない）。新しい example
+  `02.Interfaces/HelloInterface`（ピンを使わないインターフェース）。読む人ごとの手引き: はじめてのインターフェース、firmware の機能（部品の
+  選択、自分のものを足す）、標準インターフェースを足す（貢献する人のチェックリスト）。probe を書くはそれらを案内し、インターフェースの表と
+  README の構成を今に合わせ、README の仕様の commit は tests/vectors/SPEC_COMMIT のものとした。
 - (EN) The classic ESP32's logic sampler takes repeat with rearm 1 (capture §2.1), as the RP2's: every segment a window of
   its own trigger (arm 1) into a slot, the sampling task started again once one is free (up to 16 slots; state 5 until
   release), rearm / gap flags, trigger records (§3.10, op triggers). Built only: NOT YET RUN on hardware (the bench's classic

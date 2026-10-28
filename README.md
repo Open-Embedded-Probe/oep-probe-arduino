@@ -149,16 +149,8 @@ the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (
 and the interfaces `interfaces/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
 no compatibility is promised.
 
-**The spec this implements: oep-spec commit `498ae95`** (no `v0.x` tag yet, versioning §6) - the 2026-10-06
-simplification: one 10-byte request header with session_id, TLV tag(u8) len(u16), sequences without element lengths,
-closed fixed forms, the `ops` describe tag on every fn (in its one canonical encoding), no resume (end releases
-everything the session created), the 59dd028 rule that an attach joining a live connection keeps the settings it does
-not carry, a193272 (a failed attach adds no user); and the 2026-10-06 structure (2e5dc4c - 498ae95): the core (fn 0)
-has no name and is not listed, its ops are confirm, list, describe, clock, open, end, keepalive and lock_state (clock
-0x04: boot_id and uptime_ns, no session needed); the plan is `oep.probe.plan` (plan_apply 0x01, plan_release 0x02,
-plan_roles), the restart `oep.probe.restart` (restart 0x01, restart_max_ms; every firmware offers it), the link test
-and port_speed `oep.probe.link`; subscribe / unsubscribe (0x30 / 0x32) are ops of the interface that sends the
-notifications (logic, analog, capture-group), there is no heartbeat, and only data is batched. Until the freeze the
+**The spec this implements: the oep-spec commit in `tests/vectors/SPEC_COMMIT`** (no `v0.x` tag yet, versioning §6),
+copied with `tools/sync_registry.sh`; what changed with each one is in [CHANGELOG.md](CHANGELOG.md). Until the freeze the
 Japanese text (`*.ja.md`) is the working text.
 
 The wire numbers are defined only in oep-spec's `registry/oep-v1.toml`; its generated header is copied to
@@ -174,14 +166,17 @@ one of them against this endpoint).
 | `src/OepBind.*` | what each serial port carries (a bind: one stream per port, held during a session and resumed where it stopped) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
 | `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepSettings.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture); the core's settings (core §13: the owners' items, initial values, labels unique but for case, saved by name in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
-| `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1) on the ESP-IDF I2C / SPI slaves (custom `io.github.ch32-riscv-ug.esp32.*` until 2026-09-30) |
-| `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table and idle states, Arduino core differences, frames) |
+| `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*`, `src/OepRp2SpiTarget.*`, `src/OepCh32SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1) on the ESP-IDF I2C / SPI slaves, an RP2 PIO state machine, the CH32 core's SPI slave |
+| `src/OepI2cController.*`, `src/OepSpiController.*`, `src/OepPwm.*`, `src/OepCounter.*`, `src/OepDac.*` | the fixtures that drive a target: `oep.fixture.i2c-controller` / `spi-controller` (bit-banged on any GPIOs), `pwm`, `counter`, `dac` |
+| `src/OepAnalog.*`, `src/OepRp2Logic.*`, `src/OepCh32Logic.*`, `src/OepCaptureGroup.*` | captures on each chip: `oep.fixture.analog`, the RP2's PIO and the CH32's logic `oep.fixture.logic`, `oep.fixture.capture-group` |
+| `src/OepChoice.h` | how the firmware makes each part a choice that links nothing when left out (`Slot`, `HeapSlot`, `Hooks`; see [firmware features](docs/guide/firmware-features.md)) |
+| `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table, its owners (`oep::owners`) and idle states, Arduino core differences, frames) |
 | `examples/` | the board firmware and examples to learn from: see [Examples](#examples) |
 | `tests/host/` | host tests of the portable parts (the serial-port reader, the endpoint's sharing rules, binds): `tests/host/run.sh` (g++) |
 | `tests/compile/`, `.github/workflows/tests.yml` | regression tests for P4/P4X profiles and release models; builds every P4 example with both profiles. Run `python3 tests/compile/test_profiles.py`; `tools/check_p4_firmware.py` checks firmware identity |
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` and its `tests/vectors/*.json` to `tests/vectors/` (`OEP_SPEC_REF` picks the commit) |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
-| `docs/guide/` | the guides (English and Japanese): getting started, writing a probe, boards |
+| `docs/guide/` | the guides (English and Japanese), by reader: [getting started](docs/guide/getting-started.md) (use a probe), [your first interface](docs/guide/your-first-interface.md) (beginners), [firmware features](docs/guide/firmware-features.md) (choose what the firmware has, add your own to it), [writing a probe](docs/guide/writing-a-probe.md) (the full reference), [adding a standard interface](docs/guide/adding-a-standard-interface.md) (contributors), [boards](docs/guide/boards.md) |
 | `docs/` | the rest: the examples plan and dated work records (history) |
 
 ## Examples
@@ -192,9 +187,10 @@ uses it.
 
 | Example | Boards (profiles) | What it shows |
 |---|---|---|
-| `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4) / P4X (esp32p4x), classic ESP32 (esp32) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host, a jig = its settings |
+| `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4) / P4X (esp32p4x), classic ESP32 (esp32), WCH CH32 (ch32x035, ch32v307, ch32h417) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host, a jig = its settings |
 | `01.Basics/MinimalProbe` | RP2040 / RP2350, classic ESP32 | the smallest probe: fn 0 (the core) alone, no interface - the endpoint, a transport, the describe |
 | `01.Basics/FixtureProbe` | RP2040 / RP2350, classic ESP32 | a test fixture: GPIO and a UART on pins the host plans (the pin table, owners, the plan) |
+| `02.Interfaces/HelloInterface` | RP2040 / RP2350, classic ESP32 | **your first interface**: a name, two ops, the lock - no pins |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350, classic ESP32 | **extending OEP**: your own interface under your own name - describe, the plan, ops, TLV tails |
 | `03.Transports/MultipleTransports` | ESP32-P4 / P4X | one endpoint on four USB transports at once (HS vendor bulk, HID, CDC, USB-Serial/JTAG), USB identity |
 | `03.Transports/WifiTcp` | classic ESP32 | OEP over TCP on Wi-Fi: the serial port and a TCP listener (three connections), the networks from the settings' wifi item, mDNS |

@@ -40,7 +40,7 @@ struct I2cHostBus {
 
 class I2cController final : public Interface {
  public:
-  static constexpr uint8_t kOwnerId = 8;
+  static constexpr uint8_t kOwnerId = owners::kI2cController;
   enum Role : uint8_t { kRoleSda = 1, kRoleScl = 2 };
   static constexpr size_t kMaxLength = 256;   // the bytes written and read in one transfer
 #if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_I2C_BUS)

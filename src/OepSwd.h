@@ -70,7 +70,7 @@ struct SwdPort {
   // pair above. swdio / swclk are then the pair the link is on, held in `pins` under pin_owner while it is live.
   uint64_t pin_choice = 0;
   PinTable *pins = nullptr;
-  uint8_t pin_owner = 0xf1;
+  uint8_t pin_owner = owners::kSwdWire;
   WireLossClock loss{};        // oep-if-debug §2: the live connection closes only once the wire is lost
   bool io_driven = false;      // the lines are driven (from a wake on, until they are let go)
   bool rest_free = false;      // oep-if-debug §2: no answer since the last exchange - the lines free between exchanges

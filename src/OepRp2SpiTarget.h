@@ -28,7 +28,7 @@ namespace oep {
 
 class Rp2SpiTarget final : public Interface {
  public:
-  static constexpr uint8_t kOwnerId = 6;
+  static constexpr uint8_t kOwnerId = owners::kSpiTarget;
   enum Role : uint8_t { kRoleSck = 1, kRoleMosi = 2, kRoleMiso = 3, kRoleCs = 4 };
   static constexpr size_t kMaxFrame = 64;
   static constexpr size_t kRxRoom = 256;        // a master past the armed length still clocked in (then the PIO stalls)

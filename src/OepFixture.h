@@ -42,7 +42,7 @@ class FixtureGpio final : public Interface {
   enum : uint8_t { kOpSet = reg::fixture_gpio::kOpSet, kOpRead = reg::fixture_gpio::kOpRead };
   static constexpr uint32_t kModes = 0x7f;   // modes 0-6, all of them (describe modes, u32 bit set)
   // owner: this instance's PinTable owner id (keeps it off the channels other fixtures hold).
-  FixtureGpio(PinTable &pins, uint16_t instance, uint8_t owner = 1) : pins_(pins), instance_(instance), owner_(owner) {}
+  FixtureGpio(PinTable &pins, uint16_t instance, uint8_t owner = owners::kGpio) : pins_(pins), instance_(instance), owner_(owner) {}
   const char *name() const override { return reg::fixture_gpio::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_gpio::kRevision; }
@@ -72,7 +72,7 @@ class FixtureUart final : public Interface, public BindSource {
   };
   static constexpr uint32_t kDefaultBaud = 115200, kMinBaud = 1200, kMaxBaud = 2000000;
   // owner: this instance's PinTable owner id (each UART instance needs its own so a release returns only its pins).
-  FixtureUart(PinTable &pins, OepUart &serial, uint16_t instance, uint8_t owner = 2)
+  FixtureUart(PinTable &pins, OepUart &serial, uint16_t instance, uint8_t owner = owners::kUart)
       : pins_(pins), serial_(serial), instance_(instance), owner_(owner), stream_(buffer_, kCapacity, marks_, kMarks) {}
   const char *name() const override { return reg::fixture_uart::kName; }
   uint16_t instance() const override { return instance_; }

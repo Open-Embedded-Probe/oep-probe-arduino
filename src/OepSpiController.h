@@ -35,7 +35,7 @@ struct SpiHostBus {
 
 class SpiController final : public Interface {
  public:
-  static constexpr uint8_t kOwnerId = 9;
+  static constexpr uint8_t kOwnerId = owners::kSpiController;
   enum Role : uint8_t { kRoleSck = 1, kRoleMosi = 2, kRoleMiso = 3, kRoleCs = 4 };
   static constexpr size_t kMaxLength = 256;   // the bytes of one request's transfers
 #if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_SPI_BUS)

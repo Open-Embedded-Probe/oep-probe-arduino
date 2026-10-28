@@ -171,8 +171,7 @@ static constexpr uint64_t kChannels = ((1ull << 55) - 1) & ~kReserved;
 static oep::PinTable pins(kChannels);
 static uint8_t probeTlv[256];   // with the firmware text's note of the boot before (BootGuard::lastBoot)
 static char serial_[20];
-// PinTable owners: gpio 1, uart1 2, uart2 5 (the I2C device is 3, the SPI device 6, the RVSWD wire 0xf0, the SWIO wire
-// 0xf2, the analog 7, the I2C controller 8, the SPI controller 9)
+// Who holds a channel in pins: oep::owners (OepPinTable.h), the second uart kUart2, the SWIO wire beside RVSWD kSecondWire
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the HS device (the
 // transports, in the describe's order), its loop work; the settings' fn at its place, what comes last
@@ -333,7 +332,7 @@ void oepAddConsole() {
 
 void oepAddGpio() {
   static oep::Slot<oep::FixtureGpio> gpio;
-  endpoint.add(gpio.make(pins, 0, 1));
+  endpoint.add(gpio.make(pins, 0, oep::owners::kGpio));
 }
 
 // The fixture UARTs' interrupts run on core 0 (FixtureUart::setInterruptCore): loop() runs on core 1, and its SWIO /
@@ -349,8 +348,8 @@ static constexpr int kUartCore = 0;
 static_assert(kUartCore != CONFIG_ARDUINO_RUNNING_CORE, "the fixture UARTs' interrupts must not share loop()'s core");
 void oepAddUart() {
   static oep::Slot<oep::FixtureUart> uart1, uart2;
-  uart1In = &uart1.make(pins, Serial1, 0, 2);
-  uart2In = &uart2.make(pins, Serial2, 1, 5);
+  uart1In = &uart1.make(pins, Serial1, 0, oep::owners::kUart);
+  uart2In = &uart2.make(pins, Serial2, 1, oep::owners::kUart2);
   uart1->setInterruptCore(kUartCore);   // before any plan begins them (applySaved)
   uart2->setInterruptCore(kUartCore);
   endpoint.add(*uart1);
@@ -420,7 +419,7 @@ static constexpr uint64_t kAdc1 = 0xffull << 16;
 void oepAddAnalog() {
   static oep::Slot<oep::AnalogCapture> analog;
   analogIn = &analog.make(endpoint, kAdc1, 0);
-  analog->setPins(&pins, 7);   // its pads go analog: claimed against wires and settings
+  analog->setPins(&pins, oep::owners::kAnalog);   // its pads go analog: claimed against wires and settings
   endpoint.add(*analog);   // after the settings: the fns before it keep their numbers
   loopWork.add([] { analog->poll(); });
 }
@@ -444,7 +443,7 @@ struct SwioParts {
   SwioParts() {
     port.pin_choice = kChannels;
     port.pins = &pins;
-    port.pin_owner = 0xf2;
+    port.pin_owner = oep::owners::kSecondWire;
     port.reset_allowed = kChannels;
   }
 };
@@ -471,8 +470,7 @@ void oepAddSwioConsole() {
   loopWork.add([] { console->poll(); });
 }
 
-// oep.wire.swd + oep.target.arm-adi on the GPIO registers (OepEspBitBang.h), any pair the host chooses (PinTable owner
-// 0xf1)
+// oep.wire.swd + oep.target.arm-adi on the GPIO registers (OepEspBitBang.h), any pair the host chooses (owners::kSwdWire)
 void oepAddSwd() {
   static oep::SwdPort swd{kUnset, kUnset};
   static oep::Slot<oep::WireSwd> wireSwd;
@@ -485,7 +483,7 @@ void oepAddSwd() {
   swdWireIn = &*wireSwd;
 }
 
-// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (owners::kI2cController / kSpiController)
 void oepAddI2cController() {
   static oep::Slot<oep::I2cController> i2c;
   endpoint.add(i2c.make(pins));
@@ -496,7 +494,7 @@ void oepAddSpiController() {
   endpoint.add(spi.make(pins));
 }
 
-// oep.fixture.pwm (PinTable owner 10) / counter (it only listens: no owner)
+// oep.fixture.pwm (owners::kPwm) / counter (it only listens: no owner)
 void oepAddPwm() {
   static oep::Slot<oep::FixturePwm> pwm;
   endpoint.add(pwm.make(pins));
@@ -511,6 +509,10 @@ void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
 }
+
+// The sketch's own parts (OepFeatures.h): none here; a sketch's oepUserSetup / oepUserLoop replace these
+__attribute__((weak)) void oepUserSetup(oep::Endpoint &, oep::PinTable &) {}
+__attribute__((weak)) void oepUserLoop() {}
 
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
 __attribute__((weak)) void oepWithBulk() { oepAddBulk(); }
@@ -609,6 +611,7 @@ void setup() {
   // disable items' channels, which are never touched (core §13.7: disable before anything else; applySaved
   // gives them back if the settings are not applied).
   oep::platformParkMask(kChannels & ~pins.disabledMask() & ~ownPins);
+  oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();
 }
 
@@ -616,4 +619,5 @@ void loop() {
   oep::BootGuard::poll();
   endpoint.poll();
   loopWork.run();
+  oepUserLoop();
 }

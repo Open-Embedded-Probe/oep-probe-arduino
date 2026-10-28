@@ -55,7 +55,7 @@ struct DebugPort {
   // 0 = the one fixed pair in swdio / swclk (a channel group). swdio / swclk are then the pair the link is on now, and a
   // live connection holds them in `pins` under pin_owner (core §8.1). A one-wire link keeps swclk 0xffff.
   uint64_t pin_choice = 0;
-  uint8_t pin_owner = 0xf0;
+  uint8_t pin_owner = owners::kRiscvWire;
   // Who uses the connection (oep-if-common §2): the host through attach, a slot (the settings (core §13)) through its
   // automatic attach or the console its bind opened. A host's detach drops only its own use; the link goes when nobody
   // uses it, or on a forced detach. The bits are the connections entry's users (registry connection_users).

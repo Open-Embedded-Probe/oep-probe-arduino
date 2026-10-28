@@ -140,15 +140,8 @@ ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につない�
 Open Embedded Probe（OEP）の probe を Arduino で書くためのライブラリと、各 probe のファームウェア（`examples/`）。
 v1（oep-spec の `docs/oep-core.ja.md`、`docs/oep-transports.ja.md` とインターフェースの `interfaces/oep-if-*.ja.md`）を話す。凍結の前の v1 で、凍結までは仕様が壊れることがある。破壊的変更を前提とする実験段階で、互換は約束しない。
 
-**実装している仕様: oep-spec の commit `498ae95`**（`v0.x` の tag はまだ無い。versioning §6）。2026-10-06 の単純化: session_id を
-持つ 10 byte の要求の見出し一つ、TLV は tag(u8) len(u16)、要素の長さの無い並び、閉じた固定の形、すべての fn の describe の
-`ops`（符号は 1 つだけの正規形）、再開なし（end はセッションが作ったものをすべて解放する）、59dd028 の、生きている connection に
-加わる attach は運ばない設定を変えないという規則、a193272（失敗した attach は users に加えない）。そして 2026-10-06 の構成
-（2e5dc4c - 498ae95）: 本体（fn 0）は名前を持たず list に載らない。その op は confirm、list、describe、clock、open、end、keepalive、
-lock_state（clock 0x04: boot_id と uptime_ns、セッション不要）。plan は `oep.probe.plan`（plan_apply 0x01、plan_release 0x02、
-plan_roles）、再起動は `oep.probe.restart`（restart 0x01、restart_max_ms。どのファームウェアも持つ）、線の試験と port_speed は
-`oep.probe.link`。subscribe / unsubscribe（0x30 / 0x32）は通知を送り出すインターフェース（logic、analog、capture-group）の op で、
-heartbeat は無く、まとめて送るのはデータだけ。凍結までは日本語の文（`*.ja.md`）が作業の文。
+**実装している仕様: `tests/vectors/SPEC_COMMIT` にある oep-spec の commit**（`v0.x` の tag はまだ無い。versioning §6）。
+`tools/sync_registry.sh` で写し、それぞれで何が変わったかは [CHANGELOG.md](CHANGELOG.md) にある。凍結までは日本語の文（`*.ja.md`）が作業の文。
 
 wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で、その生成物を `src/OepRegistry.h` に写している。仕様の共通の
 byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` がそのすべてをこの endpoint に当てる。
@@ -162,14 +155,17 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `src/OepBind.*` | シリアルの口に流すもの（bind: 口ごとに 1 本のストリーム、セッション中の停止と止めた位置からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepSettings.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）。core の設定（core §13: 項目の宣言、初期値、大小文字を区別しない一意の label、名前での保存。ESP32 は NVS、RP2040 / RP2350 は flash）。各ファイルの冒頭に対応する仕様の節がある |
-| `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1、ESP-IDF の I2C / SPI スレーブで実装。2026-09-30 までは独自の `io.github.ch32-riscv-ug.esp32.*`） |
-| `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表と空きの状態、Arduino の core の差、フレーム） |
+| `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*`、`src/OepRp2SpiTarget.*`、`src/OepCh32SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1。ESP-IDF の I2C / SPI スレーブ、RP2 の PIO、CH32 の core の SPI スレーブで実装） |
+| `src/OepI2cController.*`、`src/OepSpiController.*`、`src/OepPwm.*`、`src/OepCounter.*`、`src/OepDac.*` | target を動かす fixture: `oep.fixture.i2c-controller` / `spi-controller`（どの GPIO でもビットを刻む）、`pwm`、`counter`、`dac` |
+| `src/OepAnalog.*`、`src/OepRp2Logic.*`、`src/OepCh32Logic.*`、`src/OepCaptureGroup.*` | チップごとのキャプチャ: `oep.fixture.analog`、RP2 の PIO と CH32 の `oep.fixture.logic`、`oep.fixture.capture-group` |
+| `src/OepChoice.h` | firmware の各部品を、外せば何もリンクしない選択にする仕組み（`Slot`、`HeapSlot`、`Hooks`。[firmware の機能](docs/guide/firmware-features.ja.md)） |
+| `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表とその持ち主（`oep::owners`）と空きの状態、Arduino の core の差、フレーム） |
 | `examples/` | ボードの firmware と学ぶための example: [Example](#example) を参照 |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
 | `tests/compile/`, `.github/workflows/tests.yml` | P4 / P4X の profile と Release の model の回帰テスト、各 P4 対応 example を両 profile でビルド。`python3 tests/compile/test_profiles.py`、firmware の識別情報は `tools/check_p4_firmware.py` で検証 |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に、`tests/vectors/*.json` を `tests/vectors/` に写す（`OEP_SPEC_REF` で commit を選ぶ） |
 | `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
-| `docs/guide/` | 手引き（英語と日本語）: 使い始める、probe を書く、ボード |
+| `docs/guide/` | 手引き（英語と日本語）。読む人ごとに: [使い始める](docs/guide/getting-started.ja.md)（probe を使う）、[はじめてのインターフェース](docs/guide/your-first-interface.ja.md)（初めての人）、[firmware の機能](docs/guide/firmware-features.ja.md)（firmware が持つものを選ぶ、自分のものを足す）、[probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[標準インターフェースを足す](docs/guide/adding-a-standard-interface.ja.md)（ライブラリに貢献する人）、[ボード](docs/guide/boards.ja.md) |
 | `docs/` | そのほか: example の並べ方の案と、日付入りの作業記録（経緯） |
 
 ## Example
@@ -179,9 +175,10 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 
 | Example | ボード（profile） | 示すこと |
 |---|---|---|
-| `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、classic ESP32（esp32） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
+| `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、classic ESP32（esp32）、WCH CH32（ch32x035、ch32v307、ch32h417） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
 | `01.Basics/MinimalProbe` | RP2040 / RP2350、classic ESP32 | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
 | `01.Basics/FixtureProbe` | RP2040 / RP2350、classic ESP32 | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
+| `02.Interfaces/HelloInterface` | RP2040 / RP2350、classic ESP32 | **はじめてのインターフェース**: 名前、2 つの op、ロック。ピンは使わない |
 | `02.Interfaces/CustomInterface` | RP2040 / RP2350、classic ESP32 | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
 | `03.Transports/MultipleTransports` | ESP32-P4 / P4X | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
 | `03.Transports/WifiTcp` | classic ESP32 | Wi-Fi の TCP で OEP: シリアルの口と TCP の待ち受け（3 接続）、ネットワークは設定の wifi の項目から、mDNS |

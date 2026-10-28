@@ -195,12 +195,12 @@ void oepAddSwd() {
 
 void oepAddGpio() {
   static oep::Slot<oep::FixtureGpio> gpio;
-  endpoint.add(gpio.make(pins, 0, 1));
+  endpoint.add(gpio.make(pins, 0, oep::owners::kGpio));
 }
 
 void oepAddUart() {
   static oep::Slot<oep::FixtureUart> uart;
-  endpoint.add(uart.make(pins, Serial1, 0, 2));
+  endpoint.add(uart.make(pins, Serial1, 0, oep::owners::kUart));
   uart->setRoleChannels(oep::platformUartRxMask(0), oep::platformUartTxMask(0));   // Serial1 = UART0: the pins it reaches
   uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
@@ -248,13 +248,13 @@ void oepAddSettings() {
 static constexpr uint64_t kAdc = 0x7ull << 26;
 void oepAddAnalog() {
   static oep::Slot<oep::AnalogCapture> analog;
-  analog.make(endpoint, kAdc, 0).setPins(&pins, 7);   // PinTable owners: gpio 1, uart 2, the analog 7 (its pads go analog)
+  analog.make(endpoint, kAdc, 0).setPins(&pins, oep::owners::kAnalog);   // its pads go analog
   endpoint.add(*analog);
   analogIn = &*analog;
   loopWork.add([] { analog->poll(); });
 }
 
-// oep.fixture.i2c-target on arduino-pico's Wire slave (PinTable owner 3)
+// oep.fixture.i2c-target on arduino-pico's Wire slave (owners::kI2cTarget)
 void oepAddI2c() {
   static oep::Slot<oep::P4I2cTarget> i2c;
   endpoint.add(i2c.make(pins));
@@ -270,7 +270,7 @@ struct SwioParts {
   SwioParts() {
     port.pin_choice = kChannels;
     port.pins = &pins;
-    port.pin_owner = 0xf2;
+    port.pin_owner = oep::owners::kSecondWire;
     port.reset_allowed = kChannels;
   }
 };
@@ -320,7 +320,7 @@ void oepAddLink() {
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
 }
 
-// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (PinTable owners 8 / 9)
+// oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (owners::kI2cController / kSpiController)
 void oepAddI2cController() {
   static oep::Slot<oep::I2cController> i2c;
   endpoint.add(i2c.make(pins));
@@ -331,13 +331,13 @@ void oepAddSpiController() {
   endpoint.add(spi.make(pins));
 }
 
-// oep.fixture.spi-target on a PIO state machine (Rp2SpiTarget; PinTable owner 6) - built, not yet run on hardware
+// oep.fixture.spi-target on a PIO state machine (Rp2SpiTarget; owners::kSpiTarget) - built, not yet run on hardware
 void oepAddSpi() {
   static oep::Slot<oep::Rp2SpiTarget> spi;
   endpoint.add(spi.make(pins));
 }
 
-// oep.fixture.pwm (PinTable owner 10) / counter (it only listens: no owner)
+// oep.fixture.pwm (owners::kPwm) / counter (it only listens: no owner)
 void oepAddPwm() {
   static oep::Slot<oep::FixturePwm> pwm;
   endpoint.add(pwm.make(pins));
@@ -347,6 +347,10 @@ void oepAddCounter() {
   static oep::Slot<oep::FixtureCounter> counter;
   endpoint.add(counter.make(pins));
 }
+
+// The sketch's own parts (OepFeatures.h): none here; a sketch's oepUserSetup / oepUserLoop replace these
+__attribute__((weak)) void oepUserSetup(oep::Endpoint &, oep::PinTable &) {}
+__attribute__((weak)) void oepUserLoop() {}
 
 // This build's choices (OepFeatures.h: a sketch's own replaces one)
 __attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
@@ -438,6 +442,7 @@ void setup() {
   oepWithPwm();
   oepWithCounter();
   oepWithSpi();
+  oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();
 }
 
@@ -445,4 +450,5 @@ void loop() {
   oep::BootGuard::poll();
   endpoint.poll();
   loopWork.run();
+  oepUserLoop();
 }

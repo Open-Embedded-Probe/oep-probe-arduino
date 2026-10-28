@@ -44,7 +44,7 @@ namespace oep {
 
 class P4I2cTarget final : public Interface {
  public:
-  static constexpr uint8_t kOwnerId = 3;
+  static constexpr uint8_t kOwnerId = owners::kI2cTarget;
   enum Role : uint8_t { kRoleSda = 1, kRoleScl = 2 };
 #if defined(ARDUINO_ARCH_CH32RV)
   static constexpr size_t kMaxFrame = CH32RV_WIRE_BUFFER_SIZE < 128 ? CH32RV_WIRE_BUFFER_SIZE : 128;   // the core's Wire buffer
