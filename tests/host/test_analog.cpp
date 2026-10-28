@@ -181,7 +181,10 @@ static void testDescribe() {
     if (tag == ana::kTlvDescribeChannels) { channels = true; CHECK(len == 1 && d[at + kTlvHeader] == AnalogCapture::kMaxChannels); }
     if (tag == ana::kTlvDescribeFrontend) ++frontends;
     CHECK(tag < 0x40 || tag == ana::kTlvDescribeMode || tag == ana::kTlvDescribeRateRange ||
-          tag == ana::kTlvDescribeChannels || tag == ana::kTlvDescribeTrigger || tag == ana::kTlvDescribeFrontend);
+          tag == ana::kTlvDescribeChannels || tag == ana::kTlvDescribeTrigger || tag == ana::kTlvDescribeFrontend ||
+          tag == ana::kTlvDescribeFormats || tag == ana::kTlvDescribeCarriage);
+    if (tag == ana::kTlvDescribeFormats) CHECK(len == 1 && d[at + kTlvHeader] == ana::kDataFormatAnalogBlocks);
+    if (tag == ana::kTlvDescribeCarriage) CHECK(len == 9);
   }
   CHECK(modes == 1 && channels && frontends == 1);
 }
@@ -434,7 +437,66 @@ static void testLinked() {
   CHECK(rig.cap.trackCanJudge(grp::kTriggerCondEdge, 0, mid) == GroupTrack::kJudgeUnsupported);
 }
 
+// Data format 2 (capture §1.4) in one-shot: the answer's format and block, write_pos and every read the blocks of the
+// frames as they came (OepAnalogBlocks.h, checked against the shared vectors in test_vectors), read in pieces as well;
+// the carriage's refusals.
+static void testFormat2() {
+  namespace ab = analog_blocks;
+  auto request = [](std::initializer_list<Bytes> carriages, uint32_t block_max) {
+    Bytes p = configureRequest(10000, 32);
+    tlv(p, kCrit | ana::kTlvConfigureFormat, {ana::kDataFormatAnalogBlocks});
+    for (const Bytes &c : carriages) tlv(p, kCrit | ana::kTlvConfigureCarriage, c);
+    if (block_max) tlv(p, ana::kTlvConfigureBlockMax, u32(block_max));
+    return p;
+  };
+  auto carriage = [](uint8_t role, uint8_t kind, uint32_t d) { Bytes c = {role, kind}; const Bytes v = u32(d); c.insert(c.end(), v.begin(), v.end()); return c; };
+  Rig rig;
+  CHECK(rig.plan({26, 27}) == 0);
+  CHECK(ok(rig.op(ana::kOpConfigure, request({carriage(0, ab::kMinMax | ab::kSum, 8)}, 16))));
+  CHECK(hasTag(rig.out, ana::kTlvConfigureAnswerFormat) && hasTag(rig.out, ana::kTlvConfigureAnswerBlock));
+  CHECK(ok(rig.op(ana::kOpStart)));
+  const uint32_t generation = getU32(rig.out.data());
+  std::vector<uint16_t> frames;
+  for (uint32_t i = 0; i < 64; ++i) frames.push_back(static_cast<uint16_t>(i < 20 ? 100 + i : 4000 - i));
+  for (uint16_t v : frames) convert(1, v);
+  CHECK(ok(rig.op(ana::kOpStatus)) && rig.out[0] == ana::kStateDone);
+  ab::Plan plan;
+  plan.channels = 2;
+  plan.block = 16;
+  plan.kind[0] = ab::kMinMax | ab::kSum;
+  plan.d[0] = 8;
+  Bytes want;
+  for (uint32_t first = 0; first < 32; first += 16) {
+    uint8_t block[64];
+    want.insert(want.end(), block, block + ab::encode(plan, frames.data() + first * 2, 16, block));
+  }
+  CHECK(getU64(rig.out.data() + 5) == want.size());
+  CHECK(ok(rig.op(ana::kOpRead, readReq(generation, 0, 1000))) && getU16(rig.out.data() + 9) == want.size() &&
+        Bytes(rig.out.begin() + 11, rig.out.end()) == want);
+  Bytes pieces;   // a read from inside a block
+  for (uint64_t at = 0; at < want.size(); at += 7) {
+    CHECK(ok(rig.op(ana::kOpRead, readReq(generation, at, 7))));
+    pieces.insert(pieces.end(), rig.out.begin() + 11, rig.out.end());
+  }
+  CHECK(pieces == want);
+  // malformed: no bit, packed with another, d 0, a role twice; unsupported: past max_d (tag as received), a block_max
+  // under the D's; a role not in the plan: cause 6
+  for (const Bytes &c : {carriage(0, 0, 4), carriage(0, ab::kPacked | ab::kSum, 4), carriage(0, ab::kMinMax, 0)})
+    CHECK(rejectedAs(rig.op(ana::kOpConfigure, request({c}, 0)), kRejectMalformed));
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, request({carriage(0, ab::kSum, 4), carriage(0, ab::kMinMax, 4)}, 0)),
+                   kRejectMalformed));
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, request({carriage(0, ab::kMinMax, 1024)}, 0)), kRejectUnsupported) &&
+        rig.out.size() == 1 && rig.out[0] == (kCrit | ana::kTlvConfigureCarriage));
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, request({carriage(0, ab::kMinMax, 32)}, 16)), kRejectUnsupported) &&
+        rig.out[0] == ana::kTlvConfigureBlockMax);
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, request({carriage(3, ab::kMinMax, 4)}, 0)), kRejectUnavailable));
+  Bytes plain = configureRequest(10000, 32);   // carriage without format 2
+  tlv(plain, kCrit | ana::kTlvConfigureCarriage, carriage(0, ab::kMinMax, 4));
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, plain), kRejectMalformed));
+}
+
 int main() {
+  testFormat2();
   testTriggerIndex();
   testStop();
   testHole();

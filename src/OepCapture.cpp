@@ -1133,10 +1133,9 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   putU32(mode + 1, kSegmentBytes * 8);
   putU32(mode + 5, kInfos);
   w.put(cap::kTlvDescribeMode, mode, sizeof mode);
-  uint8_t range[9];
+  uint8_t range[8];   // min_hz(u32) max_hz(u32) (capture §3.5)
   putU32(range, kMinHz);
   putU32(range + 4, kSourceHz);
-  range[8] = 1;                                    // any value in range (fractional divider)
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);   // max(u8)
   // immediate, level, edge (one-shot and repeat), linked (one-shot); the most pretrigger the ring can give back (the

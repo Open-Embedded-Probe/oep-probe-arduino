@@ -114,7 +114,7 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   putU32(mode + 5, kStreamSegments);
   w.put(ana::kTlvDescribeMode, mode, sizeof mode);
 #endif
-  uint8_t range[9];
+  uint8_t range[8];   // min_hz(u32) max_hz(u32) (capture §3.5)
 #if defined(OEP_ANALOG_CH32)
   putU32(range, gStepCount ? gSteps[gStepCount - 1] : 0);   // the slowest and the fastest step, measured at boot
   putU32(range + 4, gStepCount ? gSteps[0] : 0);
@@ -122,7 +122,6 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
   putU32(range, kMinTotalHz);
   putU32(range + 4, kMaxTotalHz);
 #endif
-  range[8] = 0;
   w.put(ana::kTlvDescribeRateRange, range, sizeof range);   // one channel (more share the ADC: configure says)
   w.u8(ana::kTlvDescribeChannels, kMaxChannels);             // max(u8)
   uint8_t trig[9];   // types(u32) max_pretrigger(u32) opts(u8)
@@ -131,13 +130,19 @@ size_t AnalogCapture::describe(uint8_t *out, size_t capacity) {
                  maxPretrigger(), kTriggerOpts);
   w.put(ana::kTlvDescribeTrigger, trig, sizeof trig);
   for (const Frontend &f : kFrontends) {
-    uint8_t v[13];
+    uint8_t v[9];   // frontend(u8) range_min_mv(i32) range_max_mv(i32) (capture §3.5)
     v[0] = f.number;
     putU32(v + 1, static_cast<uint32_t>(f.min_mv));
     putU32(v + 5, static_cast<uint32_t>(f.max_mv));
-    putU32(v + 9, f.attenuation_mdb);
     w.put(ana::kTlvDescribeFrontend, v, sizeof v);
   }
+  // format 2 in one-shot (capture §1.4): packed, minmax and sum, D up to the longest block
+  const uint8_t formats[] = {ana::kDataFormatAnalogBlocks};
+  w.put(ana::kTlvDescribeFormats, formats, sizeof formats);
+  uint8_t carriage[9] = {analog_blocks::kPacked | analog_blocks::kMinMax | analog_blocks::kSum};
+  putU32(carriage + 1, 2);
+  putU32(carriage + 5, analog_blocks::kMaxBlock);
+  w.put(ana::kTlvDescribeCarriage, carriage, sizeof carriage);
   // no features: revision 1 defines no bit (query, force, subscribe and unsubscribe are in the ops tag)
   return w.ok() ? w.length() : 0;
 }
@@ -196,6 +201,7 @@ void AnalogCapture::planRelease() {
 void AnalogCapture::forget() {
   state_ = ana::kStateUnconfigured;
   mode_ = ana::kModeOneShot;
+  format_ = ana::kDataFormatPacked;
   frames_ = samples_ = 0;
   short_ = trig_slipped_ = follow_ = segment_ = lost_ = linked_ = false;
   trig_type_ = 0;
@@ -216,7 +222,8 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   // changes (core §4.3): the form, then the values, then the plan, the group and the state (unavailable).
   static const uint8_t kKnown[] = {ana::kTlvConfigureMode, ana::kTlvConfigureRate, ana::kTlvConfigureSamples,
                                    ana::kTlvConfigureSegments, ana::kTlvConfigureTrigger, ana::kTlvConfigurePretrigger,
-                                   ana::kTlvConfigureFrontend, ana::kTlvConfigureTriggerOpts};
+                                   ana::kTlvConfigureFrontend, ana::kTlvConfigureTriggerOpts, ana::kTlvConfigureFormat,
+                                   ana::kTlvConfigureCarriage, ana::kTlvConfigureBlockMax};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(payload, length, kKnown, out, capacity, &unknown_critical);
@@ -225,9 +232,11 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   Item items[] = {{ana::kTlvConfigureMode, 1, nullptr, false},     {ana::kTlvConfigureRate, 4, nullptr, false},
                   {ana::kTlvConfigureSamples, 4, nullptr, false},  {ana::kTlvConfigureSegments, 4, nullptr, false},
                   {ana::kTlvConfigureTrigger, 6, nullptr, false},  {ana::kTlvConfigurePretrigger, 4, nullptr, false},
-                  {ana::kTlvConfigureTriggerOpts, kTriggerOptsBytes, nullptr, false}};
+                  {ana::kTlvConfigureTriggerOpts, kTriggerOptsBytes, nullptr, false},
+                  {ana::kTlvConfigureFormat, 1, nullptr, false},   {ana::kTlvConfigureBlockMax, 4, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
-       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6];
+       &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &format_tlv = items[7],
+       &block_max_tlv = items[8];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -244,6 +253,26 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
       if ((raw & ~kTagCritical) != ana::kTlvConfigureFrontend) continue;
       if (vlen != 2) return rejected(kRejectMalformed);
       if (v[0] < 32 && ((roles >> v[0]) & 1)) return rejected(kRejectMalformed);   // two for the same role
+      if (v[0] < 32) roles |= 1u << v[0];
+    }
+  }
+  // carriage(role u8, kind u8, d u32), repeated (capture §3.3): d 0, a kind with no bit or packed with another, a role
+  // twice, carriage without format 1 / 2 - malformed; the kinds as received for the checks below
+  const uint8_t format = format_tlv.v ? format_tlv.v[0] : ana::kDataFormatPacked;
+  {
+    size_t at = 0, vlen = 0;
+    uint8_t raw = 0;
+    const uint8_t *v = nullptr;
+    uint32_t roles = 0;
+    while (tail.next(at, raw, v, vlen)) {
+      if ((raw & ~kTagCritical) != ana::kTlvConfigureCarriage) continue;
+      if (vlen != 6) return rejected(kRejectMalformed);
+      const uint8_t kind = v[1];
+      const bool reduced = kind & (analog_blocks::kMinMax | analog_blocks::kSum);
+      if (!getU32(v + 2) || !kind || ((kind & analog_blocks::kPacked) && reduced) ||
+          (v[0] < 32 && ((roles >> v[0]) & 1)) ||
+          (format != ana::kDataFormatLogicBlocks && format != ana::kDataFormatAnalogBlocks))
+        return rejected(kRejectMalformed);
       if (v[0] < 32) roles |= 1u << v[0];
     }
   }
@@ -306,6 +335,45 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
     if (pretrigger > maxPretrigger() || pretrigger + kPretriggerRoom > samples)
       return Tail::refuse(ana::kTlvConfigurePretrigger, pretrigger_tlv.critical, out, capacity);
   }
+  // format 2 in one-shot only (a value this probe cannot honour, capture §3.3); the carriages it declares, its block
+  if (format != ana::kDataFormatPacked && (format != ana::kDataFormatAnalogBlocks || stream))
+    return Tail::refuse(ana::kTlvConfigureFormat, format_tlv.critical, out, capacity);
+  uint8_t kinds[kMaxChannels] = {analog_blocks::kPacked, analog_blocks::kPacked, analog_blocks::kPacked,
+                                 analog_blocks::kPacked};   // by role
+  uint32_t ds[kMaxChannels] = {1, 1, 1, 1};
+  uint32_t unit = 8;                                        // L: a multiple of 8 and of every D (§1.4)
+  uint8_t first_carriage = 0;
+  {
+    size_t at = 0, vlen = 0;
+    uint8_t raw = 0;
+    const uint8_t *v = nullptr;
+    while (tail.next(at, raw, v, vlen)) {
+      if ((raw & ~kTagCritical) != ana::kTlvConfigureCarriage) continue;
+      const uint32_t d = getU32(v + 2);
+      if (v[1] & ~(analog_blocks::kPacked | analog_blocks::kMinMax | analog_blocks::kSum) || d > analog_blocks::kMaxBlock)
+        return unsupportedTag(out, capacity, raw);
+      if (!first_carriage) first_carriage = raw;
+      if (v[0] >= kMaxChannels) continue;                   // not in the plan: cause 6 below
+      kinds[v[0]] = v[1];
+      if (v[1] != analog_blocks::kPacked) {
+        ds[v[0]] = d;
+        uint32_t a = unit, b = d;                           // lcm(unit, d)
+        while (b) { const uint32_t t = a % b; a = b; b = t; }
+        unit = unit / a * d;
+      }
+    }
+  }
+  uint32_t block = 0;
+  if (format == ana::kDataFormatAnalogBlocks) {
+    const uint32_t most = block_max_tlv.v && getU32(block_max_tlv.v) < analog_blocks::kMaxBlock ? getU32(block_max_tlv.v)
+                                                                                               : analog_blocks::kMaxBlock;
+    block = unit <= analog_blocks::kMaxBlock ? most / unit * unit : 0;
+    if (!block) {
+      if (block_max_tlv.v && getU32(block_max_tlv.v) < unit)
+        return Tail::refuse(ana::kTlvConfigureBlockMax, block_max_tlv.critical, out, capacity);
+      return unsupportedTag(out, capacity, first_carriage);
+    }
+  }
   uint8_t chosen[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) chosen[k] = kWidest;
   {   // frontend(role u8, frontend u8): a role it does not have or not planned, a frontend it does not declare
@@ -321,6 +389,13 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   // no plan, or a trigger's role not in it (type 0's role is not looked at): unavailable cause 6 (capture §3.2, §3.3)
   const bool roled = trig_type != ana::kTriggerImmediate && trig_type != ana::kTriggerLinked;
   if (!channels_ || (roled && trig_role >= channels_)) return wrongState(out, capacity);
+  {   // a carriage's role not in the plan: cause 6 (capture §3.3)
+    size_t at = 0, vlen = 0;
+    uint8_t raw = 0;
+    const uint8_t *v = nullptr;
+    while (tail.next(at, raw, v, vlen))
+      if ((raw & ~kTagCritical) == ana::kTlvConfigureCarriage && v[0] >= channels_) return wrongState(out, capacity);
+  }
   if (!query && bound()) return boundInGroup(*this, out, capacity);   // the group's now (cause 4)
   if (!query && (state_ == ana::kStateCapturing || state_ == ana::kStateWaiting)) return wrongState(out, capacity);
   // the actual rate
@@ -381,6 +456,14 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
 #endif
     memcpy(order_, order, sizeof order_);
     for (uint8_t m = 0; m < channels_; ++m) if (order_[m] == trig_role) trig_slot_ = m;
+    format_ = format;
+    blocks_ = analog_blocks::Plan();
+    blocks_.channels = channels_;
+    blocks_.block = block;
+    for (uint8_t m = 0; m < channels_; ++m) {   // the carriage by frame slot (the layout's order)
+      blocks_.kind[m] = kinds[order[m]];
+      blocks_.d[m] = ds[order[m]];
+    }
     frames_ = 0;
     segment_ = false;   // the buffer is the new configuration's
     state_ = ana::kStateConfigured;
@@ -394,6 +477,10 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
   uint8_t layout[4 + kMaxChannels] = {16, 0, 12, channels_};
   for (uint8_t m = 0; m < channels_; ++m) layout[4 + m] = order[m];
   w.put(ana::kTlvConfigureAnswerLayout, layout, 4u + channels_);
+  if (format == ana::kDataFormatAnalogBlocks) {   // format and block: always with format 2 (§3.3)
+    w.u8(ana::kTlvConfigureAnswerFormat, format);
+    w.u32(ana::kTlvConfigureAnswerBlock, block);
+  }
   // one-shot: actual_samples, no actual_segments; streaming: neither, and stream_buffer (capture §3.3)
   if (stream) w.u32(ana::kTlvConfigureAnswerStreamBuffer, samples * channels_ * 2u * kStreamSegments);
   else w.u32(ana::kTlvConfigureAnswerActualSamples, samples);
@@ -1243,6 +1330,33 @@ size_t AnalogCapture::segmentInfo(uint8_t *out) const {   // the segment record 
   return 37;
 }
 
+// ---- format 2 ------------------------------------------------------------------------------------------------------
+
+uint64_t AnalogCapture::streamEnd() const {
+  if (format_ == ana::kDataFormatAnalogBlocks) return analog_blocks::segmentBytes(blocks_, frames_);
+  return static_cast<uint64_t>(frames_) * channels_ * 2u;
+}
+
+// The segment's format 2 bytes position .. position + take - 1: each block that holds some of them encoded in turn.
+size_t AnalogCapture::readBlocks(uint64_t position, size_t take, uint8_t *out) const {
+  static uint8_t scratch[analog_blocks::kMaxChannels * analog_blocks::kMaxBlock * 2];   // a block's bytes, at most
+  const size_t whole = analog_blocks::blockBytes(blocks_, blocks_.block);
+  uint64_t block = position / whole;
+  size_t done = 0;
+  while (done < take) {
+    const uint32_t first = static_cast<uint32_t>(block * blocks_.block);
+    if (first >= frames_) break;
+    const uint32_t r = frames_ - first < blocks_.block ? frames_ - first : blocks_.block;
+    const size_t len = analog_blocks::encode(blocks_, buffer_ + static_cast<size_t>(first) * channels_, r, scratch);
+    const uint64_t at = block * whole;                      // every block before it is whole
+    const size_t from = static_cast<size_t>(position + done - at), n = std::min(len - from, take - done);
+    memcpy(out + done, scratch + from, n);
+    done += n;
+    ++block;
+  }
+  return done;
+}
+
 // ---- the operations -----------------------------------------------------------------------------------------------
 
 Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity) {
@@ -1278,7 +1392,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       out[0] = state_;
       // streaming: the segments finished (dropped ones counted) and every frame's bytes; else the one segment
       putU32(out + 1, streaming() ? (seg_frames_ ? frames_ / seg_frames_ : 0) : segment_ ? 1 : 0);
-      putU64(out + 5, static_cast<uint64_t>(frames_) * channels_ * 2u);
+      putU64(out + 5, streamEnd());
 #if defined(OEP_ANALOG_DRAINED)
       out[13] = (overflow_ || overflow_seen_ || trig_slipped_ || lost_ || stream_dropped_) ? ana::kStatusFlagDropped : 0;   // bit0 conversions or a segment lost
 #else
@@ -1300,7 +1414,7 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       const uint64_t position = getU64(p + 4);
       const uint32_t most = getU16(p + 12);
       // no plan or configuration (released: the data went with it): nothing to read
-      const uint64_t end = state_ == ana::kStateUnconfigured || !buffer_ ? 0 : static_cast<uint64_t>(frames_) * channels_ * 2u;
+      const uint64_t end = state_ == ana::kStateUnconfigured || !buffer_ ? 0 : streamEnd();
       if (capacity < 11) return failed();
       if (streaming()) {   // streaming: the data goes as pushes, nothing kept to read back (gap, len 0)
         putU64(out, position);
@@ -1316,7 +1430,8 @@ Result AnalogCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *ou
       putU64(out, position);
       out[8] = position + take < end ? reg::common::kReadFlagsMore : 0;
       putU16(out + 9, static_cast<uint16_t>(take));
-      if (take) memcpy(out + 11, reinterpret_cast<const uint8_t *>(buffer_) + position, take);   // little endian
+      if (take && format_ == ana::kDataFormatAnalogBlocks) readBlocks(position, take, out + 11);
+      else if (take) memcpy(out + 11, reinterpret_cast<const uint8_t *>(buffer_) + position, take);   // little endian
       return completed(11 + take);
     }
     case ana::kOpSegments: {   // from_serial(u32) -> more(u8) count(u8) count x segment [TLV]

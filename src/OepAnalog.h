@@ -33,6 +33,7 @@
 #include <Arduino.h>
 
 #include "Oep.h"
+#include "OepAnalogBlocks.h"
 #include "OepCaptureGroup.h"
 #include "OepPinTable.h"
 
@@ -217,6 +218,11 @@ class AnalogCapture final : public Interface, public GroupTrack {
   // (rule 1: the stream position skips it, status flags bit0). Positions are frame x channels x 2, the dropped counted.
   static constexpr uint32_t kStreamSegmentBytes = 8192, kStreamSegments = 8;
   uint8_t mode_ = reg::fixture_analog::kModeOneShot;
+  // data format 2 (capture §1.4, one-shot): the frames kept as they came, the blocks a read asks for encoded then
+  uint8_t format_ = reg::fixture_analog::kDataFormatPacked;
+  analog_blocks::Plan blocks_;
+  uint64_t streamEnd() const;   // write_pos: the segment's bytes in the format in use
+  size_t readBlocks(uint64_t position, size_t take, uint8_t *out) const;
   bool streaming() const { return mode_ == reg::fixture_analog::kModeStreaming; }
   uint32_t seg_frames_ = 0;                 // a streaming segment's frames
   volatile uint32_t sent_seg_ = 0;          // the segment being pushed (loop()) ...

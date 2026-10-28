@@ -48,10 +48,9 @@ size_t Ch32LogicCapture::describe(uint8_t *out, size_t capacity) {
   putU32(mode + 1, kMaxSamples);
   putU32(mode + 5, 1);
   w.put(cap::kTlvDescribeMode, mode, sizeof mode);
-  uint8_t range[9];
+  uint8_t range[8];   // min_hz(u32) max_hz(u32) (capture §3.5)
   putU32(range, kMinHz);
   putU32(range + 4, F_CPU / dividerOf(kMaxHz));
-  range[8] = 0;   // not any value: F_CPU / a whole divider
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);
   uint8_t trig[9];

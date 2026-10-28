@@ -39,6 +39,7 @@
 #include <esp_heap_caps.h>
 #include <freertos/queue.h>
 
+#include "OepAnalogBlocks.h"
 #include "OepLogicBlocks.h"
 #include "test_ids.h"
 #include "OepCapture.h"
@@ -1648,6 +1649,42 @@ static void testLogicBlocks() {
   }
 }
 
+// capture_formats.json analog_blocks (capture §1.4): the firmware's format 2 encoder (OepAnalogBlocks.h) gives each
+// stream byte for byte, and its size is the one the segment's length is worked out with.
+static void testAnalogBlocks() {
+  const Json v = load("capture_formats.json");
+  for (const Json &c : v["analog_blocks"].items) {
+    ++cases;
+    oep::analog_blocks::Plan plan;
+    plan.channels = static_cast<uint8_t>(c["channels"].items.size());
+    plan.bits = static_cast<uint8_t>(c["b"].number);
+    plan.block = static_cast<uint32_t>(c["L"].number);
+    for (uint8_t m = 0; m < plan.channels; ++m) {
+      uint8_t kind = 0;
+      for (const Json &k : c["kinds"].items[m].items)
+        kind |= k.string == "packed" ? oep::analog_blocks::kPacked : k.string == "minmax" ? oep::analog_blocks::kMinMax
+                                                                                          : oep::analog_blocks::kSum;
+      plan.kind[m] = kind;
+      plan.d[m] = static_cast<uint32_t>(c["d"].items[m].number);
+    }
+    const size_t n = c["channels"].items[0].items.size();
+    std::vector<uint16_t> frames(n * plan.channels);
+    for (size_t f = 0; f < n; ++f)
+      for (uint8_t m = 0; m < plan.channels; ++m)
+        frames[f * plan.channels + m] = static_cast<uint16_t>(c["channels"].items[m].items[f].number);
+    Bytes got;
+    for (size_t first = 0; first < n; first += plan.block) {
+      const uint32_t r = static_cast<uint32_t>(n - first < plan.block ? n - first : plan.block);
+      uint8_t out[2048];
+      const size_t len = oep::analog_blocks::encode(plan, frames.data() + first * plan.channels, r, out);
+      CHECK(len == oep::analog_blocks::blockBytes(plan, r));
+      got.insert(got.end(), out, out + len);
+    }
+    CHECK(got.size() == oep::analog_blocks::segmentBytes(plan, n));
+    CHECK(same("analog_blocks", c["name"].string, got, hex(c["stream_hex"].string)));
+  }
+}
+
 int main() {
   testHeaders();
   testCobs();
@@ -1662,6 +1699,7 @@ int main() {
   testWideCases();
   testLogicEvents();
   testLogicBlocks();
+  testAnalogBlocks();
   testRestartLetsGo();
   testEveryOpsCanonical();
   testPassthrough();
