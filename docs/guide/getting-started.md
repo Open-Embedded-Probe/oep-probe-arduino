@@ -28,7 +28,7 @@ Updating an ESP32-P4 that runs OepProbe needs only its HS port: `dfu-util -D Oep
 image, not the merged one) writes the other app partition, checks it and restarts into it; the settings stay (clear
 them with `oep settings unset --all <port>` and a save when you want a fresh probe). The new firmware is kept as soon as it starts: no
 later reset goes back to the one before. If the bootloader did not start it, the describe's firmware text says so
-after the version, e.g. `0.0.29 (update to app1 did not reach setup: software)`; any reset that was not a power-on or
+after the version, e.g. `<version> (update to app1 did not reach setup: software)`; any reset that was not a power-on or
 a restart the probe made shows there the same way (`brownout at 3 s`). A chip that was never flashed, or one that does
 not start, is flashed with esptool on USB-Serial/JTAG as above.
 

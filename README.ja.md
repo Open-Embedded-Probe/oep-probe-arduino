@@ -36,8 +36,7 @@ OEP のフレームはどのリンクでも同じで、違うのは包み方だ�
 | **UART**（USB-UART の変換チップ経由: CP2102、CH340 など） | UART と変換チップがあるボード（安いボードのほとんど）なら probe になれる。遅いが、小さな target の書き込みとデバッグには足りる | 約 11 KB/s（115200 baud） | 約 11 KB/s | 約 5 ms | classic ESP32 |
 | **TCP**（Wi-Fi） | ケーブルが要らない: 作業台のネットワークの probe を mDNS（`_oep._tcp`）で見つけ、複数の host の接続が 1 つのロックを共有する。信頼できるネットワークだけ（認証なし） | 26〜103 KB/s | 23〜31 KB/s | 約 9 ms（中央値） | classic ESP32 |
 
-数値は試験台で測ったもの（ESP32-P4 は usbipd 経由、2026-09-25 / 26。classic ESP32 は 115200 baud。oep-spec の
-docs/logic-capture.ja.md §2.7、docs/probe-cdc-and-persistence.ja.md §5.3 / §7）。low speed の HID の値は class そのものの上限
+数値は試験台で測ったおよその値です（classic ESP32 は 115200 baud）。low speed の HID の値は class そのものの上限
 （8 byte の report、1 ms に 1 つ）で、測った値ではありません。
 
 **なぜ probe に自分の USB の ID が要るのか**: host は USB のデバイスを 1 つずつ開かずに OEP の probe を見つけ、probe が持つどの
@@ -58,11 +57,12 @@ classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中�
 確かめてから、そのセッションの間その速さに決めます。確かめが来ない、フレームが壊れる、線が黙る、セッションが終わる、の
 どれでも probe は自分で 115200 に戻ります（スケッチで `void oepWithPortSpeed() {}` と定義すると外れる。Firmware/OepProbe の OepFeatures.h）。
 
-このライブラリは、ESP32-P4、classic ESP32、RP2350、RP2040 をその probe にします。
+このライブラリは、ESP32-P4、classic ESP32、RP2350、RP2040、WCH CH32 をその probe にします。
 
-- 手引き: [使い始める](docs/guide/getting-started.ja.md)（焼く、見つける、Python から使う）、[probe を書く](docs/guide/writing-a-probe.ja.md)
-  （ライブラリの中身、自分のインターフェース）、[ボード](docs/guide/boards.ja.md)（チップごとにできること、ほかのボード向けのビルド）。
-- 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)（英語の本文が正で、`.ja.md` はその訳。食い違えば英語が正しい）—
+- 手引き: [使い始める](docs/guide/getting-started.ja.md)（焼く、見つける、Python から使う）、
+  [はじめてのインターフェース](docs/guide/your-first-interface.ja.md)、[firmware の機能](docs/guide/firmware-features.ja.md)（外す、自分のものを足す）、
+  [probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[ボード](docs/guide/boards.ja.md)（チップごとにできること、ほかのボード向けのビルド）。
+- 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)（凍結までは日本語の文書が正。英語は凍結のときに作る）—
   まず [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.ja.md) と [レビューの手引き](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md) から。
   [使い始める](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.ja.md) が最小の probe と host を作り、プロトコルの本体は
   [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、適合に要ることは
@@ -77,7 +77,7 @@ classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中�
 ## 配線: 回路図も、決まったピンの割り当ても無い
 
 OpenEmbeddedProbe はファームウェアだけでできています。独自の基板や回路はありません。probe は、対応するマイコン（ESP32-P4、
-classic ESP32、RP2040 / RP2350）の市販の開発ボードにこのファームウェアを書いたものなので、従うべき回路図がありません。決まった
+classic ESP32、RP2040 / RP2350、WCH CH32）の市販の開発ボードにこのファームウェアを書いたものなので、従うべき回路図がありません。決まった
 ピンの割り当てもありません。
 
 - **debug の線と GPIO の線は、空いている GPIO のどれにつないでもよい。** debug の線（RVSWD、SWIO、SWD）はどれもビットバンギング
@@ -166,7 +166,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に、`tests/vectors/*.json` を `tests/vectors/` に写す（`OEP_SPEC_REF` で commit を選ぶ） |
 | `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
 | `docs/guide/` | 手引き（英語と日本語）。読む人ごとに: [使い始める](docs/guide/getting-started.ja.md)（probe を使う）、[はじめてのインターフェース](docs/guide/your-first-interface.ja.md)（初めての人）、[firmware の機能](docs/guide/firmware-features.ja.md)（firmware が持つものを選ぶ、自分のものを足す）、[probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[標準インターフェースを足す](docs/guide/adding-a-standard-interface.ja.md)（ライブラリに貢献する人）、[ボード](docs/guide/boards.ja.md) |
-| `docs/` | そのほか: example の並べ方の案と、日付入りの作業記録（経緯） |
+| `docs/` | この実装の値と限界（implementation limits）、検証と転送の手順 |
 
 ## Example
 
@@ -237,7 +237,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 - direct build（`build_opt.h` で EspUsbDevice の vendor を直接書く形）のスケッチは、`build_opt.h` を変えたら `--clean` でビルドする。
 - vendor bulk の OUT は packet ごとに受ける（`CFG_TUD_VENDOR_RX_NEED_ZLP=0`）。16 KiB の転送で受けて ZLP で終わらせる形
   （`=1`）では、ちょうど 512 byte の倍数で終わる要求（1024 byte の write_block など）の完了が、P4 では次の OUT が来るまで
-  遅れ、probe は 3 s 答えなかった（2026-09-30、X035 の治具）。
+  遅れ、probe は数秒答えなかった。
 
 ## リリース
 
@@ -247,7 +247,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 変更は `CHANGELOG.md` の `## Unreleased` に (EN) / (JA) で書き足し、GitHub Actions の Release（workflow_dispatch）を起動すると、
 `library.properties` の版を上げ、`src/openembeddedprobe_version.h` を作り、`release` ブランチで example の `sketch.yaml` の `dir: ../..` を
 `OpenEmbeddedProbe (<版>)` に書き換え、`tests/` を除いた ZIP、tag、GitHub Release を作る。続けて、別の `.github/workflows/firmware.yml`（toolkit のものではない）が
-tag から各 example の各 profile をビルドし、`<Example>-<profile>-<version>.merged.bin`（ESP32、0x0 に書く）/ `.bin`（ESP32、更新用の app の image。P4 の DFU）/ `.uf2`（RP2040 / RP2350）と
+tag から各 example の各 profile をビルドし、`<Example>-<profile>-<version>.merged.bin`（ESP32、0x0 に書く）/ `.bin`（ESP32、更新用の app の image。P4 の DFU）/ `.uf2`（RP2040 / RP2350）/ `.bin`（CH32、code flash の全体）と
 `firmware-<version>.json`（sha256）を Release に付ける（付けるのは `examples/Firmware/` の分だけ。ほかの example は確かめるためにビルドする）。probe は同じ版を describe の firmware の文字列で返す。
 
 ### Release の添付
@@ -255,20 +255,20 @@ tag から各 example の各 profile をビルドし、`<Example>-<profile>-<ver
 `firmware-<version>.json` はこのリポジトリの決まり（OEP の規範ではない。oep-spec の凍結の決定 9）:
 
 ```json
-{"schema": 1, "library": "OpenEmbeddedProbe", "version": "0.0.20", "firmware": [
-  {"example": "Firmware/OepProbe", "profile": "esp32p4", "file": "OepProbe-esp32p4-0.0.20.bin", "kind": "app",
+{"schema": 1, "library": "OpenEmbeddedProbe", "version": "<version>", "firmware": [
+  {"example": "Firmware/OepProbe", "profile": "esp32p4", "file": "OepProbe-esp32p4-<version>.bin", "kind": "app",
    "model": "esp32p4", "fqbn": "esp32:esp32:esp32p4:...", "flash_offset": null, "sha256": "..."}]}
 ```
 
 | フィールド | 意味 |
 |---|---|
 | `schema` | 1。読む側は違う番号を断る。フィールドは足すだけ |
-| `kind` | `merged`（ESP32、`flash_offset` 0 から書く全体）、`app`（ESP32、app の image。もう片方の app の区画への更新、P4 の DFU）、`uf2`（RP2040 / RP2350） |
-| `model` | この image が describe の model で返す値（`esp32p4`、`esp32p4x`、`esp32`、`rp2040`、`rp2350`）。ビルドの対象のチップ。describe の chip の TLV は動いている部品の `<part> v<rev>`（P4X でも例 `esp32p4 v3.2`） |
+| `kind` | `merged`（ESP32、`flash_offset` 0 から書く全体）、`app`（ESP32、app の image。もう片方の app の区画への更新、P4 の DFU）、`uf2`（RP2040 / RP2350）、`flash`（CH32、code flash の先頭 0x08000000 から。`flash_offset` 0） |
+| `model` | この image が describe の model で返す値（`esp32p4`、`esp32p4x`、`esp32`、`rp2040`、`rp2350`、`ch32x035`、`ch32v307`、`ch32h417`）。ビルドの対象のチップ。describe の chip の TLV は動いている部品の `<part> v<rev>`（P4X でも例 `esp32p4 v3.2`） |
 | `fqbn`、`flash_offset` | ビルドに使ったもの。`merged` を書く位置（ほかは `null`） |
 | `sha256` | ファイルの sha256 |
 
-このライブラリでビルドした sketch の describe の firmware の文字列は、ライブラリのリリースの版（`0.0.20`、
+このライブラリでビルドした sketch の describe の firmware の文字列は、ライブラリのリリースの版（
 `OPENEMBEDDEDPROBE_VERSION_STR`）で、Release と上の `version` と同じ。作業中の tree からのビルドは `library.properties`
 の版を返す。OEP は文字列を決めていない（core §7.5）。これはこのリポジトリの決まり。
 

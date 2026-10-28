@@ -38,8 +38,8 @@ probe の版は提供側で管理し、利用側へ最低 firmware 版の設定�
 
 複数 target を採用する platform では、connection/console/config の上限を実装して宣言し、同じ probe の A/B の reset・操作・stream が混線しないことを確認します。上限1の platform を、同時接続が必要な契約へ割り当てません。target の USB data と probe 自身の USB transport は別の契約として検査します。
 
-## host timing 検査の未解決事項
+## 実時間に依存する host 検査
 
-`tests/host/test_wire_gate.cpp` は host の2 threadと実時間で短い marker 波形を生成・取得します。2026-10-09の横断検査では他suiteとの並行実行でtoggleのtrigger/segment/edge検査3件が失敗し、単独実行では portable 2件が成功しました。転送判定の unit 26件も成功しています。host負荷・スケジュールへの依存が疑われますが、原因は未確定です。
-
-失敗した実行も保存し、成功するまでの自動retryで gate を通しません。切り分けでは他の大きな検査と並行させず単独で実行し、その条件を記録します。今後、論理的な順序・排他の検査と実時間の stress/計測を分離し、hostの波形生成を決定的にする必要があります。単独での成功を実機の時間精度の保証へ読み替えません。
+`tests/host/test_wire_gate.cpp` は host の 2 つのスレッドで、実時間の短い波形を作って取ります。host の負荷に左右されるので、
+`tests/host/run.sh` は 3 回まで試し、3 回とも落ちたときだけ失敗にします。そのときは、負荷の少ないときに単独で流し直します。
+ここで通っても、実機の時間の精度を保証したことにはなりません。

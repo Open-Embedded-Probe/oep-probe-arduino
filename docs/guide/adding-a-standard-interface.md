@@ -6,7 +6,7 @@ How to add an `oep.*` interface that oep-spec defines to this library and the re
 your own (`io.github.<you>.*`) to your own probe you need none of this: see [your first interface](your-first-interface.md)
 and [firmware features](firmware-features.md).
 
-Work from the top down. A recent example to follow is `oep.fixture.pwm` / `counter` / `dac` (commit 9317805).
+Work from the top down. A good model to follow is `oep.fixture.pwm` / `counter` / `dac` (`OepPwm.*`, `OepCounter.*`, `OepDac.*` and their wiring in each chip header).
 
 ## 1. The spec and its numbers
 

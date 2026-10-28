@@ -38,9 +38,8 @@ the fastest it finds. Each kind exists because some probe needs it:
 | **UART** through a USB-UART bridge (CP2102, CH340, ...) | Any board with a UART and a bridge chip - most cheap boards - can be a probe; slow, but enough for flashing and debugging small targets | about 11 KB/s (115200 baud) | about 11 KB/s | about 5 ms | classic ESP32 |
 | **TCP** over Wi-Fi | No cable: a probe on the bench network, found by mDNS (`_oep._tcp`), several hosts' connections at once sharing the one lock. Trusted networks only (no authentication) | 26-103 KB/s | 23-31 KB/s | about 9 ms (median) | classic ESP32 |
 
-Figures are what the bench measured (ESP32-P4 through usbipd, 2026-09-25 / 26; classic ESP32 at 115200 baud;
-oep-spec docs/logic-capture.ja.md §2.7, docs/probe-cdc-and-persistence.ja.md §5.3 / §7). The low-speed HID figure is the
-class's own ceiling (8-byte reports, one per millisecond), not a measurement.
+Figures are rough, as measured on the bench (the classic ESP32 at 115200 baud). The low-speed HID figure is the class's
+own ceiling (8-byte reports, one per millisecond), not a measurement.
 
 **Why a probe needs its own USB identity**: a host finds OEP probes among all the USB devices without opening each one, and
 the same probe is seen on every link it has (vendor bulk, HID, CDC) as one device with one serial number (= the probe's
@@ -62,14 +61,15 @@ comes, frames break, the line goes quiet or the session ends (a sketch defining 
 
 This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into such a probe.
 
-- Guides: [Getting started](docs/guide/getting-started.md) (flash, find, use a probe from Python), [Writing a probe](docs/guide/writing-a-probe.md)
-  (the library from the inside, your own interfaces), [Boards](docs/guide/boards.md) (what each chip does, building for
-  another board).
-- Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (the English text is authoritative) - start with
-  its [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.md) and [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.md);
-  [getting started](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.md) builds the smallest probe and host, the protocol core is
-  [docs/oep-core.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.md), what a probe must do to conform is
-  [docs/conformance.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.md), and the wire numbers are
+- Guides: [Getting started](docs/guide/getting-started.md) (flash, find, use a probe from Python),
+  [Your first interface](docs/guide/your-first-interface.md), [Firmware features](docs/guide/firmware-features.md) (leave parts
+  out, add your own), [Writing a probe](docs/guide/writing-a-probe.md) (the full reference),
+  [Boards](docs/guide/boards.md) (what each chip does, building for another board).
+- Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (in Japanese until the freeze; the English text
+  comes with it) - start with its [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.md) and [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md);
+  [getting started](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.ja.md) builds the smallest probe and host, the protocol core is
+  [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md), what a probe must do to conform is
+  [docs/conformance.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.ja.md), and the wire numbers are
   [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml).
 - Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
   `oep` command, a fake probe for tests).
@@ -82,7 +82,7 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
 ## Wiring: no schematic, no fixed pin map
 
 OpenEmbeddedProbe is firmware only. There is no board or circuit of our own: the probe is a stock development board of a
-supported microcontroller (ESP32-P4, classic ESP32, RP2040 / RP2350) running the firmware, so there is no schematic to
+supported microcontroller (ESP32-P4, classic ESP32, RP2040 / RP2350, WCH CH32) running the firmware, so there is no schematic to
 follow. Nor is there a fixed pin map:
 
 - **Any free GPIO can be wired to a debug or GPIO line.** Every debug wire (RVSWD, SWIO, SWD) is bit-banged and every GPIO
@@ -145,8 +145,8 @@ This library does not deal with voltage levels: the probe's pins are the MCU's o
 ## This library
 
 A library for writing Open Embedded Probe (OEP) probes with Arduino, and the firmware of each probe (`examples/`). It speaks
-the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.md`, `docs/oep-transports.md`
-and the interfaces `interfaces/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
+the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.ja.md`, `docs/oep-transports.ja.md`
+and the interfaces `interfaces/oep-if-*.ja.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
 no compatibility is promised.
 
 **The spec this implements: the oep-spec commit in `tests/vectors/SPEC_COMMIT`** (no `v0.x` tag yet, versioning §6),
@@ -177,7 +177,7 @@ one of them against this endpoint).
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` and its `tests/vectors/*.json` to `tests/vectors/` (`OEP_SPEC_REF` picks the commit) |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
 | `docs/guide/` | the guides (English and Japanese), by reader: [getting started](docs/guide/getting-started.md) (use a probe), [your first interface](docs/guide/your-first-interface.md) (beginners), [firmware features](docs/guide/firmware-features.md) (choose what the firmware has, add your own to it), [writing a probe](docs/guide/writing-a-probe.md) (the full reference), [adding a standard interface](docs/guide/adding-a-standard-interface.md) (contributors), [boards](docs/guide/boards.md) |
-| `docs/` | the rest: the examples plan and dated work records (history) |
+| `docs/` | this implementation's values and limits, how it is verified and transferred |
 
 ## Examples
 
@@ -252,7 +252,7 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
   `build_opt.h` changes.
 - Vendor bulk OUT is received a packet at a time (`CFG_TUD_VENDOR_RX_NEED_ZLP=0`). Receiving 16 KiB transfers ended by a
   ZLP (`=1`) delayed, on the P4, the completion of a request that ends on a 512-byte boundary (a 1024-byte write_block)
-  until the next OUT: the probe did not answer for 3 s (2026-09-30, the X035 jig).
+  until the next OUT, and the probe stopped answering for seconds.
 
 ## Releases
 
@@ -264,7 +264,7 @@ Record changes under `## Unreleased` in `CHANGELOG.md`, (EN) and (JA), and run t
 examples' `sketch.yaml` `dir: ../..` to `OpenEmbeddedProbe (<version>)` on the `release` branch, and makes the ZIP (without
 `tests/`), the tag and the GitHub Release. Then the separate `.github/workflows/firmware.yml` (not part of the toolkit)
 builds every profile of every example from the tag and attaches `<Example>-<profile>-<version>.merged.bin` (ESP32, flash
-at 0x0) / `.bin` (ESP32, the app image for an update, the P4's DFU) / `.uf2` (RP2040 / RP2350) of `examples/Firmware/` and `firmware-<version>.json` (sha256) to the Release (the other examples are built only
+at 0x0) / `.bin` (ESP32, the app image for an update, the P4's DFU) / `.uf2` (RP2040 / RP2350) / `.bin` (CH32, the whole code flash) of `examples/Firmware/` and `firmware-<version>.json` (sha256) to the Release (the other examples are built only
 to check them). The probe reports the same version as its describe firmware
 string.
 
@@ -273,8 +273,8 @@ string.
 `firmware-<version>.json` is this repository's own (OEP does not define it; oep-spec freeze decision 9):
 
 ```json
-{"schema": 1, "library": "OpenEmbeddedProbe", "version": "0.0.20", "firmware": [
-  {"example": "Firmware/OepProbe", "profile": "esp32p4", "file": "OepProbe-esp32p4-0.0.20.bin", "kind": "app",
+{"schema": 1, "library": "OpenEmbeddedProbe", "version": "<version>", "firmware": [
+  {"example": "Firmware/OepProbe", "profile": "esp32p4", "file": "OepProbe-esp32p4-<version>.bin", "kind": "app",
    "model": "esp32p4", "fqbn": "esp32:esp32:esp32p4:...", "flash_offset": null, "sha256": "..."}]}
 ```
 
@@ -286,7 +286,7 @@ string.
 | `fqbn`, `flash_offset` | what it was built with; where a `merged` or `flash` image goes (`null` for the others) |
 | `sha256` | of the file |
 
-The describe firmware string of every sketch built from this library is the library's release version (`0.0.20`,
+The describe firmware string of every sketch built from this library is the library's release version (
 `OPENEMBEDDEDPROBE_VERSION_STR`), the same as the release and `version` above; a build from a work tree reports the
 version in its `library.properties`. OEP itself leaves the string free (core §7.5); this is this repository's rule.
 

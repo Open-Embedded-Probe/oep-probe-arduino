@@ -159,10 +159,9 @@ class Blink final : public oep::Interface {
   `reset_allowed` は attach の reset TLV が引いてよい channel で、いつも host が名指します。
 - 線の設定（休ませ方、速さの上限）は target のもので、host が attach で渡します。probe はチップごとの既定を持ちません。
 - **debug の線は、線のタイミングが許すいちばん弱い出力の強さで駆動します。** 線の鋭いエッジは、同じ治具の隣の fixture の線に
-  乗ります。classic ESP32 の既定の 20 mA では、コンソールを読んでいる間、SWIO の線が 1 MHz の SPI target の bit を落としたり
-  ずらしたりしました（36 frame 中 23 だけ正しい。最弱では 72 中 72 で、線の速さは変わらない。2026-10-02）。このライブラリの
-  PHY はどれもそうしています（RVSWD: ESP32-P4 は `GPIO_DRIVE_CAP_0`、RP2 は 2 mA。SWIO: classic と P4 は `GPIO_DRIVE_CAP_0`、
-  `OEP_SWIO_DRIVE_CAP`）。新しい PHY や別のチップへの移植でも必ず設定します（P4 の SWIO の移植は、最初は既定のままでした）。
+  乗ります。classic ESP32 の既定の強さでは、コンソールを読んでいる間、SWIO の線が隣の SPI target の bit を落としたり
+  ずらしたりしました（最弱にすると直り、線の速さは変わりません）。このライブラリの PHY はどれもそうしています（RVSWD: ESP32-P4 は `GPIO_DRIVE_CAP_0`、RP2 は 2 mA。SWIO: classic と P4 は `GPIO_DRIVE_CAP_0`、
+  `OEP_SWIO_DRIVE_CAP`）。新しい PHY や別のチップへの移植でも必ず設定します。
   線がピンを取るたびに設定し直します（RVSWD の PHY は attach のたびにそうします）。host が選ぶ組は接続と接続の間は空いていて、
   fixture gpio の出力や出力の idle が別の強さを残すことがあるためです。
 - **fixture gpio の出力の強さ**（oep-if-fixture §1.1）は `OepPlatform.h` の `platformDriveLevels()` から来ます。段階と、
@@ -203,7 +202,7 @@ class Blink final : public oep::Interface {
   （`Firmware/OepProbe/Esp32P4.h`）。保存した設定が起こす crash の繰り返しは safe boot が受け持ちます。前の起動が何で終わったか
   （firmware が意図しなかったリセット: 落ちた・止まったときの種類と上がっていた秒数、brownout、bootloader が更新を起動しなかったか。外からのリセットと自分でした再起動は何も言いません。RP2 は `crashed()` が付ける印で自分の crash を外からの watchdog の再起動と分けます）は `BootGuard::lastBoot()` が文字列で言います。
   `Firmware/OepProbe` はそれを fn 0 の describe の firmware の文字列で版の後ろに付けます（`describeCore` の最後の引数。
-  例 `0.0.29 (panic at 12 s)`）。
+  例 `<版> (panic at 12 s)`）。
 - fixture の UART は UART の割り込みで受けます。ビットを自分で刻む線のフレームは、その core の割り込みを止めます（フレームごと:
   SWIO は `SwioPhy::kIrqOffMaxUs` まで、RVSWD は最も遅い max_speed で約 1.1 ms まで）。ESP32 では割り込みが 128 byte の RX FIFO の
   `kUartRxFifoFull`（32）byte で起き、2000000 で 480 us の余りがあります。`loop()` がそうした線を動かすデュアルコアの ESP32 は、
@@ -243,7 +242,7 @@ USB の probe は、プロジェクトの VID:PID `1209:4F45`（`oep::reg::kUsbP
 これで probe を見分けません。同じ device の OEP の外のインターフェース（ESP32-P4 のアプリの中の DFU など）も、その device の一部です。
 vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /
 usage 0x45 を持ちます（transports §3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
-describe は VID:PID について何も宣言しません（前の discoverable は無くなりました、core §7.5）。host は、プロジェクトの VID:PID、
+describe は VID:PID について何も宣言しません（core §7.5）。host は、プロジェクトの VID:PID、
 名指された unit id、利用者が選んだ口で probe を見つけます（transports §3）。
 
 ## 10. 試す

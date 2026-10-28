@@ -6,7 +6,7 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
 （`io.github.<you>.*`）を自分の probe に足すだけなら、この手順は要りません。[はじめてのインターフェース](your-first-interface.ja.md)
 と [firmware の機能](firmware-features.ja.md) を見てください。
 
-上から順に進めます。最近の例として、`oep.fixture.pwm` / `counter` / `dac`（commit 9317805）がそのまま参考になります。
+上から順に進めます。手本には `oep.fixture.pwm` / `counter` / `dac`（`OepPwm.*`、`OepCounter.*`、`OepDac.*` と、各チップのヘッダでの配線）が向いています。
 
 ## 1. 仕様と番号
 

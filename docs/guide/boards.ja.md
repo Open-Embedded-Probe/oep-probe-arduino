@@ -10,7 +10,7 @@
 | | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32（X035 / V307 / H417） | ほかの ESP32（S3、C3、C6 など） |
 |---|---|---|---|---|---|
 | リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | 無し: 自分でビルド（下） |
-| ベンチでの確認 | Pico 2 で確認（CH32L103） | P4: 済み（CH32X035 の治具）。P4X: キャプチャ（wireskein のベンチ） | 済み（CH32V003 の治具） | 無し（ビルドと host テストのみ） | 無し |
+| 実機での確認 | 済み | 済み | 済み | 無し（ビルドと host テストのみ） | 無し |
 | 経路 | USB CDC、vendor bulk、HID | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID | USB-Serial/JTAG か USB CDC |
 | RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | あり | あり | あり（dedicated GPIO。ビルドのみ、未確認） |
 | SWIO（CH32V00x の 1 線） | あり | あり | あり | あり（X035 以外） | 無し |
@@ -18,7 +18,7 @@
 | target のコンソール（debug module 経由） | あり | あり | あり | あり | あり |
 | GPIO、UART の fixture | あり | あり（UART 2 つ） | あり | GPIO。UART は X035 以外 | あり |
 | ロジックのキャプチャ | PIO + DMA: 8 ch、ワンショット、エッジ / レベルのトリガ | PARLIO: 16 ch まで、2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps。ワンショットのレベル / エッジのトリガ、プリトリガは 32 Ki サンプルまで（16 ch） | GPIO の sampler: 8 ch、1〜300 kHz、ワンショット。レベル / エッジのトリガを区切りごとに探す | 1 つのポートの 0〜15 番から 8 ch、250 kS/s まで、ワンショット、エッジ / レベルのトリガ（X035 以外） | 無し |
-| アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | ADC1、4 ch、ADC のサンプル時間の段（V307 約 47.6 k〜、H417 約 198 k〜）。X035 以外 | 無し（ビルドしていない） |
+| アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | ADC1、4 ch、ADC のサンプル時間の段（数十〜数百 kS/s）。X035 以外 | 無し（ビルドしていない） |
 | トラックを一緒に始める（capture-group） | ロジック + アナログ | ロジック + アナログ | ロジック（sampler）+ アナログ | 無し | 無し |
 | SPI / I2C の target（DUT の controller の相手） | I2C、SPI（PIO。未検証） | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | あり（未確認） |
 | SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 2 MHz まで） | あり（P4 と同じ） | あり（X035 以外。GPIO、250 kHz まで） | 無し（ビルドしていない） |
@@ -72,8 +72,7 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
 
 ## ほかのボード向けのビルド
 
-ベンチの無いボードには、リリースされた firmware を出しません。確かめていない binary は誰の役にも立たないからです。自分で
-ビルドするのは数分で済みます。例: ESP32-S3 DevKitC を CH32 のデバッガにする。
+表に無いチップには、リリースされた firmware がありません。自分でビルドするのは数分で済みます。例: ESP32-S3 DevKitC を CH32 のデバッガにする。
 
 1. **やりたいことに近い example から始める。** CH32 のデバッガなら `04.Debug/RvswdDebugProbe`、治具なら `01.Basics/FixtureProbe`、
    全部なら `Firmware/OepProbe`（自分のチップに近いチップの部分を写す。例: `Esp32P4.h`）。
@@ -87,7 +86,7 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
          - platform: esp32:esp32 (3.3.12)
            platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
        libraries:
-         - OpenEmbeddedProbe (0.0.9)
+         - OpenEmbeddedProbe (<ライブラリの版>)
    ```
 
    `RvswdDebugProbe` にはこの profile がもうあり、`arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe` で
@@ -99,10 +98,20 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
    host は利用者が選んだ口で届きます。
 4. **ピンを選ぶ。** flash / PSRAM のピン、USB のピン、起動のストラップ、ボードが部品につないだピンを外し
    （ピンの表に入れず、起動時も空きの状態にしない）、残りを出す（ピンの表の mask、host が選ぶなら `pin_choice`）。
+   考えることは次のとおりです。
+   - **起動のストラップ**：reset が解ける瞬間だけ読まれるので、target がそれを low / high に保っていると、probe が別の
+     モードで起動します（ESP32 の GPIO0 が low なら download mode）。target が引くかは配線するまで分からないので、外します。
+     RP2040 / RP2350 にはありません（BOOTSEL は flash の chip select の側）。
+   - **既定の UART**：ESP32 の boot ROM は reset のたびに UART0 へログを出し、そこにつないだものへ流れ込むので、外します。
+     RP2 の既定は core の慣習（`Serial1`）にすぎず、そのピンは使えます。
+   - **使わないピンは空きにする**（Hi-Z、pull 無し）。最初の応答の前に `setup()` で `oep::platformParkMask` を呼びます。
+     RP2 の pad は pull-down で起動し、半分だけ配線した target の reset を引いたままにすることがあります。
+   - **RP2350 のエラッタ E9**：放した入力が high に張り付くことがあります。ピンを読むときは pad の pull を当てて読みます。
+   - 同じ機能の線は隣り合わせに寄せます（RP2 の PIO は連続したピンを前提にします）。
 5. **ビルドして焼く**: `arduino-cli compile --profile esp32s3 <dir>`、`arduino-cli upload -p <port> --profile esp32s3 <dir>`。
 6. `oep dump --port <port>` で**確かめ**、Python から target を attach する（[使い始める](getting-started.ja.md)）。
 
-動いたら知らせてください（リポジトリの issue）。ベンチのあるボードには、リリースされた firmware を出せます。
+動いたら知らせてください（リポジトリの issue）。
 
 ## ライブラリが知らないチップ
 

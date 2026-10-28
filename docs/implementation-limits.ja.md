@@ -6,9 +6,7 @@
 ライブラリと `examples/Firmware/OepProbe`）が platform ごとに持つ限界を、1 か所にまとめる。仕様の規範はこの文書に依らない: 別の probe は
 別の値を選んでよく、host はここの値に頼らない（仕様の待ちと宣言だけに頼る）。
 
-2026-10-07 の仕様の規則の見直し（oep-spec の `docs/v1-rule-review-2026-10-07.ja.md` §2、§4）で、仕様から外れて実装の値になったものを
-ここに移した。firmware は oep-spec 0f455a0 の規則に沿う（0.0.29 の開発版から）。その後の外部の見直しの再確認（2026-10-07）の変更も含めて、今は oep-spec 30b2b36（wifi の項目、TCP の見つけ方、unset の len はキーの長さを含む）に沿う。見直しで外した動き（boot_reset など）の記録は §2.6。
-TCP と Wi-Fi（port、mDNS、Wi-Fi の設定の提案、測った値）は §6。
+TCP と Wi-Fi（port、mDNS、Wi-Fi の設定、測った値）は §6。
 
 ## 1. どの platform にも共通
 
@@ -26,7 +24,7 @@ TCP と Wi-Fi（port、mDNS、Wi-Fi の設定の提案、測った値）は §6�
 
 ### 1.2 線の時間と回数
 
-仕様（oep-if-debug §1〜§4、2026-10-07）は、attach、scan、riscv-dm の reset を max_op_ms のうちに答えることだけを求め、host はその
+仕様（oep-if-debug §1〜§4）は、attach、scan、riscv-dm の reset を max_op_ms のうちに答えることだけを求め、host はその
 引数の時間を max_op_ms として待つ。この実装の実際の値:
 
 | 値 | この実装 | 意味 |
@@ -105,7 +103,7 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 - **開いても再起動しない**: どの transport でも、開閉と DTR / RTS で probe は再起動しない（USB-Serial/JTAG の DTR / RTS のリセットは
   切ってある）。
 
-### 1.7 キャプチャ（capture）と fixture（oep-spec 0098b56..78fb561 に合わせたもの）
+### 1.7 キャプチャ（capture）と fixture
 
 - **pretrigger の上限**（capture §3.3: max_pretrigger を超えるか samples 以上なら unsupported）:
   - ESP32-P4 の logic: describe の max_pretrigger は w = 1 のときの値 523263（1 区画の最大 523264 サンプル − 1）。リングが返せるのは
@@ -155,17 +153,16 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   そこが割り込みを止めている間（SWIO のフレーム）は待つ。2 ms 以内に載らなければ arm は failed（何も arm しない）。i2c-target の preload_tx
   も、置き場が TX FIFO に載ってから答える（バスが使用中なら、その転送の STOP で載せる: その後に始まる読み出しがその置き場で答える）。
 - **classic ESP32 の spi-target と cs_setup_ns**（15000 ns）: MISO は CS が有効になってから CS の割り込み（ソフトウェア）で駆動し始めるので、
-  その前に SCK を始める master は最初のビットを当てにできない（fixture §4）。線にプルアップがあれば、そのビットは 1 に読める。ベンチ
-  （87f6d40、V003 の master が CS を下げてすぐ SCK を始める、4 byte の転送を続けて 5 回）: 3 MHz で 0 / 5、1 MHz で 4 / 5。DUT が受けたのは
-  3C96C30F のはずが BC / FC（最初の 1〜2 ビットが 1）で、arm は関係しない（どれも arm の後に載っていた）。ESP32-P4 は MISO を自分で
-  駆動しない間を持たない（cs_setup_ns を宣言しない、ベンチ: 4 MHz の 5 回が 5 / 5）。
-- **CH32 の spi-target**（ArduinoCore-CH32RV 0.4.0 の CH32RVSPISlave）: slave は byte を数えるので、bits は byte 数 x 8（byte の途中で
+  その前に SCK を始める master は最初のビットを当てにできない（fixture §4）。線にプルアップがあれば、そのビットは 1 に読める
+  （CS を下げてすぐ SCK を始める MHz 級の master では、最初の 1〜2 ビットが 1 になった）。ESP32-P4 は MISO を自分で駆動しない間を
+  持たない（cs_setup_ns を宣言しない）。
+- **CH32 の spi-target**（ArduinoCore-CH32RV の CH32RVSPISlave）: slave は byte を数えるので、bits は byte 数 x 8（byte の途中で
   CS が上がった転送の、来たビットの数は分からない）。CS と各 byte が割り込みなので、cs_setup_ns 5000 ns、max_clock_hz 200 kHz（コアの
   自己試験の値。ハードウェアの master での上限は未測定）。SCK / MISO / MOSI は SPI の 1 つの経路でなければならず、違えば configure が
-  failed。X035 には入れない（コアの SPI slave を読むだけで割り込みのハンドラーが 640 byte リンクされる）。
-- **CH32 の analog**（ArduinoCore-CH32RV 0.4.0 の CH32RVAdcStream）: ADC はタイマーを使わずに自走するので、レートは 8 段のサンプル時間の
+  failed。X035 には入れない（コアの SPI slave を参照するだけで割り込みのハンドラーがリンクされる）。
+- **CH32 の analog**（ArduinoCore-CH32RV の CH32RVAdcStream）: ADC はタイマーを使わずに自走するので、レートは 8 段のサンプル時間の
   どれか（起動時に最初の ADC の端子で測る。その間その端子はアナログになり、測り終えたら浮いた入力に戻す）。一番遅い段より遅いレートは
-  作れない（V307 で約 47,600 回/秒、H417 で約 198,000 回/秒）。値は 512 個ずつの半分で DMA から写すので、loop() がそれより長く回らないと
+  作れない（V307 で数万回/秒、H417 で約 20 万回/秒）。値は 512 個ずつの半分で DMA から写すので、loop() がそれより長く回らないと
   半分が上書きされ、その区画は穴として渡さない（state 6、error 2）。1 区画は 16 KiB。
 - **I2C / SPI の controller**: 線は GPIO で動かし、時間は ESP32 では CPU のサイクル、ほかでは micros()（1 µs 刻み、250 kHz まで）で数える。
   割り込みは半周期や CS の時間を延ばすだけで縮めない。SPI の 2 MHz（ESP32）は控えめに置いた値で、SCK の実際の速さは未測定。
@@ -203,7 +200,7 @@ probe がしていない software の再起動、panic の無い RTC watchdog �
 
 ### 2.3 DFU で更新した image（ESP32-P4）
 
-DFU で書いた image は、起動したときに確定する（試しの期間は無い）。arduino-esp32 3.3.x の initArduino が setup() の前に image を valid に
+DFU で書いた image は、起動したときに確定する（試しの期間は無い）。arduino-esp32 の initArduino が setup() の前に image を valid に
 する（esp_ota_mark_app_valid_cancel_rollback）ので、その後の panic、watchdog、brownout、host の列挙し直しで前の image に戻ることはない。
 bootloader がまだ前に戻しうるのは、新しい image が自分の確かめに通らないときと、core が確定する前にリセットが来たときだけで、そのときは
 §2.2 の `update to <slot> did not reach setup: <reset>` が付く。壊れた image は ESP32-P4 の USB-Serial/JTAG と esptool で戻す。classic ESP32
@@ -217,19 +214,6 @@ restart の応答の後、probe は応答を送り終えてから再起動する
 ### 2.5 保存
 
 設定は ESP32 / ESP32-P4 では NVS、RP2040 / RP2350 では flash の最後の sector に、丸ごと置き換えで保存する。
-
-### 2.6 見直しで外した動きの記録（0.0.28 まで）
-
-oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。どれも今の firmware には無い。
-
-- **boot_reset**（スロットのリセットでのやり直し）: at boot のスロットの自動の attach が線の応答をまったく得られなかったら、ロックが一度も
-  取られていない起動の間だけ、スロットごとに 1 回、label `nrst` の channel を 20 ms 引いて attach をやり直した。
-- スロットの錠（target_id の mask / value）と slot_state 2 / 3、bind の mode（last-reset、manual、mixed。mixed の行は 128 byte か 100 ms の
-  静けさで閉じた）と、セッションの後に最後の host の reset から再開すること、応答の ignored、corr_reused（送り直しの表の CRC-32）、
-  list の prefix、describe の reserved / profile / resets_on_open / discoverable / implementation、port_speed の port と idle_ms と壊れの数え、
-  i2c-target の mode と arm_rx / reset、spi-target の reset、gpio の drive の kind と mode 7、uart の status の configured、コンソールの
-  send_queue の宣言、捕捉の timing / rate_accuracy と宣言（rate_list など）、riscv-dm の reset の method と attempts、
-  OEP_SWIO_PAUSE_CONSOLE の試験用の仕掛け（今は窓の間いつも止める、§4.1）。
 
 ## 3. 線の PHY ごと
 
@@ -285,94 +269,48 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   トリガが立ち、キャプチャに写る。区切りの最初のサンプルからトリガを見る（エッジは 2 つ目から）: プリトリガの分がまだ溜まっていない
   ときは区画が短く、trigger_index が小さい（capture §3.3）。見逃すのは、すき間に来た出来事と、フレームの間（1 つ約 60〜150 µs）に
   始まって終わるパルス。
-- 経緯: 0.0.29 の開発版 51360ea は番を区切りと区切りの間に置き、その間は誰もサンプルしなかった。コマンドやリセットはその番の中で
-  target に届き、target もその中で動くので、立ち下がりのトリガが立たなかった（V003 の台、8bcecca: ソフトウェアのリセットの印の low は
-  約 0.57 ms で 5 ms の番に収まり、reset_probe の "no capture for the software reset"。TOGGLE の 20 回も同じ）。トリガが立たないままの
-  キャプチャは state 2 のままで、次の configure は unavailable cause 6 で断られる（capture §3.2 の表のとおり。samples の切り下げとは関係
-  ない）。
 - **探索の中の背景の線**: 探索の中で番を取るのは、host の要求（線を待てば 64 サンプル以内）とコンソールの読み（区切りごとに 1 回）
   だけ。probe が自分で線を使う仕事で、待っている要求の無いもの（at-boot の slot の attach とその再試行、生存確認の DMSTATUS の読み
   （retry_ms ごと）、コンソールの attach のやり直し）は、sampler の窓（即時の窓とトリガの探索）が開いている間は線を取らず、番も
   求めない。窓が閉じた後の最初の poll で行う。トリガを長く待つ間はその分遅れる（素通しの生存確認の間隔は
-  仕様が決めない）。経緯: 873c8f0 までは、生存確認が要求と同じに線を待ち、探索はそれにすぐ番を譲った。そのフレーム（読み 1 つ約
-  60 µs）の間 sampler は読まないので、区画に入れば slipped。ベンチ（V003 の台、slot の retry 1 s）では、force の区画が 400 kHz〜
-  100 kHz のどの rate でも 64 回に 0〜11 回 slipped した（約 1 s ごと、続くキャプチャの 4 回に 1 回の並び。即時の窓では生存確認が窓の
-  終わりを待つので 0）。
+  仕様が決めない）。こうしないと、背景の線のフレームの間 sampler が読めず、区画が slipped になる。
 - **番の中のフレームの長さ**: SWIO のフレームは、sampler が合図を受けてから数命令で core 0 の割り込みを止め、フレームの終わりの合図
   （frameEnd）の後で戻す。sampler が待つのはフレームそのもの（読み約 60 µs、書き約 46 µs）だけで、間に入った割り込みや task（Wi-Fi の
-  driver は loop() より優先度が高い）の分は待たない。873c8f0 までは frameEnd が割り込みを戻した後だったので、溜まっていた割り込み
-  （radio が点いていれば Wi-Fi のもの）とそれが起こす task の切り替えの間も sampler は止まっていた。
+  driver は loop() より優先度が高い）の分は待たない。
 - **宣言（トリガのキャプチャの slipped）**: トリガの探索の中で SWIO の線を使うもの（番を取った host の要求、区切りの初めのコンソールの
   読み）があると、そのフレームの間のサンプルは遅れ、区画に入れば slipped が立つ。radio の有無に依らない。区画のデータは正しく、遅れは
-  slipped で示す（滑らなかったとは言わない）。線を使うものが無ければ、300 kHz 以下で即時と同じ（873c8f0 の測定で 400 kHz 以下 0 / 64）。
-  873c8f0 の Wi-Fi の image（台の slot の生存確認が 1 s ごとに番を取っていた）での force の slipped は、400 kHz〜100 kHz で 64 回に 0〜11 回
-  （上の表）。生存確認が番を取らなくなったこの版の値は、ベンチで測り直してここに書く。
+  slipped で示す（滑らなかったとは言わない）。線を使うものが無ければ、rate_range の中で即時と同じく slipped は出ない。
 - slipped は、本当に遅れたサンプル（割り込みや周辺のバスの待ち、番の中のフレーム）が区画に入ったときだけ示す。即時の窓と、トリガの後の
   区画の残りには、新しいフレームは入らない。
 - コンソールの読みを窓の間止めることは、仕様（console §3）の規則に反しない（読む間隔を決めない）。target の側では、SDI / DMDATA は
   その間書き込みを待ち、dmseq の target は長い待ち（1 s 以上）のうちに戻る。
-- 経緯: 0.0.29 の開発版 589acd5 は、窓の中でもフレームを 1 つずつ通した（sampler がフレームの間だけ読むのを止める）。classic の V003 の
-  台では、コンソールの読みが窓ごとにフレームを入れるため、速く続く信号（pwm、tone、速い切り替え）が slipped で崩れ、ソフトウェアの
-  リセットのキャプチャの 5 回に 1 回が空になり、試験の一式が 446 s から 1040 s に延びた。キャプチャの目的（正しいサンプル）を守るため、
-  この排他の規則に戻した。
 - **割り込みを止める長さは時計で区切る**: 割り込みを止めている 1 回（即時の窓、探索の区切りとトリガの後の残り）は、サンプルの数では
   なく時計（cycle counter）で最長 250 ms（`kOffNs`、割り込みの watchdog は 300 ms）に区切る。速いレートではサンプルが遅れると取り戻せないので、
   番の中のフレーム、トリガの時に線を使っていた要求の続くフレーム、もう一方の core や radio の DMA のバスの待ちが、その分だけ 1 回を延ばす。
-  サンプルの数で区切っていたときは、TCP で test_timing を流す間に 300 ms を越え、probe が int-wdt でリセットした（V003 の台、3169721、
-  describe の firmware の文字列 `(int-wdt at 961 s)`。接続が「peer closed」で切れたのはこのリセット）。探索の区切りは「1 回の長さから区画の
+  探索の区切りは「1 回の長さから区画の
   残りの名目の時間を引いた分」で終わる。区画（即時の窓も）がその長さに達しても読み終えていなければ、そこで終える: **samples は configure の
   値より少なく、slipped が立つ**（サンプルが遅れていたため）。トリガの位置と trigger_index は正しい。
 - **radio が点いていても限界は同じ**: sampler の窓は radio の core（core 0）を止めないので、radio のための区画や 1 回の長さの制限は
   無い（区画は最大 65408 サンプル、1 回は最長 250 ms、探索のすき間は約 1 ms。Wi-Fi の有無で変わらない）。radio の行き来（Wi-Fi の
   driver が core 0 で動き、周辺のバスを使う）でサンプルが遅れることはあり、そのときは slipped が立つ（データは正しいと言わない）。
-  - 経緯: 0.0.29 の開発版 028554d までは sampler が core 0（radio と同じ）だった。窓の間は Wi-Fi の driver が止まるので、radio が点いて
-    いる間は区画を 25 ms、1 回を 50 ms に切り、区切りの間は Wi-Fi が先に動いた。V003 の台（Wi-Fi に接続、TCP とシリアルの両方）では、
-    int-wdt は消えたが、test_timing で区画が 25 ms に足りず（1000 µs の toggle 20 回の 40 ms が入らない）、探索のすき間に Wi-Fi が
-    core を長く使う間に出来事を見逃して何も取れない区画があり（toggle delay=1000us、TOGGLE0、millis）、test_pwm で slipped が出た。
-- **レートの範囲**: rate_range は 1 kHz〜300 kHz。上限はベンチで測って決めた（下の表）: 即時の窓と、SWIO の行き来の無い force の
-  キャプチャが全て slipped 無しだった最も速いレートが 400 kHz、500 kHz は滑った。300 kHz はその下に余裕をとる（240 MHz で 1 サンプル
-  800 cycle）。下限は以前 400 kHz（割り込みを止めている 1 回をサンプルの数で数えていた頃に、いっぱいの窓を割り込みの watchdog の内に
-  収めるためだった。1 回は時計で 250 ms に区切るので、その理由は無い）。samples は 200 ms 分に切り下げる（窓は 200 ms 以内、探索の
+- **レートの範囲**: rate_range は 1 kHz〜300 kHz。上限はベンチで測って決めた: 即時の窓と、SWIO の行き来の無い force の
+  キャプチャが slipped 無しで通る最も速いレートの少し下に余裕をとる。samples は 200 ms 分に切り下げる（窓は 200 ms 以内、探索の
   区切りは区画の残りの後に 50 ms 以上の探索を持つ）。300 kHz で 200 ms は 60000 サンプルで、これが区画の最大（describe の max_samples、
   max_pretrigger は 59999）。低いレートは 1 サンプルの余裕を増やす。GPIO32..39 を含む plan も同じ範囲（1 サンプルに読むレジスタが 1 つ
   増えるが、1 MHz まで間に合った）。
 - **1 サンプルの手間**: 即時の窓とトリガの探索は、1 サンプルに同じことをする（ゲートの印を見る、時計とサンプルの時刻を比べる、待つ、
   GPIO.in を読んで表で詰める、置く）。探索は、それに加えてトリガの判定だけ（エッジ: 前のレベルとの比較、レベル: 比較）。区切りの時計、
-  線の番、control（force と中止）は 64 サンプルごとに見る（force と番は最大 64 サンプル待つ: 300 kHz で 213 µs）。0.0.29 の開発版 87f6d40
-  までは探索がこれらを毎サンプル見ていて、共有の語の読み（それぞれメモリの壁つき）と、スタックへの退避が 1 サンプルに 10 回ほど増え、
-  即時が間に合うレートで探索が遅れた（ベンチ、87f6d40: force の行は 500 kHz〜2 MHz で 64 / 64 slipped、即時は 750 kHz から）。
-- **ベンチの slipped（873c8f0、V003 の台、64 回ずつ、1 本と 4 本）**: slipped の回数 / 64。force は、pretrigger（samples の半分）が
-  溜まった時刻の 5 ms 後（20 ms 後も同じ）に force した区画。
-
-  | rate | 即時（Wi-Fi の image のシリアルと TCP、Wi-Fi 無しの image） | force、Wi-Fi 無しの image（slot の設定無し） | force、Wi-Fi の image（シリアルと TCP、台の at-boot の slot あり） |
-  |---|---|---|---|
-  | 750 kHz | 64 | 64 | 64 |
-  | 500 kHz | 1〜4 | 10〜11 | 12〜15 |
-  | 400 kHz | 0 | 0 | 3〜6 |
-  | 300 kHz | 0 | 0 | 0〜10 |
-  | 250 kHz | 0 | 0 | 0〜6 |
-  | 200 kHz | 0 | 0 | 6〜11 |
-  | 100 kHz | 0 | 0 | 4〜8 |
-
-  切れた区画（250 ms の区切り）は 2 回だけ（TCP の force、250 kHz と 200 kHz）。右の列の 400 kHz 以下の slipped は rate に依らず、
-  約 1 s の周期で起きた（続くキャプチャの 4 回に 1 回の並び）: 台の at-boot の slot（retry 1 s）の生存確認が探索の中で番を取ったため
-  （下の「探索の中の背景の線」）。Wi-Fi 無しの image はこの測定で slot を設定していなかったので、Wi-Fi の有無の比較ではない。
-  以前（87f6d40、探索が毎サンプル共有の語を読んでいた）: 即時は 2 MHz〜750 kHz で 64 / 64、500 kHz で 0〜6 %、400 kHz で 0 %。force は
-  2 MHz〜500 kHz で 64 / 64、400 kHz で Wi-Fi の image 52〜59 %、Wi-Fi 無しで 0〜2 %。
+  線の番、control（force と中止）は 64 サンプルごとに見る（force と番は最大 64 サンプル待つ: 300 kHz で 213 µs）。毎サンプル見ると、共有の語の読みで探索が即時より遅くなる。
 - **sampler の task の優先度は 17**（core 1 にはほかに重い task が無い。sketch が sampler と同じ core で TCP/IP の stack（18）や Wi-Fi の
   driver（23）を動かすときに、それらを先にするため）。
 - fixture UART の受信の割り込みは loop() の core（sampler と別）で、FIFO の閾値は 32 byte。速さは 2000000 bps まで。
 
 ### 4.2 ESP32-P4
 
-- **USB の device のスタック（TinyUSB の DWC2）**: EspUsbDevice 2.5.1 が使う TinyUSB の DWC2 のドライバは、control 転送の status stage の間に
+- **USB の device のスタック（TinyUSB の DWC2）**: EspUsbDevice が使う TinyUSB の DWC2 のドライバは、control 転送の status stage の間に
   次の SETUP が届くと panic する（upstream の不具合）。P4 では panic はチップのリセットになるので、host には device が bus から外れて列挙し
   直し、boot_id が変わったように見える（firmware の文字列には `panic at <n> s`、§2.2）。セッション、資源、保存していない設定は失われる。
   host は boot_id の変化で知り、開き直す。直った版が出たら上げる。
-- **TODO（未解決、優先度低）: 2 回目の streaming での watchdog**: 以前、同じ起動で 2 回目の streaming を始めたときに watchdog の
-  リセットが見えた。0.0.35 の前（2026-10-20、P4X）に、同じセッションで streaming を 10 回続けても再現しなかった（そのときの落としは
-  host の負荷による受信の遅れで、firmware の問題ではなかった）。再現したら、そのときの firmware の文字列（`panic at <n> s` や wdt の
-  印、§2.2）と、直前の操作の並びを残す。
 - fixture UART の受信の割り込みは core 0（loop() は core 1）で、FIFO の閾値は 32 byte、ドライバの受信のバッファは 16 KiB。2000000 bps まで。
 - i2c-target: ESP-IDF の slave ドライバ（v1）は受けた byte の数を知らせず、送信は区切りの無い流れなので、この実装は周辺の割り込みを
   自分で受け、トランザクションの byte を数え、TX FIFO を置き場から埋める（空なら 0xFF）。チップの FIFO の癖（読み出しの最後に余分な byte を
@@ -392,7 +330,6 @@ oep-spec 0f455a0 の規則に合わせて 0.0.29 の開発版で外した。ど�
   フロー制御が無いので、壊れたフレームは host が同じ corr で送り直す（probe の送り直しの表が二重の実行を防ぐ）。
 - **Linux の cdc_acm**: probe → host の burst が約 8 KiB を超えると、エラーなしに黙って失う。oep-client-python は、同時に待つ応答の量を
   6 KiB、購読の min_bytes を 2 KiB に抑える。
-- 変換器ごとに通った port_speed の速さの記録は、oep-spec の記録（`docs/link-measurements.ja.md`、`docs/uart-speed-negotiation.ja.md`）にある。
 
 ## 6. TCP と Wi-Fi（classic ESP32）
 
@@ -412,14 +349,14 @@ TCP は信頼できる手元のネットワークか、認証したトンネル�
   バッファは、window を守る host がその接続に待たせうるものすべて（max_inflight 個の応答、push の queue 1024 byte と push 1 つ、event の
   queue）が入る大きさ（firmware の static_assert）: そういう host には、ネットワークがどれだけ止まっても（Wi-Fi の再送で数秒）probe は
   待たず、接続を閉じない。window を越えて送る host のときだけ、バッファがいっぱいで socket が 2000 ms（`TcpSlot::kWriteWaitMs`）受け取らな
-  ければ、その接続は死んだとして閉じる（読まなくなった host に probe が止められない上限）。2 KiB（b9401fe から）はこの和より小さかった。TCP keepalive: 10 s 黙ったら 5 s ごとに 3 回、答えが無ければ閉じる。
+  ければ、その接続は死んだとして閉じる（読まなくなった host に probe が止められない上限）。TCP keepalive: 10 s 黙ったら 5 s ごとに 3 回、答えが無ければ閉じる。
 - max_frame を超える長さを読んだら、その接続を閉じる（transports §1）。フレームの途中の休みでは読み直さない（transports §2）。
 - 接続が閉じても、セッション、ロック、購読、送り直しの表は残る（transports §3）。閉じた接続に送るはずの応答と通知は捨てる。同じ slot に
   来た次の接続は、前の接続の通知を受けない（読みかけのフレームも捨てる）。同じ session id の open が別の接続から来れば、lease を始め直し、
   通知はその接続に移る（core §6.2）。
 - restart（`oep.probe.restart`）: 応答を送った後、待ち受けを閉じ（再起動する前の probe が新しい接続を受けないように）、送りのバッファを
-  socket に渡し、100 ms 待ってから再起動する。**restart_max_ms は Wi-Fi の build で 15000**: 起動、接続、アドレスまでで（2026-10-07 の測りは、まだ接続の前に scan をしていたとき）、応答から
-  新しい接続の confirm が答えるまで ATOM で 5.5〜6.9 s（10 回、2026-10-07）。その倍。設定の前の方の entry が
+  socket に渡し、100 ms 待ってから再起動する。**restart_max_ms は Wi-Fi の build で 15000**: 起動、接続、アドレスまでで、応答から
+  新しい接続の confirm が答えるまで ATOM で数秒かかる。その倍。設定の前の方の entry が
   つながらないと、1 つあたり最長 15 s 延びる（§6.3）。
 
 ### 6.2 見つけ方（mDNS、transports §3）
@@ -449,11 +386,10 @@ oep-spec の transports §7。この実装の値と動きは次のとおり。
   radio を止める。modem sleep は切る（要求が次の beacon まで待たされないように）。Wi-Fi の driver 自身の保存は使わない。
 - 失敗の reason は driver の理由を丸めたもの。passphrase も SSID もログに出さない（UART は OEP の経路でログを出さない、probe guide §3）。
 
-### 6.4 測った値（M5Stack ATOM、2026-10-07、家庭の AP、host は WSL2 の NAT の後ろ）
+### 6.4 測った値（M5Stack ATOM、家庭の AP。およその値）
 
-- clock の往復: 中央値 8.7 ms、99 % 44 ms、最大 56 ms（20 s で 1558 回）。
-- `oep linktest`（505 byte のフレーム、各 300）: in x1 26〜71 KB/s、in x2 103 KB/s、out 23〜31 KB/s、duplex 22〜28 KB/s。どれも壊れ 0、
-  失い 0。UART の 115200（約 11 KB/s）より速い。
+- clock の往復: 中央値で約 10 ms、ときどき数十 ms。
+- `oep linktest`: 数十〜100 KB/s ほど。壊れも失いも無い。UART の 115200（約 11 KB/s）より速い。
 - 2 つ in flight で max_frame いっぱいの応答を続けると、ときどき 1〜2 s（最長 4 s）答えが止まってから続きが来る（Wi-Fi の再送。Windows から
   直接でも同じ）。答えは失われない。host の TCP の待ち（oep-client-python は 15 s）はこれを越える。modem sleep を切る前は ping でも 0.5 s
   を越えた。
@@ -468,17 +404,10 @@ oep-spec の transports §7。この実装の値と動きは次のとおり。
 - **コンソールの返事の遅れ**: Wi-Fi のネットワークの止まり（再送で 1〜4 s、§6.4）と、radio が点いているときの UART0 の損失（下）は、
   コンソールの返事（console の通知）も同じだけ遅らせ、または落とす。host はコンソールを待つ時間をそれより長くし（4 s を越える）、
   通知の seq の飛びは read で読み直す（console の read は消費しない）。firmware の側で消せる原因は見つかっていない。
-- **radio が点いているときの UART0 の損失（classic ESP32、測った値）**: V003 の台（classic ESP32、CH340 を usbipd で WSL に）、
-  `oep.probe.link` の source（probe → host）を 500000 bps で 60 s、ほかに何も動かさずに 3 回ずつ。失いの割合（壊れは 0）:
-  Wi-Fi に接続（rssi -41）1.64 / 0.76 / 0.55 %、同じ image で wifi の entry を unset（radio 切）1.69 %（unset の 3 s 後に始めた回）/ 0.28 /
-  0.17 %、Wi-Fi の無い build 0.47 / 0.08 / 0.17 %。radio が点いていると数倍失い、失った 1 つごとに host の待ち（0.3 s）の分だけ遅くなる
-  （ok の数 2884〜3449 と 3581〜3727）。失うのはフレームまるごと。firmware の側では（028554d のとき）、UART0 の送りの割り込みは core 1、Wi-Fi と lwIP は core 0
-  で、キャプチャの無いとき loop() が待つ所（Wi-Fi の状態を見る、待ち受けの accept、TCP の受け）はどれも待たない呼び出しで、原因になる待ちは
-  見つかっていない。遅れ（host の待ちを越えた）か、変換器までの間でバイトが壊れた（CRC の合わないフレームは host が雑音として捨て、失いに
-  数える）かは、まだ分けていない。radio の電源や RF が原因なら、この firmware では消せない。シリアルの口を Wi-Fi と一緒に使うときは、
-  host の送り直しで回復する前提にする。
-- build の大きさ: classic ESP32 の firmware は Wi-Fi で 1.07 MB（app の区画 1.31 MB の 81 %）、RAM 107 KB。スケッチで `void oepWithWifi() {}` と定義すると外れ、0.54 MB、RAM 80 KB
-  （0.42 MB）。Wi-Fi の無い build に wifi の項目は無い（describe の items に出ない）。
+- **radio が点いているときの UART0 の損失（classic ESP32）**: Wi-Fi に接続していると、UART0 の probe → host の流れ（500000 bps）で、
+  フレームまるごとの失いが Wi-Fi の無い build の数倍に増える（どちらも数 % 未満）。firmware の側で原因になる待ちは見つかっておらず、
+  radio の電源や RF が原因ならこの firmware では消せない。シリアルの口を Wi-Fi と一緒に使うときは、host の送り直しで回復する前提にする。
+- Wi-Fi の無い build（スケッチで `void oepWithWifi() {}`）は、大きさも RAM も大きく減り、wifi の項目を持たない（describe の items に出ない）。
 - **ESP32-P4** は radio を持たない。arduino-esp32 には別のチップ（ESP32-C6 など）を SDIO で使う ESP-Hosted の道があるが、この firmware は
   使わない（`OepWifi.h` は SOC_WIFI_SUPPORTED のチップだけ）。手元の P4 のボードには co-processor が無く、試していない。
 - **RP2040 / RP2350**（Pro Micro RP2350 を含む）: Wi-Fi なし。Pico W / Pico 2 W の CYW43 は使っていない。

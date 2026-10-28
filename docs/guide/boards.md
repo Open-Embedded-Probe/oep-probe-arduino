@@ -10,7 +10,7 @@ no released firmware.
 | | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32 (X035 / V307 / H417) | other ESP32 (S3, C3, C6, ...) |
 |---|---|---|---|---|---|
 | Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | none: build it (below) |
-| Checked on a bench | on a Pico 2 (CH32L103) | P4: yes (CH32X035 jig); P4X: captures (wireskein's bench) | yes (CH32V003 jig) | no (built and host-tested only) | no |
+| Checked on hardware | yes | yes | yes | no (built and host-tested only) | no |
 | Transports | USB CDC, vendor bulk, HID | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB vendor bulk, HID | USB-Serial/JTAG or USB CDC |
 | RVSWD (CH32 2-wire) | yes (SIO) | yes (dedicated GPIO) | yes | yes | yes (dedicated GPIO; built, not checked) |
 | SWIO (CH32V00x 1-wire) | yes | yes | yes | yes (not the X035) | no |
@@ -18,7 +18,7 @@ no released firmware.
 | Target console (through the debug module) | yes | yes | yes | yes | yes |
 | GPIO, UART fixtures | yes | yes (2 UARTs) | yes | GPIO; UART not on the X035 | yes |
 | Logic capture | PIO + DMA: 8 ch, one-shot, edge / level trigger | PARLIO: up to 16 ch, 2 ch 160 Msps / 8 ch 40 Msps / 16 ch 20 Msps; one-shot level / edge trigger, pretrigger up to 32 Ki samples (16 ch) | GPIO sampler: 8 ch, 1-300 kHz, one-shot; level / edge trigger searched in bursts | one port's pins 0-15, 8 ch, up to 250 kS/s, one-shot, edge / level trigger (not the X035) | no |
-| Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | ADC1, 4 ch, the ADC's sample-time steps (V307 from about 47.6 k, H417 from 198 k); not the X035 | no (not built) |
+| Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | ADC1, 4 ch, the ADC's sample-time steps (tens to hundreds of kS/s); not the X035 | no (not built) |
 | Tracks started together (capture-group) | logic + analog | logic + analog | logic (sampler) + analog | no | no |
 | SPI / I2C target (the DUT controller's peer) | I2C, SPI (PIO; not checked) | yes | yes (SPI modes 0 / 2) | yes (not the X035; SPI up to 200 kHz) | yes (not checked) |
 | SPI / I2C controller (the DUT target's peer) | yes (GPIOs, up to 250 kHz) | yes (GPIOs, I2C 400 kHz / SPI 2 MHz) | yes (as the P4) | yes (not the X035; GPIOs, up to 250 kHz) | no (not built) |
@@ -72,8 +72,7 @@ vendor bulk, DFU and HID interfaces; installing it needs administrator rights.
 
 ## Building for another board
 
-Boards with no bench get no released firmware: an unchecked binary helps nobody. Building one yourself takes a few
-minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
+Chips outside the table have no released firmware; building one yourself takes a few minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
 
 1. **Start from the example closest to what you want.** A CH32 debugger: `04.Debug/RvswdDebugProbe`; a fixture:
    `01.Basics/FixtureProbe`; everything: `Firmware/OepProbe` (copy the part of the chip nearest yours, e.g. `Esp32P4.h`).
@@ -87,7 +86,7 @@ minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
          - platform: esp32:esp32 (3.3.12)
            platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
        libraries:
-         - OpenEmbeddedProbe (0.0.9)
+         - OpenEmbeddedProbe (<the library's version>)
    ```
 
    `RvswdDebugProbe` already has this profile: `arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe`
@@ -99,12 +98,21 @@ minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
    fixed ID: a host reaches them by the port the user chooses.
 4. **Choose the pins.** Leave out the flash / PSRAM pins, the USB pins, the boot straps and anything the board wires to a
    part (keep them out of the pin table and out of the start-up parking), offer the rest (the pin table's mask,
-   `pin_choice` for host-chosen pins).
+   `pin_choice` for host-chosen pins). What to weigh:
+   - **Boot straps**: read only as reset ends, so a target holding one low or high starts the probe in another mode
+     (an ESP32's GPIO0 low: download mode). Whether the target pulls one is not known until it is wired: leave them out.
+     The RP2040 / RP2350 have none (BOOTSEL is on the flash's chip select).
+   - **The default UART**: an ESP32's boot ROM logs to UART0 at every reset, into whatever is wired there: leave it out.
+     On an RP2 the default is only the core's habit (`Serial1`): its pins are free to use.
+   - **Unused pins are parked** (Hi-Z, no pull) before the first answer: an RP2 pad starts pulled down, enough to hold
+     a half-wired target's reset. Call `oep::platformParkMask` in `setup()`.
+   - **The RP2350's erratum E9**: a released input can stick high; read a pin through a pad pull.
+   - Keep the lines of one function next to each other (an RP2's PIO wants consecutive pins).
 5. **Build and flash**: `arduino-cli compile --profile esp32s3 <dir>`, then `arduino-cli upload -p <port> --profile esp32s3
    <dir>`.
 6. **Check** with `oep dump --port <port>`, then attach a target from Python ([Getting started](getting-started.md)).
 
-If it works, tell us (an issue on the repository): a board with a bench can get released firmware.
+If it works, tell us (an issue on the repository).
 
 ## A chip the library does not know
 

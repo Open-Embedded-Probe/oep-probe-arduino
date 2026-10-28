@@ -167,11 +167,9 @@ Each source file starts with the spec sections it follows.
 - The line's settings (how it rests, how fast it may go) are the target's: the host passes them at attach; the probe
   keeps no per-chip defaults.
 - **Drive the debug wire at the weakest strength the wire's timing allows.** Its sharp edges couple into the fixture
-  lines next to it on the same jig: at the classic ESP32's default 20 mA the SWIO line made a 1 MHz SPI target lose or
-  shift bits while the console was read (23 of 36 frames good; 72 of 72 at the weakest, wire speed unchanged,
-  2026-10-02). Every PHY in this library does so (RVSWD: ESP32-P4 `GPIO_DRIVE_CAP_0`, RP2 2 mA; SWIO: classic and P4
-  `GPIO_DRIVE_CAP_0`, `OEP_SWIO_DRIVE_CAP`). A new PHY or a port to another chip must set it too - the P4 SWIO port
-  first left it at the default. Set it again when the wire takes its pins (the RVSWD PHY does at every attach): a
+  lines next to it on the same jig: at the classic ESP32's default strength the SWIO line made the SPI target beside it
+  lose or shift bits while the console was read (the weakest fixed it, the wire's speed unchanged). Every PHY in this library does so (RVSWD: ESP32-P4 `GPIO_DRIVE_CAP_0`, RP2 2 mA; SWIO: classic and P4
+  `GPIO_DRIVE_CAP_0`, `OEP_SWIO_DRIVE_CAP`). A new PHY or a port to another chip must set it too. Set it again when the wire takes its pins (the RVSWD PHY does at every attach): a
   host-chosen pair is free between connections, and a fixture gpio output or an output idle may leave another strength
   on it.
 - **Fixture gpio's output strength** (oep-if-fixture §1.1) comes from `platformDriveLevels()` in `OepPlatform.h`: the
@@ -216,7 +214,7 @@ Each source file starts with the spec sections it follows.
   (`Firmware/OepProbe/Esp32P4.h`); the safe boot covers a crash loop the saved settings set off. `BootGuard::lastBoot()`
   says what ended the boot before when the firmware did not intend it (a crash or a hang and the seconds it was up, a brownout, an update the bootloader did not start; nothing for a reset from outside or a restart on purpose - on the RP2 `crashed()` marks its own reset, so an unmarked watchdog reboot such as picotool's is no crash);
   `Firmware/OepProbe` puts it after the version in fn 0's describe firmware text (`describeCore`'s last argument), e.g.
-  `0.0.29 (panic at 12 s)`.
+  `<version> (panic at 12 s)`.
 - A fixture UART receives through its UART's interrupt, which the bit-banged wires' frames hold off on their core
   (interrupts off one frame at a time: SWIO up to `SwioPhy::kIrqOffMaxUs`, RVSWD up to about 1.1 ms at the slowest
   max_speed). On an ESP32 the interrupt fires at `kUartRxFifoFull` (32) bytes of the 128-byte RX FIFO, leaving 480 us at
@@ -260,7 +258,7 @@ probes apart and finds a probe named by it). iProduct is free text for people (`
 host identifies a probe by it. Interfaces outside OEP on the same device, such as the ESP32-P4's in-app DFU, are part of it.
 The vendor bulk interface carries bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45 and a vendor HID says usage page
 0xFF4F, usage 0x45 (transports §3; `Firmware/OepProbe/Esp32P4.h` patches EspUsbDevice's descriptors for that).
-describe declares nothing about the VID:PID (the old discoverable is gone, core §7.5): a host finds a probe by the
+describe declares nothing about the VID:PID (core §7.5): a host finds a probe by the
 project's VID:PID, by the unit id it was given, or by the port the user chose (transports §3).
 
 ## 10. Testing

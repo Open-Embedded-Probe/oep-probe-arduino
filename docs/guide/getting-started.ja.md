@@ -28,7 +28,7 @@ OepProbe が動いている ESP32-P4 は、HS の口だけで更新できます:
 app の image）が、もう一方の app の領域に書き、確かめてから再起動します。設定は残ります（まっさらにしたいときは
 `oep settings unset --all <port>` の後に save）。新しい firmware は起動したらそのまま残ります: その後のどのリセットでも前の firmware には戻りません。
 bootloader が新しい firmware を起動しなかったときは、describe の firmware の文字列が版の後ろにそれを示します（例
-`0.0.29 (update to app1 did not reach setup: software)`）。電源の投入でも probe 自身の再起動でもないリセットも、同じように
+`<版> (update to app1 did not reach setup: software)`）。電源の投入でも probe 自身の再起動でもないリセットも、同じように
 そこに出ます（`brownout at 3 s`）。一度も焼いていないチップや、起動しないチップは、上のとおり USB-Serial/JTAG で esptool
 を使って焼きます。
 
