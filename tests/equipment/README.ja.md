@@ -126,12 +126,6 @@ uv run --project tests --with-editable /path/to/oep-client-python pytest -c test
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_recovery_races.py
 ```
 
-corr枯渇前の切替は[公開rolloverガイド](../../../oep-client-python/docs/rollover-conformance.ja.md)の明示sampleで検査する。production Hostや物理readerの切替を検査した結果には含めない。
-
-```bash
-uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_conformance_rollover.py
-```
-
 end/openの応答喪失後の回復は[公開session-lossガイド](../../../oep-client-python/docs/session-loss-conformance.ja.md)の明示sampleで検査する。保存されたopenの成功と現在のsessionの有効性を分け、result_lostからoutcomeやlease値を推測しない。物理再接続やproduction Hostへの統合は未検査。
 
 ```sh
@@ -475,15 +469,6 @@ streamingのerror時write_posも完了境界から計算する。全group/multir
 
 ```sh
 uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_trigger_modes.py
-```
-
-## repeat/streamingのグループtrigger
-
-異なるactual_rateのlogic/analogを束ね、trigger元を入れ替えて全trackの待機、forceと自然trigger、
-共通時刻とP_k、最初のrepeat区画を確認する。既知波形fixtureの回帰であり実時間latencyは証明しない。
-
-```sh
-uv run --project tests --with-editable /path/to/oep-client-python pytest -c tests/pyproject.toml /path/to/oep-client-python/tests/test_virtual_bench_capture_group_modes.py
 ```
 
 ## 待機後の信号変化
