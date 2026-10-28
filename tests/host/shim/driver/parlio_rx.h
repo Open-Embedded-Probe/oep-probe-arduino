@@ -29,7 +29,7 @@ typedef FakeParlioDelimiter *parlio_rx_delimiter_handle_t;
 typedef struct {
   size_t trans_queue_depth, max_recv_size, data_width;
   parlio_clock_source_t clk_src;
-  uint32_t exp_clk_freq_hz;
+  uint32_t ext_clk_freq_hz, exp_clk_freq_hz;
   int clk_in_gpio_num, clk_out_gpio_num, valid_gpio_num;
   int data_gpio_nums[PARLIO_RX_UNIT_MAX_DATA_WIDTH];
 } parlio_rx_unit_config_t;

@@ -1689,7 +1689,8 @@ static void testExternalClockAndGlitch() {
     if (out[at] == cap::kTlvConfigureAnswerLayout) CHECK(out[at + kTlvHeader + 1] == 3);   // C 3: the clock's role is none
   }
   CHECK(num == 0);
-  CHECK(g_fake_parlio_config.clk_src == PARLIO_CLK_SRC_EXTERNAL && g_fake_parlio_config.clk_in_gpio_num == 3);
+  CHECK(g_fake_parlio_config.clk_src == PARLIO_CLK_SRC_EXTERNAL && g_fake_parlio_config.clk_in_gpio_num == 3 &&
+        g_fake_parlio_config.ext_clk_freq_hz == 1000000 && g_fake_parlio_config.exp_clk_freq_hz == 1000000);
   CHECK(g_fake_parlio_config.data_gpio_nums[2] == 2 && g_fake_parlio_config.data_gpio_nums[3] == GPIO_NUM_NC);
   CHECK(!g_fake_parlio_delimiter.level && g_fake_parlio_delimiter.edge == PARLIO_SAMPLE_EDGE_NEG);
   p = with(request(c), cap::kTlvConfigureClock, {3, 0, 1, 0});   // a qualifier on role 1, active low

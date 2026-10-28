@@ -1265,7 +1265,8 @@ bool LogicCapture::open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t 
   c.max_recv_size = bytes;
   c.data_width = width;
   c.clk_src = clock_pin_ >= 0 ? PARLIO_CLK_SRC_EXTERNAL : PARLIO_CLK_SRC_PLL_F160M;
-  c.exp_clk_freq_hz = rate_hz;   // external: the fastest clock that may come
+  c.exp_clk_freq_hz = rate_hz;   // external: the fastest clock that may come, taken undivided
+  c.ext_clk_freq_hz = clock_pin_ >= 0 ? rate_hz : 0;
   c.clk_in_gpio_num = clock_pin_ >= 0 ? static_cast<gpio_num_t>(clock_pin_) : GPIO_NUM_NC;
   c.clk_out_gpio_num = GPIO_NUM_NC;
   c.valid_gpio_num = qual_pin_ >= 0 ? static_cast<gpio_num_t>(qual_pin_) : GPIO_NUM_NC;
