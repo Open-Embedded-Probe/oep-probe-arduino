@@ -72,7 +72,7 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   w.u16(kTagMaxLength, kMaxFrame);
   w.u32(kTagMaxClockHz, kMaxClockHz);
   namespace i2c = reg::fixture_i2c_target;
-  // bit2 the internal pull-ups start() enables (fixture §3); stretch is in the ops tag (offers)
+  // bit0 the internal pull-ups start() enables (fixture §3); stretch is in the ops tag (offers)
   w.u32(kTagFeatures, kInternalPullups ? i2c::kFeaturesInternalPullups : 0);
   w.u8(i2c::kTlvDescribeQueueDepth, kQueueDepth);
   if (kStretch) w.u32(i2c::kTlvDescribeMaxStretchUs, kMaxStretchUs);
@@ -224,7 +224,7 @@ bool P4I2cTarget::start() {
   // input read 0 on the wire), so a real bus needs them here: the GPIO matrix lets the pad keep its
   // ~45 kOhm internal pull-up while the I2C peripheral owns it, as the IDF master driver does with
   // enable_internal_pullup. Weak, but a bus for master tests at <= 400 kHz rather than no bus. Declared in describe
-  // (features bit2: fixture §3).
+  // (features bit0: fixture §3).
   gpio_set_pull_mode(static_cast<gpio_num_t>(sda_), GPIO_PULLUP_ONLY);
   gpio_set_pull_mode(static_cast<gpio_num_t>(scl_), GPIO_PULLUP_ONLY);
   // This handler on the driver's shared interrupt: added later, so it runs first (esp_intr_alloc chains the newest
@@ -317,7 +317,7 @@ bool P4I2cTarget::start() {
 #else
   wire_->setClock(kMaxClockHz);
   wire_->begin(address_);
-  gpio_pull_up(sda_);   // the pads' pull-ups (features bit2: fixture §3)
+  gpio_pull_up(sda_);   // the pads' pull-ups (features bit0: fixture §3)
   gpio_pull_up(scl_);
 #endif
   rx_count_ = 0;

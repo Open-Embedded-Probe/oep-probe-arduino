@@ -13,8 +13,8 @@
 // Triggers: immediate, level and edge on one channel, with a pretrigger inside the segment; the search runs in bursts
 // with interrupts on between them, and gives the SWIO wire turns inside them (OepSamplerRun.h).
 //
-//   0x01 configure(TLV) -> TLV   0x02 start -> generation u32   0x03 stop   0x04 force   0x05 status
-//   0x06 read(generation, position, max)   0x07 segments   0x08 release (nothing to do in one-shot)   0x09 query (no lock)
+//   configure(TLV) -> TLV   start -> generation u32   stop   force   status
+//   read(generation, position, max)   segments   release (nothing to do in one-shot)   query (no lock)
 #pragma once
 
 #include <Arduino.h>

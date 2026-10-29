@@ -3,9 +3,9 @@
 
 // oep.fixture.spi-target revision 1 (oep-spec oep-if-fixture §4), on an ESP32's hardware SPI target (the ESP-IDF
 // spi_slave driver, SPI2_HOST, no DMA: 64-byte FIFO transactions).
-//   0x01 configure(mode u8 0-3, bit_order u8: 0 MSB first, 1 LSB first)   0x02 arm(length u16, count u16, tx)
-//   0x03 read_rx -> pending(u8) bits(u32) count(u16) data
-//   0x04 status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) (no lock)
+//   configure(mode u8 0-3, bit_order u8: 0 MSB first, 1 LSB first)   arm(length u16, count u16, tx)
+//   read_rx -> pending(u8) bits(u32) count(u16) data
+//   status -> state mode bit_order armed queued (u8 each) transactions(u32) errors(u32) (no lock)
 // Every request takes a TLV tail (oep-core §2.3). Roles: 1 SCK, 2 MOSI, 3 MISO, 4 CS.
 // One CS-framed transaction is armed at a time with the MISO bytes to send;
 // after the master raises CS the result (MOSI bytes, length in bits) is queued

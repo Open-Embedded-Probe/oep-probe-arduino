@@ -17,8 +17,8 @@
 // the probe's GPIOs: the capture only listens, and claims none). A sample is late only if the state machine stalled
 // on a full FIFO (the DMA behind): the segment is then slipped.
 //
-//   0x01 configure(TLV) -> TLV   0x02 start -> generation u32   0x03 stop   0x04 force   0x05 status
-//   0x06 read(generation, position, max)   0x07 segments   0x08 release (nothing to do in one-shot)   0x09 query (no lock)
+//   configure(TLV) -> TLV   start -> generation u32   stop   force   status
+//   read(generation, position, max)   segments   release (nothing to do in one-shot)   query (no lock)
 #pragma once
 
 #include <Arduino.h>

@@ -20,9 +20,9 @@
 // A trigger keeps the ADC converting into a ring while it is looked for (ESP32: the segment's buffer, filled by the
 // driver's reads; RP2: a 32 KiB DMA write ring) and takes the segment from pretrigger frames before the crossing.
 //
-//   0x01 configure(TLV) -> TLV   0x02 start -> generation u32   0x03 stop   0x04 force   0x05 status
-//   0x06 read(generation, position, max)   0x07 segments   0x08 release (nothing to do in one-shot)   0x09 query (no lock)
-//   0x0A calibration -> TLV (no lock)
+//   configure(TLV) -> TLV   start -> generation u32   stop   force   status
+//   read(generation, position, max)   segments   release (nothing to do in one-shot)   query (no lock)
+//   calibration -> TLV (no lock)
 //
 // Channel k is plan role k (0..3); a pin is an ADC input the sketch offers. The pads go to their analog function while
 // it runs, which cuts their digital input and output (the classic ESP32: GPIO32 as logic and analog at once gave 0

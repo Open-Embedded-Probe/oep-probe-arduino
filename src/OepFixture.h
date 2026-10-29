@@ -4,24 +4,21 @@
 // OEP v1 fixtures on the probe's own pins (oep-spec docs/oep-if-fixture.ja.md, revision 1):
 //
 //   oep.fixture.gpio   plan role 1 = a line (any number of them). Only planned channels may be set or read.
-//     0x01 set(n u8, n x (channel u16, mode u8)) [TLV]      modes 0 input, 1 pull-up, 2 pull-down, 3 output low,
-//                                                          4 output high, 5 open-drain low, 6 open-drain release
-//          TLV 0x01 drive(index u8, level u8), one per mode 3 / 4 element: its output strength (§1.1, level 0xFF the
-//          default level)
-//     0x02 read(n u8, n x channel u16) [TLV] -> n(u8) n x level [TLV]                       no lock
-//     The output strength (oep-if-fixture §1.1) where the chip switches it (platformDriveLevels: describe drive_levels,
-//     the classic ESP32 / ESP32-P4 and the RP2040 / RP2350): a set's drive, else the channel's idle drive, else the
-//     default level, kept until the channel is set again; a channel taken or released is at its idle state's (PinTable).
+//     set(n u8, n x (channel u16, mode u8)) [TLV]      modes 0 input, 1 pull-up, 2 pull-down, 3 output low,
+//                                                    4 output high, 5 open-drain low, 6 open-drain release
+//     read(n u8, n x channel u16) [TLV] -> n(u8) n x level [TLV]                       no lock
+//     The output strength is the probe's (oep-if-fixture §1): where the chip switches it, the channel's idle drive,
+//     else the default level; a channel taken or released is at its idle state's (PinTable).
 //   oep.fixture.uart   plan roles 1 = RX, 2 = TX. A position stream like oep.target.console (without the stream
-//                      byte): the plan makes the stream and the UART runs from then on (the the settings uart item's
+//                      byte): the plan makes the stream and the UART runs from then on (the settings uart item's
 //                      settings, else 115200 8N1) until plan_release; reading does not consume. Positions and mark
 //                      serials never go back within a boot (a plan made again goes on from where the last left off).
 //                      TX idles high while planned (before configure too); released, it goes to its idle state
 //                      (PinTable, default Hi-Z).
-//     0x01 configure(baud u32) [TLV 0x01 format] -> baud (actual) [TLV]
-//     0x02 read(from, arg, max) -> start flags len data [TLV] (no lock)   0x03 marks(from_serial) (no lock)
-//     0x04 clear   0x05 mark(value)   0x06 write(count u16, data) -> accepted
-//     0x07 status -> baud format (no lock): the running ones (a settings item whose baud could not be made: the default)
+//     configure(baud u32) [TLV format] -> baud (actual) [TLV]
+//     read(from, arg, max) -> start flags len data [TLV] (no lock)   marks(from_serial) (no lock)
+//     clear   mark(value)   write(count u16, data) -> accepted
+//     status -> baud format (no lock): the running ones (a settings item whose baud could not be made: the default)
 //
 // The ESP32 I2C / SPI targets are in OepP4I2cTarget.h / OepP4SpiTarget.h.
 #pragma once

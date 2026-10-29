@@ -3,9 +3,9 @@
 
 // oep.fixture.i2c-target revision 1 (oep-spec oep-if-fixture §3), on an ESP32's hardware I2C target, for testing a DUT's
 // I2C controller.
-//   0x01 configure(address u8)   0x03 read_rx -> pending(u8) count(u16) data   0x04 preload_tx(count u16, data)
-//   0x05 status -> state(u8) queued(u8) rx_frames(u32) tx_slots(u8) errors(u32)   (no lock)
-//   0x07 stretch(stretch_us u32; ESP32-P4 only, declared in the ops tag)
+//   configure(address u8)   read_rx -> pending(u8) count(u16) data   preload_tx(count u16, data)
+//   status -> state(u8) queued(u8) rx_frames(u32) tx_slots(u8) errors(u32)   (no lock)
+//   stretch(stretch_us u32; ESP32-P4 only, declared in the ops tag)
 // Every request takes a TLV tail (oep-core §2.3). Roles: 1 SDA, 2 SCL. A write with data in one transaction is one
 // frame (bytes past max_length dropped, errors + 1); a read is answered from the preload slots in order, 0xFF when
 // there is none.
@@ -67,7 +67,7 @@ class P4I2cTarget final : public Interface {
   static constexpr uint32_t kMaxStretchUs = 0;
 #endif
 
-  // start() enables the pads' internal pull-ups on SDA / SCL while configured (fixture §3: declared with features bit2).
+  // start() enables the pads' internal pull-ups on SDA / SCL while configured (fixture §3: declared with features bit0).
   // The typical R_PU of both chips' datasheets is 45 kOhm: ESP32-P4 Series Datasheet v1.2 / Pre-release v0.7, Table 5-4
   // DC Characteristics (3.3 V, 25 °C), "R_PU Internal weak pull-up resistor - 45 - kOhm"; ESP32 Series Datasheet v5.3,
   // Table 5-3 DC Characteristics (3.3 V, 25 °C), "R_PU Resistance of internal pull-up resistor - 45 - kOhm" (typical
