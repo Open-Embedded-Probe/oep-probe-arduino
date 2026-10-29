@@ -38,8 +38,12 @@ class SpiController final : public Interface {
   static constexpr uint8_t kOwnerId = owners::kSpiController;
   enum Role : uint8_t { kRoleSck = 1, kRoleMosi = 2, kRoleMiso = 3, kRoleCs = 4 };
   static constexpr size_t kMaxLength = 256;   // the bytes of one request's transfers
-#if defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_SPI_BUS)
-  static constexpr uint32_t kMaxClockHz = 2000000;
+#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
+  // the P4's GPIO reads and writes take some 300 ns each, a half of SCK holds a write and a read: the bench (P4X, the
+  // lines captured) kept 750 kHz, and 1 MHz asked came out at 768 kHz
+  static constexpr uint32_t kMaxClockHz = 750000;
+#elif defined(ARDUINO_ARCH_ESP32) || defined(OEP_HOST_FAKE_SPI_BUS)
+  static constexpr uint32_t kMaxClockHz = 2000000;   // the classic ESP32: not measured (its sampler cannot see it)
 #else
   static constexpr uint32_t kMaxClockHz = 250000;   // halves of whole microseconds (micros()): 2 us at the most
 #endif

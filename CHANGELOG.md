@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: the I2C / SPI controllers' times on an ESP32. An edge's time is now taken as its write is issued (an ESP32's
+  GPIO write returns some 300 ns later, and counting from the return added that to every half: SPI at 1 MHz came out at
+  620 kHz on the ESP32-P4), the SCL low after a START is counted from SCL's own fall (it was 1.0 us at 400 kHz, under
+  Fast mode's 1.3 us), and SCL's high counts from SCL seen high less the read's own time. The timed code runs from
+  internal RAM on an ESP32 (a cache miss stretched the first bits). The ESP32-P4's SPI controller declares
+  max_clock_hz 750 kHz (its GPIO reads and writes bound it: 1 MHz asked gave 768 kHz; 750 kHz kept, the lines captured).
+- (JA) 修正: ESP32 の I2C / SPI の controller の時間。エッジの時刻を、書き込みを出した時点で取る（ESP32 の GPIO の書き込みは約 300 ns
+  後に戻り、戻った時点から数えると半周期ごとにその分だけ延びた: ESP32-P4 で SPI の 1 MHz が 620 kHz）。START の後の SCL の low を
+  SCL を下げた時点から数える（400 kHz で 1.0 µs になり、Fast mode の 1.3 µs を下回っていた）。SCL の high は、high を読めた時点から
+  読みにかかる時間を引いて数える。時間を刻む部分は ESP32 では内部 RAM に置く（キャッシュのミスで最初のビットが延びた）。ESP32-P4 の
+  SPI の controller の describe の max_clock_hz は 750 kHz（GPIO の読み書きで決まる: 1 MHz を頼むと 768 kHz。750 kHz は線を取り込んで確かめた）。
 - (EN) counter on an ESP32 with a pulse counter (classic ESP32, ESP32-P4 / P4X, and S2 / S3 / C6 / H2 builds) counts in
   the PCNT, a unit an input made for the measure: describe's max_clock_hz is 40 MHz on the ESP32-P4 and 10 MHz on the
   classic ESP32 (counted without a miss on the bench, a square wave on the same pad; the classic's PWM stops at 10 MHz).

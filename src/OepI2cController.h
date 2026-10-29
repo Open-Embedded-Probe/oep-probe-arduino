@@ -97,11 +97,13 @@ class I2cController final : public Interface {
   uint32_t half_ = 0;       // a half SCL period, ticks (CPU cycles on an ESP32, microseconds elsewhere)
   uint32_t timeout_ = 0;    // stretch_timeout_us, ticks
   uint32_t edge_ = 0;       // the tick count at the last edge
+  uint32_t read_lag_ = 0;   // ticks a level read takes (start()): taken off the time SCL was seen high
   void sda(bool high) const;
   void scl(bool high) const;
   bool sdaHigh() const;
   bool sclHigh() const;
   void waitHalf();
+  void sclLow();            // SCL pulled low, its time taken as the write is issued
   bool sclRelease();        // SCL let go and waited high: false, the target held it past the timeout
   uint8_t bitOut(bool bit);
   uint8_t bitIn(bool &bit);

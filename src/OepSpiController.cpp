@@ -34,6 +34,13 @@ inline uint32_t ticks() { return micros(); }
 inline void line(int pad, bool high) { digitalWrite(pad, high ? HIGH : LOW); }
 inline bool level(int pad) { return digitalRead(pad) != 0; }
 #endif
+// The timed part runs from internal RAM on an ESP32: a cache miss in the middle of a transfer (code in flash) stretched
+// the first bits' halves to 2-5 us at 1 MHz (P4X, the bench)
+#if defined(ARDUINO_ARCH_ESP32)
+#define OEP_SPI_TIMED IRAM_ATTR
+#else
+#define OEP_SPI_TIMED
+#endif
 // A time asked as whole ticks at or above it, and those ticks as ns rounded down: what the line kept at least
 uint32_t cyclesOf(uint32_t ns) { return static_cast<uint32_t>((static_cast<uint64_t>(ns) * tickHz() + 999999999u) / 1000000000u); }
 uint32_t nsOf(uint32_t cycles) { return static_cast<uint32_t>(static_cast<uint64_t>(cycles) * 1000000000u / tickHz()); }
@@ -146,11 +153,11 @@ void SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint3
 
 #else
 
-void SpiController::set(int pad, bool high) const { line(pad, high); }
-bool SpiController::miso() const { return level(miso_pad_); }
+void OEP_SPI_TIMED SpiController::set(int pad, bool high) const { line(pad, high); }
+bool OEP_SPI_TIMED SpiController::miso() const { return level(miso_pad_); }
 
 // Until `cycles` ticks after the last edge
-void SpiController::waitFor(uint32_t cycles) {
+void OEP_SPI_TIMED SpiController::waitFor(uint32_t cycles) {
   const uint32_t due = edge_ + cycles;
   while (static_cast<int32_t>(ticks() - due) < 0) {}
 }
@@ -158,7 +165,10 @@ void SpiController::waitFor(uint32_t cycles) {
 // One CS-framed transfer. Mode = CPOL x 2 + CPHA (fixture §4): with CPHA 0 a bit is on MOSI before its leading edge
 // (the first one right at CS), MISO read at the leading edge; with CPHA 1 a bit goes out at its leading edge and MISO is
 // read at the trailing one. The last edge is a trailing one either way; hold counts from it.
-void SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint32_t hold, const uint8_t *tx, uint8_t *rx,
+// An SCK edge's time is taken as its write is issued: an ESP32's GPIO write returns some 300 ns after (the P4X), the
+// same for every edge, so counting from its return added that to every half (1 MHz came out at 620 kHz). CS's time is
+// taken after its write returns: setup, hold and gap only come out longer for it, which the answer allows.
+void OEP_SPI_TIMED SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint32_t hold, const uint8_t *tx, uint8_t *rx,
                                  size_t count) {
   const bool cpol = mode_ >> 1, cpha = mode_ & 1, lsb = bit_order_;
   const size_t bits = count * 8;
@@ -169,18 +179,18 @@ void SpiController::lineTransfer(bool first, uint32_t gap, uint32_t setup, uint3
   if (!bits) {
     waitFor(setup + hold);
   } else {
-    memset(rx, 0, count);
+    for (size_t k = 0; k < count; ++k) rx[k] = 0;   // not memset: it may sit in flash
     if (!cpha) set(mosi_pad_, bitOf(0));
     waitFor(setup);
     for (size_t k = 0; k < bits; ++k) {
       if (k) waitFor(half_);
-      set(sck_pad_, !cpol);   // the leading edge
       edge_ = ticks();
+      set(sck_pad_, !cpol);   // the leading edge
       if (cpha) set(mosi_pad_, bitOf(k));
       bool in = cpha ? false : miso();
       waitFor(half_);
-      set(sck_pad_, cpol);   // the trailing edge
       edge_ = ticks();
+      set(sck_pad_, cpol);   // the trailing edge
       if (cpha) in = miso();
       if (in) rx[k / 8] |= static_cast<uint8_t>(1u << (lsb ? k % 8 : 7 - k % 8));
       if (!cpha && k + 1 < bits) set(mosi_pad_, bitOf(k + 1));

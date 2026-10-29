@@ -19,6 +19,13 @@
 
 namespace oep {
 
+// The timed part runs from internal RAM on an ESP32 (a cache miss in a bit stretches it)
+#if defined(ARDUINO_ARCH_ESP32)
+#define OEP_I2C_TIMED IRAM_ATTR
+#else
+#define OEP_I2C_TIMED
+#endif
+
 namespace {
 // The clock the halves are counted on: the CPU's cycles on an ESP32, micros() elsewhere; the host tests' a 160 MHz CPU
 #if defined(OEP_HOST_FAKE_I2C_BUS)
@@ -124,6 +131,9 @@ bool I2cController::start() {
   const uint32_t hz = tickHz();
   half_ = (hz + 2 * clock_hz_ - 1) / (2 * clock_hz_);
   timeout_ = static_cast<uint32_t>(static_cast<uint64_t>(stretch_timeout_us_) * (hz / 1000000u));
+  const uint32_t t0 = ticks();
+  (void)level(scl_pad_);
+  read_lag_ = ticks() - t0;
   started_ = true;
   return true;
 #endif
@@ -152,52 +162,60 @@ void I2cController::lineRelease() { host_bus->release(); }
 
 #else
 
-void I2cController::sda(bool high) const { line(sda_pad_, high); }
-void I2cController::scl(bool high) const { line(scl_pad_, high); }
-bool I2cController::sdaHigh() const { return level(sda_pad_); }
-bool I2cController::sclHigh() const { return level(scl_pad_); }
+void OEP_I2C_TIMED I2cController::sda(bool high) const { line(sda_pad_, high); }
+void OEP_I2C_TIMED I2cController::scl(bool high) const { line(scl_pad_, high); }
+bool OEP_I2C_TIMED I2cController::sdaHigh() const { return level(sda_pad_); }
+bool OEP_I2C_TIMED I2cController::sclHigh() const { return level(scl_pad_); }
 
-// Until half a period after the last edge; a half an interrupt stretched starts the next one from now
-void I2cController::waitHalf() {
+// Until half a period after the last edge. An edge's time is taken as its write is issued: an ESP32's GPIO write
+// returns some 300 ns after (the P4X), and a half counted from the return, or from the half before's due time, came out
+// longer or shorter by that (the low after a START 1.0 us at 400 kHz).
+void OEP_I2C_TIMED I2cController::waitHalf() {
   const uint32_t due = edge_ + half_;
   while (static_cast<int32_t>(ticks() - due) < 0) {}
-  const uint32_t now = ticks();
-  edge_ = now - due > half_ ? now : due;
 }
 
-bool I2cController::sclRelease() {
-  scl(true);
+void OEP_I2C_TIMED I2cController::sclLow() {
+  edge_ = ticks();
+  scl(false);
+}
+
+// The high half counts from SCL seen high, as a controller's clock synchronization does (UM10204): a slow rise or a
+// target stretching it makes the period longer. The read that saw it is taken off.
+bool OEP_I2C_TIMED I2cController::sclRelease() {
   const uint32_t from = ticks();
+  scl(true);
   while (!sclHigh()) {
     if (ticks() - from > timeout_) return false;
   }
-  edge_ = ticks();
+  const uint32_t seen = ticks();
+  edge_ = seen - from > read_lag_ ? seen - read_lag_ : from;
   return true;
 }
 
 // SCL low on entry and on return. A 1 the bus does not show while SCL is high: another controller, or a stuck line.
-uint8_t I2cController::bitOut(bool bit) {
+uint8_t OEP_I2C_TIMED I2cController::bitOut(bool bit) {
   sda(bit);
   waitHalf();
   if (!sclRelease()) return kLineStretch;
   if (bit && !sdaHigh()) return kLineBusError;
   waitHalf();
-  scl(false);
+  sclLow();
   return kLineOk;
 }
 
-uint8_t I2cController::bitIn(bool &bit) {
+uint8_t OEP_I2C_TIMED I2cController::bitIn(bool &bit) {
   sda(true);
   waitHalf();
   if (!sclRelease()) return kLineStretch;
   bit = sdaHigh();
   waitHalf();
-  scl(false);
+  sclLow();
   return kLineOk;
 }
 
 // A START from an idle bus (both lines high), or a repeated START with SCL held low
-uint8_t I2cController::lineStart(bool repeated) {
+uint8_t OEP_I2C_TIMED I2cController::lineStart(bool repeated) {
   if (repeated) {
     sda(true);
     waitHalf();
@@ -208,13 +226,14 @@ uint8_t I2cController::lineStart(bool repeated) {
     if (!sclRelease()) return kLineStretch;   // a target still holding SCL low
   }
   if (!sdaHigh()) return kLineBusError;   // SDA held low: no START can be made
-  sda(false);
+  edge_ = ticks();
+  sda(false);   // the START
   waitHalf();
-  scl(false);
+  sclLow();
   return kLineOk;
 }
 
-uint8_t I2cController::lineWrite(uint8_t byte, bool &ack) {
+uint8_t OEP_I2C_TIMED I2cController::lineWrite(uint8_t byte, bool &ack) {
   for (int k = 7; k >= 0; --k) {
     const uint8_t r = bitOut((byte >> k) & 1);
     if (r != kLineOk) return r;
@@ -225,7 +244,7 @@ uint8_t I2cController::lineWrite(uint8_t byte, bool &ack) {
   return r;
 }
 
-uint8_t I2cController::lineRead(uint8_t &byte, bool ack) {
+uint8_t OEP_I2C_TIMED I2cController::lineRead(uint8_t &byte, bool ack) {
   byte = 0;
   for (int k = 0; k < 8; ++k) {
     bool bit = false;
@@ -236,12 +255,13 @@ uint8_t I2cController::lineRead(uint8_t &byte, bool ack) {
   return bitOut(!ack);
 }
 
-void I2cController::lineStop() {
+void OEP_I2C_TIMED I2cController::lineStop() {
   sda(false);
   waitHalf();
   sclRelease();   // a target holding SCL past the timeout: SDA rises anyway, the bus let go
   waitHalf();
-  sda(true);
+  edge_ = ticks();
+  sda(true);   // the STOP
   waitHalf();
 }
 

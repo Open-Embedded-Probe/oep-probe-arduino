@@ -21,7 +21,7 @@ no released firmware.
 | Analog capture (one-shot, raw values, a threshold trigger with pretrigger) | GP26-28, 4 ch, 500 kS/s in all | ADC1 GPIO16-23, 4 ch, 46 kHz in all, attenuations 0-12 dB | ADC1 GPIO32-36 / 39, 4 ch, 20-100 kHz in all | ADC1, 4 ch, the ADC's sample-time steps (tens to hundreds of kS/s); not the X035 | no (not built) |
 | Tracks started together (capture-group) | logic + analog | logic + analog | logic (sampler) + analog | no | no |
 | SPI / I2C target (the DUT controller's peer) | I2C, SPI (PIO; not checked) | yes | yes (SPI modes 0 / 2) | yes (not the X035; SPI up to 200 kHz) | yes (not checked) |
-| SPI / I2C controller (the DUT target's peer) | yes (GPIOs, up to 250 kHz) | yes (GPIOs, I2C 400 kHz / SPI 2 MHz) | yes (as the P4) | yes (not the X035; GPIOs, up to 250 kHz) | no (not built) |
+| SPI / I2C controller (the DUT target's peer) | yes (GPIOs, up to 250 kHz) | yes (GPIOs, I2C 400 kHz / SPI 750 kHz) | yes (as the P4) | yes (not the X035; GPIOs, up to 250 kHz) | no (not built) |
 | PWM output | yes (PWM slices) | yes (LEDC) | yes (LEDC) | no | no (not built) |
 | Edge counter | yes (interrupts, up to 100 kHz) | yes (PCNT, up to 40 MHz) | yes (PCNT, up to 10 MHz) | yes (not the X035) | no (not built) |
 | Analog output (DAC) | no | no | GPIO25 / 26, 8 bits | PA4 / PA5, 12 bits (V307, H417) | no |

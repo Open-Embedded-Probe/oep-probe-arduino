@@ -21,7 +21,7 @@
 | アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | ADC1、4 ch、ADC のサンプル時間の段（数十〜数百 kS/s）。X035 以外 | 無し（ビルドしていない） |
 | トラックを一緒に始める（capture-group） | ロジック + アナログ | ロジック + アナログ | ロジック（sampler）+ アナログ | 無し | 無し |
 | SPI / I2C の target（DUT の controller の相手） | I2C、SPI（PIO。未検証） | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | あり（未確認） |
-| SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 2 MHz まで） | あり（P4 と同じ） | あり（X035 以外。GPIO、250 kHz まで） | 無し（ビルドしていない） |
+| SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 750 kHz まで） | あり（P4 と同じ） | あり（X035 以外。GPIO、250 kHz まで） | 無し（ビルドしていない） |
 | PWM の出力 | あり（PWM のスライス） | あり（LEDC） | あり（LEDC） | 無し | 無し（ビルドしていない） |
 | エッジを数える（counter） | あり（割り込み、100 kHz まで） | あり（PCNT、40 MHz まで） | あり（PCNT、10 MHz まで） | あり（X035 以外） | 無し（ビルドしていない） |
 | アナログの出力（DAC） | 無し | 無し | GPIO25 / 26、8 bit | PA4 / PA5、12 bit（V307、H417） | 無し |
