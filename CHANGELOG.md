@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) counter on an ESP32 with a pulse counter (classic ESP32, ESP32-P4 / P4X, and S2 / S3 / C6 / H2 builds) counts in
+  the PCNT, a unit an input made for the measure: describe's max_clock_hz is 40 MHz on the ESP32-P4 and 10 MHz on the
+  classic ESP32 (counted without a miss on the bench, a square wave on the same pad; the classic's PWM stops at 10 MHz).
+  It still shares the pad with any function, a PWM counted on itself. Other boards keep the GPIO interrupt (100 kHz).
+- (JA) パルスカウンタを持つ ESP32（初代 ESP32、ESP32-P4 / P4X、S2 / S3 / C6 / H2 のビルド）の counter は PCNT で数える（measure ごとに
+  入力 1 つに 1 ユニット）。describe の max_clock_hz は ESP32-P4 で 40 MHz、初代 ESP32 で 10 MHz（ベンチで同じ pad の方形波を
+  取りこぼさずに数えた。初代の PWM は 10 MHz まで）。今までどおりどの機能ともピンを共有する（自分の PWM を数えられる）。ほかのボードは
+  GPIO の割り込みのまま（100 kHz）。
 - (EN) Fixed: the ESP32 / ESP32-P4 spi-target's describe left out modes, which fixture §4 requires. It now declares the
   modes configure takes: all four on the ESP32-P4, 0 and 2 on the classic ESP32 (as before).
 - (JA) 修正: ESP32 / ESP32-P4 の spi-target の describe に、fixture §4 が必須とする modes が無かった。configure が受ける mode を宣言する

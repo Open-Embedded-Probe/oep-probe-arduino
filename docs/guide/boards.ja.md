@@ -23,7 +23,7 @@
 | SPI / I2C の target（DUT の controller の相手） | I2C、SPI（PIO。未検証） | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | あり（未確認） |
 | SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 2 MHz まで） | あり（P4 と同じ） | あり（X035 以外。GPIO、250 kHz まで） | 無し（ビルドしていない） |
 | PWM の出力 | あり（PWM のスライス） | あり（LEDC） | あり（LEDC） | 無し | 無し（ビルドしていない） |
-| エッジを数える（counter） | あり（割り込み、100 kHz まで） | あり（同） | あり（同） | あり（X035 以外） | 無し（ビルドしていない） |
+| エッジを数える（counter） | あり（割り込み、100 kHz まで） | あり（PCNT、40 MHz まで） | あり（PCNT、10 MHz まで） | あり（X035 以外） | 無し（ビルドしていない） |
 | アナログの出力（DAC） | 無し | 無し | GPIO25 / 26、8 bit | PA4 / PA5、12 bit（V307、H417） | 無し |
 | 設定の保存 | flash（最後の領域） | NVS | NVS | 無し（保存の場所がまだ無い。X035 は設定そのものが無い） | NVS |
 
