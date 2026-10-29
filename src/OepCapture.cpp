@@ -1619,7 +1619,10 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     b = (b + 127) & ~uint64_t{127};                                  // whole cache lines for the DMA
     if (b > most) b = most / 128 * 128;
     bytes = static_cast<uint32_t>(b);
-    samples = static_cast<uint32_t>(static_cast<uint64_t>(bytes) * 8 / width);
+    // the segment is the samples asked, or what the buffer holds when that is less (capture §3.3: rounded down only);
+    // the DMA's whole cache lines past them are taken and not kept
+    const uint32_t fit = static_cast<uint32_t>(static_cast<uint64_t>(bytes) * 8 / width);
+    if (samples > fit) samples = fit;
   }
   // the pretrigger is what the ring can give back at this sample width (describe declares the most, at w = 1), less
   // than the segment's samples as rounded (capture §3.3); only with a trigger (above), so a one-shot

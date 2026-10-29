@@ -1,6 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 one-shot: the segment is the samples asked (rounded down to what the buffer holds, capture §3.3) - it
+  had been rounded up to the DMA's whole cache lines (200 asked at w 1 gave 1024); those lines are still taken, their
+  samples past the asked ones not kept, so a one-shot ends that much later.
+- (JA) ESP32-P4 のワンショット: 区画は頼まれたサンプル数（置き場に入る数へ切り下げ、capture §3.3）。DMA のキャッシュラインの単位に
+  切り上げていた（w 1 で 200 を頼むと 1024）。その単位では今も取るが、頼まれた数より後は残さないので、ワンショットはその分だけ遅く終わる。
 - (EN) `OepProbeLog.h`: a log of the probe's own code for an interface of the sketch's own - lines written to a RAM ring,
   each marked with the probe's clock (the clock of a capture's start_ns), read by the host with common §1's read / marks /
   clear (oep.target.console's op numbers); overflow shows as a lost mark or a jump in the marks' serials. New

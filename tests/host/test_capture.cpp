@@ -385,13 +385,13 @@ static void testContract() {
     Bytes p = base(0);   // a trigger role outside the plan (roles 0, 1): unavailable cause 6
     tlv(p, cap::kTlvConfigureTrigger, {cap::kTriggerLevel, 2, 1, 0, 0, 0});
     CHECK(rejectedAs(raw(rig.cap, op, p, out), kRejectUnavailable) && out == Bytes({reg::core::kTlvUnavailablePayloadCause, 1, 0, 6}));
-    // the pretrigger against samples as rounded: 1000 samples at w = 2 is 1024 (whole cache lines)
-    for (const uint32_t pre : {1023u, 1024u}) {
+    // the pretrigger against samples: 1000 at w = 2 stay 1000 (the DMA's whole cache lines are not the segment's)
+    for (const uint32_t pre : {999u, 1000u}) {
       p = base(0);
       tlv(p, cap::kTlvConfigureTrigger, edge);
       tlv(p, cap::kTlvConfigurePretrigger, u32(pre));
       const Result r = raw(rig.cap, op, p, out);
-      CHECK(pre == 1023 ? ok(r) : rejectedAs(r, kRejectUnsupported) && out == Bytes{cap::kTlvConfigurePretrigger});
+      CHECK(pre == 999 ? ok(r) : rejectedAs(r, kRejectUnsupported) && out == Bytes{cap::kTlvConfigurePretrigger});
     }
     // every row of the mode: one-shot rate, layout, actual_samples; repeat also actual_segments
     CHECK(ok(raw(rig.cap, op, base(0), out)) && hasTag(out, cap::kTlvConfigureAnswerActualRate) &&
@@ -908,8 +908,9 @@ static void testEveryStartFresh() {
   CHECK(g_fake_parlio_made == made + 1 && g_fake_parlio_size == 5120);
   generation = getU32(out.data());
   complete(0xFF);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone && getU64(out.data() + 5) == 5120);
-  for (uint32_t at : {0u, 4000u, 4920u}) {   // before, across and after where the stopped run had got to
+  // the segment is the 5000 bytes asked; the DMA's 5120 (whole cache lines) past it are not kept
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out[0] == cap::kStateDone && getU64(out.data() + 5) == 5000);
+  for (uint32_t at : {0u, 4000u, 4800u}) {   // before, across and after where the stopped run had got to
     CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, at, 200), out)) && getU16(out.data() + 9) == 200);
     CHECK(std::all_of(out.begin() + 11, out.begin() + 211, [](uint8_t b) { return b == 0xFF; }));
   }
