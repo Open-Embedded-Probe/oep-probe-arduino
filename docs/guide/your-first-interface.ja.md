@@ -12,7 +12,7 @@ probe は、host（PC）から届く要求に答える小さな機械です。�
 （payload）で」の 3 つでできています。
 
 ```text
-host --要求: fn 1, op 0x01, payload--> Endpoint --> あなたのインターフェース（handle）
+host --要求: fn 1, op 0x10, payload--> Endpoint --> あなたのインターフェース（handle）
 host <--結果: completed, payload------ Endpoint <--
 ```
 
@@ -40,8 +40,11 @@ HelloInterface は合計を数えるだけの例です。
 
 | op | 名前 | 要求の payload | 結果の payload | ロック |
 |---|---|---|---|---|
-| 0x01 | add | value（u32） | total（u32） | 要る（合計を変える） |
-| 0x02 | total | なし | total（u32） | 要らない（何も変えない） |
+| 0x10 | add | value（u32） | total（u32） | 要る（合計を変える） |
+| 0x11 | total | なし | total（u32） | 要らない（何も変えない） |
+
+自分の op は 0x10〜0xFF から選びます。0x01〜0x0F はどのインターフェースにも共通の操作の番号で（0x01 subscribe、0x02 unsubscribe。
+core §2.5）、ここに自分の op を置くと endpoint が受け付けません（unknown operation）。
 
 ```cpp
 bool offers(uint8_t op) const override { return op == kOpAdd || op == kOpTotal; }   // 持っている op
@@ -92,8 +95,8 @@ void loop() { endpoint.poll(); }
 from oep_client import core, link
 hst = link.open_host("<port>"); hst.open(3000)          # セッションを開き、ロックを取る
 fn = core.find(hst, "io.github.example.hello")          # 名前で探す
-hst.call(fn, 0x01, (5).to_bytes(4, "little")).payload    # b'\x05\x00\x00\x00'
-hst.call(fn, 0x02, locked=False).payload                 # ロックなしで読む
+hst.call(fn, 0x10, (5).to_bytes(4, "little")).payload    # b'\x05\x00\x00\x00'
+hst.call(fn, 0x11, locked=False).payload                 # ロックなしで読む
 ```
 
 `oep dump --port <port>` を使うと、probe が何を持っているか（あなたのインターフェースと、その ops）が見えます。

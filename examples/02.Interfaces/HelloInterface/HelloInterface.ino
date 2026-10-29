@@ -4,16 +4,16 @@
 // Your first interface: a counter, no pins. An interface is a class with a name and a few operations (ops); the endpoint
 // numbers it (fn 1 here) and the host finds it by its name. This one, io.github.example.hello revision 1:
 //
-//   op 0x01 add    value(u32)  ->  total(u32)   (changes the total: run only for the session holding the lock)
-//   op 0x02 total  -           ->  total(u32)   (changes nothing: lock-free, no session needed)
+//   op 0x10 add    value(u32)  ->  total(u32)   (changes the total: run only for the session holding the lock)
+//   op 0x11 total  -           ->  total(u32)   (changes nothing: lock-free, no session needed)
 //
 // From Python (pip install oep-client-python):
 //
 //   from oep_client import core, link
 //   hst = link.open_host("<port>"); hst.open(3000)       # a session, holding the lock
 //   fn = core.find(hst, "io.github.example.hello")
-//   hst.call(fn, 0x01, (5).to_bytes(4, "little")).payload    # b'\x05\x00\x00\x00'
-//   hst.call(fn, 0x02, locked=False).payload                 # the total again, no lock needed
+//   hst.call(fn, 0x10, (5).to_bytes(4, "little")).payload    # b'\x05\x00\x00\x00'
+//   hst.call(fn, 0x11, locked=False).payload                 # the total again, no lock needed
 //
 // Next: CustomInterface (a pin the host plans, describe), and
 // docs/guide/your-first-interface.md. The name is yours to pick under something you own (io.github.<you>.<name>); oep.*
@@ -31,7 +31,9 @@ static constexpr uint8_t kInterface = 0xff;   // a UART bridge: no USB interface
 
 class Hello final : public oep::Interface {
  public:
-  static constexpr uint8_t kOpAdd = 0x01, kOpTotal = 0x02;
+  // an interface's own ops are 0x10 - 0xFF: 0x01 - 0x0F are the ops every interface shares (0x01 subscribe, 0x02
+  // unsubscribe; core §2.5)
+  static constexpr uint8_t kOpAdd = 0x10, kOpTotal = 0x11;
 
   // Who it is: the name the host looks for, which one of that name (0: the only one), the shape of its payloads
   const char *name() const override { return "io.github.example.hello"; }

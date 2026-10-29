@@ -79,6 +79,9 @@ void oepUserLoop() {
   the firmware's parts.
 - How to write the interface: [your first interface](your-first-interface.md).
 
+An example: [extras/LibraryTest](../../extras/LibraryTest/README.md) runs a library's calls on the probe and lines its log
+(`OepProbeLog.h`: written to RAM with the probe's clock) up with the capture's wires.
+
 ## 4. Building it
 
 - **Arduino IDE**: open `File > Examples > OpenEmbeddedProbe > Firmware > OepProbe`, save it under a name of yours, then

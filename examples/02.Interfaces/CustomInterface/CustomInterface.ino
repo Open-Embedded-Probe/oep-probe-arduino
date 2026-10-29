@@ -8,9 +8,9 @@
 //
 // This one, io.github.example.blink revision 1, blinks a pin:
 //
-//   op 0x01 set    level(u8: 0 / 1)          ->  -
-//   op 0x02 blink  count(u8), half_ms(u16)   ->  -        (runs in loop(), the answer comes at once)
-//   op 0x03 state  -                         ->  level(u8), left(u8)   (no lock: it changes nothing)
+//   op 0x10 set    level(u8: 0 / 1)          ->  -
+//   op 0x11 blink  count(u8), half_ms(u16)   ->  -        (runs in loop(), the answer comes at once)
+//   op 0x12 state  -                         ->  level(u8), left(u8)   (no lock: it changes nothing)
 //
 // Every request may end with TLVs (core §2.3): an unknown critical one refuses the request, an unknown other one is
 // ignored - Tail does both. Which pin it drives is planned by the host (role 1), like the
@@ -20,7 +20,7 @@
 //   hst = link.open_host("<port>"); hst.open(3000)
 //   fn = core.find(hst, "io.github.example.blink")
 //   core.plan_apply(hst, [(fn, 1, 25)])          # the Pico's LED
-//   hst.call(fn, 0x02, bytes([5]) + (200).to_bytes(2, "little"))
+//   hst.call(fn, 0x11, bytes([5]) + (200).to_bytes(2, "little"))
 //
 // Pick the name from something you own (a GitHub account: io.github.<you>.<name>), never oep.*: that prefix is the
 // specification's. Change the revision when the fixed part of a payload changes.
@@ -43,7 +43,7 @@ static constexpr uint16_t kChannelCount = 40;
 
 class Blink final : public oep::Interface {
  public:
-  static constexpr uint8_t kOpSet = 0x01, kOpBlink = 0x02, kOpState = 0x03;
+  static constexpr uint8_t kOpSet = 0x10, kOpBlink = 0x11, kOpState = 0x12;   // 0x01 - 0x0F: the shared ops
   static constexpr uint8_t kRoleLine = 1;
 
   explicit Blink(oep::PinTable &pins) : pins_(pins) {}

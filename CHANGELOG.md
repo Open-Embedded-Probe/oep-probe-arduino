@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `OepProbeLog.h`: a log of the probe's own code for an interface of the sketch's own - lines written to a RAM ring,
+  each marked with the probe's clock (the clock of a capture's start_ns), read by the host with common §1's read / marks /
+  clear (oep.target.console's op numbers); overflow shows as a lost mark or a jump in the marks' serials. New
+  `extras/LibraryTest`: a file for OepProbe that runs a library's calls on the probe (here Wire, nothing wired) while the
+  logic capture takes their lines, and its pytest placing every log line at its sample (P4X: the lines fall where the wire
+  says, +-6 samples at 1 MHz). Fixed: HelloInterface and CustomInterface used ops 0x01 / 0x02 / 0x03, the ops every
+  interface shares (0x01 subscribe, 0x02 unsubscribe): the endpoint answered unknown_operation. Their ops are 0x10 and up,
+  and the first-interface guide says why.
+- (JA) `OepProbeLog.h`: スケッチの自分のインターフェースが持つ、プローブ上のコードのログ。行を RAM のリングに書き、それぞれにプローブの
+  時計（キャプチャの start_ns と同じ時計）のマークを付ける。ホストは common §1 の read / marks / clear（oep.target.console と同じ op
+  番号）で読む。あふれは lost のマークか、マークの通し番号の飛びで分かる。新しい `extras/LibraryTest`: OepProbe に足すファイルで、
+  ライブラリの呼び出し（ここでは Wire、配線なし）をプローブの上で動かしながらロジックのキャプチャでその線を取る。pytest がログの
+  各行をサンプルに置く（P4X: 行が線の示す所に来た。1 MHz で ±6 サンプル）。修正: HelloInterface と CustomInterface が op 0x01 / 0x02 /
+  0x03 を使っていたが、これはどのインターフェースにも共通の操作（0x01 subscribe、0x02 unsubscribe）の番号で、endpoint は
+  unknown_operation を返していた。0x10 からに直し、はじめてのインターフェースのガイドに理由を書いた。
 - (EN) Adding interfaces made easier to get right. `oep::owners` (`OepPinTable.h`): every PinTable owner id of the library in
   one list, the classes and the Firmware taking theirs from it (no id changed); a sketch's own take `owners::kSketch` (0x80)
   and up (CustomInterface had used 1, gpio's). The Firmware takes the sketch's own interfaces: `oepUserSetup(endpoint,

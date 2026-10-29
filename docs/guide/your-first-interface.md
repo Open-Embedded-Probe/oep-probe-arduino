@@ -12,7 +12,7 @@ A probe is a small machine that answers requests from a host (the PC). A request
 operation (op), and what payload.
 
 ```text
-host --request: fn 1, op 0x01, payload--> Endpoint --> your interface (handle)
+host --request: fn 1, op 0x10, payload--> Endpoint --> your interface (handle)
 host <--result: completed, payload------- Endpoint <--
 ```
 
@@ -41,8 +41,11 @@ HelloInterface only keeps a total.
 
 | op | name | request payload | result payload | lock |
 |---|---|---|---|---|
-| 0x01 | add | value (u32) | total (u32) | needed (changes the total) |
-| 0x02 | total | none | total (u32) | not needed (changes nothing) |
+| 0x10 | add | value (u32) | total (u32) | needed (changes the total) |
+| 0x11 | total | none | total (u32) | not needed (changes nothing) |
+
+Pick your own ops from 0x10 - 0xFF. 0x01 - 0x0F are the ops every interface shares (0x01 subscribe, 0x02 unsubscribe;
+core §2.5): an op of your own there is not taken by the endpoint (unknown operation).
 
 ```cpp
 bool offers(uint8_t op) const override { return op == kOpAdd || op == kOpTotal; }   // the ops it has
@@ -93,8 +96,8 @@ Flash it, then call it from the Python client on the PC:
 from oep_client import core, link
 hst = link.open_host("<port>"); hst.open(3000)          # open a session, holding the lock
 fn = core.find(hst, "io.github.example.hello")          # find it by name
-hst.call(fn, 0x01, (5).to_bytes(4, "little")).payload    # b'\x05\x00\x00\x00'
-hst.call(fn, 0x02, locked=False).payload                 # read without the lock
+hst.call(fn, 0x10, (5).to_bytes(4, "little")).payload    # b'\x05\x00\x00\x00'
+hst.call(fn, 0x11, locked=False).payload                 # read without the lock
 ```
 
 `oep dump --port <port>` shows what the probe has: your interface and its ops.

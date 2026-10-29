@@ -79,6 +79,9 @@ void oepUserLoop() {
   重ならないようにします。
 - インターフェースの書き方は [はじめてのインターフェース](your-first-interface.ja.md) を見てください。
 
+例: [extras/LibraryTest](../../extras/LibraryTest/README.ja.md) は、試したいライブラリの呼び出しをプローブの上で動かし、そのログ
+（`OepProbeLog.h`: RAM に書いてプローブの時計を付ける）をキャプチャの波形に紐付ける例です。
+
 ## 4. ビルドする
 
 - **Arduino IDE**：`ファイル > スケッチ例 > OpenEmbeddedProbe > Firmware > OepProbe` を開き、名前を付けて保存してから、自分の
