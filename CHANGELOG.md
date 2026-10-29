@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: the ESP32 / ESP32-P4 spi-target's describe left out modes, which fixture §4 requires. It now declares the
+  modes configure takes: all four on the ESP32-P4, 0 and 2 on the classic ESP32 (as before).
+- (JA) 修正: ESP32 / ESP32-P4 の spi-target の describe に、fixture §4 が必須とする modes が無かった。configure が受ける mode を宣言する
+  （ESP32-P4 は 4 つ全部、初代 ESP32 は今までどおり 0 と 2）。
 - (EN) ESP32-P4 one-shot: the segment is the samples asked (rounded down to what the buffer holds, capture §3.3) - it
   had been rounded up to the DMA's whole cache lines (200 asked at w 1 gave 1024); those lines are still taken, their
   samples past the asked ones not kept, so a one-shot ends that much later.

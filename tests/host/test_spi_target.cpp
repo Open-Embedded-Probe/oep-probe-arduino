@@ -331,6 +331,11 @@ int main() {
     for (size_t at = 0; at + kTlvHeader <= n; at += kTlvHeader + getU16(d + at + 1))
       if (d[at] == reg::fixture_spi_target::kTlvDescribeCsSetupNs && getU16(d + at + 1) == 4) found = getU32(d + at + 3) == P4SpiTarget::kCsSetupNs;
     CHECK(found && P4SpiTarget::kCsSetupNs == 15000);   // the bench's 11.9 us (CS rising to MISO undriven) with margin
+    // modes (required, fixture §4): the ones configure takes, 0 and 2 on the classic
+    bool modes = false;
+    for (size_t at = 0; at + kTlvHeader <= n; at += kTlvHeader + getU16(d + at + 1))
+      if (d[at] == reg::fixture_spi_target::kTlvDescribeModes && getU16(d + at + 1) == 1) modes = d[at + 3] == P4SpiTarget::kModes;
+    CHECK(modes && P4SpiTarget::kModes == 0x05);
   }
 
   // Modes 1 and 3 are not offered on the classic (its slave drives 0 on MISO before the first SCK edge, whatever the

@@ -153,6 +153,11 @@ class P4SpiTarget final : public Interface {
   bool gate_ok_ = false;
   bool gateBegin();
   void gateEnd();
+#else
+ public:
+  static constexpr uint8_t kModes = 0x0F;   // SPI modes this target offers (bit n: mode n): all four, no gate between
+
+ private:
 #endif
   bool start();
   void stop();

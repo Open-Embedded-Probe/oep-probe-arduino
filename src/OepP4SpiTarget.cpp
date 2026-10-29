@@ -76,6 +76,7 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagMaxClockHz, kMaxClockHz);
   w.u32(kTagFeatures, 1);   // bit0 LSB first
   w.u8(reg::fixture_spi_target::kTlvDescribeQueueDepth, kQueueDepth);
+  w.u8(reg::fixture_spi_target::kTlvDescribeModes, kModes);   // required (fixture §4): the modes configure takes
 #if defined(OEP_SPI_MISO_GATE)
   // cs_setup_ns (u32): how long after CS falls MISO may still be undriven, and after CS rises still driven - the
   // gate's worst case, measured (kCsSetupNs).
@@ -322,9 +323,7 @@ Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
       if (refused(parsed)) return parsed;
       if (payload[0] > 3 || payload[1] > 1) return rejected(kRejectMalformed);   // not a mode / order of the table
-#if defined(OEP_SPI_MISO_GATE)
       if (!(kModes >> payload[0] & 1)) return unsupportedValue(out, capacity);   // a mode this target does not offer
-#endif
       if (sck_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §4: unavailable cause 6)
       stop();   // the queue and the wait go
       mode_ = payload[0]; bit_order_ = payload[1]; transactions_ = 0; errors_ = 0;
