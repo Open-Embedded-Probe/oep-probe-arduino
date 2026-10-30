@@ -341,7 +341,7 @@ bool configureIo() {
   config.pull_down_en = GPIO_PULLDOWN_DISABLE;
   config.intr_type = GPIO_INTR_DISABLE;
   gpio_config(&config);
-  gpio_set_drive_capability(gpio_num_t(gPin), OEP_SWIO_DRIVE_CAP);   // the weakest, as the classic and the RVSWD PHY
+  gpio_set_drive_capability(gpio_num_t(gPin), OEP_SWIO_DRIVE_CAP);   // the weakest, as the classic and the RVSWD PHY's SWDIO
   const int pins[] = {gPin};
   dedic_gpio_bundle_config_t out = {};
   out.gpio_array = pins;

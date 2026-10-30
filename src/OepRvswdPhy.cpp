@@ -31,6 +31,10 @@ dedic_gpio_bundle_handle_t gIn = nullptr;
 int gDio = -1;
 uint32_t gHalfCycles = 0;
 uint32_t gDioSig = 0, gClkSig = 0;   // the pins' output signals once in the bundle (ioReclaim)
+// The pads' drive: SWDIO the weakest; SWCLK one step up - at the weakest its falling edge, slow with a WCH-LinkE on the
+// same lines, clocked a CH32X035F8U6 (chip id 0x035e0611) twice: each 1 it answered stood ~100 ns and fell, DMSTATUS
+// 0xc82 read 0x800 (P4X 80f1b2d80a34, 2026-10-30; good at CAP_1 to CAP_3, half 500 ns to 5 us).
+constexpr gpio_drive_cap_t kDioDrive = GPIO_DRIVE_CAP_0, kClkDrive = GPIO_DRIVE_CAP_1;
 
 struct Io {
   inline void spin() const {
@@ -80,8 +84,8 @@ bool ioBegin(int dio, int clk) {
     gpio_ll_set_output_enable_ctrl(&GPIO, clk, false, false);
     gpio_ll_pullup_en(&GPIO, dio);
     gpio_ll_input_enable(&GPIO, dio);
-    gpio_set_drive_capability(gpio_num_t(dio), GPIO_DRIVE_CAP_0);
-    gpio_set_drive_capability(gpio_num_t(clk), GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(gpio_num_t(dio), kDioDrive);
+    gpio_set_drive_capability(gpio_num_t(clk), kClkDrive);
     gIo.bothHigh();
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
     gDioSig = GPIO.func_out_sel_cfg[dio].out_sel;
@@ -107,12 +111,12 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {
 // The pins back in the bundles if something else routed them away since (ESP32-P4: oep.wire.swio takes any channel,
 // the RVSWD pair's too, into its own bundle and leaves it a plain GPIO; a pair unchanged since would otherwise stay
 // cut off from its bundle). Nothing done while they are still routed here.
-// The weakest strength is put back too: a fixture gpio output or an output idle on these pins since (a host-chosen
+// The wire's strengths are put back too: a fixture gpio output or an output idle on these pins since (a host-chosen
 // pair is free between connections) leaves the pad at its own strength (oep-if-fixture §1.1), never the wire's.
 void ioReclaim(int dio, int clk) {
   if (dio >= 0) {
-    gpio_set_drive_capability(gpio_num_t(dio), GPIO_DRIVE_CAP_0);
-    gpio_set_drive_capability(gpio_num_t(clk), GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(gpio_num_t(dio), kDioDrive);
+    gpio_set_drive_capability(gpio_num_t(clk), kClkDrive);
     gpio_ll_pullup_en(&GPIO, dio);   // the data line idles high while the target drives it (ioFree took it off)
   }
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
