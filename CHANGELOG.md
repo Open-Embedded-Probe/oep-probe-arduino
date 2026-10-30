@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.40
 - (EN) Fixed: the I2C / SPI controllers' times on an ESP32. An edge's time is now taken as its write is issued (an ESP32's
   GPIO write returns some 300 ns later, and counting from the return added that to every half: SPI at 1 MHz came out at
   620 kHz on the ESP32-P4), the SCL low after a START is counted from SCL's own fall (it was 1.0 us at 400 kHz, under
