@@ -31,9 +31,11 @@ dedic_gpio_bundle_handle_t gIn = nullptr;
 int gDio = -1;
 uint32_t gHalfCycles = 0;
 uint32_t gDioSig = 0, gClkSig = 0;   // the pins' output signals once in the bundle (ioReclaim)
-// The pads' drive: SWDIO the weakest; SWCLK one step up - at the weakest its falling edge, slow with a WCH-LinkE on the
-// same lines, clocked a CH32X035F8U6 (chip id 0x035e0611) twice: each 1 it answered stood ~100 ns and fell, DMSTATUS
-// 0xc82 read 0x800 (P4X 80f1b2d80a34, 2026-10-30; good at CAP_1 to CAP_3, half 500 ns to 5 us).
+// The pads' drive: SWDIO the weakest; SWCLK one step up, for wiring whose ground is poor. A CH32X035F8U6 (chip id
+// 0x035e0611) whose ground reached the probe only the long way took one SWCLK falling edge as two: each 1 it answered
+// stood ~100 ns and fell, DMSTATUS 0xc82 read 0x800. On a P4X (80f1b2d80a34) with a WCH-LinkE on the lines CAP_0 failed
+// and CAP_1 to CAP_3 read; on 4-2 (GND through USB only) CAP_1 read none and CAP_3 6 of 140. With the target's GND wired
+// to the probe, CAP_0 to CAP_3 all read both 4-2 X035s, 50 kHz to 4 MHz (2026-10-30).
 constexpr gpio_drive_cap_t kDioDrive = GPIO_DRIVE_CAP_0, kClkDrive = GPIO_DRIVE_CAP_1;
 
 struct Io {

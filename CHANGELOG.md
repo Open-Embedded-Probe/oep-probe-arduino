@@ -1,12 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
-- (EN) Fixed: on the ESP32-P4, a CH32X035F8U6 behind the RVSWD wire was never found (its reads came back with the 1s
-  lost, the parity bad). SWCLK at the weakest drive fell too slowly with a WCH-LinkE on the same lines, and the target
-  took one falling edge as two. SWCLK is now driven one step stronger; SWDIO stays at the weakest.
-- (JA) 修正: ESP32-P4 で、RVSWD の wire の先の CH32X035F8U6 が見つからなかった（読み出しの 1 が欠け、パリティが合わない）。最も弱い駆動の
-  SWCLK は、同じ線に WCH-LinkE がつながっていると立ち下がりが遅く、ターゲットが 1 回の立ち下がりを 2 回と数えていた。SWCLK の駆動を 1 段強くした。
-  SWDIO は最も弱いまま。
+- (EN) Changed: on the ESP32-P4, the RVSWD wire drives SWCLK one step stronger (SWDIO stays at the weakest). A
+  CH32X035F8U6 whose ground reached the probe only the long way (through USB) took one SWCLK falling edge as two: its
+  reads came back with the 1s lost and the parity bad, and it was never found. The stronger SWCLK helps such wiring
+  (on one bench it was enough, on another not); wire the target's GND to the probe - with it, every strength reads.
+- (JA) 変更: ESP32-P4 で、RVSWD の wire の SWCLK の駆動を 1 段強くした（SWDIO は最も弱いまま）。GND が USB を回ってしか probe とつながって
+  いない CH32X035F8U6 は、SWCLK の 1 回の立ち下がりを 2 回と数え、読み出しの 1 が欠けてパリティが合わず、見つからなかった。強い SWCLK は
+  そうした配線で効くことがある（1 つのベンチでは足り、別のベンチでは足りなかった）。ターゲットの GND は probe と線でつなぐ。つなげば、どの
+  強さでも読める。
 - (EN) Fixed: on the ESP32-P4, the RVSWD wire's pads stayed driven when it let them go (between connections, the
   target's half of a read). Putting a pin into a dedicated GPIO bundle hands its output enable to the bundle, whose
   output is always on, so the enable register the wire set had no effect: a WCH-LinkE on the same lines found no target
