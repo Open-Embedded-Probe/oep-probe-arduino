@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: the ESP32-P4's logic capture repeated part of a triggered one-shot, with no mark, while a wire (RVSWD,
+  SWIO) worked on the probe. The PARLIO unit and its DMA interrupts were made on loop()'s core, where a wire turns the
+  interrupts off for a frame (RVSWD at the slowest max_speed about 1.2 ms); the ring's chunks then came late and
+  together, and their places were misjudged - about 200 us of an earlier stretch came back a second time (a scan's
+  frame captured with 8 - 11 clocks too many; the wire itself was right, its frames' CPU time steady). The unit is now
+  made on the harvest's core (core 0, as the fixture UARTs' interrupts and the SPI target's CS gate), from a task pinned
+  there.
+- (JA) 修正: ESP32-P4 のロジックの取り込みが、probe で wire（RVSWD、SWIO）が動いている間、トリガー付きの一発の取り込みの一部を印なしで
+  繰り返していた。PARLIO の受信の装置と DMA の割り込みを loop() の core で作っていて、そこでは wire がフレームの間割り込みを止める
+  （RVSWD の最も遅い速さで約 1.2 ms）。輪のかたまりの知らせが遅れてまとめて届き、その位置を取り違えて、約 200 µs 前の区間がもう一度
+  入っていた（スキャンのフレームが 8〜11 クロック多く取り込まれた。線そのものは正しく、フレームの CPU の時間も一定だった）。受信の装置を
+  受け取りのタスクの core（core 0。fixture の UART の割り込みや SPI target の CS の処理と同じ）で、そこに固定したタスクから作るようにした。
 
 ## 0.0.40
 - (EN) Fixed: the I2C / SPI controllers' times on an ESP32. An edge's time is now taken as its write is issued (an ESP32's

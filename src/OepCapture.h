@@ -233,6 +233,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   Result configure(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity, bool query);
   bool open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t &num, uint32_t &den);
   bool openUnit(uint32_t rate_hz, uint8_t width, bool ring, uint32_t bytes, uint32_t &num, uint32_t &den);
+  bool openUnitHere(uint32_t rate_hz, uint8_t width, bool ring, uint32_t bytes, uint32_t &num, uint32_t &den);
+  static void unitTask(void *job);
   void closeUnit();
   bool reopenUnit();   // every start: the unit made anew for its receive, as configure leaves it
   void close();

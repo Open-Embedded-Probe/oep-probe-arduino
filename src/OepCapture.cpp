@@ -6,6 +6,7 @@
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
 #if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
 
+#include <freertos/semphr.h>
 #include <esp_cache.h>
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
@@ -1288,10 +1289,52 @@ bool LogicCapture::open(uint32_t rate_hz, uint8_t width, size_t bytes, uint32_t 
   return true;
 }
 
+// The unit is made on kHarvestCore: the PARLIO and GDMA interrupts are allocated on the core that makes it, and loop()'s
+// core turns its interrupts off for a wire's frame - an RVSWD frame about 1.2 ms at the slowest max_speed. The ring's
+// partial receives then came late and together, the chunks' places in the ring were misjudged, and a triggered one-shot
+// taken while a scan ran repeated about 200 us of an earlier stretch with no mark (P4X 80f1b2d80a34, 2026-10-30: the
+// frames' CPU time was steady, the capture's frame had 8 - 11 clocks too many). As the fixture UARTs' interrupts and the
+// SPI target's CS gate: from an ordinary task pinned there, not the IPC task (the allocation may itself make an IPC
+// call, and one from inside an IPC call never returns).
+namespace {
+struct UnitJob {
+  LogicCapture *self;
+  uint32_t rate_hz, bytes, num, den;
+  uint8_t width;
+  bool ring, ok;
+  SemaphoreHandle_t done;
+};
+}  // namespace
+
+void LogicCapture::unitTask(void *arg) {
+  UnitJob *job = static_cast<UnitJob *>(arg);
+  job->ok = job->self->openUnitHere(job->rate_hz, job->width, job->ring, job->bytes, job->num, job->den);
+  xSemaphoreGive(job->done);
+  vTaskDelete(nullptr);
+}
+
+bool LogicCapture::openUnit(uint32_t rate_hz, uint8_t width, bool ring, uint32_t bytes, uint32_t &num, uint32_t &den) {
+#if defined(OEP_HOST_FAKE_PARLIO)
+  return openUnitHere(rate_hz, width, ring, bytes, num, den);   // host tests: one core, the tasks run by the test
+#else
+  if (xPortGetCoreID() == kHarvestCore) return openUnitHere(rate_hz, width, ring, bytes, num, den);
+  static StaticSemaphore_t buffer;
+  static SemaphoreHandle_t done = xSemaphoreCreateBinaryStatic(&buffer);
+  UnitJob job = {this, rate_hz, bytes, num, den, width, ring, false, done};
+  if (xTaskCreatePinnedToCore(unitTask, "oep_parlio", 4096, &job, uxTaskPriorityGet(nullptr), nullptr, kHarvestCore) !=
+      pdPASS)
+    return false;
+  xSemaphoreTake(done, portMAX_DELAY);
+  num = job.num;
+  den = job.den;
+  return job.ok;
+#endif
+}
+
 // The PARLIO RX unit for the configuration, its callbacks and soft delimiter, enabled: the segment's own receive
 // (an immediate one-shot: done at `bytes`, the DMA nodes counted for a stop) or the DMA ring's (repeat, streaming and
-// a one-shot through the ring: partial receives into the harvest's queue).
-bool LogicCapture::openUnit(uint32_t rate_hz, uint8_t width, bool ring, uint32_t bytes, uint32_t &num, uint32_t &den) {
+// a one-shot through the ring: partial receives into the harvest's queue). On kHarvestCore (openUnit).
+bool LogicCapture::openUnitHere(uint32_t rate_hz, uint8_t width, bool ring, uint32_t bytes, uint32_t &num, uint32_t &den) {
   if (!open(rate_hz, width, ring ? rx_ring_bytes_ : bytes, num, den)) return false;
   parlio_rx_event_callbacks_t cb = {};
   if (ring) {
