@@ -72,6 +72,12 @@ bool ioBegin(int dio, int clk) {
     inCfg.gpio_array = inPins; inCfg.array_size = 1; inCfg.flags.in_en = 1;
     if (dedic_gpio_new_bundle(&inCfg, &gIn) != ESP_OK) return false;
     gpio_ll_od_disable(&GPIO, dio);
+    // The pads' output enable from the GPIO enable register, as hostDrives / ioDrive / ioRelease set it: routing a pin
+    // to a dedicated GPIO bundle hands its output enable to the bundle (oen_sel 0), whose output is always on - the
+    // pads then stayed driven whatever the enable register said: a WCH-LinkE on the same lines found no target after a
+    // scan until something else took the pins back (P4X 80f1b2d80a34, 2026-10-30).
+    gpio_ll_set_output_enable_ctrl(&GPIO, dio, false, false);
+    gpio_ll_set_output_enable_ctrl(&GPIO, clk, false, false);
     gpio_ll_pullup_en(&GPIO, dio);
     gpio_ll_input_enable(&GPIO, dio);
     gpio_set_drive_capability(gpio_num_t(dio), GPIO_DRIVE_CAP_0);

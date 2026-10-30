@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: on the ESP32-P4, the RVSWD wire's pads stayed driven when it let them go (between connections, the
+  target's half of a read). Putting a pin into a dedicated GPIO bundle hands its output enable to the bundle, whose
+  output is always on, so the enable register the wire set had no effect: a WCH-LinkE on the same lines found no target
+  after a scan. The pads' output enable is taken back to the enable register when the bundle is made.
+- (JA) 修正: ESP32-P4 で、RVSWD の wire が線を離したとき（接続の間、読み出しのターゲットの区間）も、ピンが駆動されたままだった。ピンを専用
+  GPIO の束に入れると、出力の有効が束に移り、束の出力はいつも有効なので、wire が設定する有効のレジスタが効かなかった。同じ線の WCH-LinkE が、
+  スキャンの後はターゲットを見つけられなかった。束を作るときに、ピンの出力の有効を有効のレジスタに戻すようにした。
 - (EN) Fixed: the ESP32-P4's logic capture repeated part of a triggered one-shot, with no mark, while a wire (RVSWD,
   SWIO) worked on the probe. The PARLIO unit and its DMA interrupts were made on loop()'s core, where a wire turns the
   interrupts off for a frame (RVSWD at the slowest max_speed about 1.2 ms); the ring's chunks then came late and
