@@ -16,7 +16,7 @@
 // place among its owner's entries, from 1):
 //   fn 0 (setPins)    channel.{}.label (text 1-32), channel.{}.idle (enum), channel.{}.disable (bool)        core §13.8
 //   fn 0 (setWifi)    wifi.{}.ssid, wifi.{}.passphrase (secret), ipv4.{}.mode / address / prefix / gateway / dns  transports §7
-//   a debug wire      rest.{} (rvswd), hold.{}                                                                debug §2, §3.1
+//   a debug wire      channel.{}.rest (rvswd), channel.{}.hold                                                                debug §2, §3.1
 //   a fixture uart    passthrough.{}.rx / baud / format                                                       fixture §2.1
 //   a console         passthrough.{}.wire / swdio / swclk / max-speed / mechanism                             console §2.1
 //   the sketch's      addSetting(owner, name, ...)                                                            core §13.1
@@ -120,7 +120,7 @@ class Settings final : public SettingsCore {
   // A wire and its console the console pass-through may name (after the endpoint has them): the console's items, the
   // wire's hold (and rest on an rvswd wire).
   bool addPlace(WireRvswd &wire, TargetConsoleStream &console);
-  // A debug wire's hold after a close (oep-if-debug §2): its item hold.{} read through `hold`, and `check` called from
+  // A debug wire's hold after a close (oep-if-debug §2): its item channel.{}.hold read through `hold`, and `check` called from
   // poll() to end a hold whose pins were taken or whose settings changed. addPlace does it for its wire; oep.wire.swd
   // (SwdPort) comes here: settings.addHold(swd, swd.hold, checkSwdHold, &swd).
   bool addHold(const Interface &wire, WireHold &hold, void (*check)(void *), void *port);
@@ -267,8 +267,8 @@ class Settings final : public SettingsCore {
   void runPassthroughs();
   void runPassthroughsYield(uint8_t port);
   static void passIn(void *self, const uint8_t *data, size_t length);
-  static uint8_t restOf(const void *self, uint16_t swclk);   // rest.{} of that channel (auto when none)
-  static bool holdOf(const void *self, uint16_t swdio);      // hold.{} of that channel (on when none)
+  static uint8_t restOf(const void *self, uint16_t swclk);   // channel.{}.rest of that channel (auto when none)
+  static bool holdOf(const void *self, uint16_t swdio);      // channel.{}.hold of that channel (on when none)
 };
 
 uint32_t crc32Ieee(const uint8_t *data, size_t length);

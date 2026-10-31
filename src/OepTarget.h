@@ -70,11 +70,11 @@ struct DebugPort {
   bool has_tid = false;
   uint32_t tid = 0;
   // rvswd (oep-if-debug §3.1): how the live connection rests SWCLK - the attach's idle_clock, else the setting
-  // rest.{} of its SWCLK channel (rest_setting: the settings' lookup, reg::wire_rvswd::kRest*), else
+  // channel.{}.rest of its SWCLK channel (rest_setting: the settings' lookup, reg::wire_rvswd::kRest*), else
   // the probe's choice from the target_id. Answered in attach and connections.
   bool rest_low = false;
   // oep-if-debug §2: after a close that was not a lost line the lines stay driven at the rest (holding), until the pins
-  // are taken, the setting hold.{} goes off, an idle / disable item lands on them, or the probe restarts (checkHold).
+  // are taken, the setting channel.{}.hold goes off, an idle / disable item lands on them, or the probe restarts (checkHold).
   WireHold hold;
   bool holding = false;
   uint8_t (*rest_setting)(const void *, uint16_t swclk) = nullptr;
@@ -97,7 +97,7 @@ bool residentAttach(DebugPort &port, uint16_t swdio, uint16_t swclk, uint32_t ma
 void residentRelease(DebugPort &port);
 bool attachRunning(DebugPort &port, uint8_t user, uint32_t &dmstatus, uint32_t max_hz = 0, bool idle_low = false);
 // rvswd's rest when the attach gave no idle_clock (oep-if-debug §3.1), the link just up and resting high: the target_id
-// read now (has_tid / tid), then the setting rest.{} of the port's SWCLK, else low for a family in the registry's
+// read now (has_tid / tid), then the setting channel.{}.rest of the port's SWCLK, else low for a family in the registry's
 // idle_low_family. Sets the PHY's rest and rest_low.
 void chooseRest(DebugPort &port);
 // A hold ended (debug §2): its pins taken by something else (the taker drives them now), or no longer allowed (the

@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Changed (breaking): the debug wires' settings are named `channel.{}.rest` and `channel.{}.hold` (oep-spec a6a4374,
+  debug §2, §3.1), in the core's `channel.{}.label` order; `rest.{}` / `hold.{}` are gone. A value a probe saved under
+  the old names is no longer read: set it again. The spec this library follows is oep-spec a6a4374 (it also adds the
+  address's route, host guide §5.3, which a probe does not read).
+- (JA) 変更（壊す変更）: debug の線の設定の項目名を `channel.{}.rest` と `channel.{}.hold` にした（oep-spec a6a4374、debug §2、§3.1）。
+  本体の `channel.{}.label` と同じ並び。`rest.{}` / `hold.{}` は無くなった。古い名前で保存した値は読まれないので、設定し直す。
+  このライブラリが従う仕様は oep-spec a6a4374（アドレスの経路、host ガイド §5.3 も入っているが、probe は読まない）。
 
 ## 0.0.41
 - (EN) Changed: on the ESP32-P4, the RVSWD wire drives SWCLK one step stronger (SWDIO stays at the weakest). A

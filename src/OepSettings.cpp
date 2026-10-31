@@ -194,8 +194,8 @@ Settings::Spec Settings::spec(uint8_t entry) const {
     case kIpPrefix: return {k::kSettingIpv4Prefix, k::kSettingFormU32, k::kSettingKeyKindNetif, 0, 0, 0};
     case kIpGateway: return {k::kSettingIpv4Gateway, k::kSettingFormIpv4, k::kSettingKeyKindNetif, 0, 0, 0};
     case kIpDns: return {k::kSettingIpv4Dns, k::kSettingFormIpv4, k::kSettingKeyKindNetif, 0, 0, 0};
-    case kRest: return {reg::wire_rvswd::kSettingRest, k::kSettingFormEnum, k::kSettingKeyKindChannel, 0, 0, 0};
-    case kHold: return {reg::wire_rvswd::kSettingHold, k::kSettingFormBool, k::kSettingKeyKindChannel, 0, 0, 0};
+    case kRest: return {reg::wire_rvswd::kSettingChannelRest, k::kSettingFormEnum, k::kSettingKeyKindChannel, 0, 0, 0};
+    case kHold: return {reg::wire_rvswd::kSettingChannelHold, k::kSettingFormBool, k::kSettingKeyKindChannel, 0, 0, 0};
     case kPassRx:
       return {reg::fixture_uart::kSettingPassthroughRx, k::kSettingFormChannel, k::kSettingKeyKindTransport, 0, 0, 0};
     case kPassBaud:

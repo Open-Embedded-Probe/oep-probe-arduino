@@ -229,7 +229,7 @@ void oepAddSettings() {
     endpoint.setRawPorts(&*binds);
     config->usePassthroughs();   // a serial port's raw stream carries them (fixture §2.1)
     if (consoleIn) config->addPlace(rvswd->wire, *consoleIn);
-    if (swdIn) config->addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);   // oep.wire.swd's hold after a close (oep-if-debug §2): hold.{}
+    if (swdIn) config->addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);   // oep.wire.swd's hold after a close (oep-if-debug §2): channel.{}.hold
     if (uartIn) config->addUart(*uartIn);
     config->setPins(&pins);   // the idle item sets these pins' free state
     loopWork.add([] { config->poll(); });

@@ -214,7 +214,7 @@ class PinTable {
 };
 
 // oep-if-debug §2: whether a debug wire holds its lines at their rest after a close that is not a lost line - the
-// setting hold.{} of the port's SWDIO (the settings (core §13) sets `on`; none: on) and no idle / disable item on its pins.
+// setting channel.{}.hold of the port's SWDIO (the settings (core §13) sets `on`; none: on) and no idle / disable item on its pins.
 // `check` (set by the wire) ends a hold whose pins were taken or whose settings changed; Settings::poll calls it.
 struct WireHold {
   bool (*on)(const void *, uint16_t swdio) = nullptr;
