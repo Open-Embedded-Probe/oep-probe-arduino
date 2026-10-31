@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.41
 - (EN) Changed: on the ESP32-P4, the RVSWD wire drives SWCLK one step stronger (SWDIO stays at the weakest). A
   CH32X035F8U6 whose ground reached the probe only the long way (through USB) took one SWCLK falling edge as two: its
   reads came back with the 1s lost and the parity bad, and it was never found. The stronger SWCLK helps such wiring
