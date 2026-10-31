@@ -605,7 +605,7 @@ void RvswdPhy::activate() {
   if (readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1)) return;
   writeRaw(kDmControl, 1);
   // The CFGR pair above went to a module that was not active (a detach writes DMCONTROL = 0): the configuration
-  // sequence again now that it is, the order a WCH-LinkE uses (dmactive, then CFGR; wch-protocols link-to-target §5). It
+  // sequence again now that it is, the order a WCH-LinkE uses (dmactive, then CFGR; wch-protocols link-to-target#linke-wire-behavior). It
   // did not cure the dmseq console coming back 1-10 s late after a refused automatic attach (probe-cdc-and-persistence
   // §7.5.1); oep_smoke x035 14/14 with it.
   for (int i = 0; i < 2; ++i) {
