@@ -15,7 +15,7 @@ UART、SPI / I2C のデバイス、ロジックのキャプチャ）を兼ね、
   持つものに合わせて動く。
 - 標準のインターフェース（`oep.wire.*`、`oep.target.*`、`oep.fixture.*` など）は oep-spec が定める。それとは別に、**誰でも
   自分のインターフェースを足せる**。自分の逆 DNS の名前（`io.github.<you>.<name>`、revision も自分で持つ）で出せば、誰の
-  許可も要らない。知らない host は使わないだけである。このライブラリの ESP32 の SPI / I2C デバイスは、その拡張の例。
+  許可も要らない。知らない host は使わないだけである。`examples/02.Interfaces` の HelloInterface と CustomInterface が、その例。
 - **セッションのロック**で、2 つのプログラムが同時に probe を動かすのを防ぐ。
 - **USB の vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge** のどれでも運べる。シリアルの口は、OEP のフレームと target の
   コンソールを 1 本で運ぶ。
@@ -89,7 +89,7 @@ classic ESP32、RP2040 / RP2350、WCH CH32）の市販の開発ボードにこ�
   要る。これらの線は、そのピンにつなぐ。チップごとの一覧は [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン) にある。
 - **target がどこにつながっているかは、host が探す。** oep-client-python の `oep pins` は、probe の pull をかけて probe が出す
   すべてのピンを読み、候補の上で debug の線を scan し、target を ID で見分け、リセットの線を見つける。最後に、保存する
-  スロットを示す（oep-spec の host 開発ガイド §19。target ごとの記録は oep-spec の docs/target-scan-notes.ja.md）。
+  口の label（`S.swdio`、`S.swclk`、`S.nrst`）を示す（oep-spec の host 開発ガイド §5.3）。
 - **残りの線は、target を通して探せる。** debug の線がつながれば、host はその線を通して target 自身の GPIO を動かし、probe の
   どのピンが追いかけるかを見られる。そのため、target のほかの線（UART、電源のスイッチ、アプリケーションのピン）も、配線の表
   なしに同じやり方で見つかる。

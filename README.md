@@ -16,7 +16,7 @@ discovery work, and leaves the capabilities open:
   boards and adapts to whatever the probe has;
 - the standard interfaces (`oep.wire.*`, `oep.target.*`, `oep.fixture.*`, ...) are specified in oep-spec, and **anyone can add
   their own** under a reverse-DNS name of theirs (`io.github.<you>.<name>`, with its own revision) without asking anybody: a
-  host that does not know it just does not use it. This library's ESP32 SPI / I2C devices are such extensions;
+  host that does not know it just does not use it. HelloInterface and CustomInterface in `examples/02.Interfaces` are examples;
 - a **session lock** keeps two programs from driving the probe at the same time;
 - it runs over **USB vendor bulk, HID, USB CDC, USB-Serial/JTAG or a plain UART** bridge; a serial port carries the OEP frames
   and the target's console on the same line;
@@ -94,8 +94,7 @@ follow. Nor is there a fixed pin map:
   GPIO32. Wire those lines to such a pin; [Boards](docs/guide/boards.md#pins-of-the-released-firmware) lists them per chip.
 - **The host finds where the target is.** `oep pins` (oep-client-python) reads every offered pin under the probe's pulls,
   scans the debug wire over the candidates, identifies the target by its ID, and finds its reset line. It then suggests
-  the port's labels to save (`S.swdio`, `S.swclk`, `S.nrst`: oep-spec host guide §5.3; per-target notes in oep-spec
-  docs/target-scan-notes.ja.md).
+  the port's labels to save (`S.swdio`, `S.swclk`, `S.nrst`: oep-spec host guide §5.3).
 - **The rest can be found through the target.** Once the debug link is up, the host can drive the target's own GPIOs
   through it and see which probe pin follows, so its other lines (UART, power switch, application pins) are found the same
   way, without a wiring list.
