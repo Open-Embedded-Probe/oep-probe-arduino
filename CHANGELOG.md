@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.42
 - (EN) Changed (breaking): a request with a non-repeating TLV given twice is rejected malformed (oep-spec 253c643, core
   §2.3); the later copies are no longer checked or ignored. `Tail::fixed` refuses it, `Tail::once` tells a reader of its
   own; a tag that repeats is still read in order with `Tail::next`. The spec this library follows is oep-spec 364827b.
