@@ -168,6 +168,14 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `docs/guide/` | 手引き（英語と日本語）。読む人ごとに: [使い始める](docs/guide/getting-started.ja.md)（probe を使う）、[はじめてのインターフェース](docs/guide/your-first-interface.ja.md)（初めての人）、[firmware の機能](docs/guide/firmware-features.ja.md)（firmware が持つものを選ぶ、自分のものを足す）、[probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[標準インターフェースを足す](docs/guide/adding-a-standard-interface.ja.md)（ライブラリに貢献する人）、[ボード](docs/guide/boards.ja.md) |
 | `docs/` | この実装の値と限界（implementation limits）、検証と転送の手順 |
 
+スケッチが include するのは、配布する firmware（`examples/Firmware/OepProbe`）が使うヘッダーと同じ部品にする: 本体（`OepEndpoint.h`、
+`OepPlatform.h`、`OepPinTable.h`、`OepSettings.h`、`OepChoice.h`、`OepBind.h`、`OepBootGuard.h`、`OepLog.h`、`OepProbeLog.h`）、
+経路（`OepWifi.h`、`OepTcp.h`、`OepDirectBulkStream.h`、`OepRp2Usb.h`）、標準インターフェースと線の物理層（上の表の各行）。
+次のヘッダーは、それらの中で使う部品で、スケッチから直接 include しない: `OepFrame.h`、`OepRvswdFrame.h`、`OepDmiPhy.h`、
+`OepWireGate.h`、`OepWireLoss.h`、`OepLimits.h`、`OepLogicBlocks.h`、`OepAnalogBlocks.h`、`OepSamplerRun.h`、`OepUartRx.h`、
+`OepEspBitBang.h`、`OepCh32BitBang.h`、`OepDebug.h`、`OepStream.h`、`OepResult.h`、`OepRegistry.h`。そこで定める型（`oep::Result`、
+`oep::PositionStream` など）は、上の部品を通して使う。どの部品も、版をまたいだ互換は約束しない。
+
 ## Example
 
 Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開くか、`sketch.yaml` の profile でビルドする

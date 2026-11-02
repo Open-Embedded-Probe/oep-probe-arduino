@@ -178,6 +178,15 @@ one of them against this endpoint).
 | `docs/guide/` | the guides (English and Japanese), by reader: [getting started](docs/guide/getting-started.md) (use a probe), [your first interface](docs/guide/your-first-interface.md) (beginners), [firmware features](docs/guide/firmware-features.md) (choose what the firmware has, add your own to it), [writing a probe](docs/guide/writing-a-probe.md) (the full reference), [adding a standard interface](docs/guide/adding-a-standard-interface.md) (contributors), [boards](docs/guide/boards.md) |
 | `docs/` | this implementation's values and limits, how it is verified and transferred |
 
+A sketch includes the parts the released firmware (`examples/Firmware/OepProbe`) includes: the core (`OepEndpoint.h`,
+`OepPlatform.h`, `OepPinTable.h`, `OepSettings.h`, `OepChoice.h`, `OepBind.h`, `OepBootGuard.h`, `OepLog.h`,
+`OepProbeLog.h`), the transports (`OepWifi.h`, `OepTcp.h`, `OepDirectBulkStream.h`, `OepRp2Usb.h`), and the standard
+interfaces and wire physical layers (the rows of the table above). These headers are pieces those use, not included by
+a sketch: `OepFrame.h`, `OepRvswdFrame.h`, `OepDmiPhy.h`, `OepWireGate.h`, `OepWireLoss.h`, `OepLimits.h`,
+`OepLogicBlocks.h`, `OepAnalogBlocks.h`, `OepSamplerRun.h`, `OepUartRx.h`, `OepEspBitBang.h`, `OepCh32BitBang.h`,
+`OepDebug.h`, `OepStream.h`, `OepResult.h`, `OepRegistry.h`; their types (`oep::Result`, `oep::PositionStream`, ...) are
+used through the parts above. No part promises compatibility across versions.
+
 ## Examples
 
 Open them from `File > Examples > OpenEmbeddedProbe` in the Arduino IDE, or build one with its `sketch.yaml` profile
