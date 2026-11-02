@@ -313,10 +313,10 @@ static void testTlvForm() {
     const Result u = tail.parse(named, sizeof named, kKnown, out, sizeof out);
     CHECK(t & kTagCritical ? u.detail == kRejectUnsupported && out[0] == t : u.resolution == kResolutionCompleted);
   }
-  const uint8_t twice[] = {0x01, 1, 0, 5, 0x81, 1, 0, 6};                // a repeated tag: the first is used
-  CHECK(tail.parse(twice, sizeof twice, kKnown, out, sizeof out).resolution == kResolutionCompleted);
-  v = tail.find(0x01, len);
-  CHECK(v && len == 1 && v[0] == 5);
+  const uint8_t twice[] = {0x01, 1, 0, 5, 0x81, 1, 0, 6};                // a non-repeating tag twice (core §2.3):
+  CHECK(tail.parse(twice, sizeof twice, kKnown, out, sizeof out).resolution == kResolutionCompleted);   // the form is good,
+  v = nullptr;                                                            // read as one value it is malformed
+  CHECK(tail.fixed(0x01, 1, v, out, sizeof out).detail == kRejectMalformed && !v && !tail.once(0x01));
   const uint8_t unknown[] = {0x85, 1, 0, 1};                              // an unknown critical tag
   const Result r = tail.parse(unknown, sizeof unknown, kKnown, out, sizeof out);
   CHECK(r.detail == kRejectUnsupported && r.length == 1 && out[0] == 0x85);

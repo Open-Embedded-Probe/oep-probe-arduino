@@ -875,7 +875,7 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
   if (session == 0) return rejected(kRejectMalformed);
   size_t owner_len = 0;
   const uint8_t *owner = tail.find(reg::core::kTlvOpenOwner, owner_len);
-  if (owner && (owner_len == 0 || owner_len > sizeof owner_)) return rejected(kRejectMalformed);
+  if (owner && (owner_len == 0 || owner_len > sizeof owner_ || !tail.once(reg::core::kTlvOpenOwner))) return rejected(kRejectMalformed);
   if (capacity < 8) return failed();
   const uint32_t asked = lease == 0 ? kLeaseDefaultMs : (lease > kLeaseMaxMs ? kLeaseMaxMs : lease < kLeaseMinMs ? kLeaseMinMs : lease);
   if (locked_ && holder_ == session) {

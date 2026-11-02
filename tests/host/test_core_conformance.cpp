@@ -367,16 +367,17 @@ static void testDescribeAndList() {
 }
 
 // core §6.4 / §2.1: open's force reads any non-zero as true; owner is text of 1 to 32 bytes (other text is taken as
-// sent); core §2.3: a repeated non-repeating TLV - the first one is used.
+// sent); core §2.3: a non-repeating TLV given twice is malformed.
 static void testRequestValues() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
   Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
   CHECK(reason(exchange(ep, s, false, request(1, 0, 0x10, withTlv(openReq(9, 3000), 0x01, Bytes(33, 'a'))))) == kRejectMalformed);
   const Bytes twice = withTlv(withTlv(openReq(9, 3000), 0x01, {'a', 0x0a}), 0x01, {'b'});
-  Bytes r = exchange(ep, s, false, request(2, 0, 0x10, twice));
+  CHECK(reason(exchange(ep, s, false, request(6, 0, 0x10, twice))) == kRejectMalformed && !ep.locked());
+  Bytes r = exchange(ep, s, false, request(2, 0, 0x10, withTlv(openReq(9, 3000), 0x01, {'a', 0x0a})));
   CHECK(r.size() == 5 + 8 && r[3] == kResolutionCompleted && ep.locked());   // lease_ms boot_id (core §6.4)
-  r = exchange(ep, s, false, request(3, 0, 0x13, {}));   // lock_state shows the first owner, as sent
+  r = exchange(ep, s, false, request(3, 0, 0x13, {}));   // lock_state shows the owner, as sent
   const Bytes owner = {0x01, 2, 0, 'a', 0x0a};
   CHECK(r.size() == 5 + 5 + owner.size() && Bytes(r.begin() + 10, r.end()) == owner);
   // force 2 is true: another session takes the lock

@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Changed (breaking): a request with a non-repeating TLV given twice is rejected malformed (oep-spec 253c643, core
+  §2.3); the later copies are no longer checked or ignored. `Tail::fixed` refuses it, `Tail::once` tells a reader of its
+  own; a tag that repeats is still read in order with `Tail::next`. The spec this library follows is oep-spec 364827b.
+- (JA) 変更（壊す変更）: 繰り返さない TLV を 2 回持つ要求は rejected malformed（oep-spec 253c643、core §2.3）。2 つ目以降を確かめたり
+  無視したりはしない。`Tail::fixed` が断り、自分で読む handler は `Tail::once` で確かめる。繰り返す tag は、これまでどおり
+  `Tail::next` で順に読む。このライブラリが従う仕様は oep-spec 364827b。
 - (EN) Changed (breaking): the debug wires' settings are named `channel.{}.rest` and `channel.{}.hold` (oep-spec a6a4374,
   debug §2, §3.1), in the core's `channel.{}.label` order; `rest.{}` / `hold.{}` are gone. A value a probe saved under
   the old names is no longer read: set it again. The spec this library follows is oep-spec a6a4374 (it also adds the

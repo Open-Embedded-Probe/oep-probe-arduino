@@ -351,7 +351,8 @@ inline bool tlvAt(const uint8_t *p, size_t n, size_t at, uint8_t &tag, const uin
 // tag byte as received); an unknown non-critical one is ignored, nothing said about it. An implemented TLV is checked the
 // same with or without bit 7: a value whose length differs from its definition, or a value the definition excludes, is
 // malformed; a value the definition leaves unused or this probe does not handle is unsupported with the tag as received
-// (core §2.3). A tag that appears twice where its definition does not say it repeats: the first one is used.
+// (core §2.3). A tag read as one value (fixed, once) that appears twice is malformed (core §2.3: the later copies are not
+// checked); a tag whose definition says it repeats is read in order with next().
 class Tail {
  public:
   // The whole tail's form is checked before any unknown critical tag is refused (one answer per request, core §4.3).
@@ -388,7 +389,8 @@ class Tail {
     return parse(p, n, known, N, out, capacity, deferred);
   }
 
-  // An implemented tag's value (its first occurrence, core §2.3), nullptr when absent. critical: whether the host marked it.
+  // An implemented tag's value (its first occurrence), nullptr when absent. critical: whether the host marked it. A reader
+  // of a non-repeating tag checks once() too (fixed() does).
   const uint8_t *find(uint8_t tag, size_t &length, bool *critical = nullptr) const {
     size_t at = 0;
     uint8_t raw = 0;
@@ -412,8 +414,17 @@ class Tail {
     value = find(tag, len, &crit);
     if (critical) *critical = crit;
     if (!value) return completed();
-    if (len != size) { value = nullptr; return rejected(kRejectMalformed); }
+    if (len != size || !once(tag)) { value = nullptr; return rejected(kRejectMalformed); }
     return completed();
+  }
+  // Whether `tag` (bit 7 aside) appears at most once in the tail: a non-repeating tag given twice is malformed (core §2.3).
+  bool once(uint8_t tag) const {
+    size_t at = 0, len = 0, seen = 0;
+    uint8_t raw = 0;
+    const uint8_t *value = nullptr;
+    while (at < n_ && step(at, raw, value, len))
+      if ((raw & ~kTagCritical) == (tag & ~kTagCritical) && ++seen > 1) return false;
+    return true;
   }
   // Every TLV in order (for a request that is a list of them, like plan_apply). false at the end.
   bool next(size_t &at, uint8_t &raw, const uint8_t *&value, size_t &length) const {

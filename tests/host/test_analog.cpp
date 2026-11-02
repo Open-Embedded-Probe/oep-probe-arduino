@@ -199,8 +199,8 @@ static void testConfigureOrder() {
   tlv(p, ana::kTlvConfigureSegments, {1, 0});                             // and a short segments
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
   p = configureRequest(10000);
-  tlv(p, kCrit | ana::kTlvConfigureMode, {});                             // mode twice: the first is used (core §2.3)
-  CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnavailable));
+  tlv(p, kCrit | ana::kTlvConfigureMode, {});                             // mode twice: malformed (core §2.3)
+  CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectMalformed));
   p = configureRequest(10000);
   tlv(p, kCrit | ana::kTlvConfigureTrigger, {3, 3, 0, 8, 0, 0});          // role 3 without a plan: the plan's refusal
   CHECK(rejectedAs(rig.op(ana::kOpConfigure, p), kRejectUnavailable));
