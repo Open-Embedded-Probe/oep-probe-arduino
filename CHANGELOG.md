@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.44
 - (EN) Fixed: on the ESP32 (P4 and classic), the spi-target drives MISO one step below the default strength. At the
   default its edges, next to SCK in a jig's wiring, reached SCK as a spare edge the slave counted: read_rx gave 41
   bits for 40 clocks and MOSI and MISO a bit late, about 1 in 12 transfers (a CH32X035's SPI1 at 750 kHz). The pad is
