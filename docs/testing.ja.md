@@ -13,12 +13,13 @@ Arduino の実行環境は `tests/` の uv / pytest workspace にまとめます
 | `cd tests && uv run pytest` | 転送判定、既存 host 検査、release profile 検査。実機は操作しない |
 | `uv run --env-file .env pytest -c pyproject.toml ../examples/Firmware/OepProbe/test_transfer.py --profile esp32` | 選択した ESP32 / P4 / P4X / Pico の build・個体／image 照合・転送・再列挙・宣言と設定／slot の再確認 |
 | `tests/host/run.sh` | host 上の shim と C++ による portable な protocol・状態・資源の検査 |
+| `uv run --project tests --env-file tests/.env pytest tests/equipment`（[実機の適合検査](../tests/equipment/README.ja.md)） | 実機の firmware を、選んだ oep-spec の checkout に照らした core と共通の宣言の検査。書き込みと設定の変更はしない |
 | `python3 tests/compile/test_profiles.py` | profile/model の定義の回帰検査 |
 | `.github/workflows/tests.yml` | host 検査と P4/P4X 等の build。実機の電気動作の保証とは別 |
 | Python client の `tests/hw` | 独立 host による実機の結合検査。現行設定の制約はその README に記載 |
 | `.github/workflows/firmware.yml` | image と manifest/hash の生成。実機での起動・復帰は別途検査 |
 
-新しい設備形式には offline loader/planner、仮想 smoke、共通ロックと結果保存を伴う実機 probe preflight があり、[最小構成の確認](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/hardware-quickstart.ja.md)から試せます。`pytest tests/equipment` が明示設備設定を使う probe 単体入口です。target 試験 adapter と複数 target の共有 session adapter は未実装です。probe preflight の成功で wire/DM・fixture・USB pair の適合を認定しません。
+新しい設備形式には offline loader/planner、仮想 smoke、共通ロックと結果保存を伴う実機 probe preflight があり、[最小構成の確認](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/hardware-quickstart.ja.md)から試せます。probe preflight の成功で wire/DM・fixture・USB pair の適合を認定しません。
 
 ## 候補 firmware を検証する順序
 
