@@ -105,7 +105,12 @@ bool P4SpiTarget::begin() {
   idle_trans_ = {};
   idle_trans_.length = kMaxFrame * 8; idle_trans_.tx_buffer = idle_tx_; idle_trans_.rx_buffer = idle_rx_;
   idle_trans_.user = this;
-  return spi_slave_initialize(SPI2_HOST, &bus, &cfg, SPI_DMA_DISABLED) == ESP_OK;
+  if (spi_slave_initialize(SPI2_HOST, &bus, &cfg, SPI_DMA_DISABLED) != ESP_OK) return false;
+  // MISO one step below the default: at the default its edges, next to SCK in a jig's wiring, came onto SCK as a
+  // spare edge the slave counted (41 bits for 40 clocks, MOSI and MISO a bit late; 4-2, a CH32X035's SPI1 at 750 kHz,
+  // about 1 in 12). One step weaker none in 48 (the weakest none either).
+  pins_.ownStrength(static_cast<uint16_t>(miso_), kMisoDrive);
+  return true;
 }
 
 // In the driver's interrupt, at the CS rising edge that ended `done` (its result already stored): note what it was and

@@ -163,6 +163,14 @@ class PinTable {
     platformDrive(channel, platformDriveLevels().default_level);
     strong_ &= ~bit;
   }
+  // The same, then the pad at `level` (a level of platformDriveLevels) for a line the fixture's peripheral drives; a
+  // level other than the default is marked, so the next owner gets the default back.
+  void ownStrength(uint16_t channel, uint8_t level) {
+    ownStrength(channel);
+    if (channel >= kChannels || !platformDriveLevels().count) return;
+    platformDrive(channel, level);
+    if (level != platformDriveLevels().default_level) strong_ |= uint64_t{1} << channel;
+  }
   // A drive level (fixture §1.1: a level number of drive_levels, 0xFF its default level) as a level of `d`. false: a
   // level past drive_levels, or any level on a probe without drive_levels (refused unsupported).
   static bool driveLevelOf(const DriveLevels &d, uint8_t value, uint8_t &level) {

@@ -140,6 +140,8 @@ int main() {
     CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnknownOperation);
   }
   CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
+  CHECK(g_pin_drive[6] == P4SpiTarget::kMisoDrive);   // MISO one step below the default, the inputs untouched
+  CHECK(g_pin_drive[4] != P4SpiTarget::kMisoDrive && g_pin_drive[7] != P4SpiTarget::kMisoDrive);
   Status s = status(t);
   CHECK(s.state == 1 && !s.armed && s.queued == 0 && s.transactions == 0 && s.errors == 0);
 
@@ -282,6 +284,7 @@ int main() {
   // output enable from CS): configured, armed, after a CS cycle, armed again, during a frame, and after release.
   {
     t.planRelease();
+    CHECK(g_pin_drive[6] == platformDriveLevels().default_level);   // released: MISO's pad back at the default strength
     CHECK(t.planApply(roles, 4));
     CHECK(!fakeMisoDriven());                               // planned, not configured
     CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));

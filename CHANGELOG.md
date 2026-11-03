@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: on the ESP32 (P4 and classic), the spi-target drives MISO one step below the default strength. At the
+  default its edges, next to SCK in a jig's wiring, reached SCK as a spare edge the slave counted: read_rx gave 41
+  bits for 40 clocks and MOSI and MISO a bit late, about 1 in 12 transfers (a CH32X035's SPI1 at 750 kHz). The pad is
+  back at the default once the plan is released.
+- (JA) 修正: ESP32（P4 と classic）で、spi-target は MISO を既定より 1 段弱い強さで出す。既定の強さでは、治具の配線で隣にある SCK に
+  その縁が飛び移り、slave が余分なエッジとして数えた: read_rx が 40 クロックを 41 ビットと返し、MOSI と MISO が 1 ビット遅れた（CH32X035 の
+  SPI1、750 kHz で、およそ 12 回に 1 回）。plan を外すと、パッドは既定の強さに戻る。
 - (EN) Fixed: on the ESP32-P4, the i2c-target ends a write at a repeated START as well as at a STOP (fixture §3). A
   write, a read after a repeated START and another write came back from read_rx as one frame. The classic ESP32's slave
   has no START interrupt, so there a write still ends at the STOP only (implementation limits §4.1).
