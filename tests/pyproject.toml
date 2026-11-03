@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 dependencies = [
   "pytest>=8",
   "pytest-embedded-arduino-cli==1.8.0",
-  "oep-client-python==0.0.31",
+  "oep-client-python==0.0.43",
 ]
 
 [tool.pytest.ini_options]
