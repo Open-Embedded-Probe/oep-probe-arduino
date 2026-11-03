@@ -124,8 +124,12 @@ void P4I2cTarget::onTransaction(bool read) {
 namespace {
 i2c_dev_t *const kDev = I2C_LL_GET_HW(0);
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
-constexpr uint32_t kIntrMask = I2C_LL_SLAVE_RX_INT | I2C_LL_SLAVE_TX_INT | I2C_SLAVE_STRETCH_INT_ENA_M;
+// DET_START: a START, repeated or not, also ends the transaction before it (TRANS_COMPLETE comes at a STOP only)
+constexpr uint32_t kTransactionEnd = I2C_TRANS_COMPLETE_INT_ENA_M | I2C_DET_START_INT_ENA_M;
+constexpr uint32_t kIntrMask = I2C_LL_SLAVE_RX_INT | I2C_LL_SLAVE_TX_INT | I2C_SLAVE_STRETCH_INT_ENA_M | kTransactionEnd;
 #else
+// No START interrupt in the slave: a repeated START does not end the write before it (only the STOP does)
+constexpr uint32_t kTransactionEnd = I2C_TRANS_COMPLETE_INT_ENA_M;
 constexpr uint32_t kIntrMask = I2C_LL_SLAVE_RX_INT | I2C_LL_SLAVE_TX_INT;
 #endif
 uint32_t txFifoHeld() {
@@ -177,6 +181,13 @@ void P4I2cTarget::isr(void *context) {
   i2c_ll_clear_intr_mask(kDev, status);   // handled here: the driver's own handler (after this one) sees none of it
   portENTER_CRITICAL_ISR(&self->lock_);
   self->drainRx();
+  if (status & kTransactionEnd) {
+    // the read, if any, took bytes out of the TX FIFO (a STOP of another target's transaction took none). Before the
+    // stretch below: a read after a repeated START gets the next slot before SCL goes.
+    const bool read = self->tx_loaded_ > txFifoHeld();
+    self->onTransaction(read);
+    if (read || self->tx_stale_) self->reloadTx();
+  }
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (status & I2C_SLAVE_STRETCH_INT_ENA_M) {   // SCL held: at a received byte's ACK, or a read's address
     self->fillTx();
@@ -189,12 +200,6 @@ void P4I2cTarget::isr(void *context) {
   }
 #endif
   if (status & I2C_LL_SLAVE_TX_INT) self->fillTx();
-  if (status & I2C_TRANS_COMPLETE_INT_ENA_M) {
-    // the read, if any, took bytes out of the TX FIFO (a STOP of another target's transaction took none)
-    const bool read = self->tx_loaded_ > txFifoHeld();
-    self->onTransaction(read);
-    if (read || self->tx_stale_) self->reloadTx();
-  }
   portEXIT_CRITICAL_ISR(&self->lock_);
 }
 

@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: on the ESP32-P4, the i2c-target ends a write at a repeated START as well as at a STOP (fixture §3). A
+  write, a read after a repeated START and another write came back from read_rx as one frame. The classic ESP32's slave
+  has no START interrupt, so there a write still ends at the STOP only (implementation limits §4.1).
+- (JA) 修正: ESP32-P4 で、i2c-target が書き込みを STOP だけでなく repeated START でも区切るようにした（fixture §3）。書き込み、repeated
+  START の後の読み出し、もう 1 つの書き込みが、read_rx で 1 つのフレームとして返っていた。classic ESP32 の slave には START の割り込みが
+  無いので、そちらは今も STOP でだけ区切る（実装の限界 §4.1）。
 
 ## 0.0.42
 - (EN) Changed (breaking): a request with a non-repeating TLV given twice is rejected malformed (oep-spec 253c643, core

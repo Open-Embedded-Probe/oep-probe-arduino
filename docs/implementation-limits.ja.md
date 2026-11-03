@@ -325,6 +325,8 @@ restart の応答の後、probe は応答を送り終えてから再起動する
 - **sampler の task の優先度は 17**（core 1 にはほかに重い task が無い。sketch が sampler と同じ core で TCP/IP の stack（18）や Wi-Fi の
   driver（23）を動かすときに、それらを先にするため）。
 - fixture UART の受信の割り込みは loop() の core（sampler と別）で、FIFO の閾値は 32 byte。速さは 2000000 bps まで。
+- i2c-target: slave の周辺に START の割り込みが無いので、書き込みは STOP でだけ区切る。repeated START でつないだ書き込みは、STOP までが
+  1 つのフレームになる（fixture §3 では START でも区切る）。
 
 ### 4.2 ESP32-P4
 
@@ -336,6 +338,8 @@ restart の応答の後、probe は応答を送り終えてから再起動する
 - i2c-target: ESP-IDF の slave ドライバ（v1）は受けた byte の数を知らせず、送信は区切りの無い流れなので、この実装は周辺の割り込みを
   自分で受け、トランザクションの byte を数え、TX FIFO を置き場から埋める（空なら 0xFF）。チップの FIFO の癖（読み出しの最後に余分な byte を
   出す、など）はこの実装が吸収する。stretch は 100000 µs まで（max_stretch_us）。
+  書き込みは STOP と START（repeated START を含む）の割り込みで区切る。START の割り込みが、次のトランザクションの最初のデータの byte が
+  届くまで（アドレスと合わせて 18 クロック）より遅れると、その byte は前のフレームに入る。
 
 ### 4.3 RP2040 / RP2350
 
