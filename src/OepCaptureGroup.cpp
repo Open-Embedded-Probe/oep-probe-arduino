@@ -273,7 +273,7 @@ Result CaptureGroup::handle(uint8_t op, const uint8_t *payload, size_t length, u
 }
 
 // The trigger track starts once the followers hold their pretrigger. Failing after the group's start: the group goes to
-// state 6, every track stops, stopped reason 3 (§4.1).
+// state 6, every track stops, stopped reason 2 (§4.1).
 bool CaptureGroup::startTrigger() {
   trigger_pending_ = false;
   if (tracks_[trigger_].track->trackStart()) return true;

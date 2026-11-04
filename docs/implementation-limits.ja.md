@@ -134,7 +134,7 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   いる区画）、segments はその範囲で共通部品 §1.3 のとおり答える。
 - **連続でない区画は出さない**（capture §2.2）: ESP32-P4 の logic で取り込みのキュー（128 個）があふれたか、DMA のリング（128 KiB）が
   まだ写していないバイトの上を回ったときは、埋めていた区画を捨て（segments に載せず、read でもストリーミングでも返さない）、トラックを
-  state 6、stopped reason 3、error 2 で止める。status の write_pos はその区画の先頭、flags bit0 が立つ。それより前に終わった区画は
+  state 6、stopped reason 2、error 2 で止める。status の write_pos はその区画の先頭、flags bit0 が立つ。それより前に終わった区画は
   そのまま読める。トリガ付きのワンショットでは、区画を写し終える前にリングが回ったとき（トリガがリングの最も古いバイトより前だった
   ときも）同じく止まる（write_pos 0）。アナログ（ESP32 の変換のあふれ、ESP32 / RP2 のリングが区画の上を回ったとき）も同じ。classic
   ESP32 の sampler はサンプルを落とさない（遅れたサンプルは slipped で示す）。
@@ -142,7 +142,7 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
   write_pos はその区画の先頭に戻る。host は受け取ったうち write_pos から先を捨てる。vendor bulk の zero-copy の経路は、送っていない
   フレームを捨てて止まる。リピートは区画の始まりで空きを決め（全部を置ける場所があるときだけ始める）、空きが無ければ区画を丸ごと
   取らず、次の区画に flags bit0。それ以外の落とし（キューやリングのあふれ）は境目でもエラー。
-- **state 6 に入るときは必ず stopped reason 3**（state 2 からも、ペリフェラルの失敗も。capture §3.2）。capture-group では、組の stopped は
+- **state 6 に入るときは必ず stopped reason 2**（state 2 からも、ペリフェラルの失敗も。capture §3.2）。capture-group では、組の stopped は
   そのトラックの error を持ち、ほかのトラックは組の stop と同じに止まる（stopped reason 1）。
 - **type 0 のトリガの role と value は見ない**（plan に無い role でも断らない、capture §3.3）。
 - **spi-target の bits**: ESP-IDF の SPI slave は、arm した length × 8 を超えて数えないので、bits は length × 8 を超えない

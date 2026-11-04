@@ -402,13 +402,13 @@ class LogicCapture final : public Interface, public GroupTrack {
   volatile bool gap_pending_ = false, paused_ = false;
   // capture §2.2: a segment that could not be kept seamless (a chunk lost to the queue, the DMA ring come round over
   // bytes not yet copied) is never handed out: the harvest drops it and stops taking data (lost_), poll() stops the
-  // track in state 6 (stopped reason 3, error 2). lost_pos_: where that segment began (status write_pos stays there).
+  // track in state 6 (stopped reason 2, error 2). lost_pos_: where that segment began (status write_pos stays there).
   volatile bool lost_ = false;
   uint64_t lost_pos_ = 0;
   uint8_t error_ = reg::fixture_logic::kErrorPeripheral;   // status's error TLV in state 6
   void loseSegment();          // harvest task: the segment being filled (or the stage) goes, nothing more is taken
-  void failLost();             // loop: the track stops on it (state 6, stopped reason 3 error 2)
-  void fail(uint8_t error);    // state 6 with stopped reason 3 and `error` (capture §3.2)
+  void failLost();             // loop: the track stops on it (state 6, stopped reason 2 error 2)
+  void fail(uint8_t error);    // state 6 with stopped reason 2 and `error` (capture §3.2)
   uint32_t reported_ = 0;
   // streaming: the next byte to push is sent_off_ into segment sent_seg_
   volatile uint32_t sent_seg_ = 0;

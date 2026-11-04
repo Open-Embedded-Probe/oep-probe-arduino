@@ -167,8 +167,8 @@ class AnalogCapture final : public Interface, public GroupTrack {
   uint8_t error_ = reg::fixture_analog::kErrorPeripheral;   // status's error TLV in state 6
   bool lost_ = false;          // the segment had a hole and was not handed out (capture §2.2)
   bool hole() const;           // the segment just finished has values lost or overwritten inside it
-  void failHole();             // not handed out: state 6, stopped reason 3, error 2
-  void fail(uint8_t error);    // state 6 with stopped reason 3 and `error` (capture §3.2)
+  void failHole();             // not handed out: state 6, stopped reason 2, error 2
+  void fail(uint8_t error);    // state 6 with stopped reason 2 and `error` (capture §3.2)
   Endpoint &endpoint_;
   uint32_t generation_ = 0;   // one up at every start (nextGeneration); 0 before the first
   uint64_t adc_pins_;

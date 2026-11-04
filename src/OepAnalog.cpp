@@ -1261,7 +1261,7 @@ bool AnalogCapture::hole() const {
 }
 
 // The segment with a hole is not handed out (no segment, read empty, write_pos 0 - its start); the track stops in
-// state 6 with stopped reason 3, error 2 (the conversions' queue or the ring overflowed).
+// state 6 with stopped reason 2, error 2 (the conversions' queue or the ring overflowed).
 void AnalogCapture::failHole() {
   segment_ = false;
   frames_ = 0;
@@ -1271,7 +1271,7 @@ void AnalogCapture::failHole() {
   fail(ana::kErrorStorage);
 }
 
-// State 6 (capture §3.2): every entry sends stopped reason 3 with the error status answers (1 the ADC driver or its
+// State 6 (capture §3.2): every entry sends stopped reason 2 with the error status answers (1 the ADC driver or its
 // DMA, 2 a segment with a hole).
 void AnalogCapture::fail(uint8_t error) {
   const bool entering = state_ != ana::kStateError;

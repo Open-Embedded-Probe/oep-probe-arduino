@@ -976,7 +976,7 @@ void LogicCapture::loseSegment() {
 }
 
 // Loop: a segment was lost (lost_), or a triggered one-shot's segment has a hole (trig_overrun_): the track stops in
-// state 6 with stopped reason 3, error 2 (the queue or the ring overflowed; capture §2.2) - no segment handed out.
+// state 6 with stopped reason 2, error 2 (the queue or the ring overflowed; capture §2.2) - no segment handed out.
 void LogicCapture::failLost() {
   if (triggered_) {
     harvesting_ = false;
@@ -991,7 +991,7 @@ void LogicCapture::failLost() {
   fail(cap::kErrorStorage);
 }
 
-// State 6 (capture §3.2): every entry - from state 1, 2, 3 or 5 - sends stopped reason 3 with the error status answers
+// State 6 (capture §3.2): every entry - from state 1, 2, 3 or 5 - sends stopped reason 2 with the error status answers
 // (1 the PARLIO or its DMA, 2 a segment lost to the queue or the ring).
 void LogicCapture::fail(uint8_t error) {
   const bool entering = state_ != kStateError;

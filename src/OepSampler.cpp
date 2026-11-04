@@ -469,7 +469,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       start_ns_ = static_cast<uint64_t>(esp_timer_get_time()) * 1000u;
       generation_ = nextGeneration(generation_);   // 1 after 0xFFFFFFFF, never 0 (capture §3.2)
       if (!startRun()) {
-        state_ = cap::kStateError;   // every entry to state 6 sends stopped reason 3 (capture §3.2)
+        state_ = cap::kStateError;   // every entry to state 6 sends stopped reason 2 (capture §3.2)
         if (subscribed_) {
           uint8_t stopped[6] = {cap::kStoppedReasonError, cap::kErrorPeripheral};
           putU32(stopped + 2, generation_);
