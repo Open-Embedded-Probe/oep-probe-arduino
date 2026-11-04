@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: setting a channel's idle to pull-down (`channel.{}.idle`, core §13.8) crashed the probe: the set's check
+  copied the choice's name, 9 bytes and its 0, into an 8-byte buffer. The host test sets every idle choice and builds under
+  AddressSanitizer (found by the pin-release check on an ESP32-P4).
+- (JA) 修正: channel の idle を pull-down にする設定（`channel.{}.idle`、core §13.8）でプローブが落ちていた: set の確かめで、選択肢の名前
+  （9 byte と末尾の 0）を 8 byte のバッファに写していた。ホストの試験で idle の選択肢をすべて set し、AddressSanitizer で build する
+  （ESP32-P4 で、ピンの解放の検査で見つけた）。
 - (EN) Fixed: an HID output report whose count passes what it carries is dropped, and so is every report up to a pause of
   probe_frame_gap_ms with none (transports §1, the HID rules), as a length over max_frame is. The ESP32-P4 / P4X, CH32
   and RP2 HID receivers dropped only that report and took the next at once, so a request right after it was answered

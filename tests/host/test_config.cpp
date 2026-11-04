@@ -265,6 +265,20 @@ static void testLabelsUnique() {
 }
 
 // A save is read back by name (core §13.7): a firmware whose fns moved applies the same values under its own numbers.
+// Every idle choice can be set by its number and reads back as itself - the longest name ("pull-down") too: the set's
+// check once copied the choice's name into a buffer too small for it (a crash of the probe on the bench, 2026-11-04).
+static void testEveryIdleChoice() {
+  fakeConfigStore(nullptr, 0);
+  Bytes out;
+  Probe a(false);
+  const uint8_t idle = a.number(0, rc::kSettingChannelIdle);
+  for (uint8_t choice : {rc::kChannelIdleHiZ, rc::kChannelIdlePullUp, rc::kChannelIdlePullDown, rc::kChannelIdleLow,
+                         rc::kChannelIdleHigh}) {
+    CHECK(ok(a.op(rc::kOpSet, set({value(0, idle, 6, {choice})}), out)));
+    CHECK(has(values(a), 0, idle, 6, {choice}));
+  }
+}
+
 static void testSavedByName() {
   fakeConfigStore(nullptr, 0);
   Bytes out;
@@ -418,6 +432,7 @@ int main() {
   testDescribe();
   testInitialValues();
   testLabelsUnique();
+  testEveryIdleChoice();
   testSavedByName();
   testSavedDisabled();
   testBrokenContainer();

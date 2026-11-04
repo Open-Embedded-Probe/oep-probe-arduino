@@ -122,7 +122,8 @@ wire_gate_failed=
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SWD -I"$here/shim" -I"$src" -o "$out-swd" \
   "$here/test_swd.cpp" "$src/OepSwd.cpp" "$src/OepFrame.cpp"
 "$out-swd"
-g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CONFIG -I"$here/shim" -I"$src" -o "$out-config" "$here/test_config.cpp" \
+# under AddressSanitizer: a settings buffer overflow crashed a probe once (the set of "pull-down")
+g++ -std=gnu++17 -g -fsanitize=address -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CONFIG -I"$here/shim" -I"$src" -o "$out-config" "$here/test_config.cpp" \
   "$src/OepSettings.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" \
   "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepFixture.cpp"
 "$out-config"

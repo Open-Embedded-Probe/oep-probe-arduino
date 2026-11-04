@@ -630,7 +630,7 @@ Result Settings::checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_
   }
   // a key this probe has no value for (unsupported)
   if (!keyValid(entry, key)) return unsupportedItem(out, capacity, item);
-  uint8_t name[8];
+  uint8_t name[64];   // the stored text of an enum value and its 0 (storedValue writes both; "pull-down" is 9)
   if (s.form == k::kSettingFormEnum && !storedValue(entry, d, 1, name)) return unsupportedItem(out, capacity, item);
   if (s.form == k::kSettingFormChannel && (pins_ ? !pins_->allowed(getU16(d)) : getU16(d) >= channels_))
     return unsupportedItem(out, capacity, item);
