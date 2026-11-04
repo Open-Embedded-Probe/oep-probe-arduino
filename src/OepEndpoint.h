@@ -31,7 +31,7 @@ class SettingsCore;
 // One accepted TCP connection at a time (transports §1): a Stream while it lasts. A listening socket is one transport
 // entry of fn 0's describe (kind 6, interface 0xFF); each connection accepted on it is a transport of its own -
 // confirm's transport TLV names the listener's entry, while the revision, max_frame / window / max_inflight and the
-// notifications' destination are the connection's (core §7.1, §11.4). A slot holds one connection; the endpoint takes
+// notifications' destination are the connection's (core §7.1, §10.4). A slot holds one connection; the endpoint takes
 // a few slots per listener (Endpoint::addTcpListener). OepTcp.h has the ESP32's (lwIP sockets).
 class Connection : public Stream {
  public:
@@ -138,7 +138,7 @@ class Endpoint {
   uint16_t maxFrame() const { return limits_.max_frame; }
   // confirm's values within core §7.1's bounds, whatever the sketch gave: max_frame 64 or more, window max_frame or
   // more, max_inflight 1 or more (a host treats a transport answering outside them as not usable). max_inflight is at
-  // most the resend table's entries: the table remembers at least max_inflight requests (core §5.2).
+  // most the resend table's entries: the table remembers at least max_inflight requests (core §5.1).
   static constexpr Limits bounded(Limits l) {
     if (l.max_frame < reg::kMinMaxFrame) l.max_frame = reg::kMinMaxFrame;
     if (l.window_bytes < l.max_frame) l.window_bytes = l.max_frame;
@@ -325,7 +325,7 @@ class Endpoint {
   }
   bool portSpeedCommitted() const { return speed_state_ == kSpeedCommitted; }
   // An event from an interface that notifies() (sent to the lock holder if it subscribed to that fn): not batched, it
-  // goes out as soon as the answers to what has arrived have (core §11.3, §11.4); kept in a small queue until then
+  // goes out as soon as the answers to what has arrived have (core §10.3, §10.4); kept in a small queue until then
   // (oldest dropped when full - the seq gap shows it).
   bool event(Interface &from, uint8_t kind, const uint8_t *payload, size_t length);
   // Events the interface lost before handing them over (its own queue overflowed): the seq skips them, so the
@@ -333,7 +333,7 @@ class Endpoint {
   void eventsLost(Interface &from, uint16_t count);
   // Experimental: at most this many bytes of pushes may wait in the transport. Size it to the link: a result waits
   // behind up to this much (256 B is about 0.3 ms on USB-Serial/JTAG, 23 ms on a 115200 UART). Never more than
-  // max_frame x 2 (core §11.4 obligation 2): 0, or a larger value, is that bound.
+  // max_frame x 2 (core §10.4 obligation 2): 0, or a larger value, is that bound.
   void setPushQueue(size_t bytes) {
     const size_t bound = 2u * limits_.max_frame;
     push_queue_ = bytes == 0 || bytes > bound ? bound : bytes;
@@ -480,7 +480,7 @@ class Endpoint {
   void planRelease(const uint16_t *fns, size_t nfns);
   bool planned_[kMaxInterfaces] = {};
   bool persistent_[kMaxInterfaces] = {};   // planned through replacePlan (the settings (core §13)): a lapse does not release it
-  // Subscriptions, per fn (core §11.3: one per fn, the lock holder's).
+  // Subscriptions, per fn (core §10.3: one per fn, the lock holder's).
   volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;
   DirectTransport *directT() const { return direct_; }
@@ -491,7 +491,7 @@ class Endpoint {
   uint32_t waiting_since_[kMaxInterfaces] = {};
   bool waiting_[kMaxInterfaces] = {};
   size_t draining_[kMaxInterfaces] = {};   // a batch due: the bytes still to send of what was pending then
-  // events: fn (1 and up: fn 0 sends none, core §11.2), seq per fn shared with data frames
+  // events: fn (1 and up: fn 0 sends none, core §10.2), seq per fn shared with data frames
   struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[40]; };
   static constexpr size_t kEvents = OEP_SMALL_RAM ? 8 : 32;
   Event events_[kEvents];
@@ -503,7 +503,7 @@ class Endpoint {
   void push();
   void endSubscriptions();
   void send(size_t length);
-  // Dedup of the last session's requests sent again (core §5.2): the last kDedupEntries (corr, answer), keyed on corr
+  // Dedup of the last session's requests sent again (core §5.1): the last kDedupEntries (corr, answer), keyed on corr
   // alone; dropped at every successful open (kept over end, lapse, force). Results over kDedupBytes are not kept
   // (rejected result_lost): kDedupBytes covers a whole frame of the largest profile, so a 1 KiB read_block whose answer
   // was corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).

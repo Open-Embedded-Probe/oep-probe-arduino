@@ -41,7 +41,7 @@ constexpr uint32_t kPretriggerRoom = 129;                        // see configur
 constexpr Frontend kFrontends[] = {{0, 0, 950, 0}, {1, 0, 1250, 2500}, {2, 0, 1750, 6000}, {3, 0, 3100, 12000}};
 constexpr uint32_t kMinTotalHz = 611, kMaxTotalHz = 46000;       // above 46 kHz the P4 gives each value twice
 constexpr size_t kRecordBytes = 4;
-constexpr bool kFirstFrameLost = true;                           // measured on the P4 (logic-capture §7.4)
+constexpr bool kFirstFrameLost = true;                           // measured on the P4
 // Triggered, the segment's buffer is the ring: one channel's values can run up to a driver read (128 records) ahead
 // of the frame being looked at, into the ring's slots of older frames; the pretrigger leaves them out.
 constexpr uint32_t kPretriggerRoom = 129;
@@ -648,7 +648,7 @@ bool AnalogCapture::startNow() {
   }
 #endif
   // The P4's driver leaves out the first conversion frame: its first value is one frame after the start. Corrected,
-  // it matched to about 0.1 ms (logic-capture §7.4). The classic ESP32 keeps it, but its values came about 100 us
+  // it matched to about 0.1 ms. The classic ESP32 keeps it, but its values came about 100 us
   // before the logic's for the same edge, at 10, 20 and 40 kS/s alike (50-200 us: a time, not a count of samples,
   // within one sample either way; a capture-group on the V003 jig, 0.0.16, 2026-09-30).
   if (kFirstFrameLost) {

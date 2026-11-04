@@ -1046,7 +1046,7 @@ static void testConfirmBoundsAndFixedList() {
   CHECK(Endpoint::kMaxOpMs >= 1 && Endpoint::kMaxOpMs <= reg::kLimitMaxOpMsMax);
 }
 
-// oep-if-plan §2.5 / core §4.3 (C-21): plan_apply's form over the whole request comes first (order 5: a role_assignment
+// oep-if-plan §2.4 / core §4.3 (C-21): plan_apply's form over the whole request comes first (order 5: a role_assignment
 // of another length, fn 0: malformed), then at the end of order 5 the fns named inside it (unknown_function), then an
 // unknown critical tag and a fn with no plan role - oep.probe.plan itself - (unsupported, order 6). oep-if-plan: a probe
 // none of whose interfaces has plan roles does not list oep.probe.plan (its fn is unknown); one with them lists it after

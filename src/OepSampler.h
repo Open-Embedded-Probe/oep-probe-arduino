@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// OEP v1 logic capture (oep.fixture.logic revision 1, oep-spec logic-capture.ja.md §5) on the classic ESP32: the
-// software GPIO sampler of the v0 FixtureCapture: one-shot, and repeat with rearm 1 (every segment its own triggered
+// OEP v1 logic capture (oep.fixture.logic revision 1, oep-spec oep-if-capture) on the classic ESP32: a software GPIO
+// sampler: one-shot, and repeat with rearm 1 (every segment its own triggered
 // window into a slot, the task started again for the next once a slot is free: up to kMaxSegments, state 5 when full;
 // not yet run on hardware - the bench's classic ESP32 has no free channel). Repeat with rearm 0 (gapless) is refused. It samples on the core that loop() is not on (the one
 // start is called from), with interrupts off, paced by the cycle counter (one register read per sample); OEP keeps
 // answering on loop()'s core. The firmware with Wi-Fi puts loop(), the Arduino events, the Wi-Fi driver and the TCP/IP
 // stack on core 0 (LoopCore=0, EventsCore=0; the driver and the stack are pinned there by the core's build) and leaves
 // core 1 to the sampler: a window never holds up the radio, so it needs no radio-specific limit.
-// A sample is one byte (w = 8), channel k on bit k (logic-capture §3.0), up to 8 channels; bits of unused channels are 0.
+// A sample is one byte (w = 8), channel k on bit k (capture §1.1), up to 8 channels; bits of unused channels are 0.
 // Triggers: immediate, level and edge on one channel, with a pretrigger inside the segment; the search runs in bursts
 // with interrupts on between them, and gives the SWIO wire turns inside them (OepSamplerRun.h).
 //
@@ -79,7 +79,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   // a read's answer is sized by its route's room as well: the largest route's (the zero-copy stages too)
   void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }
-  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
+  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §10.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   // From loop(), every time round: a finished window becomes the segment and stopped events; and the SWIO wire is let
   // go of (OepWireGate.h) - a sketch with this sampler and a SwioPhy calls it each loop(), or no window opens.

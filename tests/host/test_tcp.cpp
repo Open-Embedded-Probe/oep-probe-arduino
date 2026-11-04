@@ -1,4 +1,4 @@
-// Host tests: a TCP listener's connection slots on the endpoint (oep-transports §1, §2, §3; core §7.1, §11.4). One
+// Host tests: a TCP listener's connection slots on the endpoint (oep-transports §1, §2, §3; core §7.1, §10.4). One
 // describe entry for the listening socket (kind 6, interface 0xFF) after a UART bridge's, confirm on every connection
 // naming it; an answer goes back on the connection the request came on; a frame split over many writes with long
 // pauses is read whole (no gap rule on TCP), frames merged into one write are all answered; a length over max_frame

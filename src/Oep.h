@@ -115,7 +115,7 @@ constexpr uint32_t kRestartDetachMs = 60, kRestartResetMs = 10;
 
 constexpr uint8_t kRoleRequest = reg::kRoleRequest, kRoleResult = reg::kRoleResult;
 // Probe-initiated frames (core §11), sent only to the lock holder that subscribed to the emitting fn, after results.
-//   role(0x06) fn(u16) seq(u16) payload     data: payload = position(u64) len(u16) data [TLV] (core §11.2)
+//   role(0x06) fn(u16) seq(u16) payload     data: payload = position(u64) len(u16) data [TLV] (core §10.2)
 constexpr uint8_t kRolePush = reg::kRoleData;
 constexpr size_t kPushHeader = 5;
 //   role(0x05) fn(u16) seq(u16) kind(u8) fixed part [TLV]   events, the kinds the interface's own (fn 0 sends none)
@@ -144,7 +144,7 @@ constexpr uint8_t kOpConfirm = reg::core::kOpConfirm, kOpList = reg::core::kOpLi
 constexpr uint8_t kOpOpen = reg::core::kOpOpen, kOpEnd = reg::core::kOpEnd, kOpKeepalive = reg::core::kOpKeepalive,
                   kOpLockState = reg::core::kOpLockState;
 // subscribe / unsubscribe: ops of the interface that sends notifications, the same numbers in every interface's op space
-// (core §11.3); the endpoint answers them for an interface that notifies()
+// (core §10.3); the endpoint answers them for an interface that notifies()
 constexpr uint8_t kOpSubscribe = reg::kOpSubscribe, kOpUnsubscribe = reg::kOpUnsubscribe;
 // oep.probe.plan (oep-if-plan) and oep.probe.restart (oep-if-restart): their own fns, which the endpoint lists itself
 constexpr uint8_t kOpPlanApply = reg::probe_plan::kOpPlanApply, kOpPlanRelease = reg::probe_plan::kOpPlanRelease;
@@ -721,12 +721,12 @@ class Interface {
     setFrameLimit(smallest);
   }
   // Notifications (core §11): an interface that sends them says true here, and the endpoint puts subscribe and
-  // unsubscribe (0x30 / 0x32, core §11.3) in its ops and answers them itself (the lock holder's; min_bytes and
+  // unsubscribe (0x30 / 0x32, core §10.3) in its ops and answers them itself (the lock holder's; min_bytes and
   // max_delay_ms batch the data frames only, an event goes out as soon as the answers ahead of it have). One that sends
   // none has neither op: a subscribe to it is unknown_operation.
   virtual bool notifies() const { return false; }
   // The lock holder subscribed (true) or unsubscribed / its session ended (false); called only when notifies(). While
-  // subscribed, the endpoint asks for a data frame's payload (pull): write up to `capacity` bytes of it in core §11.2's
+  // subscribed, the endpoint asks for a data frame's payload (pull): write up to `capacity` bytes of it in core §10.2's
   // form - position(u64) len(u16) data [TLV] - and return the length; 0 = nothing now. The return value is not used.
   virtual bool subscribe(bool on) { (void)on; return false; }
   virtual size_t pull(uint8_t *out, size_t capacity) {

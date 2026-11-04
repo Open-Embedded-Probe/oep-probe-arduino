@@ -244,7 +244,7 @@ bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_byt
   return false;
 }
 
-// Events go before data and are never batched (core §11.3): out as soon as the answers ahead of them have gone. false: no
+// Events go before data and are never batched (core §10.3): out as soon as the answers ahead of them have gone. false: no
 // room right now.
 bool Endpoint::sendEvents() {
   while (event_tail_ != event_head_) {
@@ -272,13 +272,13 @@ void Endpoint::push() {
   if (room > frame - kPushHeader) room = frame - kPushHeader;
   for (size_t i = 0; i < count_; ++i) {
     if (!subscribed_[i]) continue;
-    // batching, of the data only (core §11.3): wait for min_bytes, or max_delay_ms after the first byte became pending;
+    // batching, of the data only (core §10.3): wait for min_bytes, or max_delay_ms after the first byte became pending;
     // once either holds, what is pending then goes out frame after frame, min_bytes not applied again to the rest
     if ((min_bytes_[i] || max_delay_ms_[i]) && !draining_[i]) {
       const size_t ready = interfaces_[i]->pending();
       if (ready == 0) { waiting_[i] = false; continue; }
       if (!waiting_[i]) { waiting_[i] = true; waiting_since_[i] = millis(); }
-      // 0 = that condition is not used (core §11.3): send on min_bytes ready, or max_delay_ms after the first byte
+      // 0 = that condition is not used (core §10.3): send on min_bytes ready, or max_delay_ms after the first byte
       const bool enough = min_bytes_[i] && ready >= min_bytes_[i];
       const bool due = max_delay_ms_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) >= max_delay_ms_[i];
       if (!enough && !due) continue;
@@ -319,7 +319,7 @@ void Endpoint::push() {
 }
 
 // subscribe (0x30): min_bytes(u16) max_delay_ms(u32) [TLV]; unsubscribe (0x32): [TLV] - ops of the fn that sends the
-// notifications itself, the request's header names it (core §11.3); in the ops of an interface that notifies() only
+// notifications itself, the request's header names it (core §10.3); in the ops of an interface that notifies() only
 // (handleMessage refused any other unknown_operation, and checked the lock holder's session). seq starts again at 0 with
 // every subscribe, which replaces the fn's subscription whole; an unsubscribe of a fn not subscribed does nothing.
 Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, size_t length, uint8_t *out,
@@ -399,7 +399,7 @@ void Endpoint::lapse() {
 // connection, so a stream it was the last user of closes with detail session_ended, oep-if-console §2), its plans (the
 // pins to their idle state). A plan set through the settings (core §13) stays (probe settings, not a session's), as do a
 // slot's connection and a bind's stream. The owner is forgotten; the last id and the resend table stay (a resent end
-// is answered from it, core §5.2). Nothing passes to the next session: no resume.
+// is answered from it, core §5.1). Nothing passes to the next session: no resume.
 void Endpoint::releaseLock() {
   locked_ = false;
   owner_length_ = 0;
@@ -417,7 +417,7 @@ void Endpoint::loseSession() {
   if (n) planRelease(lapsed, n);   // n == 0 would mean every fn: only the session's plans go
 }
 
-// Subscriptions belong to the lock: they end with it (core §11.3).
+// Subscriptions belong to the lock: they end with it (core §10.3).
 void Endpoint::endSubscriptions() {
   event_tail_ = event_head_;
   for (size_t i = 0; i < count_; ++i) {
@@ -442,7 +442,7 @@ Result Endpoint::checkSession(uint32_t session, uint8_t *out, size_t capacity) {
 
 bool Endpoint::lockFreeOp(uint16_t fn, uint8_t op) const {
   if (fn == 0) return lockFreeIn(reg::core::kLockFreeOps, op);
-  if (op == kOpSubscribe || op == kOpUnsubscribe) return false;   // the lock holder's (core §11.3)
+  if (op == kOpSubscribe || op == kOpUnsubscribe) return false;   // the lock holder's (core §10.3)
   return interfaces_[fn - 1]->lockFree(op);
 }
 
@@ -465,7 +465,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
            static_cast<unsigned>(payload_length));
   // core §4.3 order 1, the header: a fn this probe does not have, an op that fn does not offer (its ops, core §1.2), an
   // op that needs the lock with session_id 0 (open's own id 0 is malformed: open checks it) - before the resend table
-  // (order 2), so such a refusal is neither kept nor restarts the lease (core §5.2, §6.1)
+  // (order 2), so such a refusal is neither kept nor restarts the lease (core §5.1, §6.1)
   const bool is_open = fn == 0 && op == kOpOpen;
   if (corr == 0) { sendReject(corr, kRejectMalformed); return; }   // core §4.3 order 1: corr 0 first
   if (fn != 0 && fn > count_) { sendReject(corr, kRejectUnknownFunction); return; }
@@ -590,7 +590,7 @@ bool Endpoint::offersOp(uint16_t fn, uint8_t op) const {
   if (op == 0 || op >= kReservedOps) return false;   // reserved in every interface's space (core §2.5)
   if (fn == 0) return coreOffers(op);
   const Interface *it = interfaces_[fn - 1];
-  // subscribe / unsubscribe both, in every interface that sends notifications and in no other (core §11.3)
+  // subscribe / unsubscribe both, in every interface that sends notifications and in no other (core §10.3)
   if (op == kOpSubscribe || op == kOpUnsubscribe) return it->notifies();
   return it->offers(op);
 }
@@ -911,7 +911,7 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
 // plan (unsupported), an unknown non-critical one is ignored. A session's plan goes when its lock ends (end, a lapse, a
 // takeover); a plan set through the settings (core §13) (replacePlan, persistent) stays.
 Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
-  // Every check before anything changes (core §4.3, oep-if-plan §2.5): its form (every role_assignment 5 bytes, fn 0
+  // Every check before anything changes (core §4.3, oep-if-plan §2.4): its form (every role_assignment 5 bytes, fn 0
   // malformed, at least one), the fns named inside it (unknown_function), an unknown critical tag and a fn with no plan
   // role (unsupported, the role_assignment's tag as received), then the count against plan_roles (unavailable cause 2).
   static const uint8_t kKnown[] = {kTagRoleAssignment};
@@ -961,7 +961,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   // another plan's channel, a wire connection's, the interface's own state: what it met (core §4.3)
   if (reason == kRejectUnavailable) return planUnavailable(out, capacity);
   // a role, channel or combination the interface does not declare: unsupported, the first role_assignment's tag as
-  // received (oep-if-plan §2.5)
+  // received (oep-if-plan §2.4)
   if (reason == kRejectUnsupported) {
     for (at = 0; tail.next(at, raw, v, len);)
       if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical)) return unsupportedTag(out, capacity, raw);

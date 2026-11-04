@@ -6,9 +6,8 @@
 // channel that cannot drive is refused, every release goes to the idle state, a channel taken by a gpio plan keeps its
 // idle drive until the first set (no glitch on a power line), a debug wire's release touches only channels with an
 // idle, the reset line goes back to its idle, and a plan replaced through the endpoint releases only the channels that
-// leave it (a power line kept in both plans never blinks off). The output drive strength (oep-if-fixture §1.1): describe's
-// drive_levels, set's drive TLV per element (index level; malformed / unsupported), the inheritance set -> idle ->
-// default; read has no drive TLV, mode 7 is unsupported like 8.
+// leave it (a power line kept in both plans never blinks off). The output strength is the probe's (fixture §1): a mode 3 / 4
+// output and an output idle at the pad's default; mode 7 is unsupported like 8.
 #include <stdio.h>
 
 #include <vector>

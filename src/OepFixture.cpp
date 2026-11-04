@@ -88,11 +88,8 @@ Result FixtureGpio::handle(uint8_t op, const uint8_t *payload, size_t length, ui
           return unsupportedAt(out, capacity, getU16(payload + 1 + 3 * i), i);
       for (uint8_t i = 0; i < n; ++i)
         if (!planned(getU16(payload + 1 + 3 * i))) return refusedAt(pins_, i, getU16(payload + 1 + 3 * i), out, capacity);
-      // a mode 3 / 4 element at its channel's idle strength, else the default level (the probe's choice)
-      for (uint8_t i = 0; i < n; ++i) {
-        const uint16_t c = getU16(payload + 1 + 3 * i);
-        pins_.setPad(static_cast<uint8_t>(c), platformMode(payload[3 + 3 * i]), pins_.idleDrive(c));
-      }
+      for (uint8_t i = 0; i < n; ++i)
+        pins_.setPad(static_cast<uint8_t>(getU16(payload + 1 + 3 * i)), platformMode(payload[3 + 3 * i]));
       return completed();
     }
     case kOpRead: {   // n(u8) n x channel(u16) [TLV]  ->  n(u8) n x level(u8) [TLV]

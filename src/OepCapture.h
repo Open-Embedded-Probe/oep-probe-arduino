@@ -44,7 +44,7 @@ class Endpoint;
 class LogicCapture final : public Interface, public GroupTrack {
  public:
   // A segment's start_uncertainty_ns (capture §2.2): PARLIO's first sample against the start's clock read - an edge
-  // landed within 5 us of the GPIO write that made it (logic-capture §7.4), so +-5 us
+  // landed within 5 us of the GPIO write that made it, so +-5 us
   static constexpr uint32_t kStartUncertaintyNs = 5000;
   // The external clock (capture §3.8): PARLIO's clock input, one edge (rising or falling), a qualifier as its level
   // delimiter's valid line; a one-shot with an immediate trigger only. The fastest clock declared: not measured beyond
@@ -132,7 +132,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   // a read's answer is sized by its route's room as well: the largest route's (the zero-copy stages too)
   void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }
-  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
+  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §10.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   size_t pending() override;
   size_t pull(uint8_t *out, size_t capacity) override;

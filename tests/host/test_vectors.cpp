@@ -18,7 +18,7 @@
 //     state its `state` says, with the session 0x11223344 open when the request carries it.
 // ops.json's cases of other probes run on their own: fns 12 - 14 (capture-group with two tracks, spi-target) on
 // WideProbe, the console marks of a ring of 4 on a PositionStream, arm-adi in test_swd, the dropped segment of a
-// 1000-byte segment in test_capture (this probe's are 4 KiB); multirate (capture §5) is not offered here. ops.json's
+// 1000-byte segment in test_capture (this probe's are 4 KiB). ops.json's
 // events: the group's on WideProbe, fn 9's from the logic capture (testLogicEvents), seq aside.
 // clock's uptime_ns (sessions.json) is the example probe's in the vector: here it is checked to be this probe's clock as
 // it reads it for the answer (the fake clock, which the test moves on before each clock), the rest byte for byte.
@@ -27,7 +27,7 @@
 // samples is the actual_samples this capture's configure answered for the 1000 asked (a one-shot segment is whole
 // 128-byte cache lines: 1024 at one line); the rest of that answer is compared byte for byte.
 // The test's own setup requests are numbered just before the vector's corr (core §4.1: the host numbers its requests
-// in order, and a corr no newer than the newest is result_lost, core §5.2).
+// in order, and a corr no newer than the newest is result_lost, core §5.1).
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -943,12 +943,6 @@ static bool setUp(OpsProbe &p, const std::string &name, const std::string &state
   return true;   // the refusals that come before any state (core §4.3 orders 1, 5, 6), oep.probe.link
 }
 
-// A case of capture §5 (multirate, the second definition on TLVs 0x60): this probe does not offer it (its describe has
-// no 0x60), so only the case of a fn without it applies - run on fn 9.
-static bool multirate(const Json &c) {
-  const std::string &name = c["name"].string;
-  return name.find("multirate") != std::string::npos && name.find("does not declare") == std::string::npos;
-}
 // A case whose answer depends on the example probe's segment of 1000 bytes (this one's repeat segments are whole 4 KiB):
 // the dropped segment of capture §2.2, checked with this probe's sizes in tests/host/test_capture.cpp (testLostChunk).
 static bool ownSegments(const Json &c) {
@@ -1007,8 +1001,8 @@ static void testOps(const char *file, const char *list) {
       printf("  %s \"%s\": in test_wire (a debug module that runs the block writer)\n", file, c["name"].string.c_str());
       continue;
     }
-    if (multirate(c) || ownSegments(c)) {
-      printf("  %s \"%s\": %s\n", file, c["name"].string.c_str(), multirate(c) ? "multirate, not offered" : "in test_capture");
+    if (ownSegments(c)) {
+      printf("  %s \"%s\": in test_capture\n", file, c["name"].string.c_str());
       continue;
     }
     ++cases;
@@ -1201,10 +1195,6 @@ static void testWideCases() {
   for (const Json &c : v["cases"].items) {
     if (!elsewhere(c)) continue;
     const std::string name = c["name"].string;
-    if (multirate(c)) {
-      printf("  ops.json \"%s\": multirate, not offered\n", name.c_str());
-      continue;
-    }
     if (names(c["fns"], "oep.target.arm-adi")) {   // a simulated SWD target: tests/host/test_swd.cpp runs it
       printf("  ops \"%s\": in test_swd\n", name.c_str());
       continue;
@@ -1312,7 +1302,7 @@ static void testWideCases() {
     for (const uint16_t fn : {uint16_t(12), uint16_t(14)})
       CHECK(describeFits([&](uint16_t first) { return w.request(0, kOpDescribe, {uint8_t(fn), 0, uint8_t(first), uint8_t(first >> 8)}, 0); }));
   }
-  // The notification frames (core §11.2) with the generation each carries: the group's from WideProbe (fn 12
+  // The notification frames (core §10.2) with the generation each carries: the group's from WideProbe (fn 12
   // subscribed, group generation 5, fn 9's trigger at 7.05 ms, then every track done); fn 9's own in testLogicEvents.
   boot();
   WideProbe p;

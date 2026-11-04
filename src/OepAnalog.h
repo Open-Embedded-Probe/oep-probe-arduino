@@ -7,7 +7,7 @@
 //
 //   ESP32-P4 / classic ESP32   ADC1 in continuous (DMA) mode (esp_adc adc_continuous), a pattern entry per channel with
 //                              its own attenuation. The P4's driver leaves out its first conversion frame: the first
-//                              value is one frame after the start (logic-capture §7.4), and the time says so. Above
+//                              value is one frame after the start, and the time says so. Above
 //                              46 kHz in all the P4 gives each value twice, so that is the ceiling declared.
 //   RP2040 / RP2350            the ADC's round robin into its FIFO, copied by DMA: 48 MHz / 96 cycles a conversion at
 //                              most (500 kS/s in all), one frontend (0 - ADC_VREF = the supply).
@@ -113,7 +113,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? max_frame - 16 : 0; }
   // a read's answer is sized by its route's room as well: the largest route's (the zero-copy stages too)
   void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }
-  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
+  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §10.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   // streaming (mode 3, the ESP build): the data pushed while the lock holder is subscribed (core §10.2, capture §3.4)
   size_t pending() override;

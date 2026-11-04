@@ -17,7 +17,7 @@ TCP と Wi-Fi（port、mDNS、Wi-Fi の設定、測った値）は §6。
 | max_op_ms（fn 0 の describe） | 10000 ms | 1〜600000 ms、値は probe が決める（core §7.5） |
 | restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。Wi-Fi を外した build（`oepWithWifi`）で 1500 ms）、RP2040 / RP2350 2000 ms | probe が決める（oep-if-restart §1） |
 | lease の既定（open の lease_ms 0） | 3000 ms | 1000〜60000 ms（core §6.4） |
-| 送り直しの表 | 8 件、1 件の応答は 1029 byte まで（それより大きい応答の送り直しは result_lost） | max_inflight 件以上（core §5.2） |
+| 送り直しの表 | 8 件、1 件の応答は 1029 byte まで（それより大きい応答の送り直しは result_lost） | max_inflight 件以上（core §5.1） |
 | コンソールの送りの列 | ストリームごとに 256 byte | 大きさは probe が決める（oep-if-console §2） |
 | model、chip | チップの名前をハイフンなしの小文字で（`esp32p4`、`esp32`、`rp2040`、`rp2350`）、型番とリビジョン（例 `esp32p4 v1.3`） | 任意の自由な文字列（core §7.5） |
 | unit_id | チップの固有の番号を小文字の 16 進で | core §7.5 |
@@ -351,7 +351,7 @@ restart の応答の後、probe は応答を送り終えてから再起動する
 - **USB-UART の変換器**（UART bridge の口。CH340 の類）: 続けて流れる probe → host のバイトを、長い流れ（max_frame いっぱいの応答が
   続く書き込み、キャプチャの読み出し）で落とすことがある。短い確かめは通っても、長い転送で壊れる。測った変換器（CH340、FTDI 互換を名乗る
   CH552）では、921600 bps で 9 KiB ほどの書き込みのたびに max_frame いっぱいの応答が 1〜4 個壊れ、500000 bps はどちらでも壊れなかった。
-  実用の速さは **500000 bps**（oep-spec の host 開発ガイド §17 の既定の上限）。CH340 は 115200 でも数秒まとめて 0〜10 % を落とすことがある。
+  実用の速さは **500000 bps**。CH340 は 115200 でも数秒まとめて 0〜10 % を落とすことがある。
   フロー制御が無いので、壊れたフレームは host が同じ corr で送り直す（probe の送り直しの表が二重の実行を防ぐ）。
 - **Linux の cdc_acm**: probe → host の burst が約 8 KiB を超えると、エラーなしに黙って失う。oep-client-python は、同時に待つ応答の量を
   6 KiB、購読の min_bytes を 2 KiB に抑える。

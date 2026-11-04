@@ -163,11 +163,12 @@ class Blink final : public oep::Interface {
   ずらしたりしました（最弱にすると直り、線の速さは変わりません）。このライブラリの PHY はどれもそうしています（RVSWD: ESP32-P4 は `GPIO_DRIVE_CAP_0`、RP2 は 2 mA。SWIO: classic と P4 は `GPIO_DRIVE_CAP_0`、
   `OEP_SWIO_DRIVE_CAP`）。新しい PHY や別のチップへの移植でも必ず設定します。
   線がピンを取るたびに設定し直します（RVSWD の PHY は attach のたびにそうします）。host が選ぶ組は接続と接続の間は空いていて、
-  fixture gpio の出力や出力の idle が別の強さを残すことがあるためです。
-- **fixture gpio の出力の強さ**（oep-if-fixture §1.1）は `OepPlatform.h` の `platformDriveLevels()` から来ます。段階と、
-  そのおよその mA と、既定（パッドのリセット時の強さ）です。classic ESP32 / ESP32-P4 は `GPIO_DRIVE_CAP_0..3` で約
-  5 / 10 / 20 / 40 mA、既定は 2。RP2040 / RP2350 は 2 / 4 / 8 / 12 mA で、既定は 4 mA。ほかのチップは持ちません（drive_levels
-  を出さず、set の drive TLV は知らない tag です）。別のチップへの移植では、そこに段階を足すか、持たないままにします。
+  周辺の機能（spi-target の MISO など）が別の強さを残すことがあるためです。
+- **出力の強さ**は probe が決めます（fixture §1）。段階と、そのおよその mA と、既定（パッドのリセット時の強さ）は
+  `OepPlatform.h` の `platformDriveLevels()` にあります。classic ESP32 / ESP32-P4 は `GPIO_DRIVE_CAP_0..3` で約
+  5 / 10 / 20 / 40 mA、既定は 2。RP2040 / RP2350 は 2 / 4 / 8 / 12 mA で、既定は 4 mA。ほかのチップは持ちません。fixture gpio
+  の出力と出力の idle は既定の強さで出します。周辺の機能は、自分の線の強さを `PinTable::ownStrength(channel, level)` で
+  決めます（spi-target の MISO は既定より 1 段弱い）。別のチップへの移植では、そこに段階を足すか、持たないままにします。
   強さが効くのは mode 3 / 4（set と出力の idle）だけです。`PinTable::setPad` は、パッドがそれ以外の mode に移るとき既定の強さに
   戻します。ピンを自分の周辺回路に使う fixture（UART、I2C / SPI target）は claim のあとで `PinTable::ownStrength` を呼ぶので、
   出力の idle から直接取ってもパッド本来の強さから始まります。線は自分の強さ（最弱）を自分で設定します。
@@ -228,7 +229,7 @@ class Blink final : public oep::Interface {
 ## 8. push と出来事
 
 通知を送り出すインターフェースは `notifies()` で true を返します。endpoint はその ops に subscribe と unsubscribe（0x30 / 0x32、
-core §11.3）を立て、自分で答えて `subscribe(true / false)` を呼びます。流すものは `pull()` と `pending()` も持ちます。endpoint は、
+core §10.3）を立て、自分で答えて `subscribe(true / false)` を呼びます。流すものは `pull()` と `pending()` も持ちます。endpoint は、
 購読した host がロックを持つ間、購読の min_bytes / max_delay_ms でまとめてデータのフレームを送ります。
 `endpoint.event(*this, kind, payload, length)` で出来事を送ります。出来事はまとめず、先に送る応答を送り終えたらすぐ送ります。
 logic と analog の capture、capture-group がこれを使っています。何も送らないインターフェースはどちらの op も持ちません（fn 0 は

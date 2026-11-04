@@ -8,7 +8,7 @@
 // How it goes that fast:
 //   - OEP runs on the HS OTG vendor bulk interface (EspUsbDevice) in a direct build (build_opt.h:
 //     CFG_TUD_VENDOR_TXRX_BUFFERED=0; compile with --clean): results go through oep::DirectBulkStream, and a streaming
-//     capture's pushes go zero-copy from the PARLIO DMA buffers through the same transport (logic-capture §7.9).
+//     capture's pushes go zero-copy from the PARLIO DMA buffers through the same transport.
 //   - 16 KiB frames (confirm's max_frame): one bulk transfer per push.
 //
 // With nothing wired, io.github.open-embedded-probe.test-signal (this example's own interface, TestSignal.h) puts an

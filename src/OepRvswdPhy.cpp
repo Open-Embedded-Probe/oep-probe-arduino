@@ -114,7 +114,7 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {
 // the RVSWD pair's too, into its own bundle and leaves it a plain GPIO; a pair unchanged since would otherwise stay
 // cut off from its bundle). Nothing done while they are still routed here.
 // The wire's strengths are put back too: a fixture gpio output or an output idle on these pins since (a host-chosen
-// pair is free between connections) leaves the pad at its own strength (oep-if-fixture §1.1), never the wire's.
+// pair is free between connections) leaves the pad at its own strength (the probe's, fixture §1), never the wire's.
 void ioReclaim(int dio, int clk) {
   if (dio >= 0) {
     gpio_set_drive_capability(gpio_num_t(dio), kDioDrive);
@@ -186,7 +186,7 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {   // the old pins back
   }
   return gIo.setup(dio, clk);
 }
-// The weakest strength put back (a fixture gpio output or an output idle on the pair since, oep-if-fixture §1.1), and
+// The weakest strength put back (a fixture's line or an output idle on the pair since; the strength is the probe's, fixture §1), and
 // the data line's pull-up (ioFree took it off)
 void ioReclaim(int dio, int clk) {
   if (dio < 0) return;
@@ -240,7 +240,7 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {   // the old pins back
   return gIo.setup(dio, clk);
 }
 // The weakest strength put back (a fixture gpio output, an output idle or arduino-pico's pinMode(OUTPUT) - 4 mA - on a
-// host-chosen pair since its last connection, oep-if-fixture §1.1): the wire always runs at 2 mA (setup).
+// host-chosen pair since its last connection; the strength is the probe's, fixture §1): the wire always runs at 2 mA (setup).
 void ioReclaim(int dio, int clk) {
   if (dio < 0) return;
   gpio_set_drive_strength(dio, GPIO_DRIVE_STRENGTH_2MA);

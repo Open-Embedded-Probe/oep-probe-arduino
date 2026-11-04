@@ -266,7 +266,7 @@ class CaptureGroup final : public Interface {
     return op == kOpBind || op == kOpStart || op == kOpStop || op == kOpStatus || op == kOpForce;
   }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
-  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §11.3)
+  bool notifies() const override { return true; }   // subscribe / unsubscribe in its ops (core §10.3)
   bool subscribe(bool on) override { subscribed_ = on; return true; }
   // The bind is the session's (core §9): its end (end, a lapse, a takeover) unbinds.
   void sessionOver() override { unbind(); }

@@ -512,7 +512,7 @@ void LogicCapture::sendStage() {
     __atomic_fetch_or(&stage_free_, 1u << index, __ATOMIC_ACQ_REL);
     return;
   }
-  // the message: push header, position(u64), len(u16), data, TLV 0x01 generation (core §11.2, oep-if-capture §3.4)
+  // the message: push header, position(u64), len(u16), data, TLV 0x01 generation (core §10.2, oep-if-capture §3.4)
   putU16(s, static_cast<uint16_t>(kPushHead - 2 + fill + kPushTail));
   s[2] = kRolePush;
   putU16(s + 3, fn);
@@ -1480,7 +1480,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // capture §3.3's contract: mode and rate required, samples in mode 1 / 2; none of them 0 (malformed)
   auto ask = [](const Item &it) { return CaptureAsk{it.v, it.critical}; };
   if (captureMalformed(ask(mode_tlv), ask(rate_tlv), ask(samples_tlv), ask(segments_tlv))) return rejected(kRejectMalformed);
-  {   // glitch_filter(group u8, ns u32), one per group: another length, a group twice - malformed (core §2.3, §3.8)
+  {   // glitch_filter(group u8, ns u32), one per group: another length, a group twice - malformed (core §2.3, capture §3.8)
     size_t at = 0, vlen = 0;
     uint8_t raw = 0;
     const uint8_t *v = nullptr;
@@ -2228,7 +2228,7 @@ size_t LogicCapture::pending() {
 }
 
 // Streaming push: the next bytes in stream order, from the segment being sent; a segment fully sent is released.
-// payload: position(u64) len(u16) data, then TLV 0x01 generation (core §11.2, oep-if-capture §3.4)
+// payload: position(u64) len(u16) data, then TLV 0x01 generation (core §10.2, oep-if-capture §3.4)
 size_t LogicCapture::pull(uint8_t *out, size_t capacity) {
   constexpr size_t kHead = 10, kTail = kTlvHeader + 4 + kTlvHeader + kSegmentInfoBytes;   // TLVs generation, segment_info
   if (mode_ != 3 || direct_ || !store_ || capacity <= kHead + kTail) return 0;

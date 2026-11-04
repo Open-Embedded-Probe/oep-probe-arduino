@@ -170,12 +170,14 @@ Each source file starts with the spec sections it follows.
   lines next to it on the same jig: at the classic ESP32's default strength the SWIO line made the SPI target beside it
   lose or shift bits while the console was read (the weakest fixed it, the wire's speed unchanged). Every PHY in this library does so (RVSWD: ESP32-P4 `GPIO_DRIVE_CAP_0`, RP2 2 mA; SWIO: classic and P4
   `GPIO_DRIVE_CAP_0`, `OEP_SWIO_DRIVE_CAP`). A new PHY or a port to another chip must set it too. Set it again when the wire takes its pins (the RVSWD PHY does at every attach): a
-  host-chosen pair is free between connections, and a fixture gpio output or an output idle may leave another strength
-  on it.
-- **Fixture gpio's output strength** (oep-if-fixture §1.1) comes from `platformDriveLevels()` in `OepPlatform.h`: the
-  levels, their approximate mA and the default (the pad's reset strength) - classic ESP32 / ESP32-P4 `GPIO_DRIVE_CAP_0..3`
-  about 5 / 10 / 20 / 40 mA, default 2; RP2040 / RP2350 2 / 4 / 8 / 12 mA, default 4 mA; other chips none (no
-  drive_levels, and set's drive TLV is an unknown tag). A port to another chip adds its levels there, or leaves none.
+  host-chosen pair is free between connections, and a peripheral's line (the spi-target's MISO, say) may leave another
+  strength on it.
+- **The output strength** is the probe's (fixture §1). The levels, their approximate mA and the default (the pad's
+  reset strength) are in `platformDriveLevels()` in `OepPlatform.h` - classic ESP32 / ESP32-P4 `GPIO_DRIVE_CAP_0..3`
+  about 5 / 10 / 20 / 40 mA, default 2; RP2040 / RP2350 2 / 4 / 8 / 12 mA, default 4 mA; other chips none. A fixture gpio
+  output and an output idle go at the default; a peripheral sets its own line's with `PinTable::ownStrength(channel,
+  level)` (the spi-target's MISO one step below the default). A port to another chip adds its levels there, or leaves
+  none.
   The strength applies to modes 3 / 4 only (a set, an output idle); `PinTable::setPad` puts a pad back to the default
   when it leaves them, and a fixture that takes a pin for its own peripheral (UART, I2C / SPI target) calls
   `PinTable::ownStrength` after its claim, so it starts from the pad's own strength even straight from an output idle.
@@ -243,7 +245,7 @@ Each source file starts with the spec sections it follows.
 ## 8. Pushes and events
 
 An interface that sends notifications says `notifies()`: the endpoint then puts subscribe and unsubscribe (0x30 / 0x32,
-core §11.3) in its ops and answers them itself, calling `subscribe(true / false)`. A streaming one implements `pull()`
+core §10.3) in its ops and answers them itself, calling `subscribe(true / false)`. A streaming one implements `pull()`
 and `pending()` too; the endpoint sends data frames to the subscriber while it holds the lock, batched by the
 subscription's min_bytes / max_delay_ms. `endpoint.event(*this, kind, payload, length)` sends an event, never batched:
 it goes as soon as the answers ahead of it have. The logic and analog captures and the capture-group do this; an

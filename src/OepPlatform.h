@@ -124,9 +124,10 @@ inline void platformGpio(int pin, uint8_t mode) {
 #endif
 }
 
-// Output drive strengths (oep-if-fixture §1.1): the levels a fixture gpio output (mode 3 / 4, an output idle) can be
-// driven at, ascending, with their approximate mA, and the default level - the pad's own reset strength, so a pin
-// nobody set is already at it. count 0: this chip's strength is not switched (no drive_levels in describe).
+// Output drive strengths (the probe's, fixture §1): the levels a pad can be driven at, ascending, with their approximate
+// mA, and the default level - the pad's own reset strength, so a pin nobody set is already at it. A fixture gpio output
+// and an output idle use the default; a peripheral's line may take another (PinTable::ownStrength). count 0: this
+// chip's strength is not switched.
 //   classic ESP32, ESP32-P4: gpio_drive_cap_t GPIO_DRIVE_CAP_0..3, about 5 / 10 / 20 / 40 mA (the datasheets' typical
 //                            source currents); GPIO_DRIVE_CAP_DEFAULT is 2.
 //   RP2040 / RP2350: the pad's 2 / 4 / 8 / 12 mA (enum gpio_drive_strength 0..3); 4 mA after reset.

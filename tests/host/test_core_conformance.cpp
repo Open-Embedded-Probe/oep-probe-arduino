@@ -293,7 +293,7 @@ static void testUnknownTlvs() {
   CHECK(reason(exchange(ep, s, false, request(7, 0, 0x13, withTlv({}, reg::kTagNamedExtension, {5, 'a'})))) == kRejectMalformed);
 }
 
-// core §5.2: the resend table keeps (corr, answer) - the same corr is a resend whatever it carries (no corr_reused).
+// core §5.1: the resend table keeps (corr, answer) - the same corr is a resend whatever it carries (no corr_reused).
 static void testResendByCorr() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
@@ -436,7 +436,7 @@ static void testLengthPrefixedReader() {
   }
 }
 
-// core §5.2: the resend table remembers at least max_inflight requests - confirm never offers more than it has entries.
+// core §5.1: the resend table remembers at least max_inflight requests - confirm never offers more than it has entries.
 static void testInflightWithinTable() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
