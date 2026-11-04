@@ -68,7 +68,9 @@ bool Endpoint::addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capa
   t.usb_interface = usb_interface;
   t.index = entries_++;
   t.owner = this;
-  if (serialKind(kind)) t.serial.reset(rx_buffer, rx_capacity, decode_, sizeof decode_);
+  // a serial port decodes at most its max_frame and the CRC: a longer message does not decode, so it is raw and gets no
+  // answer (transports §1), however much the shared decode buffer holds
+  if (serialKind(kind)) t.serial.reset(rx_buffer, rx_capacity, decode_, t.max_frame + 2);
   else t.reader.reset(rx_buffer, rx_capacity, t.max_frame);
   t.reader.setTcp(kind == kTcp);   // no restart on a pause inside a frame (transports §2)
   t.flush_after_burst = flush_after_burst;

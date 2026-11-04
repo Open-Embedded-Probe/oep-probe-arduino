@@ -249,6 +249,33 @@ static void testEndpointSerialPort() {
   CHECK(vendor && usjSeen);
 }
 
+// transports §1: a message longer than the port's max_frame gets no answer, though it fits the decode buffer (a probe
+// whose max_frame is below the serial ports' largest: the classic ESP32's 512 against 2048 once answered it malformed).
+static void testSerialOverMaxFrame() {
+  MemStream uart;
+  static uint8_t rx[3000], tx[1100];
+  Endpoint ep(uart, rx, sizeof rx, tx, sizeof tx, {512, 1024, 2}, Endpoint::kUartBridge, 0xff);
+  Bytes big = request(9, 0, reg::core::kOpClock, {});
+  big.push_back(0x7f);                                     // a named extension TLV that makes it 600 bytes
+  const size_t ext = 600 - big.size() - 2;
+  big.push_back(static_cast<uint8_t>(ext));
+  big.push_back(static_cast<uint8_t>(ext >> 8));
+  big.push_back(4);
+  for (char c : {'i', 'o', '.', 'x'}) big.push_back(static_cast<uint8_t>(c));
+  big.resize(600, 'x');
+  uart.send(frame(big));
+  ep.poll();
+  std::vector<Bytes> frames;
+  Bytes raw;
+  split(uart.tx, frames, raw);
+  CHECK(frames.empty());                                   // no answer to the 600-byte message
+  uart.tx.clear();
+  uart.send(frame(request(10, 0, reg::core::kOpClock, {})));
+  ep.poll();
+  split(uart.tx, frames, raw);
+  CHECK(frames.size() == 1 && frames[0][1] == 10);         // the next one is answered
+}
+
 // An interface that takes any plan (for the plan rules).
 class PlanSink final : public Interface {
  public:
@@ -1149,6 +1176,7 @@ int main() {
   testLastMarkMissing();
   testReader();
   testEndpointSerialPort();
+  testSerialOverMaxFrame();
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: a serial port answered a message longer than its max_frame when it still fit the shared decode buffer (the
+  classic ESP32's UART bridge: max_frame 512, buffer 2048 - such a message was answered malformed). A serial port now
+  decodes at most its max_frame and the CRC: a longer message is raw and gets no answer (transports §1). Found by the
+  client's serial framing check on a classic ESP32.
+- (JA) 修正: シリアルの口が、max_frame より長い message でも共有の復号のバッファに入れば答えていた（classic ESP32 の UART bridge:
+  max_frame 512、バッファ 2048。その message に malformed と答えていた）。シリアルの口は max_frame と CRC までしか復号しない: それより
+  長い message は raw で、答えない（transports §1）。classic ESP32 で、client のシリアルのフレームの検査で見つけた。
 - (EN) Fixed: setting a channel's idle to pull-down (`channel.{}.idle`, core §13.8) crashed the probe: the set's check
   copied the choice's name, 9 bytes and its 0, into an 8-byte buffer. The host test sets every idle choice and builds under
   AddressSanitizer (found by the pin-release check on an ESP32-P4).
