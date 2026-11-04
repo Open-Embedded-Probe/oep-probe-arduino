@@ -56,6 +56,7 @@
 #include <OepCh32Dm.h>
 #include <OepChoice.h>
 #include <OepSettings.h>
+#include <OepMemo.h>
 #include <OepConsole.h>
 #include <OepDirectBulkStream.h>
 #include <OepDmConsole.h>
@@ -505,6 +506,11 @@ void oepAddCounter() {
   endpoint.add(counter.make(pins));
 }
 
+void oepAddMemo() {
+  static oep::Memo memo;
+  if (memo.begin()) endpoint.add(memo);   // oep.probe.memo (oep-if-memo), on the LittleFS; left out when it does not mount
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
@@ -539,6 +545,7 @@ __attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
 __attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
 __attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
 __attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
+__attribute__((weak)) void oepWithMemo() { oepAddMemo(); }
 
 // oep.probe.restart (oep-if-restart): the HS device detaches first so the host records an unplug rather than a device that went
 // silent, waits oep::kRestartDetachMs for the host to see it (20 ms, as EspUsbDevice's own restarts wait, left the WeAct
@@ -607,6 +614,7 @@ void setup() {
   oepWithSpiController();
   oepWithPwm();
   oepWithCounter();
+  oepWithMemo();   // last: it has no settings, and the fns before it keep their numbers
   // Every channel Hi-Z, no pull, before the first answer (core §8: the P4 boots some pins with a pull), but the saved
   // disable items' channels, which are never touched (core §13.7: disable before anything else; applySaved
   // gives them back if the settings are not applied).

@@ -56,7 +56,7 @@ build 後、共有ロックを非待機で取得し、個体照合から upload�
 
 ## 確認範囲と終了状態
 
-通常の Arduino CLI upload を使い、Flash の退避と旧 firmware の復元は行いません。転送した候補を残して利用します。ESP32 の通常 profile は NVS を全消去しませんが、保存設定の維持は転送後の実測で判定します。
+通常の Arduino CLI upload を使い、Flash の退避と旧 firmware の復元は行いません。転送した候補を残して利用します。通常の upload は、設定とメモ欄を置く LittleFS の領域を消しませんが、保存設定の維持は転送後の実測で判定します。
 
 `transfer.json` には source commit/dirty、SPEC commit、build image の SHA-256、個体、転送前後の版、宣言、保存設定、slot 状態、合否を記録します。upload 中の失敗は pytest の setup error とログにも残ります。結果には設備情報が入るため、Git 管理外の保存先を使います。
 

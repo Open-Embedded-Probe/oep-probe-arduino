@@ -25,7 +25,8 @@ no released firmware.
 | PWM output | yes (PWM slices) | yes (LEDC) | yes (LEDC) | no | no (not built) |
 | Edge counter | yes (interrupts, up to 100 kHz) | yes (PCNT, up to 40 MHz) | yes (PCNT, up to 10 MHz) | yes (not the X035) | no (not built) |
 | Analog output (DAC) | no | no | GPIO25 / 26, 8 bits | PA4 / PA5, 12 bits (V307, H417) | no |
-| Settings saved | flash (last sector) | NVS | NVS | no (no store yet; the X035 has no settings) | NVS |
+| Settings saved | a file on the LittleFS (the FS area: 256 KB / 512 KB) | a file on the LittleFS (`spiffs` partition) | a file on the LittleFS (`spiffs` partition) | no (no store yet; the X035 has no settings) | a file on the LittleFS (`spiffs` partition) |
+| Memo area (`oep.probe.memo`) | 2 KB objects: 52 (RP2040) / 64 (RP2350) | 2 KB objects: 64 | 2 KB objects: 64 | no | 2 KB objects: 64 (not checked) |
 
 "No" means the library has no backend for it on that chip yet, not that the chip cannot.
 

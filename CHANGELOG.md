@@ -1,6 +1,22 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Added: `oep.probe.memo` (oep-if-memo), the host's named objects on the probe (2 KB each; 52 on an RP2040, 64 on an
+  RP2350 and an ESP32), as files on the probe's LittleFS. A write goes to a staging file and is renamed in place at its
+  last part, so a power loss leaves the old object or the new one. Not on a CH32. The RP2 builds now have an FS area
+  (`flash=2097152_262144` / `4194304_524288`).
+- (EN) Changed: the settings are saved as a file on the same LittleFS on ESP32 and RP2 (written to `/s.w`, renamed over
+  `/s`), no longer in NVS (ESP32) or the flash's last sector (RP2). Measured with power cuts during repeated saves: the
+  last sector read as never saved after 2 of 30 cuts on a Pico (the sector erased, not yet written), NVS after 1 of 60 on an
+  ESP32-P4X; the file kept a whole save in 150 of 150 on four probes. A save made before this is not read: the first boot
+  after the update reports no save (storage_state 0); import the exported settings again.
+- (JA) 追加: `oep.probe.memo`（oep-if-memo）。host の名前つきのオブジェクトを probe の LittleFS のファイルに置く（1 つ 2 KB。RP2040 で 52 個、
+  RP2350 と ESP32 で 64 個）。write は仮のファイルに書き、最後の write で名前を変えて置き換えるので、電源断の後には前のものか新しいものが残る。
+  CH32 には無い。RP2 の build に FS の領域を足した（`flash=2097152_262144` / `4194304_524288`）。
+- (JA) 変更: 設定の保存を、ESP32 と RP2 とも同じ LittleFS のファイルにした（`/s.w` に書いて `/s` へ名前を変える）。NVS（ESP32）と flash の
+  最後の sector（RP2）には置かない。保存をくり返す最中の電源断で測った: 最後の sector は Pico で 30 回中 2 回、NVS は ESP32-P4X で 60 回中
+  1 回、保存が無いと読めた（sector を消して書く前など）。ファイルは 4 台で 150 回中 150 回、完全な保存が残った。これより前の保存は読まない:
+  更新の後の最初の起動は保存が無い（storage_state 0）と答えるので、書き出した設定を入れ直す。
 - (EN) Fixed: a serial port answered a message longer than its max_frame when it still fit the shared decode buffer (the
   classic ESP32's UART bridge: max_frame 512, buffer 2048 - such a message was answered malformed). A serial port now
   decodes at most its max_frame and the CRC: a longer message is raw and gets no answer (transports §1). Found by the

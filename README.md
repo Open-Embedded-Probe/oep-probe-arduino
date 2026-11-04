@@ -161,10 +161,11 @@ one of them against this endpoint).
 | Path | Contents |
 |---|---|
 | `src/Oep.h`, `src/OepEndpoint.*`, `src/OepRegistry.h` | the core (oep-core, oep-transports): frames, interfaces by name and their ops, the lock, several transports (the describe transport list), serial ports shared by frames and raw bytes (transports §4), notifications (subscribe on the emitting fn), fn 0's clock; `oep::ProbePlan` / `oep::ProbeRestart` are `oep.probe.plan` / `oep.probe.restart`, which the endpoint lists itself after the sketch's interfaces; `oep::Link` is `oep.probe.link` (the link test, port_speed) |
+| `src/OepMemo.*`, `src/OepFlashFs.*` | `oep.probe.memo` (oep-if-memo): the host's named objects as files on the probe's LittleFS, each written to a staging file and renamed in place at its last part; the LittleFS mount the memo area and the settings share (ESP32: the `spiffs` data partition; RP2040 / RP2350: the FS area of the board's flash menu) |
 | `src/OepTcp.h`, `src/OepWifi.h` | TCP (a listener whose connections are each a transport; lwIP sockets) and Wi-Fi on an ESP32 (the settings' networks tried in order, mDNS `_oep._tcp`); header-only, so only a sketch that includes them links the network |
 | `src/OepBind.*` | what each serial port carries (a bind: one stream per port, held during a session and resumed where it stopped) |
 | `src/OepStream.h`, `src/OepDebug.h` | parts the standard interfaces share (position streams; wire / target status and pin pairs) |
-| `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepSettings.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture); the core's settings (core §13: the owners' items, initial values, labels unique but for case, saved by name in NVS on ESP32 / flash on RP2040 / RP2350). Each file starts with the spec sections it follows |
+| `src/OepTarget.*`, `src/OepSwd.*`, `src/OepConsole.*`, `src/OepFixture.*`, `src/OepCapture.*`, `src/OepSampler.*`, `src/OepSettings.*` | the standard interfaces: wires and targets (`oep.wire.rvswd` / `swio` / `swd`, `oep.target.riscv-dm` / `arm-adi`), the console, fixtures (gpio / uart / capture); the core's settings (core §13: the owners' items, initial values, labels unique but for case, saved by name as a file on the LittleFS on ESP32 and RP2040 / RP2350). Each file starts with the spec sections it follows |
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*`, `src/OepRp2SpiTarget.*`, `src/OepCh32SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1) on the ESP-IDF I2C / SPI slaves, an RP2 PIO state machine, the CH32 core's SPI slave |
 | `src/OepI2cController.*`, `src/OepSpiController.*`, `src/OepPwm.*`, `src/OepCounter.*`, `src/OepDac.*` | the fixtures that drive a target: `oep.fixture.i2c-controller` / `spi-controller` (bit-banged on any GPIOs), `pwm`, `counter`, `dac` |
 | `src/OepAnalog.*`, `src/OepRp2Logic.*`, `src/OepCh32Logic.*`, `src/OepCaptureGroup.*` | captures on each chip: `oep.fixture.analog`, the RP2's PIO and the CH32's logic `oep.fixture.logic`, `oep.fixture.capture-group` |
@@ -240,7 +241,7 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
    carries OEP frames (`0x00 <COBS> 0x00`) and its bind's raw bytes on one line; the host opens it exclusively (TIOCEXCL)
    and skips the bytes outside frames as noise (oep-spec host guide §1, §2).
 3. **Settings.** To carry a target's console on a serial port while no session uses the probe, set the console's
-   pass-through (the core's settings, oep-spec core §13; saved by name in NVS on ESP32, in flash on RP2040 / RP2350). Pins
+   pass-through (the core's settings, oep-spec core §13; saved by name as a file on the probe's LittleFS on ESP32 and RP2040 / RP2350). Pins
    are named as in the datasheet (`GPIO2`), ports by their route name (`cdc0`). Name the port with `S.N` labels (a host
    names it `oep://<probe>/<port>`):
 

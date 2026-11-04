@@ -24,8 +24,8 @@
 // sketch's initial values (core §13.4) go into it before applySaved(), which keeps them only on a boot without a save.
 // generation: 1 at boot, +1 for every set / unset that changes the contents (never 0; at 0xFFFFFFFF a change is refused
 // cause 2 until a restart). Saved by name (core §13.7): the category (empty for the core, else the interface's name and
-// instance), the item's name, the key's name and the value with its references as names - to NVS on an ESP32
-// (Preferences "oepset" / "v1"), the flash's last sector on an RP2 (EEPROM, "OES1"); none on a CH32 yet.
+// instance), the item's name, the key's name and the value with its references as names - as a file on the probe's
+// LittleFS on an ESP32 and an RP2 ("/s", OepFlashFs.h); none on a CH32 yet.
 #pragma once
 
 #include <Arduino.h>

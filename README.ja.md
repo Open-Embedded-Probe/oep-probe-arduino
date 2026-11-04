@@ -151,10 +151,11 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | PATH | 中身 |
 |---|---|
 | `src/Oep.h`、`src/OepEndpoint.*`、`src/OepRegistry.h` | v1 の本体（oep-core、oep-transports）: フレーム、名前で探すインターフェースとその ops、ロック、複数の経路（describe の transport）、シリアルの口の共用（transports §4）、通知（送り出す fn への subscribe）、fn 0 の clock。`oep::ProbePlan` / `oep::ProbeRestart` が `oep.probe.plan` / `oep.probe.restart` で、endpoint がスケッチのインターフェースの後に自分で出す。`oep::Link` が `oep.probe.link`（線の試験、port_speed） |
+| `src/OepMemo.*`、`src/OepFlashFs.*` | `oep.probe.memo`（oep-if-memo）: host の名前つきのオブジェクトを probe の LittleFS のファイルに置く。仮のファイルに書き、最後の write で名前を変えて置き換える。メモ欄と設定が共用する LittleFS のマウント（ESP32 は data パーティション `spiffs`、RP2040 / RP2350 はボードの flash の選択の FS の領域） |
 | `src/OepTcp.h`、`src/OepWifi.h` | TCP（受けた接続がそれぞれ経路になる待ち受け。lwIP の socket）と ESP32 の Wi-Fi（設定のネットワークを順に試す、mDNS `_oep._tcp`）。header だけなので、include したスケッチだけがネットワークを持つ |
 | `src/OepBind.*` | シリアルの口に流すもの（bind: 口ごとに 1 本のストリーム、セッション中の停止と止めた位置からの再開） |
 | `src/OepStream.h`、`src/OepDebug.h` | 標準インターフェースの共通部品（位置つきのストリーム、線と target の status とピンの組） |
-| `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepSettings.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）。core の設定（core §13: 項目の宣言、初期値、大小文字を区別しない一意の label、名前での保存。ESP32 は NVS、RP2040 / RP2350 は flash）。各ファイルの冒頭に対応する仕様の節がある |
+| `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepSettings.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）。core の設定（core §13: 項目の宣言、初期値、大小文字を区別しない一意の label、名前での保存。ESP32 と RP2040 / RP2350 は LittleFS のファイル）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*`、`src/OepRp2SpiTarget.*`、`src/OepCh32SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1。ESP-IDF の I2C / SPI スレーブ、RP2 の PIO、CH32 の core の SPI スレーブで実装） |
 | `src/OepI2cController.*`、`src/OepSpiController.*`、`src/OepPwm.*`、`src/OepCounter.*`、`src/OepDac.*` | target を動かす fixture: `oep.fixture.i2c-controller` / `spi-controller`（どの GPIO でもビットを刻む）、`pwm`、`counter`、`dac` |
 | `src/OepAnalog.*`、`src/OepRp2Logic.*`、`src/OepCh32Logic.*`、`src/OepCaptureGroup.*` | チップごとのキャプチャ: `oep.fixture.analog`、RP2 の PIO と CH32 の `oep.fixture.logic`、`oep.fixture.capture-group` |
@@ -227,7 +228,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
    OEP のフレーム（`0x00 <COBS> 0x00`）と bind の生のバイトを 1 本で運ぶ。host は排他（TIOCEXCL）で開き、フレームの外は雑音として
    捨てる（oep-spec の host 開発ガイド §1、§2）。
 3. **設定**: セッションの無い間、target のコンソールをシリアルの口に流すには、コンソールの素通しを設定する（core の設定、oep-spec
-   core §13。ESP32 は NVS、RP2040 / RP2350 は flash に名前で保存）。ピンはデータシートの名前（`GPIO2`）、口は経路の名前（`cdc0`）で指す。
+   core §13。ESP32 と RP2040 / RP2350 は probe の LittleFS のファイルに名前で保存）。ピンはデータシートの名前（`GPIO2`）、口は経路の名前（`cdc0`）で指す。
    口の名前は label の `S.N` で付ける（host が `oep://<probe>/<口>` で名指す）:
 
    ```sh

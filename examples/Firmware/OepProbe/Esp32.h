@@ -41,6 +41,7 @@
 #include <OepCh32Dm.h>
 #include <OepChoice.h>
 #include <OepSettings.h>
+#include <OepMemo.h>
 #include <OepConsole.h>
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
@@ -358,6 +359,11 @@ void oepAddConsole() {
   loopWork.add([] { rvswdConsoleIn->poll(); });
 }
 
+void oepAddMemo() {
+  static oep::Memo memo;
+  if (memo.begin()) endpoint.add(memo);   // oep.probe.memo (oep-if-memo), on the LittleFS; left out when it does not mount
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link: the link test and port_speed (oep-if-link)
@@ -459,6 +465,7 @@ __attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
 __attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
 __attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
 __attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
+__attribute__((weak)) void oepWithMemo() { oepAddMemo(); }
 __attribute__((weak)) void oepWithDac() { oepAddDac(); }
 
 void setup() {
@@ -496,6 +503,7 @@ void setup() {
   oepWithPwm();
   oepWithCounter();
   oepWithDac();
+  oepWithMemo();   // last: it has no settings, and the fns before it keep their numbers
   oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();
 }

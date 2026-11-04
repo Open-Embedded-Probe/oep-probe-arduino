@@ -34,6 +34,7 @@
 #include <OepCh32Dm.h>
 #include <OepChoice.h>
 #include <OepSettings.h>
+#include <OepMemo.h>
 #include <OepConsole.h>
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
@@ -315,6 +316,11 @@ void oepAddGroup() {
   loopWork.add([] { group->poll(); });
 }
 
+void oepAddMemo() {
+  static oep::Memo memo;
+  if (memo.begin()) endpoint.add(memo);   // oep.probe.memo (oep-if-memo), on the LittleFS; left out when it does not mount
+}
+
 void oepAddLink() {
   static oep::Slot<oep::Link> link;
   endpoint.add(link.make(endpoint));   // oep.probe.link (oep-if-link)
@@ -375,6 +381,7 @@ __attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
 __attribute__((weak)) void oepWithSpi() { oepAddSpi(); }
 __attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
 __attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
+__attribute__((weak)) void oepWithMemo() { oepAddMemo(); }
 
 // oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
 // rp2040.reboot(), a watchdog reset, oep::kRestartDetachMs later. restart_max_ms (its describe): the chip is running
@@ -442,6 +449,7 @@ void setup() {
   oepWithPwm();
   oepWithCounter();
   oepWithSpi();
+  oepWithMemo();   // last: it has no settings, and the fns before it keep their numbers
   oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();
 }

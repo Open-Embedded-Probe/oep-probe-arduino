@@ -5,10 +5,10 @@
 
 #if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_CH32RV) || defined(OEP_HOST_FAKE_CONFIG)
 
-#if defined(ARDUINO_ARCH_ESP32)
-#include <Preferences.h>
-#elif defined(ARDUINO_ARCH_RP2040)
-#include <EEPROM.h>
+#if defined(ARDUINO_ARCH_ESP32) || defined(ARDUINO_ARCH_RP2040)
+#include <LittleFS.h>
+
+#include "OepFlashFs.h"
 #endif
 #include <initializer_list>
 #include <string.h>
@@ -28,27 +28,7 @@ namespace rc = reg::core;
 // match, or that does not end on a group, cannot be confirmed whole (storage_state 2, reason 1).
 constexpr uint8_t kBlobVersion = 1;
 constexpr size_t kMaxBlob = OEP_SMALL_RAM ? 512 : 2048;
-#if defined(ARDUINO_ARCH_ESP32)
-// NVS writes a key whole (old or new after a power loss); "oepcfg" was the settings' (dropped at the first save).
-constexpr const char *kNvsNamespace = "oepset", *kNvsKey = "v1";
-bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
-  Preferences p;
-  if (!p.begin(kNvsNamespace, true)) return false;
-  length = p.getBytesLength(kNvsKey);
-  const bool ok = length > 0 && length <= capacity && p.getBytes(kNvsKey, blob, length) == length;
-  p.end();
-  return ok;
-}
-bool storeWrite(const uint8_t *blob, size_t length) {
-  Preferences old;
-  if (old.begin("oepcfg", false)) { old.clear(); old.end(); }
-  Preferences p;
-  if (!p.begin(kNvsNamespace, false)) return false;
-  const size_t written = p.putBytes(kNvsKey, blob, length);
-  p.end();
-  return written == length;
-}
-#elif defined(OEP_HOST_FAKE_CONFIG)
+#if defined(OEP_HOST_FAKE_CONFIG)
 uint8_t gFakeBlob[kMaxBlob];
 size_t gFakeLength = 0;
 bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
@@ -72,25 +52,35 @@ constexpr bool kNoStore = true;
 bool storeRead(uint8_t *, size_t, size_t &length) { length = 0; return false; }
 bool storeWrite(const uint8_t *, size_t) { return false; }
 #else
-// The flash's last sector (arduino-pico EEPROM): magic, length, the blob. A sector rewrite is not atomic under a power
-// loss; the CRC makes a torn one read as unreadable (reason 1) rather than as settings (core §13.7).
-constexpr uint32_t kEepromMagic = 0x3153454f;   // "OES1"
-constexpr size_t kEepromHeader = 6;             // magic(u32) length(u16)
+// A file on the probe's LittleFS (OepFlashFs.h), written whole into "/s.w" and renamed over "/s": LittleFS commits
+// a rename at once, so a power loss leaves the old save or the new one (core §13.7). (arduino-pico syncs a file at its
+// open, so a file opened "w" in place would be empty on the flash before it is written.) An FS area that held something
+// but no longer mounts was formatted: the save that was there reads as unreadable (storage_state 2, reason 1), not as
+// none.
+constexpr const char *kSaveFile = "/s", *kSaveStage = "/s.w";
 bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
-  EEPROM.begin(kEepromHeader + kMaxBlob);
-  const uint8_t *e = EEPROM.getConstDataPtr();
-  length = getU16(e + 4);
-  if (getU32(e) != kEepromMagic || length == 0 || length > capacity) return false;
-  memcpy(blob, e + kEepromHeader, length);
+  length = 0;
+  if (!FlashFs::mount()) return false;
+  LittleFS.remove(kSaveStage);                        // a save a power loss cut short: the old one stands
+  if (FlashFs::lostOnMount()) return true;            // unreadable
+  File f = LittleFS.open(kSaveFile, "r");
+  if (!f) return false;                               // never saved
+  const size_t n = f.size();
+  if (n == 0 || n > capacity || f.read(blob, n) != n) return true;   // unreadable
+  length = n;
   return true;
 }
 bool storeWrite(const uint8_t *blob, size_t length) {
-  EEPROM.begin(kEepromHeader + kMaxBlob);
-  uint8_t *e = EEPROM.getDataPtr();
-  putU32(e, kEepromMagic);
-  putU16(e + 4, static_cast<uint16_t>(length));
-  memcpy(e + kEepromHeader, blob, length);
-  return EEPROM.commit();
+  if (!FlashFs::mount()) return false;
+  File f = LittleFS.open(kSaveStage, "w");
+  if (!f) return false;
+  const bool ok = f.write(blob, length) == length;
+  f.close();
+  if (!ok || !LittleFS.rename(kSaveStage, kSaveFile)) {
+    LittleFS.remove(kSaveStage);
+    return false;
+  }
+  return true;
 }
 #endif
 
