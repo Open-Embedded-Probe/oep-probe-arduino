@@ -160,7 +160,7 @@ size_t SamplerCapture::describe(uint8_t *out, size_t capacity) {
   putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge),
                  kBufferBytes - 1, kTriggerOpts);  // the pretrigger: less than the segment's samples
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
-  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.10)
+  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.9)
   const uint8_t formats[] = {cap::kDataFormatStateTimed};    // format 3, on the external clock (§3.8)
   w.put(cap::kTlvDescribeFormats, formats, sizeof formats);
   uint8_t clock[6];   // external_clock: max_hz(u32) edges(u8: rising, falling, both) qualifier(u8)
@@ -438,7 +438,7 @@ void SamplerCapture::poll() {
     const uint64_t ns = trig_burst_ns_ + static_cast<uint64_t>(trig_count_) * cycles_ * 1000000000ull / cpu_hz_;
     const uint64_t sample = ns > start_ns_ ? (ns - start_ns_) * (cpu_hz_ / 1000u) / cycles_ / 1000000u : 0;
     const uint32_t record = repeat() ? record_next_++ : 0;
-    if (repeat()) records_[record % kTriggerRecords] = {sample, ns, record, periodNs(cpu_hz_, cycles_)};   // §3.10
+    if (repeat()) records_[record % kTriggerRecords] = {sample, ns, record, periodNs(cpu_hz_, cycles_)};   // §3.9
     if (subscribed_) {   // capture §3.4
       uint8_t e[kTriggeredBytes];
       putTriggered(e, record, trig_kept_, sample, ns, periodNs(cpu_hz_, cycles_), generation_);
@@ -585,7 +585,7 @@ Result SamplerCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *o
       if (state_ == cap::kStateWaiting || (state_ == cap::kStateCapturing && rep_wait_)) control_ = sampler::kControlForce;
       return completed();
     }
-    case cap::kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.10)
+    case cap::kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.9)
       const Result parsed = plainTail(tail, p, n, 8, out, capacity);
       if (refused(parsed)) return parsed;
       if (getU32(p) != generation_) return wrongState(out, capacity);

@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Changed: the registry header and the test vectors follow oep-spec 3b6dbbc, which drops capture's optional features
+  no probe implemented (the external data path, named formats, the front-end settings threshold, coupling, offset,
+  bandwidth, impedance, resolution and oversample). No probe here declared them, so what it sends is unchanged; the
+  glitch filter's group 0 (every channel) is now the only group the spec allows, as this library already did.
+- (JA) 変更: registry のヘッダとベクタを oep-spec 3b6dbbc に合わせた。capture の、どの probe も持たなかった任意の機能（データの外部の
+  経路、名前付きの形式、前段の threshold、coupling、offset、bandwidth、impedance、resolution、oversample）が仕様から外れた。この
+  ライブラリはどれも宣言していなかったので、送るものは変わらない。グリッチフィルタの群は、このライブラリのとおり 0（全チャネル）だけが
+  仕様で許されるようになった。
 
 ## 0.0.44
 - (EN) Fixed: on the ESP32 (P4 and classic), the spi-target drives MISO one step below the default strength. At the

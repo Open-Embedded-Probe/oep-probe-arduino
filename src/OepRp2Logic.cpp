@@ -391,7 +391,7 @@ size_t Rp2LogicCapture::describe(uint8_t *out, size_t capacity) {
   putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge),
                  kMaxSamples - 1, kTriggerOpts);
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
-  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.10)
+  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.9)
   return w.ok() ? w.length() : 0;
 }
 
@@ -595,7 +595,7 @@ void Rp2LogicCapture::poll() {
     const uint64_t ns = time_us_64() * 1000ull;
     const uint64_t sample = ns > start_ns_ ? (ns - start_ns_) / period_ns : 0;
     const uint32_t record = repeat() ? record_next_++ : 0;
-    if (repeat()) records_[record % kTriggerRecords] = {sample, ns, record, static_cast<uint32_t>(period_ns)};   // §3.10
+    if (repeat()) records_[record % kTriggerRecords] = {sample, ns, record, static_cast<uint32_t>(period_ns)};   // §3.9
     if (subscribed_) {   // capture §3.4: its time from now, the samples after it still to come
       uint8_t e[kTriggeredBytes];
       putTriggered(e, record, pretrigger_, sample, ns, periodNs(clk_hz_, divider_ * kCyclesPerSample), generation_);
@@ -765,7 +765,7 @@ Result Rp2LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *
         pio_sm_exec(pio_, static_cast<uint>(sm_), pio_encode_jmp(static_cast<uint>(offset_ + kPost)));
       return completed();
     }
-    case cap::kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.10)
+    case cap::kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.9)
       const Result parsed = plainTail(tail, p, n, 8, out, capacity);
       if (refused(parsed)) return parsed;
       if (getU32(p) != generation_) return wrongState(out, capacity);

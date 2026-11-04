@@ -262,7 +262,7 @@ void LogicCapture::beginTriggeredSegment(uint64_t trigger, uint64_t base) {
     fill_ = static_cast<uint32_t>(to - from);
   }
   uint32_t record = 0xFFFFFFFFu;
-  if (rearm_ && records_) {   // a record for every trigger (§3.10)
+  if (rearm_ && records_) {   // a record for every trigger (§3.9)
     record = record_next_;
     records_[record % kTriggerRecords] = {trigger, start_ns_ + nsOf(trigger), record, periodNs(rate_num_, rate_den_)};
     __atomic_thread_fence(__ATOMIC_RELEASE);
@@ -1146,7 +1146,7 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
                            (1u << cap::kTriggerLinked),
                  kSegmentBytes * 8 - 1, kTriggerOpts);   // at w = 1 (below the segment); a wider sample's is less
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
-  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.10)
+  w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.9)
   // beyond 0 (capture §3.5): 1 the logic blocks (streaming over the vendor port's stages: configure says), 4 the test
   // sequence
   const uint8_t formats[] = {cap::kDataFormatLogicBlocks, cap::kDataFormatTestCounter};
@@ -1715,7 +1715,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   const bool triggered = mode == cap::kModeOneShot && trig_type != cap::kTriggerImmediate;
   if (!query && (triggered || mode != cap::kModeOneShot) && !takeRing())
     return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
-  if (!query && rep_trig && opts.rearm && !records_) {   // rearm 1's records (§3.10): taken once, kept
+  if (!query && rep_trig && opts.rearm && !records_) {   // rearm 1's records (§3.9): taken once, kept
     records_ = static_cast<TriggerRecord *>(heap_caps_malloc(sizeof(TriggerRecord) * kTriggerRecords, MALLOC_CAP_SPIRAM));
     if (!records_) records_ = static_cast<TriggerRecord *>(heap_caps_malloc(sizeof(TriggerRecord) * kTriggerRecords, MALLOC_CAP_8BIT));
     if (!records_) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
@@ -2566,7 +2566,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         force_ = true;
       }
       return completed();
-    case kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.10)
+    case kOpTriggers: {   // generation(u32) from_serial(u32) [TLV] -> more(u8) count(u8) count x record [TLV] (§3.9)
       const Result parsed = plainTail(tail, p, n, 8, out, capacity);
       if (refused(parsed)) return parsed;
       if (getU32(p) != generation_) return wrongState(out, capacity);   // another generation (cause 6)

@@ -70,7 +70,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint8_t kMaxChannels = 16;
   // describe trigger opts: arm 0, when 1, and rearm 1 (a repeat's every segment its own trigger, capture §2.1)
   static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsRearm | kTriggerOptsWhen1;
-  static constexpr uint16_t kTriggerRecords = 64;   // describe trigger_records: rearm 1's records kept (capture §3.10)
+  static constexpr uint16_t kTriggerRecords = 64;   // describe trigger_records: rearm 1's records kept (capture §3.9)
   static constexpr size_t kSegmentBytes = 65408;   // 511 cache lines, inside the driver's 65535-byte frame
   // a triggered one-shot's segment, copied out of the ring: up to this (and the store's room) at this rate or below
   static constexpr size_t kTriggeredSegmentMax = 16 * 1024 * 1024;
@@ -117,7 +117,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   size_t describe(uint8_t *out, size_t capacity) override;
   bool lockFree(uint8_t op) const override { return lockFreeIn(reg::fixture_logic::kLockFreeOps, op); }
   // every op of capture §3.2 (query and force optional, in the ops tag; calibration is analog's)
-  // and triggers (rearm 1's records, §3.10: required with the opts' rearm bit)
+  // and triggers (rearm 1's records, §3.9: required with the opts' rearm bit)
   bool offers(uint8_t op) const override { return opIn(op, kOpConfigure, kOpQuery) || op == kOpTriggers; }
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
   bool planRoles() const override { return true; }
@@ -435,7 +435,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   void harvestRepeatTriggered(const Chunk &chunk);
   bool harvestRepeatTrigger(const Chunk &chunk, uint64_t base, size_t &at);   // waiting: the trigger found -> the segment begun
   void beginTriggeredSegment(uint64_t trigger, uint64_t base);
-  // rearm 1's records (§3.10): serial (from 0 in the generation), the original sample, ns, uncertainty
+  // rearm 1's records (§3.9): serial (from 0 in the generation), the original sample, ns, uncertainty
   struct TriggerRecord { uint64_t sample; uint64_t ns; uint32_t serial; uint32_t uncertainty; };   // 24 bytes
   TriggerRecord *records_ = nullptr;   // kTriggerRecords of them, taken by the first rearm 1 configure (PSRAM when there is some)
   volatile uint32_t record_next_ = 0;

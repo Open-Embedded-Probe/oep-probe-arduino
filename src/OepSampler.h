@@ -38,7 +38,7 @@ class SamplerCapture final : public Interface, public GroupTrack {
   static constexpr uint8_t kMaxChannels = 8;
   static constexpr uint8_t kTriggerOpts = kTriggerOptsArm0 | kTriggerOptsWhen1 | kTriggerOptsRearm;   // describe trigger opts
   static constexpr uint32_t kMaxSegments = 16;      // repeat's slots
-  static constexpr uint16_t kTriggerRecords = 32;   // rearm 1's records kept (capture §3.10)
+  static constexpr uint16_t kTriggerRecords = 32;   // rearm 1's records kept (capture §3.9)
   // The declared ceiling, from the bench (0.0.29-dev 873c8f0, V003 jig, 64 captures a row, 1 and 4 lines, serial and
   // TCP, with and without Wi-Fi): 400 kHz was the fastest rate at which no immediate window and no forced capture
   // without SWIO traffic slipped; 500 kHz slipped (immediate 1 - 4 / 64, forced 10 - 15 / 64), 750 kHz always. 300 kHz

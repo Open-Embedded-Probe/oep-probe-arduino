@@ -427,7 +427,7 @@ static void testDescribe() {
           tag == cap::kTlvDescribeExternalClock || tag == cap::kTlvDescribeGlitchFilter);
     if (tag == cap::kTlvDescribeExternalClock) CHECK(len == 6 && d[at + kTlvHeader + 4] == 0b011 && d[at + kTlvHeader + 5] == 1);
     if (tag == cap::kTlvDescribeGlitchFilter) CHECK(len == 13 && d[at + kTlvHeader] == 0);
-    if (tag == cap::kTlvDescribeTriggerRecords)   // rearm 1's records (§3.10: with the opts' rearm bit)
+    if (tag == cap::kTlvDescribeTriggerRecords)   // rearm 1's records (§3.9: with the opts' rearm bit)
       CHECK(len == 2 && getU16(d.data() + at + kTlvHeader) == LogicCapture::kTriggerRecords);
     if (tag == cap::kTlvDescribeTrigger)   // types max_pretrigger opts (capture §3.5): arm 0, rearm 1, when 1 beyond the defaults
       CHECK(len == 9 && d[at + kTlvHeader + 8] == LogicCapture::kTriggerOpts);
@@ -1554,7 +1554,7 @@ static void testForcedAfterWrap() {
   }
 }
 
-// A repeat with a trigger (capture §2.1, §3.10): the samples a byte each (w 8 on 2 lines); waiting in state 2 until the
+// A repeat with a trigger (capture §2.1, §3.9): the samples a byte each (w 8 on 2 lines); waiting in state 2 until the
 // first trigger; each segment pretrigger samples before its trigger (trigger_index = pretrigger, arm 1); rearm 1: the
 // next waits for its own trigger from the last one's end (status flags bit2 meanwhile), its flags bit3 and bit0 (not
 // straight after), a record each (triggers), positions the segments' bytes one after another; a force in the wait;

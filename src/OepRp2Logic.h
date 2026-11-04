@@ -40,7 +40,7 @@ class Rp2LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint8_t kMaxChannels = 8;
   static constexpr uint8_t kTriggerOpts = kTriggerOptsWhen1 | kTriggerOptsRearm;   // arm 1 only; when 0 / 1; rearm 1
   static constexpr uint32_t kMaxSegments = 16;      // repeat's slots
-  static constexpr uint16_t kTriggerRecords = 32;   // describe trigger_records: rearm 1's records kept (capture §3.10)
+  static constexpr uint16_t kTriggerRecords = 32;   // describe trigger_records: rearm 1's records kept (capture §3.9)
   // The most samples a segment holds: its ring (4 bytes a sample) and the packed segment (1) from the heap.
 #if defined(PICO_RP2350)
   static constexpr uint32_t kMaxSamples = 65536;
