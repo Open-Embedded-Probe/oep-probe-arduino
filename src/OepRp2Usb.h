@@ -19,6 +19,8 @@
 
 #include <Arduino.h>
 
+#include "OepFrame.h"
+
 namespace oep {
 namespace rp2usb {
 
@@ -91,6 +93,9 @@ class HidStream final : public UsbStream {
  protected:
   size_t fillIn() override;
   void takeOut(uint32_t bytes) override;
+
+ private:
+  HidCountGuard guard_;
 };
 
 }  // namespace rp2usb

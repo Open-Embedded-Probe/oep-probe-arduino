@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed: an HID output report whose count passes what it carries is dropped, and so is every report up to a pause of
+  probe_frame_gap_ms with none (transports §1, the HID rules), as a length over max_frame is. The ESP32-P4 / P4X, CH32
+  and RP2 HID receivers dropped only that report and took the next at once, so a request right after it was answered
+  (found by the client's raw HID check on an ESP32-P4).
+- (JA) 修正: count が report に入る量を超える HID の output report を捨て、そのあと probe_frame_gap_ms 途切れるまでの report も捨てる
+  （transports §1 の HID の規則。max_frame を超える長さと同じ）。ESP32-P4 / P4X、CH32、RP2 の HID の受け口は、その report だけを捨てて
+  すぐ次を受けていたので、直後の要求に答えていた（client の HID の生の検査で、ESP32-P4 で見つけた）。
 - (EN) Changed: the registry header and the test vectors follow oep-spec 3b6dbbc, which drops capture's optional features
   no probe implemented (the external data path, named formats, the front-end settings threshold, coupling, offset,
   bandwidth, impedance, resolution and oversample). No probe here declared them, so what it sends is unchanged; the

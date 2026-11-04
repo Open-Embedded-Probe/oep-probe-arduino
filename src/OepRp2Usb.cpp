@@ -280,11 +280,12 @@ size_t HidStream::fillIn() {
   return kPacket;
 }
 
-// One report: its count's bytes (a count over what it carries: the report dropped whole, transports §1)
+// One report: its count's bytes (a count over what it carries: that report and those up to the pause after dropped,
+// transports §1)
 void HidStream::takeOut(uint32_t bytes) {
   if (bytes < 2) return;
   const size_t n = out_[0] | (out_[1] << 8);
-  if (n > bytes - 2) return;
+  if (!guard_.accept(n > bytes - 2, millis())) return;
   for (size_t i = 0; i < n && rx_.room(); ++i) rx_.put(out_[2 + i]);
 }
 

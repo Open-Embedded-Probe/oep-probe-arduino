@@ -60,6 +60,26 @@ class FrameReader {
   bool gapRestarts() const { return state_ == State::Discard || (state_ != State::LengthLow && !tcp_); }
 };
 
+// HID's output reports (transports §1, the HID rules): a report whose count passes what it carries is dropped, and the
+// stream counts as broken - every report up to a pause of kIdleResyncMs with none is dropped too, as a length over
+// max_frame is. accept(): whether this report's bytes go on (`bad`: its count passes what it carries).
+class HidCountGuard {
+ public:
+  bool accept(bool bad, uint32_t now_ms) {
+    if (broken_ && static_cast<uint32_t>(now_ms - last_ms_) < FrameReader::kIdleResyncMs) {
+      last_ms_ = now_ms;
+      return false;
+    }
+    broken_ = bad;
+    last_ms_ = now_ms;
+    return !bad;
+  }
+
+ private:
+  bool broken_ = false;
+  uint32_t last_ms_ = 0;
+};
+
 // Write one message with its length prefix. Returns bytes of message written (0 on failure).
 size_t writeFrame(Stream &stream, const uint8_t *message, size_t length);
 

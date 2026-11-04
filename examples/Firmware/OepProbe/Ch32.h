@@ -122,10 +122,10 @@ class HidStream final : public Stream {
   }
 
  private:
-  void take(const uint8_t *d, size_t len) {   // one output report: its count bytes into the ring (rule 6: a bad count drops it)
+  void take(const uint8_t *d, size_t len) {   // one output report: its count bytes into the ring (transports §1)
     if (!d || len < 2) return;
     const size_t n = d[0] | (d[1] << 8);
-    if (n > len - 2) return;
+    if (!guard_.accept(n > len - 2, millis())) return;   // a count over what it carries, and up to the pause after
     for (size_t i = 0; i < n; ++i) {
       const size_t next = (head_ + 1) % sizeof rx_;
       if (next == tail_) return;
@@ -134,6 +134,7 @@ class HidStream final : public Stream {
     }
   }
   CH32RVUsbDeviceHidVendor &h_;
+  oep::HidCountGuard guard_;
   uint8_t rx_[640];
   volatile size_t head_ = 0, tail_ = 0;
   uint8_t tx_[kReport];

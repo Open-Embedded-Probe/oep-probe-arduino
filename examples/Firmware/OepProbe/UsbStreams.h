@@ -5,6 +5,7 @@
 // output) and a CDC port that never waits long (a serial port: frames and raw bytes, oep-transports §4).
 #pragma once
 #include <EspUsbDevice.h>
+#include <OepFrame.h>
 #include <class/cdc/cdc_device.h>   // EspUsbDevice's TinyUSB: the CDC FIFO's free room
 
 class CdcStream final : public Stream {
@@ -42,7 +43,7 @@ class HidStream final : public Stream {
       if (d && r.reportId == 0 && len == kReport + 1 && d[0] == ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) { ++d; --len; }
       if (len < 2 || !d) return;
       size_t n = d[0] | (d[1] << 8);
-      if (n > len - 2) return;   // a count over what the report carries: the report is discarded whole (transports §1)
+      if (!guard_.accept(n > len - 2, millis())) return;   // a count over what it carries, and up to the pause after
       for (size_t i = 0; i < n; ++i) { const size_t next = (head_ + 1) % sizeof rx_; if (next == tail_) return; rx_[head_] = d[2 + i]; head_ = next; }
     });
   }
@@ -83,6 +84,7 @@ class HidStream final : public Stream {
   int availableForWrite() override { return 4096; }
  private:
   EspUsbDeviceHidVendor &h_;
+  oep::HidCountGuard guard_;
   uint8_t rx_[8192];
   volatile size_t head_ = 0, tail_ = 0;
   uint8_t tx_[kReport];
