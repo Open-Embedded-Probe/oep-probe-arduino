@@ -40,7 +40,12 @@ class HidStream final : public Stream {
       // only when several HID classes are merged; with this single HID it arrives as data[0] of a kReport + 1 report.
       const uint8_t *d = r.data;
       size_t len = r.length;
-      if (d && r.reportId == 0 && len == kReport + 1 && d[0] == ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) { ++d; --len; }
+      if (r.reportId != 0 && r.reportId != ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) return;   // another ID: dropped (rule 4)
+      if (d && r.reportId == 0 && len == kReport + 1) {
+        if (d[0] != ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) return;   // another ID: dropped, not a bad count (rule 4)
+        ++d;
+        --len;
+      }
       if (len < 2 || !d) return;
       size_t n = d[0] | (d[1] << 8);
       if (!guard_.accept(n > len - 2, millis())) return;   // a count over what it carries, and up to the pause after
