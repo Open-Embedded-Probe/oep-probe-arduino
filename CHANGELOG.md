@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed (spi-controller): an interrupt between an SCK edge's look at the clock and its write no longer shortens the
+  half after it. The half was counted from the look, so the late edge left the next level short: SCK held 0.7 us of a
+  5 us half after a 9.6 us one (4-2, 100 kHz, a CH32X035 slave, 1 transfer in 3). A write that returns 1 us or more after
+  it began was interrupted, and then the edge's time is taken after it: a half only comes out longer, as a master may
+  stretch its clock.
+- (JA) 修正（spi-controller）: SCK の辺で時計を読んでから書くまでの間に割り込みが入っても、次の半周期が短くならない。
+  半周期をその読みから数えていたので、遅れた辺の次のレベルが短くなっていた（4-2、100 kHz、CH32X035 の相手で、3 回に 1 回:
+  9.6 µs の後に 5 µs の半周期のうち 0.7 µs）。書き込みが始めから 1 µs 以上たって戻ったら割り込まれたとみなし、そのときは
+  辺の時刻を書いた後で取る。半周期は長くなるだけで、主はクロックを伸ばしてよい。
 
 ## 0.0.49
 - (EN) Fixed (ESP32 / ESP32-P4 spi-target): the four pads are routed to the slave by the target and the ESP-IDF driver

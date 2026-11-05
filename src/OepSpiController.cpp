@@ -44,6 +44,8 @@ inline bool level(int pad) { return digitalRead(pad) != 0; }
 // A time asked as whole ticks at or above it, and those ticks as ns rounded down: what the line kept at least
 uint32_t cyclesOf(uint32_t ns) { return static_cast<uint32_t>((static_cast<uint64_t>(ns) * tickHz() + 999999999u) / 1000000000u); }
 uint32_t nsOf(uint32_t cycles) { return static_cast<uint32_t>(static_cast<uint64_t>(cycles) * 1000000000u / tickHz()); }
+// A GPIO write takes some 300 ns on the ESP32-P4 (above); one past this was interrupted (sckEdge)
+constexpr uint32_t kLateNs = 1000;
 constexpr size_t kItem = 14;   // gap_ns setup_ns hold_ns count: a transfer's fixed part, asked and answered
 }  // namespace
 
@@ -162,6 +164,17 @@ void OEP_SPI_TIMED SpiController::waitFor(uint32_t cycles) {
   while (static_cast<int32_t>(ticks() - due) < 0) {}
 }
 
+// An SCK edge, its time taken as its write is issued (below). An interrupt between the look at the clock and the write
+// made the edge late and the half after it short, counted from the look: SCK held 0.7 us of a 5 us half after a 9.6 us
+// one (4-2, 100 kHz, a CH32X035 slave, 1 transfer in 3). A write that returns late (kLateNs) was interrupted: then the
+// edge's time is taken after it, so a half only comes out longer - a master may stretch its clock.
+void OEP_SPI_TIMED SpiController::sckEdge(bool high) {
+  const uint32_t before = ticks();
+  set(sck_pad_, high);
+  const uint32_t after = ticks();
+  edge_ = after - before >= late_ ? after : before;
+}
+
 // One CS-framed transfer. Mode = CPOL x 2 + CPHA (fixture §4): with CPHA 0 a bit is on MOSI before its leading edge
 // (the first one right at CS), MISO read at the leading edge; with CPHA 1 a bit goes out at its leading edge and MISO is
 // read at the trailing one. The last edge is a trailing one either way; hold counts from it.
@@ -184,13 +197,11 @@ void OEP_SPI_TIMED SpiController::lineTransfer(bool first, uint32_t gap, uint32_
     waitFor(setup);
     for (size_t k = 0; k < bits; ++k) {
       if (k) waitFor(half_);
-      edge_ = ticks();
-      set(sck_pad_, !cpol);   // the leading edge
+      sckEdge(!cpol);   // the leading edge
       if (cpha) set(mosi_pad_, bitOf(k));
       bool in = cpha ? false : miso();
       waitFor(half_);
-      edge_ = ticks();
-      set(sck_pad_, cpol);   // the trailing edge
+      sckEdge(cpol);   // the trailing edge
       if (cpha) in = miso();
       if (in) rx[k / 8] |= static_cast<uint8_t>(1u << (lsb ? k % 8 : 7 - k % 8));
       if (!cpha && k + 1 < bits) set(mosi_pad_, bitOf(k + 1));
@@ -265,6 +276,9 @@ Result SpiController::handle(uint8_t operation, const uint8_t *payload, size_t l
       mode_ = payload[0]; bit_order_ = payload[1]; transfers_ = 0;
       const uint32_t cpu = tickHz();
       half_ = (cpu + 2 * clock - 1) / (2 * clock);   // the SCK used: the nearest at or below the one asked
+#if !defined(OEP_HOST_FAKE_SPI_BUS)
+      late_ = cyclesOf(kLateNs) < 2 ? 2 : cyclesOf(kLateNs);   // micros() elsewhere: 2, past one tick's step
+#endif
       if (!start()) { stop(); mode_ = bit_order_ = 0; return failed(); }
       putU32(out, cpu / (2 * half_));
       return completed(4);

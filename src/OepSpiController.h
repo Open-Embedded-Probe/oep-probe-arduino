@@ -89,8 +89,10 @@ class SpiController final : public Interface {
 #if !defined(OEP_HOST_FAKE_SPI_BUS)
   int sck_pad_ = -1, mosi_pad_ = -1, miso_pad_ = -1, cs_pad_ = -1;
   uint32_t edge_ = 0;   // the tick count at the last edge
+  uint32_t late_ = 0;   // a GPIO write that returns this many ticks or more after it began was interrupted (sckEdge)
   void waitFor(uint32_t cycles);
   void set(int pad, bool high) const;
+  void sckEdge(bool high);
   bool miso() const;
 #endif
   bool start();
