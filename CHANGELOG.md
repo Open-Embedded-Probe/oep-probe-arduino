@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.49
 - (EN) Fixed (ESP32 / ESP32-P4 spi-target): the four pads are routed to the slave by the target and the ESP-IDF driver
   is given none, so a configure no longer moves the master's lines. What the driver does to the pins it is given
   (ESP-IDF 5.5): spi_slave_free resets them (gpio_reset_pin, input off: SCK and MOSI read low by the probe's capture for
