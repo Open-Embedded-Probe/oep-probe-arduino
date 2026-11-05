@@ -1,6 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Changed: an FS area that does not mount is formatted and the settings read as never saved (storage_state 0), as
+  core §13.7 now allows when nothing of the save is left; the probe no longer scans the area for what it held first.
+- (JA) 変更: マウントできない FS の領域は初期化し、設定は保存が無い（storage_state 0）と読む。保存が何も残らないときは 0 でよいと
+  core §13.7 が認めたため。初期化の前に領域の中身を調べることをやめた。
+
 
 ## 0.0.45
 - (EN) Added: `oep.probe.memo` (oep-if-memo), the host's named objects on the probe (2 KB each; 52 on an RP2040, 64 on an

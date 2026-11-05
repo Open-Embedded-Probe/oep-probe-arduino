@@ -236,8 +236,7 @@ restart の応答の後、probe は応答を送り終えてから再起動する
 
 設定は probe の LittleFS（ESP32 / ESP32-P4 はパーティション `spiffs`、RP2040 / RP2350 は FS の領域）のファイル `/s` に保存する。
 全体を `/s.w` に書いてから `/s` へ名前を変えるので、電源断の後には前の保存か新しい保存のどちらかが残る（core §13.7 の推奨）。
-FS の領域が何かを持っていたのにマウントできないときは、領域を初期化し、その起動の state は storage_state 2、reason 1 にする
-（保存が無いとは答えない）。firmware の通常の書き込み（arduino-cli upload）は FS の領域を消さない。
+FS の領域がマウントできないときは、領域を初期化する。そのときの保存は無いもの（storage_state 0）になる。firmware の通常の書き込み（arduino-cli upload）は FS の領域を消さない。
 
 ### 2.6 メモ欄（`oep.probe.memo`）
 

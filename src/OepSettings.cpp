@@ -54,15 +54,13 @@ bool storeWrite(const uint8_t *, size_t) { return false; }
 #else
 // A file on the probe's LittleFS (OepFlashFs.h), written whole into "/s.w" and renamed over "/s": LittleFS commits
 // a rename at once, so a power loss leaves the old save or the new one (core §13.7). (arduino-pico syncs a file at its
-// open, so a file opened "w" in place would be empty on the flash before it is written.) An FS area that held something
-// but no longer mounts was formatted: the save that was there reads as unreadable (storage_state 2, reason 1), not as
-// none.
+// open, so a file opened "w" in place would be empty on the flash before it is written.) An FS area that did not mount
+// was formatted: the save reads as none (storage_state 0, which core §13.7 allows when nothing is left).
 constexpr const char *kSaveFile = "/s", *kSaveStage = "/s.w";
 bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
   length = 0;
   if (!FlashFs::mount()) return false;
   LittleFS.remove(kSaveStage);                        // a save a power loss cut short: the old one stands
-  if (FlashFs::lostOnMount()) return true;            // unreadable
   File f = LittleFS.open(kSaveFile, "r");
   if (!f) return false;                               // never saved
   const size_t n = f.size();
