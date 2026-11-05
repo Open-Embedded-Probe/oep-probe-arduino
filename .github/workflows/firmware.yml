@@ -232,6 +232,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ needs.plan.outputs.tag }}" firmware/* --clobber --repo "${{ github.repository }}"
 
+      # The OEP Probe Tool page (oep-client-js's Pages) serves the latest Release's firmware: ask it to rebuild. Needs a
+      # token that may dispatch to that repository (secret OEP_CLIENT_JS_DISPATCH_TOKEN); without it the page picks the
+      # Release up at its daily rebuild.
+      - name: Tell the page about the new firmware
+        env:
+          GH_TOKEN: ${{ secrets.OEP_CLIENT_JS_DISPATCH_TOKEN }}
+        if: ${{ env.GH_TOKEN != '' }}
+        run: gh api repos/Open-Embedded-Probe/oep-client-js/dispatches -f event_type=firmware-released
+
   check:
     needs: [plan, build]
     if: ${{ needs.plan.outputs.checks != '[]' }}
