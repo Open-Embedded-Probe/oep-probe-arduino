@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.50
 - (EN) Fixed (spi-controller): an interrupt between an SCK edge's look at the clock and its write no longer shortens the
   half after it. The half was counted from the look, so the late edge left the next level short: SCK held 0.7 us of a
   5 us half after a 9.6 us one (4-2, 100 kHz, a CH32X035 slave, 1 transfer in 3). A write that returns 1 us or more after
