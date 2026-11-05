@@ -22,8 +22,11 @@ def release_builds():
                          WORKFLOW.read_text(), re.MULTILINE | re.DOTALL)
     output = subprocess.check_output([sys.executable, "-c", textwrap.dedent(scripts[0])],
                                      cwd=ROOT, text=True)
-    return json.loads(next(line.removeprefix("builds=") for line in output.splitlines()
-                           if line.startswith("builds=")))
+    # every (example, profile): the released ones (builds=) and the ones only checked (checks=)
+    out = []
+    for key in ("builds=", "checks="):
+        out += json.loads(next(line.removeprefix(key) for line in output.splitlines() if line.startswith(key)))
+    return out
 
 
 class BuildProfilesTest(unittest.TestCase):
