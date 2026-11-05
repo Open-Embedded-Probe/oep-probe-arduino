@@ -10,4 +10,5 @@ inline void gpio_ll_set_output_enable_ctrl(gpio_dev_t *, uint8_t pin, bool ctrl_
 }
 inline void gpio_ll_output_enable(gpio_dev_t *, uint32_t pin) { g_fake_gpio.enable[pin] = true; }
 inline void gpio_ll_output_disable(gpio_dev_t *, uint32_t pin) { g_fake_gpio.enable[pin] = false; }
+inline void gpio_ll_input_enable(gpio_dev_t *, uint32_t) {}
 inline int gpio_ll_get_level(gpio_dev_t *, uint32_t pin) { return g_fake_gpio.level[pin]; }

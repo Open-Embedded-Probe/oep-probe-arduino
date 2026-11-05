@@ -305,6 +305,9 @@ int main() {
     CHECK(!fakeMisoDriven());
     CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {2, 0}, out)));
     CHECK(!fakeMisoDriven());                               // configured anew
+    // CS is an input only: routed by the target, not given to the driver (which would make the pad an output of the
+    // peripheral's CS signal - a pulse on the master's CS at every configure)
+    CHECK(!g_fake_spi.cs_driven && g_fake_spi.cs_pin == 7);
     // configured while selected: driven at once
     CHECK(fakeCsLow() || true);
     CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));

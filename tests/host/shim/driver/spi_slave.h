@@ -14,6 +14,8 @@
 // - the classic's slave enables its MISO output from spi_slave_initialize to spi_slave_free, CS high or low (bench,
 //   2026-10-02): fakeMisoDriven() is that, unless the pin's output enable was given to the GPIO enable bit
 //   (driver/gpio.h's fake), which then decides.
+// - given a CS pin (spics_io_num), the driver makes it an output of the peripheral's CS signal too (ESP-IDF 5.5's
+//   spicommon_cs_initialize): cs_driven. CS routed by esp_rom_gpio_connect_in_signal instead is an input only.
 // The master: fakeCsLow / fakeClock / fakeCsHigh, or fakeSpiTransfer for a whole frame; g_fake_spi.miso is what the
 // master read in the last frame. CS edges are also edges of the CS pin for driver/gpio.h's fake.
 #pragma once
@@ -63,6 +65,7 @@ struct FakeSpiSlave {
   int queue_size = 0;
   int inits = 0;
   int cs_pin = -1, miso_pin = -1;
+  bool cs_driven = false;    // the probe drives the CS pad (the driver was given CS)
   uint32_t flags = 0;
   slave_transaction_cb_t post_trans_cb = nullptr, post_setup_cb = nullptr;
   // the driver's core has its interrupts off (a frame of the SWIO wire on it): queue_trans loads nothing until unmask
@@ -78,6 +81,14 @@ struct FakeSpiSlave {
   std::vector<uint8_t> miso;   // what the master read in the last frame
 };
 inline FakeSpiSlave g_fake_spi;
+constexpr uint32_t kFakeSpiCsIn = 0x40;   // SPI2's CS input signal in the fake GPIO matrix
+
+// esp_rom_gpio_connect_in_signal's fake: a pad routed to SPI2's CS input is the slave's CS.
+inline void fakeSpiConnectIn(uint32_t pin, uint32_t signal) {
+  if (signal != kFakeSpiCsIn) return;
+  g_fake_spi.cs_pin = static_cast<int>(pin);
+  g_fake_gpio.level[pin] = g_fake_spi.cs_low ? 0 : 1;
+}
 
 inline void fakeSpiLoad() {
   FakeSpiSlave &f = g_fake_spi;
@@ -113,7 +124,9 @@ inline esp_err_t spi_slave_initialize(spi_host_device_t, const spi_bus_config_t 
                                       spi_dma_chan_t) {
   FakeSpiSlave &f = g_fake_spi;
   if (f.up || f.fail_init) { f.fail_init = false; return ESP_FAIL; }
-  f.cs_pin = c->spics_io_num; f.miso_pin = b->miso_io_num;
+  if (c->spics_io_num >= 0) f.cs_pin = c->spics_io_num;
+  f.cs_driven = c->spics_io_num >= 0;
+  f.miso_pin = b->miso_io_num;
   if (f.cs_pin >= 0) g_fake_gpio.level[f.cs_pin] = f.cs_low ? 0 : 1;
   if (f.miso_pin >= 0) g_fake_gpio.oe_by_gpio[f.miso_pin] = false;   // routed to the slave: its output enable
   f.up = true; f.queue_size = c->queue_size; f.flags = c->flags; f.post_trans_cb = c->post_trans_cb; f.post_setup_cb = c->post_setup_cb; ++f.inits;
@@ -125,7 +138,7 @@ inline esp_err_t spi_slave_initialize(spi_host_device_t, const spi_bus_config_t 
 inline esp_err_t spi_slave_free(spi_host_device_t) {
   FakeSpiSlave &f = g_fake_spi;
   if (!f.up) return ESP_FAIL;
-  f.up = false; f.queued.clear(); f.done.clear(); f.cur = nullptr; f.intr_on = false;
+  f.up = false; f.queued.clear(); f.done.clear(); f.cur = nullptr; f.intr_on = false; f.cs_driven = false;
   return ESP_OK;
 }
 // The queue holds queue_size waiting transactions besides the one loaded.

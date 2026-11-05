@@ -93,7 +93,13 @@ bool P4SpiTarget::begin() {
   bus.quadwp_io_num = -1; bus.quadhd_io_num = -1;
   bus.max_transfer_sz = kMaxFrame;
   spi_slave_interface_config_t cfg = {};
-  cfg.spics_io_num = cs_;
+  // CS is routed here, an input only: given CS, the driver makes the pad an output of the peripheral's CS signal as
+  // well (spicommon_cs_initialize, ESP-IDF 5.5, GPIO matrix), so every configure drove the master's CS low for 3-4 us
+  // (4-2, a CH32X035's push-pull CS seen by the same probe's capture, 2026-11-05). Connected before the driver starts,
+  // so its slave never sees an unconnected CS.
+  gpio_ll_input_enable(&GPIO, static_cast<uint32_t>(cs_));
+  esp_rom_gpio_connect_in_signal(static_cast<uint32_t>(cs_), spi_periph_signal[SPI2_HOST].spics_in, false);
+  cfg.spics_io_num = -1;
   // No result queue: post_trans_cb sees every end and loads the next transaction there.
   cfg.flags = (bit_order_ ? SPI_SLAVE_BIT_LSBFIRST : 0) | SPI_SLAVE_NO_RETURN_RESULT;
   cfg.queue_size = 1;   // never more than one waits: the one post_trans_cb or arm puts in, loaded at once

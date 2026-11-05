@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed (ESP32 / ESP32-P4 spi-target): CS is routed to the slave by the target as an input only, not given to the
+  ESP-IDF driver, which makes the pad an output of the peripheral's CS signal as well (spicommon_cs_initialize, ESP-IDF
+  5.5): every configure drove the master's CS low for 3 to 4 us (4-2, a CH32X035's push-pull CS seen by the same probe's
+  capture: 9 of 9 configures).
+- (JA) 修正（ESP32 / ESP32-P4 の spi-target）: CS は target が入力としてだけスレーブにつなぐ。ESP-IDF のドライバに渡すと、
+  ドライバがその pad を周辺の CS 信号の出力にもする（spicommon_cs_initialize、ESP-IDF 5.5）。configure のたびに、相手の CS を
+  3〜4 µs Low に引いていた（4-2、CH32X035 の push-pull の CS を同じプローブの取り込みで見て、9 回の configure の 9 回とも）。
 
 ## 0.0.47
 - (EN) Added (RP2040 / RP2350 firmware): the pico-sdk's reset interface (vendor class, RESET_INTERFACE_SUBCLASS /

@@ -29,7 +29,10 @@
 #define OEP_SPI_SLAVE_DRIVER 1
 #include <driver/spi_slave.h>
 #include <esp_private/spi_slave_internal.h>   // spi_slave_queue_trans_isr, spi_slave_queue_reset
+#include <esp_rom_gpio.h>                     // esp_rom_gpio_connect_in_signal: CS routed here, not by the driver
 #include <freertos/FreeRTOS.h>
+#include <hal/gpio_ll.h>
+#include <soc/spi_periph.h>
 #endif
 // The classic ESP32's slave drives MISO from spi_slave_initialize to spi_slave_free, CS high as well (bench,
 // 2026-10-02: low while CS is high, configured, armed and between frames; the ESP32-P4's leaves it undriven). A target
