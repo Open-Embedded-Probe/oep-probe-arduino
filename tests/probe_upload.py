@@ -59,8 +59,10 @@ def dfu_args(unit):
     if len(interfaces) != 1:
         raise RuntimeError(f'expected one DFU download interface, found {interfaces}')
     # A serial selector is mandatory: VID:PID alone could update another probe.
-    pattern = ('"{runtime.tools.dfu-util.path}/dfu-util" --device 1209:4f45 --serial ' + unit +
-               ' --intf ' + str(interfaces[0]) + ' --alt 0 -D "{build.path}/{build.project_name}.bin"')
+    # dfu_resume.py rather than dfu-util: it goes on after a control transfer times out (dfu-util stops there)
+    script = Path(__file__).resolve().with_name('dfu_resume.py')
+    pattern = (f'"{sys.executable}" "{script}" --serial {unit} --intf {interfaces[0]}'
+               ' "{build.path}/{build.project_name}.bin"')
     return properties(**{'upload.pattern': pattern})
 
 

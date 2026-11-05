@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) tests: a P4 / P4X probe is updated over DFU by `tests/dfu_resume.py` rather than dfu-util: it reads the state
+  after a control transfer that times out and goes on (a block taken is not sent again, one lost is), where dfu-util
+  stops. Behind the bench's hub 3-2.3 one control transfer in a few hundred stalls for over a second, and updates failed
+  part way.
+- (JA) tests: P4 と P4X のプローブの DFU の更新を、dfu-util ではなく `tests/dfu_resume.py` で行う。制御の転送が時間切れになったら
+  状態を読み直して続ける（受け取られたブロックは送り直さず、届かなかったものは送り直す）。dfu-util はそこで止まる。ベンチのハブ 3-2.3 の
+  下では、制御の転送が数百回に 1 回、1 秒を越えて止まり、更新が途中で失敗していた。
 
 ## 0.0.46
 - (EN) Changed (oep-spec 4d28f24): the answers of `oep.fixture.spi-controller` transfer and `oep.fixture.pwm` set start
