@@ -23,7 +23,7 @@ namespace {
 
 UsbStream *gVendor = nullptr, *gHid = nullptr;   // the ones begun
 bool gReset = false;                             // the reset interface added
-uint8_t gResetLocal = 0xff, gResetString = 0, gResetItf = 0xff;
+uint8_t gResetLocal = 0xff, gResetString = 0;
 
 // The HID report descriptor: OEP's usage page / usage, a 64-byte input and a 64-byte output report, no report ID
 const uint8_t kHidReport[] = {
@@ -48,7 +48,6 @@ uint16_t drvOpen(uint8_t rhport, tusb_desc_interface_t const *desc, uint16_t max
   const uint8_t *d = reinterpret_cast<const uint8_t *>(desc);
   if (gReset && desc->bInterfaceClass == TUSB_CLASS_VENDOR_SPECIFIC && desc->bInterfaceSubClass == RESET_INTERFACE_SUBCLASS &&
       desc->bInterfaceProtocol == RESET_INTERFACE_PROTOCOL && max_len >= sizeof(tusb_desc_interface_t)) {
-    gResetItf = desc->bInterfaceNumber;
     return sizeof(tusb_desc_interface_t);
   }
   if (gVendor) {
@@ -59,16 +58,25 @@ uint16_t drvOpen(uint8_t rhport, tusb_desc_interface_t const *desc, uint16_t max
   }
   return 0;
 }
-bool drvControl(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
-  if (gReset && request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_INTERFACE && tu_u16_low(request->wIndex) == gResetItf) {
-    if (stage != CONTROL_STAGE_SETUP) return true;
-    if (request->bRequest == RESET_REQUEST_BOOTSEL) rom_reset_usb_boot_extra(-1, request->wValue & 0x7f, false);   // no return
-    if (request->bRequest == RESET_REQUEST_FLASH) {
-      watchdog_reboot(0, 0, 10);
-      return tud_control_status(rhport, request);
-    }
+// A request to the reset interface (class or vendor type, recipient the interface): true when it was one
+bool resetRequest(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request, bool &answer) {
+  if (!gReset || request->bmRequestType_bit.recipient != TUSB_REQ_RCPT_INTERFACE ||
+      tu_u16_low(request->wIndex) != USB.findInterfaceID(gResetLocal))
     return false;
+  answer = true;
+  if (stage != CONTROL_STAGE_SETUP) return true;
+  if (request->bRequest == RESET_REQUEST_BOOTSEL) rom_reset_usb_boot_extra(-1, request->wValue & 0x7f, false);   // no return
+  if (request->bRequest == RESET_REQUEST_FLASH) {
+    watchdog_reboot(0, 0, 10);
+    answer = tud_control_status(rhport, request);
+    return true;
   }
+  answer = false;
+  return true;
+}
+bool drvControl(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+  bool answer = false;
+  if (resetRequest(rhport, stage, request, answer)) return answer;
   if (gHid && request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_INTERFACE &&
       tu_u16_low(request->wIndex) == gHid->interfaceNumber())
     return gHid->control(rhport, stage, request);
@@ -325,6 +333,16 @@ void addResetInterface() {
 
 }  // namespace rp2usb
 }  // namespace oep
+
+// TinyUSB hands every vendor-type request to this callback, not to the class drivers (usbd.c process_control_request);
+// arduino-pico defines it only in its picotool-upload build. The reset interface's requests come here when they are
+// sent vendor-typed; the rest is refused as before.
+#if !defined(ENABLE_PICOTOOL_USB)
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+  bool answer = false;
+  return oep::rp2usb::resetRequest(rhport, stage, request, answer) && answer;
+}
+#endif
 
 usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
   *driver_count = 1;
