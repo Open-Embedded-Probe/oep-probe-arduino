@@ -98,6 +98,12 @@ class HidStream final : public UsbStream {
   HidCountGuard guard_;
 };
 
+// The pico-sdk's reset interface (what `picotool reboot -f` and a page's WebUSB use, outside OEP like the P4's DFU):
+// class 0xFF, RESET_INTERFACE_SUBCLASS / RESET_INTERFACE_PROTOCOL, no endpoints; the control request
+// RESET_REQUEST_BOOTSEL restarts the chip into its boot ROM (rom_reset_usb_boot_extra), RESET_REQUEST_FLASH restarts
+// it. Call before USB.connect().
+void addResetInterface();
+
 }  // namespace rp2usb
 }  // namespace oep
 

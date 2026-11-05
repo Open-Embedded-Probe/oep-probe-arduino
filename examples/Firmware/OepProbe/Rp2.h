@@ -419,6 +419,7 @@ void setup() {
   oepWithBulk();   // their interfaces in the descriptor USB.connect() builds
   oepWithHid();
   oepWithBridge();
+  oep::rp2usb::addResetInterface();   // picotool's reset interface: into the boot ROM for a firmware update over USB
   USB.connect();
   oepWithCdc();
   afterCdc.run();

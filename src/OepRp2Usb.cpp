@@ -9,7 +9,10 @@
 #include <USB.h>
 #include <device/usbd.h>
 #include <device/usbd_pvt.h>
+#include <hardware/watchdog.h>
 #include <initializer_list>
+#include <pico/bootrom.h>
+#include <pico/usb_reset_interface.h>
 #include <string.h>
 
 #include "Oep.h"
@@ -19,6 +22,8 @@ namespace rp2usb {
 namespace {
 
 UsbStream *gVendor = nullptr, *gHid = nullptr;   // the ones begun
+bool gReset = false;                             // the reset interface added
+uint8_t gResetLocal = 0xff, gResetString = 0, gResetItf = 0xff;
 
 // The HID report descriptor: OEP's usage page / usage, a 64-byte input and a 64-byte output report, no report ID
 const uint8_t kHidReport[] = {
@@ -41,6 +46,11 @@ void drvReset(uint8_t) {
 }
 uint16_t drvOpen(uint8_t rhport, tusb_desc_interface_t const *desc, uint16_t max_len) {
   const uint8_t *d = reinterpret_cast<const uint8_t *>(desc);
+  if (gReset && desc->bInterfaceClass == TUSB_CLASS_VENDOR_SPECIFIC && desc->bInterfaceSubClass == RESET_INTERFACE_SUBCLASS &&
+      desc->bInterfaceProtocol == RESET_INTERFACE_PROTOCOL && max_len >= sizeof(tusb_desc_interface_t)) {
+    gResetItf = desc->bInterfaceNumber;
+    return sizeof(tusb_desc_interface_t);
+  }
   if (gVendor) {
     if (const uint16_t n = gVendor->open(rhport, d, max_len)) return n;
   }
@@ -50,6 +60,15 @@ uint16_t drvOpen(uint8_t rhport, tusb_desc_interface_t const *desc, uint16_t max
   return 0;
 }
 bool drvControl(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+  if (gReset && request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_INTERFACE && tu_u16_low(request->wIndex) == gResetItf) {
+    if (stage != CONTROL_STAGE_SETUP) return true;
+    if (request->bRequest == RESET_REQUEST_BOOTSEL) rom_reset_usb_boot_extra(-1, request->wValue & 0x7f, false);   // no return
+    if (request->bRequest == RESET_REQUEST_FLASH) {
+      watchdog_reboot(0, 0, 10);
+      return tud_control_status(rhport, request);
+    }
+    return false;
+  }
   if (gHid && request->bmRequestType_bit.recipient == TUSB_REQ_RCPT_INTERFACE &&
       tu_u16_low(request->wIndex) == gHid->interfaceNumber())
     return gHid->control(rhport, stage, request);
@@ -287,6 +306,21 @@ void HidStream::takeOut(uint32_t bytes) {
   const size_t n = out_[0] | (out_[1] << 8);
   if (!guard_.accept(n > bytes - 2, millis())) return;
   for (size_t i = 0; i < n && rx_.room(); ++i) rx_.put(out_[2 + i]);
+}
+
+namespace {
+void fillResetDescriptor(int itf, uint8_t *dst, int len, void *) {
+  const uint8_t d[] = {9, TUSB_DESC_INTERFACE, static_cast<uint8_t>(itf), 0, 0, TUSB_CLASS_VENDOR_SPECIFIC,
+                       RESET_INTERFACE_SUBCLASS, RESET_INTERFACE_PROTOCOL, gResetString};
+  memcpy(dst, d, len < static_cast<int>(sizeof d) ? len : sizeof d);
+}
+}  // namespace
+
+void addResetInterface() {
+  if (gReset) return;
+  gResetString = USB.registerString("Reset");
+  gResetLocal = USB.registerInterface(1, fillResetDescriptor, nullptr, 9, 100, 0);   // after the others, as arduino-pico's
+  gReset = true;
 }
 
 }  // namespace rp2usb

@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Added (RP2040 / RP2350 firmware): the pico-sdk's reset interface (vendor class, RESET_INTERFACE_SUBCLASS /
+  PROTOCOL): its control request RESET_REQUEST_BOOTSEL restarts the probe into its boot ROM, so `picotool reboot -f` or a
+  page over WebUSB updates a running probe without a 1200 baud touch or the BOOTSEL button. Outside OEP, as the P4's DFU.
+- (JA) 追加（RP2040 / RP2350 の firmware）: pico-sdk の reset のインターフェース（vendor class、RESET_INTERFACE_SUBCLASS / PROTOCOL）。制御の要求
+  RESET_REQUEST_BOOTSEL で probe を boot ROM に入れ直すので、`picotool reboot -f` や WebUSB のページが、1200 baud touch も BOOTSEL の
+  ボタンもなしに、動いている probe を更新できる。P4 の DFU と同じく OEP の外。
 - (EN) The Firmware workflow builds and attaches the examples/Firmware builds first (8 jobs, one wave) and checks the other
   examples after them, so the release's firmware is attached without waiting behind 24 check builds.
 - (JA) Firmware の workflow は、examples/Firmware のビルド（8 つ、一度に流れる）を先にして添付し、ほかの例の確かめのビルドはその後に回す。
