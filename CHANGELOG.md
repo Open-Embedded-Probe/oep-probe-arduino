@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.45
 - (EN) Added: `oep.probe.memo` (oep-if-memo), the host's named objects on the probe (2 KB each; 52 on an RP2040, 64 on an
   RP2350 and an ESP32), as files on the probe's LittleFS. A write goes to a staging file and is renamed in place at its
   last part, so a power loss leaves the old object or the new one. Not on a CH32. The RP2 builds now have an FS area
