@@ -87,18 +87,29 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
 
 #if defined(OEP_SPI_SLAVE_DRIVER)
 
+// The four pads are routed to the slave here, and the driver is given none: what it does to the pins it is given made the
+// master's lines move at every configure (4-2, a CH32X035 master seen by the same probe's capture, 2026-11-05) -
+// spi_slave_free puts them back with gpio_reset_pin, input off (SCK and MOSI read low for about 150 us until the next
+// initialize: 146-166 us on an idle-high SCK), and spi_slave_initialize makes CS and MOSI outputs of the peripheral's
+// CS / MOSI signals besides (ESP-IDF 5.5: spicommon_cs_initialize, and the bus's dual mode when both data pins can
+// drive): a 3-4 us low on CS. Routed once more at every start, the same connections: nothing on the pads moves.
+// MISO is the peripheral's output (its output enable the slave's, or the gate's on the classic).
+void P4SpiTarget::route() {
+  const spi_signal_conn_t &sig = spi_periph_signal[SPI2_HOST];
+  for (int pin : {sck_, mosi_, cs_, miso_}) gpio_ll_input_enable(&GPIO, static_cast<uint32_t>(pin));   // the capture reads them
+  esp_rom_gpio_connect_in_signal(static_cast<uint32_t>(sck_), sig.spiclk_in, false);
+  esp_rom_gpio_connect_in_signal(static_cast<uint32_t>(mosi_), sig.spid_in, false);
+  esp_rom_gpio_connect_in_signal(static_cast<uint32_t>(cs_), sig.spics_in, false);
+  esp_rom_gpio_connect_out_signal(static_cast<uint32_t>(miso_), sig.spiq_out, false, false);
+}
+
 bool P4SpiTarget::begin() {
+  route();   // before the driver starts: its slave never sees an unconnected line
   spi_bus_config_t bus = {};
-  bus.mosi_io_num = mosi_; bus.miso_io_num = miso_; bus.sclk_io_num = sck_;
+  bus.mosi_io_num = -1; bus.miso_io_num = -1; bus.sclk_io_num = -1;
   bus.quadwp_io_num = -1; bus.quadhd_io_num = -1;
   bus.max_transfer_sz = kMaxFrame;
   spi_slave_interface_config_t cfg = {};
-  // CS is routed here, an input only: given CS, the driver makes the pad an output of the peripheral's CS signal as
-  // well (spicommon_cs_initialize, ESP-IDF 5.5, GPIO matrix), so every configure drove the master's CS low for 3-4 us
-  // (4-2, a CH32X035's push-pull CS seen by the same probe's capture, 2026-11-05). Connected before the driver starts,
-  // so its slave never sees an unconnected CS.
-  gpio_ll_input_enable(&GPIO, static_cast<uint32_t>(cs_));
-  esp_rom_gpio_connect_in_signal(static_cast<uint32_t>(cs_), spi_periph_signal[SPI2_HOST].spics_in, false);
   cfg.spics_io_num = -1;
   // No result queue: post_trans_cb sees every end and loads the next transaction there.
   cfg.flags = (bit_order_ ? SPI_SLAVE_BIT_LSBFIRST : 0) | SPI_SLAVE_NO_RETURN_RESULT;

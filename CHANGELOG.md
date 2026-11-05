@@ -1,13 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
-- (EN) Fixed (ESP32 / ESP32-P4 spi-target): CS is routed to the slave by the target as an input only, not given to the
-  ESP-IDF driver, which makes the pad an output of the peripheral's CS signal as well (spicommon_cs_initialize, ESP-IDF
-  5.5): every configure drove the master's CS low for 3 to 4 us (4-2, a CH32X035's push-pull CS seen by the same probe's
-  capture: 9 of 9 configures).
-- (JA) 修正（ESP32 / ESP32-P4 の spi-target）: CS は target が入力としてだけスレーブにつなぐ。ESP-IDF のドライバに渡すと、
-  ドライバがその pad を周辺の CS 信号の出力にもする（spicommon_cs_initialize、ESP-IDF 5.5）。configure のたびに、相手の CS を
-  3〜4 µs Low に引いていた（4-2、CH32X035 の push-pull の CS を同じプローブの取り込みで見て、9 回の configure の 9 回とも）。
+- (EN) Fixed (ESP32 / ESP32-P4 spi-target): the four pads are routed to the slave by the target and the ESP-IDF driver
+  is given none, so a configure no longer moves the master's lines. What the driver does to the pins it is given
+  (ESP-IDF 5.5): spi_slave_free resets them (gpio_reset_pin, input off: SCK and MOSI read low by the probe's capture for
+  about 150 us until the next initialize, 146-166 us on an idle-high SCK), and spi_slave_initialize makes CS an output of
+  the peripheral's CS signal (spicommon_cs_initialize), and MOSI of its MOSI signal when both data pins can drive: a 3 to
+  4 us low on CS (4-2, a CH32X035's push-pull master seen by the same probe's capture, at every configure).
+- (JA) 修正（ESP32 / ESP32-P4 の spi-target）: 4 本の pad は target がスレーブにつなぎ、ESP-IDF のドライバには 1 本も渡さない。
+  configure で相手の線が動かなくなる。ドライバが渡されたピンにすること（ESP-IDF 5.5）: spi_slave_free がピンを戻す
+  （gpio_reset_pin で入力が切れ、次の initialize まで約 150 µs、プローブの取り込みでは SCK と MOSI が Low に読めた。待機が
+  High の SCK で 146〜166 µs）。spi_slave_initialize は CS を周辺の CS 信号の出力にもし（spicommon_cs_initialize）、両方の
+  データのピンが出力にできるときは MOSI も MOSI 信号の出力にする。CS には 3〜4 µs の Low が出ていた（4-2、CH32X035 の
+  push-pull の主を同じプローブの取り込みで見て、configure のたびに）。
 
 ## 0.0.47
 - (EN) Added (RP2040 / RP2350 firmware): the pico-sdk's reset interface (vendor class, RESET_INTERFACE_SUBCLASS /

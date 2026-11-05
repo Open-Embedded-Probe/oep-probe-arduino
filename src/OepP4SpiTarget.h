@@ -125,6 +125,7 @@ class P4SpiTarget final : public Interface {
   const spi_slave_transaction_t *volatile loaded_ = nullptr;
   static constexpr uint32_t kLoadWaitUs = 2000;   // arm waits this long at most for the driver to load it
   bool begin();        // the driver alone
+  void route();        // the pads to the slave (the driver is given none)
 #endif
 #if defined(OEP_SPI_MISO_GATE)
  public:

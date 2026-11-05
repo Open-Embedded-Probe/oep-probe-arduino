@@ -8,3 +8,4 @@
 #include <driver/spi_slave.h>
 
 inline void esp_rom_gpio_connect_in_signal(uint32_t pin, uint32_t signal, bool) { fakeSpiConnectIn(pin, signal); }
+inline void esp_rom_gpio_connect_out_signal(uint32_t pin, uint32_t signal, bool, bool) { fakeSpiConnectOut(pin, signal); }
