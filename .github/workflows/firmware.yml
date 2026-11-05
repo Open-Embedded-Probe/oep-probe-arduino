@@ -14,9 +14,11 @@
 # flash), model (the describe model: esp32p4, esp32p4x, esp32, rp2040, rp2350, ch32x035, ch32v307, ch32h417) and
 # sha256 (the fields: README "Release assets").
 #
-# One job per (example, profile), all at once: `plan` lists them, `build` compiles one each (the platform's
+# One job per (example, profile): `plan` lists them, `build` compiles the examples/Firmware ones (the platform's
 # installation cached per platform version, so a job downloads no toolchain after the first run), `attach` gathers
-# the Firmware builds and uploads them. A fresh runner has no stale build, so no --clean is needed.
+# them and uploads them, and `check` then compiles every other example to check it (after `build`, so the release's
+# jobs are not queued behind them: an account runs 20 jobs at once). A fresh runner has no stale build, so no --clean is
+# needed.
 name: Firmware
 
 on:
@@ -41,6 +43,7 @@ jobs:
       version: ${{ steps.tag.outputs.version }}
       library: ${{ steps.list.outputs.library }}
       builds: ${{ steps.list.outputs.builds }}
+      checks: ${{ steps.list.outputs.checks }}
     steps:
       - name: Checkout the default branch (the version the release committed)
         uses: actions/checkout@v5
@@ -88,7 +91,8 @@ jobs:
                       # the cache holds the platforms this profile installs, so it is keyed by them
                       "cache": re.sub(r"[^A-Za-z0-9.]+", "-", "_".join(sorted(platforms))),
                   })
-          print("builds=" + json.dumps(builds))
+          print("builds=" + json.dumps([b for b in builds if b["release"]]))
+          print("checks=" + json.dumps([b for b in builds if not b["release"]]))
           print("library=" + re.search(r"(?m)^name=(.+)$", pathlib.Path("library.properties").read_text()).group(1).strip())
           PY
 
@@ -227,3 +231,103 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ needs.plan.outputs.tag }}" firmware/* --clobber --repo "${{ github.repository }}"
+
+  check:
+    needs: [plan, build]
+    if: ${{ needs.plan.outputs.checks != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.checks) }}
+    name: ${{ matrix.name }} (${{ matrix.profile }})
+    steps:
+      - name: Checkout the tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Restore the platform
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            !~/.arduino15/staging
+          key: arduino15-${{ runner.os }}-${{ matrix.cache }}
+
+      - name: Update board and library indexes
+        env:
+          BOARD_INDEX_URLS: ${{ matrix.index_urls }}
+        run: arduino-cli update --additional-urls "$BOARD_INDEX_URLS"
+
+      - name: Build
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          SKETCH: ${{ matrix.sketch }}
+          PROFILE: ${{ matrix.profile }}
+          FQBN: ${{ matrix.fqbn }}
+          RELEASE: ${{ matrix.release }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, shutil, subprocess
+
+          version, profile, fqbn = os.environ["VERSION"], os.environ["PROFILE"], os.environ["FQBN"]
+          sketch = pathlib.Path(os.environ["SKETCH"])
+          root = pathlib.Path.cwd()
+          lib = re.search(r"(?m)^name=(.+)$", pathlib.Path("library.properties").read_text()).group(1).strip()
+          yaml = sketch / "sketch.yaml"
+          # the tag's own library sources, not the Library Manager's copy of this version
+          up = os.path.relpath(root, sketch.resolve())
+          yaml.write_text(re.sub(r"(?m)^(\s*)- " + re.escape(lib) + r" \([^)]*\)\s*$", r"\1- dir: " + up, yaml.read_text()))
+          build = pathlib.Path("build")
+          subprocess.run(["arduino-cli", "compile", "--profile", profile, "--output-dir", str(build), str(sketch)],
+                         check=True)
+          if os.environ["RELEASE"] != "true":
+              raise SystemExit(0)   # the other examples are built to check them, not released
+          # the chip the profile builds for (RP2: build.chip, ESP32: build.mcu): the Firmware sketches' describe model
+          props = subprocess.run(["arduino-cli", "compile", "--profile", profile, "--show-properties", str(sketch)],
+                                 check=True, capture_output=True, text=True).stdout
+          found = dict(re.findall(r"(?m)^build\.(chip|mcu|chip_variant|series)=(\S+)$", props))
+          # CH32 (ArduinoCore-CH32RV): build.series, the part the describe model lowercases ("CH32X035" -> "ch32x035")
+          chip = found.get("chip") or found.get("mcu") or found.get("series", profile).lower()
+          # P4X has the same build.mcu as P4; distinguish the SDK selected by ChipVariant.
+          if chip == "esp32p4" and found.get("chip_variant") == "esp32p4":
+              chip = "esp32p4x"
+          # New tags verify the identity used to refuse a P4/P4X DFU mix-up; older tags predate this tool.
+          checker = pathlib.Path("tools/check_p4_firmware.py")
+          if chip in ("esp32p4", "esp32p4x") and checker.exists():
+              subprocess.run(["python3", str(checker), str(build), chip], check=True)
+          out = pathlib.Path("firmware")
+          out.mkdir()
+          files = []
+          # the app image only with a merged one (ESP32): other cores' .bin is not an app for an OTA partition
+          merged = (build / f"{sketch.name}.ino.merged.bin").exists()
+          # CH32: the .bin is the whole code flash from its start (0x08000000), kind flash
+          ch32 = chip.startswith("ch32")
+          for suffix, ext, kind in ((".ino.merged.bin", "merged.bin", "merged"), (".ino.bin", "bin", "app"),
+                                    (".ino.bin", "bin", "flash"), (".ino.uf2", "uf2", "uf2")):
+              src = build / f"{sketch.name}{suffix}"
+              if src.exists() and (kind != "app" or merged) and ((kind == "flash") == ch32 or kind == "uf2"):
+                  dst = out / f"{sketch.name}-{profile}-{version}.{ext}"
+                  shutil.copy(src, dst)
+                  # model: the describe model the Firmware sketches report (the chip built for)
+                  files.append({"example": str(sketch.relative_to("examples")), "profile": profile, "file": dst.name,
+                                "kind": kind, "model": chip, "fqbn": fqbn,
+                                "flash_offset": 0 if kind in ("merged", "flash") else None,
+                                "sha256": hashlib.sha256(dst.read_bytes()).hexdigest()})
+          if not any(f["kind"] in ("merged", "uf2", "flash") for f in files):
+              raise SystemExit(f"{sketch.name} ({profile}): no merged.bin, uf2 or CH32 bin in {build}")
+          (out / "files.json").write_text(json.dumps(files))
+          print("\n".join(f["file"] for f in files))
+          PY
+
+      - name: Keep the firmware
+        if: ${{ matrix.release }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.id }}
+          path: firmware/
+          retention-days: 1

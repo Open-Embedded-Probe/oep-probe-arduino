@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The Firmware workflow builds and attaches the examples/Firmware builds first (8 jobs, one wave) and checks the other
+  examples after them, so the release's firmware is attached without waiting behind 24 check builds.
+- (JA) Firmware の workflow は、examples/Firmware のビルド（8 つ、一度に流れる）を先にして添付し、ほかの例の確かめのビルドはその後に回す。
+  リリースの firmware の添付が、24 の確かめのビルドを待たなくなる。
 - (EN) tests: a P4 / P4X probe is updated over DFU by `tests/dfu_resume.py` rather than dfu-util: it reads the state
   after a control transfer that times out and goes on (a block taken is not sent again, one lost is), where dfu-util
   stops. Behind the bench's hub 3-2.3 one control transfer in a few hundred stalls for over a second, and updates failed
