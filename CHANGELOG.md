@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.47
 - (EN) Added (RP2040 / RP2350 firmware): the pico-sdk's reset interface (vendor class, RESET_INTERFACE_SUBCLASS /
   PROTOCOL): its control request RESET_REQUEST_BOOTSEL restarts the probe into its boot ROM, so `picotool reboot -f` or a
   page over WebUSB updates a running probe without a 1200 baud touch or the BOOTSEL button. Outside OEP, as the P4's DFU.
