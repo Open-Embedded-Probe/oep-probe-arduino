@@ -202,7 +202,7 @@ size_t FixturePwm::describe(uint8_t *out, size_t capacity) {
 Result FixturePwm::handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (operation) {
-    case kOpSet: {   // n(u8) n x (role(u8) hz(u32) duty(u16)) [TLV] -> n x (role num den duty) [TLV]
+    case kOpSet: {   // n(u8) n x (role(u8) hz(u32) duty(u16)) [TLV] -> n(u8) n x (role num den duty) [TLV]
       if (length < 1) return rejected(kRejectMalformed);
       const uint8_t n = payload[0];
       const size_t fixed = 1u + 7u * n;
@@ -218,7 +218,8 @@ Result FixturePwm::handle(uint8_t operation, const uint8_t *payload, size_t leng
         seen |= 1u << e[0];
       }
       for (uint8_t i = 0; i < n; ++i) if (out_[payload[1 + 7 * i]].channel < 0) return wrongState(out, capacity);
-      if (capacity < 11u * n) return failed();
+      if (capacity < 1 + 11u * n) return failed();
+      out[0] = n;
       for (uint8_t i = 0; i < n; ++i) {
         const uint8_t *e = payload + 1 + 7 * i;
         Out &o = out_[e[0]];
@@ -231,9 +232,9 @@ Result FixturePwm::handle(uint8_t operation, const uint8_t *payload, size_t leng
           stop(o);
           return failed();
         }
-        entry(e[0], out + 11 * i);
+        entry(e[0], out + 1 + 11 * i);
       }
-      return completed(11u * n);
+      return completed(1 + 11u * n);
     }
     case kOpStatus: {   // [TLV] -> n(u8) n x (role num den duty) [TLV]: the planned roles
       const Result parsed = plainTail(tail, payload, length, 0, out, capacity);

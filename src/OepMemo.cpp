@@ -129,7 +129,7 @@ bool Memo::offers(uint8_t op) const {
 size_t Memo::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   w.u32(rm::kTlvDescribeMaxObject, kMaxObject);
-  w.u32(rm::kTlvDescribeMaxObjects, max_objects_);
+  w.u16(rm::kTlvDescribeMaxObjects, static_cast<uint16_t>(max_objects_));
   return w.ok() ? w.length() : 0;
 }
 
@@ -258,7 +258,7 @@ Result Memo::write(const uint8_t *p, size_t len, uint8_t *out, size_t capacity) 
   if (~stage_crc_ != stage_want_) {
     LittleFS.remove(kStage);
     if (exists) LittleFS.remove(path);                                  // the object goes (§2.3)
-    return rejected(kRejectMalformed);
+    return failed();
   }
   if (!path[0] || !LittleFS.rename(kStage, path)) { LittleFS.remove(kStage); return failed(); }
   return completed();

@@ -61,9 +61,9 @@ int main() {
     Bytes r = {2};
     pwmEntry(r, 0, 1000, 32767);
     pwmEntry(r, 2, 0, 0);
-    CHECK(ok(call(pwm, FixturePwm::kOpSet, r, out)) && out.size() == 22);
-    CHECK(out[0] == 0 && getU32(out.data() + 1) == 1000 && getU32(out.data() + 5) == 1 && getU16(out.data() + 9) == 32767);
-    CHECK(out[11] == 2 && getU32(out.data() + 12) == 0 && getU32(out.data() + 16) == 1);
+    CHECK(ok(call(pwm, FixturePwm::kOpSet, r, out)) && out.size() == 23 && out[0] == 2);   // n first (core §2.3)
+    CHECK(out[1] == 0 && getU32(out.data() + 2) == 1000 && getU32(out.data() + 6) == 1 && getU16(out.data() + 10) == 32767);
+    CHECK(out[12] == 2 && getU32(out.data() + 13) == 0 && getU32(out.data() + 17) == 1);
     CHECK(ok(call(pwm, FixturePwm::kOpStatus, {}, out)) && out[0] == 2 && getU32(out.data() + 2) == 1000);
     CHECK(pins.owner(3) == FixturePwm::kOwnerId);
     // the counter shares the pwm's pin (it only listens); measure counts the edges in its window

@@ -114,18 +114,18 @@ int main() {
     CHECK(bus.seen[0].first && bus.seen[0].gap == 0 && bus.seen[0].setup == 160 && bus.seen[0].hold == 81);
     CHECK(!bus.seen[1].first && bus.seen[1].gap == 322 && bus.seen[1].setup == 161 && bus.seen[1].hold == 0);
     CHECK(bus.seen[1].tx == Bytes({0x01, 0x02}));
-    CHECK(out.size() == 14 + 1 + 14 + 2);
-    CHECK(getU32(out.data()) == 0 && getU32(out.data() + 4) == 1000 && getU32(out.data() + 8) == 506);
-    CHECK(getU16(out.data() + 12) == 1 && out[14] == 0x60);
-    CHECK(getU32(out.data() + 15) == 2012 && getU32(out.data() + 19) == 1006 && getU32(out.data() + 23) == 0);
-    CHECK(getU16(out.data() + 27) == 2 && out[29] == 0xfe && out[30] == 0xfd);
+    CHECK(out.size() == 1 + 14 + 1 + 14 + 2 && out[0] == 2);   // n first (core §2.3)
+    CHECK(getU32(out.data() + 1) == 0 && getU32(out.data() + 5) == 1000 && getU32(out.data() + 9) == 506);
+    CHECK(getU16(out.data() + 13) == 1 && out[15] == 0x60);
+    CHECK(getU32(out.data() + 16) == 2012 && getU32(out.data() + 20) == 1006 && getU32(out.data() + 24) == 0);
+    CHECK(getU16(out.data() + 28) == 2 && out[30] == 0xfe && out[31] == 0xfd);
   }
   // a CS-only transfer: count 0, nothing clocked
   bus.seen.clear();
   {
     Bytes p = {1};
     item(p, 0, 100, 100, {});
-    CHECK(ok(call(c, SpiController::kOpTransfer, p, out)) && out.size() == 14 && getU16(out.data() + 12) == 0);
+    CHECK(ok(call(c, SpiController::kOpTransfer, p, out)) && out.size() == 15 && out[0] == 1 && getU16(out.data() + 13) == 0);
     CHECK(bus.seen.size() == 1 && bus.seen[0].tx.empty());
   }
   CHECK(ok(call(c, SpiController::kOpStatus, {}, out)) && getU32(out.data() + 3) == 3);

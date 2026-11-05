@@ -230,9 +230,10 @@ Result SpiController::transfer(const uint8_t *payload, size_t length, uint8_t *o
   if (!started_) return wrongState(out, capacity);
   ns += static_cast<uint64_t>(total) * 16 * nsOf(half_);
   if (ns > static_cast<uint64_t>(kMaxOpMs) * 1000000u) return unsupportedValue(out, capacity);   // past max_op_ms
-  if (capacity < kItem * n + total) return failed();
+  if (capacity < 1 + kItem * n + total) return failed();
+  out[0] = n;   // n(u8) n x (the times used, count, rx) [TLV]
   at = 1;
-  size_t put = 0;
+  size_t put = 1;
   for (uint8_t t = 0; t < n; ++t) {
     const uint32_t gap = t ? cyclesOf(getU32(payload + at)) : 0;
     const uint32_t setup = cyclesOf(getU32(payload + at + 4)), hold = cyclesOf(getU32(payload + at + 8));

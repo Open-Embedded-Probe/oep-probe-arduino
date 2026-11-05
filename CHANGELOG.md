@@ -1,6 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Changed (oep-spec 4d28f24): the answers of `oep.fixture.spi-controller` transfer and `oep.fixture.pwm` set start
+  with n(u8); a memo write whose crc does not match at its last part answers completed failed (the object gone); the memo
+  area declares max_objects as u16. Registry and vectors synced.
+- (JA) 変更（oep-spec 4d28f24）: `oep.fixture.spi-controller` の transfer と `oep.fixture.pwm` の set の応答の頭に n(u8) を置く。メモ欄の最後の
+  write で crc が合わなければ completed failed（そのオブジェクトは消える）。メモ欄の max_objects の宣言は u16。registry とベクタを同期した。
 - (EN) Changed: an FS area that does not mount is formatted and the settings read as never saved (storage_state 0), as
   core §13.7 now allows when nothing of the save is left; the probe no longer scans the area for what it held first.
 - (JA) 変更: マウントできない FS の領域は初期化し、設定は保存が無い（storage_state 0）と読む。保存が何も残らないときは 0 でよいと
