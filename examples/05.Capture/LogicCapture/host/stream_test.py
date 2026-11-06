@@ -9,13 +9,15 @@ of 1 MHz and 250 kHz on GPIO 4 / 5 (io.github.open-embedded-probe.test-signal), 
 each rate for some seconds (oep_client.acquire), judged by WireSkein.
 Checks per rate: no loss (a position jump or a push frame missing by seq stops the capture and fails it), and each
 square on its ideal grid within one sample (WireSkein's square with grid_abs_s: LEDC and PARLIO share a source clock,
-so an edge on the sampling instant lands on either side). Each capture is kept as evidence:
-<out dir>/stream-<rate>.wireskein (default: the current directory).
+so an edge on the sampling instant lands on either side). Each capture is saved before it is judged, to look into a
+failure or to keep as a golden one: <out dir>/stream-<rate>.wireskein. Without an out dir, a new temporary directory
+that is left in place (its path printed); how long to keep the files is the user's to decide.
 
   uv run stream_test.py <usb serial, e.g. 30eda0e343c6-hs> <rate Hz[,rate...]> <seconds> [out dir]
 """
 
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -30,8 +32,9 @@ SIGNALS = (("sq1m", 4, 1_000_000), ("sq250k", 5, 250_000))
 
 def main() -> int:
     serial, rates, seconds = sys.argv[1], [int(r) for r in sys.argv[2].split(",")], float(sys.argv[3])
-    out = Path(sys.argv[4] if len(sys.argv) > 4 else ".")
+    out = Path(sys.argv[4]) if len(sys.argv) > 4 else Path(tempfile.mkdtemp(prefix="oep-stream-test-"))
     out.mkdir(parents=True, exist_ok=True)
+    print(f"# captures saved in {out}")
     hst = link.open_usb_host(serial=serial)
     lk = hst.link
     print(f"# transport {lk.transport}")
@@ -49,7 +52,7 @@ def main() -> int:
             took = time.monotonic() - t0
             got = res.meta.get("stream", {})
             judged = []
-            kept = wc.write(out / f"stream-{rate}.wireskein", capture_of(res))   # the evidence, judged as saved
+            kept = wc.write(out / f"stream-{rate}.wireskein", capture_of(res))   # saved first, judged as saved
             cap = decode.load(kept)
             for name, _, hz in SIGNALS:
                 if cap.rate / hz < 4:          # too slow to see the square
