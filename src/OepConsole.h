@@ -42,8 +42,11 @@ class TargetConsoleStream final : public Interface, public BindSource {
     kMarkLost = reg::common::kMarkKindLost, kMarkClear = reg::common::kMarkKindClear, kMarkHost = reg::common::kMarkKindHost,
   };
   enum : uint8_t { kUserHost = legacy::kStreamUsersHostSession, kUserSlot = legacy::kStreamUsersSlot };
-  TargetConsoleStream(DebugPort &port, DmConsole &driver, uint16_t instance)
-      : port_(port), driver_(driver), instance_(instance), stream_(buffer_, kCapacity, marks_, kMarks) {
+  // capacity: the bytes of console output kept (rounded down to a power of two), taken for good here.
+  static constexpr size_t kDefaultCapacity = OEP_SMALL_RAM ? 1024 : 8192;
+  TargetConsoleStream(DebugPort &port, DmConsole &driver, uint16_t instance, size_t capacity = kDefaultCapacity)
+      : port_(port), driver_(driver), instance_(instance),
+        buffer_(PositionStream::takeRing(capacity, capacity_, fallback_)), stream_(buffer_, capacity_, marks_, kMarks) {
     driver_.setSink(&TargetConsoleStream::take, this, &TargetConsoleStream::takeMark);   // straight into this buffer
   }
   const char *name() const override { return reg::target_console::kName; }
@@ -109,8 +112,8 @@ class TargetConsoleStream final : public Interface, public BindSource {
   size_t bindInput(const uint8_t *data, size_t length) override;
 
  private:
-  // both powers of two (wrapping positions / serials); a small-RAM build (OEP_SMALL_RAM) keeps 1 KiB of console
-  static constexpr size_t kCapacity = OEP_SMALL_RAM ? 1024 : 8192, kMarks = OEP_SMALL_RAM ? 8 : 16;
+  // a power of two (wrapping serials)
+  static constexpr size_t kMarks = OEP_SMALL_RAM ? 8 : 16;
   DebugPort &port_;
   DmConsole &driver_;
   uint16_t instance_;
@@ -126,7 +129,9 @@ class TargetConsoleStream final : public Interface, public BindSource {
   bool open_ = false;
   uint8_t mechanism_ = 0;
   uint16_t max_read_ = 1000;
-  uint8_t buffer_[kCapacity];
+  uint8_t fallback_[16];
+  size_t capacity_ = 0;
+  uint8_t *buffer_;
   PositionStream::Mark marks_[kMarks];
   PositionStream stream_;
   uint32_t seen_resets_ = 0, seen_resyncs_ = 0, seen_restarts_ = 0, seen_closes_ = 0;

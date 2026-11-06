@@ -22,6 +22,15 @@ namespace oep {
 
 class PositionStream {
  public:
+  // A ring for a stream, taken for good when its interface is made: `want` bytes rounded down to a power of two (at
+  // least 16). No room: `fallback` (16 bytes) - the stream works, keeping little.
+  static uint8_t *takeRing(size_t want, size_t &got, uint8_t *fallback) {
+    size_t n = 16;
+    while (n * 2 <= want) n *= 2;
+    uint8_t *ring = static_cast<uint8_t *>(takeForGood(n));
+    got = ring ? n : 16;
+    return ring ? ring : fallback;
+  }
   struct Mark { uint32_t serial; uint64_t position; uint8_t kind; uint64_t time_ns; uint8_t detail; };
   static constexpr size_t kMarkBytes = 22;
   static constexpr size_t kReadRequest = 11;   // from(u8) arg(u64) max(u16)

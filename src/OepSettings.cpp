@@ -27,9 +27,8 @@ namespace rc = reg::core;
 // key_len(u8) key value_len(u8) value (references as names) - then CRC-32 of all of it (u32). A blob whose CRC does not
 // match, or that does not end on a group, cannot be confirmed whole (storage_state 2, reason 1).
 constexpr uint8_t kBlobVersion = 1;
-constexpr size_t kMaxBlob = OEP_SMALL_RAM ? 512 : 2048;
 #if defined(OEP_HOST_FAKE_CONFIG)
-uint8_t gFakeBlob[kMaxBlob];
+uint8_t gFakeBlob[8192];
 size_t gFakeLength = 0;
 bool storeRead(uint8_t *blob, size_t capacity, size_t &length) {
   length = gFakeLength;
@@ -126,7 +125,6 @@ bool formatName(uint8_t format, char *out) {
 
 bool sameText(const uint8_t *a, size_t n, const char *b) { return strlen(b) == n && memcmp(a, b, n) == 0; }
 
-uint8_t gBlob[kMaxBlob];   // the save as written or read (save, readBlob: never at once)
 
 // The holds' and rests' contexts: the settings and the wire whose items they read
 struct WireContext { Settings *settings; const Interface *wire; };
@@ -144,16 +142,23 @@ uint32_t crc32Ieee(const uint8_t *data, size_t length) {
   return ~crc;
 }
 
-uint8_t Settings::scratch_[Settings::kMaxItems];
 
-Settings::Settings(Endpoint &endpoint, Binds &binds) : endpoint_(endpoint), binds_(binds) {
+Settings::Settings(Endpoint &endpoint, Binds &binds, Sizes sizes) : endpoint_(endpoint), binds_(binds), sizes_(sizes) {
+  if (sizes_.entries > kNoEntry - 1) sizes_.entries = kNoEntry - 1;
+  entries_ = static_cast<Entry *>(takeForGood(sizes_.entries * sizeof(Entry)));
+  items_ = static_cast<uint8_t *>(takeForGood(sizes_.items));
+  scratch_ = static_cast<uint8_t *>(takeForGood(sizes_.items));
+  blob_ = static_cast<uint8_t *>(takeForGood(sizes_.blob));
+  if (!entries_) sizes_.entries = 0;   // no room: no items (every set refused), nothing saved or read
+  if (!items_ || !scratch_) sizes_.items = 0;
+  if (!blob_) sizes_.blob = 0;
   endpoint_.setSettings(this);
 }
 
 // ---- the entries ------------------------------------------------------------------------------------------------------
 
 bool Settings::addEntry(uint8_t id, const Interface *owner, void *context, uint8_t own) {
-  if (entry_count_ == kMaxEntries) return false;
+  if (entry_count_ >= sizes_.entries) return false;
   entries_[entry_count_++] = {owner, context, id, own};
   return true;
 }
@@ -161,7 +166,7 @@ bool Settings::addEntry(uint8_t id, const Interface *owner, void *context, uint8
 uint8_t Settings::entryOf(uint8_t id, const void *owner) const {
   for (uint8_t e = 0; e < entry_count_; ++e)
     if (entries_[e].id == id && entries_[e].owner == owner) return e;
-  return kMaxEntries;
+  return kNoEntry;
 }
 
 Settings::Spec Settings::spec(uint8_t entry) const {
@@ -221,13 +226,13 @@ uint8_t Settings::entryAt(uint16_t fn, uint8_t number) const {
   uint8_t n = 0;
   for (uint8_t e = 0; e < entry_count_; ++e)
     if (ownerFn(e) == fn && (fn != 0 || !entries_[e].owner) && ++n == number) return e;
-  return kMaxEntries;
+  return kNoEntry;
 }
 
 uint8_t Settings::entryNamed(const Interface *owner, const char *name, size_t length) const {
   for (uint8_t e = 0; e < entry_count_; ++e)
     if (entries_[e].owner == owner && sameText(reinterpret_cast<const uint8_t *>(name), length, spec(e).name)) return e;
-  return kMaxEntries;
+  return kNoEntry;
 }
 
 bool Settings::addPlace(WireRvswd &wire, TargetConsoleStream &console) {
@@ -236,14 +241,14 @@ bool Settings::addPlace(WireRvswd &wire, TargetConsoleStream &console) {
   p.wire = &wire;
   p.console = &console;
   addHold(wire, wire.port().hold, checkHoldOf, &wire.port());
-  if (wire.isRvswd() && entryOf(kRest, &wire) == kMaxEntries && gRestCount < kMaxPlaces) {
+  if (wire.isRvswd() && entryOf(kRest, &wire) == kNoEntry && gRestCount < kMaxPlaces) {
     addEntry(kRest, &wire, nullptr);   // its rest can be fixed per port (oep-if-debug §3.1)
     gRestContext[gRestCount] = {this, &wire};
     wire.port().rest_setting = &Settings::restOf;
     wire.port().rest_context = &gRestContext[gRestCount++];
   }
   // the console's pass-through (console §2.1): the items of the console the host sees (its front, common §2), once
-  if (pass_run_ && entryOf(kConWire, &console.front()) == kMaxEntries) {
+  if (pass_run_ && entryOf(kConWire, &console.front()) == kNoEntry) {
     for (uint8_t id = kConWire; id <= kConMechanism; ++id) addEntry(id, &console.front(), &p);
   }
   return true;
@@ -282,7 +287,7 @@ bool Settings::addUart(FixtureUart &uart) {
 void Settings::setPins(PinTable *pins) {
   pins_ = pins;
   endpoint_.setPins(pins);
-  if (pins && entryOf(kLabel) == kMaxEntries)
+  if (pins && entryOf(kLabel) == kNoEntry)
     for (uint8_t id = kLabel; id <= kDisable; ++id) addEntry(id, nullptr, nullptr);
 }
 
@@ -292,7 +297,7 @@ bool Settings::setWifi(WifiControl *wifi) {
   // the Wi-Fi's part reached only from here: a sketch that hands no WifiControl links none of it
   wifi_hand_ = wifi ? &Settings::handWifi : nullptr;
   wifi_net_ = wifi ? &Settings::network : nullptr;
-  if (wifi && entryOf(kSsid) == kMaxEntries)
+  if (wifi && entryOf(kSsid) == kNoEntry)
     for (uint8_t id = kSsid; id <= kIpDns; ++id) addEntry(id, nullptr, nullptr);
   return true;
 }
@@ -312,7 +317,7 @@ bool Settings::addSetting(const Interface &owner, const char *name, uint8_t form
   // max_len only for bytes / text, where one value's get fits the smallest max_frame (core §13.2: max_frame - 19)
   if (!ok || braces != (keys ? 1u : 0u) || own_count_ == kMaxOwn ||
       (sized ? max_len == 0 || reg::kLimitSettingGetOverheadBytes + max_len > endpoint_.maxFrame() : max_len != 0) ||
-      (flags & ~(k::kSettingFlagSecret | k::kSettingFlagRestart)) || entryNamed(&owner, name, n) != kMaxEntries)
+      (flags & ~(k::kSettingFlagSecret | k::kSettingFlagRestart)) || entryNamed(&owner, name, n) != kNoEntry)
     return false;
   Own &o = own_[own_count_];
   o.name = name;
@@ -328,11 +333,11 @@ bool Settings::addSetting(const Interface &owner, const char *name, uint8_t form
 bool Settings::initialValue(const Interface *owner, const char *name, uint16_t key, const uint8_t *data, size_t length) {
   const uint8_t e = entryNamed(owner, name, strlen(name));
   uint8_t sink[16];
-  if (e == kMaxEntries || length > 64 || refused(checkValue(e, key, data, length, 0, sink, sizeof sink))) return false;
+  if (e == kNoEntry || length > 64 || refused(checkValue(e, key, data, length, 0, sink, sizeof sink))) return false;
   uint8_t v[2 + 64];
   putU16(v, key);
   memcpy(v + 2, data, length);
-  return insert(items_, items_length_, kMaxItems, e, v, 2 + length);
+  return insert(items_, items_length_, sizes_.items, e, v, 2 + length);
 }
 
 const uint8_t *Settings::value(uint8_t entry, uint16_t key, size_t &length) const {
@@ -345,7 +350,7 @@ const uint8_t *Settings::value(uint8_t entry, uint16_t key, size_t &length) cons
 
 const uint8_t *Settings::setting(const Interface &owner, const char *name, uint16_t key, size_t &length) const {
   const uint8_t e = entryNamed(&owner, name, strlen(name));
-  return e == kMaxEntries ? nullptr : value(e, key, length);
+  return e == kNoEntry ? nullptr : value(e, key, length);
 }
 
 // ---- the stores --------------------------------------------------------------------------------------------------------
@@ -397,7 +402,7 @@ void Settings::remove(uint8_t *store, size_t &length, uint8_t entry, uint16_t ke
 const uint8_t *Settings::in(const uint8_t *items, size_t length, uint8_t id, const void *owner, uint16_t key,
                             size_t &n) const {
   const uint8_t e = entryOf(id, owner);
-  if (e == kMaxEntries) return nullptr;
+  if (e == kNoEntry) return nullptr;
   size_t vlen = 0;
   const uint8_t *v = find(items, length, e, key, vlen);
   if (!v) return nullptr;
@@ -408,7 +413,7 @@ const uint8_t *Settings::in(const uint8_t *items, size_t length, uint8_t id, con
 uint64_t Settings::disabledIn(const uint8_t *items, size_t length) const {
   uint64_t mask = 0;
   const uint8_t e = entryOf(kDisable);
-  if (e == kMaxEntries) return 0;
+  if (e == kNoEntry) return 0;
   size_t at = 0, vlen = 0;
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
@@ -431,7 +436,7 @@ bool sameFolded(const uint8_t *a, const uint8_t *b, size_t n) {
 // when every label is unique.
 uint16_t Settings::labelClash(const uint8_t *items, size_t length) const {
   const uint8_t e = entryOf(kLabel);
-  if (e == kMaxEntries) return 0xffff;
+  if (e == kNoEntry) return 0xffff;
   size_t at = 0, vlen = 0;
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
@@ -775,7 +780,7 @@ Result Settings::set(const uint8_t *payload, size_t length, uint8_t *out, size_t
     const uint16_t fn = getU16(payload + p), key = getU16(payload + p + 3), n = getU16(payload + p + 5);
     if (fn && !endpoint_.interfaceAt(fn)) return rejected(kRejectUnknownFunction);
     const uint8_t e = entryAt(fn, payload[p + 2]);
-    const Result r = e == kMaxEntries ? unsupportedItem(out, capacity, static_cast<uint8_t>(i))
+    const Result r = e == kNoEntry ? unsupportedItem(out, capacity, static_cast<uint8_t>(i))
                                       : checkValue(e, key, payload + p + 7, n, static_cast<uint8_t>(i), out, capacity);
     if (r.resolution == kResolutionRejected && r.detail == kRejectMalformed) return r;
     if (refused(r) && !refused(first)) first = r;
@@ -785,7 +790,7 @@ Result Settings::set(const uint8_t *payload, size_t length, uint8_t *out, size_t
     for (size_t p = 1, i = 0; i < count; ++i) {
       const uint16_t n = getU16(payload + p + 5);
       const uint8_t e = entryAt(getU16(payload + p), payload[p + 2]);
-      const Result r = e == kMaxEntries ? unsupportedItem(out, capacity, static_cast<uint8_t>(i))
+      const Result r = e == kNoEntry ? unsupportedItem(out, capacity, static_cast<uint8_t>(i))
                                         : checkValue(e, getU16(payload + p + 3), payload + p + 7, n, static_cast<uint8_t>(i), out, capacity);
       if (refused(r)) return r;
       p += 7 + n;
@@ -801,7 +806,7 @@ Result Settings::set(const uint8_t *payload, size_t length, uint8_t *out, size_t
       uint8_t v[2 + 255];
       putU16(v, getU16(payload + p + 3));
       memcpy(v + 2, payload + p + 7, n);
-      if (!insert(candidate, clen, kMaxItems, e, v, 2u + n))
+      if (!insert(candidate, clen, sizes_.items, e, v, 2u + n))
         return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // more than this probe holds
     }
     p += 7 + n;
@@ -825,7 +830,7 @@ Result Settings::unset(const uint8_t *payload, size_t length, uint8_t *out, size
   for (uint8_t i = 0; i < count; ++i) {
     const uint8_t *r = payload + 1 + 5 * i;
     if (getU16(r) && !endpoint_.interfaceAt(getU16(r))) return rejected(kRejectUnknownFunction);
-    if (entryAt(getU16(r), r[2]) == kMaxEntries) return unsupportedItem(out, capacity, i);
+    if (entryAt(getU16(r), r[2]) == kNoEntry) return unsupportedItem(out, capacity, i);
   }
   uint8_t *const candidate = scratch_;
   size_t clen = items_length_;
@@ -853,7 +858,7 @@ Result Settings::get(const uint8_t *payload, size_t length, uint8_t *out, size_t
   for (uint16_t fn = 0; fn <= top && !more; ++fn) {
     for (uint8_t number = 1; !more; ++number) {
       const uint8_t e = entryAt(fn, number);
-      if (e == kMaxEntries) break;
+      if (e == kNoEntry) break;
       const bool secret = spec(e).flags & reg::core::kSettingFlagSecret;
       // its values, in key order (the store keeps them so)
       size_t at = 0, vlen = 0;
@@ -911,7 +916,7 @@ void Settings::describe(uint16_t fn, TlvPager &put) const {
   if (fn == 0 && wifi_) put.text(k::kTlvDescribeNetif, k::kNameNetifWifi);
   for (uint8_t number = 1;; ++number) {
     const uint8_t e = entryAt(fn, number);
-    if (e == kMaxEntries) break;
+    if (e == kNoEntry) break;
     const Spec s = spec(e);
     uint8_t v[6 + 48];
     const size_t n = strlen(s.name);
@@ -1032,8 +1037,8 @@ Result Settings::save(const uint8_t *payload, size_t length, uint8_t *out, size_
   const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
   if (refused(parsed)) return parsed;
   if (capacity < 4) return failed();
-  uint8_t *const blob = gBlob;
-  const size_t n = saveBlob(blob, kMaxBlob);
+  uint8_t *const blob = blob_;
+  const size_t n = saveBlob(blob, sizes_.blob);
   if (!n) return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);   // more than the save holds
   putU32(out, generation_);
   const uint32_t crc = getU32(blob + n - 4);
@@ -1054,7 +1059,7 @@ size_t Settings::saveBlob(uint8_t *blob, size_t capacity) const {
   if (capacity < 1 + 4) return 0;
   blob[put++] = kBlobVersion;
   // the owners in entry order, each once: the core first
-  const Interface *owners[kMaxEntries + 1];
+  const Interface *owners[kNoEntry + 1];
   size_t owner_count = 0;
   owners[owner_count++] = nullptr;
   for (uint8_t e = 0; e < entry_count_; ++e) {
@@ -1120,9 +1125,9 @@ size_t Settings::saveBlob(uint8_t *blob, size_t capacity) const {
 // candidate, applied (applySaved).
 void Settings::readBlob(bool all) {
   if (kNoStore) return;
-  uint8_t *const blob = gBlob;
+  uint8_t *const blob = blob_;
   size_t length = 0;
-  if (!storeRead(blob, kMaxBlob, length)) return;
+  if (!storeRead(blob, sizes_.blob, length)) return;
   bool whole = length >= 5 && getU32(blob + length - 4) == crc32Ieee(blob, length - 4) && blob[0] == kBlobVersion;
   const size_t end = whole ? length - 4 : 0;
   uint8_t *const applied = scratch_;
@@ -1150,7 +1155,7 @@ void Settings::readBlob(bool all) {
         const uint8_t *name = blob + at + 1;
         const uint16_t values = getU16(blob + at + 1 + nl);
         at += 3 + nl;
-        uint8_t e = kMaxEntries;
+        uint8_t e = kNoEntry;
         if (all && known) e = entryNamed(owner, reinterpret_cast<const char *>(name), nl);
         const bool disable = cl == 0 && sameText(name, nl, reg::core::kSettingChannelDisable);
         for (uint16_t v = 0; whole && v < values; ++v) {
@@ -1171,7 +1176,7 @@ void Settings::readBlob(bool all) {
           uint16_t k = 0;
           uint8_t w[2 + 64];
           size_t wl = 0;
-          bool ok = e != kMaxEntries && keyNamed(e, key, kl, k) && wireValue(e, val, vl, w + 2, wl) &&
+          bool ok = e != kNoEntry && keyNamed(e, key, kl, k) && wireValue(e, val, vl, w + 2, wl) &&
                     !refused(checkValue(e, k, w + 2, wl, 0, sink, sizeof sink));
           if (ok && entries_[e].id == kIdle && ((disabledIn(applied, alen) >> k) & 1)) ok = false;   // disable wins
           if (ok && entries_[e].id == kLabel) {   // labels unique but for case (core §13.7): the lower channel's stays
@@ -1187,7 +1192,7 @@ void Settings::readBlob(bool all) {
             size_t had = 0;
             putU16(w, k);
             if (find(applied, alen, e, k, had)) ok = false;   // a key saved twice: neither
-            else if (!insert(applied, alen, kMaxItems, e, w, 2 + wl)) { ok = false; capacity_short = true; }
+            else if (!insert(applied, alen, sizes_.items, e, w, 2 + wl)) { ok = false; capacity_short = true; }
           }
           bad |= !ok;
         }

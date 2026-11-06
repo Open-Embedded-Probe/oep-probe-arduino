@@ -106,17 +106,28 @@ class WifiControl {
   virtual uint16_t tcpPort() const { return 0; }   // the TCP port listened on now (0: none)
 };
 
+// The settings' room, given when they are made (the constructor's last argument; each taken for good there): the items
+// the probe declares (each interface's, the sketch's own), the bytes of the values held (every value with its 3-byte
+// header and key: a change past it is refused cause 2) and the save's (the values with their names).
+struct SettingsSizes {
+  static constexpr uint16_t kDefaultEntries = OEP_SMALL_RAM ? 20 : 40;
+  static constexpr uint16_t kDefaultItems = OEP_SMALL_RAM ? 256 : 2048;
+  static constexpr uint16_t kDefaultBlob = OEP_SMALL_RAM ? 512 : 4096;
+  uint16_t entries = kDefaultEntries;   // at most 254
+  uint16_t items = kDefaultItems;
+  uint16_t blob = kDefaultBlob;
+};
+
 class Settings final : public SettingsCore {
  public:
   static constexpr size_t kMaxPlaces = 2, kMaxUarts = 4;
   static constexpr size_t kMaxWifi = 4;   // Wi-Fi entries (wifi.{}'s keys)
   static constexpr size_t kMaxOwn = 4;    // the sketch's own items (addSetting)
-  static constexpr size_t kMaxEntries = OEP_SMALL_RAM ? 20 : 40;
-  // The values' bytes this probe holds (every value with its 3-byte header and key): a change past it is refused cause 2.
-  static constexpr size_t kMaxItems = OEP_SMALL_RAM ? 256 : 800;   // a small-RAM build: two of these
+  using Sizes = SettingsSizes;
+  static constexpr uint8_t kNoEntry = 0xff;   // entryOf / entryAt / entryNamed: no such item
 
   // Attaches itself to the endpoint: fn 0's settings ops and the items in every fn's describe.
-  Settings(Endpoint &endpoint, Binds &binds);
+  Settings(Endpoint &endpoint, Binds &binds, Sizes sizes = Sizes());
   // A wire and its console the console pass-through may name (after the endpoint has them): the console's items, the
   // wire's hold (and rest on an rvswd wire).
   bool addPlace(WireRvswd &wire, TargetConsoleStream &console);
@@ -172,7 +183,7 @@ class Settings final : public SettingsCore {
   uint32_t generation() const { return generation_; }
   // The value now of an item (nullptr: none): its data and length.
   const uint8_t *value(uint8_t entry, uint16_t key, size_t &length) const;
-  // The entry of an item (kMaxEntries: none) by id and owner (nullptr: the core).
+  // The entry of an item (kNoEntry: none) by id and owner (nullptr: the core).
   uint8_t entryOf(uint8_t id, const void *owner = nullptr) const;
   // A test's starting point: the generation (0xFFFFFFFF refuses every change).
   void testGeneration(uint32_t g) { generation_ = g; }
@@ -196,7 +207,7 @@ class Settings final : public SettingsCore {
   Binds &binds_;
   PinTable *pins_ = nullptr;
   uint16_t channels_ = PinTable::kChannels;
-  Entry entries_[kMaxEntries];
+  Entry *entries_ = nullptr;   // sizes_.entries
   uint8_t entry_count_ = 0;
   Place places_[kMaxPlaces];
   size_t place_count_ = 0;
@@ -214,9 +225,11 @@ class Settings final : public SettingsCore {
   bool wifi_handed_ = false;
   bool storage_ = true, skip_boot_attach_ = false, changeable_ = true;
   bool (*attach_gate_)() = nullptr;
-  uint8_t items_[kMaxItems];     // the user values, in (entry, key) order
+  uint8_t *items_ = nullptr;   // sizes_.items
   size_t items_length_ = 0;
-  static uint8_t scratch_[kMaxItems];   // a change's candidate store
+  Sizes sizes_;
+  uint8_t *scratch_ = nullptr;   // sizes_.items: one work area for set / unset / applySaved (never at once)
+  uint8_t *blob_ = nullptr;      // sizes_.blob: the save as written or read (save, readBlob: never at once)
   uint32_t generation_ = 1;
   uint8_t storage_state_ = reg::core::kStorageStateNone, reason_ = 0;
   uint32_t saved_generation_ = 0;
@@ -234,7 +247,7 @@ class Settings final : public SettingsCore {
   bool addEntry(uint8_t id, const Interface *owner, void *context, uint8_t own = 0);
   Spec spec(uint8_t entry) const;
   uint16_t ownerFn(uint8_t entry) const;
-  uint8_t entryAt(uint16_t fn, uint8_t number) const;   // kMaxEntries: none
+  uint8_t entryAt(uint16_t fn, uint8_t number) const;   // kNoEntry: none
   uint8_t entryNamed(const Interface *owner, const char *name, size_t length) const;
   bool keyValid(uint8_t entry, uint16_t key) const;
   // the store helpers (tag = entry + 1, value = key(u16) data)

@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Settings: the items declared, the bytes of the values held and the save's are given when the settings are made, by
+  an optional last constructor argument `Settings::Sizes` (entries, items, blob), and taken for good there. The defaults
+  hold more values than before: 2048 bytes (was 800) and a 4096-byte save (was 2048) - a P4 probe with a label on each
+  of its 28 wired pins used 428 of the 800 (the small-RAM defaults are as before). `Settings::kMaxEntries` /
+  `kMaxItems` are gone (`kNoEntry` says "no such item").
+- (EN) The target console's and the fixture UART's rings are given when they are made, by an optional last constructor
+  argument (the bytes kept, rounded down to a power of two; the defaults as before: `kDefaultCapacity`), and taken for
+  good there. CH32X035 (with the changes above): flash +244 bytes, static RAM -4,612 bytes.
+- (JA) Settings: 宣言する項目、持つ値のバイト、保存の大きさは、作るときにコンストラクタの省略できる最後の引数 `Settings::Sizes`
+  （entries、items、blob）で決め、そこで一度だけ取る。既定で持てる値を増やした: 2048 バイト（800 だった）、保存 4096 バイト
+  （2048 だった）。P4 のプローブで、配線した 28 本のピンにラベルを付けると 800 のうち 428 を使っていた（小さい RAM の既定は
+  これまでどおり）。`Settings::kMaxEntries` / `kMaxItems` は無くなった（項目が無いことは `kNoEntry`）。
+- (JA) ターゲットのコンソールと fixture UART のリングは、作るときにコンストラクタの省略できる最後の引数（持つバイト数。2 のべき乗に
+  切り下げる。既定はこれまでどおりの `kDefaultCapacity`）で決め、そこで一度だけ取る。CH32X035（上の変更と合わせて）: flash +244
+  バイト、静的な RAM -4,612 バイト。
 - (EN) Endpoint: its resend record (core §5.1), event queue and serial decode buffer are sized when it is made, by an
   optional last constructor argument `Endpoint::Tables` (resend_entries, resend_bytes, events, serial_frame; the
   defaults are the old fixed sizes), and taken for good there (the decode buffer with the first serial port; a probe

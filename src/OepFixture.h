@@ -69,8 +69,12 @@ class FixtureUart final : public Interface, public BindSource {
   };
   static constexpr uint32_t kDefaultBaud = 115200, kMinBaud = 1200, kMaxBaud = 2000000;
   // owner: this instance's PinTable owner id (each UART instance needs its own so a release returns only its pins).
-  FixtureUart(PinTable &pins, OepUart &serial, uint16_t instance, uint8_t owner = owners::kUart)
-      : pins_(pins), serial_(serial), instance_(instance), owner_(owner), stream_(buffer_, kCapacity, marks_, kMarks) {}
+  // capacity: the bytes received that are kept (rounded down to a power of two), taken for good here; the default
+  // kDefaultCapacity (the platform's, below).
+  FixtureUart(PinTable &pins, OepUart &serial, uint16_t instance, uint8_t owner = owners::kUart,
+              size_t capacity = kDefaultCapacity)
+      : pins_(pins), serial_(serial), instance_(instance), owner_(owner),
+        buffer_(PositionStream::takeRing(capacity, capacity_, fallback_)), stream_(buffer_, capacity_, marks_, kMarks) {}
   const char *name() const override { return reg::fixture_uart::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_uart::kRevision; }
@@ -124,15 +128,15 @@ class FixtureUart final : public Interface, public BindSource {
   uint64_t rx_mask_ = ~uint64_t{0}, tx_mask_ = ~uint64_t{0};   // setRoleChannels
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   // a port forwarded over USB may not be drained for 90 ms and more (usbip): 8 KiB overflowed at 921600 (P7)
-  static constexpr size_t kCapacity = 32768, kMarks = 16;
+  static constexpr size_t kDefaultCapacity = 32768, kMarks = 16;
   // The UART driver's receive buffer: what loop() may be away for before the driver drops bytes (marked lost overflow)
   // - 16 KiB is 82 ms at 2000000 (4 KiB was 20 ms). Above 4 KiB malloc takes it from PSRAM where there is one.
   static constexpr size_t kDriverRx = 16384;
 #elif OEP_SMALL_RAM
-  static constexpr size_t kCapacity = 1024, kMarks = 8;    // a small-RAM build (the CH32X035's 20 KiB)
+  static constexpr size_t kDefaultCapacity = 1024, kMarks = 8;    // a small-RAM build (the CH32X035's 20 KiB)
   static constexpr size_t kDriverRx = 256;
 #else
-  static constexpr size_t kCapacity = 8192, kMarks = 16;   // both powers of two (wrapping positions / serials)
+  static constexpr size_t kDefaultCapacity = 8192, kMarks = 16;   // kMarks a power of two (wrapping serials)
   static constexpr size_t kDriverRx = 4096;                // 20 ms at 2000000 (see above)
 #endif
   int irq_core_ = -1;   // setInterruptCore
@@ -187,7 +191,9 @@ class FixtureUart final : public Interface, public BindSource {
   void stopEvents();   // the task ends after the events queued before; the ledger published
 #endif
   void stopUart();   // what the UART received taken, then end()
-  uint8_t buffer_[kCapacity];
+  uint8_t fallback_[16];
+  size_t capacity_ = 0;
+  uint8_t *buffer_;
   PositionStream::Mark marks_[kMarks];
   PositionStream stream_;
   void idleHigh();   // TX at the UART idle level, driven

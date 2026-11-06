@@ -396,13 +396,13 @@ static void testOwnSettings() {
   CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnknownFunction);
 }
 
-// More than the probe holds (kMaxItems): unavailable cause 2, nothing changed.
+// More than the probe holds (the Sizes' items, by default kDefaultItems): unavailable cause 2, nothing changed.
 static void testCapacity() {
   fakeConfigStore(nullptr, 0);
   Probe p(false);
   CHECK(p.settings.addSetting(p.board, "blob.{}", rc::kSettingFormBytes, 64, 64));
   Bytes out;
-  const size_t fit = Settings::kMaxItems / (kTlvHeader + 2 + 64);   // whole values the store holds
+  const size_t fit = Settings::Sizes::kDefaultItems / (kTlvHeader + 2 + 64);   // whole values the store holds
   uint32_t generation = 0;
   for (uint16_t k = 0; k < fit; ++k) {
     CHECK(ok(p.op(rc::kOpSet, set({value(1, 1, k, Bytes(64, uint8_t(k)))}), out)));
