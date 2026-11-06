@@ -70,6 +70,9 @@ struct Target {
   // the long frame (a CH32V103: link-to-target#long-frame, E173): long_only answers nothing else; a write lands only
   // when the host's bit 83 is 0. long_seen: frames of 80 clocks or more any target met.
   bool long_only = false;
+  // sticky: what the bench's V103 does once active (dmactive set) - a short frame, or its lines let go, and it answers
+  // every long frame after with status 2 (failed), its writes not taken, until its power goes (80f1b2d80a34 v103evt)
+  bool sticky = false;
   uint8_t op = 0;
   int long_seen = 0, long_reads = 0, long_writes = 0, bit83_wrong = 0;
 
@@ -108,7 +111,7 @@ struct Target {
     else if (pos == 41 && op == 1) { ++long_reads; ++reads; out = readReg(address); }
     else if (pos == 83) {   // the host's bit 83: 1 after a read, 0 after a write
       if (!host_drives || bit != (op == 1)) ++bit83_wrong;
-      if (op == 2 && awake && host_drives && !bit) { ++long_writes; writeReg(address, data); out = data; }
+      if (op == 2 && host_drives && !bit && !sticky) { ++long_writes; writeReg(address, data); out = data; }
     }
     ++pos;
   }
@@ -144,15 +147,16 @@ struct Target {
       op = 0; wake_cells = 0;
     } else {
       if (pos >= 80) ++long_seen;
+      else if (long_only && (dmcontrol & 1)) sticky = true;   // a short frame to an active V103
       in_frame = false;   // STOP
     }
   }
   bool targetBit() const {
     if (long_only) {   // the target's phase: the address echoed, the data (read, or the write's echoed), status 0
-      if (!awake || !in_frame || pos < 42 || pos > 82) return pulled;
+      if (!in_frame || pos < 42 || pos > 82) return pulled;   // no wake needed (a WCH-LinkE sends none)
       if (pos <= 48) return (address >> (48 - pos)) & 1;
       if (pos <= 80) return ((op == 1 ? out : data) >> (80 - pos)) & 1;
-      return false;
+      return sticky && pos == 81;   // status: 2 when sticky, else 0
     }
     if (!awake || !header_ok || write || !in_frame) return pulled;
     if (pos >= 14 && pos <= 45) return (out >> (45 - pos)) & 1;
@@ -176,7 +180,10 @@ void FakeRvswdIo::hostDrives(bool yes) const { t.host_drives = yes; }
 bool FakeRvswdIo::begin(int, int) const { t.begun = true; t.pulled = true; t.driven = false; return true; }   // the pull-up a setup gives
 void FakeRvswdIo::pullUp(bool on) const { t.pulled = on; }
 void FakeRvswdIo::clkPull(int dir) const { t.clk_pull = dir; }
-void FakeRvswdIo::driveBoth(bool on) const { t.driven = on; }
+void FakeRvswdIo::driveBoth(bool on) const {
+  if (!on && t.driven && t.long_only && (t.dmcontrol & 1)) t.sticky = true;   // an active V103's lines let go
+  t.driven = on;
+}
 uint32_t FakeRvswdIo::setHalfNs(uint32_t half_ns) const { t.half_ns = half_ns; return half_ns; }
 
 // ---- checks ------------------------------------------------------------------------------------------------------
@@ -223,20 +230,37 @@ int main() {
     CHECK(!t.pulled && !t.driven);
   }
 
-  // ---- a part that answers only the long frame (a CH32V103): the short look gets no answer, the long one does, and the
-  // connection stays on it - its writes land (bit 83 the host's: 0 after a write, 1 after a read); a part that answers
-  // the short frame never meets a long one ----
+  // ---- a part that answers only the long frame (a CH32V103): asked in the long frame first (as a WCH-LinkE asks), it
+  // answers, and the connection stays on it - its writes land (bit 83 the host's: 0 after a write, 1 after a read) and
+  // it never meets a short frame, which would leave an active one failing every frame after; a part on the short frame
+  // gets the long ask, no answer to it, then the short frame ----
   {
-    CHECK(t.long_seen == 0);   // the clean attach above
+    CHECK(t.long_seen > 0);   // the clean attach above asked in the long frame first, as a WCH-LinkE does
     t.reset(); t.begun = true; t.long_only = true;
     CHECK(phy.attach());
+    CHECK(!t.sticky && t.frames == t.long_seen);   // asked in the long frame only: no short frame, no wake
     CHECK(phy.noAutoexec());
     CHECK(t.long_reads > 0 && t.long_writes > 0 && t.bit83_wrong == 0);
     CHECK(t.progbuf0 == 0x12345678u);   // the write check's writes landed, PROGBUF0 put back
     CHECK(t.cfgr_writes == 0);          // no WCH configuration pair on the long frame
+    // closed and attached again (a detach parks the lines, the close's hold drives them on: OepTarget
+    // releaseConnection): the lines never let go, and the second attach asks in the long frame only
+    CHECK(!t.sticky);
+    phy.park();
+    phy.hold();
+    CHECK(!t.sticky);
+    const int writes_before = t.long_writes;
+    CHECK(phy.attach());
+    CHECK(!t.sticky && t.long_writes > writes_before && t.bit83_wrong == 0);
     phy.free();
+    CHECK(t.sticky);   // let go: the model's V103 is stuck now, as the bench's is
+    // the same pins, the part swapped for one that answers the short frame: the long ask finds nothing, the short does
     t.reset(); t.begun = true;
-    CHECK(phy.attach() && !phy.noAutoexec() && t.long_seen == 0);
+    CHECK(phy.attach() && !phy.noAutoexec());
+    phy.free();
+    // an active V103 left by another tool (DMCONTROL already 1): the first attach asks in the long frame only
+    t.reset(); t.begun = true; t.long_only = true; t.dmcontrol = 1;
+    CHECK(phy.attach() && phy.noAutoexec() && !t.sticky && t.frames == t.long_seen);
     phy.free();
   }
 

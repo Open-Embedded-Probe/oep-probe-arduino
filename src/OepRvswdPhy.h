@@ -123,6 +123,7 @@ class RvswdPhy final : public DmiPhy {
   bool writesLand(uint8_t retries);    // a few hundred program-buffer write/read round trips, then scratch_ back
   void activate();                     // dmactive, unless DMCONTROL already reads it set
   bool wakeModule(uint32_t &dmstatus); // wake + configuration + dmactive at the slowest period until DMSTATUS answers
+  bool askLong(uint32_t &dmstatus);    // the long frame asked first, as a WCH-LinkE asks (a CH32V103 answers only it)
   void resyncAt(uint32_t half_ns);     // the configuration pair at the slowest period, then this period
   void configureBus(bool with_wake);
   void writeRaw(uint8_t address, uint32_t data);

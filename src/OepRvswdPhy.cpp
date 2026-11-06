@@ -351,7 +351,7 @@ static_assert(kSlowestFrameNs <= 1100000u, "one RVSWD frame keeps interrupts off
 bool RvswdPhy::begin(int swdio, int swclk) {
   swdio_ = swdio;
   swclk_ = swclk;
-  long_ = false;   // another target: the short frame until wakeModule finds otherwise
+  long_ = false;   // another target: found again by the next attach (wakeModule)
   if (!ioBegin(swdio, swclk)) return false;
   free();   // until a connection takes them: the free state (oep-core §8), the same as after a release
   ready_ = true;
@@ -402,7 +402,11 @@ void RvswdPhy::hold() {
 void RvswdPhy::park() {
   rest_free_ = false;
   if (swdio_ < 0) { attached_ = false; return; }
-  if (!park_low_) { release(); return; }
+  // High: both lines driven high, not released - whoever parks decides next (a close holds them, oep-if-debug §2, or
+  // frees them). Released here and driven again by the hold right after, a CH32V103 took the moment for a frame and
+  // answered every long frame after it with status 2 (failed) until its power went (bench, 80f1b2d80a34 v103evt: an
+  // attach after a detach with the hart halted, 1 s later, failed 1 in 3; driven through, 8 of 8 and across sessions).
+  if (!park_low_) { hold(); return; }
   ioClkPull(swclk_, 0);
   ioDrive(swdio_, swclk_);
   gIo.clkLowDio(true);
@@ -634,17 +638,31 @@ bool RvswdPhy::wakeModule(uint32_t &dmstatus) {
   for (int wake = 0; wake < 8; ++wake) {
     if (wake && pastDeadline()) return false;
     if (wake) ++search_retries_;   // the wake before this one got no answer (oep-if-debug §1, search_retries)
-    long_ = false;
+    if (askLong(dmstatus)) return true;
     configureBus(true);
     activate();
     if (readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus)) return true;
-    // No answer on the short frame: the long one, the way a WCH-LinkE asks first (link-to-target#long-frame) - a
-    // CH32V103 answers only that. Found, the connection stays on it.
-    long_ = true;
+  }
+  return false;
+}
+
+// The long frame first, as a WCH-LinkE asks every part (link-to-target#long-frame, E173): a part on the short frame
+// answers none of it and takes no harm, while a CH32V103 that is active - from an earlier connection, ours or another
+// tool's - and is asked in the short frame answers every long frame after with status 2 (failed) until its power goes
+// (bench, 80f1b2d80a34 v103evt). Both lines high, no wake and no configuration pair (neither goes to a V103); a read of
+// DMCONTROL - twice, a module just woken answering busy first - before anything is written, so a part on the short
+// frame is never written in the long one. Found, the connection stays on it (long_); not found, long_ is false again.
+bool RvswdPhy::askLong(uint32_t &dmstatus) {
+  long_ = true;
+  configureBus(false);
+  uint32_t control = 0;
+  bool there = false;
+  for (int i = 0; i < 2 && !there; ++i) there = readRaw(kDmControl, control);
+  if (there) {
     activate();
     if (readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus)) return true;
-    long_ = false;
   }
+  long_ = false;
   return false;
 }
 
@@ -661,18 +679,14 @@ bool RvswdPhy::bringUp(uint32_t &dmstatus) {
 bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
   ioReclaim(swdio_, swclk_);
-  long_ = false;
-  setHalf(slowestNs());   // the wake / configuration and dmactive at the slowest period (oep-if-debug §1, §3.1)
-  configureBus(true);
-  activate();
-  setHalf(half_ns);       // the look at this period
+  setHalf(slowestNs());   // the asks, the wake / configuration and dmactive at the slowest period (oep-if-debug §1, §3.1)
   dmstatus = 0;
-  bool ok = readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus);
-  if (!ok) {   // the short frame first (nearly every part); then the long one (a CH32V103)
-    long_ = true;
-    ok = readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus);
-    if (!ok) long_ = false;
+  if (!askLong(dmstatus)) {   // the long frame first (a CH32V103), then the short one (every other part)
+    configureBus(true);
+    activate();
   }
+  setHalf(half_ns);       // the look at this period
+  const bool ok = readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus);
   if (!keep_driven) { ioRelease(swdio_, swclk_); attached_ = false; }
   // A debug module reports a known DMSTATUS.version; an idle bus reads all ones or zeros.
   return ok && dmVersionKnown(dmstatus);
