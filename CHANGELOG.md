@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Endpoint: its resend record (core §5.1), event queue and serial decode buffer are sized when it is made, by an
+  optional last constructor argument `Endpoint::Tables` (resend_entries, resend_bytes, events, serial_frame; the
+  defaults are the old fixed sizes), and taken for good there (the decode buffer with the first serial port; a probe
+  with none takes none). max_inflight is at most resend_entries, as it was at most the fixed record. The old constants
+  `kDedupEntries` / `kDedupBytes` / `kEvents` / `kMaxSerialFrame` and `kDedupEntriesOf()` are gone
+  (`kDefaultSerialFrame`, `resendEntries()`). The spec's session vector that fixes the record at four entries now runs
+  with a four-entry record. CH32X035 (with the two changes above): flash +212 bytes, static RAM -3,612 bytes (the tables
+  now from the heap at start-up).
+- (JA) Endpoint: 再送の記録（core §5.1）、イベントの待ち行列、シリアルの受信の解読のバッファは、作るときにコンストラクタの省略できる
+  最後の引数 `Endpoint::Tables`（resend_entries、resend_bytes、events、serial_frame。既定はこれまでの固定の大きさ）で大きさを決め、
+  そこで一度だけ取る（解読のバッファは最初のシリアルの経路と一緒に。シリアルの経路の無い probe は取らない）。max_inflight は、
+  これまで固定の記録の件数までだったのと同じく、resend_entries まで。`kDedupEntries` / `kDedupBytes` / `kEvents` /
+  `kMaxSerialFrame` と `kDedupEntriesOf()` は無くなった（`kDefaultSerialFrame`、`resendEntries()`）。記録をちょうど 4 件とする仕様の
+  セッションのベクタは、4 件の記録で流すようになった。CH32X035（上の 2 つと合わせて）: flash +212 バイト、静的な RAM -3,612 バイト
+  （表は起動時にヒープから）。
 - (EN) Endpoint, Binds, Settings: no limit on the transports either (there was a table of 8, 2 on a small-RAM build).
   Each transport is taken for good as it is added and chained. A serial port's pass-through ring (Binds) is taken the
   first time a pass-through puts bytes for that port - a port that never carries one takes nothing - and its size is the

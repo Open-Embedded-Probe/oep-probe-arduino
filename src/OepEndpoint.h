@@ -94,6 +94,23 @@ class RawPorts {
   ~RawPorts() = default;
 };
 
+// The endpoint's tables, sized when it is made (the constructor's last argument; each taken for good): the resend
+// record (core §5.1: the probe's choice - how many requests, and answers up to how many bytes; a larger answer is
+// not kept, a resend of it rejected result_lost; max_inflight is at most resend_entries), the events queued for a
+// subscriber (the oldest go when it is full), and a serial port's max_frame (at most serial_frame: its frames are
+// decoded in one buffer of that size, taken with the first serial port; the endpoint's own may be larger, its other
+// transports use it, core §7.1).
+struct EndpointTables {
+  static constexpr uint16_t kDefaultResendEntries = OEP_SMALL_RAM ? 4 : 8;
+  static constexpr uint16_t kDefaultResendBytes = (OEP_SMALL_RAM ? 512 : 1024) + 5;   // a whole frame of 512 / 1024 and its head
+  static constexpr uint16_t kDefaultEvents = OEP_SMALL_RAM ? 8 : 32;
+  static constexpr uint16_t kDefaultSerialFrame = OEP_SMALL_RAM ? 512 : 2048;
+  uint16_t resend_entries = kDefaultResendEntries;
+  uint16_t resend_bytes = kDefaultResendBytes;
+  uint16_t events = kDefaultEvents;
+  uint16_t serial_frame = kDefaultSerialFrame;
+};
+
 class Endpoint {
  public:
   static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMinMs = reg::kLimitLeaseMinMs, kLeaseMaxMs = reg::kLimitLeaseMaxMs;
@@ -107,38 +124,40 @@ class Endpoint {
     kHid = reg::core::kTransportKindHid, kTcp = reg::core::kTransportKindTcp,
   };
   static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
-  // A serial port's frames are decoded here (one at a time): a serial port's max_frame is at most this (the
-  // endpoint's own may be larger: its other transports use it, core §7.1).
-  static constexpr size_t kMaxSerialFrame = OEP_SMALL_RAM ? 512 : 2048;
+  // The tables' sizes (EndpointTables, below the class): the constructor's last argument.
+  using Tables = EndpointTables;
+  static constexpr uint16_t kDefaultSerialFrame = EndpointTables::kDefaultSerialFrame;
 
   // usb_interface (describe transport, core §7.5): for USB CDC the bInterfaceNumber of the CDC communication interface
   // (the first of the function); for built-in USB serial that number as the hardware presents it, or 0xFF when the
   // probe cannot know it; for vendor bulk and HID that interface's number; 0xFF for a UART bridge and TCP.
   OEP_ALWAYS_INLINE Endpoint(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity,
-                             Limits limits, uint8_t kind, uint8_t usb_interface = 0xff)
-      : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(bounded(limits)) {
+                             Limits limits, uint8_t kind, uint8_t usb_interface = 0xff, Tables tables = Tables())
+      : tx_(tx_buffer), tx_capacity_(tx_capacity), tables_(tables), limits_(bounded(limits, tables.resend_entries)) {
+    makeTables();
     addTransport(stream, rx_buffer, rx_capacity, kind, usb_interface, false);
     setPushQueue(1024);
   }
   // No transport yet: each is a choice of the sketch's, added with addTransport (the first one transport 0) - none of
   // them, vendor bulk, HID or a serial port, is the probe's by the spec (transports §3).
-  OEP_ALWAYS_INLINE Endpoint(uint8_t *tx_buffer, size_t tx_capacity, Limits limits)
-      : tx_(tx_buffer), tx_capacity_(tx_capacity), limits_(bounded(limits)) {
+  OEP_ALWAYS_INLINE Endpoint(uint8_t *tx_buffer, size_t tx_capacity, Limits limits, Tables tables = Tables())
+      : tx_(tx_buffer), tx_capacity_(tx_capacity), tables_(tables), limits_(bounded(limits, tables.resend_entries)) {
+    makeTables();
     setPushQueue(1024);
   }
   // How many requests the resend record keeps (core §5.1: the probe's choice).
-  static constexpr size_t kDedupEntriesOf() { return kDedupEntries; }
-  // The largest max_frame of this endpoint (the constructor's; a serial port's is at most kMaxSerialFrame - each
+  size_t resendEntries() const { return dedup_ ? tables_.resend_entries : 0; }
+  // The largest max_frame of this endpoint (the constructor's; a serial port's is at most Tables::serial_frame - each
   // transport answers confirm with its own, core §7.1).
   uint16_t maxFrame() const { return limits_.max_frame; }
   // confirm's values within core §7.1's bounds, whatever the sketch gave: max_frame 64 or more, window max_frame or
   // more, max_inflight 1 or more (a host treats a transport answering outside them as not usable). max_inflight is at
   // most the resend table's entries: the table remembers at least max_inflight requests (core §5.1).
-  static constexpr Limits bounded(Limits l) {
+  static constexpr Limits bounded(Limits l, uint16_t resend_entries) {
     if (l.max_frame < reg::kMinMaxFrame) l.max_frame = reg::kMinMaxFrame;
     if (l.window_bytes < l.max_frame) l.window_bytes = l.max_frame;
     if (l.max_inflight < 1) l.max_inflight = 1;
-    if (l.max_inflight > kDedupEntries) l.max_inflight = kDedupEntries;
+    if (resend_entries >= 1 && l.max_inflight > resend_entries) l.max_inflight = static_cast<uint8_t>(resend_entries);
     return l;
   }
 
@@ -392,7 +411,7 @@ class Endpoint {
   void releaseLock();
   RawPorts *raw_ = nullptr;
   uint32_t held_ = 0;   // serial ports the lock holder's requests came in on (transports §4)
-  uint8_t decode_[kMaxSerialFrame + 2];
+  uint8_t *decode_ = nullptr;   // tables_.serial_frame + 2, taken with the first serial port
   uint8_t owner_[32];   // the lock holder's owner text (core §6.4)
   uint8_t owner_length_ = 0;
   size_t appendOwner(uint8_t *out, size_t room, uint8_t tag) const;
@@ -411,6 +430,7 @@ class Endpoint {
   bool pushGone() const { return connOf(tr(push_)) && connOf(tr(push_))->connection() != push_conn_; }
   uint8_t *tx_;
   size_t tx_capacity_;
+  Tables tables_;
   Limits limits_;
   // The interfaces: chained as added (Interface::next_), then - once, when the tables are made (seal) - an array of
   // them and their per-fn state, taken for good (takeForGood) with room for the endpoint's own two. Before that, nth()
@@ -511,8 +531,7 @@ class Endpoint {
   static Connection *connOf(const Transport &t) { return t.conn; }
   // events: fn (1 and up: fn 0 sends none, core §10.2), seq per fn shared with data frames
   struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[40]; };
-  static constexpr size_t kEvents = OEP_SMALL_RAM ? 8 : 32;
-  Event events_[kEvents];
+  Event *events_ = nullptr;   // tables_.events
   uint32_t event_head_ = 0, event_tail_ = 0;
   bool queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length);
   bool sendEvents();
@@ -521,12 +540,10 @@ class Endpoint {
   void push();
   void endSubscriptions();
   void send(size_t length);
-  // Dedup of the last session's requests sent again (core §5.1): the last kDedupEntries (corr, answer), keyed on corr
-  // alone; dropped at every successful open (kept over end, lapse, force). Results over kDedupBytes are not kept
-  // (rejected result_lost): kDedupBytes covers a whole frame of the largest profile, so a 1 KiB read_block whose answer
-  // was corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).
-  // A small-RAM build: 4 (over its max_inflight) of a 512-byte frame.
-  static constexpr size_t kDedupEntries = OEP_SMALL_RAM ? 4 : 8, kDedupBytes = (OEP_SMALL_RAM ? 512 : 1024) + 5;
+  // Dedup of the last session's requests sent again (core §5.1): the last tables_.resend_entries (corr, answer), keyed
+  // on corr alone; dropped at every successful open (kept over end, lapse, force). Results over tables_.resend_bytes are
+  // not kept (rejected result_lost): the default covers a whole frame of 1 KiB, so a 1 KiB read_block whose answer was
+  // corrupted on a CP2102 link comes back from here instead of being read again (V003 jig, 2026-10-01).
   // The request is kept too, up to kDedupRequestBytes (core §5.1: a resent request is compared byte for byte with the
   // one recorded - a different one is malformed; one whose bytes are not kept is result_lost).
   static constexpr size_t kDedupRequestBytes = 64;
@@ -534,11 +551,12 @@ class Endpoint {
     bool used = false, kept = false;
     uint16_t corr = 0;
     uint16_t length = 0, request_length = 0;   // request_length 0: the request's bytes not kept
-    uint8_t result[kDedupBytes];
+    uint8_t *result;   // tables_.resend_bytes of the pool
     uint8_t request[kDedupRequestBytes];
   };
   bool fresh_session_ = false;   // this request is an open that began a new session (its corr starts the order, §5.1)
-  Dedup dedup_[kDedupEntries];
+  Dedup *dedup_ = nullptr;   // tables_.resend_entries
+  void makeTables();
   size_t dedup_next_ = 0;
   uint16_t newest_corr_ = 0;   // the last session's newest request (core §4.1: the host numbers them in order)
   bool have_newest_ = false;

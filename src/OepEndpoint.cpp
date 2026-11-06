@@ -53,6 +53,18 @@ bool Endpoint::add(Interface &interface) {
 // The endpoint's tables, made once - at the first poll(), or before it when the saved settings are applied - for the
 // interfaces added and the endpoint's own two: taken for good, after which add() is refused. No room: nothing is listed
 // (only fn 0), and the probe logs why.
+// The tables the constructor's Tables size, taken for good: the resend record (its answers in one pool) and the event
+// queue. One that finds no room is left out: no resend record (a resend is result_lost), no events queued.
+void Endpoint::makeTables() {
+  if (tables_.resend_entries && tables_.resend_bytes) {
+    dedup_ = static_cast<Dedup *>(takeForGood(tables_.resend_entries * sizeof(Dedup)));
+    uint8_t *pool = static_cast<uint8_t *>(takeForGood(static_cast<size_t>(tables_.resend_entries) * tables_.resend_bytes));
+    if (!dedup_ || !pool) dedup_ = nullptr;
+    else for (size_t k = 0; k < tables_.resend_entries; ++k) dedup_[k].result = pool + k * tables_.resend_bytes;
+  }
+  if (tables_.events) events_ = static_cast<Event *>(takeForGood(tables_.events * sizeof(Event)));
+}
+
 bool Endpoint::seal() {
   if (sealed_) return interfaces_ != nullptr;
   sealed_ = true;
@@ -91,7 +103,11 @@ bool Endpoint::addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capa
   Transport *made = newTransport();
   if (!made) return false;
   Transport &t = *made;
-  t.max_frame = serialKind(kind) && limits_.max_frame > kMaxSerialFrame ? kMaxSerialFrame : limits_.max_frame;
+  t.max_frame = serialKind(kind) && limits_.max_frame > tables_.serial_frame ? tables_.serial_frame : limits_.max_frame;
+  if (serialKind(kind) && !decode_) {   // the serial ports' one decode buffer, with the first of them
+    decode_ = static_cast<uint8_t *>(takeForGood(tables_.serial_frame + 2u));
+    if (!decode_) return false;
+  }
   t.stream = &stream;
   t.kind = kind;
   t.usb_interface = usb_interface;
@@ -260,8 +276,9 @@ size_t Endpoint::appendOwner(uint8_t *out, size_t room, uint8_t tag) const {
 // what already sits in the transport's own buffer. One push frame per subscribed fn per poll.
 bool Endpoint::queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, size_t length) {
   if (length > sizeof(Event::payload)) return false;
-  if (event_head_ - event_tail_ >= kEvents) ++event_tail_;   // full: the oldest goes (its seq never appears)
-  Event &e = events_[event_head_ % kEvents];
+  if (!events_) return false;
+  if (event_head_ - event_tail_ >= tables_.events) ++event_tail_;   // full: the oldest goes (its seq never appears)
+  Event &e = events_[event_head_ % tables_.events];
   e.fn = fn;
   e.seq = takeSeq(fn);   // numbered when queued: one dropped from the queue leaves a gap
   e.kind = kind;
@@ -301,7 +318,7 @@ bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_byt
 // room right now.
 bool Endpoint::sendEvents() {
   while (event_tail_ != event_head_) {
-    const Event &e = events_[event_tail_ % kEvents];
+    const Event &e = events_[event_tail_ % tables_.events];
     const Transport &t = tr(current_);
     const int need = static_cast<int>(serialKind(t.kind) ? cobsFrameMax(kEventHeader + e.length) : kEventHeader + e.length + 2);
     if (t.stream->availableForWrite() < need) return false;
@@ -531,7 +548,8 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   // result_lost - a recorded request no longer kept is not run again.
   const bool mine = session != 0 && have_last_ && session == last_;
   if (mine) {
-    for (Dedup &d : dedup_) {
+    for (size_t k = 0; k < resendEntries(); ++k) {
+      Dedup &d = dedup_[k];
       if (!d.used || d.corr != corr) continue;
       if (have_newest_ && static_cast<uint16_t>(newest_corr_ - d.corr) >= 0x8000) { d.used = false; continue; }   // half a turn old: dropped (§5.1)
       if (!d.kept || !d.request_length) { sendReject(corr, kRejectResultLost); return; }
@@ -572,15 +590,17 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   if (mine || fresh_session_) {   // the order and the record: rejected answers too (core §5.1; a new session's open starts them)
     newest_corr_ = corr;
     have_newest_ = true;
+    if (dedup_) {
     Dedup &d = dedup_[dedup_next_];
-    dedup_next_ = (dedup_next_ + 1) % kDedupEntries;
+    dedup_next_ = (dedup_next_ + 1) % tables_.resend_entries;
     d.used = true;
     d.corr = corr;
-    d.kept = total <= kDedupBytes;
+    d.kept = total <= tables_.resend_bytes;
     d.length = d.kept ? static_cast<uint16_t>(total) : 0;
     if (d.kept) memcpy(d.result, tx_, total);
     d.request_length = length <= kDedupRequestBytes ? static_cast<uint16_t>(length) : 0;
     if (d.request_length) memcpy(d.request, message, length);
+    }
   }
   if (restart_taken_) {
     // oep.probe.restart (oep-if-restart §2): no notification after its answer - the session's end, and the zero-copy data
@@ -946,7 +966,7 @@ Result Endpoint::open(uint32_t session, const uint8_t *payload, size_t length, u
   if (owner) memcpy(owner_, owner, owner_len);
   owner_length_ = owner ? static_cast<uint8_t>(owner_len) : 0;
   // a new session (another id): the resend state starts again from this open (core §5.1)
-  for (Dedup &d : dedup_) d.used = false;
+  for (size_t k = 0; k < resendEntries(); ++k) dedup_[k].used = false;
   have_newest_ = false;
   fresh_session_ = true;
   locked_ = true;

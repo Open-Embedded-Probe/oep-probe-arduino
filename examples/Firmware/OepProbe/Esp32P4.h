@@ -159,7 +159,7 @@ static EspUsbDevice usbDevice;
 // a small static answer buffer, swapped before its first poll.
 static constexpr size_t kMaxFrame = 27136;   // 53 x 512: a stage is one 27 KiB transfer (45 MB/s on the HS port)
 static constexpr size_t kAnswerBytes = 16384;   // an answer's most (DirectBulkStream's result buffers, internal RAM)
-static constexpr size_t kRxSerial = oep::cobsFrameMax(oep::Endpoint::kMaxSerialFrame), kRxFrame = kMaxFrame + 2;
+static constexpr size_t kRxSerial = oep::cobsFrameMax(oep::Endpoint::kDefaultSerialFrame), kRxFrame = kMaxFrame + 2;
 static uint8_t txBoot[64];
 static uint8_t *frameBuffer(size_t n) {
   void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

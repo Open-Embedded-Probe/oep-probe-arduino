@@ -273,8 +273,8 @@ struct Example {
   MemStream s;
   uint8_t rx[2200], tx[1100], desc[32];
   Endpoint ep;
-  explicit Example(uint8_t kind = Endpoint::kUartBridge)
-      : ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, kind, kind == Endpoint::kUartBridge ? 0xff : 0) {
+  explicit Example(uint8_t kind = Endpoint::kUartBridge, Endpoint::Tables tables = Endpoint::Tables())
+      : ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, kind, kind == Endpoint::kUartBridge ? 0xff : 0, tables) {
     ep.setBootId(0x12345678);
     ep.setMaxOpMs(1000);
     TlvWriter w(desc, sizeof desc);
@@ -427,15 +427,12 @@ static void testDiscovery() {
 static void testSessions() {
   const Json v = load("sessions.json");
   for (const Json &sc : v["scenarios"].items) {
-    // a scenario whose initial state fixes the record's size (core §5.1 leaves it to the probe): run only at that size
-    if (sc["initial"].string.find("exactly four cache entries") != std::string::npos && Endpoint::kDedupEntriesOf() != 4) {
-      printf("  sessions \"%s\": the record holds %u, not four (core §5.1: the probe's choice)\n", sc["name"].string.c_str(),
-             static_cast<unsigned>(Endpoint::kDedupEntriesOf()));
-      continue;
-    }
+    // a scenario whose initial state fixes the record's size (core §5.1 leaves it to the probe): the probe made with it
+    Endpoint::Tables tables;
+    if (sc["initial"].string.find("exactly four cache entries") != std::string::npos) tables.resend_entries = 4;
     ++cases;
     boot();
-    Example p;
+    Example p(Endpoint::kUartBridge, tables);
     for (const Json &st : sc["steps"].items) {
       const Bytes req = hex(st["request_hex"].string);
       Bytes want = hex(st["answer_hex"].string);
