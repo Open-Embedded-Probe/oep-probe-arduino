@@ -43,7 +43,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
   };
   enum : uint8_t { kUserHost = legacy::kStreamUsersHostSession, kUserSlot = legacy::kStreamUsersSlot };
   // capacity: the bytes of console output kept (rounded down to a power of two), taken for good here.
-  static constexpr size_t kDefaultCapacity = OEP_SMALL_RAM ? 1024 : 8192;
+  static constexpr size_t kDefaultCapacity = kSmallRam ? 1024 : 8192;
   TargetConsoleStream(DebugPort &port, DmConsole &driver, uint16_t instance, size_t capacity = kDefaultCapacity)
       : port_(port), driver_(driver), instance_(instance),
         buffer_(PositionStream::takeRing(capacity, capacity_, fallback_)), stream_(buffer_, capacity_, marks_, kMarks) {
@@ -113,7 +113,7 @@ class TargetConsoleStream final : public Interface, public BindSource {
 
  private:
   // a power of two (wrapping serials)
-  static constexpr size_t kMarks = OEP_SMALL_RAM ? 8 : 16;
+  static constexpr size_t kMarks = kSmallRam ? 8 : 16;
   DebugPort &port_;
   DmConsole &driver_;
   uint16_t instance_;

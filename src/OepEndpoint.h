@@ -101,10 +101,10 @@ class RawPorts {
 // decoded in one buffer of that size, taken with the first serial port; the endpoint's own may be larger, its other
 // transports use it, core §7.1).
 struct EndpointTables {
-  static constexpr uint16_t kDefaultResendEntries = OEP_SMALL_RAM ? 4 : 8;
-  static constexpr uint16_t kDefaultResendBytes = (OEP_SMALL_RAM ? 512 : 1024) + 5;   // a whole frame of 512 / 1024 and its head
-  static constexpr uint16_t kDefaultEvents = OEP_SMALL_RAM ? 8 : 32;
-  static constexpr uint16_t kDefaultSerialFrame = OEP_SMALL_RAM ? 512 : 2048;
+  static constexpr uint16_t kDefaultResendEntries = kSmallRam ? 4 : 8;
+  static constexpr uint16_t kDefaultResendBytes = (kSmallRam ? 512 : 1024) + 5;   // a whole frame of 512 / 1024 and its head
+  static constexpr uint16_t kDefaultEvents = kSmallRam ? 8 : 32;
+  static constexpr uint16_t kDefaultSerialFrame = kSmallRam ? 512 : 2048;
   uint16_t resend_entries = kDefaultResendEntries;
   uint16_t resend_bytes = kDefaultResendBytes;
   uint16_t events = kDefaultEvents;
@@ -496,7 +496,7 @@ class Endpoint {
   uint32_t holder_ = 0, last_ = 0;
   bool have_last_ = false;
   uint32_t lease_ms_ = kLeaseDefaultMs, expires_ms_ = 0;
-  uint8_t scratch_[OEP_SMALL_RAM ? 512 : 768];   // one interface's full describe (after the ops tag) before paging
+  uint8_t scratch_[kSmallRam ? 512 : 768];   // one interface's full describe (after the ops tag) before paging
 
   uint32_t max_op_ms_ = kMaxOpMs;
 

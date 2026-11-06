@@ -110,9 +110,9 @@ class WifiControl {
 // the probe declares (each interface's, the sketch's own), the bytes of the values held (every value with its 3-byte
 // header and key: a change past it is refused cause 2) and the save's (the values with their names).
 struct SettingsSizes {
-  static constexpr uint16_t kDefaultEntries = OEP_SMALL_RAM ? 20 : 40;
-  static constexpr uint16_t kDefaultItems = OEP_SMALL_RAM ? 256 : 2048;
-  static constexpr uint16_t kDefaultBlob = OEP_SMALL_RAM ? 512 : 4096;
+  static constexpr uint16_t kDefaultEntries = kSmallRam ? 20 : 40;
+  static constexpr uint16_t kDefaultItems = kSmallRam ? 256 : 2048;
+  static constexpr uint16_t kDefaultBlob = kSmallRam ? 512 : 4096;
   uint16_t entries = kDefaultEntries;   // at most 254
   uint16_t items = kDefaultItems;
   uint16_t blob = kDefaultBlob;

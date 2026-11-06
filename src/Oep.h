@@ -8,17 +8,6 @@
 // registry/oep-v1.toml); the names below are the library's aliases.
 #pragma once
 
-// A chip with little RAM (a CH32: the X035's 20 KiB, a V307's 64 KiB; not the H41x's 512 KiB): the endpoint's tables
-// are cut to what a probe of a few interfaces on one or two USB transports needs (OepEndpoint.h), the consoles' and
-// uarts' buffers too. A build may set it itself (-DOEP_SMALL_RAM=1).
-#if !defined(OEP_SMALL_RAM)
-#if defined(ARDUINO_ARCH_CH32RV) && !defined(CH32RV_SERIES_CH32H417) && !defined(CH32RV_SERIES_CH32H416) && \
-    !defined(CH32RV_SERIES_CH32H415)
-#define OEP_SMALL_RAM 1
-#else
-#define OEP_SMALL_RAM 0
-#endif
-#endif
 
 
 #include <stddef.h>
@@ -45,6 +34,17 @@
 #endif
 
 namespace oep {
+
+// A chip family with little RAM (a CH32 but the H41x: the X035's 20 KiB, a V307's 64 KiB), told from the family the
+// build is for: the defaults of the sizes given at start-up (Endpoint::Tables, Settings::Sizes, Binds, the console's
+// and the fixture UART's rings) are its smaller ones. A sketch that wants others gives them through those arguments.
+#if defined(ARDUINO_ARCH_CH32RV) && !defined(CH32RV_SERIES_CH32H417) && !defined(CH32RV_SERIES_CH32H416) && \
+    !defined(CH32RV_SERIES_CH32H415)
+inline constexpr bool kSmallRam = true;
+#else
+inline constexpr bool kSmallRam = false;
+#endif
+
 
 // The wire numbers (generated from oep-spec registry/oep-v1.toml - protocol revision 1 - into OepRegistry.h).
 namespace reg = v1::reg;

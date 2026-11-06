@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `OEP_SMALL_RAM` is gone, and with it the build-time override (`-DOEP_SMALL_RAM=`): the small-RAM defaults are
+  chosen from the chip family the build is for (`oep::kSmallRam`: a CH32 but the H41x), and only as the defaults of the
+  sizes given at start-up (`Endpoint::Tables`, `Settings::Sizes`, `Binds`, the console's and the fixture UART's rings).
+  A sketch wanting other sizes gives them through those arguments. The sizes themselves are unchanged (CH32X035: the
+  same flash and RAM).
+- (JA) `OEP_SMALL_RAM` と、ビルド時に外から変える口（`-DOEP_SMALL_RAM=`）を無くした。小さい RAM の既定値は、ビルドする
+  チップのファミリーから選ぶ（`oep::kSmallRam`: H41x 以外の CH32）。使うのは、起動時に渡す大きさ（`Endpoint::Tables`、
+  `Settings::Sizes`、`Binds`、コンソールと fixture UART のリング）の既定値としてだけ。ほかの大きさにしたい sketch は、それらの
+  引数で渡す。大きさそのものは変わらない（CH32X035 の flash と RAM も同じ）。
 
 ## 0.0.51
 - (EN) Settings: the items declared, the bytes of the values held and the save's are given when the settings are made, by

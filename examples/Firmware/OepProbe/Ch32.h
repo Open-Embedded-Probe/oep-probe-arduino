@@ -17,7 +17,7 @@
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (any enabled USART's route; another pair is
 // refused at the UART's begin).
 //
-// A CH32 but the H41x builds with OEP_SMALL_RAM (Oep.h): the endpoint's tables cut, a 1 KiB console ring. Everything is
+// A CH32 but the H41x is a small-RAM family (oep::kSmallRam, Oep.h): the endpoint's tables cut, a 1 KiB console ring. Everything is
 // in by default but on the CH32X035 (62 KiB flash, 20 KiB RAM; kRoomy below): the V307 97.7 KB / 24.8 KB, the H417
 // 106 KB (0.2.2).
 //

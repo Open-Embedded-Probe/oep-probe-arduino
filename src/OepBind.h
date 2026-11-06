@@ -18,7 +18,7 @@ class Binds final : public RawPorts {
  public:
   // Each port's ring: `ring` bytes, taken for good the first time a pass-through puts bytes for that port (a port that
   // never carries one takes nothing). The default as before: 512 bytes, 256 on a small-RAM build.
-  static constexpr size_t kDefaultRing = OEP_SMALL_RAM ? 256 : 512;
+  static constexpr size_t kDefaultRing = kSmallRam ? 256 : 512;
   explicit Binds(size_t ring = kDefaultRing) : ring_(ring ? ring : 1) {}
 
   // The pass-through of `port` adds bytes (the oldest go when the ring is full: a serial monitor sees the newest).
