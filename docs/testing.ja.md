@@ -38,6 +38,7 @@ testpaths に入れないので、`uv run pytest` では集めません。流す
 | フォルダ | 確かめること | 機材 |
 |---|---|---|
 | `p4_uart_bridge` | ESP32-P4 / P4X の UART bridge（GPIO37 / 38）から書き込み、同じ口で OEP が答え、その 2 本を fixture に出さない | GPIO37 / 38 に USB-UART を持つ P4 のボード（ベンチの 2-3: CH340C） |
+| `esp32_uart_bridge` | classic ESP32 の UART bridge（UART0）から書き込み、同じ口で OEP が答え、Wi-Fi の TCP の待ち受けが起動時に作られて経路に並ぶ | UART0 に USB-UART を持つ classic ESP32 のボード（ベンチの 1-1） |
 
 ## 候補 firmware を検証する順序
 
