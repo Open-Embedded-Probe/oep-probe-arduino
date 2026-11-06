@@ -33,6 +33,7 @@ class RvswdPhy final : public DmiPhy {
   void park() override;
   void hold() override;   // driven at the rest: SWCLK low / SWDIO high with idle_clock low, both high otherwise
   bool attached() const override { return attached_; }
+  bool noAutoexec() const override { return long_; }   // the long frame's CH32V103 has no autoexec (E173)
   // One cheap look for a debug module at this half period: drive the bus, set dmactive (unless DMCONTROL reads it set)
   // and read DMSTATUS once. For sweeping candidate pin pairs, where attach()'s margin check
   // (six half periods x 1000 reads) is far too slow to be a search step.
@@ -105,6 +106,7 @@ class RvswdPhy final : public DmiPhy {
   uint32_t revives_ = 0;
   uint32_t last_activity_us_ = 0;
   bool park_low_ = false;     // idle with SWCLK low instead of both lines high (setIdleClockLow)
+  bool long_ = false;         // the long frame (a CH32V103: it answers no other); found by wakeModule
   // oep-if-debug §2, the lines while the wire does not answer: rest_free_ from an exchange with no answer until one
   // answers (the lines free between exchanges); searching_ inside retune's speed search, where it is not applied
   bool rest_free_ = false, searching_ = false;

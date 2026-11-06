@@ -351,6 +351,7 @@ static_assert(kSlowestFrameNs <= 1100000u, "one RVSWD frame keeps interrupts off
 bool RvswdPhy::begin(int swdio, int swclk) {
   swdio_ = swdio;
   swclk_ = swclk;
+  long_ = false;   // another target: the short frame until wakeModule finds otherwise
   if (!ioBegin(swdio, swclk)) return false;
   free();   // until a connection takes them: the free state (oep-core §8), the same as after a release
   ready_ = true;
@@ -456,7 +457,7 @@ void RvswdPhy::configureBus(bool with_wake) {
   // communicate without it, and writes each one twice because once is not always enough.
   // The CH32X035 answered without it; the CH32L103 on the Pico's wiring did not halt
   // (2026-09-23), which is what sent us looking at what a known-good host does.
-  for (int i = 0; i < 2; ++i) {
+  for (int i = 0; i < 2 && !long_; ++i) {   // not on the long frame: a WCH-Link does not write them to a V103 (E173)
     writeRaw(kDmShadowCfgr, kCfgr);
     writeRaw(kDmCfgr, kCfgr);
   }
@@ -553,7 +554,7 @@ bool RvswdPhy::readRaw(uint8_t address, uint32_t &value) {
   exchangeBegins();
   {
     Critical lock;
-    ok = rvswd::readWord(gIo, address, value);
+    ok = long_ ? rvswd::readLong(gIo, address, value) : rvswd::readWord(gIo, address, value);
     if (park_low_) gIo.clkLowDio(true);
   }
   ++transactions_;
@@ -584,7 +585,8 @@ void RvswdPhy::writeRaw(uint8_t address, uint32_t data) {
   exchangeBegins();
   {
     Critical lock;
-    rvswd::writeWord(gIo, address, data);
+    if (long_) rvswd::writeLong(gIo, address, data);
+    else rvswd::writeWord(gIo, address, data);
     if (park_low_) gIo.clkLowDio(true);
   }
   ++transactions_;
@@ -604,6 +606,10 @@ void RvswdPhy::activate() {
   uint32_t control = 0;
   if (readRaw(kDmControl, control) && control != 0xffffffffu && (control & 1)) return;
   writeRaw(kDmControl, 1);
+  if (long_) {   // no CFGR on the long frame (configureBus); dmactive twice, as a WCH-LinkE writes it to a V103 (E173)
+    writeRaw(kDmControl, 1);
+    return;
+  }
   // The CFGR pair above went to a module that was not active (a detach writes DMCONTROL = 0): the configuration
   // sequence again now that it is, the order a WCH-LinkE uses (dmactive, then CFGR; wch-protocols link-to-target#linke-wire-behavior). It
   // did not cure the dmseq console coming back 1-10 s late after a refused automatic attach (probe-cdc-and-persistence
@@ -614,6 +620,11 @@ void RvswdPhy::activate() {
   }
 }
 
+// A DMSTATUS that is a module's at the start of a connection: a found version and the reserved bits 31:23 zero (debug
+// spec 0.13). An idle or misframed line can read a known version by chance - a CH32V103 asked in the short frame reads
+// 0xfffffffe (E173) - and then the long frame is never tried.
+static bool moduleAnswered(uint32_t dmstatus) { return dmVersionKnown(dmstatus) && (dmstatus >> 23) == 0; }
+
 // The writes allowed before the speed is verified, at the slowest period (oep-if-debug §1, §3): the wake and the
 // configuration pair, then dmactive - until DMSTATUS shows a debug module. A cold one does not answer the first wake.
 // Measured on a CH32L103 over the RP2350 probe (2026-09-23): the first clean read came on attempt 5 at a 500 ns half
@@ -623,9 +634,16 @@ bool RvswdPhy::wakeModule(uint32_t &dmstatus) {
   for (int wake = 0; wake < 8; ++wake) {
     if (wake && pastDeadline()) return false;
     if (wake) ++search_retries_;   // the wake before this one got no answer (oep-if-debug §1, search_retries)
+    long_ = false;
     configureBus(true);
     activate();
-    if (readRaw(kDmStatus, dmstatus) && dmVersionKnown(dmstatus)) return true;
+    if (readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus)) return true;
+    // No answer on the short frame: the long one, the way a WCH-LinkE asks first (link-to-target#long-frame) - a
+    // CH32V103 answers only that. Found, the connection stays on it.
+    long_ = true;
+    activate();
+    if (readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus)) return true;
+    long_ = false;
   }
   return false;
 }
@@ -643,12 +661,18 @@ bool RvswdPhy::bringUp(uint32_t &dmstatus) {
 bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
   ioReclaim(swdio_, swclk_);
+  long_ = false;
   setHalf(slowestNs());   // the wake / configuration and dmactive at the slowest period (oep-if-debug §1, §3.1)
   configureBus(true);
   activate();
   setHalf(half_ns);       // the look at this period
   dmstatus = 0;
-  const bool ok = readRaw(kDmStatus, dmstatus);
+  bool ok = readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus);
+  if (!ok) {   // the short frame first (nearly every part); then the long one (a CH32V103)
+    long_ = true;
+    ok = readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus);
+    if (!ok) long_ = false;
+  }
   if (!keep_driven) { ioRelease(swdio_, swclk_); attached_ = false; }
   // A debug module reports a known DMSTATUS.version; an idle bus reads all ones or zeros.
   return ok && dmVersionKnown(dmstatus);

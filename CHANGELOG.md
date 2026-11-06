@@ -1,6 +1,23 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) RVSWD: the long frame (84 bits and the terminal clock: the RISC-V DTM's dmi register as it is), the only one a
+  CH32V103 answers. An attach (and a scan's look) asks DMSTATUS in the short frame first, as before, and in the long one
+  only when the short one gets no answer; a part that answers the short frame never meets a long one. Bit 83 is the
+  host's - 0 after a write, 1 after a read, as a WCH-LinkE sends it (wch-protocols E173: a V103 takes a write that ends
+  with 1 for no write). No WCH configuration pair on the long frame. A DMSTATUS at the start of a connection now also
+  needs its reserved bits 31:23 zero: a V103 asked in the short frame read 0xfffffffe, a known version by chance. The
+  V103's debug module runs no command on a DATA0 access with abstractauto set: on the long frame the block reader and
+  writer run their program by its command for every word. Checked on a CH32V103C8T6 board (attach, halt, the UID,
+  a block read of flash).
+- (JA) RVSWD: 長い形のフレーム（84 ビットと終端の 1 クロック。RISC-V の DTM の dmi レジスタそのまま）を足した。CH32V103 はこれに
+  しか答えない。attach（と scan の問い合わせ）は、これまでどおり DMSTATUS をまず短い形で読み、答えが無いときだけ長い形で読む。
+  短い形に答える相手は、長い形を受け取らない。bit 83 はホストが出す: 書き込みの後は 0、読みの後は 1（WCH-LinkE と同じ。
+  wch-protocols E173: V103 は 1 で終わる書き込みを書き込みとして受け取らない）。長い形では WCH の設定の組を書かない。
+  つなぎ始めの DMSTATUS は、予約のビット 31:23 が 0 であることも見るようにした（V103 に短い形で聞くと 0xfffffffe と読め、
+  たまたま版が分かる値になっていた）。V103 のデバッグモジュールは、abstractauto を立てても DATA0 の読み書きでコマンドを
+  走らせないので、長い形の相手では、ブロックの読み書きを 1 ワードごとにコマンドで走らせる。CH32V103C8T6 のボードで確かめた
+  （attach、halt、UID、フラッシュのブロック読み出し）。
 - (EN) `OEP_SMALL_RAM` is gone, and with it the build-time override (`-DOEP_SMALL_RAM=`): the small-RAM defaults are
   chosen from the chip family the build is for (`oep::kSmallRam`: a CH32 but the H41x), and only as the defaults of the
   sizes given at start-up (`Endpoint::Tables`, `Settings::Sizes`, `Binds`, the console's and the fixture UART's rings).

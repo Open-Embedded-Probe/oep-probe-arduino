@@ -73,6 +73,40 @@ inline void writeWord(Io &io, uint8_t address, uint32_t data) {
   stopFrame(io);
 }
 
+// The 84-bit long frame, the RISC-V DTM's dmi register as it is - the only one a CH32V103 answers (wch-protocols
+// link-to-target#long-frame, E165 / E173): START, the host's address (7 bits), data (32) and op (2: 1 read, 2 write)
+// and one 0 (bit 41; no parity on a V103), then - SWDIO released - the target's echo of the address (7), its data (32:
+// the value read, or the data written echoed) and status (2: 0 success), then the host's bit 83 (1 after a read, 0
+// after a write; a V103 takes a write that ends with 1 as a read), the terminal clock 0 and STOP: 85 clocks. false: the echo is not the address or the status not success (the caller retries).
+template <typename Io>
+inline bool longFrame(Io &io, uint8_t address, uint32_t data, uint8_t op, uint32_t &answer) {
+  startFrame(io);
+  for (int bit = 6; bit >= 0; --bit) clockBit(io, (address >> bit) & 1);
+  for (int bit = 31; bit >= 0; --bit) clockBit(io, (data >> bit) & 1);
+  clockBit(io, op & 2);
+  clockBit(io, op & 1);
+  clockBit(io, false);
+  io.hostDrives(false);
+  uint8_t echo = 0;
+  for (int bit = 6; bit >= 0; --bit) echo = static_cast<uint8_t>(echo << 1 | readBit(io));
+  uint32_t value = 0;
+  for (int bit = 31; bit >= 0; --bit) value |= uint32_t(readBit(io)) << bit;
+  uint8_t status = static_cast<uint8_t>(readBit(io) << 1);
+  status |= static_cast<uint8_t>(readBit(io));
+  io.hostDrives(true);
+  clockBit(io, op == 1);   // bit 83 is the host's: 1 after a read, 0 after a write, as a WCH-LinkE sends it (E173)
+  stopFrame(io);
+  answer = value;
+  return echo == address && status == 0;
+}
+template <typename Io> inline bool readLong(Io &io, uint8_t address, uint32_t &value) {
+  return longFrame(io, address, 0, 1, value);
+}
+template <typename Io> inline void writeLong(Io &io, uint8_t address, uint32_t data) {
+  uint32_t echo = 0;
+  (void)longFrame(io, address, data, 2, echo);
+}
+
 // Bring the bus up: both lines driven high, 100 idle clocks, one low bit, idle.
 template <typename Io>
 inline void wake(Io &io) {

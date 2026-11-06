@@ -67,6 +67,11 @@ struct Target {
   std::set<int> bad_reads;
   int flip_every = 0;
   int ignore_wakes = 0;   // wakes the module sleeps through before one wakes it
+  // the long frame (a CH32V103: link-to-target#long-frame, E173): long_only answers nothing else; a write lands only
+  // when the host's bit 83 is 0. long_seen: frames of 80 clocks or more any target met.
+  bool long_only = false;
+  uint8_t op = 0;
+  int long_seen = 0, long_reads = 0, long_writes = 0, bit83_wrong = 0;
 
   void reset() { *this = Target(); }
   void tick() {
@@ -95,8 +100,21 @@ struct Target {
   }
   bool parityOf(uint32_t v) { bool p = false; while (v) { p ^= v & 1; v >>= 1; } return p; }
   // a rising edge of SWCLK: the cell at pos
+  void riseLong() {
+    const bool bit = host_drives ? dio : true;
+    if (pos <= 6) address = static_cast<uint8_t>((address << 1) | bit);
+    else if (pos <= 38) data = (data << 1) | bit;
+    else if (pos <= 40) op = static_cast<uint8_t>((op << 1) | bit);
+    else if (pos == 41 && op == 1) { ++long_reads; ++reads; out = readReg(address); }
+    else if (pos == 83) {   // the host's bit 83: 1 after a read, 0 after a write
+      if (!host_drives || bit != (op == 1)) ++bit83_wrong;
+      if (op == 2 && awake && host_drives && !bit) { ++long_writes; writeReg(address, data); out = data; }
+    }
+    ++pos;
+  }
   void rise() {
     if (!driven) return;
+    if (in_frame && long_only) { riseLong(); return; }
     if (!in_frame) {
       if (!dio && wake_cells >= 100 && ignore_wakes > 0) { --ignore_wakes; wake_cells = 0; return; }   // a cold module
       wake_cells = dio ? wake_cells + 1 : (wake_cells >= 100 ? (awake = true, 0) : 0);
@@ -123,12 +141,19 @@ struct Target {
     if (!driven || !clk || from == to) return;
     if (!to) {   // START
       in_frame = true; ++frames; pos = 0; address = 0; header_parity = false; data = 0; data_parity = false;
-      wake_cells = 0;
+      op = 0; wake_cells = 0;
     } else {
+      if (pos >= 80) ++long_seen;
       in_frame = false;   // STOP
     }
   }
   bool targetBit() const {
+    if (long_only) {   // the target's phase: the address echoed, the data (read, or the write's echoed), status 0
+      if (!awake || !in_frame || pos < 42 || pos > 82) return pulled;
+      if (pos <= 48) return (address >> (48 - pos)) & 1;
+      if (pos <= 80) return ((op == 1 ? out : data) >> (80 - pos)) & 1;
+      return false;
+    }
     if (!awake || !header_ok || write || !in_frame) return pulled;
     if (pos >= 14 && pos <= 45) return (out >> (45 - pos)) & 1;
     if (pos == 46) return out_parity;
@@ -196,6 +221,23 @@ int main() {
     CHECK(t.pulled && t.driven);
     phy.free();
     CHECK(!t.pulled && !t.driven);
+  }
+
+  // ---- a part that answers only the long frame (a CH32V103): the short look gets no answer, the long one does, and the
+  // connection stays on it - its writes land (bit 83 the host's: 0 after a write, 1 after a read); a part that answers
+  // the short frame never meets a long one ----
+  {
+    CHECK(t.long_seen == 0);   // the clean attach above
+    t.reset(); t.begun = true; t.long_only = true;
+    CHECK(phy.attach());
+    CHECK(phy.noAutoexec());
+    CHECK(t.long_reads > 0 && t.long_writes > 0 && t.bit83_wrong == 0);
+    CHECK(t.progbuf0 == 0x12345678u);   // the write check's writes landed, PROGBUF0 put back
+    CHECK(t.cfgr_writes == 0);          // no WCH configuration pair on the long frame
+    phy.free();
+    t.reset(); t.begun = true;
+    CHECK(phy.attach() && !phy.noAutoexec() && t.long_seen == 0);
+    phy.free();
   }
 
   // ---- dmactive already set (a halted target): DMCONTROL is not written (the write would clear haltreq) ----

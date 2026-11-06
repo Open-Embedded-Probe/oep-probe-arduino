@@ -153,6 +153,9 @@ class Ch32Dm {
   bool keepGprs();
   bool giveGprs();
   uint8_t cmderr_ = 0;
+  // The module runs no command on a DATA0 access with abstractauto set (a CH32V103's): the block reader and writer run
+  // their program once a word by its command instead. Set at attach from the link (DmiPhy::noAutoexec).
+  bool no_autoexec_ = false;
   bool auto_on_ = true;     // ABSTRACTAUTO may be set: autoOff() writes 0 only then (a block op's fixed cost is DMI round trips)
   // ABSTRACTAUTO seen 0 in this op (two reads agreeing) and not written since but with 0: autoOffSure() has nothing to
   // look at again. Only a write sets it - the probe's own, inside an op (autoOn, giveAuto); a lost write leaves it as

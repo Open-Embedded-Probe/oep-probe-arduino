@@ -30,6 +30,7 @@ bool Ch32Dm::waitAbstract() {
 bool Ch32Dm::attach() {
   if (phy_.attached()) return true;
   if (!phy_.attach()) return false;
+  no_autoexec_ = phy_.noAutoexec();
   phy_.forgetRead();   // the PHY's own reads of its attach went before (readIs)
   // Leave the abstract-command block in a known state. A session that ended mid-sequence can leave autoexec armed
   // on DATA0 or a sticky cmderr behind (2026-09-23).
@@ -722,12 +723,14 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
   for (int attempt = 0; attempt < (twice ? 6 : 3) && !done; ++attempt) {
     if (!held([&] { return loadBlock(kReader, sizeof kReader / sizeof kReader[0], address); })) break;
     const uint32_t revives = phy_.revives();   // a revive inside the run is a drop met there (as in a held group)
-    autoOn();
+    const bool each = no_autoexec_;   // a run by its command for every word, no look-ahead
+    if (!each) autoOn();
     phy_.write(kCommand, 0x00240000);  // first run
     bool ok = true;
     uint32_t crc = 0xffffffffu;
     for (size_t i = 0; i < words; ++i) {
       // E156: one program-buffer run finishes within one DMI transaction; no poll.
+      if (each && i) phy_.write(kCommand, 0x00240000);
       uint32_t word = 0;
       if (!phy_.read(kData0, word)) { ok = false; break; }
       if (!checking) out[i] = word;
@@ -756,8 +759,9 @@ bool Ch32Dm::readWords(uint32_t address, uint32_t *out, size_t words, uint8_t *c
     // (2026-09-23): a whole-flash CRC came out different about one read in three, with
     // every read reporting success.
     uint32_t next = 0;
-    const uint32_t ran = address + 4u * static_cast<uint32_t>(words + (err == 3 ? 0 : 1));
+    const uint32_t ran = address + 4u * static_cast<uint32_t>(words + (each || err == 3 ? 0 : 1));
     const bool counted = phy_.read(kData1, next) && next == ran;
+
     // cmderr 3 is the look-ahead walking off the end of a region and says nothing about
     // the words already read. Anything else means the program buffer did not run: the
     // reads then returned whatever was left in DATA0, which looks like data and is not.
@@ -834,10 +838,11 @@ bool Ch32Dm::writeWordsFast(uint32_t address, const uint32_t *words, size_t coun
     uint32_t next = 0;
     bool ok = waitAbstract() && phy_.read(kData1, next) && next == ranTo(stored + 1);
     if (ok && stored + 1 < count) {
-      autoOn();
+      if (!no_autoexec_) autoOn();
       for (size_t i = stored + 1; ok && i < count; ++i) {
         phy_.write(kData0, words[i]);   // E156: the run is over within this transaction
-        ok = phy_.read(kData1, next) && next == ranTo(i + 1);
+        if (no_autoexec_) ok = waitAbstract() && (phy_.write(kCommand, 0x00240000), waitAbstract());
+        ok = ok && phy_.read(kData1, next) && next == ranTo(i + 1);
       }
       ok = ok && waitAbstract();
     }
@@ -1110,6 +1115,7 @@ bool Ch32Dm::attachUnderReset(void (*hold)(void *), void (*release)(void *), voi
   // go and keep asking until the hart reports halted - before firmware that kills the debug pins gets that far.
   relink();
   phy_.attach();
+  no_autoexec_ = phy_.noAutoexec();
   phy_.forgetRead();
   // The part comes out of reset on its default clock: a speed tuned earlier to a sketch's raised clock garbles the
   // halt requests below and the hart runs into its image (2026-09-24, CH32L103: 2 in 10 stopped mid-sketch after a
