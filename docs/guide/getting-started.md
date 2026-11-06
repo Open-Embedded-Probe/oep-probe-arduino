@@ -236,6 +236,8 @@ working alongside, and every connection shares the one lock. `03.Transports/Wifi
 
 ## Next
 
+- [What OEP does for you](use-cases.md): by what you want to do, what to prepare, wire and set. [Debug targets](debug-targets.md),
+  [Capture: which way](capture.md), [Settings](settings.md).
 - [Firmware features](firmware-features.md): leave parts out of the released firmware, add your own interface to it.
 - [Your first interface](your-first-interface.md): your own interface, step by step.
 - [Writing a probe](writing-a-probe.md): the full reference to the library from the inside.

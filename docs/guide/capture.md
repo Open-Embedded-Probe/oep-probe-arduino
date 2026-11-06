@@ -1,0 +1,136 @@
+# Capture: which way
+
+[日本語](capture.ja.md)
+
+An OEP probe captures signals as a logic analyzer. What you prepare, set and do differs between using the probe **for
+capture alone** and **capturing on the labels of a debug or test jig**. This page puts the differences side by side.
+How many channels at what speed each board takes is in [Boards](boards.md#what-each-chip-does).
+
+## Which to choose
+
+| Way | Suits | Probe settings | Channels named by |
+|---|---|---|---|
+| [A. Capture alone](#a-capture-alone) | Look at signals in a circuit, decode protocols | none | the probe's pin names (`GPIO47`) |
+| [B. On labelled wiring](#b-on-labelled-wiring) | Watch the lines a debug or test jig wired, as they are | wiring labels (a fixed jig's settings) | the port's line names (`mcu.swdio`, `mcu@pb6`) |
+| [C. Along with an operation](#c-along-with-an-operation) | Record what flashing, a reset or a transfer did on the lines | as B | as B |
+| [D. Checked in tests](#d-checked-in-tests) | Judge automatically whether the waveform is as expected | as B | as B |
+
+## Common points
+
+- **It only listens**: capture never drives a pin. It takes pins other functions use (debug lines, UART, SPI) as they are.
+- **Analog is apart**: analog capture switches its pins to the analog function while it runs, so they are not shared.
+  To see one signal both as logic and analog, wire it to two pins.
+- **Modes**:
+  - One shot (`--mode oneshot`): a set number of samples in the probe's memory, with a trigger (edge or level) and the
+    samples kept before it (pretrigger).
+  - Streaming (`--mode stream`): sent to the PC as taken, longer than the probe's memory; the link (USB speed) sets the rate.
+  - Repeat (`--mode repeat`): a one shot per trigger, gathered in one file.
+- **Link**: fast captures read back best over USB (the ESP32-P4's HS vendor bulk, `oep://<probe>?via=usb`). A probe on
+  a UART (classic ESP32) raises its link speed for the read back only (WireSkein picks the rate).
+- **File**: a capture is kept as WireSkein's format (`.wireskein`), with the rate actually used, the trigger position,
+  the probe's clock and the channel names. `wireskein convert` makes PulseView's `.sr` or VCD.
+
+## A. Capture alone
+
+The probe as a logic analyzer. Nothing to set in the probe.
+
+**What you need**: a probe that captures, WireSkein (`pip install "wireskein[oep]"`).
+
+**Wiring**: the signals to free probe pins, GND shared. Avoid pins wired to the board's parts (LEDs, buttons, boot straps).
+
+**Steps**:
+
+1. Find the pin names: `oep dump --port oep://<probe>` lists the pins that capture (`GPIO47` and so on).
+2. Capture:
+
+   ```sh
+   wireskein capture --source oep:oep://<probe> \
+       --channels SDA=GPIO47,SCL=GPIO48 --rate 20M --samples 200k \
+       --trigger SCL:fall --pretrigger 1000 -o i2c.wireskein
+   ```
+
+   `NAME` in `NAME=ID` is the channel's name in the file, given each time.
+3. Look and decode:
+
+   ```sh
+   wireskein gui i2c.wireskein                 # show it in the browser
+   wireskein analyze i2c.wireskein             # find the buses and decode them (UART, SPI, I2C, CAN, LIN and more)
+   wireskein decode i2c.wireskein --spec '{"buses":[{"protocol":"i2c","pins":{"sda":"SDA","scl":"SCL"}}]}'
+   ```
+
+**Given each time**: channels, rate, samples (or a duration when streaming), trigger, pretrigger. None stays in the probe.
+
+## B. On labelled wiring
+
+On a probe whose wiring has names (labels) for debugging or a test jig, channels are named by line. When the wiring
+changes, fix the labels and the same command still works.
+
+**What you need**: A's, plus the wiring labels.
+
+**Settings (once, saved in the probe)**:
+
+- `oep pins --wire <rvswd|swio> --name <port> --save` finds the debug lines and makes them labels.
+- Other lines: `oep settings set <probe> core channel.GPIO12.label=mcu.rx@pa9 channel.GPIO6.label=mcu@pb6 --save`.
+  The naming rules are in [Settings](settings.md#pin-labels-port-and-line-names).
+
+**Steps**:
+
+```sh
+wireskein capture --source oep:oep://<probe> \
+    --channels SWDIO=mcu.swdio,SWCLK=mcu.swclk,RX=mcu.rx --rate 40M --samples 1M -o debug.wireskein
+wireskein analyze debug.wireskein           # decodes the CH32 debug lines (RVSWD, SWIO) too
+```
+
+**How it differs from A**:
+
+| | A. Capture alone | B. Labelled |
+|---|---|---|
+| Probe settings | none | labels (saved, a fixed jig) |
+| Channels named by | `GPIO47` | `mcu.swdio`, `mcu@pb6` (case does not matter) |
+| When the wiring changes | fix the pins in the command | fix the labels; the command stays |
+| Other PCs, other tools | someone tells them the pin mapping | the same name reaches the same line |
+
+## C. Along with an operation
+
+Capture while flashing, resetting, attaching a debugger or making an I2C transfer, and you have a record of what the
+operation did on the lines. Run the operation on the same probe while capturing its lines (with B's labels, the
+operation and the capture use the same names).
+
+**Steps (Python)**: run the operation inside the capture.
+
+```python
+from oep_client import acquire, core, link, riscv
+from wireskein import capture as wc
+from wireskein.sources import oep as wso
+
+hst = link.open_host("oep://<probe>?via=usb")
+core.take(hst, 30000, owner="capture-during-attach")
+try:
+    w = riscv.Wire(hst, "oep.wire.rvswd")
+    def steps(wait):
+        wait(0.01)
+        conn, _ = w.attach(halt=True, pins=(18, 17))   # the operation, while capturing
+        w.detach(conn)
+        wait(0.01)
+    res = acquire.capture(hst, acquire.Request([("dio", "GPIO18"), ("clk", "GPIO17")], 40_000_000, 0,
+                                               mode="stream", during=steps))
+    wc.write("attach.wireskein", wso.capture_of(res))
+finally:
+    hst.end()
+```
+
+- With a trigger, "arm, then operate" makes the event the operation causes fire the trigger.
+- The classic ESP32's sampler holds the SWIO line while its window runs. To catch what an operation does, use a trigger
+  ([Getting started](getting-started.md#capture-signals-esp32-p4)).
+- For logic and analog cut on one trigger, use the capture-group (give `--analog` with `--trigger` and WireSkein pairs them).
+
+## D. Checked in tests
+
+Not just capture: judge in a test whether the waveform is as expected. Write the test's steps and expectations in
+WireSkein's record (runlog) and check it with `wireskein verify`. Under pytest, pytest-embedded-wireskein keeps and
+checks the record per test.
+
+- Expectations are written as `square` (period and duty), `uart`, `i2c`, `voltage` and more. Results are pass / fail
+  with the measured values, and JUnit XML.
+- Name lines by label, and the test code survives changes to the jig's wiring.
+- The steps are in [WireSkein's capture tests](https://github.com/Open-Embedded-Probe/wireskein/blob/main/docs/capture-test-guide.md).
