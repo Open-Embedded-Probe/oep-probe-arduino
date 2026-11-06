@@ -178,6 +178,9 @@ void OEP_SPI_TIMED SpiController::sckEdge(bool high) {
 // One CS-framed transfer. Mode = CPOL x 2 + CPHA (fixture §4): with CPHA 0 a bit is on MOSI before its leading edge
 // (the first one right at CS), MISO read at the leading edge; with CPHA 1 a bit goes out at its leading edge and MISO is
 // read at the trailing one. The last edge is a trailing one either way; hold counts from it.
+// MISO is read right before the edge it is read at is issued: the bit has been there since the edge before, and a
+// read after the write (an ESP32's GPIO write returns some 300 ns late) met a slave that puts its next bit out at that
+// edge - a CH32V103 SPI slave at each byte's end, where the probe read every byte's last bit as the next one's first.
 // An SCK edge's time is taken as its write is issued: an ESP32's GPIO write returns some 300 ns after (the P4X), the
 // same for every edge, so counting from its return added that to every half (1 MHz came out at 620 kHz). CS's time is
 // taken after its write returns: setup, hold and gap only come out longer for it, which the answer allows.
@@ -197,12 +200,12 @@ void OEP_SPI_TIMED SpiController::lineTransfer(bool first, uint32_t gap, uint32_
     waitFor(setup);
     for (size_t k = 0; k < bits; ++k) {
       if (k) waitFor(half_);
+      bool in = cpha ? false : miso();   // at the leading edge: read as it is issued
       sckEdge(!cpol);   // the leading edge
       if (cpha) set(mosi_pad_, bitOf(k));
-      bool in = cpha ? false : miso();
       waitFor(half_);
+      if (cpha) in = miso();             // at the trailing edge: read as it is issued
       sckEdge(cpol);   // the trailing edge
-      if (cpha) in = miso();
       if (in) rx[k / 8] |= static_cast<uint8_t>(1u << (lsb ? k % 8 : 7 - k % 8));
       if (!cpha && k + 1 < bits) set(mosi_pad_, bitOf(k + 1));
     }

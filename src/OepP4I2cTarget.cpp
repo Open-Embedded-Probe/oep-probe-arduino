@@ -184,7 +184,15 @@ void P4I2cTarget::isr(void *context) {
   if (status & kTransactionEnd) {
     // the read, if any, took bytes out of the TX FIFO (a STOP of another target's transaction took none). Before the
     // stretch below: a read after a repeated START gets the next slot before SCL goes.
+#if defined(CONFIG_IDF_TARGET_ESP32P4)
+    // ...and was a read: the P4 takes the TX FIFO's first byte at an address match whatever the direction, so a write
+    // also left the FIFO one short. Taken for a read, a write [10] then Sr and a 3-byte read used up the slot at the Sr,
+    // and the read sent the byte already taken, then 0xFF 0xFF (bench, 80f1b2d80a34: a CH32V103's Wire, 09 FF FF for an
+    // armed 09 37 64). slave_rw still holds the ended transaction's direction here: the next address has not come yet.
+    const bool read = kDev->sr.slave_rw && self->tx_loaded_ > txFifoHeld();
+#else
     const bool read = self->tx_loaded_ > txFifoHeld();
+#endif
     self->onTransaction(read);
     if (read || self->tx_stale_) self->reloadTx();
   }

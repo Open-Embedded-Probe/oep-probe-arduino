@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) spi-controller: MISO is read right before the edge it is read at is issued, not after its write returned (an
+  ESP32's GPIO write returns some 300 ns late, so the read came that long after the edge). A CH32V103 SPI slave puts
+  the next byte's first bit out at the edge ending a byte, and every byte's last bit read as that bit. Checked on the
+  CH32V103 (core's spi.slave at 100 kHz: pass).
+- (JA) spi-controller: MISO を、読むエッジを出した後（書き込みが返った後）ではなく、そのエッジを出す直前に読む。ESP32 の GPIO の
+  書き込みは約 300 ns 遅れて返るので、読みはエッジからその分あとになっていた。CH32V103 の SPI スレーブはバイトの終わりのエッジで
+  次のバイトの最初のビットを出すので、各バイトの最後のビットがそれに読めていた。CH32V103 で確かめた（core の spi.slave、100 kHz: 通過）。
+- (EN) i2c-target (ESP32-P4): a transaction is taken for a read only when the hardware's direction says so (sr.slave_rw):
+  the P4 takes the TX FIFO's first byte at an address match whatever the direction, so a write left the FIFO one short
+  too. Taken for a read, a write then a repeated START and a 3-byte read used up the armed slot at the repeated START,
+  and the read sent 09 FF FF for 09 37 64 (a CH32V103's Wire). Checked on the CH32V103 (core's wire: pass, 09 37 64).
+- (JA) i2c-target（ESP32-P4）: トランザクションを読みと見るのは、ハードウェアの向き（sr.slave_rw）が読みのときだけにした。P4 は向きに
+  かかわらずアドレスが合った時点で TX FIFO の先頭を取り込むので、書き込みでも FIFO が 1 つ減っていた。それを読みと見て、書き込みの
+  後の repeated START でスロットを使い切り、続く 3 バイトの読みは 09 37 64 に対して 09 FF FF を送っていた（CH32V103 の Wire）。
+  CH32V103 で確かめた（core の wire: 通過、09 37 64）。
 - (EN) riscv-dm reset is the system reset (oep-if-debug §4.3): before the ndmreset that stops the hart at its first
   instruction, the CH32's PFIC system reset (PFIC_CFGR = KEY3 | SYSRESET; PFIC_SCTLR's SYSRESET on the CH32M030 and
   CH32V205), so the peripherals start from their reset values. ndmreset alone left the last image's SysTick and USART1
