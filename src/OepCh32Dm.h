@@ -121,6 +121,10 @@ class Ch32Dm {
   // resetHalt: system reset with haltreq held through it, so the hart stops before its first instruction
   // (semihosting, gdb "monitor reset halt", flashing over a running watchdog). dpc = where it stopped.
   bool resetHalt(uint32_t &dpc);
+  // systemReset: the PFIC's system reset from the halted hart, haltreq held; resetHalt's first step (oep-if-debug §4.3).
+  bool systemReset();
+  uint32_t reset_ram_[4] = {};   // systemReset's program words: the RAM they took, put back after the reset
+  bool reset_ram_kept_ = false;
   // step: one instruction with dcsr.step, resumed exactly once (a re-issued resume would step twice), the
   // privilege level left as it is; moved = dpc changed (the CH32L103 raises no allresumeack to go by). end (oep-if-debug
   // §4.2): back in debug mode by itself within limits::kDmWaitMs; halted by the probe's haltreq after that (dpc_after valid);

@@ -100,6 +100,10 @@ class DmiPhy {
   // reset runs at the slowest period, and once the hart has stopped the link is tuned again without a wake (which
   // would reset the target). Backends whose speed does not depend on the target leave these alone.
   virtual void useSafeSpeed() {}
+  // After a system reset: slower than the slowest the attach searches from, for a part that came out of the reset on
+  // its default clock with its debug link in step only at a lower speed (a CH32V103 at 8 MHz answered 1 MHz with bits
+  // wrong and then failed every frame until its power went; up to 500 kHz it came back, bench 80f1b2d80a34).
+  virtual void useResetSpeed() { useSafeSpeed(); }
   virtual bool retune() { return true; }
   // A ceiling on the link speed from the next attach on (and the retunes after it): the host's max_speed, in Hz of the
   // bit clock. 0 = none. false: this backend cannot stay under it (a fixed speed above it).

@@ -47,6 +47,7 @@ class RvswdPhy final : public DmiPhy {
   void reinit() override { configureBus(false); }
   void useHalf(uint32_t half_ns) { setHalf(half_ns); }
   void useSafeSpeed() override;
+  void useResetSpeed() override;
   bool retune() override;
   // The host's max_speed (v1 attach TLV 0x01): no half period shorter than one SWCLK period of 1 / hz allows. Taken
   // from the nominal period (the measured rate, with the loop overhead, is lower). 0 = no ceiling.

@@ -17,6 +17,7 @@ constexpr uint32_t kWireLostMs = 1000;      // failing with no answer this long 
 constexpr uint32_t kAttachBudgetMs = 1000;  // one attach's speed search and retries (a reset's hold and the DM wait aside)
 constexpr uint32_t kScanBudgetMs = 500;     // no new pair is started after this (at least one is tried)
 constexpr uint32_t kResetSettleMs = 700;    // after a reset line or ndmreset is let go: the DM's silence waited out
+constexpr uint32_t kSystemResetQuietMs = 50;   // after the system reset is requested: no frame (its program's wait, then the reset)
 constexpr uint32_t kDmWaitMs = 100;         // one wait for DM state inside a high-level op (busy, allhalted, allresumeack)
 constexpr uint32_t kDmiBusyRetries = 100;   // DMI busy retried, then status wait
 constexpr uint32_t kResetRetries = 1;       // riscv-dm reset: the sequence redone at most this often

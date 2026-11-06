@@ -1,6 +1,27 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) riscv-dm reset is the system reset (oep-if-debug §4.3): before the ndmreset that stops the hart at its first
+  instruction, the CH32's PFIC system reset (PFIC_CFGR = KEY3 | SYSRESET; PFIC_SCTLR's SYSRESET on the CH32M030 and
+  CH32V205), so the peripherals start from their reset values. ndmreset alone left the last image's SysTick and USART1
+  running, and a CH32V103 starting a new image trapped on its first interrupt's mret (an upload from another sketch, 4
+  in 16). The store runs from 16 bytes of RAM the hart is resumed into, interrupts off, after a count (about 1 ms): no
+  DM command under way and no frame on the wire when the reset comes (from the program buffer it cut the command, and a
+  V103 failed every frame after until its power went); the RAM goes back once the hart is stopped. The lines stay
+  driven and quiet for 50 ms, then the link comes back at 250 kHz (a V103 just out of reset on 8 MHz misread 1 MHz) and
+  is tuned again once stopped. Checked on a CH32X035, V208, V103, two V003, V006 and M030 (reset halt and run three
+  times each: the peripherals back to their reset values, the RAM as before, running after), and the V103's upload
+  from another sketch 8 of 8 (it failed at the first before). CH32X035 flash +632 bytes.
+- (JA) riscv-dm の reset をシステムリセットにした（oep-if-debug §4.3）: hart を最初の命令の前で止める ndmreset の前に、CH32 の PFIC の
+  システムリセット（PFIC_CFGR = KEY3 | SYSRESET。CH32M030 と CH32V205 は PFIC_SCTLR の SYSRESET）をかけ、周辺を既定の値から始める。
+  ndmreset だけでは前のイメージの SysTick と USART1 が動いたままで、新しいイメージを起動した CH32V103 が最初の割り込みの mret で
+  止まっていた（別のスケッチからの書き込みで 16 回中 4 回）。書き込みは、hart を走らせた RAM の 16 バイトから、割り込みを止め、
+  数えて待ってから（約 1 ms）行う。リセットの瞬間に DM の command も線のフレームも無いようにするため（program buffer からだと
+  command が途中で切れ、V103 は電源を切るまで以後のフレームに失敗し続けた）。RAM は hart を止めた後に戻す。線は 50 ms 駆動したまま
+  黙り、250 kHz でつなぎ直し（リセット直後の 8 MHz の V103 は 1 MHz を読み違えた）、止めた後に速さを測り直す。CH32X035、V208、
+  V103、V003 × 2、V006、M030 で確かめた（止めるリセットと走らせるリセットを 3 回ずつ: 周辺は既定の値、RAM は元のまま、
+  リセットの後は走っている）。V103 への別のスケッチからの書き込みは 8 回中 8 回通った（直す前は 1 回目で失敗）。CH32X035 の flash は
+  632 バイト増えた。
 - (EN) SWIO on the ESP32-P4 / P4X: each low of a host bit is timed from the moment the line fell (and the high after it
   from the moment it rose), not from a deadline set by the edge before. The CPU stalls for 0.3 - 0.6 us even with
   interrupts off while the logic capture's and USB's DMA share the memory this code runs from; a stall before an edge

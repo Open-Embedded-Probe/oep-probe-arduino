@@ -791,6 +791,14 @@ bool RvswdPhy::writesLand(uint8_t retries) {
   return ok;
 }
 
+// 250 kHz (half period 2 us), or slower when the slowest period is: half of what a CH32V103 just out of its system reset
+// followed (oep-if-debug §4.3; DmiPhy::useResetSpeed).
+void RvswdPhy::useResetSpeed() {
+  if (!ready_) return;
+  constexpr uint32_t kResetHalfNs = 2000;
+  setHalf(slowestNs() > kResetHalfNs ? slowestNs() : kResetHalfNs);
+}
+
 void RvswdPhy::useSafeSpeed() {
   // Also when attach() did not take: a CH32 held in reset may not answer, and the writes that follow the release
   // must still go out at a speed its default clock can follow.
@@ -919,6 +927,7 @@ bool RvswdPhy::readWire(uint8_t, uint32_t &) { return false; }
 void RvswdPhy::write(uint8_t, uint32_t) {}
 void RvswdPhy::setHalf(uint32_t) {}
 void RvswdPhy::configureBus(bool) {}
+void RvswdPhy::useResetSpeed() {}
 void RvswdPhy::useSafeSpeed() {}
 bool RvswdPhy::retune() { return false; }
 void RvswdPhy::writeRaw(uint8_t, uint32_t) {}

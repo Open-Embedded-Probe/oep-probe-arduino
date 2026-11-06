@@ -2,10 +2,13 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 #include "OepCh32Dm.h"
+
+#include <string.h>
 #include "OepLog.h"
 
 namespace oep {
 namespace {
+constexpr uint32_t kSystemResetQuietMs = limits::kSystemResetQuietMs;   // oep-if-debug §4.3
 constexpr uint32_t kDmWaitMs = limits::kDmWaitMs;   // one wait for DM state inside a high-level op (oep-if-debug §4)
 constexpr uint8_t kData0 = 0x04, kData1 = 0x05, kDmControl = 0x10, kDmStatus = 0x11, kDmHartInfo = 0x12,
                   kAbstractCs = 0x16, kCommand = 0x17, kAbstractAuto = 0x18, kProgBuf0 = 0x20;
@@ -1010,6 +1013,50 @@ bool Ch32Dm::ackHaveReset() {
   return true;
 }
 
+// The PFIC's system reset (a WCH-LinkE's soft reset writes the same register after its haltreq): PFIC_CFGR = KEY3 |
+// SYSRESET on most CH32 parts; PFIC_SCTLR's SYSRESET (bit 31) on those with no CFGR - the CH32M030 (target_id
+// 0x03b.....) and the CH32V205 (0x205.....), as ArduinoCore-CH32RV's CH32RV_SYSTEM_RESET. The store runs from a few
+// words of RAM the hart is resumed into, interrupts off, after counting t0 down: the reset then comes about 1 ms after
+// the resume (11 ms at the 8 MHz a part starts on), with no abstract command under way and while the probe sends nothing.
+// Run as an abstract command from the program buffer, the reset cut the command, and a CH32V103 answered every frame
+// after with status 2 (failed) until its power went. false: the program, a register or dpc was not seen to land (the
+// hart is left halted, no reset requested). True does not wait.
+bool Ch32Dm::systemReset() {
+  uint32_t id = 0;
+  const bool sctlr = readDmiSure(0x7f, id) && id != 0xffffffffu && ((id >> 20) == 0x03bu || (id >> 20) == 0x205u);
+  const uint32_t address = sctlr ? 0xE000ED10u : 0xE000E048u;      // PFIC_SCTLR : PFIC_CFGR
+  const uint32_t value = sctlr ? 0x80000000u : 0xBEEF0080u;        // SYSRESET : KEY3 | SYSRESET
+  // addi t0, t0, -1; bnez t0, -4; sw a1, 0(a0); j .
+  static const uint32_t kProgram[] = {0xfff28293u, 0xfe029ee3u, 0x00b52023u, 0x0000006fu};
+  constexpr size_t kWords = sizeof kProgram / sizeof kProgram[0];
+  constexpr uint32_t kAt = 0x20000000u, kCount = 30000;
+  if (!halted_ && !halt()) return false;
+  // the words the program takes, read first: put back once the hart is stopped after the reset (restoreResetRam)
+  if (!readWords(kAt, reset_ram_, kWords)) return false;
+  reset_ram_kept_ = true;
+  auto undo = [&]() {   // no reset requested after all: the RAM back as it was
+    writeWordsFast(kAt, reset_ram_, kWords);
+    reset_ram_kept_ = false;
+    return false;
+  };
+  uint32_t back[kWords] = {};
+  if (!writeWordsFast(kAt, kProgram, kWords) || !readWords(kAt, back, kWords) || memcmp(back, kProgram, sizeof back) != 0)
+    return undo();
+  uint32_t dcsr = 0, mstatus = 0;
+  if (!held([&] {
+        return readRegisterSure(0x07b0, dcsr) && writeRegisterSeen(0x07b0, dcsr | 0x3u, 0x3u) &&
+               readRegisterSure(0x0300, mstatus) && writeRegisterTaken(0x0300, mstatus & ~0x8u) &&
+               writeRegisterSeen(0x1005, kCount) && writeRegisterSeen(0x100a, address) &&
+               writeRegisterSeen(0x100b, value) && writeRegisterSeen(0x07b1, kAt);
+      }))
+    return undo();
+  phy_.write(kAbstractAuto, 0);
+  phy_.write(kDmControl, 0x00000001);      // haltreq lowered first (a resumereq is ignored while it is set)
+  phy_.write(kDmControl, 0x40000001);      // resumereq: the count, the store, the reset
+  halted_ = false;
+  return true;
+}
+
 bool Ch32Dm::resetHalt(uint32_t &dpc) {
   dpc = 0;
   cmderr_ = 0;
@@ -1023,6 +1070,22 @@ bool Ch32Dm::resetHalt(uint32_t &dpc) {
   // the slowest period and tune the link again once the hart has stopped. A DMSTATUS without version 2 or 3 is noise.
   phy_.useSafeSpeed();
   kept_ = gprs_kept_ = false;              // the target starts over: nothing of before is wanted back
+  // The system reset first (oep-if-debug §4.3: the peripherals back to their reset values as well). ndmreset alone
+  // restarts the hart and leaves them as the last image set them: a CH32V103 started a new image with the old one's
+  // SysTick and USART1 running and trapped on its first interrupt's mret (bench, 80f1b2d80a34 v103evt: an upload
+  // from another sketch, 4 in 16). Then the lines stay driven and quiet for kSystemResetQuietMs - an exchange the
+  // resetting module does not answer would let them go, and a CH32V103 then fails every frame until its power goes -
+  // at a speed the part's default clock follows, and the link is brought back. The image has run for a moment by then;
+  // it is stopped, and the ndmreset below stops the hart before its first instruction with the peripherals as the
+  // system reset left them (a CH32V003's module loses its configuration and dmactive with the system reset).
+  if (systemReset()) {
+    phy_.useResetSpeed();                  // the part comes back on its default clock (DmiPhy::useResetSpeed)
+    delay(kSystemResetQuietMs);
+    relink();
+    // the image started after the reset: stopped for the ndmreset below, and the RAM the program took put back
+    if (halt() && reset_ram_kept_) writeWordsFast(0x20000000u, reset_ram_, sizeof reset_ram_ / sizeof reset_ram_[0]);
+    reset_ram_kept_ = false;
+  }
   phy_.write(kDmControl, 0x80000003);      // haltreq | ndmreset | dmactive
   phy_.write(kDmControl, 0x80000001);
   // Out of reset the hart may be unavailable for a while; it should then come up halted at the reset vector.
