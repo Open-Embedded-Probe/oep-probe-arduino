@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.51
 - (EN) Settings: the items declared, the bytes of the values held and the save's are given when the settings are made, by
   an optional last constructor argument `Settings::Sizes` (entries, items, blob), and taken for good there. The defaults
   hold more values than before: 2048 bytes (was 800) and a 4096-byte save (was 2048) - a P4 probe with a label on each
