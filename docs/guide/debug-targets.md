@@ -40,6 +40,17 @@ series. Which series have been flashed on hardware is kept in ArduinoCore-CH32RV
   fix it for a given target, use the port's `channel.{}.rest` setting ([Settings](settings.md#debug-lines)).
 - The speed limit is given by the tool at each connection (`max_speed`). The probe picks a speed that holds within it.
 
+### Reset
+
+A reset over the debug line (the reset of OEP's `oep.target.riscv-dm`, `reset` in `oep_client.riscv`) is a system
+reset. The peripherals go back to their reset values along with the CPU, so a newly flashed application does not inherit
+the previous one's peripheral setup (timers, interrupts, UART and so on).
+
+- On a CH32 it is the PFIC's system reset. It does not use the NRST line.
+- A reset that halts stops at the first instruction after the reset.
+- For this the probe borrows the first 16 bytes of the target's RAM and puts them back afterwards.
+- To reset through the NRST line, use attach's reset (attach under reset).
+
 ### Wiring tips
 
 - **Wire NRST**: to recover when the application has turned the debug pin into a GPIO or sleeps too deeply to answer

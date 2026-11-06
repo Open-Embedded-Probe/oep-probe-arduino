@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) docs/guide debug-targets: a Reset section - the debug line's reset is a system reset (peripherals too; the CH32's
+  PFIC, no NRST), a halting reset stops at the first instruction, 16 bytes of RAM borrowed and put back.
+- (JA) docs/guide の debug-targets: 「リセット」の節を足した。デバッグの線のリセットはシステムリセット（周辺も戻る。CH32 は PFIC、
+  NRST は使わない）、止めるリセットは最初の命令で止まる、RAM の 16 バイトを借りて戻す。
 - (EN) SWIO on the RP2040 / RP2350 and the CH32 probes: each low timed from the moment the line fell, as on the ESP32-P4
   (a stall before an edge - an XIP cache miss, a bus stall - lengthens the high before it and never shortens a long low
   into a short one). No misread was recorded on these; built for every profile, not run on hardware.
