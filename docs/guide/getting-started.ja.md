@@ -233,6 +233,8 @@ oep linktest tcp://192.168.1.128:7450
 
 ## 次に
 
+- [OEP でできること](use-cases.ja.md): やりたいことごとに、用意するもの、配線、設定。[デバッグの対応ターゲット](debug-targets.ja.md)、
+  [キャプチャの使い分け](capture.ja.md)、[設定項目](settings.ja.md)。
 - [firmware の機能](firmware-features.ja.md): 配布の firmware から機能を外す、自分のインターフェースを足す。
 - [はじめてのインターフェース](your-first-interface.ja.md): 自分のインターフェースを一歩ずつ。
 - [probe を書く](writing-a-probe.ja.md): ライブラリの中身の詳しい手引き。
