@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 #include "OepEndpoint.h"
+
+#include <new>
 #include "OepLog.h"
 #include "OepPinTable.h"
 
@@ -79,14 +81,16 @@ void Endpoint::freeze() {
   }
   size_t smallest = limits_.max_frame;   // the routes' max_frame, each its own (core §7.1)
   for (size_t k = 0; k < transport_count_; ++k)
-    if (transports_[k].max_frame < smallest) smallest = transports_[k].max_frame;
+    if (tr(k).max_frame < smallest) smallest = tr(k).max_frame;
   for (size_t i = 0; i < count_; ++i) interfaces_[i]->setFrameLimits(smallest, limits_.max_frame);
 }
 
 bool Endpoint::addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
                               bool flush_after_burst) {
-  if (transport_count_ >= kMaxTransports || listener_) return false;
-  Transport &t = transports_[transport_count_];
+  if (listener_) return false;
+  Transport *made = newTransport();
+  if (!made) return false;
+  Transport &t = *made;
   t.max_frame = serialKind(kind) && limits_.max_frame > kMaxSerialFrame ? kMaxSerialFrame : limits_.max_frame;
   t.stream = &stream;
   t.kind = kind;
@@ -103,6 +107,22 @@ bool Endpoint::addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capa
   return true;
 }
 
+// The i-th transport (i < transport_count_), along the chain.
+Endpoint::Transport &Endpoint::tr(size_t i) const {
+  Transport *t = transport_first_;
+  while (i-- && t->next) t = t->next;
+  return *t;
+}
+
+// Room for one more transport, taken for good and chained. nullptr: no room.
+Endpoint::Transport *Endpoint::newTransport() {
+  void *p = takeForGood(sizeof(Transport));
+  if (!p) return nullptr;
+  Transport *t = new (p) Transport();
+  (transport_last_ ? transport_last_->next : transport_first_) = t;
+  return transport_last_ = t;
+}
+
 // A TCP slot at a poll: a new connection starts with a fresh reader (and none of the old one's pushes). false: no
 // connection on it now. Reached through tcp_slot_ only (set by addTcpListener): a probe with no listener links none of
 // it.
@@ -117,10 +137,13 @@ bool Endpoint::slotOfTcp(Transport &t) {
 }
 
 bool Endpoint::addTcpListener(Connection *const *slots, uint8_t *const *rx, size_t rx_capacity, size_t count) {
-  if (!count || transport_count_ + count > kMaxTransports || rx_capacity < limits_.max_frame) return false;
+  if (!count || rx_capacity < limits_.max_frame) return false;
   tcp_slot_ = slotOfTcp;
   for (size_t k = 0; k < count; ++k) {
-    Transport &t = transports_[transport_count_++];
+    Transport *made = newTransport();
+    if (!made) return k > 0;   // no room for more slots: the ones made serve
+    Transport &t = *made;
+    ++transport_count_;
     t.stream = slots[k];
     t.conn = slots[k];
     t.seen = 0;
@@ -139,7 +162,7 @@ bool Endpoint::addTcpListener(Connection *const *slots, uint8_t *const *rx, size
 }
 
 void Endpoint::send(size_t length) {
-  Transport &t = transports_[current_];
+  Transport &t = tr(current_);
   t.wrote = true;
   if (serialKind(t.kind)) serial_->write(*t.stream, tx_, length);
   else writeFrame(*t.stream, tx_, length);
@@ -148,7 +171,7 @@ void Endpoint::send(size_t length) {
 
 // A serial port's bytes this poll (transports §1, §4): COBS frames to handleMessage, raw bytes to the binds.
 void Endpoint::pollSerial(Endpoint &e, size_t i) {
-  Transport &t = e.transports_[i];
+  Transport &t = e.tr(i);
   uint8_t chunk[512];
   for (int avail; (avail = t.stream->available()) > 0;) {
     size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
@@ -201,7 +224,7 @@ void Endpoint::rawOut() {
   if (!raw_) return;
   raw_->poll(locked_);
   for (size_t i = 0; i < transport_count_; ++i) {
-    Transport &t = transports_[i];
+    Transport &t = tr(i);
     const int reserve = static_cast<int>(cobsFrameMax(t.max_frame));
     if (!serialKind(t.kind) || held(i)) continue;
     int room = t.stream->availableForWrite() - reserve;
@@ -279,7 +302,7 @@ bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_byt
 bool Endpoint::sendEvents() {
   while (event_tail_ != event_head_) {
     const Event &e = events_[event_tail_ % kEvents];
-    const Transport &t = transports_[current_];
+    const Transport &t = tr(current_);
     const int need = static_cast<int>(serialKind(t.kind) ? cobsFrameMax(kEventHeader + e.length) : kEventHeader + e.length + 2);
     if (t.stream->availableForWrite() < need) return false;
     tx_[0] = kRoleEvent;
@@ -298,7 +321,7 @@ void Endpoint::push() {
   if (!locked_ || pushGone()) return;   // the subscriber's TCP connection closed: its notifications go nowhere
   if (!sendEvents()) return;
   size_t room = tx_capacity_ - kPushHeader;
-  const size_t frame = transports_[current_].max_frame;   // the subscriber's route (core §7.1)
+  const size_t frame = tr(current_).max_frame;   // the subscriber's route (core §7.1)
   if (room > frame - kPushHeader) room = frame - kPushHeader;
   for (size_t i = 0; i < count_; ++i) {
     if (!fn_[i].subscribed) continue;
@@ -314,7 +337,7 @@ void Endpoint::push() {
       if (!enough && !due) continue;
       fn_[i].draining = ready;
     }
-    Transport &t = transports_[current_];
+    Transport &t = tr(current_);
     const int writable = t.stream->availableForWrite();
     // Keep at most push_queue_ bytes waiting in the transport: a result queues behind no more than that. The
     // transport's capacity is taken as the most room ever seen free (idle).
@@ -382,7 +405,7 @@ void Endpoint::poll() {
   freeze();
   (void)nowNs();   // the clock counts the wraps of a 32-bit timer as it reads it (core §2.6a): read it every pass
   for (size_t i = 0; i < transport_count_; ++i) {
-    Transport &t = transports_[i];
+    Transport &t = tr(i);
     current_ = i;   // results go back on this transport
     if (serialKind(t.kind)) {
       serial_->poll(*this, i);
@@ -414,7 +437,7 @@ void Endpoint::poll() {
   if (serial_) serial_->after(*this, true);   // then the serial ports' raw bytes (never inside a frame), and a lapse
                                               // push() found: back to the boot speed
   for (size_t i = 0; i < transport_count_; ++i) {
-    Transport &t = transports_[i];
+    Transport &t = tr(i);
     if (t.flush_after_burst && t.wrote) t.stream->flush();
     t.wrote = false;
   }
@@ -487,7 +510,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   const size_t payload_length = length - kRequestHeader;
   uint8_t *out = tx_ + kResultHeader;
   size_t capacity = tx_capacity_ - kResultHeader;
-  const size_t frame = transports_[current_].max_frame;   // the request's route (core §4.4)
+  const size_t frame = tr(current_).max_frame;   // the request's route (core §4.4)
   if (capacity > frame - kResultHeader) capacity = frame - kResultHeader;
 
   lapse();
@@ -532,7 +555,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
   }
   if (result.length > capacity) result = failed(0);
   // transports §4: a serial port the lock holder's requests come in on (its open too) stops its raw transfer
-  if (serialKind(transports_[current_].kind) && locked_ && session == holder_ &&
+  if (serialKind(tr(current_).kind) && locked_ && session == holder_ &&
       (!is_open || result.resolution == kResolutionCompleted))
     held_ |= uint32_t{1} << current_;
   // The lease runs from when the holder's request completed (a long verify must not lapse its own lock); every answer
@@ -579,7 +602,7 @@ void Endpoint::handleMessage(const uint8_t *message, size_t length) {
 void Endpoint::restartNow() {
   restart_taken_ = false;
   restarting_ = true;
-  Transport &t = transports_[current_];
+  Transport &t = tr(current_);
   // The answer out first: a UART's flush returns once its last bit is sent, a USB stream's starts the transfer. Not
   // USB-Serial/JTAG's: HWCDC's flush with no TX timeout drops what still waits; its interrupt sends it as the host reads.
   if (t.kind != kUsbSerialJtag) t.stream->flush();
@@ -668,12 +691,12 @@ Result Endpoint::core(uint8_t op, uint32_t session, const uint8_t *payload, size
       if (capacity < 20) return failed();
       memcpy(out, reg::kConfirmResultMagic, 4);
       out[4] = reg::kProtocolRevision;
-      putU16(out + 5, transports_[current_].max_frame);   // this route's (core §7.1)
+      putU16(out + 5, tr(current_).max_frame);   // this route's (core §7.1)
       putU32(out + 7, limits_.window_bytes);
       out[11] = limits_.max_inflight;
       putU32(out + 12, bootId());                     // a host without the lock learns of a restart here (core §6.5)
       putTlvHeader(out + 16, reg::core::kTlvConfirmAnswerTransport, 1);
-      out[19] = transports_[current_].index;          // the entry of describe's transport list it came on
+      out[19] = tr(current_).index;          // the entry of describe's transport list it came on
       return completed(20);
     }
     case kOpList: return list(payload, length, out, capacity);
@@ -793,7 +816,7 @@ Result Endpoint::portSpeed(const uint8_t *payload, size_t length, uint8_t *out, 
   // 0x00 (core §2.5)
   if (step == reg::probe_link::kPortSpeedStepTry && verify == 0) return rejected(kRejectMalformed);
   if (step > reg::probe_link::kPortSpeedStepRevert) return unsupportedValue(out, capacity);
-  if (transports_[port].kind != kUartBridge) return wrongState(out, capacity);
+  if (tr(port).kind != kUartBridge) return wrongState(out, capacity);
   if (speed_fallback_) return wrongState(out, capacity);   // phase 3: every step refused, never cancelled (link §3)
   const bool this_port = speed_state_ != kSpeedBase && speed_port_ == port;   // this port is off its boot speed
   uint32_t answer = 0;
@@ -831,7 +854,7 @@ void Endpoint::speedApply() {
   speed_pending_ = kSpeedNone;
   if (pending == kSpeedRevert) { speedRevert(); return; }
   if (pending != kSpeedSwitch || !port_speed_) return;
-  Transport &t = transports_[speed_pending_port_];
+  Transport &t = tr(speed_pending_port_);
   t.stream->flush();   // the answer out at the old speed first
   speed_rate_ = port_speed_(speed_pending_port_, speed_pending_baud_, true);
   speed_port_ = speed_pending_port_;
@@ -848,7 +871,7 @@ Result Endpoint::portState(const uint8_t *payload, size_t length, uint8_t *out, 
   const Result parsed = plainTail(tail, payload, length, 0, out, capacity);
   if (refused(parsed)) return parsed;
   const uint8_t port = static_cast<uint8_t>(current_);
-  if (transports_[port].kind != kUartBridge) return wrongState(out, capacity);
+  if (tr(port).kind != kUartBridge) return wrongState(out, capacity);
   if (capacity < 5) return failed();
   const uint8_t phase = portPhase(port);
   putU32(out, phase == 0 ? speed_base_ : speed_rate_);
@@ -860,14 +883,14 @@ Result Endpoint::portState(const uint8_t *payload, size_t length, uint8_t *out, 
 // frame's answer has gone (handleMessage then reverts) or the line goes quiet (the reader's gap: speedPoll).
 void Endpoint::speedFall() {
   if (speed_state_ == kSpeedBase) return;
-  if (transports_[speed_port_].serial.receiving()) { speed_fallback_ = true; return; }
+  if (tr(speed_port_).serial.receiving()) { speed_fallback_ = true; return; }
   speedRevert();
 }
 
 void Endpoint::speedRevert() {
   speed_fallback_ = false;
   if (speed_state_ == kSpeedBase) return;
-  transports_[speed_port_].stream->flush();
+  tr(speed_port_).stream->flush();
   port_speed_(speed_port_, speed_base_, true);
   speed_state_ = kSpeedBase;
   speed_port_ = 0xff;
@@ -877,7 +900,7 @@ void Endpoint::speedRevert() {
 void Endpoint::speedPoll() {
   if (speed_pending_ == kSpeedRevert) { speed_pending_ = kSpeedNone; speedRevert(); }
   if (speed_fallback_) {   // phase 3: back once nothing is being received (a frame's answer reverts in handleMessage)
-    if (!transports_[speed_port_].serial.receiving()) speedRevert();
+    if (!tr(speed_port_).serial.receiving()) speedRevert();
     return;
   }
   const uint32_t now = millis();
@@ -1228,8 +1251,8 @@ Result Endpoint::describe(const uint8_t *payload, size_t length, uint8_t *out, s
     }
     if (settings_) settings_->describe(0, page);
     for (size_t i = 0; i < transport_count_; ++i) {
-      if (i && transports_[i].index == transports_[i - 1].index) continue;   // a listener's slots: one entry
-      const uint8_t t[3] = {transports_[i].index, transports_[i].kind, transports_[i].usb_interface};
+      if (i && tr(i).index == tr(i - 1).index) continue;   // a listener's slots: one entry
+      const uint8_t t[3] = {tr(i).index, tr(i).kind, tr(i).usb_interface};
       page.put(reg::core::kTlvDescribeTransport, t, sizeof t);
     }
     uint8_t ms[4];

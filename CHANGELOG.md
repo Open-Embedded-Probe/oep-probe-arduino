@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Endpoint, Binds, Settings: no limit on the transports either (there was a table of 8, 2 on a small-RAM build).
+  Each transport is taken for good as it is added and chained. A serial port's pass-through ring (Binds) is taken the
+  first time a pass-through puts bytes for that port - a port that never carries one takes nothing - and its size is the
+  Binds constructor's (default 512 bytes, 256 on a small-RAM build, as before). The settings' pass-through state per
+  port is made once, the first time the pass-throughs run. `Endpoint::kMaxTransports`, `Binds::kMaxPorts` / `kRing` and
+  `Settings::kMaxPorts` are gone. CH32X035 (with the interfaces' change above): flash +544 bytes, static RAM -388 bytes.
+- (JA) Endpoint、Binds、Settings: transport の数にも上限が無くなった（8 個、小さい RAM のビルドでは 2 個の表だった）。transport は
+  足すときに 1 つずつ取ってずっと持ち、つなぐ。シリアルの経路の中継のリング（Binds）は、その経路で中継が初めてバイトを置いたときに
+  取る（中継を使わない経路は何も取らない）。大きさは Binds のコンストラクタで決め、既定はこれまでどおり 512 バイト（小さい RAM の
+  ビルドは 256）。設定の経路ごとの中継の状態は、中継が初めて動くときに一度だけ作る。`Endpoint::kMaxTransports`、
+  `Binds::kMaxPorts` / `kRing`、`Settings::kMaxPorts` は無くなった。CH32X035（上のインターフェイスの変更と合わせて）: flash +544
+  バイト、静的な RAM -388 バイト。
 - (EN) ESP32-P4 / P4X firmware: the UART bridge transport (UART3 on GPIO37 / 38, 115200) is in by default. Those are
   the chip's default UART pads (the boot ROM's download and log), so a USB-UART adapter there reaches OEP as well, and
   they are no longer offered to fixtures or the wires (the pin table leaves out 24, 25, 37 and 38). A sketch's own

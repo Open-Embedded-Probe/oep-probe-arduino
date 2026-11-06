@@ -128,8 +128,6 @@ bool sameText(const uint8_t *a, size_t n, const char *b) { return strlen(b) == n
 
 uint8_t gBlob[kMaxBlob];   // the save as written or read (save, readBlob: never at once)
 
-struct PassContext { Settings *settings; uint8_t port; };
-PassContext gPassContext[Settings::kMaxPorts];
 // The holds' and rests' contexts: the settings and the wire whose items they read
 struct WireContext { Settings *settings; const Interface *wire; };
 WireContext gHoldContext[Settings::kMaxPlaces + 2], gRestContext[Settings::kMaxPlaces];
@@ -149,7 +147,6 @@ uint32_t crc32Ieee(const uint8_t *data, size_t length) {
 uint8_t Settings::scratch_[Settings::kMaxItems];
 
 Settings::Settings(Endpoint &endpoint, Binds &binds) : endpoint_(endpoint), binds_(binds) {
-  for (size_t p = 0; p < kMaxPorts; ++p) pass_uart_[p] = pass_console_[p] = -1;
   endpoint_.setSettings(this);
 }
 
@@ -565,7 +562,7 @@ bool Settings::keyValid(uint8_t entry, uint16_t key) const {
     case reg::core::kSettingKeyKindNone: return key == 0;
     case reg::core::kSettingKeyKindIndex: return key < s.keys;
     case reg::core::kSettingKeyKindNetif: return key == 1;   // "wifi", the one netif (core §7.7: from 1)
-    case reg::core::kSettingKeyKindTransport: return key < kMaxPorts && endpoint_.isSerialPort(key);   // serial ports
+    case reg::core::kSettingKeyKindTransport: return endpoint_.isSerialPort(key);   // serial ports
     case reg::core::kSettingKeyKindChannel: return pins_ ? pins_->allowed(key) : key < channels_;
     default: return false;
   }
@@ -674,7 +671,7 @@ Result Settings::checkWhole(const uint8_t *items, size_t length, uint8_t *out, s
         return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, ch);
     }
   }
-  for (uint8_t port = 0; port < kMaxPorts; ++port) {
+  for (uint8_t port = 0; port < endpoint_.transportCount(); ++port) {
     int users = 0;
     size_t n = 0;
     for (size_t k = 0; k < uart_count_; ++k) {
@@ -1236,14 +1233,24 @@ void Settings::applySaved() {
 // ---- the pass-throughs (fixture §2.1, console §2.1) ----------------------------------------------------------------------
 
 void Settings::passIn(void *self, const uint8_t *data, size_t length) {
-  const PassContext *c = static_cast<const PassContext *>(self);
+  const Port *c = static_cast<const Port *>(self);
   c->settings->binds_.put(c->port, data, length);
 }
 
+bool Settings::makePorts() {
+  if (ports_) return true;
+  const size_t n = endpoint_.transportCount();
+  ports_ = static_cast<Port *>(takeForGood(n * sizeof(Port)));
+  if (!ports_) return false;
+  for (size_t p = 0; p < n; ++p) ports_[p] = {this, static_cast<uint8_t>(p), -1, -1, false};
+  port_count_ = n;
+  return true;
+}
+
 void Settings::runPassthroughs() {
-  for (uint8_t port = 0; port < kMaxPorts; ++port) {
+  if (!makePorts()) return;
+  for (uint8_t port = 0; port < port_count_; ++port) {
     const bool session = endpoint_.held(port);   // a session's request came on the port: off for the session
-    gPassContext[port] = {this, port};
     size_t n = 0;
     // a UART's
     int want_uart = -1;
@@ -1255,16 +1262,16 @@ void Settings::runPassthroughs() {
       const uint8_t *b = in(items_, items_length_, kPassBaud, &uart, port, n);
       const uint8_t *f = in(items_, items_length_, kPassFormat, &uart, port, n);
       const bool on = !session && !uart.planned() && pins_ && pins_->free(rx);
-      if (on && pass_uart_[port] < 0 &&
-          uart.passStart(rx, b ? getU32(b) : reg::kUartBridgeBootBaud, f ? f[0] : 0, &Settings::passIn, &gPassContext[port]))
-        pass_uart_[port] = static_cast<int8_t>(want_uart);
-      if (pass_uart_[port] >= 0) {
+      if (on && ports_[port].uart < 0 &&
+          uart.passStart(rx, b ? getU32(b) : reg::kUartBridgeBootBaud, f ? f[0] : 0, &Settings::passIn, &ports_[port]))
+        ports_[port].uart = static_cast<int8_t>(want_uart);
+      if (ports_[port].uart >= 0) {
         if (on) uart.poll();
-        else { uart.passStop(); pass_uart_[port] = -1; binds_.drop(port); }
+        else { uart.passStop(); ports_[port].uart = -1; binds_.drop(port); }
       }
-    } else if (pass_uart_[port] >= 0) {
-      uarts_[pass_uart_[port]]->passStop();
-      pass_uart_[port] = -1;
+    } else if (ports_[port].uart >= 0) {
+      uarts_[ports_[port].uart]->passStop();
+      ports_[port].uart = -1;
       binds_.drop(port);
     }
     // a console's: wire, swdio and mechanism given (and swclk on rvswd)
@@ -1275,13 +1282,13 @@ void Settings::runPassthroughs() {
       if (wire) want_place = placeOf(c, getU16(wire));
     }
     if (want_place < 0) {
-      if (pass_console_[port] >= 0) {
-        places_[pass_console_[port]].console->passStop();
-        residentRelease(places_[pass_console_[port]].wire->port());
-        pass_console_[port] = -1;
+      if (ports_[port].console >= 0) {
+        places_[ports_[port].console].console->passStop();
+        residentRelease(places_[ports_[port].console].wire->port());
+        ports_[port].console = -1;
         binds_.drop(port);
       }
-      console_tried_[port] = false;
+      ports_[port].console_tried = false;
       continue;
     }
     const Place &pl = places_[want_place];
@@ -1301,38 +1308,38 @@ void Settings::runPassthroughs() {
     const bool pins_free = !pins_ || (pins_->free(swdio) && (swclk == 0xffff || pins_->free(swclk)));
     const bool on = complete && !session && !dp.connected && pins_free && !skip_boot_attach_ && (!attach_gate_ || attach_gate_());
     if (!on) {
-      if (pass_console_[port] >= 0) { console.passStop(); residentRelease(dp); pass_console_[port] = -1; binds_.drop(port); }
-      console_tried_[port] = false;   // the condition starts again later: one more try (rvswd)
+      if (ports_[port].console >= 0) { console.passStop(); residentRelease(dp); ports_[port].console = -1; binds_.drop(port); }
+      ports_[port].console_tried = false;   // the condition starts again later: one more try (rvswd)
       continue;
     }
-    if (pass_console_[port] < 0) {
+    if (ports_[port].console < 0) {
       // rvswd's wake may reset the target: tried once while the condition holds; swio tries again (console §2.1)
-      if (console_tried_[port] && pl.wire->isRvswd()) continue;
-      console_tried_[port] = true;
+      if (ports_[port].console_tried && pl.wire->isRvswd()) continue;
+      ports_[port].console_tried = true;
       dp.yield = [](void *c) {
-        PassContext *pc = static_cast<PassContext *>(c);
+        Port *pc = static_cast<Port *>(c);
         pc->settings->runPassthroughsYield(pc->port);
       };
-      dp.yield_context = &gPassContext[port];
+      dp.yield_context = &ports_[port];
       const uint32_t max_hz = hz ? getU32(hz) : dp.dm.phy().minClockHz();
       if (residentAttach(dp, swdio, swclk, max_hz ? max_hz : 1000000u) &&
-          console.passStart(number, &Settings::passIn, &gPassContext[port]))
-        pass_console_[port] = static_cast<int8_t>(want_place);
+          console.passStart(number, &Settings::passIn, &ports_[port]))
+        ports_[port].console = static_cast<int8_t>(want_place);
       else
         residentRelease(dp);
     }
-    if (pass_console_[port] >= 0) {
+    if (ports_[port].console >= 0) {
       console.poll();
-      if (console.passLost()) { residentRelease(dp); pass_console_[port] = -1; }   // line lost: tried again (swio)
+      if (console.passLost()) { residentRelease(dp); ports_[port].console = -1; }   // line lost: tried again (swio)
     }
   }
 }
 
 void Settings::runPassthroughsYield(uint8_t port) {
-  if (port >= kMaxPorts || pass_console_[port] < 0) return;
-  places_[pass_console_[port]].console->passStop();
-  residentRelease(places_[pass_console_[port]].wire->port());
-  pass_console_[port] = -1;
+  if (port >= port_count_ || ports_[port].console < 0) return;
+  places_[ports_[port].console].console->passStop();
+  residentRelease(places_[ports_[port].console].wire->port());
+  ports_[port].console = -1;
   binds_.drop(port);
 }
 

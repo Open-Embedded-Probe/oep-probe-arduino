@@ -16,7 +16,10 @@ namespace oep {
 
 class Binds final : public RawPorts {
  public:
-  static constexpr size_t kMaxPorts = Endpoint::kMaxTransports, kRing = OEP_SMALL_RAM ? 256 : 512;
+  // Each port's ring: `ring` bytes, taken for good the first time a pass-through puts bytes for that port (a port that
+  // never carries one takes nothing). The default as before: 512 bytes, 256 on a small-RAM build.
+  static constexpr size_t kDefaultRing = OEP_SMALL_RAM ? 256 : 512;
+  explicit Binds(size_t ring = kDefaultRing) : ring_(ring ? ring : 1) {}
 
   // The pass-through of `port` adds bytes (the oldest go when the ring is full: a serial monitor sees the newest).
   void put(uint8_t port, const uint8_t *data, size_t length);
@@ -29,8 +32,13 @@ class Binds final : public RawPorts {
   void sessionOver(uint32_t) override {}
 
  private:
-  struct Ring { uint8_t data[kRing]; size_t head = 0, count = 0; };
-  Ring rings_[kMaxPorts];
+  struct Ring { Ring *next; uint8_t port; size_t head, count; uint8_t data[1]; };   // data: ring_ bytes
+  Ring *find(uint8_t port) const {
+    for (Ring *r = rings_; r; r = r->next) if (r->port == port) return r;
+    return nullptr;
+  }
+  size_t ring_;
+  Ring *rings_ = nullptr;
 };
 
 }  // namespace oep

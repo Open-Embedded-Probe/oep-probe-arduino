@@ -108,7 +108,7 @@ class WifiControl {
 
 class Settings final : public SettingsCore {
  public:
-  static constexpr size_t kMaxPlaces = 2, kMaxUarts = 4, kMaxPorts = Binds::kMaxPorts;
+  static constexpr size_t kMaxPlaces = 2, kMaxUarts = 4;
   static constexpr size_t kMaxWifi = 4;   // Wi-Fi entries (wifi.{}'s keys)
   static constexpr size_t kMaxOwn = 4;    // the sketch's own items (addSetting)
   static constexpr size_t kMaxEntries = OEP_SMALL_RAM ? 20 : 40;
@@ -223,9 +223,13 @@ class Settings final : public SettingsCore {
   uint32_t saved_crc_ = 0;       // the save as it is (its blob's CRC and length): a save of the same is not written
   size_t saved_size_ = 0;
   uint64_t saved_disabled_ = 0;
-  int8_t pass_uart_[kMaxPorts];     // the uarts_ index passing to the port now, -1: none
-  int8_t pass_console_[kMaxPorts];  // the places_ index whose console passes to the port now, -1: none
-  bool console_tried_[kMaxPorts] = {};
+  // Each transport's pass-through state, made the first time the pass-throughs run (every transport added by then) and
+  // taken for good: the context passIn gets, the uarts_ index passing to the port now and the places_ index whose
+  // console does (-1: none).
+  struct Port { Settings *settings; uint8_t port; int8_t uart, console; bool console_tried; };
+  Port *ports_ = nullptr;
+  size_t port_count_ = 0;
+  bool makePorts();
 
   bool addEntry(uint8_t id, const Interface *owner, void *context, uint8_t own = 0);
   Spec spec(uint8_t entry) const;

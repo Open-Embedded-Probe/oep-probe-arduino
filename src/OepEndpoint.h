@@ -107,8 +107,6 @@ class Endpoint {
     kHid = reg::core::kTransportKindHid, kTcp = reg::core::kTransportKindTcp,
   };
   static constexpr bool serialKind(uint8_t kind) { return kind == kUartBridge || kind == kUsbCdc || kind == kUsbSerialJtag; }
-  // Transports, a TCP listener's connection slots each counted (addTcpListener).
-  static constexpr size_t kMaxTransports = OEP_SMALL_RAM ? 2 : 8;
   // A serial port's frames are decoded here (one at a time): a serial port's max_frame is at most this (the
   // endpoint's own may be larger: its other transports use it, core §7.1).
   static constexpr size_t kMaxSerialFrame = OEP_SMALL_RAM ? 512 : 2048;
@@ -165,10 +163,10 @@ class Endpoint {
   // may answer within less than its max_frame, core §4.4). Before the first poll. false: the receive buffer too small
   // for the max_frame (nothing changed).
   bool setBuffers(uint8_t *rx_buffer, size_t rx_capacity, uint8_t *tx_buffer, size_t tx_capacity) {
-    if (polled_ || serialKind(transports_[0].kind) || rx_capacity < transports_[0].max_frame + 2u || tx_capacity < 64)
+    if (polled_ || !transport_count_ || serialKind(tr(0).kind) || rx_capacity < tr(0).max_frame + 2u || tx_capacity < 64)
       return false;
-    transports_[0].reader.reset(rx_buffer, rx_capacity, transports_[0].max_frame);
-    transports_[0].reader.setTcp(transports_[0].kind == kTcp);
+    tr(0).reader.reset(rx_buffer, rx_capacity, tr(0).max_frame);
+    tr(0).reader.setTcp(tr(0).kind == kTcp);
     tx_ = tx_buffer;
     tx_capacity_ = tx_capacity;
     return true;
@@ -188,7 +186,7 @@ class Endpoint {
   // are the probe's one, shared with every other transport (transports §3).
   bool addTcpListener(Connection *const *slots, uint8_t *const *rx, size_t rx_capacity, size_t count);
   size_t transportCount() const { return transport_count_; }
-  bool isSerialPort(size_t index) const { return index < transport_count_ && serialKind(transports_[index].kind); }
+  bool isSerialPort(size_t index) const { return index < transport_count_ && serialKind(tr(index).kind); }
   // The raw side of the serial ports (the binds); nullptr: raw bytes are dropped.
   void setRawPorts(RawPorts *raw) { raw_ = raw; }
   // A session holds the lock / holds serial port `port` (its raw transfer is stopped, transports §4).
@@ -255,7 +253,7 @@ class Endpoint {
   // The kind of the transport with describe index `index` (core §7.5). false: none.
   bool transportKindOf(uint16_t index, uint8_t &kind) const {
     for (size_t i = 0; i < transport_count_; ++i)
-      if (transports_[i].index == index) { kind = transports_[i].kind; return true; }
+      if (tr(i).index == index) { kind = tr(i).kind; return true; }
     return false;
   }
   // The pin table the interfaces' plans claim from: a plan replacement releases only the channels leaving the plan
@@ -339,16 +337,16 @@ class Endpoint {
   }
   // Flush the stream after each poll that wrote something: a buffered USB vendor interface sends a short frame only
   // when flushed (E160). Off for streams that send by themselves (USB-Serial/JTAG, UART).
-  void setFlushAfterBurst(bool on) { transports_[0].flush_after_burst = on; }
+  void setFlushAfterBurst(bool on) { if (transport_count_) tr(0).flush_after_burst = on; }
   // A zero-copy path for an interface's data pushes (length-prefixed framing only). The interface builds
   // whole push frames itself, from its own task: directPush says whether it may send now (the lock holder subscribed
   // its fn) with the fn and the subscriber's batching; takeSeq numbers a frame (shared with that fn's events).
   void setDirect(DirectTransport *direct) { direct_ = direct; }
   // A zero-copy path exists (whoever subscribes): a streaming configure can plan on it without a store of its own.
-  bool directCapable() const { return directT() != nullptr && !serialKind(transports_[0].kind); }
+  bool directCapable() const { return directT() != nullptr && transport_count_ && !serialKind(tr(0).kind); }
   // the zero-copy path belongs to transport 0: pushes use it only while the subscriber came in on transport 0
   DirectTransport *direct() const {
-    return push_ == 0 && !serialKind(transports_[0].kind) ? directT() : nullptr;
+    return push_ == 0 && transport_count_ && !serialKind(tr(0).kind) ? directT() : nullptr;
   }
   bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint32_t &max_delay_ms) const;
   uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&fn_[fn - 1].push_seq, 1, __ATOMIC_RELAXED); }
@@ -366,6 +364,7 @@ class Endpoint {
     bool flush_after_burst = false, wrote = false;
     int tx_room_max = 0;
     uint16_t max_frame = 0;       // confirm's max_frame on this transport (core §4.4, §7.1: each route its own)
+    Transport *next = nullptr;    // the next one added
   };
   bool addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
                       bool flush_after_burst);
@@ -397,15 +396,19 @@ class Endpoint {
   uint8_t owner_[32];   // the lock holder's owner text (core §6.4)
   uint8_t owner_length_ = 0;
   size_t appendOwner(uint8_t *out, size_t room, uint8_t tag) const;
-  Transport transports_[kMaxTransports];
+  // The transports, as many as are added (a TCP listener's slots each one): each taken for good as it is added
+  // (takeForGood) and chained; tr(i) walks to the i-th (a probe has a few).
+  Transport *transport_first_ = nullptr, *transport_last_ = nullptr;
   size_t transport_count_ = 0;
+  Transport &tr(size_t i) const;
+  Transport *newTransport();
   uint8_t entries_ = 0;   // fn 0's describe transport entries (a listener's slots are one)
   bool listener_ = false;
   size_t current_ = 0;   // the transport the message being handled came in on (results go back there)
   size_t push_ = 0;      // the transport the push subscriptions came in on
   uint32_t push_conn_ = 0;   // and its connection, on a TCP slot (another connection there gets none of them)
-  void pushHere() { push_ = current_; push_conn_ = transports_[current_].seen; }
-  bool pushGone() const { return connOf(transports_[push_]) && connOf(transports_[push_])->connection() != push_conn_; }
+  void pushHere() { push_ = current_; push_conn_ = tr(current_).seen; }
+  bool pushGone() const { return connOf(tr(push_)) && connOf(tr(push_))->connection() != push_conn_; }
   uint8_t *tx_;
   size_t tx_capacity_;
   Limits limits_;
@@ -458,7 +461,7 @@ class Endpoint {
   friend class Link;
   Result portSpeed(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   Result portState(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
-  size_t maxFrameIn() const { return transports_[current_].max_frame; }   // the request's route
+  size_t maxFrameIn() const { return tr(current_).max_frame; }   // the request's route
   void speedApply();             // the switch or revert a request asked for, after its answer
   void speedRevert();            // back to the boot speed (nothing when there already)
   void speedPoll();              // the try deadline, the idle limit, a revert the session's end asked for
