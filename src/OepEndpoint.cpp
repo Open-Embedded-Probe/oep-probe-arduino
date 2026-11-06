@@ -28,17 +28,19 @@ Result lockedFor(uint32_t remaining_ms, const uint8_t *owner, size_t owner_lengt
 bool Endpoint::add(Interface &interface) {
   // a name outside core §13 rule 1 is refused: list would show what no host may rely on; so is an interface with no op
   // (its describe's ops would declare nothing, core §7.4). Two places stay for the endpoint's own.
-  if (count_ + 2 >= kMaxInterfaces || polled_ || !interfaceName(interface.name())) return false;
+  if (sealed_ || interface.next_ || &interface == last_added_ || !interfaceName(interface.name())) return false;
   // an op its ops tag will declare (offersOp): subscribe / unsubscribe only with notifications (core §10.3)
   bool any = interface.notifies();
   for (int op = 1; op < kReservedOps && !any; ++op)
     any = op != kOpSubscribe && op != kOpUnsubscribe && interface.offers(static_cast<uint8_t>(op));
   if (!any) return false;
-  for (size_t i = 0; i < count_; ++i)   // (name, revision, instance) names one interface (core §7.2)
-    if (interfaces_[i]->instance() == interface.instance() && interfaces_[i]->revision() == interface.revision() &&
-        strcmp(interfaces_[i]->name(), interface.name()) == 0)
+  for (const Interface *it = first_; it; it = it->next_)   // (name, revision, instance) names one interface (core §7.2)
+    if (it->instance() == interface.instance() && it->revision() == interface.revision() &&
+        strcmp(it->name(), interface.name()) == 0)
       return false;
-  interfaces_[count_++] = &interface;
+  (last_added_ ? last_added_->next_ : first_) = &interface;
+  last_added_ = &interface;
+  ++count_;
   interface.setFrameLimit(limits_.max_frame);
   return true;
 }
@@ -46,12 +48,35 @@ bool Endpoint::add(Interface &interface) {
 // The first poll(): the list is fixed for the boot (core §7.2). The endpoint's own interfaces go after every one the
 // sketch added, always in the same order - oep.probe.plan when an interface has plan roles (oep-if-plan), then
 // oep.probe.restart when the sketch set a handler (oep-if-restart).
+// The endpoint's tables, made once - at the first poll(), or before it when the saved settings are applied - for the
+// interfaces added and the endpoint's own two: taken for good, after which add() is refused. No room: nothing is listed
+// (only fn 0), and the probe logs why.
+bool Endpoint::seal() {
+  if (sealed_) return interfaces_ != nullptr;
+  sealed_ = true;
+  const size_t n = count_ + 2;   // and the endpoint's own two
+  fn_ = static_cast<FnState *>(takeForGood(n * sizeof(FnState)));
+  interfaces_ = static_cast<Interface **>(takeForGood(n * sizeof(Interface *)));
+  fn_list_ = static_cast<uint16_t *>(takeForGood(n * sizeof(uint16_t)));
+  if (!fn_ || !interfaces_ || !fn_list_) {
+    OEP_LOGF("endpoint: no room for the tables of %u interfaces: none listed", static_cast<unsigned>(count_));
+    interfaces_ = nullptr;
+    count_ = 0;
+    return false;
+  }
+  size_t i = 0;
+  for (Interface *it = first_; it; it = it->next_) interfaces_[i++] = it;
+  return true;
+}
+
 void Endpoint::freeze() {
   if (polled_) return;
   const bool plan = anyPlanRoles();
   polled_ = true;
-  if (plan) interfaces_[count_++] = &plan_iface_;
-  if (restart_) interfaces_[count_++] = &restart_iface_;
+  if (seal()) {
+    if (plan) interfaces_[count_++] = &plan_iface_;
+    if (restart_) interfaces_[count_++] = &restart_iface_;
+  }
   size_t smallest = limits_.max_frame;   // the routes' max_frame, each its own (core §7.1)
   for (size_t k = 0; k < transport_count_; ++k)
     if (transports_[k].max_frame < smallest) smallest = transports_[k].max_frame;
@@ -224,23 +249,26 @@ bool Endpoint::queueEvent(uint16_t fn, uint8_t kind, const uint8_t *payload, siz
 }
 
 bool Endpoint::event(Interface &from, uint8_t kind, const uint8_t *payload, size_t length) {
+  if (!interfaces_) return false;   // no tables yet: no fn, so no subscription
   for (size_t i = 0; i < count_; ++i)
-    if (interfaces_[i] == &from) return subscribed_[i] && queueEvent(static_cast<uint16_t>(i + 1), kind, payload, length);
+    if (interfaces_[i] == &from) return fn_[i].subscribed && queueEvent(static_cast<uint16_t>(i + 1), kind, payload, length);
   return false;
 }
 
 void Endpoint::eventsLost(Interface &from, uint16_t count) {
+  if (!interfaces_) return;
   for (size_t i = 0; i < count_; ++i)
-    if (interfaces_[i] == &from && subscribed_[i]) __atomic_fetch_add(&push_seq_[i], count, __ATOMIC_RELAXED);
+    if (interfaces_[i] == &from && fn_[i].subscribed) __atomic_fetch_add(&fn_[i].push_seq, count, __ATOMIC_RELAXED);
 }
 
 bool Endpoint::directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint32_t &max_delay_ms) const {
+  if (!interfaces_) return false;   // no tables yet: no fn, so no subscription
   for (size_t i = 0; i < count_; ++i) {
     if (interfaces_[i] != &from) continue;
-    if (!subscribed_[i] || !locked_) return false;
+    if (!fn_[i].subscribed || !locked_) return false;
     fn = static_cast<uint16_t>(i + 1);
-    min_bytes = min_bytes_[i];
-    max_delay_ms = max_delay_ms_[i];
+    min_bytes = fn_[i].min_bytes;
+    max_delay_ms = fn_[i].max_delay_ms;
     return true;
   }
   return false;
@@ -273,18 +301,18 @@ void Endpoint::push() {
   const size_t frame = transports_[current_].max_frame;   // the subscriber's route (core §7.1)
   if (room > frame - kPushHeader) room = frame - kPushHeader;
   for (size_t i = 0; i < count_; ++i) {
-    if (!subscribed_[i]) continue;
+    if (!fn_[i].subscribed) continue;
     // batching, of the data only (core §10.3): wait for min_bytes, or max_delay_ms after the first byte became pending;
     // once either holds, what is pending then goes out frame after frame, min_bytes not applied again to the rest
-    if ((min_bytes_[i] || max_delay_ms_[i]) && !draining_[i]) {
+    if ((fn_[i].min_bytes || fn_[i].max_delay_ms) && !fn_[i].draining) {
       const size_t ready = interfaces_[i]->pending();
-      if (ready == 0) { waiting_[i] = false; continue; }
-      if (!waiting_[i]) { waiting_[i] = true; waiting_since_[i] = millis(); }
+      if (ready == 0) { fn_[i].waiting = false; continue; }
+      if (!fn_[i].waiting) { fn_[i].waiting = true; fn_[i].waiting_since = millis(); }
       // 0 = that condition is not used (core §10.3): send on min_bytes ready, or max_delay_ms after the first byte
-      const bool enough = min_bytes_[i] && ready >= min_bytes_[i];
-      const bool due = max_delay_ms_[i] && static_cast<uint32_t>(millis() - waiting_since_[i]) >= max_delay_ms_[i];
+      const bool enough = fn_[i].min_bytes && ready >= fn_[i].min_bytes;
+      const bool due = fn_[i].max_delay_ms && static_cast<uint32_t>(millis() - fn_[i].waiting_since) >= fn_[i].max_delay_ms;
       if (!enough && !due) continue;
-      draining_[i] = ready;
+      fn_[i].draining = ready;
     }
     Transport &t = transports_[current_];
     const int writable = t.stream->availableForWrite();
@@ -306,17 +334,17 @@ void Endpoint::push() {
     }
     const size_t n = interfaces_[i]->pull(tx_ + kPushHeader, cap);   // the payload is the interface's
     if (n == 0) {
-      if (draining_[i] && interfaces_[i]->pending() == 0) { draining_[i] = 0; waiting_[i] = false; }   // gone meanwhile
+      if (fn_[i].draining && interfaces_[i]->pending() == 0) { fn_[i].draining = 0; fn_[i].waiting = false; }   // gone meanwhile
       continue;
     }
     tx_[0] = kRolePush;
     putU16(tx_ + 1, static_cast<uint16_t>(i + 1));
-    putU16(tx_ + 3, push_seq_[i]++);
+    putU16(tx_ + 3, fn_[i].push_seq++);
     send(kPushHeader + n);
     // the batch ends once what was pending when it was due has gone (resetting it after every frame sent one frame a
     // max_delay_ms and dropped the rest: 1000 bytes every 20 ms of a 10 MB/s stream, 2026-10-20 P4X)
-    draining_[i] = draining_[i] > n ? draining_[i] - n : 0;
-    if (!draining_[i]) waiting_[i] = false;
+    fn_[i].draining = fn_[i].draining > n ? fn_[i].draining - n : 0;
+    if (!fn_[i].draining) fn_[i].waiting = false;
   }
 }
 
@@ -332,20 +360,20 @@ Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, s
   if (refused(parsed)) return parsed;
   const size_t i = fn - 1;
   if (!sub) {
-    if (subscribed_[i]) interfaces_[i]->subscribe(false);
-    subscribed_[i] = false;
+    if (fn_[i].subscribed) interfaces_[i]->subscribe(false);
+    fn_[i].subscribed = false;
     return completed();
   }
   const uint16_t min_bytes = getU16(payload);
   const uint32_t max_delay = getU32(payload + 2);
   pushHere();   // pushes and events go where the subscription came from (on TCP: that connection)
   interfaces_[i]->subscribe(true);
-  subscribed_[i] = true;
-  push_seq_[i] = 0;
-  min_bytes_[i] = min_bytes;
-  max_delay_ms_[i] = max_delay;
-  waiting_[i] = false;
-  draining_[i] = 0;
+  fn_[i].subscribed = true;
+  fn_[i].push_seq = 0;
+  fn_[i].min_bytes = min_bytes;
+  fn_[i].max_delay_ms = max_delay;
+  fn_[i].waiting = false;
+  fn_[i].draining = 0;
   return completed();
 }
 
@@ -413,9 +441,9 @@ void Endpoint::loseSession() {
   endSubscriptions();
   for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->sessionOverFirst()) interfaces_[i]->sessionOver();
   for (size_t i = 0; i < count_; ++i) if (!interfaces_[i]->sessionOverFirst()) interfaces_[i]->sessionOver();
-  uint16_t lapsed[kMaxInterfaces];
+  uint16_t *lapsed = fn_list_;
   size_t n = 0;
-  for (size_t i = 0; i < count_; ++i) if (planned_[i] && !persistent_[i]) lapsed[n++] = static_cast<uint16_t>(i + 1);
+  for (size_t i = 0; i < count_; ++i) if (fn_[i].planned && !fn_[i].persistent) lapsed[n++] = static_cast<uint16_t>(i + 1);
   if (n) planRelease(lapsed, n);   // n == 0 would mean every fn: only the session's plans go
 }
 
@@ -423,8 +451,8 @@ void Endpoint::loseSession() {
 void Endpoint::endSubscriptions() {
   event_tail_ = event_head_;
   for (size_t i = 0; i < count_; ++i) {
-    if (subscribed_[i]) interfaces_[i]->subscribe(false);
-    subscribed_[i] = false;
+    if (fn_[i].subscribed) interfaces_[i]->subscribe(false);
+    fn_[i].subscribed = false;
   }
 }
 
@@ -693,10 +721,10 @@ Result Endpoint::planReleaseRequest(const uint8_t *payload, size_t length, uint8
   const Result parsed = plainTail(tail, payload, length, 1 + 2 * n, out, capacity);
   if (refused(parsed)) return parsed;
   // the session's plans only: a plan the settings put in stays (oep-if-plan §2.3), n = 0 included
-  uint16_t fns[kMaxInterfaces];
+  uint16_t *fns = fn_list_;
   size_t m = 0;
   for (size_t i = 0; i < count_; ++i) {
-    if (!planned_[i] || persistent_[i]) continue;
+    if (!fn_[i].planned || fn_[i].persistent) continue;
     bool hit = n == 0;
     for (size_t k = 0; k < n; ++k) hit |= getU16(payload + 1 + 2 * k) == i + 1;
     if (hit) fns[m++] = static_cast<uint16_t>(i + 1);
@@ -944,7 +972,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   size_t count = 0;
   for (at = 0; tail.next(at, raw, v, len);)
     if ((raw & ~kTagCritical) == (kTagRoleAssignment & ~kTagCritical)) roles[count++] = {getU16(v), v[2], getU16(v + 3)};
-  uint16_t fns[kMaxInterfaces];
+  uint16_t *fns = fn_list_;
   size_t nfns = 0;
   for (size_t r = 0; r < count; ++r) {
     bool seen = false;
@@ -953,7 +981,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
   }
   // a fn whose plan the settings put in is the settings' to change (oep-if-plan §2.3)
   for (size_t k = 0; k < nfns; ++k)
-    if (persistent_[fns[k] - 1])
+    if (fn_[fns[k] - 1].persistent)
       return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings);
   for (size_t r = 0; r < count; ++r)   // a channel the settings disable (core §13.8)
     if (disabled(roles[r].channel))
@@ -978,6 +1006,7 @@ Result Endpoint::planApply(const uint8_t *payload, size_t length, uint8_t *out, 
 // kRejectUnavailable + 0x100 when an interface accepted the check and then failed to apply (completed failed).
 uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns,
                               bool persistent) {
+  if (!seal()) return kRejectUnavailable;   // the saved settings' plan may come before the first poll
   // The old plans are released and the new ones applied as one change: a channel in both keeps its state and drive
   // (a power line through a gpio plan does not blink off), one leaving goes to its idle state at the end, a new one
   // stays in its idle state until its first set (oep-core §8, oep-if-fixture §1). The undo path settles the same way.
@@ -993,13 +1022,13 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
     explicit Settle(PinTable *p) : pins(p) { if (pins) pins->deferIdle(); }
     ~Settle() { if (pins) pins->settleIdle(); }
   } settle(pins_);
-  bool listed[kMaxInterfaces] = {};
-  for (size_t k = 0; k < nfns; ++k) if (fns[k] >= 1 && fns[k] <= count_) listed[fns[k] - 1] = true;
+  for (size_t i = 0; i < count_; ++i) fn_[i].mark_a = false;   // the fns listed
+  for (size_t k = 0; k < nfns; ++k) if (fns[k] >= 1 && fns[k] <= count_) fn_[fns[k] - 1].mark_a = true;
   // oep-if-plan §2.1: a fn whose set of (role, channel) does not change is left alone (nothing released or taken again);
   // every other one is checked against what runs now - its own channels counted as its own - before anything is
   // released, so that a refusal changes nothing (a configured UART, a running capture keep their state and data).
   for (size_t i = 0; i < count_; ++i) {
-    if (!listed[i]) continue;
+    if (!fn_[i].mark_a) continue;
     RoleAssignment mine[kMaxRoles];
     size_t m = 0, had = 0, kept = 0;
     for (size_t r = 0; r < count; ++r) if (roles[r].function == i + 1 && m < kMaxRoles) mine[m++] = roles[r];
@@ -1009,7 +1038,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
       for (size_t q = 0; q < m; ++q)
         if (mine[q].role == plan_roles_[r].role && mine[q].channel == plan_roles_[r].channel) { ++kept; break; }
     }
-    if (had == m && kept == m && (m || !planned_[i])) { listed[i] = false; continue; }   // the same set: nothing to do
+    if (had == m && kept == m && (m || !fn_[i].planned)) { fn_[i].mark_a = false; continue; }   // the same set: nothing to do
     if (!m) continue;
     if (const uint8_t reason = interfaces_[i]->planCheck(mine, m)) {
       if (reason == kRejectUnavailable) {
@@ -1031,23 +1060,23 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
   }
   RoleAssignment old[kMaxRoles];
   size_t old_count = 0;
-  bool old_persistent[kMaxInterfaces] = {};
+  for (size_t i = 0; i < count_; ++i) fn_[i].mark_b = false;   // the old persistent
   size_t keep = 0;
   for (size_t r = 0; r < plan_count_; ++r) {   // the listed fns' old roles come out of the table
     const uint16_t f = plan_roles_[r].function;
-    if (listed[f - 1]) old[old_count++] = plan_roles_[r];
+    if (fn_[f - 1].mark_a) old[old_count++] = plan_roles_[r];
     else plan_roles_[keep++] = plan_roles_[r];
   }
   plan_count_ = keep;
   for (size_t i = 0; i < count_; ++i) {
-    if (!listed[i]) continue;
-    old_persistent[i] = persistent_[i];
-    if (planned_[i]) { interfaces_[i]->planRelease(); planned_[i] = false; }
+    if (!fn_[i].mark_a) continue;
+    fn_[i].mark_b = fn_[i].persistent;
+    if (fn_[i].planned) { interfaces_[i]->planRelease(); fn_[i].planned = false; }
   }
   plan_refusal_ = {reg::core::kUnavailableCausePinInUse, 0xffff};
-  auto applyAll = [this, &listed](const RoleAssignment *set, size_t n, bool check) -> uint16_t {
+  auto applyAll = [this](const RoleAssignment *set, size_t n, bool check) -> uint16_t {
     for (size_t i = 0; i < count_; ++i) {
-      if (!listed[i]) continue;
+      if (!fn_[i].mark_a) continue;
       RoleAssignment mine[kMaxRoles];
       size_t m = 0;
       for (size_t r = 0; r < n; ++r) if (set[r].function == i + 1) mine[m++] = set[r];
@@ -1068,17 +1097,17 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
         }
       } else {
         if (!interfaces_[i]->planApply(mine, m)) return kRejectUnavailable + 0x100;
-        planned_[i] = true;
+        fn_[i].planned = true;
       }
     }
     return 0;
   };
   auto undo = [&]() {   // the new ones off, the old ones back (they fitted before)
     for (size_t i = 0; i < count_; ++i)
-      if (listed[i] && planned_[i]) { interfaces_[i]->planRelease(); planned_[i] = false; }
+      if (fn_[i].mark_a && fn_[i].planned) { interfaces_[i]->planRelease(); fn_[i].planned = false; }
     applyAll(old, old_count, false);
     for (size_t r = 0; r < old_count && plan_count_ < kMaxRoles; ++r) plan_roles_[plan_count_++] = old[r];
-    for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = old_persistent[i];
+    for (size_t i = 0; i < count_; ++i) if (fn_[i].mark_a) fn_[i].persistent = fn_[i].mark_b;
   };
   if (plan_count_ + count > kMaxRoles) {   // over plan_roles (core §8)
     plan_refusal_ = {reg::core::kUnavailableCauseLimit, 0xffff};
@@ -1110,7 +1139,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
   if (const uint16_t reason = applyAll(roles, count, true)) { undo(); return reason; }
   if (const uint16_t reason = applyAll(roles, count, false)) { undo(); return reason; }
   for (size_t r = 0; r < count; ++r) plan_roles_[plan_count_++] = roles[r];
-  for (size_t i = 0; i < count_; ++i) if (listed[i]) persistent_[i] = persistent && planned_[i];
+  for (size_t i = 0; i < count_; ++i) if (fn_[i].mark_a) fn_[i].persistent = persistent && fn_[i].planned;
   return 0;
 }
 
@@ -1120,19 +1149,19 @@ void Endpoint::planRelease(const uint16_t *fns, size_t nfns) {
     bool hit = nfns == 0;
     for (size_t k = 0; k < nfns; ++k) hit |= fns[k] == i + 1;
     if (!hit) continue;
-    if (planned_[i]) interfaces_[i]->planRelease();
-    planned_[i] = persistent_[i] = false;
+    if (fn_[i].planned) interfaces_[i]->planRelease();
+    fn_[i].planned = fn_[i].persistent = false;
   }
   size_t keep = 0;
   for (size_t r = 0; r < plan_count_; ++r)
-    if (planned_[plan_roles_[r].function - 1]) plan_roles_[keep++] = plan_roles_[r];
+    if (fn_[plan_roles_[r].function - 1].planned) plan_roles_[keep++] = plan_roles_[r];
   plan_count_ = keep;
 }
 
 size_t Endpoint::plan(RoleAssignment *out, size_t max, bool persistent_only) const {
   size_t n = 0;
   for (size_t r = 0; r < plan_count_ && n < max; ++r)
-    if (!persistent_only || persistent_[plan_roles_[r].function - 1]) out[n++] = plan_roles_[r];
+    if (!persistent_only || fn_[plan_roles_[r].function - 1].persistent) out[n++] = plan_roles_[r];
   return n;
 }
 

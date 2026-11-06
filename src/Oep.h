@@ -24,7 +24,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#if defined(__SANITIZE_ADDRESS__)
+#include <sanitizer/lsan_interface.h>
+#endif
 
 #include "OepResult.h"
 #include "OepRegistry.h"
@@ -648,11 +652,37 @@ class ResourceNumbers {
 };
 
 // One offered interface. The endpoint gives it fn = 1, 2, ... in registration order.
+// Memory taken once, at start-up, and kept for the boot (never given back): the tables sized by what the sketch added.
+// nullptr when there is no room. A CH32 takes it from its core's _sbrk (the heap malloc would use, without malloc's
+// code); the others from malloc. Zeroed.
+#if defined(ARDUINO_ARCH_CH32RV)
+extern "C" void *_sbrk(ptrdiff_t increment);
+inline void *takeForGood(size_t bytes) {
+  bytes = (bytes + 7) & ~static_cast<size_t>(7);
+  void *p = _sbrk(static_cast<ptrdiff_t>(bytes));
+  if (p == reinterpret_cast<void *>(-1)) return nullptr;
+  memset(p, 0, bytes);
+  return p;
+}
+#else
+inline void *takeForGood(size_t bytes) {
+  void *p = calloc(1, bytes ? bytes : 1);
+#if defined(__SANITIZE_ADDRESS__)
+  __lsan_ignore_object(p);   // a host test's endpoints come and go; a probe's is kept for good, as meant
+#endif
+  return p;
+}
+#endif
+
 class Interface {
  protected:
   // Never deleted through an Interface: no virtual destructor, so a static interface needs no destructor run at exit
   // (nor its registration, nor the vtable's two slots)
   ~Interface() = default;
+
+ private:
+  friend class Endpoint;
+  Interface *next_ = nullptr;   // the endpoint's chain of the interfaces added, before its tables are made
 
  public:
   virtual const char *name() const = 0;

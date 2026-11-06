@@ -8,6 +8,26 @@
 - (JA) ESP32-P4 / P4X の firmware: UART bridge の経路（UART3、GPIO37 / 38、115200）を既定で入れた。チップの既定の UART
   のピン（boot ROM の書き込みとログ）なので、そこにつないだ USB-UART の変換器からも OEP が使え、fixture や線には出さない
   （ピンの表から 24、25、37、38 を外す）。sketch に `void oepWithBridge() {}` を置けば、これまでどおり外せる。
+- (EN) Endpoint: no limit on the interfaces a sketch adds (there was a table of 24, 10 on a small-RAM build). They are
+  chained as added; the endpoint makes its tables once - at the first poll(), or before it when the saved settings are
+  applied - for as many as were added and its own two (oep.probe.plan, oep.probe.restart), taken for good (a CH32 from
+  its core's _sbrk, the others from malloc). An add after that is refused, as one after the first poll was. This also
+  fixes a crash at every boot: the old table took a 23rd interface and the first poll wrote its own two past it (an
+  ESP32-P4 firmware with three interfaces of the sketch's own). `Endpoint::kMaxInterfaces` is gone. CH32X035: flash
+  +380 bytes, static RAM -180 bytes.
+- (JA) Endpoint: sketch が足すインターフェイスの数に上限が無くなった（24 個、小さい RAM のビルドでは 10 個の表だった）。足した順に
+  つなぎ、最初の poll（保存した設定の適用がそれより前ならそのとき）に、足した数と自身の 2 つ（oep.probe.plan、
+  oep.probe.restart）の分の表を一度だけ取り、ずっと持つ（CH32 は core の _sbrk から、ほかは malloc から）。その後の add は、
+  これまでの最初の poll の後と同じく断る。古い表は 23 個目を受け付け、最初の poll が自身の 2 つを表の外に書いて、起動のたびに
+  落ちていた（sketch 独自のインターフェイスを 3 つ足した ESP32-P4 のファーム）。これも直る。`Endpoint::kMaxInterfaces` は無くなった。
+  CH32X035: flash +380 バイト、静的な RAM -180 バイト。
+- (EN) ESP32-P4 / P4X firmware: the UART bridge transport (UART3 on GPIO37 / 38, 115200) is in by default. Those are
+  the chip's default UART pads (the boot ROM's download and log), so a USB-UART adapter there reaches OEP as well, and
+  they are no longer offered to fixtures or the wires (the pin table leaves out 24, 25, 37 and 38). A sketch's own
+  `void oepWithBridge() {}` leaves it out as before.
+- (JA) ESP32-P4 / P4X の firmware: UART bridge の経路（UART3、GPIO37 / 38、115200）を既定で入れた。チップの既定の UART
+  のピン（boot ROM の書き込みとログ）なので、そこにつないだ USB-UART の変換器からも OEP が使え、fixture や線には出さない
+  （ピンの表から 24、25、37、38 を外す）。sketch に `void oepWithBridge() {}` を置けば、これまでどおり外せる。
 - (EN) Fixed (endpoint): a sketch can no longer add one interface more than the list holds. Endpoint::add took up to
   kMaxInterfaces - 1, and the first poll then put oep.probe.plan and oep.probe.restart past the table, so the probe
   crashed at every boot (an ESP32-P4 firmware with three interfaces of the sketch's own, 23 in all). It now takes at most

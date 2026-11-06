@@ -672,26 +672,32 @@ static void testRestart() {
   CHECK(g_seen.calls == 1);
 }
 
-// The list's room (Endpoint::kMaxInterfaces): the sketch adds at most kMaxInterfaces - 2, so oep.probe.plan and
-// oep.probe.restart still fit when the first poll puts them after (a 23rd one was taken and the first poll wrote past
-// the table: a P4 sketch with three interfaces of its own crashed at every boot, 2026-11-06).
+// The list has no room to run out of: the sketch adds as many interfaces as it has (40 here), the endpoint makes its
+// tables for them once - at the first poll - with oep.probe.plan and oep.probe.restart after them (a fixed table of 24
+// once took a 23rd and the first poll wrote past it: a P4 sketch with three interfaces of its own crashed at every
+// boot, 2026-11-06). The same interface twice, and an add after the tables are made, are refused.
 static void testInterfaceRoom() {
   MemStream s;
   static uint8_t rx[1200], tx[1100];
   Endpoint ep(s, rx, sizeof rx, tx, sizeof tx, {1024, 4096, 4}, Endpoint::kVendorBulk, 0);
-  static char names[Endpoint::kMaxInterfaces + 4][32];
-  static PlanToy *toys[Endpoint::kMaxInterfaces + 4];
+  constexpr size_t kMany = 40;
+  static char names[kMany][32];
+  static PlanToy *toys[kMany];
   size_t taken = 0;
-  for (size_t i = 0; i < Endpoint::kMaxInterfaces + 4; ++i) {
+  for (size_t i = 0; i < kMany; ++i) {
     snprintf(names[i], sizeof names[i], "io.github.test.room%u", unsigned(i));
     toys[i] = new PlanToy(names[i]);
     if (ep.add(*toys[i])) ++taken;
   }
-  CHECK(taken == Endpoint::kMaxInterfaces - 2);
+  CHECK(taken == kMany);
+  CHECK(!ep.add(*toys[0]) && !ep.add(*toys[kMany - 1]));   // the same one again
   ep.setRestart([]() {}, 1500);
+  CHECK(ep.planFn() == kMany + 1 && ep.restartFn() == kMany + 2);
   const Bytes l = exchange(ep, s, false, request(1, 0, 0x02, {0, 0}));   // the first poll: plan and restart listed
-  CHECK(ep.planFn() == Endpoint::kMaxInterfaces - 1 && ep.restartFn() == Endpoint::kMaxInterfaces);
-  CHECK(l.size() >= 8 && getU16(&l[5]) == Endpoint::kMaxInterfaces);
+  CHECK(ep.planFn() == kMany + 1 && ep.restartFn() == kMany + 2);
+  CHECK(l.size() >= 8 && getU16(&l[5]) == kMany + 2);
+  static PlanToy late("io.github.test.late");
+  CHECK(!ep.add(late));
 }
 
 int main() {

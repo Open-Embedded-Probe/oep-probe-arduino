@@ -96,9 +96,6 @@ class RawPorts {
 
 class Endpoint {
  public:
-  // The fns a probe lists: the sketch's interfaces (at most kMaxInterfaces - 2) and the endpoint's own two (oep.probe.plan,
-  // oep.probe.restart) after them.
-  static constexpr size_t kMaxInterfaces = OEP_SMALL_RAM ? 10 : 24;
   static constexpr uint32_t kLeaseDefaultMs = 3000, kLeaseMinMs = reg::kLimitLeaseMinMs, kLeaseMaxMs = reg::kLimitLeaseMaxMs;
 
   // A transport's kind (core §7.5, registry transport_kind): the serial ports (UART bridge, USB CDC, USB-Serial/JTAG)
@@ -204,10 +201,10 @@ class Endpoint {
   void setMaxOpMs(uint32_t ms) { if (ms >= 1 && ms <= reg::kLimitMaxOpMsMax) max_op_ms_ = ms; }
   // fn of an interface added (0: not added), and the interface at a fn (nullptr: none).
   uint16_t fnOf(const Interface &interface) const {
-    for (size_t i = 0; i < count_; ++i) if (interfaces_[i] == &interface) return static_cast<uint16_t>(i + 1);
+    for (size_t i = 0; i < count_; ++i) if (nth(i) == &interface) return static_cast<uint16_t>(i + 1);
     return 0;
   }
-  Interface *interfaceAt(uint16_t fn) const { return fn >= 1 && fn <= count_ ? interfaces_[fn - 1] : nullptr; }
+  Interface *interfaceAt(uint16_t fn) const { return fn >= 1 && fn <= count_ ? nth(fn - 1) : nullptr; }
   // The list's instance: the interface's own fixed identifier (core §7.2: kept across firmware updates, never counted
   // from the fn order or the list position; unique within one (name, revision), which add checks).
   uint16_t instanceOf(uint16_t fn) const {
@@ -215,8 +212,10 @@ class Endpoint {
     return it ? it->instance() : 0;
   }
 
-  // An interface, numbered fn 1, 2, ... in the order added. The list stays the same for a boot (core §7.2): every add
-  // comes before the first poll(), and one after it is refused (false), as is a name outside core §13 rule 1 and an
+  // An interface, numbered fn 1, 2, ... in the order added, as many as the sketch adds. The list stays the same for a
+  // boot (core §7.2): every add comes before the endpoint's tables are made - at the first poll(), or before it when
+  // the saved settings are applied (replacePlan) - and one after that is refused (false), as is a name outside core §13
+  // rule 1 and an
   // interface that offers no op (its ops tag would have no valid encoding, core §7.4). At the first poll() the endpoint
   // lists its own interfaces after the sketch's, in this order: oep.probe.plan when an interface has plan roles,
   // oep.probe.restart when setRestart gave a handler - so the same firmware gives every interface the same fn and
@@ -224,7 +223,7 @@ class Endpoint {
   // interfaces by name, instance and revision and are renumbered, core §13.7; they never name these two).
   bool add(Interface &interface);
   bool anyPlanRoles() const {
-    for (size_t i = 0; i < count_; ++i) if (interfaces_[i]->planRoles()) return true;
+    for (size_t i = 0; i < count_; ++i) if (nth(i)->planRoles()) return true;
     return false;
   }
   // The fns of oep.probe.plan and oep.probe.restart (0: not listed) - before the first poll(), the fns they will have.
@@ -352,7 +351,7 @@ class Endpoint {
     return push_ == 0 && !serialKind(transports_[0].kind) ? directT() : nullptr;
   }
   bool directPush(const Interface &from, uint16_t &fn, uint16_t &min_bytes, uint32_t &max_delay_ms) const;
-  uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&push_seq_[fn - 1], 1, __ATOMIC_RELAXED); }
+  uint16_t takeSeq(uint16_t fn) { return __atomic_fetch_add(&fn_[fn - 1].push_seq, 1, __ATOMIC_RELAXED); }
   void poll();
 
  private:
@@ -410,8 +409,22 @@ class Endpoint {
   uint8_t *tx_;
   size_t tx_capacity_;
   Limits limits_;
-  Interface *interfaces_[kMaxInterfaces] = {};
+  // The interfaces: chained as added (Interface::next_), then - once, when the tables are made (seal) - an array of
+  // them and their per-fn state, taken for good (takeForGood) with room for the endpoint's own two. Before that, nth()
+  // walks the chain.
+  Interface *first_ = nullptr, *last_added_ = nullptr;
+  Interface **interfaces_ = nullptr;
   size_t count_ = 0;
+  bool sealed_ = false;
+  bool seal();
+  Interface *nth(size_t i) const {
+    if (sealed_) return interfaces_[i];
+    Interface *it = first_;
+    while (i-- && it) it = it->next_;
+    return it;
+  }
+  // per-fn scratch for the plan's requests (planApply, planReleaseRequest, loseSession: never one inside another)
+  uint16_t *fn_list_ = nullptr;
   bool polled_ = false;   // poll() ran: the interface list is fixed (core §7.2)
   ProbePlan plan_iface_{*this};         // oep.probe.plan, listed by freeze() when an interface has plan roles
   ProbeRestart restart_iface_{*this};   // oep.probe.restart, listed by freeze() with a restart handler
@@ -478,19 +491,21 @@ class Endpoint {
   Result planReleaseRequest(const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   uint16_t replaceFns(const RoleAssignment *roles, size_t count, const uint16_t *fns, size_t nfns, bool persistent);
   void planRelease(const uint16_t *fns, size_t nfns);
-  bool planned_[kMaxInterfaces] = {};
-  bool persistent_[kMaxInterfaces] = {};   // planned through replacePlan (the settings (core §13)): a lapse does not release it
+  // Per fn (index fn - 1), made with the list (seal).
+  struct FnState {
+    size_t draining;            // a batch due: the bytes still to send of what was pending then
+    uint32_t max_delay_ms, waiting_since;
+    uint16_t push_seq, min_bytes;
+    bool planned;
+    bool persistent;            // planned through replacePlan (the settings (core §13)): a lapse does not release it
+    volatile bool subscribed;   // subscriptions, per fn (core §10.3: one per fn, the lock holder's)
+    bool waiting, mark_a, mark_b;   // mark_a / mark_b: planApply's scratch (the fns listed, the old persistent)
+  };
+  FnState *fn_ = nullptr;
   // Subscriptions, per fn (core §10.3: one per fn, the lock holder's).
-  volatile bool subscribed_[kMaxInterfaces] = {};
   DirectTransport *direct_ = nullptr;
   DirectTransport *directT() const { return direct_; }
   static Connection *connOf(const Transport &t) { return t.conn; }
-  uint16_t push_seq_[kMaxInterfaces] = {};
-  uint16_t min_bytes_[kMaxInterfaces] = {};
-  uint32_t max_delay_ms_[kMaxInterfaces] = {};
-  uint32_t waiting_since_[kMaxInterfaces] = {};
-  bool waiting_[kMaxInterfaces] = {};
-  size_t draining_[kMaxInterfaces] = {};   // a batch due: the bytes still to send of what was pending then
   // events: fn (1 and up: fn 0 sends none, core §10.2), seq per fn shared with data frames
   struct Event { uint16_t fn; uint16_t seq; uint8_t kind; uint8_t length; uint8_t payload[40]; };
   static constexpr size_t kEvents = OEP_SMALL_RAM ? 8 : 32;
