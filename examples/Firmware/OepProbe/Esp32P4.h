@@ -8,7 +8,7 @@
 //   USB-Serial/JTAG  the P4's USJ (Usj; HWCDC Serial)                                         serial port: OEP + raw
 //   HID              HS port, vendor HID reports (Hid)                                        OEP only
 //   USB CDC          HS port (Cdc)                                                            serial port: OEP + raw
-//   UART bridge      UART3 on GPIO37 / 38 (Bridge, off by default)                            serial port: OEP + raw
+//   UART bridge      UART3 on GPIO37 / 38, UART0's pads (Bridge)                              serial port: OEP + raw
 //
 //   (and a DFU interface on the HS port (Dfu): the probe's own firmware update, outside OEP, part of the same USB device)
 //
@@ -35,7 +35,8 @@
 // (ADC1 on GPIO16-23, up to 4 channels, 46 kHz in all) and oep.fixture.capture-group (the analog with the logic);
 // oep.probe.link; oep.fixture.i2c-controller / spi-controller (GPIOs, OepI2cController.h / OepSpiController.h);
 // oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Every GPIO but the
-// USB-Serial/JTAG pair (24, 25) may be the RVSWD pair, the SWIO pin, the reset line, or any fixture's pin - the host chooses.
+// USB-Serial/JTAG pair (24, 25) and the UART bridge's (37, 38) may be the RVSWD pair, the SWIO pin, the reset line, or any
+// fixture's pin - the host chooses.
 // Each is a choice (OepFeatures.h: a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and
 // Console in it), Gpio, Uart (both), Capture, I2c, Spi, Config, Analog, Group, Swio (and SwioConsole in it), Link, Swd
 // (oep.wire.swd + oep.target.arm-adi), I2cController, SpiController; all in by default.
@@ -243,7 +244,8 @@ void oepAddCdc() {
 }
 
 // A UART bridge (transports §1: a serial transport, COBS): UART3 on UART0's pads, GPIO37 (TX) / GPIO38 (RX), 115200 -
-// those two then the probe's own (never offered, never parked). Off by default.
+// those two the probe's own (never offered, never parked). In by default: they are the chip's default UART (the boot
+// ROM's download and log), so a USB-UART adapter there reaches OEP too, and no fixture takes them.
 static constexpr int kBridgeTx = 37, kBridgeRx = 38;
 static uint64_t ownPins = 0;
 void oepAddBridge() {
@@ -526,7 +528,7 @@ __attribute__((weak)) void oepWithUsj() { oepAddUsj(); }
 __attribute__((weak)) void oepWithHid() { oepAddHid(); }
 __attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
 __attribute__((weak)) void oepWithDfu() { oepAddDfu(); }
-__attribute__((weak)) void oepWithBridge() {}
+__attribute__((weak)) void oepWithBridge() { oepAddBridge(); }
 __attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
 __attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
 __attribute__((weak)) void oepWithGpio() { oepAddGpio(); }

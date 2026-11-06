@@ -11,7 +11,7 @@ no released firmware.
 |---|---|---|---|---|---|
 | Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | none: build it (below) |
 | Checked on hardware | yes | yes | yes | no (built and host-tested only) | no |
-| Transports | USB CDC, vendor bulk, HID | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB vendor bulk, HID | USB-Serial/JTAG or USB CDC |
+| Transports | USB CDC, vendor bulk, HID | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG, UART bridge (GPIO37 / 38, 115200) | UART bridge (115200); TCP over Wi-Fi once its wifi setting is set (port 7450, mDNS `_oep._tcp`; getting started §6) | USB vendor bulk, HID | USB-Serial/JTAG or USB CDC |
 | RVSWD (CH32 2-wire) | yes (SIO) | yes (dedicated GPIO) | yes | yes | yes (dedicated GPIO; built, not checked) |
 | SWIO (CH32V00x 1-wire) | yes | yes | yes | yes (not the X035) | no |
 | SWD (ARM) | yes | yes | yes | yes (not the X035) | no |
@@ -49,7 +49,7 @@ plans it; a pin one interface holds is refused to another. The others are the bo
 |---|---|---|
 | RP2040 / RP2350 | GP0-GP22, GP26-GP28 | GP23-GP25, GP29 (a Pico's SMPS, VBUS sense, LED, VSYS). On other boards, parts on offered pins (an LED, a PSRAM chip select) are for the host to leave alone |
 | SparkFun Pro Micro RP2350 (the `rp2350` build) | as the Pico 2: GP0-GP22, GP26-GP28 | GP23-GP25, GP29 (the Pico 2 build's); GP19 is its PSRAM's chip select: the host leaves it alone |
-| ESP32-P4 / P4X | GPIO0-GPIO54 but 24, 25 | GPIO24 / 25 (USB-Serial/JTAG) |
+| ESP32-P4 / P4X | GPIO0-GPIO54 but 24, 25, 37, 38 | GPIO24 / 25 (USB-Serial/JTAG), 37 / 38 (UART0's pads: the UART bridge transport) |
 | classic ESP32 | GPIO4, 5, 13, 14, 16-19 (16 / 17 dropped at start-up on a PICO-D4 / PICO-V3 / D2WD, or with a PSRAM the build enabled), 21-23, 25-27, 32, 33, 34-36, 39 (34-39 input only); SWIO on the outputs below 32 | 1, 3 (UART0: the transport), 6-11 (flash), 0, 2, 12, 15 (boot straps) |
 
 The UART fixture on an RP2 uses UART0, whose RX / TX may be GP1/0, GP13/12, GP17/16 or GP29/28. On the ESP32s any pin

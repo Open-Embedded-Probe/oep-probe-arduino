@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X firmware: the UART bridge transport (UART3 on GPIO37 / 38, 115200) is in by default. Those are
+  the chip's default UART pads (the boot ROM's download and log), so a USB-UART adapter there reaches OEP as well, and
+  they are no longer offered to fixtures or the wires (the pin table leaves out 24, 25, 37 and 38). A sketch's own
+  `void oepWithBridge() {}` leaves it out as before.
+- (JA) ESP32-P4 / P4X の firmware: UART bridge の経路（UART3、GPIO37 / 38、115200）を既定で入れた。チップの既定の UART
+  のピン（boot ROM の書き込みとログ）なので、そこにつないだ USB-UART の変換器からも OEP が使え、fixture や線には出さない
+  （ピンの表から 24、25、37、38 を外す）。sketch に `void oepWithBridge() {}` を置けば、これまでどおり外せる。
 - (EN) Fixed (endpoint): a sketch can no longer add one interface more than the list holds. Endpoint::add took up to
   kMaxInterfaces - 1, and the first poll then put oep.probe.plan and oep.probe.restart past the table, so the probe
   crashed at every boot (an ESP32-P4 firmware with three interfaces of the sketch's own, 23 in all). It now takes at most

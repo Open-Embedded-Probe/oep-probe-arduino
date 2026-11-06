@@ -11,7 +11,7 @@
 |---|---|---|---|---|---|
 | リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | 無し: 自分でビルド（下） |
 | 実機での確認 | 済み | 済み | 済み | 無し（ビルドと host テストのみ） | 無し |
-| 経路 | USB CDC、vendor bulk、HID | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID | USB-Serial/JTAG か USB CDC |
+| 経路 | USB CDC、vendor bulk、HID | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge（GPIO37 / 38、115200） | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID | USB-Serial/JTAG か USB CDC |
 | RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | あり | あり | あり（dedicated GPIO。ビルドのみ、未確認） |
 | SWIO（CH32V00x の 1 線） | あり | あり | あり | あり（X035 以外） | 無し |
 | SWD（ARM） | あり | あり | あり | あり（X035 以外） | 無し |
@@ -49,7 +49,7 @@ firmware の選択と DFU の互換性チェックは[使い始める](getting-s
 |---|---|---|
 | RP2040 / RP2350 | GP0〜GP22、GP26〜GP28 | GP23〜GP25、GP29（Pico の SMPS、VBUS の検出、LED、VSYS）。ほかのボードで、出すピンにつながった部品（LED、PSRAM の chip select）は、host が触らないようにする |
 | SparkFun Pro Micro RP2350（`rp2350` のビルド） | Pico 2 と同じ: GP0〜GP22、GP26〜GP28 | GP23〜GP25、GP29（Pico 2 のビルドの予約）。GP19 は PSRAM の chip select なので host が使わない |
-| ESP32-P4 / P4X | GPIO0〜GPIO54（24、25 以外） | GPIO24 / 25（USB-Serial/JTAG） |
+| ESP32-P4 / P4X | GPIO0〜GPIO54（24、25、37、38 以外） | GPIO24 / 25（USB-Serial/JTAG）、37 / 38（UART0 のピン: UART bridge の経路） |
 | classic ESP32 | GPIO4、5、13、14、16〜19（16 / 17 は PICO-D4 / PICO-V3 / D2WD と、ビルドで PSRAM を有効にしたときは起動時に外す）、21〜23、25〜27、32、33、34〜36、39（34〜39 は入力だけ）。SWIO は 32 未満の出力のピン | 1、3（UART0: 経路）、6〜11（flash）、0、2、12、15（起動のストラップ） |
 
 RP2 の UART の fixture は UART0 で、RX / TX は GP1/0、GP13/12、GP17/16、GP29/28 のどれかです。ESP32 はどのピンでも使えます
