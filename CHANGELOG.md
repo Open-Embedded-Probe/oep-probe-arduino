@@ -1,6 +1,20 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) SWIO on the ESP32-P4 / P4X: each low of a host bit is timed from the moment the line fell (and the high after it
+  from the moment it rose), not from a deadline set by the edge before. The CPU stalls for 0.3 - 0.6 us even with
+  interrupts off while the logic capture's and USB's DMA share the memory this code runs from; a stall before an edge
+  shortened the low after it, a read's long rw bit came out 300 - 600 ns, and a CH32V003 took a read of DMCONTROL for a
+  write of all ones - ndmreset set, the target reset (the dmseq console with a 10 MS/s stream capture and the
+  spi-target running). A stall now lengthens the high before the edge. Checked on a CH32V003 board over the same load:
+  144 round trips with no reset (before: a reset at the 6th, and in 3 of 5 test runs), 134 062 frames with no misread one, every long low 0.9 - 1.0 us.
+- (JA) ESP32-P4 / P4X の SWIO: ホストのビットの low を、前のエッジからの締め切りではなく、線が下がった時刻から数える（その
+  後の high も、上がった時刻から）。ロジックのキャプチャと USB の DMA がこのコードの置かれたメモリを共有している間、CPU は
+  割り込みを止めていても 0.3〜0.6 µs 止まることがあり、エッジの前で止まると次の low が縮んでいた。読みの rw のビット（長い
+  low）が 300〜600 ns になり、CH32V003 は DMCONTROL の読みを全部 1 の書き込みと受け取って ndmreset が立ち、リセットした
+  （dmseq のコンソール、10 MS/s の流し続けるキャプチャ、spi-target を同時に使ったとき）。いまは止まりがエッジの前の high を
+  伸ばす。CH32V003 のボードで同じ負荷で確かめた: 144 回の往復でリセットなし（直す前は 6 往復目でリセットし、試験では 5 回中 3 回）、134 062 フレームで
+  読み違いなし、長い low はどれも 0.9〜1.0 µs。
 - (EN) RVSWD: the long frame (84 bits and the terminal clock: the RISC-V DTM's dmi register as it is), the only one a
   CH32V103 answers. An attach (and a scan's look) asks in the long frame first, as a WCH-LinkE asks every part, and in the
   short one when the long one gets no answer: an active V103 asked in the short frame answers every long frame after

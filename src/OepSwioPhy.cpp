@@ -258,17 +258,23 @@ inline void IRAM_ATTR outputOff(uint32_t m) { RV_SET_CSR(CSR_GPIO_OEN_USER, m); 
 inline bool IRAM_ATTR sample(uint32_t in) { return (RV_READ_CSR(CSR_GPIO_IN_USER) & in) != 0; }
 
 // `count` bits of `bits`, most significant first, from deadline t (the previous high's end): each a low (short for a
-// 1, long for a 0) then a high. The next bit's length is worked out before the wait, so each edge comes right at its
-// deadline (deciding it after the wait shortened every low by about 80 ns, 2026-10-02). Returns the last high's end,
-// not yet waited for.
+// 1, long for a 0) then a high. The next bit's length is worked out before the wait (deciding it after the wait
+// shortened every low by about 80 ns, 2026-10-02). Each low is timed from the moment the line fell, and the high after
+// it from the moment it rose: the CPU can stall for 0.3 - 0.6 us even with interrupts off (the P4 fetches this code
+// from L2 memory that the logic capture's and USB's DMA share), and a stall before an edge timed against the previous
+// edge shortened the low after it - a read's long rw bit came out 300 - 600 ns, a CH32V003 took the read of DMCONTROL
+// for a write, the probe's short read pulses for 32 ones, and set ndmreset (bench, 30eda0ea068b: the target reset in
+// test_spi_contract with a 10 MS/s stream and the spi-target running). A stall now lengthens the high before it.
+// Returns the last high's end, not yet waited for.
 inline uint32_t IRAM_ATTR sendBits(uint32_t m, const Times &tm, uint64_t bits, int count, uint32_t t) {
   for (uint64_t mask = uint64_t{1} << (count - 1); mask; mask >>= 1) {
     const uint32_t lowFor = (bits & mask) ? tm.shortLow : tm.longLow;
     until(t);
     low(m);
-    until(t += lowFor);
+    const uint32_t fell = now();
+    until(fell + lowFor);
     high(m);
-    t += tm.high;
+    t = now() + tm.high;
   }
   return t;
 }
