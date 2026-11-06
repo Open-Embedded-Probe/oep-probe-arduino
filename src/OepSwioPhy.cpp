@@ -517,14 +517,17 @@ inline Words words() {
   return {gIo.cfg, rest | (kOutMode << gIo.cfg_shift), rest | (kInMode << gIo.cfg_shift)};
 }
 
+// As the P4's: each low timed from the moment the line fell, the high after it from the moment it rose - a stall before
+// an edge lengthens the high before it and never shortens a long low into a short one.
 inline uint32_t sendBits(const Times &tm, uint64_t bits, int count, uint32_t t) {
   for (uint64_t mask = uint64_t{1} << (count - 1); mask; mask >>= 1) {
     const uint32_t lowFor = (bits & mask) ? tm.shortLow : tm.longLow;
     until(t);
     gIo.low();
-    until(t += lowFor);
+    const uint32_t fell = now();
+    until(fell + lowFor);
     gIo.high();
-    t += tm.high;
+    t = now() + tm.high;
   }
   return t;
 }
@@ -717,14 +720,17 @@ inline void outputOn(uint32_t m) { sio_hw->gpio_oe_set = m; }
 inline void outputOff(uint32_t m) { sio_hw->gpio_oe_clr = m; }
 inline bool sample(uint32_t m) { return (sio_hw->gpio_in & m) != 0; }
 
+// As the P4's: each low timed from the moment the line fell, the high after it from the moment it rose (an XIP cache
+// miss or a bus stall before an edge lengthens the high before it, never shortens a long low into a short one).
 inline uint32_t sendBits(uint32_t m, const Times &tm, uint64_t bits, int count, uint32_t t) {
   for (uint64_t mask = uint64_t{1} << (count - 1); mask; mask >>= 1) {
     const uint32_t lowFor = (bits & mask) ? tm.shortLow : tm.longLow;
     until(t);
     low(m);
-    until(t = (t + lowFor) & 0xffffffu);
+    const uint32_t fell = now();
+    until((fell + lowFor) & 0xffffffu);
     high(m);
-    t = (t + tm.high) & 0xffffffu;
+    t = (now() + tm.high) & 0xffffffu;
   }
   return t;
 }

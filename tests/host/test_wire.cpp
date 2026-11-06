@@ -164,7 +164,22 @@ class FakePhy final : public DmiPhy {
   // communication") - and a read answers the value of the read before it.
   int glitch_at = -1, glitch_at2 = -1, glitches = 0, glitched_reads = 0, glitched_writes = 0;
   bool glitch_parity = false;
+  // The system reset (oep-if-debug §4.3), with model_block: a resumereq into the probe's reset program at 0x20000000
+  // (the count, the store, j .) with interrupts off in machine mode stores a1 to a0; a store of KEY3 | SYSRESET to
+  // PFIC_CFGR resets the system - periph (a peripheral's state) back to 0, havereset, the hart running from its vector -
+  // after reset_after_us, and any access within quiet_us of the resume is counted (the probe must stay silent then).
+  int system_resets = 0, accesses_in_reset = 0;
+  uint32_t periph = 0, reset_resumed_us = 0, reset_quiet_us = 0;
+  bool resetProgram() const {
+    static const uint32_t kProgram[] = {0xfff28293u, 0xfe029ee3u, 0x00b52023u, 0x0000006fu};
+    for (uint32_t i = 0; i < 4; ++i) {
+      const auto it = mem.find(0x20000000u + 4 * i);
+      if (it == mem.end() || it->second != kProgram[i]) return false;
+    }
+    return true;
+  }
   bool countAccess() {
+    if (reset_quiet_us && micros() - reset_resumed_us < reset_quiet_us) ++accesses_in_reset;
     ++accesses;
     if (pending_drop_access >= 0 && pending_drop_access-- == 0) { dropped = true; dropped_at_us = micros(); }
     const bool glitch = glitch_at == 0 || glitch_at2 == 0;
@@ -301,6 +316,20 @@ class FakePhy final : public DmiPhy {
       hartsel = value & 0x07ffffc0u;
       const bool was = halted;
       if ((value & (1u << 31)) && !ignore_halt) { halted = true; resumeack = false; }
+      if ((value & (1u << 30)) && !ignore_resume && !blocked && model_block && dpc == 0x20000000u && resetProgram()) {
+        // the probe's reset program: run only as the probe set it up (machine mode, interrupts off)
+        if ((dcsr & 3u) == 3u && !(mstatus & 8u) && gpr[10] == 0xE000E048u && gpr[11] == 0xBEEF0080u) {
+          ++system_resets;
+          periph = 0;
+          havereset = true;
+          reset_resumed_us = micros();
+          reset_quiet_us = 20000;   // the program's count and the reset: no frame expected meanwhile
+        }
+        halted = false;
+        resumeack = true;
+        dmcontrol = value;
+        return;
+      }
       if ((value & (1u << 30)) && !ignore_resume && !blocked) {
         ++resumes_taken;
         halted = step_returns && !run_reads;
@@ -786,6 +815,37 @@ int main() {
     phy.present = true;
     phy.gone_after_stores = -1;
     phy.model_block = false;
+  }
+
+  // ---- reset is the system reset (oep-if-debug §4.3): the PFIC's SYSRESET stored from the probe's RAM program with
+  // interrupts off in machine mode, nothing sent until it has come, the RAM it took put back, the hart stopped at the
+  // end (mode 1) ----
+  {
+    phy.halted = false;
+    phy.model_block = true;
+    phy.abstractauto = phy.cmderr = 0;
+    phy.mem.clear();
+    phy.mstatus = 0x88;                     // interrupts on, as a sketch leaves them
+    phy.dcsr = 0x40000000u;                 // prv 0
+    const uint32_t kept[4] = {0x11223344u, 0x55667788u, 0x99aabbccu, 0xddeeff00u};
+    for (uint32_t i = 0; i < 4; ++i) phy.mem[0x20000000u + 4 * i] = kept[i];
+    phy.periph = 1;                         // a peripheral the last image left on
+    phy.system_resets = phy.accesses_in_reset = 0;
+    Result r = call(wire_fixed, WireRvswd::kOpAttach, attachRequest(1), out);
+    CHECK(ok(r) && phy.halted && fixed.connected);
+    const Bytes conn = {uint8_t(fixed.number), uint8_t(fixed.number >> 8), uint8_t(fixed.number >> 16), uint8_t(fixed.number >> 24)};
+    r = call(riscv, TargetRiscvDm::kOpReset, cat(conn, {reg::target_riscv_dm::kResetModeHaltAtReset}), out);
+    CHECK(ok(r) && out[1] == reg::target_riscv_dm::kResetFlagsReached && phy.halted);
+    CHECK(phy.system_resets == 1 && phy.periph == 0 && phy.accesses_in_reset == 0);
+    bool ram_back = true;
+    for (uint32_t i = 0; i < 4; ++i) ram_back = ram_back && phy.mem[0x20000000u + 4 * i] == kept[i];
+    CHECK(ram_back);
+    phy.reset_quiet_us = 0;
+    phy.mstatus = 0;
+    phy.dcsr = 0;
+    phy.model_block = false;
+    r = call(wire_fixed, WireRvswd::kOpDetach, conn, out);
+    CHECK(ok(r));
   }
 
   // ---- halt / resume wait dm_wait_ms of time (oep-if-debug §4, §4.2): halt then clears haltreq and answers timeout,

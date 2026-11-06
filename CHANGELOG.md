@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) SWIO on the RP2040 / RP2350 and the CH32 probes: each low timed from the moment the line fell, as on the ESP32-P4
+  (a stall before an edge - an XIP cache miss, a bus stall - lengthens the high before it and never shortens a long low
+  into a short one). No misread was recorded on these; built for every profile, not run on hardware.
+- (JA) RP2040 / RP2350 と CH32 のプローブの SWIO: ESP32-P4 と同じく、low を線が下がった時刻から数える（エッジの前の止まり
+  ― XIP のキャッシュミス、バスの待ち ― は手前の high を伸ばし、長い low を短く縮めない）。これらで読み違いの記録はない。
+  全 profile のビルドだけ確かめ、実機では流していない。
+- (EN) tests/host test_wire: the reset's system reset (oep-if-debug §4.3) on the simulated module - the RAM program run in
+  machine mode with interrupts off, no access while it resets, the RAM put back, a peripheral back to its reset value.
+- (JA) tests/host の test_wire: reset のシステムリセット（oep-if-debug §4.3）を模擬のモジュールで確かめる。RAM のプログラムを M
+  モードで割り込みを止めて走らせ、リセットの間はアクセスせず、RAM を戻し、周辺が既定の値に戻ること。
 - (EN) spi-controller: MISO is read right before the edge it is read at is issued, not after its write returned (an
   ESP32's GPIO write returns some 300 ns late, so the read came that long after the edge). A CH32V103 SPI slave puts
   the next byte's first bit out at the edge ending a byte, and every byte's last bit read as that bit. Checked on the
