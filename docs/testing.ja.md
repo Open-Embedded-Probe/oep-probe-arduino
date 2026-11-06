@@ -14,12 +14,30 @@ Arduino の実行環境は `tests/` の uv / pytest workspace にまとめます
 | `uv run --env-file .env pytest -c pyproject.toml ../examples/Firmware/OepProbe/test_transfer.py --profile esp32` | 選択した ESP32 / P4 / P4X / Pico の build・個体／image 照合・転送・再列挙・宣言と設定／slot の再確認 |
 | `tests/host/run.sh` | host 上の shim と C++ による portable な protocol・状態・資源の検査 |
 | `uv run --project tests --env-file tests/.env pytest tests/equipment`（[実機の適合検査](../tests/equipment/README.ja.md)） | 実機の firmware を、選んだ oep-spec の checkout に照らした core と共通の宣言の検査。書き込みと設定の変更はしない |
+| `cd tests && uv run pytest oneshot/<名前> --profile <profile> --port <ポート>`（下の「単発の試験」） | 決まった機材と配線でだけ流せる実機の試験。プラグインがビルドし、機器ロックの中でそのポートから書き込んでから確かめる。自動では集めない |
 | `python3 tests/compile/test_profiles.py` | profile/model の定義の回帰検査 |
 | `.github/workflows/tests.yml` | host 検査と P4/P4X 等の build。実機の電気動作の保証とは別 |
 | Python client の `tests/hw` | 独立 host による実機の結合検査。現行設定の制約はその README に記載 |
 | `.github/workflows/firmware.yml` | image と manifest/hash の生成。実機での起動・復帰は別途検査 |
 
 新しい設備形式には offline loader/planner、仮想 smoke、共通ロックと結果保存を伴う実機 probe preflight があり、[最小構成の確認](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/hardware-quickstart.ja.md)から試せます。probe preflight の成功で wire/DM・fixture・USB pair の適合を認定しません。
+
+## 単発の試験
+
+決まった機材や配線でだけ流せる実機の試験は、`tests/oneshot/<名前>/` に 1 つずつ置きます。`tests/pyproject.toml` の
+testpaths に入れないので、`uv run pytest` では集めません。流すときはフォルダを名指し、機材のポートを `--port` で渡します。
+ビルド、書き込み、機器ロックは pytest-embedded-arduino-cli のプラグインの既定のとおりです。
+
+- フォルダはプラグインのスケッチのフォルダです。配布の firmware を試すときは、`.ino` に
+  `#include <../examples/Firmware/OepProbe/OepProbe.ino>` だけを書きます（ライブラリの src がインクルードのパスにあり、
+  firmware の中のヘッダは元の場所から見つかります）。`sketch.yaml` は必要な profile だけを、配布の firmware と同じに書きます。
+- インクルードできない `build_opt.h` は、配布の firmware と同じものを置きます。`tests/unit/test_oneshot_sketches.py` が
+  同じかを確かめます。
+- 試験ファイルの先頭に、使う機材、配線、流し方を書きます。
+
+| フォルダ | 確かめること | 機材 |
+|---|---|---|
+| `p4_uart_bridge` | ESP32-P4 / P4X の UART bridge（GPIO37 / 38）から書き込み、同じ口で OEP が答え、その 2 本を fixture に出さない | GPIO37 / 38 に USB-UART を持つ P4 のボード（ベンチの 2-3: CH340C） |
 
 ## 候補 firmware を検証する順序
 
