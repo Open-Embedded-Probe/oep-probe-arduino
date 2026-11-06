@@ -81,7 +81,7 @@ static oep::Slot<oep::WifiStation> wifi;
 static_assert(kMaxFrame >= oep::reg::kLimitWifiMinMaxFrame, "a probe with the wifi item answers max_frame >= wifi_min_max_frame");
 // A slot's send buffer holds all a host within its window can have outstanding (OepTcp.h): two answers in flight, the
 // push queue (1024, the endpoint's default) and one push frame, the event queue (32 x 48 bytes)
-static_assert(oep::TcpSlot::kTxBytes >= 2 * (kMaxFrame + 2) + 1024 + (kMaxFrame + 2) + 32 * 48,
+static_assert(oep::TcpSlot::kDefaultTxBytes >= 2 * (kMaxFrame + 2) + 1024 + (kMaxFrame + 2) + 32 * 48,
               "a TCP slot never waits for a host keeping to its window");
 
 // port_speed (oep-if-link §3): the host may raise UART0's baud for its session; every revert goes back to 115200, the

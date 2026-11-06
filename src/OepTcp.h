@@ -4,15 +4,16 @@
 // OEP over TCP (oep-transports §1, §2): one listening socket and a few connection slots, on lwIP's sockets (ESP32).
 // Header-only: a sketch that includes it pulls in the network; one that does not stays without it.
 //
-//   static oep::TcpListener<3> tcp;                       // three connections at once
+//   static oep::TcpListener<3> tcp;                       // three connections at once (each slot's buffers taken
+//                                                          // for good when it is made: TcpListener(rx, tx))
 //   endpoint.addTcpListener(tcp.slots(), rx, sizeof rx[0], tcp.kSlots);   // after every other transport
 //   tcp.begin(kPort);                                      // once the network is up; again after it went down
 //   tcp.poll();                                            // from loop(), before endpoint.poll()
 //
 // Each slot is one oep::Connection: the endpoint frames length(u16) message on it, answers on it and sends its
 // notifications to it; a length over max_frame closes it (Connection::drop). A connection beyond the slots is accepted
-// and closed at once. A slot's writes are buffered (kTxBytes) and sent when the endpoint flushes after a poll, so a
-// frame's length and body leave in one segment. kTxBytes holds everything a host keeping to its window can have
+// and closed at once. A slot's writes are buffered (its tx bytes) and sent when the endpoint flushes after a poll, so a
+// frame's length and body leave in one segment. The tx bytes (the listener's constructor; kDefaultTxBytes) hold everything a host keeping to its window can have
 // outstanding on the connection - the answers of max_inflight requests, the push queue with one push frame, the event
 // queue (pushes and events are only written into free room; answers are not) - so such a host never makes the probe
 // wait, however long the network stalls (a Wi-Fi retransmission: seconds): the probe never closes a connection for a
@@ -35,11 +36,21 @@ namespace oep {
 
 class TcpSlot final : public Connection {
  public:
-  static constexpr size_t kRxBytes = 1024, kTxBytes = 6144;
+  static constexpr size_t kDefaultRxBytes = 1024, kDefaultTxBytes = 6144;
   static constexpr uint32_t kWriteWaitMs = 2000;
 
   uint32_t connection() const override { return fd_ >= 0 ? id_ : 0; }
   void drop() override { close(); }
+  // The slot's buffers, taken for good (TcpListener's constructor). false: no room - the slot takes no connection.
+  bool setBuffers(size_t rx_bytes, size_t tx_bytes) {
+    rx_ = static_cast<uint8_t *>(takeForGood(rx_bytes));
+    tx_ = static_cast<uint8_t *>(takeForGood(tx_bytes));
+    if (!rx_ || !tx_) rx_ = tx_ = nullptr;
+    rx_cap_ = rx_ ? rx_bytes : 0;
+    tx_cap_ = tx_ ? tx_bytes : 0;
+    return rx_ != nullptr;
+  }
+  bool usable() const { return rx_ != nullptr; }
   bool open() const { return fd_ >= 0; }
 
   int available() override {
@@ -67,8 +78,8 @@ class TcpSlot final : public Connection {
     if (fd_ < 0) return length;   // closed: dropped (a result for a connection that went away)
     size_t done = 0;
     while (done < length) {
-      if (tx_len_ == kTxBytes && !drain(true)) return length;   // dead: closed, the rest dropped
-      size_t take = kTxBytes - tx_len_;
+      if (tx_len_ == tx_cap_ && !drain(true)) return length;   // dead: closed, the rest dropped
+      size_t take = tx_cap_ - tx_len_;
       if (take > length - done) take = length - done;
       memcpy(tx_ + tx_len_, data + done, take);
       tx_len_ += take;
@@ -76,7 +87,7 @@ class TcpSlot final : public Connection {
     }
     return length;
   }
-  int availableForWrite() override { return fd_ >= 0 ? static_cast<int>(kTxBytes - tx_len_) : 0; }
+  int availableForWrite() override { return fd_ >= 0 ? static_cast<int>(tx_cap_ - tx_len_) : 0; }
   // What a poll wrote goes out now, without waiting for the socket (the rest at the next flush or poll).
   void flush() override { drain(false); }
   // Everything buffered out, waiting for the socket (a restart's answer before the chip resets).
@@ -101,15 +112,16 @@ class TcpSlot final : public Connection {
  private:
   int fd_ = -1;
   uint32_t id_ = 0;
-  uint8_t rx_[kRxBytes];
+  uint8_t *rx_ = nullptr;
+  size_t rx_cap_ = 0, tx_cap_ = 0;
   size_t rx_len_ = 0, rx_at_ = 0;
-  uint8_t tx_[kTxBytes];
+  uint8_t *tx_ = nullptr;
   size_t tx_len_ = 0;
 
   void fill() {
     if (fd_ < 0 || rx_at_ < rx_len_) return;
     rx_len_ = rx_at_ = 0;
-    const int n = ::recv(fd_, rx_, sizeof rx_, MSG_DONTWAIT);
+    const int n = ::recv(fd_, rx_, rx_cap_, MSG_DONTWAIT);
     if (n > 0) rx_len_ = static_cast<size_t>(n);
     else if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) close();   // FIN, reset, timeout
   }
@@ -143,6 +155,9 @@ class TcpListener {
  public:
   static constexpr size_t kSlots = N;
   static constexpr int kKeepIdleS = 10, kKeepIntervalS = 5, kKeepCount = 3;
+  explicit TcpListener(size_t rx_bytes = TcpSlot::kDefaultRxBytes, size_t tx_bytes = TcpSlot::kDefaultTxBytes) {
+    for (TcpSlot &s : slot_) s.setBuffers(rx_bytes, tx_bytes);
+  }
 
   Connection *const *slots() {
     for (size_t k = 0; k < N; ++k) ptrs_[k] = &slot_[k];
@@ -193,7 +208,7 @@ class TcpListener {
       const int c = ::accept(fd_, nullptr, nullptr);
       if (c < 0) break;
       TcpSlot *free_slot = nullptr;
-      for (TcpSlot &s : slot_) if (!s.open()) { free_slot = &s; break; }
+      for (TcpSlot &s : slot_) if (!s.open() && s.usable()) { free_slot = &s; break; }
       if (!free_slot) { ::close(c); continue; }   // every slot taken: refused by closing
       const int one = 1, idle = kKeepIdleS, interval = kKeepIntervalS, count = kKeepCount;
       ::setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
