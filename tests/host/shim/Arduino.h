@@ -18,7 +18,9 @@ inline uint32_t getCpuFrequencyMhz() { return 360; }   // the P4's clock (a figu
 // A busy wait in the code under test: time goes on, and a test may complete USB transfers meanwhile.
 extern void (*g_on_wait)();
 inline void delayMicroseconds(uint32_t us) { advanceMicros(us); if (g_on_wait) g_on_wait(); }
-template <class A, class B> inline auto min(A a, B b) -> decltype(a < b ? a : b) { return a < b ? a : b; }
+// By value: decltype(a < b ? a : b) of two lvalues of one type is a reference to the argument (a dangling one once
+// min returns; ASan's stack-use-after-return in LogicCapture::harvest)
+template <class A, class B> inline auto min(A a, B b) { return a < b ? a : b; }
 
 class Print {
  public:
