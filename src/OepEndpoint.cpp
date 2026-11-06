@@ -28,7 +28,7 @@ Result lockedFor(uint32_t remaining_ms, const uint8_t *owner, size_t owner_lengt
 bool Endpoint::add(Interface &interface) {
   // a name outside core §13 rule 1 is refused: list would show what no host may rely on; so is an interface with no op
   // (its describe's ops would declare nothing, core §7.4). Two places stay for the endpoint's own.
-  if (count_ + 2 >= kMaxInterfaces + 1 || polled_ || !interfaceName(interface.name())) return false;
+  if (count_ + 2 >= kMaxInterfaces || polled_ || !interfaceName(interface.name())) return false;
   // an op its ops tag will declare (offersOp): subscribe / unsubscribe only with notifications (core §10.3)
   bool any = interface.notifies();
   for (int op = 1; op < kReservedOps && !any; ++op)

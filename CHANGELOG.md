@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Fixed (endpoint): a sketch can no longer add one interface more than the list holds. Endpoint::add took up to
+  kMaxInterfaces - 1, and the first poll then put oep.probe.plan and oep.probe.restart past the table, so the probe
+  crashed at every boot (an ESP32-P4 firmware with three interfaces of the sketch's own, 23 in all). It now takes at most
+  kMaxInterfaces - 2, as documented; the firmware builds stay below that.
+- (JA) 修正（endpoint）: sketch が、一覧に入る数より 1 つ多くインターフェイスを足せなくなった。Endpoint::add は
+  kMaxInterfaces - 1 個まで受け付けていたので、最初の poll が oep.probe.plan と oep.probe.restart を表の外に置き、
+  起動のたびに落ちていた（sketch 独自のインターフェイスを 3 つ足した ESP32-P4 のファーム、全部で 23 個）。説明どおり
+  kMaxInterfaces - 2 個までにした。firmware の各ビルドはそれより少ない。
 
 ## 0.0.50
 - (EN) Fixed (spi-controller): an interrupt between an SCK edge's look at the clock and its write no longer shortens the
