@@ -1935,6 +1935,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   enc_pos_ = sample_pos_ = stage_first_sample_ = 0;
   block_fill_ = stage_samples_ = 0;
   enc_max_cycles_ = enc_blocks_ = 0;
+  encoder_.raw_cycles_ = 0;
   ring_peak_ = 0;
   spill_peak_ = 0;
   spill_in_bytes_ = spill_in_cycles_ = spill_out_bytes_ = spill_out_cycles_ = 0;
@@ -2460,7 +2461,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 1 + kEncName, enc_max_cycles_);
         putU64(v + 5 + kEncName, enc_cycles_);
         putU32(v + 13 + kEncName, enc_blocks_);
-        putU32(v + 17 + kEncName, 0);
+        putU32(v + 17 + kEncName, encoder_.raw_cycles_);   // EXPERIMENT: the raw part's cycles
         putU32(v + 21 + kEncName, static_cast<uint32_t>(getCpuFrequencyMhz()) * 1000000u);
         used += kTlvHeader + kEncValue;
       }

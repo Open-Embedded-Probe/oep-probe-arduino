@@ -18,6 +18,9 @@
 #include <string.h>
 
 #include "OepRegistry.h"
+#if defined(ESP_PLATFORM)
+#include <esp_cpu.h>
+#endif
 
 #pragma GCC push_options
 #pragma GCC optimize("O2")
@@ -91,7 +94,13 @@ class Encoder {
     for (uint8_t c = 0; c < p.reduced; ++c)   // start: change_latch's level before the block
       if (p.kind[c] == kChangeLatch) put(red, at, (before >> p.red_bit[c]) & 1, 1);
     if (fastOk(p, src, r)) {
+#if defined(ESP_PLATFORM)
+      const uint32_t t0 = esp_cpu_get_cycle_count();
       packRaw(p, src, r, out);
+      raw_cycles_ += esp_cpu_get_cycle_count() - t0;
+#else
+      packRaw(p, src, r, out);
+#endif
       fastReduced(p, src, r, red, at, before);
     } else {
       referenceRaw(p, src, r, out);
@@ -364,6 +373,9 @@ class Encoder {
   }
   uint32_t before_ = 0;
   bool have_before_ = false;
+
+ public:
+  uint32_t raw_cycles_ = 0;   // EXPERIMENT: the raw part's cycles, since reset of the counter
 };
 
 }  // namespace blocks
