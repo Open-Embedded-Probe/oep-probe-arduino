@@ -262,9 +262,9 @@ class Encoder {
     const uint32_t W = p.w, per = 32u / W, smask = W == 32 ? 0xFFFFFFFFu : (1u << W) - 1;
     for (uint8_t gi = 0; gi < ng; ++gi) {
       const Group &gr = g[gi];
-      const uint32_t words = gr.d / per, lmask = (1u << gr.n) - 1;
+      const uint32_t words = gr.d / per, lmask = (1u << gr.n) - 1, K = r / gr.d;   // divided once (no divide a loop)
       uint32_t prev = before;   // the sample before the interval (change_latch)
-      for (uint32_t k = 0; k < r / gr.d; ++k) {
+      for (uint32_t k = 0; k < K; ++k) {
         const uint32_t *x = wd + k * words;
         uint32_t v;
         if (gr.kind == kSample) {
@@ -289,7 +289,7 @@ class Encoder {
         }
         lvs[k & 31] = (v >> gr.lane) & lmask;
         if (gr.kind == kChangeLatch) cvs[k & 31] = (v >> (16 + gr.lane)) & lmask;
-        if ((k & 31) == 31 || k + 1 == r / gr.d) flush(gr, k & ~31u, (k & 31) + 1, off, red);
+        if ((k & 31) == 31 || k + 1 == K) flush(gr, k & ~31u, (k & 31) + 1, off, red);
       }
     }
   }
