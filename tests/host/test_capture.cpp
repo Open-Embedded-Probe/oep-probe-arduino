@@ -504,6 +504,7 @@ static void testLogicBlocksFastPath() {
       p.kind[p.reduced] = c.kinds[k];
       p.d[p.reduced++] = c.ds[k];
     }
+    if (p.w == 16 && p.raw > 8) p.wout = 16;   // as configure does
     for (const bool quiet : {false, true}) {
       Encoder fast, ref;
       const size_t bytes = size_t(c.L) * c.w / 8;

@@ -37,7 +37,10 @@ inline uint8_t valueBits(uint8_t kind) { return kind == kChangeLatch ? 2 : 1; }
 
 struct Plan {
   uint8_t w = 8;                          // the capture's sample width: 1, 2, 4, 8 or 16 bits
+  uint8_t wout = 0;                       // see below (0: R)
   uint8_t raw = 0, reduced = 0;           // R, and the reduced channels
+  // the raw part's bits a sample (the answer's layout w): R, or w itself when the raw lanes go as taken (w 16 with more
+  // than 8 raw channels: a copy, the other lanes' bits there undefined, §1.1); raw channel j at bit j of it either way
   uint8_t raw_bit[kMaxChannels] = {};     // raw channel j (role order): its bit in a sample
   uint8_t red_bit[kMaxChannels] = {};     // reduced channel c (role order): its bit
   uint8_t kind[kMaxChannels] = {};        // reduced channel c: its carriage (kSample .. kChangeLatch)
@@ -56,8 +59,9 @@ inline size_t reducedBits(const Plan &p, uint32_t r) {
   for (uint8_t c = 0; c < p.reduced; ++c) bits += static_cast<size_t>((r + p.d[c] - 1) / p.d[c]) * valueBits(p.kind[c]);
   return bits;
 }
+inline uint8_t rawBits(const Plan &p) { return p.wout ? p.wout : p.raw; }
 inline size_t bytesFor(const Plan &p, uint32_t r) {
-  return (static_cast<size_t>(r) * p.raw + 7) / 8 + (reducedBits(p, r) + 7) / 8;
+  return (static_cast<size_t>(r) * rawBits(p) + 7) / 8 + (reducedBits(p, r) + 7) / 8;
 }
 
 // The fast path's view of a plan: the raw channels on bits 0 .. R-1 in role order, the reduced channels in groups of
@@ -81,7 +85,7 @@ class Encoder {
     if (!r || need > capacity) return 0;
     memset(out, 0, need);
     const uint32_t before = contiguous && have_before_ ? before_ : sample(p, src, 0);
-    const size_t raw_bytes = (static_cast<size_t>(r) * p.raw + 7) / 8;
+    const size_t raw_bytes = (static_cast<size_t>(r) * rawBits(p) + 7) / 8;
     uint8_t *red = out + raw_bytes;
     size_t at = 0;
     for (uint8_t c = 0; c < p.reduced; ++c)   // start: change_latch's level before the block
@@ -144,16 +148,13 @@ class Encoder {
     Group g[kMaxChannels];
     return !p.reduced || groups(p, g);
   }
-  // R raw bits a sample, 8 samples -> R bytes
-  static void packRaw(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out) {
-    const uint32_t R = p.raw;
-    if (!R) return;
-    if (R == p.w) { memcpy(out, src, static_cast<size_t>(r) * R / 8); return; }
-    const uint32_t *wd = reinterpret_cast<const uint32_t *>(src);
-    const uint32_t m = (1u << R) - 1;
-    uint8_t *o = out;
-    if (p.w == 8) {   // 4 samples a word: their low R bits side by side (4R bits), two words -> R bytes
-      const uint32_t m4 = m * 0x01010101u, mlo = m * 0x00010001u, mhi = (m << R) * 0x00010001u, m2 = (1u << (2 * R)) - 1;
+  // R raw bits a sample, 8 samples -> R bytes (R fixed at compile time: the shifts and the store's size constant)
+  template <uint32_t W, uint32_t R>
+  static void packT(const uint32_t *wd, uint32_t r, uint8_t *o) {
+    constexpr uint32_t m = (1u << R) - 1;
+    if (W == 8) {   // 4 samples a word: their low R bits side by side (4R bits), two words -> R bytes
+      constexpr uint32_t m4 = m * 0x01010101u, mlo = m * 0x00010001u, mhi = (m << R) * 0x00010001u,
+                         m2 = (1u << (2 * R)) - 1;
       for (uint32_t i = 0; i < r / 4; i += 2) {
         uint32_t h[2];
         for (int k = 0; k < 2; ++k) {
@@ -170,14 +171,19 @@ class Encoder {
         }
         o += R;
       }
-    } else if (p.w == 16) {   // 2 samples a word: 2R bits on, a byte out whenever there is one
-      uint64_t acc = 0;
-      uint32_t have = 0;
-      for (uint32_t i = 0; i < r / 2; ++i) {
-        const uint32_t x = wd[i];
-        acc |= static_cast<uint64_t>((x & m) | ((x >> (16 - R)) & (m << R))) << have;
-        have += 2 * R;
-        while (have >= 8) { *o++ = static_cast<uint8_t>(acc); acc >>= 8; have -= 8; }
+    } else if (W == 16) {   // 2 samples a word: 2R bits; four words -> R bytes (R <= 8)
+      for (uint32_t i = 0; i < r / 2; i += 4) {
+        uint32_t t[4];
+        for (int k = 0; k < 4; ++k) t[k] = (wd[i + k] & m) | ((wd[i + k] >> (16 - R)) & (m << R));
+        if (R <= 4) {
+          const uint32_t bits = t[0] | (t[1] << (2 * R)) | (t[2] << (4 * R)) | (t[3] << (6 * R));
+          memcpy(o, &bits, R);
+        } else {
+          const uint64_t bits = t[0] | (static_cast<uint64_t>(t[1]) << (2 * R)) |
+                                (static_cast<uint64_t>(t[2]) << (4 * R)) | (static_cast<uint64_t>(t[3]) << (6 * R));
+          memcpy(o, &bits, R);
+        }
+        o += R;
       }
     } else {   // w 4: 8 samples a word -> R bytes
       for (uint32_t i = 0; i < r / 8; ++i) {
@@ -187,6 +193,33 @@ class Encoder {
         memcpy(o, &bits, R);
         o += R;
       }
+    }
+  }
+  static void packRaw(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out) {
+    const uint32_t R = p.raw;
+    if (!R) return;
+    if (rawBits(p) == p.w) { memcpy(out, src, static_cast<size_t>(r) * p.w / 8); return; }
+    const uint32_t *wd = reinterpret_cast<const uint32_t *>(src);
+    switch (p.w * 16 + R) {
+      case 8 * 16 + 1: return packT<8, 1>(wd, r, out);
+      case 8 * 16 + 2: return packT<8, 2>(wd, r, out);
+      case 8 * 16 + 3: return packT<8, 3>(wd, r, out);
+      case 8 * 16 + 4: return packT<8, 4>(wd, r, out);
+      case 8 * 16 + 5: return packT<8, 5>(wd, r, out);
+      case 8 * 16 + 6: return packT<8, 6>(wd, r, out);
+      case 8 * 16 + 7: return packT<8, 7>(wd, r, out);
+      case 16 * 16 + 1: return packT<16, 1>(wd, r, out);
+      case 16 * 16 + 2: return packT<16, 2>(wd, r, out);
+      case 16 * 16 + 3: return packT<16, 3>(wd, r, out);
+      case 16 * 16 + 4: return packT<16, 4>(wd, r, out);
+      case 16 * 16 + 5: return packT<16, 5>(wd, r, out);
+      case 16 * 16 + 6: return packT<16, 6>(wd, r, out);
+      case 16 * 16 + 7: return packT<16, 7>(wd, r, out);
+      case 16 * 16 + 8: return packT<16, 8>(wd, r, out);
+      case 4 * 16 + 1: return packT<4, 1>(wd, r, out);
+      case 4 * 16 + 2: return packT<4, 2>(wd, r, out);
+      case 4 * 16 + 3: return packT<4, 3>(wd, r, out);
+      default: referenceRaw(p, src, r, out); return;
     }
   }
   // Every group: per interval the whole-word aggregates (first, last, OR, AND, a change), then each lane's bit to its
@@ -253,6 +286,10 @@ class Encoder {
 
   // ---- the reference: any plan, bit by bit ----
   static void referenceRaw(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out) {
+    if (rawBits(p) == p.w && p.raw) {   // as taken (raw channel j on lane j)
+      memcpy(out, src, (static_cast<size_t>(r) * p.w + 7) / 8);
+      return;
+    }
     size_t j = 0;
     for (uint32_t i = 0; i < r; ++i) {
       const uint32_t s = sample(p, src, i);

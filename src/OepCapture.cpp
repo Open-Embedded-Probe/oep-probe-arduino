@@ -1688,6 +1688,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
         plan.raw_bit[plan.raw++] = lane_of[k];
       }
     }
+    if (width == 16 && plan.raw > 8) plan.wout = 16;   // more than 8 raw lanes at w 16: sent as taken (a copy)
     size_t frame = 0;
     stagesPossible(&frame);   // a block fits the stage it goes into
     const size_t stage_data = frame - kPushHead - kPushTail;
@@ -1827,9 +1828,10 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   putU32(r, num);
   putU32(r + 4, den);
   w.put(kTagActualRate, r, sizeof r);
-  // format 1: w = C = R, the raw channels (§1.3); else every channel at its bit (the clock's role is none)
+  // format 1: C = R, the raw channels at bits 0 .. R-1 of w (R, or 16 when they go as taken, §1.3); else every channel
+  // at its bit (the clock's role is none)
   const uint8_t shown = blocks_format ? plan.raw : lines;
-  uint8_t layout[2 + kMaxChannels] = {blocks_format ? plan.raw : width, shown};
+  uint8_t layout[2 + kMaxChannels] = {blocks_format ? blocks::rawBits(plan) : width, shown};
   for (uint8_t k = 0; k < shown; ++k) layout[2 + k] = k;
   w.put(kTagLayout, layout, 2 + shown);
   // every answer row of the mode (capture §3.3): actual_samples in modes 1 / 2, actual_segments in mode 2 only
