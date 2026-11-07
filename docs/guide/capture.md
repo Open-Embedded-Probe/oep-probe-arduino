@@ -34,7 +34,9 @@ How many channels each board takes is in [Boards](boards.md#what-each-chip-does)
 ## ESP32-P4 / P4X speeds and lines
 
 The probe captures at the rate it can keep nearest to the one asked and answers the rate it used (`actual_rate` in the
-configure answer; the WireSkein file keeps it too).
+configure answer; the WireSkein file keeps it too). Before capturing, a query (an ask that sets nothing) tells the rate
+this line count and mode get: in Python the `rate` of `oep_client.capture.LogicCapture(hst).configure(query=True,
+rate=…, mode=…)`, asked once the plan has set the lines. The table below is how that answer comes about.
 
 ### Rates
 
@@ -78,7 +80,7 @@ Data format 1 (logic blocks, oep-if-capture §1.3) carries each line its own way
   events take less bandwidth.
 - In Python, name the events lines and their D: `oep_client.acquire.Request(..., resolution={"CS": 64})`. The other
   lines are raw.
-- Streaming takes it only over a route with send stages.
+- Up to 8 lines. Streaming takes it only over a route with send stages.
 
 ### With other operations
 
