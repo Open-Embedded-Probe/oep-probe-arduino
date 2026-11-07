@@ -150,16 +150,29 @@ class Encoder {
 
  private:
   // ---- the fast path: w 4 / 8 / 16, raw on bits 0 .. R-1, groups of lanes, a whole block of whole words a D ----
-  static bool fastOk(const Plan &p, const uint8_t *src, uint32_t r) {
-    if ((p.w != 4 && p.w != 8 && p.w != 16) || (reinterpret_cast<uintptr_t>(src) & 3) || r % 8) return false;
+  // The plan's layout for the fast path, worked out once a plan (not a block): cached_ the plan it is for
+  void prepare(const Plan &p) {
+    cached_ = p;
+    ng_ = groups(p, groups_);
+    layout_ok_ = (p.w == 4 || p.w == 8 || p.w == 16) && (!p.reduced || ng_);
     for (uint8_t j = 0; j < p.raw; ++j)
-      if (p.raw_bit[j] != j) return false;
+      if (p.raw_bit[j] != j) layout_ok_ = false;
     const uint32_t per = 32u / p.w;   // samples a word
     for (uint8_t c = 0; c < p.reduced; ++c)
-      if (p.d[c] % per || r % p.d[c]) return false;
-    Group g[kMaxChannels];
-    return !p.reduced || groups(p, g);
+      if (p.d[c] % per) layout_ok_ = false;
   }
+  bool fastOk(const Plan &p, const uint8_t *src, uint32_t r) {
+    if (memcmp(&p, &cached_, sizeof p) != 0) prepare(p);
+    if (!layout_ok_ || (reinterpret_cast<uintptr_t>(src) & 3) || r % 8) return false;
+    if (r != p.block)
+      for (uint8_t c = 0; c < p.reduced; ++c)
+        if (r % p.d[c]) return false;
+    return true;
+  }
+  Plan cached_;
+  Group groups_[kMaxChannels];
+  uint8_t ng_ = 0;
+  bool layout_ok_ = false;
   // R raw bits a sample, 8 samples -> R bytes (R fixed at compile time: the shifts and the store's size constant)
   template <uint32_t W, uint32_t R>
   static void packT(const uint32_t *wd, uint32_t r, uint8_t *o) {
@@ -251,8 +264,8 @@ class Encoder {
   // channel's place (channel c's interval k at bit `off_c + k * b` of the reduced part, after the starts).
   void fastReduced(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *red, size_t at, uint32_t before) {
     if (!p.reduced) return;
-    Group g[kMaxChannels];
-    const uint8_t ng = groups(p, g);
+    const Group *g = groups_;   // fastOk prepared them
+    const uint8_t ng = ng_;
     size_t off[kMaxChannels];   // channel c's first value bit
     for (uint8_t c = 0; c < p.reduced; ++c) {
       off[c] = at;
@@ -302,8 +315,14 @@ class Encoder {
       for (uint8_t i = 0; i < 8; ++i) word[l0 + i] = 0;
       for (uint32_t j0 = 0; j0 < cnt; j0 += 8) {
         uint32_t lo = 0, hi = 0;   // byte j = interval j0 + j's lanes l0 .. l0 + 7
-        for (uint32_t j = 0; j < 4; ++j) lo |= ((j0 + j < cnt ? vals[j0 + j] >> l0 : 0) & 0xFFu) << (8 * j);
-        for (uint32_t j = 0; j < 4; ++j) hi |= ((j0 + 4 + j < cnt ? vals[j0 + 4 + j] >> l0 : 0) & 0xFFu) << (8 * j);
+        if (j0 + 8 <= cnt) {
+          const uint32_t *v = vals + j0;
+          lo = ((v[0] >> l0) & 0xFFu) | (((v[1] >> l0) & 0xFFu) << 8) | (((v[2] >> l0) & 0xFFu) << 16) | ((v[3] >> l0) << 24);
+          hi = ((v[4] >> l0) & 0xFFu) | (((v[5] >> l0) & 0xFFu) << 8) | (((v[6] >> l0) & 0xFFu) << 16) | ((v[7] >> l0) << 24);
+        } else {
+          for (uint32_t j = 0; j < 4; ++j) lo |= ((j0 + j < cnt ? vals[j0 + j] >> l0 : 0) & 0xFFu) << (8 * j);
+          for (uint32_t j = 0; j < 4; ++j) hi |= ((j0 + 4 + j < cnt ? vals[j0 + 4 + j] >> l0 : 0) & 0xFFu) << (8 * j);
+        }
         uint32_t t = (lo ^ (lo >> 7)) & 0x00AA00AAu;
         lo ^= t ^ (t << 7);
         t = (hi ^ (hi >> 7)) & 0x00AA00AAu;
@@ -345,6 +364,19 @@ class Encoder {
     return (x | (x << 1)) & 0x55555555u;
   }
   static void writeBits(uint8_t *buf, size_t bit, uint64_t v, uint32_t n) {   // n bits of v ORed in from `bit`
+    while (n >= 32) {   // a whole word: two shifts, five bytes at most
+      const uint32_t w = static_cast<uint32_t>(v), sh = bit & 7;
+      uint8_t *b = buf + (bit >> 3);
+      const uint32_t lo = w << sh;
+      b[0] |= static_cast<uint8_t>(lo);
+      b[1] |= static_cast<uint8_t>(lo >> 8);
+      b[2] |= static_cast<uint8_t>(lo >> 16);
+      b[3] |= static_cast<uint8_t>(lo >> 24);
+      if (sh) b[4] |= static_cast<uint8_t>(w >> (32 - sh));
+      v >>= 32;
+      bit += 32;
+      n -= 32;
+    }
     while (n) {
       const uint32_t sh = bit & 7, take = 8 - sh < n ? 8 - sh : n;
       buf[bit >> 3] |= static_cast<uint8_t>((v & ((1u << take) - 1)) << sh);
