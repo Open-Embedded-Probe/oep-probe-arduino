@@ -473,6 +473,75 @@ static void testFormatAndTriggerOpts() {
   CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectMalformed));
 }
 
+// capture §1.3: the encoder's fast path (lanes laid out by lanesFor, whole words a D) gives the reference's bytes, block
+// after block (change_latch carried across), on random samples and on quiet ones with short pulses, at w 4 / 8 / 16.
+// The reference is the same encoder fed a misaligned copy (the fast path needs word-aligned samples).
+static void testLogicBlocksFastPath() {
+  using namespace oep::blocks;
+  struct Case { uint8_t w; std::vector<uint8_t> kinds; std::vector<uint32_t> ds; uint32_t L; };
+  const std::vector<Case> cases = {
+      {8, {kRaw, kRaw, kRaw, kSample, kSample, kSample, kSample, kSample}, {1, 1, 1, 64, 64, 64, 64, 64}, 1024},
+      {8, {kRaw, kAnyLow, kRaw, kChangeLatch, kAnyHigh, kRaw, kSample, kChangeLatch}, {1, 8, 1, 16, 8, 1, 32, 16}, 512},
+      {16, {kRaw, kRaw, kRaw, kRaw, kSample, kSample, kSample, kSample, kSample, kSample, kSample, kSample, kSample,
+            kSample, kSample, kSample}, {1, 1, 1, 1, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32}, 2048},
+      {16, {kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kChangeLatch, kAnyHigh, kAnyLow, kSample,
+            kChangeLatch}, {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 4, 2, 2, 6, 4}, 96},
+      {4, {kRaw, kRaw, kChangeLatch, kAnyLow}, {1, 1, 8, 16}, 256},
+      {8, {kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kRaw, kRaw}, {1, 1, 1, 1, 1, 1, 1, 1}, 64},
+  };
+  uint32_t seed = 12345;
+  auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return seed >> 8; };
+  for (const Case &c : cases) {
+    const uint8_t n = static_cast<uint8_t>(c.kinds.size());
+    uint8_t lane[kMaxChannels];
+    Encoder::lanesFor(n, c.kinds.data(), c.ds.data(), lane);
+    Plan p;
+    p.w = c.w;
+    p.block = c.L;
+    for (uint8_t k = 0; k < n; ++k) {
+      if (c.kinds[k] == kRaw) { p.raw_bit[p.raw++] = lane[k]; continue; }
+      p.red_bit[p.reduced] = lane[k];
+      p.kind[p.reduced] = c.kinds[k];
+      p.d[p.reduced++] = c.ds[k];
+    }
+    for (const bool quiet : {false, true}) {
+      Encoder fast, ref;
+      const size_t bytes = size_t(c.L) * c.w / 8;
+      std::vector<uint32_t> aligned(bytes / 4 + 1);
+      std::vector<uint8_t> shifted(bytes + 1);
+      uint32_t level = 0;
+      for (int blk = 0; blk < 4; ++blk) {
+        uint8_t *a = reinterpret_cast<uint8_t *>(aligned.data());
+        for (size_t i = 0; i < c.L; ++i) {   // per sample: random, or a held level with now and then a 1-sample pulse
+          uint32_t s;
+          if (quiet) {
+            if (rnd() % 97 == 0) level ^= 1u << (rnd() % c.w);
+            s = level ^ (rnd() % 53 == 0 ? 1u << (rnd() % c.w) : 0);
+          } else {
+            s = rnd();
+          }
+          s &= c.w == 16 ? 0xFFFFu : (1u << c.w) - 1;
+          if (c.w == 16) { a[2 * i] = uint8_t(s); a[2 * i + 1] = uint8_t(s >> 8); }
+          else if (c.w == 8) a[i] = uint8_t(s);
+          else a[i / 2] = uint8_t((a[i / 2] & (i & 1 ? 0x0F : 0xF0)) | (s << (4 * (i & 1))));
+        }
+        memcpy(shifted.data() + 1, a, bytes);
+        uint8_t o1[16384], o2[16384];
+        const size_t n1 = fast.encode(p, a, c.L, o1, sizeof o1, blk > 0);
+        const size_t n2 = ref.encode(p, shifted.data() + 1, c.L, o2, sizeof o2, blk > 0);
+        const bool same = n1 == n2 && n1 == bytesFor(p, c.L) && memcmp(o1, o2, n1) == 0;
+        CHECK(same);
+        if (!same) {
+          size_t at = 0;
+          while (at < n1 && o1[at] == o2[at]) ++at;
+          printf("  fast path w %u L %u quiet %d block %d: %zu / %zu bytes, first difference at %zu (raw part %zu)\n", c.w, c.L,
+                 quiet, blk, n1, n2, at, (size_t(c.L) * p.raw + 7) / 8);
+        }
+      }
+    }
+  }
+}
+
 // capture §1.3 / §3.3 format 1 (streaming over the stages): a carriage per role - raw, or a reduction with D 2 or more;
 // L a multiple of 8 and of every D (a D that is no power of 2 too), at most kMaxBlock; layout the raw channels only;
 // data_rate the block's fixed size over L samples. Malformed: a reduction with D 1, raw with D 2, a role twice;
@@ -1828,6 +1897,7 @@ int main() {
   testDescribe();
   testFormatAndTriggerOpts();
   testFormat1Carriage();
+  testLogicBlocksFastPath();
   testConfigureOrder();
   testStreamingWithoutStages();
   testStreamAfterRepeat();

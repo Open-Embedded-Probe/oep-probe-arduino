@@ -60,6 +60,14 @@ inline size_t bytesFor(const Plan &p, uint32_t r) {
   return (static_cast<size_t>(r) * p.raw + 7) / 8 + (reducedBits(p, r) + 7) / 8;
 }
 
+// The fast path's view of a plan: the raw channels on bits 0 .. R-1 in role order, the reduced channels in groups of
+// lanes side by side with one (carriage, D) each. lanes(): whether the plan is laid out so.
+struct Group {
+  uint8_t kind = 0, lane = 0, n = 0;   // carriage, first lane, lanes
+  uint32_t d = 0;
+  uint8_t chan[kMaxChannels] = {};     // lane `lane + i` is reduced channel chan[i] (role order)
+};
+
 class Encoder {
  public:
   void reset() { have_before_ = false; }
@@ -72,18 +80,187 @@ class Encoder {
     const size_t need = bytesFor(p, r);
     if (!r || need > capacity) return 0;
     memset(out, 0, need);
-    // raw part: R bits a sample
+    const uint32_t before = contiguous && have_before_ ? before_ : sample(p, src, 0);
+    const size_t raw_bytes = (static_cast<size_t>(r) * p.raw + 7) / 8;
+    uint8_t *red = out + raw_bytes;
+    size_t at = 0;
+    for (uint8_t c = 0; c < p.reduced; ++c)   // start: change_latch's level before the block
+      if (p.kind[c] == kChangeLatch) put(red, at, (before >> p.red_bit[c]) & 1, 1);
+    if (fastOk(p, src, r)) {
+      packRaw(p, src, r, out);
+      fastReduced(p, src, r, red, at, before);
+    } else {
+      referenceRaw(p, src, r, out);
+      referenceReduced(p, src, r, red, at, before);
+    }
+    before_ = sample(p, src, r - 1);
+    have_before_ = true;
+    return need;
+  }
+
+  // The plan's groups (fast path), -> their count; 0 with reduced channels when the lanes are not laid out for it.
+  static uint8_t groups(const Plan &p, Group *g) {
+    uint8_t n = 0;
+    for (uint8_t lane = p.raw; lane < p.raw + p.reduced; ++lane) {
+      uint8_t c = 0;
+      while (c < p.reduced && p.red_bit[c] != lane) ++c;
+      if (c == p.reduced) return 0;
+      if (n && g[n - 1].kind == p.kind[c] && g[n - 1].d == p.d[c] && g[n - 1].lane + g[n - 1].n == lane) {
+        g[n - 1].chan[g[n - 1].n++] = c;
+      } else {
+        g[n].kind = p.kind[c];
+        g[n].d = p.d[c];
+        g[n].lane = lane;
+        g[n].n = 1;
+        g[n].chan[0] = c;
+        ++n;
+      }
+    }
+    return n;
+  }
+  // How a plan's roles go on the capture's lanes for the fast path: raw roles first (role order), then the reduced
+  // ones grouped by (carriage, D). kinds[role] (kRaw or a reduction), ds[role]; -> lane[role].
+  static void lanesFor(uint8_t roles, const uint8_t *kinds, const uint32_t *ds, uint8_t *lane) {
+    uint8_t next = 0;
+    for (uint8_t k = 0; k < roles; ++k)
+      if (kinds[k] == kRaw) lane[k] = next++;
+    bool done[kMaxChannels] = {};
+    for (uint8_t k = 0; k < roles; ++k) {
+      if (kinds[k] == kRaw || done[k]) continue;
+      for (uint8_t m = k; m < roles; ++m)
+        if (!done[m] && kinds[m] == kinds[k] && ds[m] == ds[k]) { lane[m] = next++; done[m] = true; }
+    }
+  }
+
+ private:
+  // ---- the fast path: w 4 / 8 / 16, raw on bits 0 .. R-1, groups of lanes, a whole block of whole words a D ----
+  static bool fastOk(const Plan &p, const uint8_t *src, uint32_t r) {
+    if ((p.w != 4 && p.w != 8 && p.w != 16) || (reinterpret_cast<uintptr_t>(src) & 3) || r % 8) return false;
+    for (uint8_t j = 0; j < p.raw; ++j)
+      if (p.raw_bit[j] != j) return false;
+    const uint32_t per = 32u / p.w;   // samples a word
+    for (uint8_t c = 0; c < p.reduced; ++c)
+      if (p.d[c] % per || r % p.d[c]) return false;
+    Group g[kMaxChannels];
+    return !p.reduced || groups(p, g);
+  }
+  // R raw bits a sample, 8 samples -> R bytes
+  static void packRaw(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out) {
+    const uint32_t R = p.raw;
+    if (!R) return;
+    if (R == p.w) { memcpy(out, src, static_cast<size_t>(r) * R / 8); return; }
+    const uint32_t *wd = reinterpret_cast<const uint32_t *>(src);
+    const uint32_t m = (1u << R) - 1;
+    uint8_t *o = out;
+    if (p.w == 8) {   // 4 samples a word: their low R bits side by side (4R bits), two words -> R bytes
+      const uint32_t m4 = m * 0x01010101u, mlo = m * 0x00010001u, mhi = (m << R) * 0x00010001u, m2 = (1u << (2 * R)) - 1;
+      for (uint32_t i = 0; i < r / 4; i += 2) {
+        uint32_t h[2];
+        for (int k = 0; k < 2; ++k) {
+          uint32_t t = wd[i + k] & m4;
+          t = (t & mlo) | ((t >> (8 - R)) & mhi);
+          h[k] = (t & m2) | ((t >> (16 - 2 * R)) & (m2 << (2 * R)));
+        }
+        if (R <= 4) {
+          const uint32_t bits = h[0] | (h[1] << (4 * R));
+          memcpy(o, &bits, R);
+        } else {
+          const uint64_t bits = h[0] | (static_cast<uint64_t>(h[1]) << (4 * R));
+          memcpy(o, &bits, R);
+        }
+        o += R;
+      }
+    } else if (p.w == 16) {   // 2 samples a word: 2R bits on, a byte out whenever there is one
+      uint64_t acc = 0;
+      uint32_t have = 0;
+      for (uint32_t i = 0; i < r / 2; ++i) {
+        const uint32_t x = wd[i];
+        acc |= static_cast<uint64_t>((x & m) | ((x >> (16 - R)) & (m << R))) << have;
+        have += 2 * R;
+        while (have >= 8) { *o++ = static_cast<uint8_t>(acc); acc >>= 8; have -= 8; }
+      }
+    } else {   // w 4: 8 samples a word -> R bytes
+      for (uint32_t i = 0; i < r / 8; ++i) {
+        const uint32_t x = wd[i];
+        uint32_t bits = 0;
+        for (int k = 0; k < 8; ++k) bits |= ((x >> (4 * k)) & m) << (R * k);
+        memcpy(o, &bits, R);
+        o += R;
+      }
+    }
+  }
+  // Every group: per interval the whole-word aggregates (first, last, OR, AND, a change), then each lane's bit to its
+  // channel's place (channel c's interval k at bit `off_c + k * b` of the reduced part, after the starts).
+  void fastReduced(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *red, size_t at, uint32_t before) {
+    if (!p.reduced) return;
+    Group g[kMaxChannels];
+    const uint8_t ng = groups(p, g);
+    size_t off[kMaxChannels];   // channel c's first value bit
+    for (uint8_t c = 0; c < p.reduced; ++c) {
+      off[c] = at;
+      at += static_cast<size_t>(r / p.d[c]) * valueBits(p.kind[c]);
+    }
+    const uint32_t *wd = reinterpret_cast<const uint32_t *>(src);
+    const uint32_t W = p.w, per = 32u / W, smask = W == 32 ? 0xFFFFFFFFu : (1u << W) - 1;
+    for (uint8_t gi = 0; gi < ng; ++gi) {
+      const Group &gr = g[gi];
+      const uint32_t words = gr.d / per, lmask = (1u << gr.n) - 1;
+      uint32_t prev = before;   // the sample before the interval (change_latch)
+      for (uint32_t k = 0; k < r / gr.d; ++k) {
+        const uint32_t *x = wd + k * words;
+        uint32_t v;
+        if (gr.kind == kSample) {
+          v = x[0] & smask;
+        } else if (gr.kind == kAnyHigh) {
+          uint32_t o = 0;
+          for (uint32_t i = 0; i < words; ++i) o |= x[i];
+          v = fold(o, W, false);
+        } else if (gr.kind == kAnyLow) {
+          uint32_t a = 0xFFFFFFFFu;
+          for (uint32_t i = 0; i < words; ++i) a &= x[i];
+          v = fold(a, W, true);
+        } else {   // change_latch: XOR of each sample with the one before, ORed
+          uint32_t ch = 0, last = prev;
+          for (uint32_t i = 0; i < words; ++i) {
+            const uint32_t y = x[i];
+            ch |= y ^ ((y << W) | (last & smask));
+            last = y >> (32 - W);
+          }
+          prev = last;
+          v = (last & smask) | (fold(ch, W, false) << 16);   // level in bits 0-15, change in 16-31
+        }
+        const uint32_t lv = (v >> gr.lane) & lmask;
+        const uint32_t cv = gr.kind == kChangeLatch ? (v >> (16 + gr.lane)) & lmask : 0;
+        for (uint8_t i = 0; i < gr.n; ++i) {
+          const uint8_t c = gr.chan[i];
+          if (gr.kind == kChangeLatch) {   // two bits, which may sit either side of a byte's end
+            const size_t bit = off[c] + 2 * k;
+            red[bit >> 3] |= static_cast<uint8_t>(((lv >> i) & 1) << (bit & 7));
+            red[(bit + 1) >> 3] |= static_cast<uint8_t>(((cv >> i) & 1) << ((bit + 1) & 7));
+          } else {
+            const size_t bit = off[c] + k;
+            red[bit >> 3] |= static_cast<uint8_t>(((lv >> i) & 1) << (bit & 7));
+          }
+        }
+      }
+    }
+  }
+  // the samples of a word ORed (or ANDed) into one sample's bits
+  static uint32_t fold(uint32_t x, uint32_t W, bool all) {
+    for (uint32_t s = 16; s >= W; s >>= 1) x = all ? x & (x >> s) : x | (x >> s);
+    return x & ((1u << W) - 1);
+  }
+
+  // ---- the reference: any plan, bit by bit ----
+  static void referenceRaw(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out) {
     size_t j = 0;
     for (uint32_t i = 0; i < r; ++i) {
       const uint32_t s = sample(p, src, i);
       for (uint8_t k = 0; k < p.raw; ++k, ++j)
         if ((s >> p.raw_bit[k]) & 1) out[j >> 3] |= static_cast<uint8_t>(1u << (j & 7));
     }
-    uint8_t *red = out + (static_cast<size_t>(r) * p.raw + 7) / 8;
-    const uint32_t before = contiguous && have_before_ ? before_ : sample(p, src, 0);
-    size_t at = 0;
-    for (uint8_t c = 0; c < p.reduced; ++c)   // start: change_latch's level before the block
-      if (p.kind[c] == kChangeLatch) put(red, at, (before >> p.red_bit[c]) & 1, 1);
+  }
+  static void referenceReduced(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *red, size_t at, uint32_t before) {
     for (uint8_t c = 0; c < p.reduced; ++c) {
       const uint8_t b = p.red_bit[c], kind = p.kind[c];
       const uint32_t D = p.d[c];
@@ -110,12 +287,7 @@ class Encoder {
         put(red, at, v, valueBits(kind));
       }
     }
-    before_ = sample(p, src, r - 1);
-    have_before_ = true;
-    return need;
   }
-
- private:
   static uint32_t sample(const Plan &p, const uint8_t *src, uint32_t i) {
     switch (p.w) {
       case 16: return static_cast<uint32_t>(src[2 * i] | (src[2 * i + 1] << 8));

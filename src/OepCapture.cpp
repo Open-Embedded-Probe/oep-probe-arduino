@@ -1672,15 +1672,20 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (glitch && lines > kGlitchFilters) return Tail::refuse(cap::kTlvConfigureGlitchFilter, false, out, capacity);
   // format 1's block (§1.3): L a multiple of 8 and of every D, at most block_max and kMaxBlock, its worst within a stage
   blocks::Plan plan;
+  uint8_t lane_of[kMaxChannels];   // the capture's lane (bit) for each role: the role itself, but in format 1
+  for (uint8_t k = 0; k < kMaxChannels; ++k) lane_of[k] = k;
   if (blocks_format) {
+    // the lanes laid out for the encoder's fast path (raw roles on the low bits, the reductions side by side by carriage
+    // and D); the answer's layout and the blocks keep the roles' order whatever the lanes
+    blocks::Encoder::lanesFor(channels_, kind_of, d_of, lane_of);
     plan.w = width;
     for (uint8_t k = 0; k < channels_; ++k) {
       if ((events_roles >> k) & 1) {
-        plan.red_bit[plan.reduced] = k;
+        plan.red_bit[plan.reduced] = lane_of[k];
         plan.kind[plan.reduced] = kind_of[k];
         plan.d[plan.reduced++] = d_of[k];
       } else {
-        plan.raw_bit[plan.raw++] = k;
+        plan.raw_bit[plan.raw++] = lane_of[k];
       }
     }
     size_t frame = 0;
@@ -1711,8 +1716,13 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
 
   if (!query) {   // the lines and the clock the unit is made with (open), the filters on the lines
     data_lines_ = 0;
-    for (uint8_t k = 0; k < channels_; ++k)
-      if (!clk || k != clk[0]) data_pins_[data_lines_++] = pins_[k];
+    if (blocks_format) {   // each role on its lane (no clock in format 1: streaming)
+      for (uint8_t k = 0; k < channels_; ++k) data_pins_[lane_of[k]] = pins_[k];
+      data_lines_ = channels_;
+    } else {
+      for (uint8_t k = 0; k < channels_; ++k)
+        if (!clk || k != clk[0]) data_pins_[data_lines_++] = pins_[k];
+    }
     clock_pin_ = clk ? pins_[clk[0]] : -1;
     clock_edge_ = clk ? clk[1] : 0;
     qual_pin_ = clk && clk[2] != 0xFF ? pins_[clk[2]] : -1;
@@ -1790,7 +1800,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     rearm_ = opts.rearm;
     linked_ = trig_type == cap::kTriggerLinked;
     trig_type_ = trig_type;
-    trig_role_ = trig_role;
+    trig_role_ = trig_role < kMaxChannels ? lane_of[trig_role] : trig_role;   // the bit it is judged on
     trig_value_ = trig_value;
     pretrigger_ = pretrigger;
     arm_ = opts.arm;
