@@ -84,8 +84,9 @@ Data format 1 (logic blocks, oep-if-capture §1.3) carries each line its own way
 
 ### With other operations
 
-- A reset-halt on the debug line (one inside a flash) sent to the same probe while it streams leaves the probe silent.
-  Do not flash while capturing.
+- While streaming through ch32rv's broker with a debug port's NRST line (`<port>.nrst`) among the captured lines, a
+  ch32rv reset or flash sent from another process gets no answer and the session is lost. Leaving the NRST line out of
+  the capture avoids it; a reset sent from within the one client does not hit it.
 
 ## A. Capture alone
 
