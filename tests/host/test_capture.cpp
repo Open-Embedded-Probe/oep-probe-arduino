@@ -229,7 +229,7 @@ static void testStreamAfterRepeat() {
   for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
     if (out[at] == cap::kTlvConfigureAnswerActualRate) {
       const uint64_t num = getU32(out.data() + at + kTlvHeader), den = getU32(out.data() + at + kTlvHeader + 4);
-      CHECK(num / den > LogicCapture::kStreamSmallStagesMaxBytes);   // nor small stages' (w 8: bytes = samples)
+      CHECK(num == 40000000ull * den);   // the rate asked: never lowered for the sending (capture §3.3)
     }
 }
 
@@ -255,23 +255,17 @@ static void testStreamingWithoutStages() {
           !hasTag(out, cap::kTlvConfigureAnswerActualSegments));
     uint32_t buffer = 0;   // what it holds unsent (capture §3.3 stream_buffer): stages or the store, never nothing
     CHECK(findU32(out, cap::kTlvConfigureAnswerStreamBuffer, buffer) && buffer > 0);
-    // above what the harvest keeps up with, the nearest rate it keeps (capture §3.3): 2 lines (w 2) at most
-    // kStreamMaxBytes x 8 / 2 samples a second
+    // the capture's top rate is taken whatever the route (capture §3.3: the sending is never a reason to lower it), and
+    // data_rate says what it sends: 2 lines (w 2) at 160 MHz, 40 MB/s - the copied way and small stages alike
     c.rate = LogicCapture::kSourceHz;
     CHECK(ok(configure(rig.cap, c, out, true)));
     for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
       if (out[at] == cap::kTlvConfigureAnswerActualRate) {
         const uint64_t num = getU32(out.data() + at + kTlvHeader), den = getU32(out.data() + at + kTlvHeader + 4);
-        CHECK(num / den <= uint64_t(LogicCapture::kStreamMaxBytes) * 8 / 2);
-        // the copied way (no stages: the P4 v1.3): what the endpoint's loop keeps up with (2026-10-21, wireskein)
-        if (copied) CHECK(num / den <= uint64_t(LogicCapture::kStreamCopiedMaxBytes) * 8 / 2);
-        else CHECK(num / den > uint64_t(LogicCapture::kStreamCopiedMaxBytes) * 8 / 2);   // the zero-copy way's ceiling
-        // stages under kStreamFullStageBytes in all (2 x 8 KiB, 3 x 16 KiB): kStreamSmallStagesMaxBytes; 8 x 16 KiB: over
-        if (!copied && internal < (size_t(512) << 10))
-          CHECK(num / den <= uint64_t(LogicCapture::kStreamSmallStagesMaxBytes) * 8 / 2 * 1002 / 1000 &&   // the nearest
-                num / den > uint64_t(LogicCapture::kStreamSmallStagesMaxBytes) * 8 / 2 * 998 / 1000);    // fraction
-        if (internal == (size_t(512) << 10)) CHECK(num / den > uint64_t(LogicCapture::kStreamSmallStagesMaxBytes) * 8 / 2);
+        CHECK(num == uint64_t(LogicCapture::kSourceHz) * den);
       }
+    uint32_t data_rate = 0;
+    CHECK(findU32(out, cap::kTlvConfigureAnswerDataRate, data_rate) && data_rate == LogicCapture::kSourceHz / 4);
     // format 1 goes over the stages only: without them refused unavailable cause 3 (it sent raw samples as blocks)
     Bytes p = request(c);
     tlv(p, kCrit | cap::kTlvConfigureFormat, {cap::kDataFormatLogicBlocks});
@@ -433,6 +427,9 @@ static void testDescribe() {
       CHECK(len == 9 && d[at + kTlvHeader + 8] == LogicCapture::kTriggerOpts);
     if (tag == cap::kTlvDescribeFormats)
       CHECK(len == 2 && d[at + kTlvHeader] == cap::kDataFormatLogicBlocks && d[at + kTlvHeader + 1] == cap::kDataFormatTestCounter);
+    if (tag == cap::kTlvDescribeCarriage)   // raw and the four reductions, D 2 - kMaxBlock (capture §3.5)
+      CHECK(len == 9 && d[at + kTlvHeader] == ((1u << (cap::kLogicCarriageChangeLatch + 1)) - 1) &&
+            getU32(d.data() + at + kTlvHeader + 1) == 2 && getU32(d.data() + at + kTlvHeader + 5) == oep::blocks::kMaxBlock);
   }
   CHECK(modes == 3 && channels);
 }
@@ -474,6 +471,69 @@ static void testFormatAndTriggerOpts() {
   p = request(c);
   tlv(p, opts, {1, 0, 0});
   CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectMalformed));
+}
+
+// capture §1.3 / §3.3 format 1 (streaming over the stages): a carriage per role - raw, or a reduction with D 2 or more;
+// L a multiple of 8 and of every D (a D that is no power of 2 too), at most kMaxBlock; layout the raw channels only;
+// data_rate the block's fixed size over L samples. Malformed: a reduction with D 1, raw with D 2, a role twice;
+// unsupported (the tag as received): a carriage past change_latch, D's whose block would pass kMaxBlock.
+static void testFormat1Carriage() {
+  board(512 * 1024, size_t(32) << 20);
+  static FakeDirect direct;
+  Rig rig(4);
+  rig.ep.setDirect(&direct);
+  rig.cap.setFrameLimit(16 * 1024);
+  Bytes out;
+  Config c;
+  c.mode = cap::kModeStreaming;
+  c.rate = 40000000;
+  const uint8_t carriage = kCrit | cap::kTlvConfigureCarriage;
+  auto req = [&](std::initializer_list<Bytes> rows) {
+    Bytes p = request(c);
+    tlv(p, kCrit | cap::kTlvConfigureFormat, {cap::kDataFormatLogicBlocks});
+    for (const Bytes &r : rows) tlv(p, carriage, r);
+    return p;
+  };
+  auto row = [](uint8_t role, uint8_t kind, uint32_t d) {
+    Bytes r{role, kind};
+    const Bytes v = u32(d);
+    r.insert(r.end(), v.begin(), v.end());
+    return r;
+  };
+  // role 0 raw (no row), 1 sample / 64, 2 change_latch / 3, 3 any_low / 8: L a multiple of lcm(8, 64, 3) = 192
+  Bytes p = req({row(1, cap::kLogicCarriageSample, 64), row(2, cap::kLogicCarriageChangeLatch, 3),
+                 row(3, cap::kLogicCarriageAnyLow, 8)});
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpQuery, p, out)));
+  uint32_t L = 0, data_rate = 0;
+  CHECK(findU32(out, cap::kTlvConfigureAnswerBlock, L) && L && L % 192 == 0 && L <= oep::blocks::kMaxBlock);
+  oep::blocks::Plan plan;
+  plan.raw = 1;
+  plan.reduced = 3;
+  plan.kind[0] = oep::blocks::kSample;
+  plan.d[0] = 64;
+  plan.kind[1] = oep::blocks::kChangeLatch;
+  plan.d[1] = 3;
+  plan.kind[2] = oep::blocks::kAnyLow;
+  plan.d[2] = 8;
+  const uint64_t size = oep::blocks::bytesFor(plan, L);
+  CHECK(findU32(out, cap::kTlvConfigureAnswerDataRate, data_rate) &&
+        data_rate == (uint64_t(c.rate) * size + L - 1) / L);
+  bool layout = false;   // w = C = 1, pos 0: the raw channel only
+  for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+    if (out[at] == cap::kTlvConfigureAnswerLayout)
+      layout = getU16(out.data() + at + 1) == 3 && out[at + kTlvHeader] == 1 && out[at + kTlvHeader + 1] == 1 &&
+               out[at + kTlvHeader + 2] == 0;
+  CHECK(layout);
+  for (const Bytes &bad : {row(1, cap::kLogicCarriageSample, 1), row(1, cap::kLogicCarriageRaw, 2)}) {
+    p = req({bad});
+    CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectMalformed));
+  }
+  p = req({row(1, cap::kLogicCarriageSample, 8), row(1, cap::kLogicCarriageAnyHigh, 8)});
+  CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectMalformed));
+  for (const Bytes &bad : {row(1, cap::kLogicCarriageChangeLatch + 1, 8), row(1, cap::kLogicCarriageSample, 4093)}) {
+    p = req({bad});
+    CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpQuery, p, out), kRejectUnsupported) && out == Bytes{carriage});
+  }
 }
 
 // core §4.3: malformed before unsupported before unavailable, over the whole request; the plan (cause 6) last.
@@ -1767,6 +1827,7 @@ int main() {
   testContract();
   testDescribe();
   testFormatAndTriggerOpts();
+  testFormat1Carriage();
   testConfigureOrder();
   testStreamingWithoutStages();
   testStreamAfterRepeat();

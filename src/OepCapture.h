@@ -89,19 +89,9 @@ class LogicCapture final : public Interface, public GroupTrack {
   // internal RAM
   static constexpr size_t kStreamRingBytes = 1024 * 1024;
   static constexpr size_t kSpillBytes = 8u * 1024 * 1024;   // the spill behind it (below: spill_)
-  static constexpr uint32_t kStreamMaxBytes = 40000000;   // streaming: what the harvest and the port keep up with (bytes a second)
-  // format 1 streaming: the samples' bytes a second the encoding keeps up with, the worst case counted (every events
-  // line changing every sample); 13.3 MHz at w 8 until measured further
-  static constexpr uint32_t kStreamBlocksMaxBytes = 13400000;
-  // streaming the copied way (the store, pushed through the endpoint's loop): what it keeps up with - the P4 v1.3 (no
-  // internal RAM for the stages) kept 8 lines at 8.42 MHz w 8 with no loss and lost 11 % at 16 MHz (wireskein,
-  // 2026-10-21); the nearest whole divider at or below 8.5 MB/s
-  static constexpr uint32_t kStreamCopiedMaxBytes = 8500000;
-  // streaming over stages of less than kStreamFullStageBytes in all: fewer bytes out to the host at once, the harvest
-  // falls behind past it and the spill never catches up - P4 v1.3 (3 x 16 KiB) and P4X (8 x 8 KiB) kept 8 lines at
-  // 36 MHz (fractional) with no loss and lost ~30 % at 40; P4X with 7 x 16 KiB and 4 x 27 KiB kept 40 (2026-10-21)
-  static constexpr uint32_t kStreamSmallStagesMaxBytes = 36000000;
-  static constexpr size_t kStreamFullStageBytes = 96 * 1024;
+  // a linked one-shot's long segment out of the PSRAM ring: the speed its harvest was measured keeping up with
+  // (bytes a second, P4X 2026-10-20)
+  static constexpr uint32_t kLinkedLongMaxBytes = 40000000;
   // repeat / streaming: the DMA ring (internal). 64 KiB: at 40 MB/s 1.6 ms of the harvest's lag, and the internal RAM it
   // leaves goes to the zero-copy stages (27 KiB each)
   static constexpr size_t kRingBytes = 64 * 1024;
@@ -267,9 +257,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint64_t sample_pos_ = 0;             // samples taken since start
   uint64_t stage_first_sample_ = 0;     // the stage's (segment's) first sample
   uint32_t stage_samples_ = 0;          // its samples
-  // the encoding's cost, since start (named diagnostics capture-encode): cycles of the longest block, of all, blocks,
-  // and the channels carried raw (fallback) summed over the blocks
-  uint32_t enc_max_cycles_ = 0, enc_blocks_ = 0, enc_fallbacks_ = 0;
+  // the encoding's cost, since start (named diagnostics capture-encode): cycles of the longest block, of all, blocks
+  uint32_t enc_max_cycles_ = 0, enc_blocks_ = 0;
   uint64_t enc_cycles_ = 0;
   volatile uint32_t stage_drops_ = 0;  // bytes dropped because every stage was queued or in flight
   volatile uint32_t stage_unsent_ = 0; // bytes of stages the transport would not queue (given back unsent)
