@@ -262,20 +262,43 @@ class Encoder {
           prev = last;
           v = (last & smask) | (fold(ch, W, false) << 16);   // level in bits 0-15, change in 16-31
         }
-        const uint32_t lv = (v >> gr.lane) & lmask;
-        const uint32_t cv = gr.kind == kChangeLatch ? (v >> (16 + gr.lane)) & lmask : 0;
-        for (uint8_t i = 0; i < gr.n; ++i) {
-          const uint8_t c = gr.chan[i];
-          if (gr.kind == kChangeLatch) {   // two bits, which may sit either side of a byte's end
-            const size_t bit = off[c] + 2 * k;
-            red[bit >> 3] |= static_cast<uint8_t>(((lv >> i) & 1) << (bit & 7));
-            red[(bit + 1) >> 3] |= static_cast<uint8_t>(((cv >> i) & 1) << ((bit + 1) & 7));
-          } else {
-            const size_t bit = off[c] + k;
-            red[bit >> 3] |= static_cast<uint8_t>(((lv >> i) & 1) << (bit & 7));
-          }
-        }
+        lvs[k & 31] = (v >> gr.lane) & lmask;
+        if (gr.kind == kChangeLatch) cvs[k & 31] = (v >> (16 + gr.lane)) & lmask;
+        if ((k & 31) == 31 || k + 1 == r / gr.d) flush(gr, k & ~31u, (k & 31) + 1, off, red);
       }
+    }
+  }
+  // 32 intervals' lane values at a time -> each channel's word of them, written at its place (channel c's interval k at
+  // bit off[c] + k * b): a lane's bits gathered, then whole bytes stored, not one bit at a time
+  uint32_t lvs[32] = {}, cvs[32] = {};
+  void flush(const Group &gr, uint32_t k0, uint32_t cnt, const size_t *off, uint8_t *red) {
+    for (uint8_t i = 0; i < gr.n; ++i) {
+      uint32_t lw = 0, cw = 0;
+      for (uint32_t j = 0; j < cnt; ++j) lw |= ((lvs[j] >> i) & 1u) << j;
+      const uint8_t c = gr.chan[i];
+      if (gr.kind == kChangeLatch) {
+        for (uint32_t j = 0; j < cnt; ++j) cw |= ((cvs[j] >> i) & 1u) << j;
+        const uint64_t both = static_cast<uint64_t>(spread(lw & 0xFFFF) | (spread(cw & 0xFFFF) << 1)) |
+                              (static_cast<uint64_t>(spread(lw >> 16) | (spread(cw >> 16) << 1)) << 32);
+        writeBits(red, off[c] + 2 * k0, both, 2 * cnt);
+      } else {
+        writeBits(red, off[c] + k0, lw, cnt);
+      }
+    }
+  }
+  static uint32_t spread(uint32_t x) {   // 16 bits -> bit i at bit 2i
+    x = (x | (x << 8)) & 0x00FF00FFu;
+    x = (x | (x << 4)) & 0x0F0F0F0Fu;
+    x = (x | (x << 2)) & 0x33333333u;
+    return (x | (x << 1)) & 0x55555555u;
+  }
+  static void writeBits(uint8_t *buf, size_t bit, uint64_t v, uint32_t n) {   // n bits of v ORed in from `bit`
+    while (n) {
+      const uint32_t sh = bit & 7, take = 8 - sh < n ? 8 - sh : n;
+      buf[bit >> 3] |= static_cast<uint8_t>((v & ((1u << take) - 1)) << sh);
+      v >>= take;
+      bit += take;
+      n -= take;
     }
   }
   // the samples of a word ORed (or ANDed) into one sample's bits
