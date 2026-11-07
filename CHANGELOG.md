@@ -6,7 +6,7 @@
   core 0 at 40 MB/s - and beside a dmseq console's polling a 40 MB/s stream lost its session or overran the DMA; out of
   the internal ring it costs ~1.4 cycles a byte (17 %), the console and 40 MB/s (8 lines at 40 MHz, 4 at 80) passed
   3 times in 3, and alone the stream reached the USB path's own ceiling (42.7 MB/s kept; the path measured ~43 MB/s on
-  this bench's host). The host's pauses go into the stages and the PSRAM spill (stream_buffer). P4X, 2026-11-07.
+  this bench's host). The host's pauses go into the stages and the PSRAM spill (stream_buffer). P4X, 2026-11-07. Through ch32rv's broker: 40 MB/s alone, 35 MB/s beside a console (were 35 and 30); docs/guide capture's table follows.
 - (JA) ESP32-P4 / P4X の流し続け: PSRAM の有無によらず、DMA の輪を内部 RAM の 64 KiB にした（PSRAM の 1 MiB の輪は、linked と追う側の
   トラックに残す）。PSRAM の輪からのコピーは 1 バイト約 4.1 cycle で、40 MB/s でコア 0 の 43 % を使い、dmseq のコンソールのポーリングと
   同時の 40 MB/s はセッションを失うか DMA の取りこぼしで止まっていた。内部 RAM の輪からは約 1.4 cycle（17 %）で、コンソールと同時の
