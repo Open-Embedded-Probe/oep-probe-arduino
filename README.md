@@ -121,8 +121,8 @@ One ESP32-P4 board, wired to a CH32L103 on every pin you want to watch, is the w
   (`oep.fixture.gpio` / `uart` / `spi-target` / `i2c-target`).
 - **Capture up to 16 pins at the same time**, while it acts as that SPI device (`oep.fixture.logic`, the P4's PARLIO):
 
-  The top rate follows from the mode and the line count (streaming: 160 Msps at 2 ch, 40 Msps at 8 and so on; one-shot:
-  100 Msps up to 8 ch). The table is in [the capture guide](docs/guide/capture.md#esp32-p4--p4x-speeds-and-lines).
+  The top rate follows from the mode and the line count (streaming: 160 Msps at 2 ch, 40 Msps at 8 and so on; one-shot without a trigger:
+  160 Msps). The table is in [the capture guide](docs/guide/capture.md#esp32-p4--p4x-speeds-and-lines).
 
   Which pins are captured is chosen per request (the plan), so each test captures the pins it cares about - no rewiring and
   no reflashing between tests. The samples go to a sigrok session file (`LogicCapture.to_sr`, PulseView) or to a run

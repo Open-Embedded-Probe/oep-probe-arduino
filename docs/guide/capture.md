@@ -59,7 +59,8 @@ A rate above the limit is not refused: the probe captures at the nearest rate wi
 
 | Mode | Limit | Checked on hardware |
 |---|---|---|
-| One-shot | 100 MHz up to 8 lines, 48 MHz up to 16 | a one-shot of 2 lines asked at 160 MHz did not finish or was refused; hence the limit |
+| One-shot (no trigger) | 160 MHz (1 to 16 lines) | the square's periods right at 1, 2, 4, 8, 16 lines and 160 / 120 / 100 / 80 MHz |
+| One-shot (with a trigger) | 120 MB/s: 120 MHz at 8 lines, 60 MHz at 16 (160 MHz up to 4) | 120 MB/s kept 12 of 12, first captures included; 140 MB/s stopped part way 4 times in 12 |
 | Repeat | the one-shot's limit does not apply | no limit checked |
 | Streaming (HS USB, enough send stages) | 40 MB/s: 160 MHz up to 2 lines, 80 MHz at 4, 40 MHz at 8, 20 MHz at 16 | no loss at 2 lines 160 MHz, 4 lines 80 / 60 / 40 MHz (10 s), 8 lines 40 MHz (30 s, P4X) |
 | Streaming (little internal RAM, small send stages) | 36 MB/s: 36 MHz at 8 lines | no loss at 8 lines 36 MHz (30 s); about 30 % lost at 40 MHz |
@@ -86,8 +87,8 @@ Data format 1 (logic blocks, oep-if-capture §1.3) carries each line its own way
 
 - While streaming, the capturing client keeps reading (inside `during`, `wait` reads). Waiting inside `during` for another
   process to finish (a ch32rv flash, say) stops the reading for that long: data past what the probe or the broker can
-  hold (`stream_buffer` in the configure answer, and so on) is lost. Run a long operation in another thread and keep
-  calling `wait` meanwhile.
+  hold (`stream_buffer` in the configure answer, and so on) is lost. Run a long operation that does not use the session
+  through `wait.beside(fn)` (it runs in another thread and the stream is read until it returns).
 - ch32rv's broker up to 0.29 stalls on sending to a client that does not read, and so do other clients' requests (the
   session lapses meanwhile). Its next version fixes it.
 

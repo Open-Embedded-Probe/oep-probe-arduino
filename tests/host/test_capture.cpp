@@ -497,23 +497,28 @@ static void testConfigureOrder() {
   CHECK(rejectedAs(raw(c, LogicCapture::kOpQuery, p, out), kRejectMalformed));
 }
 
-// configure §3.3: inside rate_range, a one-shot rate above what the channel count allows (8 lines 100 MHz, 16 lines
-// 48 MHz; not declared) is set to the nearest it allows, not run at the rate asked (160 MHz was taken for any count).
+// configure §3.3: an immediate one-shot keeps any rate in rate_range at any line count (the DMA writes the segment); a
+// one-shot with a trigger is held at kTriggeredMaxBytes (the harvest copies the ring), the nearest it keeps used:
+// 160 MHz asked at 8 lines -> 120 MHz, at 16 lines -> 60 MHz. Query and configure answer alike.
 static void testRateLimit() {
   for (const uint8_t channels : {8, 16}) {
-    board(512 * 1024, size_t(32) << 20);
-    Rig rig(channels);
-    Bytes out;
-    Config c;
-    c.rate = channels == 8 ? 160000000 : 100000000;
-    for (const bool query : {true, false}) {
-      CHECK(ok(configure(rig.cap, c, out, query)));
-      Bytes rate;
-      for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
-        if (out[at] == cap::kTlvConfigureAnswerActualRate)
-          rate.assign(out.begin() + at + kTlvHeader, out.begin() + at + kTlvHeader + getU16(out.data() + at + 1));
-      // the fake divider takes a fraction as PARLIO's does: 160 / 1.6 = 100 MHz, 160 / 3.333 = 48 MHz
-      CHECK(rate.size() == 8 && getU32(rate.data()) / getU32(rate.data() + 4) == (channels == 8 ? 100000000u : 48000000u));
+    for (const bool trigger : {false, true}) {
+      board(512 * 1024, size_t(32) << 20);
+      Rig rig(channels);
+      Bytes out;
+      Config c;
+      c.rate = 160000000;
+      c.trigger = trigger;
+      const uint32_t want = !trigger ? 160000000u
+                                     : uint32_t(uint64_t(LogicCapture::kTriggeredMaxBytes) * 8 / channels);
+      for (const bool query : {true, false}) {
+        CHECK(ok(configure(rig.cap, c, out, query)));
+        Bytes rate;
+        for (size_t at = 0; at + kTlvHeader <= out.size(); at += kTlvHeader + getU16(out.data() + at + 1))
+          if (out[at] == cap::kTlvConfigureAnswerActualRate)
+            rate.assign(out.begin() + at + kTlvHeader, out.begin() + at + kTlvHeader + getU16(out.data() + at + 1));
+        CHECK(rate.size() == 8 && getU32(rate.data()) / getU32(rate.data() + 4) == want);
+      }
     }
   }
 }

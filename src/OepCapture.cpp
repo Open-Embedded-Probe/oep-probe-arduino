@@ -1523,11 +1523,6 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // samples in streaming, segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
   const Result misplaced = captureMisplaced(mode, ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv), ask(pretrigger_tlv), out, capacity);
   if (refused(misplaced)) return misplaced;
-  // inside the range, one-shot's ceiling for the channel count: above it, the nearest it allows (capture §3.3)
-  if (mode == cap::kModeOneShot && !clk) {
-    const uint32_t limit = channels_ <= kLimitLines8 ? kLimitHz8 : kLimitHz16;
-    if (rate > limit) rate = limit;
-  }
   // the lines sampled: every planned role but the clock's (no channel of the sample, §3.8)
   const uint8_t lines = clk && clk[0] < channels_ ? channels_ - 1 : channels_;
   uint32_t samples = samples_tlv.v ? getU32(samples_tlv.v) : 0, segments = segments_tlv.v ? getU32(segments_tlv.v) : 0;
@@ -1615,6 +1610,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     if (small && !by_copy && !blocks_format) return ceiling * 8ull / width;
     return kSourceHz / ((kSourceHz * static_cast<uint64_t>(width) + ceiling * 8ull - 1) / (ceiling * 8ull));
   };
+  // a one-shot with a trigger: the highest rate the harvest keeps up with at this width, the nearest used (capture §3.3)
+  if (mode == cap::kModeOneShot && !clk && trig_type != cap::kTriggerImmediate) {
+    const uint64_t most = static_cast<uint64_t>(kTriggeredMaxBytes) * 8 / width;
+    if (rate > most) rate = static_cast<uint32_t>(most);
+  }
   const uint32_t asked_rate = rate;
   if (mode == cap::kModeStreaming) {
     const uint64_t most = streamMost(copied, small_stages);

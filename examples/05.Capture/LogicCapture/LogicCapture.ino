@@ -3,7 +3,7 @@
 
 // A logic analyzer: oep.fixture.logic alone on an ESP32-P4 / P4X, at full speed (oep-spec docs/oep-if-capture.ja.md).
 // Up to 16 channels on any pins the host plans, one-shot / repeat / streaming. Streaming: 2 ch at 160 Msps, 8 ch at
-// 40 Msps, 16 ch at 20 Msps; one-shot: 100 Msps up to 8 ch, 48 up to 16 (docs/guide/capture.md, the speeds table).
+// 40 Msps, 16 ch at 20 Msps; one-shot: 160 Msps, with a trigger 120 MB/s (docs/guide/capture.md, the speeds table).
 //
 // How it goes that fast:
 //   - OEP runs on the HS OTG vendor bulk interface (EspUsbDevice) in a direct build (build_opt.h:
