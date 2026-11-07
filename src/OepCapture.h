@@ -77,10 +77,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint32_t kTriggeredLongMaxBytes = 20000000;
   static constexpr uint32_t kSourceHz = 160000000, kMinHz = 627451;   // PLL_F160M / 255 (256 silently fails)
   // a one-shot with a trigger: the harvest copies the DMA ring into the segment, and above this (bytes a second) it falls
-  // behind and the ring is rewritten first (state 6, storage). P4X, the first capture of a session (cold): 120 MB/s
-  // kept 12 of 12 (8 lines 120 MHz, 16 lines 60 MHz), 140 MB/s lost 4 of 12; later captures kept 200. Immediate
-  // one-shots (the DMA writes the segment) kept 160 MHz at 1 to 16 lines (2026-11-07)
-  static constexpr uint32_t kTriggeredMaxBytes = 120000000;
+  // behind and the ring is rewritten first (state 6, storage). P4X, 2026-11-07: the first capture after a boot (cold)
+  // kept 110 MB/s 3 of 3 and lost 120 MB/s 3 of 3; a session's first capture lost 140 MB/s 4 of 12; later captures
+  // kept 200. 100 MB/s kept every first capture after a boot (8 lines 100 MHz, 16 lines 50 MHz). Immediate one-shots
+  // (the DMA writes the segment) kept 160 MHz at 1 to 16 lines
+  static constexpr uint32_t kTriggeredMaxBytes = 100000000;
   // streaming over the zero-copy stages (formats 0 and 4): the PARLIO's DMA ring in PSRAM, the stream's buffer - the
   // harvest copies from it as the transport gives stages back, so the host's pauses up to its length cost nothing
   // (26 ms at 40 MB/s); without PSRAM the internal ring (kRingBytes). A power of 2; 2 MiB panicked in the driver's

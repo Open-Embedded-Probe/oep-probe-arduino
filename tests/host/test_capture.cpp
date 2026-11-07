@@ -499,7 +499,7 @@ static void testConfigureOrder() {
 
 // configure §3.3: an immediate one-shot keeps any rate in rate_range at any line count (the DMA writes the segment); a
 // one-shot with a trigger is held at kTriggeredMaxBytes (the harvest copies the ring), the nearest it keeps used:
-// 160 MHz asked at 8 lines -> 120 MHz, at 16 lines -> 60 MHz. Query and configure answer alike.
+// 160 MHz asked at 8 lines -> 100 MHz, at 16 lines -> 50 MHz. Query and configure answer alike.
 static void testRateLimit() {
   for (const uint8_t channels : {8, 16}) {
     for (const bool trigger : {false, true}) {

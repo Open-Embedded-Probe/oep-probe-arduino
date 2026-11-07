@@ -3,13 +3,15 @@
 ## Unreleased
 - (EN) ESP32-P4 / P4X logic one-shot: no ceiling by line count any more (it was 100 MHz up to 8 lines, 48 MHz up to 16,
   never measured): an immediate one-shot kept 160 MHz at 1 to 16 lines. A one-shot with a trigger is held at
-  120 MB/s (kTriggeredMaxBytes; configure / query answer the nearest rate within it): its harvest copies the ring and
-  fell behind above that - 140 MB/s stopped with a storage error 4 times in 12, mostly on a session's first capture,
-  120 MB/s kept 12 of 12 (P4X, 2026-11-07). Before, 8 lines at 160 MHz with a trigger was taken and then failed.
+  100 MB/s (kTriggeredMaxBytes; configure / query answer the nearest rate within it): its harvest copies the ring and
+  falls behind above that - the first capture after a boot kept 110 MB/s 3 of 3 and stopped with a storage error at
+  120 MB/s 3 of 3 (P4X, 2026-11-07); later captures keep 200. Before, 8 lines at 160 MHz with a trigger was taken and
+  then failed.
 - (JA) ESP32-P4 / P4X の logic のワンショット: 本数ごとの上限（8 本まで 100 MHz、16 本まで 48 MHz。実測の根拠なし）を外した。トリガなしの
-  ワンショットは 1〜16 本で 160 MHz を保った。トリガ付きのワンショットは 120 MB/s を上限にした（kTriggeredMaxBytes。configure / query は
-  その中の一番近い速さを答える）。輪から写す処理がそれより速いと追いつかず、140 MB/s は 12 回中 4 回 storage のエラーで止まり（多くは
-  セッションの最初の取り込み）、120 MB/s は 12 回とも通った（P4X、2026-11-07）。これまでは、トリガ付きの 8 本・160 MHz を受けてから失敗していた。
+  ワンショットは 1〜16 本で 160 MHz を保った。トリガ付きのワンショットは 100 MB/s を上限にした（kTriggeredMaxBytes。configure / query は
+  その中の一番近い速さを答える）。輪から写す処理がそれより速いと追いつかない: 起動して最初の取り込みで、110 MB/s は 3 回とも通り、
+  120 MB/s は 3 回とも storage のエラーで止まった（P4X、2026-11-07）。2 回目からは 200 MB/s も通る。これまでは、トリガ付きの 8 本・160 MHz を
+  受けてから失敗していた。
 - (EN) docs/guide capture: a section on the ESP32-P4 / P4X speeds and lines - the rates (160 MHz divided, fractional
   dividers' spacing unchecked), the sample width by line count, each mode's limit with what was checked on hardware,
   per-line resolution (format 1, `resolution=`), and that a streaming client must keep reading (`wait`) while it waits for another process - ch32rv's broker up to 0.29 stalls on a client that does not read. README,

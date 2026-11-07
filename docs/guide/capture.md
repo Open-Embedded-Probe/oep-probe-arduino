@@ -60,7 +60,7 @@ A rate above the limit is not refused: the probe captures at the nearest rate wi
 | Mode | Limit | Checked on hardware |
 |---|---|---|
 | One-shot (no trigger) | 160 MHz (1 to 16 lines) | the square's periods right at 1, 2, 4, 8, 16 lines and 160 / 120 / 100 / 80 MHz |
-| One-shot (with a trigger) | 120 MB/s: 120 MHz at 8 lines, 60 MHz at 16 (160 MHz up to 4) | 120 MB/s kept 12 of 12, first captures included; 140 MB/s stopped part way 4 times in 12 |
+| One-shot (with a trigger) | 100 MB/s: 100 MHz at 8 lines, 50 MHz at 16 (160 MHz up to 4) | the first capture after a boot kept 110 MB/s 3 of 3 and stopped part way at 120 MB/s 3 of 3; later captures keep 200 MB/s |
 | Repeat | the one-shot's limit does not apply | no limit checked |
 | Streaming (HS USB, enough send stages) | 40 MB/s: 160 MHz up to 2 lines, 80 MHz at 4, 40 MHz at 8, 20 MHz at 16 | no loss at 2 lines 160 MHz, 4 lines 80 / 60 / 40 MHz (10 s), 8 lines 40 MHz (30 s, P4X) |
 | Streaming (little internal RAM, small send stages) | 36 MB/s: 36 MHz at 8 lines | no loss at 8 lines 36 MHz (30 s); about 30 % lost at 40 MHz |
