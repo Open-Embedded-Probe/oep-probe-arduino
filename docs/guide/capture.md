@@ -42,8 +42,11 @@ rate=…, mode=…)`, asked once the plan has set the lines. The table below is 
 
 - 627.451 kHz to 160 MHz: the value nearest the one asked among 160 MHz divided by a whole number and a fraction. A rate
   in 10 MHz steps such as 60 MHz can be asked.
-- A rate that does not divide 160 MHz evenly (160, 80, 53.3, 40, 32 MHz and so on do) uses a fractional divider. Whether
-  the samples are evenly spaced then has not been checked.
+- At a rate that divides 160 MHz evenly (160, 80, 53.3, 40, 32 MHz and so on) the samples are evenly spaced. Any other
+  rate uses a fractional divider: the samples fall on the 160 MHz grid (6.25 ns) and are not evenly spaced. Capturing a
+  crystal-driven square and fitting its rising edges to an ideal grid, the largest distance was half a sample plus less
+  than 1 ns with whole dividers, and half a sample plus 2 to 5.5 ns with fractional ones (60, 64, 70, 90, 100, 120 MHz).
+  The answer's `actual_rate` is the mean rate and does not show this. For fine timing choose a whole-divider rate.
 
 ### Lines and sample width
 

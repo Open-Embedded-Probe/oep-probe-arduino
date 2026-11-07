@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) docs/guide capture: the sample spacing measured (a crystal-driven square from a CH32V103 on HSE, captured on the
+  P4X, rising edges fitted to a grid with WireSkein): whole-divider rates even (half a sample plus under 1 ns),
+  fractional-divider rates not (half a sample plus 2 to 5.5 ns at 60-120 MHz); `actual_rate` is the mean.
+- (JA) docs/guide の capture: サンプルの間隔を測った結果を書いた（HSE で動く CH32V103 の方形波を P4X で取り、立ち上がりを WireSkein で
+  格子に当てはめた）。整数の分周は揃う（半サンプル＋1 ns 未満）、分数の分周は揃わない（60〜120 MHz で半サンプル＋2〜5.5 ns）。
+  `actual_rate` は平均。
 - (EN) ESP32-P4 / P4X logic one-shot: no ceiling by line count any more (it was 100 MHz up to 8 lines, 48 MHz up to 16,
   never measured): an immediate one-shot kept 160 MHz at 1 to 16 lines. A one-shot with a trigger is held at
   100 MB/s (kTriggeredMaxBytes; configure / query answer the nearest rate within it): its harvest copies the ring and
