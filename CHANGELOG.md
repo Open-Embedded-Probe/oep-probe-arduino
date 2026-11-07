@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.52
 - (EN) ESP32-P4 / P4X streaming: the DMA ring is the internal 64 KiB one whatever PSRAM there is (the PSRAM 1 MiB ring
   stays for a linked or following track). The harvest copied out of the PSRAM ring at ~4.1 cycles a byte - 43 % of
   core 0 at 40 MB/s - and beside a dmseq console's polling a 40 MB/s stream lost its session or overran the DMA; out of
