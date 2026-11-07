@@ -253,11 +253,12 @@ class LogicCapture final : public Interface, public GroupTrack {
   blocks::Plan plan_;
   blocks::Encoder encoder_;
   // Two cores (format 1 streaming): a run of whole blocks is shared with core 1, block by block, while the harvest is
-  // behind by more than kShareLag (the bytes the DMA wrote past the chunk in hand); otherwise core 0 encodes alone and
+  // behind by more than kShareLag (the bytes the DMA wrote past the chunk in hand, a merged chunk at most 16 KiB of the
+  // 64 KiB ring before it: core 1 joins early); otherwise core 0 encodes alone and
   // core 1 stays free for the rest of the probe. Each core claims the next block (work_: generation << 16 | next
   // block); the harvest waits only for the block core 1 holds (busy2_), never for one it has not taken.
   blocks::Encoder encoder1_;            // core 1's (its own scratch)
-  static constexpr uint32_t kShareLag = kRingBytes / 4;
+  static constexpr uint32_t kShareLag = kRingBytes / 16;
   std::atomic<uint32_t> work_{0}, busy2_{0}, made2_{0};
   const uint8_t *volatile job_in_ = nullptr;
   uint8_t *volatile job_out_ = nullptr;
