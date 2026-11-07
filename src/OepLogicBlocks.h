@@ -184,6 +184,18 @@ class Encoder {
         }
         o += R;
       }
+    } else if (W == 16 && R == 4) {   // 2 samples a word: a byte a word
+      for (uint32_t i = 0; i < r / 2; ++i) {
+        const uint32_t x = wd[i];
+        o[i] = static_cast<uint8_t>((x & m) | ((x >> 12) & (m << 4)));
+      }
+    } else if (W == 16 && R < 4) {   // two words -> 4R bits; 8 samples -> R bytes
+      for (uint32_t i = 0; i < r / 2; i += 4) {
+        uint32_t bits = 0;
+        for (uint32_t k = 0; k < 4; ++k) bits |= ((wd[i + k] & m) | ((wd[i + k] >> (16 - R)) & (m << R))) << (2 * R * k);
+        for (uint32_t b = 0; b < R; ++b) o[b] = static_cast<uint8_t>(bits >> (8 * b));
+        o += R;
+      }
     } else if (W == 16) {   // 2 samples a word: 2R bits; four words -> R bytes (R <= 8)
       for (uint32_t i = 0; i < r / 2; i += 4) {
         uint32_t t[4];
@@ -284,13 +296,40 @@ class Encoder {
   // 32 intervals' lane values at a time -> each channel's word of them, written at its place (channel c's interval k at
   // bit off[c] + k * b): a lane's bits gathered, then whole bytes stored, not one bit at a time
   uint32_t lvs[32] = {}, cvs[32] = {};
+  // lane i's bit of 32 intervals' values -> word[i] (bit j = interval j), for up to 16 lanes: 8 x 8 bit transposes
+  static void lanesOf(const uint32_t *vals, uint32_t cnt, uint8_t lanes, uint32_t *word) {
+    for (uint8_t l0 = 0; l0 < lanes; l0 += 8) {
+      for (uint8_t i = 0; i < 8; ++i) word[l0 + i] = 0;
+      for (uint32_t j0 = 0; j0 < cnt; j0 += 8) {
+        uint32_t lo = 0, hi = 0;   // byte j = interval j0 + j's lanes l0 .. l0 + 7
+        for (uint32_t j = 0; j < 4; ++j) lo |= ((j0 + j < cnt ? vals[j0 + j] >> l0 : 0) & 0xFFu) << (8 * j);
+        for (uint32_t j = 0; j < 4; ++j) hi |= ((j0 + 4 + j < cnt ? vals[j0 + 4 + j] >> l0 : 0) & 0xFFu) << (8 * j);
+        uint32_t t = (lo ^ (lo >> 7)) & 0x00AA00AAu;
+        lo ^= t ^ (t << 7);
+        t = (hi ^ (hi >> 7)) & 0x00AA00AAu;
+        hi ^= t ^ (t << 7);
+        t = (lo ^ (lo >> 14)) & 0x0000CCCCu;
+        lo ^= t ^ (t << 14);
+        t = (hi ^ (hi >> 14)) & 0x0000CCCCu;
+        hi ^= t ^ (t << 14);
+        t = ((lo >> 4) ^ hi) & 0x0F0F0F0Fu;
+        hi ^= t;
+        lo ^= t << 4;
+        // now byte i (of lo, then hi) = lane l0 + i's bits of intervals j0 .. j0 + 7
+        for (uint32_t i = 0; i < 4; ++i) word[l0 + i] |= ((lo >> (8 * i)) & 0xFFu) << j0;
+        for (uint32_t i = 0; i < 4; ++i) word[l0 + 4 + i] |= ((hi >> (8 * i)) & 0xFFu) << j0;
+      }
+    }
+  }
   void flush(const Group &gr, uint32_t k0, uint32_t cnt, const size_t *off, uint8_t *red) {
+    uint32_t lws[kMaxChannels], cws[kMaxChannels];
+    lanesOf(lvs, cnt, gr.n, lws);
+    if (gr.kind == kChangeLatch) lanesOf(cvs, cnt, gr.n, cws);
     for (uint8_t i = 0; i < gr.n; ++i) {
-      uint32_t lw = 0, cw = 0;
-      for (uint32_t j = 0; j < cnt; ++j) lw |= ((lvs[j] >> i) & 1u) << j;
+      const uint32_t lw = lws[i];
       const uint8_t c = gr.chan[i];
       if (gr.kind == kChangeLatch) {
-        for (uint32_t j = 0; j < cnt; ++j) cw |= ((cvs[j] >> i) & 1u) << j;
+        const uint32_t cw = cws[i];
         const uint64_t both = static_cast<uint64_t>(spread(lw & 0xFFFF) | (spread(cw & 0xFFFF) << 1)) |
                               (static_cast<uint64_t>(spread(lw >> 16) | (spread(cw >> 16) << 1)) << 32);
         writeBits(red, off[c] + 2 * k0, both, 2 * cnt);
