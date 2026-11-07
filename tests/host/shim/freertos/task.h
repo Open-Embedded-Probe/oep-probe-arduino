@@ -47,3 +47,7 @@ inline void vTaskDelay(uint32_t ticks) {
   g_fake_task_delays += ticks;
   if (g_fake_on_delay) g_fake_on_delay();
 }
+// task notifications (format 1's blocks shared with core 1): never reached in the host tests (the harvest is never behind)
+inline TaskHandle_t xTaskGetCurrentTaskHandle() { return nullptr; }
+inline BaseType_t xTaskNotifyGive(TaskHandle_t) { return 1; }
+inline uint32_t ulTaskNotifyTake(BaseType_t, uint32_t) { return 1; }

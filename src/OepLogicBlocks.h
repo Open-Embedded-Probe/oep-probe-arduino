@@ -18,9 +18,6 @@
 #include <string.h>
 
 #include "OepRegistry.h"
-#if defined(ESP_PLATFORM)
-#include <esp_cpu.h>
-#endif
 
 #pragma GCC push_options
 #pragma GCC optimize("O2")
@@ -84,24 +81,28 @@ class Encoder {
   // that follows on with no gap); else sample 0 is compared with nothing. -> the bytes written, 0 when `capacity` cannot
   // hold them.
   size_t encode(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out, size_t capacity, bool contiguous) {
+    if (!r) return 0;
+    const size_t n = encodeAfter(p, src, r, out, capacity, contiguous && have_before_ ? before_ : sample(p, src, 0));
+    if (n) {
+      before_ = sample(p, src, r - 1);
+      have_before_ = true;
+    }
+    return n;
+  }
+  // The same with the sample before sample 0 given (`before`; sample 0 itself when there is none to compare with), the
+  // encoder's own "before" left as it was: blocks encoded apart (another core's) say what precedes them.
+  size_t encodeAfter(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out, size_t capacity, uint32_t before) {
     // `out` may be memory slow to read back (a DMA stage): the raw part is written once, front to back; the reduced
     // part is put together in red_ (bits ORed in) and copied after it
     const size_t need = bytesFor(p, r);
     if (!r || need > capacity) return 0;
-    const uint32_t before = contiguous && have_before_ ? before_ : sample(p, src, 0);
     const size_t raw_bytes = (static_cast<size_t>(r) * rawBits(p) + 7) / 8, red_bytes = need - raw_bytes;
     memset(red_, 0, red_bytes);
     size_t at = 0;
     for (uint8_t c = 0; c < p.reduced; ++c)   // start: change_latch's level before the block
       if (p.kind[c] == kChangeLatch) put(red_, at, (before >> p.red_bit[c]) & 1, 1);
     if (fastOk(p, src, r)) {
-#if defined(ESP_PLATFORM)
-      const uint32_t t0 = esp_cpu_get_cycle_count();
       packRaw(p, src, r, out);
-      raw_cycles_ += esp_cpu_get_cycle_count() - t0;
-#else
-      packRaw(p, src, r, out);
-#endif
       fastReduced(p, src, r, red_, at, before);
     } else {
       memset(out, 0, raw_bytes);
@@ -109,8 +110,6 @@ class Encoder {
       referenceReduced(p, src, r, red_, at, before);
     }
     memcpy(out + raw_bytes, red_, red_bytes);
-    before_ = sample(p, src, r - 1);
-    have_before_ = true;
     return need;
   }
 
@@ -452,7 +451,11 @@ class Encoder {
   uint8_t red_[(kMaxChannels + kMaxChannels * kMaxBlock + 7) / 8] = {};
 
  public:
-  uint32_t raw_cycles_ = 0;   // EXPERIMENT: the raw part's cycles, since reset of the counter
+  // sample i of a capture's samples (w bits each)
+  static uint32_t sampleOf(const Plan &p, const uint8_t *src, uint32_t i) { return sample(p, src, i); }
+  // the sample before the next block, when the blocks were encoded elsewhere (encodeAfter)
+  void follow(uint32_t last) { before_ = last; have_before_ = true; }
+  uint32_t before(const Plan &p, const uint8_t *src) const { return have_before_ ? before_ : sample(p, src, 0); }
 };
 
 }  // namespace blocks

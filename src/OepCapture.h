@@ -22,6 +22,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <atomic>
 
 #include "Oep.h"
 #include "OepCaptureGroup.h"
@@ -251,6 +252,23 @@ class LogicCapture final : public Interface, public GroupTrack {
   // is encoded straight into the stage; a stage (one segment) holds whole blocks, none held back
   blocks::Plan plan_;
   blocks::Encoder encoder_;
+  // Two cores (format 1 streaming): a run of whole blocks is shared with core 1, block by block, while the harvest is
+  // behind by more than kShareLag (the bytes the DMA wrote past the chunk in hand); otherwise core 0 encodes alone and
+  // core 1 stays free for the rest of the probe. Each core claims the next block (work_: generation << 16 | next
+  // block); the harvest waits only for the block core 1 holds (busy2_), never for one it has not taken.
+  blocks::Encoder encoder1_;            // core 1's (its own scratch)
+  static constexpr uint32_t kShareLag = kRingBytes / 4;
+  std::atomic<uint32_t> work_{0}, busy2_{0}, made2_{0};
+  const uint8_t *volatile job_in_ = nullptr;
+  uint8_t *volatile job_out_ = nullptr;
+  volatile uint32_t job_blocks_ = 0, job_in_bytes_ = 0, job_out_bytes_ = 0, job_before_ = 0;
+  uint16_t job_gen_ = 0;
+  uint32_t chunk_end_ = 0;              // produced_ at the end of the chunk being encoded
+  TaskHandle_t share_task_ = nullptr;
+  static void shareTask(void *context);
+  void runBlocks(blocks::Encoder &e);   // claims and encodes blocks of the job until none is left
+  size_t encodeShared(const uint8_t *in, uint32_t blocks, uint8_t *out);
+  void emitBlocks(const uint8_t *in, uint32_t blocks);   // whole blocks from `in` (the ring or block_buf_)
   uint8_t *block_buf_ = nullptr;        // one block's samples as the capture took them (L x w / 8 bytes)
   uint32_t block_fill_ = 0;             // its bytes so far
   uint64_t enc_pos_ = 0;                // the format 1 stream's position (dropped blocks jump it: their raw bytes)
@@ -286,6 +304,10 @@ class LogicCapture final : public Interface, public GroupTrack {
   struct Chunk { const uint8_t *data; size_t length; uint32_t end; uint32_t ring; };
   Chunk held_chunk_ = {};
   void harvestBlocks(const Chunk &chunk);   // format 1 streaming (above)
+  // the queued chunks right after c (the same ring run) joined into c, up to kMergeMax: fewer, longer chunks (each one
+  // costs a queue receive and the harvest's bookkeeping)
+  void mergeChunks(Chunk &c);
+  static constexpr size_t kMergeMax = 16384;
   void emitBlock(uint32_t samples);
   // the chunks lost to the queue before this one: its start past the stream byte taken last (the stages', the spill's)
   uint32_t missed(const Chunk &chunk) const {

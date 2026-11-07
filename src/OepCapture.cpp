@@ -417,14 +417,30 @@ bool LogicCapture::drainSpill() {
   return true;
 }
 
-// Format 1 (capture §1.3), streaming over the stages: the chunk's bytes gather into the block; each full block is
-// encoded into the stage, sent first when the block would not fit. Harvest task only.
+// Format 1 (capture §1.3), streaming over the stages: whole blocks that lie in the ring as one run are encoded from the
+// ring itself (and the ring checked afterwards: the DMA must not have come round over them meanwhile); a block cut by the
+// chunk's end gathers in block_buf_ first. Harvest task only.
 void LogicCapture::harvestBlocks(const Chunk &chunk) {
   if (lost_) return;
   if (missed(chunk)) { loseSegment(); return; }   // chunks lost to the queue: a hole (capture §2.2)
+  chunk_end_ = chunk.end;
   const uint32_t block_bytes = plan_.block * width_ / 8;
   size_t at = 0;
   while (at < chunk.length) {
+    if (block_fill_ == 0 && !(reinterpret_cast<uintptr_t>(chunk.data + at) & 3)) {
+      const uint32_t whole = static_cast<uint32_t>((chunk.length - at) / block_bytes);
+      if (whole) {
+        emitBlocks(chunk.data + at, whole);
+        if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA rewrote them while they were read
+          overruns_ = overruns_ + 1;
+          loseSegment();
+          return;
+        }
+        at += static_cast<size_t>(whole) * block_bytes;
+        captured_ += static_cast<size_t>(whole) * block_bytes;
+        continue;
+      }
+    }
     const size_t n = min(static_cast<size_t>(block_bytes - block_fill_), chunk.length - at);
     memcpy(block_buf_ + block_fill_, chunk.data + at, n);
     if (!ringIntact(chunk.ring + static_cast<uint32_t>(at))) {   // the DMA rewrote these bytes
@@ -435,13 +451,56 @@ void LogicCapture::harvestBlocks(const Chunk &chunk) {
     block_fill_ += static_cast<uint32_t>(n);
     at += n;
     captured_ += n;
-    if (block_fill_ == block_bytes) emitBlock(plan_.block);
+    if (block_fill_ == block_bytes) {
+      emitBlocks(block_buf_, 1);
+      block_fill_ = 0;
+    }
   }
 }
 
-// One block of `samples` from block_buf_ into the stage (a new one when it would not fit). No stage free: the block is
-// dropped - the stream's position jumps by its samples' bytes and the next block's first sample is compared with
-// nothing (after a gap, §1.3).
+// Whole blocks from `in` into the stages, as many a stage as it takes (a new one when the next would not fit). No stage
+// free: the blocks are dropped - the stream's position jumps by their samples' bytes and the next block's first sample
+// is compared with nothing (after a gap, §1.3).
+void LogicCapture::emitBlocks(const uint8_t *in, uint32_t blocks) {
+  const uint32_t L = plan_.block, in_bytes = L * width_ / 8;
+  const size_t size = blocks::bytesFor(plan_, L);
+  while (blocks) {
+    if (stage_cur_ >= 0 && stage_data_ - stage_fill_ < size) sendStage();
+    if (stage_cur_ < 0 && !takeStage()) {
+      const uint32_t raw = blocks * in_bytes;
+      stage_drops_ += raw;
+      dropped_ += raw;
+      enc_pos_ += raw;
+      sample_pos_ += static_cast<uint64_t>(blocks) * L;
+      encoder_.reset();
+      return;
+    }
+    const uint32_t room = static_cast<uint32_t>((stage_data_ - stage_fill_) / size);
+    const uint32_t n = blocks < room ? blocks : room;
+    uint8_t *at = stage_[stage_cur_] + kPushHead + stage_fill_;
+    const uint32_t t0 = esp_cpu_get_cycle_count();
+    size_t made = 0;
+    if (n >= 2 && produced_ - chunk_end_ > kShareLag) {   // behind: core 1 takes blocks too
+      made = encodeShared(in, n, at);
+      encoder_.follow(blocks::Encoder::sampleOf(plan_, in + static_cast<size_t>(n - 1) * in_bytes, L - 1));
+    } else {
+      for (uint32_t k = 0; k < n; ++k)
+        made += encoder_.encode(plan_, in + static_cast<size_t>(k) * in_bytes, L, at + made, size, true);
+    }
+    const uint32_t cycles = esp_cpu_get_cycle_count() - t0;
+    if (cycles > enc_max_cycles_) enc_max_cycles_ = cycles;
+    enc_cycles_ += cycles;
+    enc_blocks_ += n;
+    stage_fill_ += static_cast<uint32_t>(made);
+    stage_samples_ += n * L;
+    enc_pos_ += made;
+    sample_pos_ += static_cast<uint64_t>(n) * L;
+    in += static_cast<size_t>(n) * in_bytes;
+    blocks -= n;
+  }
+}
+
+// The last block of a stop, shorter than L (from block_buf_).
 void LogicCapture::emitBlock(uint32_t samples) {
   const size_t size = blocks::bytesFor(plan_, samples);
   if (stage_cur_ >= 0 && stage_data_ - stage_fill_ < size) sendStage();
@@ -456,17 +515,68 @@ void LogicCapture::emitBlock(uint32_t samples) {
     return;
   }
   uint8_t *at = stage_[stage_cur_] + kPushHead + stage_fill_;
-  const uint32_t t0 = esp_cpu_get_cycle_count();
   const size_t n = encoder_.encode(plan_, block_buf_, samples, at, stage_data_ - stage_fill_, true);
-  const uint32_t cycles = esp_cpu_get_cycle_count() - t0;
-  if (cycles > enc_max_cycles_) enc_max_cycles_ = cycles;
-  enc_cycles_ += cycles;
-  ++enc_blocks_;
   stage_fill_ += static_cast<uint32_t>(n);
   stage_samples_ += samples;
   enc_pos_ += n;
   sample_pos_ += samples;
   block_fill_ = 0;
+}
+
+// Blocks shared with core 1 (see encoder1_): the job published, both cores claim blocks until none is left, the harvest
+// then waits for the block core 1 holds. -> the bytes made (the blocks' sizes are fixed: block k at k x its size).
+size_t LogicCapture::encodeShared(const uint8_t *in, uint32_t blocks, uint8_t *out) {
+  if (!share_task_) xTaskCreatePinnedToCore(shareTask, "oep_share", 3072, this, 3, &share_task_, 1);
+  while (busy2_.load()) {}   // core 1 off the last job (it found it empty)
+  job_in_ = in;
+  job_out_ = out;
+  job_blocks_ = blocks;
+  job_in_bytes_ = plan_.block * width_ / 8;
+  job_out_bytes_ = static_cast<uint32_t>(blocks::bytesFor(plan_, plan_.block));
+  job_before_ = encoder_.before(plan_, in);
+  job_gen_ = static_cast<uint16_t>(job_gen_ + 1);
+  made2_.store(0);
+  work_.store(static_cast<uint32_t>(job_gen_) << 16);
+  xTaskNotifyGive(share_task_);
+  runBlocks(encoder_);
+  while (busy2_.load()) {}   // the block core 1 holds
+  work_.store(static_cast<uint32_t>(job_gen_) << 16 | 0xFFFFu);   // closed: a late look of core 1 finds nothing
+  return made2_.load();
+}
+
+void LogicCapture::runBlocks(blocks::Encoder &e) {
+  for (;;) {
+    uint32_t v = work_.load();
+    const uint32_t k = v & 0xFFFFu;
+    if (k >= job_blocks_ || (v >> 16) != job_gen_) return;
+    if (!work_.compare_exchange_weak(v, v + 1)) continue;
+    const uint8_t *in = job_in_ + static_cast<size_t>(k) * job_in_bytes_;
+    const uint32_t before = k ? blocks::Encoder::sampleOf(plan_, in - job_in_bytes_, plan_.block - 1) : job_before_;
+    const size_t made = e.encodeAfter(plan_, in, plan_.block, job_out_ + static_cast<size_t>(k) * job_out_bytes_,
+                                      job_out_bytes_, before);
+    made2_.fetch_add(static_cast<uint32_t>(made));
+  }
+}
+
+void LogicCapture::shareTask(void *context) {
+  auto *self = static_cast<LogicCapture *>(context);
+  for (;;) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    self->busy2_.store(1);
+    self->runBlocks(self->encoder1_);
+    self->busy2_.store(0);
+  }
+}
+
+// The queued chunks right after c (the same ring run), up to kMergeMax, joined into c.
+void LogicCapture::mergeChunks(Chunk &c) {
+  Chunk next;
+  while (c.length < kMergeMax && xQueuePeek(queue_, &next, 0) == pdTRUE && next.data == c.data + c.length &&
+         next.ring == c.ring + static_cast<uint32_t>(c.length) && c.length + next.length <= kMergeMax) {
+    xQueueReceive(queue_, &next, 0);
+    c.length += next.length;
+    c.end = next.end;
+  }
 }
 
 // A free stage becomes the current one, starting with the byte held back from the last frame, if any.
@@ -1037,6 +1147,7 @@ void LogicCapture::harvestTask(void *context) {
       if (!held && xQueueReceive(self->queue_, &waiting, wait) == pdTRUE) {
         held = true;
         at = 0;
+        self->mergeChunks(waiting);
       }
       if (held) {
         // straight into the stages - after what the spill holds; none free: into the spill
@@ -1935,7 +2046,6 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   enc_pos_ = sample_pos_ = stage_first_sample_ = 0;
   block_fill_ = stage_samples_ = 0;
   enc_max_cycles_ = enc_blocks_ = 0;
-  encoder_.raw_cycles_ = 0;
   ring_peak_ = 0;
   spill_peak_ = 0;
   spill_in_bytes_ = spill_in_cycles_ = spill_out_bytes_ = spill_out_cycles_ = 0;
@@ -2461,7 +2571,7 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
         putU32(v + 1 + kEncName, enc_max_cycles_);
         putU64(v + 5 + kEncName, enc_cycles_);
         putU32(v + 13 + kEncName, enc_blocks_);
-        putU32(v + 17 + kEncName, encoder_.raw_cycles_);   // EXPERIMENT: the raw part's cycles
+        putU32(v + 17 + kEncName, 0);
         putU32(v + 21 + kEncName, static_cast<uint32_t>(getCpuFrequencyMhz()) * 1000000u);
         used += kTlvHeader + kEncValue;
       }
