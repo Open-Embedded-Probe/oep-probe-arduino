@@ -594,7 +594,7 @@ uint32_t LogicCapture::streamBuffer(uint32_t samples, uint8_t width, uint32_t se
   if (count < 2) return static_cast<uint32_t>(static_cast<uint64_t>(samples) * width / 8 * segments);   // the copied way
   // and the FIFO behind them (formats 0 and 4; held, or PSRAM to take it)
   const bool psram = streamRingAvailable();
-  const size_t ring = format_ == cap::kDataFormatLogicBlocks ? 0 : (psram ? kStreamRingBytes : kRingBytes) - kDmaAhead - kChunkMax;
+  const size_t ring = format_ == cap::kDataFormatLogicBlocks ? 0 : kRingBytes - kDmaAhead - kChunkMax;   // the internal ring
   // the spill behind the ring (formats 0 and 4): held, or PSRAM room for it beside the ring
   const bool spill = format_ != cap::kDataFormatLogicBlocks && psram &&
                      (spill_ || heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= kSpillBytes + (stream_ring_ ? 0 : kStreamRingBytes));
@@ -1897,7 +1897,10 @@ LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uin
     store_ = static_cast<uint8_t *>(heap_caps_malloc(store_bytes_, caps));
     if (!store_) return Open::kNoMemory;
   }
-  useRing(direct_);
+  // the internal ring, whatever PSRAM there is: the harvest copies out of it at ~1.4 cycles a byte against ~4.1 out of
+  // the PSRAM one, whose copy took 43 % of core 0 at 40 MB/s and left too little beside a console's polling (sessions
+  // lost, DMA overruns); the host's pauses go into the stages and the spill (P4X, 2026-11-07)
+  useRing(false);
   // a chunk is a descriptor (3968 - 4032 bytes) or the rest of one an early close cut: the ring's worth queued, so a
   // harvest waiting for a stage loses none
   queue_ = xQueueCreate(rx_ring_bytes_ == kRingBytes ? 128 : rx_ring_bytes_ / 2048, sizeof(Chunk));

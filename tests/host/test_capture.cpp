@@ -975,7 +975,7 @@ class MemStream final : public Stream {
 
 static uint8_t pattern(uint64_t position) { return static_cast<uint8_t>(position * 7 + (position >> 8)); }
 
-// Streaming over the zero-copy stages with the host not taking IN: the stages fill, then the stream's DMA ring in PSRAM
+// Streaming over the zero-copy stages with the host not taking IN: the stages fill, then the stream's DMA ring (internal)
 // and the spill behind it hold the rest and nothing is dropped; given back, the stages take it in order. Past the
 // spill's room the DMA comes round over bytes not yet taken and drops them (the position jumps, no error: no stage had
 // them) and the frame after the jump starts at its own position. Every frame's bytes are the stream's at its position.
@@ -1013,10 +1013,10 @@ static void testStreamRing() {
   CHECK(ok(configure(logic, c, out)));
   uint32_t buffer = 0;   // the stages, the ring and the spill
   CHECK(findU32(out, cap::kTlvConfigureAnswerStreamBuffer, buffer) &&
-        buffer > LogicCapture::kStreamRingBytes / 2 + LogicCapture::kSpillBytes);
+        buffer > LogicCapture::kRingBytes / 2 + LogicCapture::kSpillBytes);
   Dma dma;
   CHECK(ok(raw(logic, LogicCapture::kOpStart, {}, out)));
-  CHECK(g_fake_parlio_size == LogicCapture::kStreamRingBytes);
+  CHECK(g_fake_parlio_size == LogicCapture::kRingBytes);   // the internal ring, PSRAM or not
   uint64_t produced = 0;
   auto deliver = [&](size_t n) {   // the stream's next n bytes, in descriptor-sized chunks, then a harvest
     Bytes b(4032);
@@ -1046,7 +1046,7 @@ static void testStreamRing() {
     CHECK(jumps == want_jumps);
     return next;
   };
-  const size_t ring = LogicCapture::kStreamRingBytes, step = 24 * 1024;
+  const size_t ring = LogicCapture::kRingBytes, step = 24 * 1024;
   for (size_t n = 0; n < ring * 3 / 4; n += step) deliver(step);   // nobody takes IN: the stages, then the ring holds it
   const size_t stages = direct.frames.size();
   CHECK(stages >= 2 && stages <= 32);

@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X streaming: the DMA ring is the internal 64 KiB one whatever PSRAM there is (the PSRAM 1 MiB ring
+  stays for a linked or following track). The harvest copied out of the PSRAM ring at ~4.1 cycles a byte - 43 % of
+  core 0 at 40 MB/s - and beside a dmseq console's polling a 40 MB/s stream lost its session or overran the DMA; out of
+  the internal ring it costs ~1.4 cycles a byte (17 %), the console and 40 MB/s (8 lines at 40 MHz, 4 at 80) passed
+  3 times in 3, and alone the stream reached the USB path's own ceiling (42.7 MB/s kept; the path measured ~43 MB/s on
+  this bench's host). The host's pauses go into the stages and the PSRAM spill (stream_buffer). P4X, 2026-11-07.
+- (JA) ESP32-P4 / P4X の流し続け: PSRAM の有無によらず、DMA の輪を内部 RAM の 64 KiB にした（PSRAM の 1 MiB の輪は、linked と追う側の
+  トラックに残す）。PSRAM の輪からのコピーは 1 バイト約 4.1 cycle で、40 MB/s でコア 0 の 43 % を使い、dmseq のコンソールのポーリングと
+  同時の 40 MB/s はセッションを失うか DMA の取りこぼしで止まっていた。内部 RAM の輪からは約 1.4 cycle（17 %）で、コンソールと同時の
+  40 MB/s（8 本 40 MHz、4 本 80 MHz）は 3 回とも通り、単独では USB の経路の限界まで出た（42.7 MB/s を保った。このベンチの host で経路は
+  約 43 MB/s）。host の一時停止は送り出しの区画と PSRAM の退避（stream_buffer）が受ける。P4X、2026-11-07。
 - (EN) docs/guide capture: streaming through ch32rv's broker measured on the P4X (20 s, 4 lines): alone no loss up to
   35 MB/s and drops at 40; beside a dmseq console no loss at 30 and 26.7 MB/s, drops from 32.
 - (JA) docs/guide の capture: ch32rv の broker 越しの流し続けを P4X で測った（20 秒、4 本）。ほかの通信なしは 35 MB/s まで欠落なし、
