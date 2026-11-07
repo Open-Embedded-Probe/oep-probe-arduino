@@ -84,15 +84,16 @@ class Encoder {
   // that follows on with no gap); else sample 0 is compared with nothing. -> the bytes written, 0 when `capacity` cannot
   // hold them.
   size_t encode(const Plan &p, const uint8_t *src, uint32_t r, uint8_t *out, size_t capacity, bool contiguous) {
+    // `out` may be memory slow to read back (a DMA stage): the raw part is written once, front to back; the reduced
+    // part is put together in red_ (bits ORed in) and copied after it
     const size_t need = bytesFor(p, r);
     if (!r || need > capacity) return 0;
-    memset(out, 0, need);
     const uint32_t before = contiguous && have_before_ ? before_ : sample(p, src, 0);
-    const size_t raw_bytes = (static_cast<size_t>(r) * rawBits(p) + 7) / 8;
-    uint8_t *red = out + raw_bytes;
+    const size_t raw_bytes = (static_cast<size_t>(r) * rawBits(p) + 7) / 8, red_bytes = need - raw_bytes;
+    memset(red_, 0, red_bytes);
     size_t at = 0;
     for (uint8_t c = 0; c < p.reduced; ++c)   // start: change_latch's level before the block
-      if (p.kind[c] == kChangeLatch) put(red, at, (before >> p.red_bit[c]) & 1, 1);
+      if (p.kind[c] == kChangeLatch) put(red_, at, (before >> p.red_bit[c]) & 1, 1);
     if (fastOk(p, src, r)) {
 #if defined(ESP_PLATFORM)
       const uint32_t t0 = esp_cpu_get_cycle_count();
@@ -101,11 +102,13 @@ class Encoder {
 #else
       packRaw(p, src, r, out);
 #endif
-      fastReduced(p, src, r, red, at, before);
+      fastReduced(p, src, r, red_, at, before);
     } else {
+      memset(out, 0, raw_bytes);
       referenceRaw(p, src, r, out);
-      referenceReduced(p, src, r, red, at, before);
+      referenceReduced(p, src, r, red_, at, before);
     }
+    memcpy(out + raw_bytes, red_, red_bytes);
     before_ = sample(p, src, r - 1);
     have_before_ = true;
     return need;
@@ -171,12 +174,13 @@ class Encoder {
           t = (t & mlo) | ((t >> (8 - R)) & mhi);
           h[k] = (t & m2) | ((t >> (16 - 2 * R)) & (m2 << (2 * R)));
         }
+        // byte by byte (the destination's alignment is any: a misaligned word store is slow on the P4)
         if (R <= 4) {
           const uint32_t bits = h[0] | (h[1] << (4 * R));
-          memcpy(o, &bits, R);
+          for (uint32_t b = 0; b < R; ++b) o[b] = static_cast<uint8_t>(bits >> (8 * b));
         } else {
           const uint64_t bits = h[0] | (static_cast<uint64_t>(h[1]) << (4 * R));
-          memcpy(o, &bits, R);
+          for (uint32_t b = 0; b < R; ++b) o[b] = static_cast<uint8_t>(bits >> (8 * b));
         }
         o += R;
       }
@@ -184,13 +188,13 @@ class Encoder {
       for (uint32_t i = 0; i < r / 2; i += 4) {
         uint32_t t[4];
         for (int k = 0; k < 4; ++k) t[k] = (wd[i + k] & m) | ((wd[i + k] >> (16 - R)) & (m << R));
-        if (R <= 4) {
-          const uint32_t bits = t[0] | (t[1] << (2 * R)) | (t[2] << (4 * R)) | (t[3] << (6 * R));
-          memcpy(o, &bits, R);
+        const uint32_t lo = t[0] | (t[1] << (2 * R)), hi = t[2] | (t[3] << (2 * R));   // 4R bits each
+        if (R % 2 == 0) {   // each half whole bytes
+          for (uint32_t b = 0; b < R / 2; ++b) o[b] = static_cast<uint8_t>(lo >> (8 * b));
+          for (uint32_t b = 0; b < R / 2; ++b) o[R / 2 + b] = static_cast<uint8_t>(hi >> (8 * b));
         } else {
-          const uint64_t bits = t[0] | (static_cast<uint64_t>(t[1]) << (2 * R)) |
-                                (static_cast<uint64_t>(t[2]) << (4 * R)) | (static_cast<uint64_t>(t[3]) << (6 * R));
-          memcpy(o, &bits, R);
+          const uint64_t bits = lo | (static_cast<uint64_t>(hi) << (4 * R));
+          for (uint32_t b = 0; b < R; ++b) o[b] = static_cast<uint8_t>(bits >> (8 * b));
         }
         o += R;
       }
@@ -199,7 +203,7 @@ class Encoder {
         const uint32_t x = wd[i];
         uint32_t bits = 0;
         for (int k = 0; k < 8; ++k) bits |= ((x >> (4 * k)) & m) << (R * k);
-        memcpy(o, &bits, R);
+        for (uint32_t b = 0; b < R; ++b) o[b] = static_cast<uint8_t>(bits >> (8 * b));
         o += R;
       }
     }
@@ -373,6 +377,8 @@ class Encoder {
   }
   uint32_t before_ = 0;
   bool have_before_ = false;
+  // the reduced part being put together: at most a start and 2 bits an interval of 2 samples on every channel
+  uint8_t red_[(kMaxChannels + kMaxChannels * kMaxBlock + 7) / 8] = {};
 
  public:
   uint32_t raw_cycles_ = 0;   // EXPERIMENT: the raw part's cycles, since reset of the counter
