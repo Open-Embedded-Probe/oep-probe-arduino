@@ -84,9 +84,12 @@ Data format 1 (logic blocks, oep-if-capture §1.3) carries each line its own way
 
 ### With other operations
 
-- While streaming through ch32rv's broker with a debug port's NRST line (`<port>.nrst`) among the captured lines, a
-  ch32rv reset or flash sent from another process gets no answer and the session is lost. Leaving the NRST line out of
-  the capture avoids it; a reset sent from within the one client does not hit it.
+- While streaming, the capturing client keeps reading (inside `during`, `wait` reads). Waiting inside `during` for another
+  process to finish (a ch32rv flash, say) stops the reading for that long: data past what the probe or the broker can
+  hold (`stream_buffer` in the configure answer, and so on) is lost. Run a long operation in another thread and keep
+  calling `wait` meanwhile.
+- ch32rv's broker up to 0.29 stalls on sending to a client that does not read, and so do other clients' requests (the
+  session lapses meanwhile). Its next version fixes it.
 
 ## A. Capture alone
 

@@ -3,11 +3,11 @@
 ## Unreleased
 - (EN) docs/guide capture: a section on the ESP32-P4 / P4X speeds and lines - the rates (160 MHz divided, fractional
   dividers' spacing unchecked), the sample width by line count, each mode's limit with what was checked on hardware,
-  per-line resolution (format 1, `resolution=`), and that a ch32rv reset / flash from another process stalls while a capture through the broker streams the port's NRST line. README,
+  per-line resolution (format 1, `resolution=`), and that a streaming client must keep reading (`wait`) while it waits for another process - ch32rv's broker up to 0.29 stalls on a client that does not read. README,
   boards, getting-started and the LogicCapture example point to it: their "2 ch 160 Msps" was streaming's, the one-shot
   stops at 100 Msps up to 8 lines.
 - (JA) docs/guide の capture: ESP32-P4 / P4X の速さと本数の節を足した。選べる速さ（160 MHz の分周。分数の分周の間隔は未確認）、本数で
-  決まる幅、取り方ごとの上限と実機で確かめたこと、線ごとの解像度（形式 1、`resolution=`）、broker 越しに口の NRST の線を流している間の、別プロセスからの ch32rv の reset / 書き込みが詰まること。
+  決まる幅、取り方ごとの上限と実機で確かめたこと、線ごとの解像度（形式 1、`resolution=`）、流し続けの client は別プロセスを待つ間も読み続けること（`wait`）。ch32rv 0.29 までの broker は読まない client で止まる。
   README、boards、getting-started、LogicCapture の例はこの表を指すようにした。そこにあった「2 ch 160 Msps」は流し続けの値で、
   ワンショットは 8 本まで 100 Msps。
 - (EN) docs/guide debug-targets: a Reset section - the debug line's reset is a system reset (peripherals too; the CH32's
