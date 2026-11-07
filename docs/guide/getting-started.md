@@ -149,7 +149,7 @@ hst.end()
 ```
 
 Up to 16 channels, on any pins - also pins another interface holds (a capture only listens), so you can watch the SPI
-device you are testing: 2 channels at 160 Msps, 8 at 40 Msps, 16 at 20 Msps.
+device you are testing. The top rates are in the table in [Capture](capture.md#esp32-p4--p4x-speeds-and-lines).
 
 To catch an event, give the one-shot a trigger - a level or an edge on one channel - and how much to keep before it:
 

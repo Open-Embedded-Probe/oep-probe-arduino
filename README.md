@@ -121,11 +121,8 @@ One ESP32-P4 board, wired to a CH32L103 on every pin you want to watch, is the w
   (`oep.fixture.gpio` / `uart` / `spi-target` / `i2c-target`).
 - **Capture up to 16 pins at the same time**, while it acts as that SPI device (`oep.fixture.logic`, the P4's PARLIO):
 
-  | Channels | Sample rate |
-  |---:|---:|
-  | 2 | 160 Msps |
-  | 8 | 40 Msps |
-  | 16 | 20 Msps |
+  The top rate follows from the mode and the line count (streaming: 160 Msps at 2 ch, 40 Msps at 8 and so on; one-shot:
+  100 Msps up to 8 ch). The table is in [the capture guide](docs/guide/capture.md#esp32-p4--p4x-speeds-and-lines).
 
   Which pins are captured is chosen per request (the plan), so each test captures the pins it cares about - no rewiring and
   no reflashing between tests. The samples go to a sigrok session file (`LogicCapture.to_sr`, PulseView) or to a run
@@ -208,7 +205,7 @@ uses it.
 | `04.Debug/RvswdDebugProbe` | RP2040 / RP2350, ESP32-P4 / P4X | a CH32 debugger on RVSWD: wire, riscv-dm, console |
 | `04.Debug/SwioDebugProbe` | classic ESP32 | a CH32V00x debugger on the one-wire SWIO |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | an ARM debugger on SWD: wire, arm-adi |
-| `05.Capture/LogicCapture` | ESP32-P4 / P4X | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2), streaming over HS; `host/stream_test.py` |
+| `05.Capture/LogicCapture` | ESP32-P4 / P4X | a logic analyzer at full speed (up to 16 channels, 160 Msps at 2 when streaming), streaming over HS; `host/stream_test.py` |
 | `06.Settings/Settings` | RP2040 / RP2350 | a jig that keeps its settings: pin labels, idle states, unused pins, pass-throughs (the target's console on the probe's port), saved by name in flash |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | a bring-up tool (text on Serial, not OEP): which pins are a debug port |
 

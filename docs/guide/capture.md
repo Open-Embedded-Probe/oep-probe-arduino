@@ -4,7 +4,8 @@
 
 An OEP probe captures signals as a logic analyzer. What you prepare, set and do differs between using the probe **for
 capture alone** and **capturing on the labels of a debug or test jig**. This page puts the differences side by side.
-How many channels at what speed each board takes is in [Boards](boards.md#what-each-chip-does).
+How many channels each board takes is in [Boards](boards.md#what-each-chip-does); the ESP32-P4 / P4X speed limits are in
+[the section below](#esp32-p4--p4x-speeds-and-lines).
 
 ## Which to choose
 
@@ -29,6 +30,60 @@ How many channels at what speed each board takes is in [Boards](boards.md#what-e
   a UART (classic ESP32) raises its link speed for the read back only (WireSkein picks the rate).
 - **File**: a capture is kept as WireSkein's format (`.wireskein`), with the rate actually used, the trigger position,
   the probe's clock and the channel names. `wireskein convert` makes PulseView's `.sr` or VCD.
+
+## ESP32-P4 / P4X speeds and lines
+
+The probe captures at the rate it can keep nearest to the one asked and answers the rate it used (`actual_rate` in the
+configure answer; the WireSkein file keeps it too).
+
+### Rates
+
+- 627.451 kHz to 160 MHz: the value nearest the one asked among 160 MHz divided by a whole number and a fraction. A rate
+  in 10 MHz steps such as 60 MHz can be asked.
+- A rate that does not divide 160 MHz evenly (160, 80, 53.3, 40, 32 MHz and so on do) uses a fractional divider. Whether
+  the samples are evenly spaced then has not been checked.
+
+### Lines and sample width
+
+The bits a sample takes (its width) follow from the number of lines; streaming's limits follow from the width.
+
+| Lines | 1 | 2 | 3-4 | 5-8 | 9-16 |
+|---|---|---|---|---|---|
+| Width (bits) | 1 | 2 | 4 | 8 | 16 |
+
+### Limits by mode
+
+A rate above the limit is not refused: the probe captures at the nearest rate within it.
+
+| Mode | Limit | Checked on hardware |
+|---|---|---|
+| One-shot | 100 MHz up to 8 lines, 48 MHz up to 16 | a one-shot of 2 lines asked at 160 MHz did not finish or was refused; hence the limit |
+| Repeat | the one-shot's limit does not apply | no limit checked |
+| Streaming (HS USB, enough send stages) | 40 MB/s: 160 MHz up to 2 lines, 80 MHz at 4, 40 MHz at 8, 20 MHz at 16 | no loss at 2 lines 160 MHz, 4 lines 80 / 60 / 40 MHz (10 s), 8 lines 40 MHz (30 s, P4X) |
+| Streaming (little internal RAM, small send stages) | 36 MB/s: 36 MHz at 8 lines | no loss at 8 lines 36 MHz (30 s); about 30 % lost at 40 MHz |
+| Streaming (a route without send stages, or not enough internal RAM) | 8.5 MB/s: 8.42 MHz at 8 lines | no loss at 8 lines 8.42 MHz; 11 % lost at 16 MHz |
+| Streaming with per-line resolution (below) | width raised to 8, 13.4 MB/s: 13.3 MHz | not checked (a value from the worst case) |
+
+- Which limit applies depends on the probe's memory and the route at the time. The answer gives the rate used
+  (`actual_rate`) and what it can hold before sending (`stream_buffer`).
+- Limits while streaming alongside other functions (a console, spi-controller and so on) have not been checked.
+
+### Per-line resolution
+
+Data format 1 (logic blocks, oep-if-capture §1.3) carries each line its own way.
+
+- **raw**: every sample.
+- **events**: a record only when the line changed within a tick of D samples (a power of 2). A short pulse inside a tick
+  is not lost: the count of changes stays. Only where in the tick it happened is lost. Slow lines such as CS carried as
+  events take less bandwidth.
+- In Python, name the events lines and their D: `oep_client.acquire.Request(..., resolution={"CS": 64})`. The other
+  lines are raw.
+- Streaming takes it only over a route with send stages.
+
+### With other operations
+
+- A reset-halt on the debug line (one inside a flash) sent to the same probe while it streams leaves the probe silent.
+  Do not flash while capturing.
 
 ## A. Capture alone
 

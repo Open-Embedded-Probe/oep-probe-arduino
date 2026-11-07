@@ -116,11 +116,8 @@ ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につない�
   `oep.fixture.spi-target` / `i2c-target`）。
 - **最大 16 ピンを同時にキャプチャ**: SPI のデバイスとして動かしながらでも取れる（`oep.fixture.logic`、P4 の PARLIO）。
 
-  | ch 数 | サンプリング |
-  |---:|---:|
-  | 2 | 160 Msps |
-  | 8 | 40 Msps |
-  | 16 | 20 Msps |
+  速さの上限は取り方と本数で決まります（流し続けで 2 ch 160 Msps、8 ch 40 Msps など。ワンショットは 8 ch まで 100 Msps）。
+  表は [キャプチャの案内](docs/guide/capture.ja.md#esp32-p4--p4x-の速さと本数) にあります。
 
   どのピンをキャプチャするかは要求ごとに選ぶ（plan）。試験項目ごとに必要なピンだけを取れ、試験の間に配線も firmware も変えなくて
   よい。取ったサンプルは sigrok のセッションファイル（`LogicCapture.to_sr`、PulseView で開ける）や、
@@ -196,7 +193,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | `04.Debug/RvswdDebugProbe` | RP2040 / RP2350、ESP32-P4 / P4X | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |
 | `04.Debug/SwioDebugProbe` | classic ESP32 | 1 本線の SWIO の CH32V00x のデバッガ |
 | `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | SWD の ARM のデバッガ: wire、arm-adi |
-| `05.Capture/LogicCapture` | ESP32-P4 / P4X | 全速のロジアナ（16 ch まで、2 ch で 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
+| `05.Capture/LogicCapture` | ESP32-P4 / P4X | 全速のロジアナ（16 ch まで、流し続けで 2 ch 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
 | `06.Settings/Settings` | RP2040 / RP2350 | 設定を持つ治具: ピンの呼び名、空きの状態、使わないピン、素通し（target のコンソールを probe の口に）。flash に名前で保存 |
 | `Tools/SwdPinSurvey` | RP2040 / RP2350 | 立ち上げの道具（Serial に文字で出す。OEP ではない）: どのピンが debug port か |
 
