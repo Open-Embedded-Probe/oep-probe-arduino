@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) docs/guide capture: streaming through ch32rv's broker measured on the P4X (20 s, 4 lines): alone no loss up to
+  35 MB/s and drops at 40; beside a dmseq console no loss at 30 and 26.7 MB/s, drops from 32.
+- (JA) docs/guide の capture: ch32rv の broker 越しの流し続けを P4X で測った（20 秒、4 本）。ほかの通信なしは 35 MB/s まで欠落なし、
+  40 で落とす。dmseq のコンソールと同時は 30 と 26.7 MB/s で欠落なし、32 から落とす。
 - (EN) docs/guide capture: the sample spacing measured (a crystal-driven square from a CH32V103 on HSE, captured on the
   P4X, rising edges fitted to a grid with WireSkein): whole-divider rates even (half a sample plus under 1 ns),
   fractional-divider rates not (half a sample plus 2 to 5.5 ns at 60-120 MHz); `actual_rate` is the mean.

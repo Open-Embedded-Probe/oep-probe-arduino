@@ -66,6 +66,7 @@ A rate above the limit is not refused: the probe captures at the nearest rate wi
 | One-shot (with a trigger) | 100 MB/s: 100 MHz at 8 lines, 50 MHz at 16 (160 MHz up to 4) | the first capture after a boot kept 110 MB/s 3 of 3 and stopped part way at 120 MB/s 3 of 3; later captures keep 200 MB/s |
 | Repeat | the one-shot's limit does not apply | no limit checked |
 | Streaming (HS USB, enough send stages) | 40 MB/s: 160 MHz up to 2 lines, 80 MHz at 4, 40 MHz at 8, 20 MHz at 16 | no loss at 2 lines 160 MHz, 4 lines 80 / 60 / 40 MHz (10 s), 8 lines 40 MHz (30 s, P4X) |
+| Streaming (through ch32rv's broker, P4X) | measured (20 s, 4 lines) | nothing else: no loss up to 35 MB/s (70 MHz), segments dropped at 40 MB/s (80 MHz at 3 or 4 lines). With a dmseq console: no loss at 30 MB/s (60 MHz) and 26.7 MB/s (53.3 MHz), 32 MB/s (64 MHz) dropped once in 2, 35 MB/s every time |
 | Streaming (little internal RAM, small send stages) | 36 MB/s: 36 MHz at 8 lines | no loss at 8 lines 36 MHz (30 s); about 30 % lost at 40 MHz |
 | Streaming (a route without send stages, or not enough internal RAM) | 8.5 MB/s: 8.42 MHz at 8 lines | no loss at 8 lines 8.42 MHz; 11 % lost at 16 MHz |
 | Streaming with per-line resolution (below) | width raised to 8, 13.4 MB/s: 13.3 MHz | not checked (a value from the worst case) |
