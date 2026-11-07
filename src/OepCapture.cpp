@@ -480,7 +480,7 @@ void LogicCapture::emitBlocks(const uint8_t *in, uint32_t blocks) {
     uint8_t *at = stage_[stage_cur_] + kPushHead + stage_fill_;
     const uint32_t t0 = esp_cpu_get_cycle_count();
     size_t made = 0;
-    if (n >= 2 && produced_ - chunk_end_ > kShareLag) {   // behind: core 1 takes blocks too
+    if (n >= 2 && share_task_ && produced_ - chunk_end_ > kShareLag) {   // behind: core 1 takes blocks too
       made = encodeShared(in, n, at);
       encoder_.follow(blocks::Encoder::sampleOf(plan_, in + static_cast<size_t>(n - 1) * in_bytes, L - 1));
     } else {
@@ -526,7 +526,7 @@ void LogicCapture::emitBlock(uint32_t samples) {
 // Blocks shared with core 1 (see encoder1_): the job published, both cores claim blocks until none is left, the harvest
 // then waits for the block core 1 holds. -> the bytes made (the blocks' sizes are fixed: block k at k x its size).
 size_t LogicCapture::encodeShared(const uint8_t *in, uint32_t blocks, uint8_t *out) {
-  if (!share_task_) xTaskCreatePinnedToCore(shareTask, "oep_share", 3072, this, 3, &share_task_, 1);
+  if (!share_task_) return 0;   // made at the start (startRepeat)
   while (busy2_.load()) {}   // core 1 off the last job (it found it empty)
   job_in_ = in;
   job_out_ = out;
@@ -2089,6 +2089,10 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
+  // format 1: core 1's encoder task made now, not when the harvest first falls behind (making a task then took longer
+  // than a 64 KiB ring lasts at 80 MB/s)
+  if (format_ == cap::kDataFormatLogicBlocks && !share_task_)
+    xTaskCreatePinnedToCore(shareTask, "oep_share", 3072, this, 3, &share_task_, 1);
   if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, kHarvestCore) != pdPASS) {
     harvesting_ = false;
     return failed();
