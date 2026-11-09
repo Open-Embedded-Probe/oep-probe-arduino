@@ -259,7 +259,6 @@ describe は VID:PID について何も宣言しません（core §7.5）。host
 - `Arduino.h` は `word(...)` を macro にしています。`word` という名前の関数や lambda は引数をそのまま返します。
 - ESP32-P4 で `RvswdPhy::begin` の後に RVSWD のピンへ `pinMode` / `digitalWrite` を使うと、dedicated GPIO の束から外れて戻り
   ません（chip の reset が要る）。PHY とピンの表はこれを避けています（`releaseQuiet`）。自分のコードでも避けてください。
-- `build_opt.h` のあるスケッチ（P4 の HS vendor の direct build）は、それを変えたら `--clean` でビルドします。
 - `handle()` や `loop()` で止まらないこと。poll しなくなった probe は答えなくなり、host は時間切れになります。
 - debug の線が忙しいとき（コンソールの読み取り、flash の書き込み）だけ壊れる fixture は、CPU より線のエッジを先に疑います。
   線が休んでいるとき（コンソールを外す）と忙しいときで試し、まず出力の強さを見ます。直ったかは前後を同じ手順で測り、arm した

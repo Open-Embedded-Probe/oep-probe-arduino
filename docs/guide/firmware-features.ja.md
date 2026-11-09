@@ -88,7 +88,6 @@ void oepUserLoop() {
   `.cpp` をタブで足します（保存したスケッチは、入れたライブラリを使います）。
 - **arduino-cli**：`OepProbe` のフォルダを写して `.cpp` を足し、写した `sketch.yaml` の `libraries: - dir:` をこのライブラリの
   場所に直します（元は `../../..`）。そのうえで `arduino-cli compile --profile <profile> <フォルダ>` を実行します。
-  ESP32-P4 は `--clean` を付けます（`build_opt.h`）。
 - 大きさに気を付けてください。CH32X035 の 62 KiB は既定の構成でほぼ埋まっています。
   何かを外して空けてください。
 

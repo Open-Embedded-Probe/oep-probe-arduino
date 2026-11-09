@@ -87,8 +87,7 @@ An example: [extras/LibraryTest](../../extras/LibraryTest/README.md) runs a libr
 - **Arduino IDE**: open `File > Examples > OpenEmbeddedProbe > Firmware > OepProbe`, save it under a name of yours, then
   add your `.cpp` in a new tab (the saved sketch uses the installed library).
 - **arduino-cli**: copy the `OepProbe` folder, add your `.cpp`, point the copied `sketch.yaml`'s `libraries: - dir:` at this
-  library (it is `../../..`), then `arduino-cli compile --profile <profile> <folder>`. On the ESP32-P4 add `--clean`
-  (`build_opt.h`).
+  library (it is `../../..`), then `arduino-cli compile --profile <profile> <folder>`.
 - Mind the size: the CH32X035's 62 KiB is nearly full with the default set. Leave something out
   to make room.
 

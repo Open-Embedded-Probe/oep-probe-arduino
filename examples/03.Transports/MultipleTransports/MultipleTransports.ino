@@ -13,8 +13,8 @@
 // the probe one way knows the others. The two serial ports carry OEP frames as 0x00 <COBS> 0x00; what else they carry
 // outside the frames is their bind (06.Settings/Settings). Vendor bulk and HID carry length-prefixed messages.
 //
-// The HS vendor bulk interface is written directly (build_opt.h: CFG_TUD_VENDOR_TXRX_BUFFERED=0 and friends; compile
-// with --clean after changing it): oep::DirectBulkStream hands whole frames to the USB stack. The HS device is the
+// The HS vendor bulk interface is written directly: oep::DirectBulkStream hands whole frames to the USB stack
+// (EspUsbDevice's borrowed transfers). The HS device is the
 // project's VID:PID 1209:4F45 (registry usb; PID-USE.md) with a serial number of the chip's MAC (the unit_id, how a host
 // finds a probe named by it, transports §3); its iProduct is a name for people. USB-Serial/JTAG keeps the chip's fixed
 // ID: a host reaches that port by the user choosing it.
@@ -31,8 +31,8 @@
 #include <OepPlatform.h>
 #include "UsbStreams.h"
 
-// The HS device's functions are created before it starts; interface numbers follow the class order: HID 0, vendor 1,
-// CDC 2-3.
+// The HS device's functions are created before it starts; interface numbers: HID first (0), then the others in the order
+// they are created: vendor 1, CDC 2-3.
 static EspUsbDevice usbDevice;
 static EspUsbDeviceVendor vendor(usbDevice);
 static oep::DirectBulkStream bulk(vendor);
@@ -80,8 +80,8 @@ void setup() {
   usb.product = "OEP multiple transports";   // a name for people; no host identifies the probe by it
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
+  bulk.begin();   // before the device starts: its callbacks are registered while it is stopped
   usbDevice.begin(usb);
-  bulk.begin();
 
   // transports 1-3 (0 is the endpoint's own): stream, receive buffer, kind, USB interface, and whether to flush after a
   // burst of results (streams that hold bytes until a packet fills: HID, CDC)

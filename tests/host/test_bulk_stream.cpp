@@ -91,6 +91,20 @@ int main() {
     std::vector<uint8_t> fills;
     CHECK(whole(v, fills) && fills.size() == 1 && s.dropped() == 0);
   }
+  {   // the vendor receives in callback mode; a result ends the host's transfer (a whole number of packets too), a
+      // queued interface's data does not
+    EspUsbDeviceVendor v;
+    g_vendor = &v;
+    oep::DirectBulkStream s(v);
+    CHECK(s.begin());
+    CHECK(v.config.rxMode == EspUsbBulkRxMode::Callback && v.config.rxCapacity == 0);
+    frame(s, 510, 6);   // 512 bytes: one whole packet
+    s.flush();
+    static const uint8_t data[64] = {};
+    CHECK(s.queueData(data, sizeof data, nullptr, nullptr));
+    for (int k = 0; k < 4 && v.in_flight; ++k) v.complete();
+    CHECK(v.sent.size() == 2 && v.sent[0].size() == 512 && v.ended[0] && !v.ended[1]);
+  }
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;
 }

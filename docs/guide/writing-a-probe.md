@@ -276,7 +276,6 @@ project's VID:PID, by the unit id it was given, or by the port the user chose (t
 - `Arduino.h` makes `word(...)` a macro: a function or lambda named `word` returns its argument.
 - On the ESP32-P4, `pinMode` / `digitalWrite` on RVSWD pins after `RvswdPhy::begin` take them out of the dedicated GPIO
   bundle for good (a chip reset is needed). The PHY and the pin table avoid it (`releaseQuiet`); your code must too.
-- `build_opt.h` sketches (the P4's direct HS vendor build) are built with `--clean` after it changes.
 - Never block in `handle()` or `loop()`: a probe that stops polling stops answering, and the host times out.
 - A fixture that fails only while the debug wire is busy (the console read, a flash write) is more likely the wire's
   edges than the CPU: test it with the wire idle (detach the console) and with the wire busy, and look at the drive

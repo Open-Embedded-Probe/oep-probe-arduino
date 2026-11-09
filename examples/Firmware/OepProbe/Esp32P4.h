@@ -47,7 +47,6 @@
 #include <esp_ota_ops.h>
 #include <soc/usb_serial_jtag_reg.h>
 #include <EspUsbDevice.h>
-#include <device/usbd.h>   // tud_disconnect (EspUsbDevice's TinyUSB)
 
 #include <OepAnalog.h>
 #include <OepBind.h>
@@ -101,7 +100,8 @@ static const P4FirmwareIdentity kFirmwareIdentity
     };
 
 // The HS functions with what a host tells them apart by (transports §3), each keeping the interface number the device
-// gave it as it built the descriptors (in usbDevice.begin: the class order, HID, vendor, CDC, DFU, of those in)
+// gave it as it built the descriptors (in usbDevice.begin: the class order, HID, vendor, CDC, DFU, of those in). The
+// device asks each for its descriptor twice, first with no buffer to measure it.
 // The vendor bulk function with OEP's subclass / protocol in its interface descriptor.
 class OepVendor final : public EspUsbDeviceVendor {
  public:
@@ -109,7 +109,7 @@ class OepVendor final : public EspUsbDeviceVendor {
   uint16_t configurationDescriptor(uint8_t *dst, uint8_t interfaceNumber, uint8_t endpointNumber, uint16_t endpointSize) override {
     number = interfaceNumber;
     const uint16_t n = EspUsbDeviceVendor::configurationDescriptor(dst, interfaceNumber, endpointNumber, endpointSize);
-    if (n >= 9) { dst[6] = oep::reg::kUsbVendorBulkSubclass; dst[7] = oep::reg::kUsbVendorBulkProtocol; }   // bInterfaceSubClass, bInterfaceProtocol
+    if (dst && n >= 9) { dst[6] = oep::reg::kUsbVendorBulkSubclass; dst[7] = oep::reg::kUsbVendorBulkProtocol; }   // bInterfaceSubClass, bInterfaceProtocol
     return n;
   }
   uint8_t number = 0xff;
@@ -202,16 +202,18 @@ static oep::LogicCapture *captureIn = nullptr;
 static oep::AnalogCapture *analogIn = nullptr;
 static oep::TargetRiscvDm *riscvDmIn = nullptr;
 
-// The vendor bulk port, with the direct build's zero-copy path: a capture's pushes go out as whole stages through
+// The vendor bulk port, with its zero-copy path (borrowed IN transfers): a capture's pushes go out as whole stages through
 // writeDirect while its subscriber came in on the vendor port (without it every push went through the loop, one max_frame
 // at a time: 5-7 MB/s on the P4X, 2026-10-20). The first transport (the one a DirectTransport belongs to).
 static oep::Slot<OepVendor> vendor;
 static oep::Slot<oep::DirectBulkStream> bulk;
 void oepAddBulk() {
   bulk.make(vendor.make(usbDevice));
+  static bool direct = false;
+  direct = bulk->begin();   // before the device starts: its callbacks are registered while it is stopped
   afterUsb.add([] {
     endpoint.addTransport(*bulk, frameBuffer(kRxFrame), kRxFrame, oep::Endpoint::kVendorBulk, vendor->number, true);
-    if (bulk->begin()) endpoint.setDirect(&*bulk);
+    if (direct) endpoint.setDirect(&*bulk);
   });
 }
 
@@ -285,15 +287,19 @@ static bool compatibleDfuImage() {
 static void restartAfterDfu() {
   if (!dfuDone || millis() - dfuDoneMs < kDfuStatusMs) return;
   oep::BootGuard::planned();
-  tud_disconnect();
+  usbDevice.end();   // off the bus: the host sees an unplug
   delay(kDfuDetachMs);
   esp_restart();
 }
 
 void oepAddDfu() {
   static oep::Slot<EspUsbDeviceDfu> dfu;
-  dfu.make(usbDevice, EspUsbDeviceDfuMode::Download, "OEP probe firmware").restartWhenComplete(false);   // restartAfterDfu, from loop()
-  dfu->onComplete([]() {   // the usbd task: the image verified, the host's last GETSTATUS still to answer
+  dfu.make(usbDevice, EspUsbDeviceDfuMode::Download, "OEP probe firmware");
+  EspUsbDfuConfig c = dfu->configuration();
+  c.transferBytes = 4096;   // the block dfu-util sends (4 KiB: a flash sector a block)
+  dfu->configure(c);
+  dfu->restartWhenComplete(false);   // restartAfterDfu, from loop()
+  dfu->onComplete([]() {   // the USB worker: the image verified, the host's last GETSTATUS still to answer
     if (!compatibleDfuImage()) return false;
     dfuDoneMs = millis();
     dfuDone = true;
@@ -561,7 +567,7 @@ __attribute__((weak)) void oepWithMemo() { oepAddMemo(); }
 static constexpr uint32_t kRestartMaxMs = 3000;
 static void restartProbe() {
   oep::BootGuard::planned();
-  tud_disconnect();
+  usbDevice.end();   // off the bus: the host sees an unplug
   delay(oep::kRestartDetachMs);
   esp_restart();
 }

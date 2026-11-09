@@ -31,7 +31,7 @@ testpaths に入れないので、`uv run pytest` では集めません。流す
 - フォルダはプラグインのスケッチのフォルダです。配布の firmware を試すときは、`.ino` に
   `#include <../examples/Firmware/OepProbe/OepProbe.ino>` だけを書きます（ライブラリの src がインクルードのパスにあり、
   firmware の中のヘッダは元の場所から見つかります）。`sketch.yaml` は必要な profile だけを、配布の firmware と同じに書きます。
-- インクルードできない `build_opt.h` は、配布の firmware と同じものを置きます。`tests/unit/test_oneshot_sketches.py` が
+- インクルードできない `build_opt.h` は、配布の firmware と同じにします（firmware に無ければ置きません）。`tests/unit/test_oneshot_sketches.py` が
   同じかを確かめます。
 - 試験ファイルの先頭に、使う機材、配線、流し方を書きます。
 

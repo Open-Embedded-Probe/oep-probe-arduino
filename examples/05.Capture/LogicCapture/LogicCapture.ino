@@ -6,9 +6,9 @@
 // 40 Msps, 16 ch at 20 Msps; one-shot: 160 Msps, with a trigger 100 MB/s (docs/guide/capture.md, the speeds table).
 //
 // How it goes that fast:
-//   - OEP runs on the HS OTG vendor bulk interface (EspUsbDevice) in a direct build (build_opt.h:
-//     CFG_TUD_VENDOR_TXRX_BUFFERED=0; compile with --clean): results go through oep::DirectBulkStream, and a streaming
-//     capture's pushes go zero-copy from the PARLIO DMA buffers through the same transport.
+//   - OEP runs on the HS OTG vendor bulk interface (EspUsbDevice, its borrowed transfers): results go through
+//     oep::DirectBulkStream, and a streaming capture's pushes go zero-copy from the PARLIO DMA buffers through the
+//     same transport.
 //   - 16 KiB frames (confirm's max_frame): one bulk transfer per push.
 //
 // With nothing wired, io.github.open-embedded-probe.test-signal (this example's own interface, TestSignal.h) puts an
@@ -64,8 +64,8 @@ void setup() {
 #endif
   config.serialNumber = serial_;
   config.controller = EspUsbController::HighSpeed;
+  const bool direct = bulk.begin();   // before the device starts; results and pushes then go through writeDirect()
   const bool ok = usbDevice.begin(config);
-  const bool direct = bulk.begin();   // needs the direct build; results and pushes then go through writeDirect()
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setPushQueue(4096);
   if (direct) endpoint.setDirect(&bulk);

@@ -256,11 +256,8 @@ The short version; [the guide](docs/guide/getting-started.md) has more (GPIO / U
 - Arduino.h makes `word(...)` a macro for `makeWord(...)`: a lambda or function named `word` returns its argument.
 - On the ESP32-P4, `pinMode` / `digitalWrite` on the same pins after `RvswdPhy::begin` takes them out of the dedicated GPIO
   bundle for good (a chip reset is needed).
-- Sketches with a direct build (`build_opt.h`, EspUsbDevice's vendor written directly) are built with `--clean` after
-  `build_opt.h` changes.
-- Vendor bulk OUT is received a packet at a time (`CFG_TUD_VENDOR_RX_NEED_ZLP=0`). Receiving 16 KiB transfers ended by a
-  ZLP (`=1`) delayed, on the P4, the completion of a request that ends on a 512-byte boundary (a 1024-byte write_block)
-  until the next OUT, and the probe stopped answering for seconds.
+- Vendor bulk OUT is received a packet at a time (EspUsbDevice's callback receive). Waiting for the end of a transfer
+  (a ZLP) would hold back a request that ends on a 512-byte boundary (a 1024-byte write_block) until the next OUT.
 
 ## Releases
 

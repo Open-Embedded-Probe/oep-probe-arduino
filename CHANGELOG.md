@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X: EspUsbDevice 3.0.0 (its own USB stack, no TinyUSB). The sketches' build_opt.h are gone (the
+  vendor port's borrowed transfers need no build flag; the DFU block, 4 KiB, is set with configure()); a P4 build no
+  longer needs --clean. `oep::DirectBulkStream::begin()` is called before the device's begin() (callbacks are
+  registered while it is stopped), receives in callback mode, and ends a result's transfer with the library's
+  EndWithShortPacket (no more last byte sent alone). The HS device leaves the bus before a restart with
+  `EspUsbDevice::end()` (was tud_disconnect). The CDC transport's free room is the port's writeAvailable().
+- (JA) ESP32-P4 / P4X: EspUsbDevice 3.0.0 にした（ライブラリ自身の USB スタック。TinyUSB を使わない）。スケッチの build_opt.h は
+  無くした（vendor の口の借用転送にビルドの指定は要らない。DFU の block の 4 KiB は configure() で決める）。P4 のビルドに --clean は
+  要らない。`oep::DirectBulkStream::begin()` は device の begin() の前に呼ぶ（callback は止まっている間に登録する）。受信は callback
+  の形で、結果の転送はライブラリの EndWithShortPacket で終える（最後の 1 byte を別に送ることはしない）。再起動の前に HS の device は
+  `EspUsbDevice::end()` で bus から外れる（以前は tud_disconnect）。CDC の経路の空きは、その口の writeAvailable()。
 
 ## 0.0.52
 - (EN) ESP32-P4 / P4X streaming: the DMA ring is the internal 64 KiB one whatever PSRAM there is (the PSRAM 1 MiB ring

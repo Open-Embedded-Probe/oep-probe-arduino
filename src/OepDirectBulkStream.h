@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Stream + zero-copy transport over an EspUsbDevice vendor bulk interface in a direct build
-// (-DCFG_TUD_VENDOR_TXRX_BUFFERED=0 in the sketch's build_opt.h, compiled with --clean). One IN transfer is in flight
-// at a time (writeDirect); the next is armed from the completion callback, so a stream of full buffers runs gapless
-// (wch-protocols E110 / E116 / E117). Results are written into one of two 64-aligned buffers and sent on flush();
-// they go before queued data. The direct build sends no zero-length packet, so a result whose length is a whole number
-// of 512-byte packets is sent as two transfers (the last byte alone) to end the host's transfer.
+// Stream + zero-copy transport over an EspUsbDevice (3.x) vendor bulk interface: its borrowed IN transfers
+// (writeDirect) and its packets received in callback mode. One IN transfer is in flight at a time; the next is armed
+// from the completion callback, so a stream of full buffers runs gapless (wch-protocols E110 / E116 / E117). Results
+// are written into one of two 64-aligned buffers and sent on flush(); they go before queued data. A result ends the
+// host's transfer (a zero-length packet after a whole number of packets); an interface's data does not.
 #pragma once
 
 #include <Arduino.h>
@@ -24,25 +23,28 @@ namespace oep {
 
 class DirectBulkStream final : public Stream, public DirectTransport {
  public:
-  // kRxBytes: two whole max_frame requests; the usbd task can land a frame faster than loop() reads it byte by byte
-  // kResultBytes: one buffer holds the largest frame whole (16 KiB + its length) with 64 bytes spare for the tail packet
-  static constexpr size_t kResultBytes = 16384 + 128, kRxBytes = 32768, kQueue = 32, kPacket = 512;
+  // kRxBytes: two whole max_frame requests; the USB worker can land a frame faster than loop() reads it byte by byte
+  // kResultBytes: one buffer holds the largest frame whole (16 KiB + its length)
+  static constexpr size_t kResultBytes = 16384 + 128, kRxBytes = 32768, kQueue = 32;
   // A result waits this long for a buffer the host has taken (IN); after it, the result is dropped whole.
   static constexpr uint32_t kWaitMs = 2000;
 
   explicit DirectBulkStream(EspUsbDeviceVendor &vendor) : vendor_(vendor) {}
 
-  // After the device's begin(): buffers and callbacks. false: not a direct build, or no memory.
+  // Before the device's begin() (its callbacks are registered while it is stopped): the vendor's receive mode, the
+  // buffers and the callbacks. false: borrowed transfers unsupported, or no memory.
   bool begin() {
     if (!EspUsbDeviceVendor::directWriteSupported()) return false;
+    EspUsbVendorConfig c = vendor_.configuration();
+    c.rxMode = EspUsbBulkRxMode::Callback;   // each packet straight into rx_ (callback mode has no ring of its own)
+    c.rxCapacity = 0;
+    if (vendor_.configure(c) != ESP_OK) return false;
     for (int i = 0; i < 2; ++i) {
       result_[i] = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kResultBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-      tail_[i] = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, 64, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-      if (!result_[i] || !tail_[i]) return false;
+      if (!result_[i]) return false;
     }
-    vendor_.onRxData([this](const uint8_t *data, size_t length) { received(data, length); });
-    vendor_.onTxComplete([this](size_t) { completed(); });
-    return true;
+    return vendor_.onRxData([this](const uint8_t *data, size_t length) { received(data, length); }) == ESP_OK &&
+           vendor_.onDirectTxComplete([this](const EspUsbTransferResult &) { completed(); }) == ESP_OK;
   }
 
   // Stream (the endpoint's side)
@@ -105,13 +107,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
     if (n == 0) return;
     busy_[i] = true;
     current_ ^= 1;
-    if (n % kPacket == 0) {   // end the host's transfer with a short packet: the last byte goes alone
-      tail_[i][0] = result_[i][n - 1];
-      queue(true, {result_[i], n - 1, nullptr, nullptr});
-      queue(true, {tail_[i], 1, resultSent, this});
-    } else {
-      queue(true, {result_[i], n, resultSent, this});
-    }
+    queue(true, {result_[i], n, resultSent, this, true});
     kick();
   }
   int availableForWrite() override {
@@ -120,7 +116,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
 
   // DirectTransport (an interface's data, from any task)
   bool queueData(const uint8_t *buffer, size_t length, Done done, void *context) override {
-    if (!queue(false, {buffer, length, done, context})) return false;
+    if (!queue(false, {buffer, length, done, context, false})) return false;
     kick();
     return true;
   }
@@ -129,9 +125,9 @@ class DirectBulkStream final : public Stream, public DirectTransport {
   uint32_t refused() const { return refused_; }
 
  private:
-  struct Entry { const uint8_t *buffer; size_t length; Done done; void *context; };
+  struct Entry { const uint8_t *buffer; size_t length; Done done; void *context; bool ends; };   // ends: the host's transfer
   EspUsbDeviceVendor &vendor_;
-  uint8_t *result_[2] = {}, *tail_[2] = {};
+  uint8_t *result_[2] = {};
   volatile size_t length_[2] = {};
   volatile bool busy_[2] = {};
   volatile int current_ = 0;
@@ -147,7 +143,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
   static void resultSent(void *context, const uint8_t *buffer) {
     auto *self = static_cast<DirectBulkStream *>(context);
     for (int i = 0; i < 2; ++i)
-      if (buffer == self->result_[i] || buffer == self->tail_[i]) { self->length_[i] = 0; self->busy_[i] = false; }
+      if (buffer == self->result_[i]) { self->length_[i] = 0; self->busy_[i] = false; }
     self->stalled_ = false;   // the host takes IN again
   }
   // Once a frame was dropped (the host stopped taking IN), later ones are dropped at once until a transfer completes:
@@ -206,7 +202,9 @@ class DirectBulkStream final : public Stream, public DirectTransport {
       in_flight_ = true;
       sending_ = e;
       portEXIT_CRITICAL(&mux_);
-      if (vendor_.writeDirect(e.buffer, e.length)) return;
+      if (vendor_.writeDirect(e.buffer, e.length, e.ends ? EspUsbTransferTermination::EndWithShortPacket
+                                                         : EspUsbTransferTermination::Continue))
+        return;
       refused_ = refused_ + 1;   // not mounted, or a contract mistake: the buffer is given back unsent
       portENTER_CRITICAL(&mux_);
       in_flight_ = false;
@@ -214,7 +212,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
       if (e.done) e.done(e.context, e.buffer);
     }
   }
-  void completed() {   // usbd task
+  void completed() {   // the USB worker: the buffer is back (sent, or cancelled by a reset or the device's end)
     portENTER_CRITICAL(&mux_);
     const Entry e = sending_;
     in_flight_ = false;
@@ -222,7 +220,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
     if (e.done) e.done(e.context, e.buffer);
     kick();
   }
-  void received(const uint8_t *data, size_t length) {   // usbd task; a full ring drops (requests are small)
+  void received(const uint8_t *data, size_t length) {   // the USB worker; a full ring drops (requests are small)
     for (size_t i = 0; i < length; ++i) {
       const size_t next = (rx_head_ + 1) & (kRxBytes - 1);
       if (next == rx_tail_) return;

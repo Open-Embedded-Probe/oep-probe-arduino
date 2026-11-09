@@ -600,8 +600,8 @@ bool LogicCapture::takeStage() {
 
 // Hand the current stage to the transport as one push frame (or give it back if nobody may receive it now). A full
 // stage is a whole number of 512-byte packets and the host's read runs on into the next one. A partial one (sent for
-// max_delay_ms, or at stop) that happens to be whole packets would leave the host's read open (the direct build sends
-// no zero-length packet), so a frame of length 0 (the transport's keepalive, 2 bytes: a short packet) follows it; so
+// max_delay_ms, or at stop) that happens to be whole packets would leave the host's read open (the stream's transfers
+// end with no zero-length packet), so a frame of length 0 (the transport's keepalive, 2 bytes: a short packet) follows it; so
 // does the stream's end (closeTransfer).
 // Every frame is one segment (capture §2.2: the probe's own cut, at a sample and a byte boundary) and carries it
 // (§3.4 segment_info): its position, its samples, its start - the start's time plus its samples at the rate (not the

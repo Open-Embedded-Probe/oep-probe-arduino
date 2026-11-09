@@ -6,11 +6,10 @@
 #pragma once
 #include <EspUsbDevice.h>
 #include <OepFrame.h>
-#include <class/cdc/cdc_device.h>   // EspUsbDevice's TinyUSB: the CDC FIFO's free room
 
 class CdcStream final : public Stream {
  public:
-  explicit CdcStream(EspUsbDeviceCdcSerial &p) : p_(p) {}
+  explicit CdcStream(EspUsbDeviceCdcSerial &p) : p_(p) { p_.setTxTimeoutMs(0); }   // write() waits here, not in the port
   int available() override { return p_.available(); }
   int read() override { return p_.read(); }
   size_t readBytes(char *b, size_t n) override { return p_.read(reinterpret_cast<uint8_t *>(b), n); }
@@ -24,9 +23,9 @@ class CdcStream final : public Stream {
     return done;
   }
   void flush() override { p_.flush(); }
-  // The FIFO's real free room: the endpoint writes raw bytes only into it, so they never wait (a port that is open but
+  // The ring's real free room: the endpoint writes raw bytes only into it, so they never wait (a port that is open but
   // not read used to take 200 ms per 64-byte chunk, and the loop stopped for seconds).
-  int availableForWrite() override { return p_.connected() ? static_cast<int>(tud_cdc_n_write_available(p_.port())) : 0; }
+  int availableForWrite() override { return p_.connected() ? static_cast<int>(p_.writeAvailable()) : 0; }
  private:
   EspUsbDeviceCdcSerial &p_;
 };
