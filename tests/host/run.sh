@@ -44,6 +44,10 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 # HID's output reports: a count over what a report carries drops it and the reports up to the pause after
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-hid-count" "$here/test_hid_count.cpp"
 "$out-hid-count"
+# oep::SimpleInterface: registration, the describe's op_name / op_field, the request's fields checked, the answer packed
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-simple" "$here/test_simple_interface.cpp" \
+  "$src/OepSimpleInterface.cpp"
+"$out-simple"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_SPI_SLAVE -DOEP_HOST_FAKE_DRIVE -I"$here/shim" -I"$src" -o "$out-spi" \
   "$here/test_spi_target.cpp" "$src/OepP4SpiTarget.cpp"
 "$out-spi"

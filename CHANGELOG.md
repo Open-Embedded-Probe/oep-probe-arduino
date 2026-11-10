@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `oep::SimpleInterface` (OepSimpleInterface.h): an interface of the sketch's own from functions -
+  `op(code, name, {request fields}, {answer fields}, fn, flags)` with the field types u8-u64, i8-i64, boolean, bytes,
+  text and lists of the number types. It shows each op's name and fields in its describe (oep-spec core §7.4
+  op_name / op_field, draft e392ad5), checks a request's fields before the function runs (short or a bool not 0 / 1:
+  malformed; the tail after them by core §2.3), packs the answer in the registered order (another one is said as
+  failed), and gives `fail(code, message)`, `unsupported()`, `busy()` and `kLockFree`. A host calls it by name with
+  oep-client-python's `oep call`. Registry and vectors synced from oep-spec e392ad5.
+- (JA) `oep::SimpleInterface`（OepSimpleInterface.h）: 関数からスケッチ自身のインターフェースを作る。`op(番号, 名前, {要求の欄},
+  {答えの欄}, 関数, 印)`。欄の型は u8〜u64、i8〜i64、boolean、bytes、text と数の型の並び。各 op の名前と欄を describe に出し
+  （oep-spec core §7.4 op_name / op_field、案 e392ad5）、関数の前に要求の欄を確かめ（短い、bool が 0 / 1 でない: malformed。欄の後ろは
+  core §2.3）、答えを登録の順に詰める（違えば failed）。`fail(番号, 文)`、`unsupported()`、`busy()`、`kLockFree`。host は
+  oep-client-python の `oep call` で名前で呼べる。registry とベクタは oep-spec e392ad5 に合わせた。
 - (EN) The released firmware is a library part: `#include <OepFirmware.h>`, `oep::firmware.begin()` in setup() and
   `oep::firmware.loop()` in loop() (examples/Firmware/OepProbe is that sketch). A newer library brings a newer firmware;
   no sketch folder is copied any more. The features are `begin<F>()`'s compile-time bits - `oep::kDefaults` (the
