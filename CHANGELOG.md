@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) I2C controller (the GPIO-timed one): SCL rises at least a quarter period after SDA changes as well as half a
+  period after SCL fell. The code between SCL's fall and SDA's change is not all in internal RAM (the transfer's loop
+  between the START and the first byte, between bytes); an interrupt or a cache miss there held SDA up to SCL's rise
+  (seen on a P4 at 100 kHz: the first bit after a START, SDA rising in the same 2 MHz sample as SCL). Timing without
+  such a delay is unchanged.
+- (JA) I2C の controller（GPIO で時間を計る方）: SCL は、SCL が下がってから半周期に加えて、SDA が変わってから 4 分の 1 周期は
+  空けてから上げる。SCL が下がってから SDA を変えるまでの間のコードは全部が内部 RAM にはない（START から最初のバイト、バイトと
+  バイトの間の transfer のループ）ので、そこでの割り込みやキャッシュの取り直しで SDA が SCL の立ち上がりまで遅れることがあった
+  （P4 の 100 kHz で、START の後の最初のビットの SDA が、2 MHz の取り込みで SCL と同じサンプルで上がった）。遅れが無いときの
+  時間は変わらない。
 - (EN) ESP32-P4 / P4X: usb.transports (oep-spec transports §3.1, draft): the HS device's set of OEP transports is a
   setting - `bulk-hid-cdc` (the default), `bulk-hid`, `bulk-hid-cdc2`, `bulk-cdc3` - read from the save before the
   device starts and in effect from the next restart (`oep settings set --save PROBE core usb.transports=bulk-hid-cdc2`).

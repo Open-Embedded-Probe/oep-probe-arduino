@@ -175,6 +175,16 @@ void OEP_I2C_TIMED I2cController::waitHalf() {
   while (static_cast<int32_t>(ticks() - due) < 0) {}
 }
 
+// SDA changed while SCL is low, before SCL rises: SCL rises half a period after it fell, and at least a quarter period
+// after SDA changed. The code between SCL's fall and here is not all in internal RAM (the transfer's loop between bytes);
+// an interrupt or a cache miss there can hold SDA's change up past the half (seen: the first bit after a START).
+void OEP_I2C_TIMED I2cController::sdaBeforeRise(bool high) {
+  const uint32_t at = ticks();
+  sda(high);
+  const uint32_t due = at + half_ / 2;
+  if (static_cast<int32_t>(due - (edge_ + half_)) > 0) edge_ = due - half_;
+}
+
 void OEP_I2C_TIMED I2cController::sclLow() {
   edge_ = ticks();
   scl(false);
@@ -195,7 +205,7 @@ bool OEP_I2C_TIMED I2cController::sclRelease() {
 
 // SCL low on entry and on return. A 1 the bus does not show while SCL is high: another controller, or a stuck line.
 uint8_t OEP_I2C_TIMED I2cController::bitOut(bool bit) {
-  sda(bit);
+  sdaBeforeRise(bit);
   waitHalf();
   if (!sclRelease()) return kLineStretch;
   if (bit && !sdaHigh()) return kLineBusError;
@@ -205,7 +215,7 @@ uint8_t OEP_I2C_TIMED I2cController::bitOut(bool bit) {
 }
 
 uint8_t OEP_I2C_TIMED I2cController::bitIn(bool &bit) {
-  sda(true);
+  sdaBeforeRise(true);
   waitHalf();
   if (!sclRelease()) return kLineStretch;
   bit = sdaHigh();
@@ -217,7 +227,7 @@ uint8_t OEP_I2C_TIMED I2cController::bitIn(bool &bit) {
 // A START from an idle bus (both lines high), or a repeated START with SCL held low
 uint8_t OEP_I2C_TIMED I2cController::lineStart(bool repeated) {
   if (repeated) {
-    sda(true);
+    sdaBeforeRise(true);
     waitHalf();
     if (!sclRelease()) return kLineStretch;
     waitHalf();
@@ -256,7 +266,7 @@ uint8_t OEP_I2C_TIMED I2cController::lineRead(uint8_t &byte, bool ack) {
 }
 
 void OEP_I2C_TIMED I2cController::lineStop() {
-  sda(false);
+  sdaBeforeRise(false);
   waitHalf();
   sclRelease();   // a target holding SCL past the timeout: SDA rises anyway, the bus let go
   waitHalf();

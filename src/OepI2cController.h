@@ -103,6 +103,7 @@ class I2cController final : public Interface {
   bool sdaHigh() const;
   bool sclHigh() const;
   void waitHalf();
+  void sdaBeforeRise(bool high);
   void sclLow();            // SCL pulled low, its time taken as the write is issued
   bool sclRelease();        // SCL let go and waited high: false, the target held it past the timeout
   uint8_t bitOut(bool bit);
