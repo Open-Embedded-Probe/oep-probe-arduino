@@ -2,10 +2,10 @@
 
 [English](README.md)
 
-配布の firmware（`examples/Firmware/OepProbe`）に足すファイルの例です。試したいライブラリの呼び出しをプローブ自身の上で動かし、
+配布の firmware（`OepFirmware.h`）に足すファイルの例です。試したいライブラリの呼び出しをプローブ自身の上で動かし、
 同じプローブのロジックのキャプチャでその線を取り、コードが書いたログの各行を波形のサンプルに紐付けます。
 
-- `LibraryTest.cpp`: `io.github.example.library-test` を足す（`oepUserSetup`）。op `run`（0x10）でケースを起こしてすぐ答え、
+- `LibraryTest.cpp`: `io.github.example.library-test` を足す（`libraryTestRegister()`: `oep::firmware.onSetup` と `add`）。op `run`（0x10）でケースを起こしてすぐ答え、
   `status`（0x20）で走っているか、終わったか、結果を返す。ケースの中の行は `mark()` で `OepProbeLog.h` のログに入る。
 - `test_library_test.py`: ホストの例（pytest）。SDA / SCL にキャプチャを plan し、START をトリガに start、`run`、`status` で終わりを
   待ち、区画を読み、ログの各行をサンプルに置いて確かめる。短い書き込みと、表示器を模した長い一連の処理（初期化と描画、約 90 ms）。
@@ -31,8 +31,20 @@ status に答え続けます。ケースのコードはふつうの順番どお�
 
 ## 使い方
 
-1. `OepProbe` のフォルダを写し、`LibraryTest.cpp` を足し、写した `sketch.yaml` の `libraries: - dir:` をこのライブラリの場所に
-   直してビルドする（[firmware の機能](../../docs/guide/firmware-features.ja.md) §4）。
+1. 自分のスケッチのフォルダに `LibraryTest.cpp` を置き、`.ino` を次の形にしてビルドする（`sketch.yaml` は
+   [firmware の機能](../../docs/guide/firmware-features.ja.md) §5）。
+
+   ```cpp
+   #include <OepFirmware.h>
+   void libraryTestRegister();
+
+   void setup() {
+     libraryTestRegister();
+     oep::firmware.begin();
+   }
+
+   void loop() { oep::firmware.loop(); }
+   ```
 2. ケースの関数を自分のライブラリの呼び出しに置き換え、マーカーを `mark()` / `markf()` で書く。
 3. ホストで `OEP_LIBTEST_PORT=<port> OEP_LIBTEST_PINS=<sda>,<scl> pytest test_library_test.py`。
 

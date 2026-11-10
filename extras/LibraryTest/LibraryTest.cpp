@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Open Embedded Probe
 
-// Running a library under test on the probe itself, captured as it runs: a file to put beside OepProbe.ino (see README).
+// Running a library under test on the probe itself, captured as it runs: a file to put beside a firmware sketch whose
+// setup() calls libraryTestRegister() before oep::firmware.begin() (see README).
 // The firmware keeps every standard interface (the logic capture among them); this adds io.github.example.library-test:
 //
 //   op 0x10 run     case(u8)  ->  -                           starts the case and answers at once (busy: unavailable)
@@ -19,11 +20,10 @@
 // the logic capture listens to the same pins (a capture only listens, oep-if-capture §1.2). Nothing has to be wired: an
 // address nobody answers still gives START, the address, a NACK and STOP on the lines.
 #include <OepEndpoint.h>
+#include <OepFirmwareParts.h>
 #include <OepPinTable.h>
 #include <OepProbeLog.h>
 #include <Wire.h>
-
-#include "OepFeatures.h"
 
 #if defined(ARDUINO_ARCH_RP2040)
 #include <pico/sync.h>
@@ -223,29 +223,32 @@ LibraryTest libraryTest;
 
 }  // namespace
 
-void oepUserSetup(oep::Endpoint &endpoint, oep::PinTable &pins) {
-  static oep::ProbeLog log(static_cast<uint8_t *>(malloc(kLogBytes)), kLogBytes,
-                           static_cast<oep::PositionStream::Mark *>(malloc(sizeof(oep::PositionStream::Mark) * kLogMarks)),
-                           kLogMarks);
-  log_ = &log;
+// The case interface and its bus, registered with the firmware (called before oep::firmware.begin())
+void libraryTestRegister() {
+  oep::firmware.onSetup([](oep::Endpoint &, oep::PinTable &pins) {
+    static oep::ProbeLog log(
+        static_cast<uint8_t *>(malloc(kLogBytes)), kLogBytes,
+        static_cast<oep::PositionStream::Mark *>(malloc(sizeof(oep::PositionStream::Mark) * kLogMarks)), kLogMarks);
+    log_ = &log;
 #if defined(ARDUINO_ARCH_RP2040)
-  critical_section_init(&logLock);
+    critical_section_init(&logLock);
 #endif
-  pins.claim(kSda, kOwner);   // the bus is the sketch's: no other interface is planned on it (the capture listens)
-  pins.claim(kScl, kOwner);
+    pins.claim(kSda, kOwner);   // the bus is the sketch's: no other interface is planned on it (the capture listens)
+    pins.claim(kScl, kOwner);
 #if defined(ARDUINO_ARCH_RP2040)
-  bus.setSDA(kSda);
-  bus.setSCL(kScl);
-  bus.begin();
+    bus.setSDA(kSda);
+    bus.setSCL(kScl);
+    bus.begin();
 #else
-  bus.begin(kSda, kScl);
+    bus.begin(kSda, kScl);
 #endif
-  bus.setClock(100000);
-  endpoint.add(libraryTest);
+    bus.setClock(100000);
+  });
+  oep::firmware.add(libraryTest);
 }
 
 #if defined(ARDUINO_ARCH_RP2040)
-// The second core: a case when one is asked for (setup1 waits for setup's oepUserSetup: loop1 starts after it)
+// The second core: a case when one is asked for (setup1 waits for setup's begin(): loop1 starts after it)
 void loop1() {
   if (state == kRunning && log_) finish(runCase(current));
 }

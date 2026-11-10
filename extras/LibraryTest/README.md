@@ -2,10 +2,10 @@
 
 [日本語](README.ja.md)
 
-A file to add to the released firmware (`examples/Firmware/OepProbe`): the calls of a library under test run on the probe
+A file to add to the released firmware (`OepFirmware.h`): the calls of a library under test run on the probe
 itself, the same probe's logic capture takes their lines, and every line the code logged is placed at its sample.
 
-- `LibraryTest.cpp`: adds `io.github.example.library-test` (`oepUserSetup`). Op `run` (0x10) starts a case and answers at
+- `LibraryTest.cpp`: adds `io.github.example.library-test` (`libraryTestRegister()`: `oep::firmware.onSetup` and `add`). Op `run` (0x10) starts a case and answers at
   once, `status` (0x20) says whether it runs, is done, and its result; the case writes its lines with `mark()` into the
   log of `OepProbeLog.h`.
 - `test_library_test.py`: the host side (pytest). The capture planned on SDA / SCL, started with START as its trigger,
@@ -35,8 +35,20 @@ Unlike markers sent on a UART, nothing waits for a line to go out and no pin is 
 
 ## Use
 
-1. Copy the `OepProbe` folder, add `LibraryTest.cpp`, point the copy's `sketch.yaml` `libraries: - dir:` at this library
-   and build ([firmware features](../../docs/guide/firmware-features.md) §4).
+1. Put `LibraryTest.cpp` in your sketch's folder, make the `.ino` this and build (`sketch.yaml`:
+   [firmware features](../../docs/guide/firmware-features.md) §5).
+
+   ```cpp
+   #include <OepFirmware.h>
+   void libraryTestRegister();
+
+   void setup() {
+     libraryTestRegister();
+     oep::firmware.begin();
+   }
+
+   void loop() { oep::firmware.loop(); }
+   ```
 2. Replace the cases with your library's calls, and write markers with `mark()` / `markf()`.
 3. On the host: `OEP_LIBTEST_PORT=<port> OEP_LIBTEST_PINS=<sda>,<scl> pytest test_library_test.py`.
 

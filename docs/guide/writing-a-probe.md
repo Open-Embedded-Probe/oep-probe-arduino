@@ -210,10 +210,10 @@ Each source file starts with the spec sections it follows.
   continue xfer on inactive ep" panic). `BootGuard` (`OepBootGuard.h`): `begin()` first in `setup()`, `poll()` in
   `loop()`; it runs the watchdogs, counts fast crash-boots, and after `kSafeAfter` of them in a row `safe()` says to
   call `settings.skipBootAttach()` for that boot. On the RP2 point the SDK's `_exit` and `isr_hardfault` at
-  `BootGuard::crashed()` (`Firmware/OepProbe/Rp2.h`): a panic then resets the chip instead of halting it. A firmware
+  `BootGuard::crashed()` (`src/firmware/Rp2.h`): a panic then resets the chip instead of halting it. A firmware
   update (an ESP32 with bootloader rollback) is taken as working and confirmed as it starts: leave `verifyRollbackLater`
   undefined and the ESP32 core confirms the image before `setup()`, so no later reset goes back to the one before
-  (`Firmware/OepProbe/Esp32P4.h`); the safe boot covers a crash loop the saved settings set off. `BootGuard::lastBoot()`
+  (`src/firmware/Esp32P4.h`); the safe boot covers a crash loop the saved settings set off. `BootGuard::lastBoot()`
   says what ended the boot before when the firmware did not intend it (a crash or a hang and the seconds it was up, a brownout, an update the bootloader did not start; nothing for a reset from outside or a restart on purpose - on the RP2 `crashed()` marks its own reset, so an unmarked watchdog reboot such as picotool's is no crash);
   `Firmware/OepProbe` puts it after the version in fn 0's describe firmware text (`describeCore`'s last argument), e.g.
   `<version> (panic at 12 s)`.
@@ -221,8 +221,8 @@ Each source file starts with the spec sections it follows.
   (interrupts off one frame at a time: SWIO up to `SwioPhy::kIrqOffMaxUs`, RVSWD up to about 1.1 ms at the slowest
   max_speed). On an ESP32 the interrupt fires at `kUartRxFifoFull` (32) bytes of the 128-byte RX FIFO, leaving 480 us at
   2000000; a dual-core ESP32 whose `loop()` runs such a wire puts it on the other core with
-  `uart.setInterruptCore(0)` before `applySaved()` (`Firmware/OepProbe/Esp32P4.h`), unless that core turns its own
-  interrupts off (the classic's sampler: `Esp32.h` keeps it on `loop()`'s core and checks the FIFO against SWIO).
+  `uart.setInterruptCore(0)` before `applySaved()` (`src/firmware/Esp32P4.h`), unless that core turns its own
+  interrupts off (the classic's sampler: `src/firmware/Esp32.h` keeps it on `loop()`'s core and checks the FIFO against SWIO).
   Bytes the UART still drops are marked lost (detail 1 overflow), never left out silently, and the mark is at or before
   the first byte after the gap - never after it: `FixtureUart` places it where the driver tells. ESP32: it takes the
   ESP-IDF driver's events itself, in order, in a task on the interrupt's core (do not give the UART an
@@ -259,7 +259,7 @@ firmware with it: [PID-USE.md](../../PID-USE.md)), and a serial number unique pe
 probes apart and finds a probe named by it). iProduct is free text for people (`OEP probe (ESP32-P4)` in the firmware); no
 host identifies a probe by it. Interfaces outside OEP on the same device, such as the ESP32-P4's in-app DFU, are part of it.
 The vendor bulk interface carries bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45 and a vendor HID says usage page
-0xFF4F, usage 0x45 (transports §3; `Firmware/OepProbe/Esp32P4.h` patches EspUsbDevice's descriptors for that).
+0xFF4F, usage 0x45 (transports §3; `src/firmware/Esp32P4.h` patches EspUsbDevice's descriptors for that).
 describe declares nothing about the VID:PID (core §7.5): a host finds a probe by the
 project's VID:PID, by the unit id it was given, or by the port the user chose (transports §3).
 

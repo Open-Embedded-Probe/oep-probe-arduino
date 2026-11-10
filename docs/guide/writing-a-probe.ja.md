@@ -197,18 +197,18 @@ class Blink final : public oep::Interface {
   USB スタックを落とすことがあります（RP2: TinyUSB 0.18 の "Can't continue xfer on inactive ep" の panic）。`BootGuard`
   （`OepBootGuard.h`）: `setup()` の最初に `begin()`、`loop()` で `poll()`。watchdog を動かし、すぐに落ちた起動を数え、
   `kSafeAfter` 回続いたら `safe()` が真になるので、その起動では `settings.skipBootAttach()` を呼びます。RP2 では SDK の `_exit` と
-  `isr_hardfault` を `BootGuard::crashed()` に向けます（`Firmware/OepProbe/Rp2.h`）。panic で止まらず、チップを reset します。
+  `isr_hardfault` を `BootGuard::crashed()` に向けます（`src/firmware/Rp2.h`）。panic で止まらず、チップを reset します。
   firmware 更新（bootloader の rollback がある ESP32）は動くものとして扱い、起動したときに確かなものにします: `verifyRollbackLater`
   を定義しなければ ESP32 の core が `setup()` の前に image を確定するので、その後のどのリセットでも前には戻りません
-  （`Firmware/OepProbe/Esp32P4.h`）。保存した設定が起こす crash の繰り返しは safe boot が受け持ちます。前の起動が何で終わったか
+  （`src/firmware/Esp32P4.h`）。保存した設定が起こす crash の繰り返しは safe boot が受け持ちます。前の起動が何で終わったか
   （firmware が意図しなかったリセット: 落ちた・止まったときの種類と上がっていた秒数、brownout、bootloader が更新を起動しなかったか。外からのリセットと自分でした再起動は何も言いません。RP2 は `crashed()` が付ける印で自分の crash を外からの watchdog の再起動と分けます）は `BootGuard::lastBoot()` が文字列で言います。
   `Firmware/OepProbe` はそれを fn 0 の describe の firmware の文字列で版の後ろに付けます（`describeCore` の最後の引数。
   例 `<版> (panic at 12 s)`）。
 - fixture の UART は UART の割り込みで受けます。ビットを自分で刻む線のフレームは、その core の割り込みを止めます（フレームごと:
   SWIO は `SwioPhy::kIrqOffMaxUs` まで、RVSWD は最も遅い max_speed で約 1.1 ms まで）。ESP32 では割り込みが 128 byte の RX FIFO の
   `kUartRxFifoFull`（32）byte で起き、2000000 で 480 us の余りがあります。`loop()` がそうした線を動かすデュアルコアの ESP32 は、
-  `applySaved()` の前に `uart.setInterruptCore(0)` で割り込みをもう一方の core に置きます（`Firmware/OepProbe/Esp32P4.h`）。
-  その core が自分で割り込みを止めるなら置きません（classic の sampler: `Esp32.h` は `loop()` の core に置いたまま、FIFO を SWIO と
+  `applySaved()` の前に `uart.setInterruptCore(0)` で割り込みをもう一方の core に置きます（`src/firmware/Esp32P4.h`）。
+  その core が自分で割り込みを止めるなら置きません（classic の sampler: `src/firmware/Esp32.h` は `loop()` の core に置いたまま、FIFO を SWIO と
   比べて確かめます）。それでも UART が落としたバイトは lost（detail 1 あふれ）のマークになり、黙って抜けることはありません。マークは
   抜けた所の直後のバイトの位置か、それより前に付き、後ろには付きません: `FixtureUart` は driver が教える所に置きます。ESP32 は
   ESP-IDF の driver の出来事を、割り込みの core のタスクで順に自分で取り、出来事が数えていないバイトは読みません（UART に自分の
@@ -242,7 +242,7 @@ USB の probe は、プロジェクトの VID:PID `1209:4F45`（`oep::reg::kUsbP
 名指した probe を探す）を名乗ります。iProduct は人が読むための自由な文字列で（firmware では `OEP probe (ESP32-P4)`）、host は
 これで probe を見分けません。同じ device の OEP の外のインターフェース（ESP32-P4 のアプリの中の DFU など）も、その device の一部です。
 vendor bulk のインターフェースは bInterfaceSubClass 0x4F / bInterfaceProtocol 0x45、vendor HID は usage page 0xFF4F /
-usage 0x45 を持ちます（transports §3。`Firmware/OepProbe/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
+usage 0x45 を持ちます（transports §3。`src/firmware/Esp32P4.h` が EspUsbDevice の記述子をそう直します）。
 describe は VID:PID について何も宣言しません（core §7.5）。host は、プロジェクトの VID:PID、
 名指された unit id、利用者が選んだ口で probe を見つけます（transports §3）。
 

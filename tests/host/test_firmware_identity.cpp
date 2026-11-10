@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 #include <assert.h>
 #include <stdio.h>
-#include "../../examples/Firmware/OepProbe/P4FirmwareIdentity.h"
+#include "../../src/firmware/P4FirmwareIdentity.h"
 
 int main() {
   using Identity = P4FirmwareIdentity;

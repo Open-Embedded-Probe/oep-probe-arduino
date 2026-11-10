@@ -15,7 +15,7 @@ TCP と Wi-Fi（port、mDNS、Wi-Fi の設定、測った値）は §6。
 | 値 | この実装 | 仕様 |
 |---|---|---|
 | max_op_ms（fn 0 の describe） | 10000 ms | 1〜600000 ms、値は probe が決める（core §7.5） |
-| restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。Wi-Fi を外した build（`oepWithWifi`）で 1500 ms）、RP2040 / RP2350 2000 ms | probe が決める（oep-if-restart §1） |
+| restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。Wi-Fi を外した build（`kWifi`）で 1500 ms）、RP2040 / RP2350 2000 ms | probe が決める（oep-if-restart §1） |
 | lease の既定（open の lease_ms 0） | 3000 ms | 1000〜60000 ms（core §6.4） |
 | 送り直しの表 | 8 件、1 件の応答は 1029 byte まで（それより大きい応答の送り直しは result_lost） | max_inflight 件以上（core §5.1） |
 | コンソールの送りの列 | ストリームごとに 256 byte | 大きさは probe が決める（oep-if-console §2） |
@@ -376,7 +376,7 @@ TCP は信頼できる手元のネットワークか、認証したトンネル�
 
 ### 6.1 経路
 
-- **port は 7450**（`examples/Firmware/OepProbe` の `kTcpPort`、`03.Transports/WifiTcp` の `kPort`）。待ち受けの socket 1 つが fn 0 の describe の
+- **port は 7450**（`src/firmware/Esp32.h` の `kTcpPort`、`03.Transports/WifiTcp` の `kPort`）。待ち受けの socket 1 つが fn 0 の describe の
   経路 1 つ（kind 6、interface 0xFF）。classic ESP32 の firmware では UART bridge が 0、TCP が 1。待ち受けは、ほかの経路をすべて足した後に
   足す（`Endpoint::addTcpListener`。後から足す経路は断られる: シリアルの口の index が describe の index のままであるため）。
 - **同時の接続は 3 つ**（`TcpListener<3>`）。どの接続も別の経路で、confirm の transport TLV は 1 を返す。max_frame / window / max_inflight は
@@ -443,7 +443,7 @@ oep-spec の transports §7。この実装の値と動きは次のとおり。
 - **radio が点いているときの UART0 の損失（classic ESP32）**: Wi-Fi に接続していると、UART0 の probe → host の流れ（500000 bps）で、
   フレームまるごとの失いが Wi-Fi の無い build の数倍に増える（どちらも数 % 未満）。firmware の側で原因になる待ちは見つかっておらず、
   radio の電源や RF が原因ならこの firmware では消せない。シリアルの口を Wi-Fi と一緒に使うときは、host の送り直しで回復する前提にする。
-- Wi-Fi の無い build（スケッチで `void oepWithWifi() {}`）は、大きさも RAM も大きく減り、wifi の項目を持たない（describe の items に出ない）。
+- Wi-Fi の無い build（`begin<oep::kDefaults & ~oep::kWifi>()`）は、大きさも RAM も大きく減り、wifi の項目を持たない（describe の items に出ない）。
 - **ESP32-P4** は radio を持たない。arduino-esp32 には別のチップ（ESP32-C6 など）を SDIO で使う ESP-Hosted の道があるが、この firmware は
   使わない（`OepWifi.h` は SOC_WIFI_SUPPORTED のチップだけ）。手元の P4 のボードには co-processor が無く、試していない。
 - **RP2040 / RP2350**（Pro Micro RP2350 を含む）: Wi-Fi なし。Pico W / Pico 2 W の CYW43 は使っていない。

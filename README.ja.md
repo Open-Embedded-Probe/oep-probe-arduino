@@ -55,7 +55,7 @@ UART の 115200 baud は、どのボードと変換チップでも通る速さ�
 通せない変換チップやボードがある）。host は、probe と host が合意しない限り 115200 のままにします。
 classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中、oep-if-link §3）を持ちます: 頼んだ host は速さを試し、両方向の大きめの転送で
 確かめてから、そのセッションの間その速さに決めます。確かめが来ない、フレームが壊れる、線が黙る、セッションが終わる、の
-どれでも probe は自分で 115200 に戻ります（スケッチで `void oepWithPortSpeed() {}` と定義すると外れる。Firmware/OepProbe の OepFeatures.h）。
+どれでも probe は自分で 115200 に戻ります（`begin<oep::kDefaults & ~oep::kPortSpeed>()` で外れる。[firmware の機能](docs/guide/firmware-features.ja.md)）。
 
 このライブラリは、ESP32-P4、classic ESP32、RP2350、RP2040、WCH CH32 をその probe にします。
 

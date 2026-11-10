@@ -76,7 +76,7 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
 表に無いチップには、リリースされた firmware がありません。自分でビルドするのは数分で済みます。例: ESP32-S3 DevKitC を CH32 のデバッガにする。
 
 1. **やりたいことに近い example から始める。** CH32 のデバッガなら `04.Debug/RvswdDebugProbe`、治具なら `01.Basics/FixtureProbe`、
-   全部なら `Firmware/OepProbe`（自分のチップに近いチップの部分を写す。例: `Esp32P4.h`）。
+   全部なら `Firmware/OepProbe`（`OepFirmware.h`。新しいチップなら、近いチップの部分から始める。例: `src/firmware/Esp32P4.h`）。
 2. その `sketch.yaml` に **profile を足す**: ボードの FQBN、core の版、ライブラリ。
 
    ```yaml

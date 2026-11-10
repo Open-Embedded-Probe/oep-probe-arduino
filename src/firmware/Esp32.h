@@ -17,8 +17,8 @@
 // devices oep.fixture.spi-target / i2c-target; the settings (core §13) (saved in NVS); oep.fixture.analog
 // (ADC1 on 32-36 / 39) and oep.fixture.capture-group (the analog with the sampler); oep.probe.link; oep.probe.plan and
 // oep.probe.restart (the endpoint's own, listed last). The host chooses every
-// pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a choice (OepFeatures.h:
-// a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Swio (and SwioConsole in it), Gpio, Uart, I2c, Spi,
+// pin: SWIO any output GPIO below 32, the reset line and the fixtures any channel below. Each is a feature (OepFirmware.h:
+// oep::kX, begin<F>() adding it; oep::kAvailable / kDefaults below; OepChoice.h): Swio (and SwioConsole in it), Gpio, Uart, I2c, Spi,
 // Capture, Config, Analog, Group, Link, Swd (oep.wire.swd + oep.target.arm-adi), Rvswd (oep.wire.rvswd, and Console:
 // a place of the one oep.target.console); Bridge (UART0, the transport below; PortSpeed in it: port_speed on UART0) and Wifi
 // (the TCP transport); all in by default.
@@ -61,7 +61,9 @@
 #include <OepTarget.h>
 #include <OepWifi.h>
 
-#include "OepFeatures.h"
+// the names in use: these, or the sketch's FirmwareConfig (a UART bridge and TCP: no USB product name)
+static const char *modelName = "esp32";
+[[maybe_unused]] static const char *productName = nullptr;
 
 // UART0 runs through the board's USB-UART bridge (no flow control): long bursts of pipelined responses lost bytes
 // (2026-09-22, 2026-09-24), so few 512-byte frames are in flight. Two (window 1024) rather than one: with port_speed
@@ -176,7 +178,7 @@ static_assert((oep::kUartRxFifo - oep::kUartRxFifoFull) * 10ull * 1000000ull / o
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, "esp32", id, oep::platformUnitId(id, sizeof id), 40,
+  oep::describeCore(w, modelName, id, oep::platformUnitId(id, sizeof id), 40,
                     oep::BootGuard::lastBoot());
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
@@ -202,7 +204,6 @@ void oepAddSwio() {
   endpoint.add(w.wire);
   riscvDmIn = &w.riscvDm;
   endpoint.add(w.riscvDm);
-  oepWithSwioConsole();
 }
 
 void oepAddSwioConsole() {
@@ -346,7 +347,6 @@ void oepAddRvswd() {
     riscvDmIn = &riscvDm.make(r.port, 0);
     endpoint.add(*riscvDmIn);
   }
-  oepWithConsole();
 }
 
 // Its ring (about 9 KB) from the heap, made once and kept: the static DRAM segment has no room for a second console (it
@@ -408,7 +408,6 @@ void oepAddBridge() {
   Serial.begin(kBootBaud);
   Serial.setRxFIFOFull(kRxFifoFull);   // after begin(): begin() sets its own (120 above 57600 baud)
   endpoint.addTransport(Serial, rx, sizeof rx, oep::Endpoint::kUartBridge);
-  oepWithPortSpeed();
 }
 
 // oep.fixture.i2c-controller / spi-controller: the lines on GPIOs (owners::kI2cController / kSpiController)
@@ -439,39 +438,25 @@ void oepAddDac() {
   endpoint.add(dac.make(pins, (1ull << 25) | (1ull << 26)));
 }
 
-// The sketch's own parts (OepFeatures.h): none here; a sketch's oepUserSetup / oepUserLoop replace these
-__attribute__((weak)) void oepUserSetup(oep::Endpoint &, oep::PinTable &) {}
-__attribute__((weak)) void oepUserLoop() {}
+// What this chip has (oep::kAvailable) and the distributed firmware's set (oep::kDefaults: all of them), the bits of
+// OepFirmware.h
+namespace oep {
+inline constexpr uint64_t kAvailable = kBridge | kPortSpeed | kWifi | kSwio | kSwioConsole | kGpio | kUart | kI2cTarget
+                                       | kSpiTarget | kCapture | kSettings | kAnalog | kGroup | kLink | kSwd | kRvswd |
+                                       kConsole | kI2cController | kSpiController | kPwm | kCounter | kDac | kMemo;
+inline constexpr uint64_t kDefaults = kAvailable;
+}  // namespace oep
 
-// This build's choices (OepFeatures.h: a sketch's own replaces one)
-__attribute__((weak)) void oepWithBridge() { oepAddBridge(); }
-__attribute__((weak)) void oepWithWifi() { oepAddWifi(); }
-__attribute__((weak)) void oepWithPortSpeed() { oepAddPortSpeed(); }
-__attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
-__attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
-__attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
-__attribute__((weak)) void oepWithUart() { oepAddUart(); }
-__attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
-__attribute__((weak)) void oepWithSpi() { oepAddSpi(); }
-__attribute__((weak)) void oepWithCapture() { oepAddCapture(); }
-__attribute__((weak)) void oepWithSettings() { oepAddSettings(); }
-__attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
-__attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
-__attribute__((weak)) void oepWithLink() { oepAddLink(); }
-__attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
-__attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
-__attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
-__attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
-__attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
-__attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
-__attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
-__attribute__((weak)) void oepWithMemo() { oepAddMemo(); }
-__attribute__((weak)) void oepWithDac() { oepAddDac(); }
-
-void setup() {
+template <uint64_t F>
+void firmwareSetup(const oep::FirmwareConfig &cfg) {
+  if (cfg.model) modelName = cfg.model;
+  if (cfg.product) productName = cfg.product;
   oep::BootGuard::begin();   // loop() under the task watchdog, and the count of fast crash-boots
   esp_log_level_set("*", ESP_LOG_NONE);   // no log on a port that carries OEP (probe guide §3): UART0 is the transport
-  oepWithBridge();   // and port_speed's choice
+  if constexpr ((F & oep::kBridge) != 0) {
+    oepAddBridge();
+    if constexpr ((F & oep::kPortSpeed) != 0) oepAddPortSpeed();
+  }   // and port_speed's choice
   // Every channel genuinely Hi-Z until the host takes it (a pull on a target's USB line breaks its enumeration, E132).
   // Pins this chip's package uses itself (the PICO-D4's flash on GPIO16 / 17, a PSRAM): never a channel, never parked.
   const uint64_t unusable = oep::platformUnusablePins();
@@ -480,35 +465,41 @@ void setup() {
   // §1, rejected unsupported), and not offered to a role that drives its line (UART TX, I2C SDA / SCL, SPI MISO, reset)
   pins.setInputOnly(kInputOnly);
   pins.setNoPull(kInputOnly);
-  oepWithSettings();   // the saved settings read before the channels are parked
+  if constexpr ((F & oep::kSettings) != 0) oepAddSettings();   // the saved settings read before the channels are parked
   oep::platformParkMask(kChannels & ~unusable & ~pins.disabledMask());
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(oep::platformRestart, kRestartMaxMs);
-  oepWithWifi();   // after the UART: the listener's entry is the last
+  if constexpr ((F & oep::kWifi) != 0) oepAddWifi();   // after the UART: the listener's entry is the last
   // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name)
-  oepWithSwio();   // and the console's choice
-  oepWithGpio();
-  oepWithUart();
-  oepWithI2c();
-  oepWithSpi();
-  oepWithCapture();
+  if constexpr ((F & oep::kSwio) != 0) {
+    oepAddSwio();
+    if constexpr ((F & oep::kSwioConsole) != 0) oepAddSwioConsole();
+  }   // and the console's choice
+  if constexpr ((F & oep::kGpio) != 0) oepAddGpio();
+  if constexpr ((F & oep::kUart) != 0) oepAddUart();
+  if constexpr ((F & oep::kI2cTarget) != 0) oepAddI2c();
+  if constexpr ((F & oep::kSpiTarget) != 0) oepAddSpi();
+  if constexpr ((F & oep::kCapture) != 0) oepAddCapture();
   settingsFn.run();
-  oepWithAnalog();   // after the settings: the fns before it keep their numbers
-  oepWithGroup();
-  oepWithLink();
-  oepWithSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
-  oepWithRvswd();   // and its console's choice
-  oepWithI2cController();
-  oepWithSpiController();
-  oepWithPwm();
-  oepWithCounter();
-  oepWithDac();
-  oepWithMemo();   // last: it has no settings, and the fns before it keep their numbers
-  oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
+  if constexpr ((F & oep::kAnalog) != 0) oepAddAnalog();   // after the settings: the fns before it keep their numbers
+  if constexpr ((F & oep::kGroup) != 0) oepAddGroup();
+  if constexpr ((F & oep::kLink) != 0) oepAddLink();
+  if constexpr ((F & oep::kSwd) != 0) oepAddSwd();   // after the ones before: they keep their numbers (the saved settings name fns)
+  if constexpr ((F & oep::kRvswd) != 0) {
+    oepAddRvswd();
+    if constexpr ((F & oep::kConsole) != 0) oepAddConsole();
+  }   // and its console's choice
+  if constexpr ((F & oep::kI2cController) != 0) oepAddI2cController();
+  if constexpr ((F & oep::kSpiController) != 0) oepAddSpiController();
+  if constexpr ((F & oep::kPwm) != 0) oepAddPwm();
+  if constexpr ((F & oep::kCounter) != 0) oepAddCounter();
+  if constexpr ((F & oep::kDac) != 0) oepAddDac();
+  if constexpr ((F & oep::kMemo) != 0) oepAddMemo();   // last: it has no settings, and the fns before it keep their numbers
+  oep::firmware.runSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();
 }
 
-void loop() {
+inline void firmwareLoop() {
   // loop() on core 0 runs without blocking: core 0's idle task (which the task watchdog watches, and which frees the
   // stacks of tasks deleted on core 0) gets a tick every 50 ms; the Wi-Fi driver and the TCP/IP stack, above loop()'s
   // priority, take the core whenever they have work
@@ -520,5 +511,5 @@ void loop() {
   oep::BootGuard::poll();
   endpoint.poll();
   loopWork.run();
-  oepUserLoop();
+  oep::firmware.runLoop();
 }

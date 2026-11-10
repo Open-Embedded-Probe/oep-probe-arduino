@@ -10,10 +10,10 @@
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
 // oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
-// oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Each is a choice (OepFeatures.h:
-// a weak oepWithX() here adds it, a sketch's own replaces it; OepChoice.h): Rvswd (and Console in it), Swd, Gpio, Uart,
+// oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Each is a feature (OepFirmware.h:
+// oep::kX, begin<F>() adding it; oep::kAvailable / kDefaults below; OepChoice.h): Rvswd (and Console in it), Swd, Gpio, Uart,
 // Config, Analog, Link, I2c (oep.fixture.i2c-target), Logic (oep.fixture.logic), Group (oep.fixture.capture-group:
-// the logic with the analog), Swio (oep.wire.swio, CH32V00x; SwioConsole in it), and Cdc (the transport), all in by default.
+// the logic with the analog), Swio (oep.wire.swio, CH32V00x; SwioConsole in it), and Cdc (the transport), all in by default (the UART bridge not).
 // Every channel below may be SWDIO / SWCLK of either
 // wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
@@ -54,13 +54,13 @@
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
 
-#include "OepFeatures.h"
-
 #if defined(ARDUINO_ARCH_RP2350) || defined(PICO_RP2350)
 static constexpr const char *kProduct = "OEP probe (RP2350)", *kModel = "rp2350";
 #else
 static constexpr const char *kProduct = "OEP probe (RP2040)", *kModel = "rp2040";
 #endif
+// the names in use: these, or the sketch's FirmwareConfig
+static const char *modelName = kModel, *productName = kProduct;
 
 // The pins a Pico / Pico 2 brings out: GP0-GP22, GP26-GP28 (GP23-GP25 and GP29 are the board's own there). Other boards
 // with the same chip run this too (a SparkFun Pro Micro RP2350: its GP19 is the PSRAM's chip select); their own parts on
@@ -171,7 +171,6 @@ void oepAddRvswd() {
   endpoint.add(r.wire);
   riscvDmIn = &r.riscvDm;
   endpoint.add(r.riscvDm);
-  oepWithConsole();
 }
 
 void oepAddConsole() {
@@ -288,7 +287,6 @@ void oepAddSwio() {
     riscvDmIn = &riscvDm.make(w.port, 0);
     endpoint.add(*riscvDmIn);
   }
-  oepWithSwioConsole();
 }
 
 void oepAddSwioConsole() {
@@ -354,34 +352,14 @@ void oepAddCounter() {
   endpoint.add(counter.make(pins));
 }
 
-// The sketch's own parts (OepFeatures.h): none here; a sketch's oepUserSetup / oepUserLoop replace these
-__attribute__((weak)) void oepUserSetup(oep::Endpoint &, oep::PinTable &) {}
-__attribute__((weak)) void oepUserLoop() {}
-
-// This build's choices (OepFeatures.h: a sketch's own replaces one)
-__attribute__((weak)) void oepWithCdc() { oepAddCdc(); }
-__attribute__((weak)) void oepWithBulk() { oepAddBulk(); }
-__attribute__((weak)) void oepWithHid() { oepAddHid(); }
-__attribute__((weak)) void oepWithBridge() {}
-__attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
-__attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
-__attribute__((weak)) void oepWithSwd() { oepAddSwd(); }
-__attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
-__attribute__((weak)) void oepWithUart() { oepAddUart(); }
-__attribute__((weak)) void oepWithSettings() { oepAddSettings(); }
-__attribute__((weak)) void oepWithAnalog() { oepAddAnalog(); }
-__attribute__((weak)) void oepWithLink() { oepAddLink(); }
-__attribute__((weak)) void oepWithI2c() { oepAddI2c(); }
-__attribute__((weak)) void oepWithSwio() { oepAddSwio(); }
-__attribute__((weak)) void oepWithLogic() { oepAddLogic(); }
-__attribute__((weak)) void oepWithGroup() { oepAddGroup(); }
-__attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
-__attribute__((weak)) void oepWithI2cController() { oepAddI2cController(); }
-__attribute__((weak)) void oepWithSpiController() { oepAddSpiController(); }
-__attribute__((weak)) void oepWithSpi() { oepAddSpi(); }
-__attribute__((weak)) void oepWithPwm() { oepAddPwm(); }
-__attribute__((weak)) void oepWithCounter() { oepAddCounter(); }
-__attribute__((weak)) void oepWithMemo() { oepAddMemo(); }
+// What this chip has (oep::kAvailable) and the distributed firmware's set (oep::kDefaults: every one but the UART
+// bridge), the bits of OepFirmware.h
+namespace oep {
+inline constexpr uint64_t kAvailable = kCdc | kBulk | kHid | kBridge | kRvswd | kConsole | kSwd | kGpio | kUart |
+                                       kSettings | kAnalog | kI2cTarget | kSwio | kSwioConsole | kLogic | kGroup | kMemo
+                                       | kLink | kI2cController | kSpiController | kSpiTarget | kPwm | kCounter;
+inline constexpr uint64_t kDefaults = kAvailable & ~kBridge;
+}  // namespace oep
 
 // oep.probe.restart (oep-if-restart): oep::platformRestart - the USB device off the bus (tud_disconnect), then
 // rp2040.reboot(), a watchdog reset, oep::kRestartDetachMs later. restart_max_ms (its describe): the chip is running
@@ -401,63 +379,72 @@ extern "C" void isr_hardfault() { oep::BootGuard::crashed(); }
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];   // the flash's unique id: the probe says who it is on any transport
-  oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 30,
+  oep::describeCore(w, modelName, id, oep::platformUnitId(id, sizeof id), 30,
                     oep::BootGuard::lastBoot());   // the firmware text: the version (and what ended the boot before)
   oep::describeChip(w);   // the MCU and its revision (a capture records what it was taken on)
   return w.ok() ? w.length() : 0;
 }
 
-void setup() {
+template <uint64_t F>
+void firmwareSetup(const oep::FirmwareConfig &cfg) {
+  if (cfg.model) modelName = cfg.model;
+  if (cfg.product) productName = cfg.product;
   oep::BootGuard::begin();   // the watchdog, and the count of fast crash-boots
   USB.disconnect();
   USB.setManufacturer("Open Embedded Probe");
   USB.setVIDPID(oep::reg::kUsbProjectVid, oep::reg::kUsbProjectPid);   // the project's VID:PID (registry usb, PID-USE.md)
-  USB.setProduct(kProduct);   // a name for people; no host identifies the probe by it
+  USB.setProduct(productName);   // a name for people; no host identifies the probe by it
   static uint8_t serial[17];
   oep::platformUnitId(serial, sizeof serial);
   USB.setSerialNumber(reinterpret_cast<const char *>(serial));   // the unit id, lowercase (transports §3)
-  oepWithBulk();   // their interfaces in the descriptor USB.connect() builds
-  oepWithHid();
-  oepWithBridge();
+  if constexpr ((F & oep::kBulk) != 0) oepAddBulk();   // their interfaces in the descriptor USB.connect() builds
+  if constexpr ((F & oep::kHid) != 0) oepAddHid();
+  if constexpr ((F & oep::kBridge) != 0) oepAddBridge();
   oep::rp2usb::addResetInterface();   // picotool's reset interface: into the boot ROM for a firmware update over USB
   USB.connect();
-  oepWithCdc();
+  if constexpr ((F & oep::kCdc) != 0) oepAddCdc();
   afterCdc.run();
 #if OEP_DEBUG_LOG
   Serial2.setTX(OEP_DEBUG_LOG_TX);
   Serial2.begin(921600);
   oep::setLog(&Serial2);
-  OEP_LOGF("oep trace on (%s)", kProduct);
+  OEP_LOGF("oep trace on (%s)", productName);
 #endif
-  oepWithSettings();   // first: the saved settings read before the channels are parked
+  if constexpr ((F & oep::kSettings) != 0) oepAddSettings();   // first: the saved settings read before the channels are parked
   oep::platformParkMask(kChannels & ~pins.disabledMask() & ~ownPins);   // Hi-Z every channel (RP2 pads boot with a pull-down) until the host takes one
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(oep::platformRestart, kRestartMaxMs);
   // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name)
-  oepWithRvswd();   // and the console's choice
-  oepWithSwd();
-  oepWithGpio();
-  oepWithUart();
+  if constexpr ((F & oep::kRvswd) != 0) {
+    oepAddRvswd();
+    if constexpr ((F & oep::kConsole) != 0) oepAddConsole();
+  }   // and the console's choice
+  if constexpr ((F & oep::kSwd) != 0) oepAddSwd();
+  if constexpr ((F & oep::kGpio) != 0) oepAddGpio();
+  if constexpr ((F & oep::kUart) != 0) oepAddUart();
   settingsFn.run();
-  oepWithAnalog();   // after the settings: the fns before it keep their numbers
-  oepWithLink();
-  oepWithI2c();   // after the ones before: they keep their numbers (the saved settings name fns)
-  oepWithSwio();   // and its console's choice
-  oepWithLogic();
-  oepWithGroup();
-  oepWithI2cController();
-  oepWithSpiController();
-  oepWithPwm();
-  oepWithCounter();
-  oepWithSpi();
-  oepWithMemo();   // last: it has no settings, and the fns before it keep their numbers
-  oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
+  if constexpr ((F & oep::kAnalog) != 0) oepAddAnalog();   // after the settings: the fns before it keep their numbers
+  if constexpr ((F & oep::kLink) != 0) oepAddLink();
+  if constexpr ((F & oep::kI2cTarget) != 0) oepAddI2c();   // after the ones before: they keep their numbers (the saved settings name fns)
+  if constexpr ((F & oep::kSwio) != 0) {
+    oepAddSwio();
+    if constexpr ((F & oep::kSwioConsole) != 0) oepAddSwioConsole();
+  }   // and its console's choice
+  if constexpr ((F & oep::kLogic) != 0) oepAddLogic();
+  if constexpr ((F & oep::kGroup) != 0) oepAddGroup();
+  if constexpr ((F & oep::kI2cController) != 0) oepAddI2cController();
+  if constexpr ((F & oep::kSpiController) != 0) oepAddSpiController();
+  if constexpr ((F & oep::kPwm) != 0) oepAddPwm();
+  if constexpr ((F & oep::kCounter) != 0) oepAddCounter();
+  if constexpr ((F & oep::kSpiTarget) != 0) oepAddSpi();
+  if constexpr ((F & oep::kMemo) != 0) oepAddMemo();   // last: it has no settings, and the fns before it keep their numbers
+  oep::firmware.runSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();
 }
 
-void loop() {
+inline void firmwareLoop() {
   oep::BootGuard::poll();
   endpoint.poll();
   loopWork.run();
-  oepUserLoop();
+  oep::firmware.runLoop();
 }

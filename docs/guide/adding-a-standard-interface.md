@@ -40,8 +40,8 @@ Work from the top down. A good model to follow is `oep.fixture.pwm` / `counter` 
 ## 3. Size (the CH32X035)
 
 - [ ] Not on the X035 (62 KiB) by default: wrap the whole `.cpp` in `#if !defined(ARDUINO_CH32X035)` (a library `.cpp` is
-      linked, and merely referencing the core's interrupt handlers from it pulls them in), and add it only `if (kRoomy)` in
-      `Ch32.h`.
+      linked, and merely referencing the core's interrupt handlers from it pulls them in), and put it in the defaults (`oep::kDefaults`) only on
+      `kRoomy` in `src/firmware/Ch32.h`.
 - [ ] Check the X035 build's size has not changed (with `--clean`: a stale include cache can linger).
 
 ## 4. Host tests
@@ -52,15 +52,16 @@ Work from the top down. A good model to follow is `oep.fixture.pwm` / `counter` 
 
 ## 5. Wiring it into the firmware
 
-In every chip header that has it (`examples/Firmware/OepProbe/Rp2.h`, `Esp32P4.h`, `Esp32.h`, `Ch32.h`):
+- [ ] Add the feature bit `k<Name>` (the next free number) to `src/OepFirmwareParts.h`.
+
+In every chip header that has it (`src/firmware/Rp2.h`, `Esp32P4.h`, `Esp32.h`, `Ch32.h`):
 
 - [ ] `#include <Oep<Name>.h>`
 - [ ] `void oepAdd<Name>()`: `static oep::Slot<oep::<Class>> x; endpoint.add(x.make(pins));` (`HeapSlot` on a chip short of
-      static RAM: the classic ESP32's DRAM); loop work goes through `loopWork.add(...)`.
-- [ ] `__attribute__((weak)) void oepWith<Name>() { oepAdd<Name>(); }` (`{}` if it is off by default; `if (kRoomy)` on the CH32)
-- [ ] `oepWith<Name>();` **last** in `setup()`'s list of `oepWith...()`: anywhere else renumbers the existing fns and breaks
-      reading back saved settings.
-- [ ] Declare `oepWith<Name>()` and `oepAdd<Name>()` in `OepFeatures.h`.
+      static RAM: the classic ESP32's DRAM); loop work goes through `loopWork.add(...)`. Not `static` (`OepChoice.h`).
+- [ ] Add `k<Name>` to `oep::kAvailable`, and to `oep::kDefaults` if it is in by default (the `kRoomy` side on the CH32).
+- [ ] `if constexpr ((F & oep::k<Name>) != 0) oepAdd<Name>();` **last** in `firmwareSetup()`'s list: anywhere else
+      renumbers the existing fns and breaks reading back saved settings.
 
 ## 6. Building
 
@@ -71,7 +72,7 @@ In every chip header that has it (`examples/Firmware/OepProbe/Rp2.h`, `Esp32P4.h
 
 - [ ] The table in [writing a probe](writing-a-probe.md) §5 (English and Japanese)
 - [ ] The table in [boards](boards.md) (both): which chips have it, their limits, whether it was checked on hardware
-- [ ] The list at the top of `examples/Firmware/OepProbe/OepProbe.ino`, the X table in [firmware features](firmware-features.md)
+- [ ] The list at the top of `src/OepFirmware.h`, the X table in [firmware features](firmware-features.md)
 - [ ] The README layout table (both), `CHANGELOG.md`
 
 ## 8. Hosts and hardware

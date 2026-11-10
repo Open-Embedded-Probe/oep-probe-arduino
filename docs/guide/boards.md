@@ -76,7 +76,7 @@ vendor bulk, DFU and HID interfaces; installing it needs administrator rights.
 Chips outside the table have no released firmware; building one yourself takes a few minutes. The example: an ESP32-S3 DevKitC as a CH32 debugger.
 
 1. **Start from the example closest to what you want.** A CH32 debugger: `04.Debug/RvswdDebugProbe`; a fixture:
-   `01.Basics/FixtureProbe`; everything: `Firmware/OepProbe` (copy the part of the chip nearest yours, e.g. `Esp32P4.h`).
+   `01.Basics/FixtureProbe`; everything: `Firmware/OepProbe` (`OepFirmware.h`; for a new chip, start from the part of the chip nearest yours, e.g. `src/firmware/Esp32P4.h`).
 2. **Add a profile** to its `sketch.yaml`: the board's FQBN, the core version, the library.
 
    ```yaml

@@ -21,8 +21,8 @@
 // in by default but on the CH32X035 (62 KiB flash, 20 KiB RAM; kRoomy below): the V307 97.7 KB / 24.8 KB, the H417
 // 106 KB (0.2.2).
 //
-// Each interface and transport is a choice (OepFeatures.h, OepChoice.h): oepWithX() is weak here, its default adding X
-// with oepAddX() (or nothing, for CDC and the UART bridge); a sketch's own oepWithX() replaces it, an empty one leaving X out.
+// Each interface and transport is a feature (OepFirmware.h, OepChoice.h): oep::kX, begin<F>() adding it with oepAddX();
+// oep::kAvailable / kDefaults below (CDC and the UART bridge not in by default).
 // Each X's objects live in its oepAddX() and what X leaves to the others (its loop work, its part of the settings)
 // goes through the hooks below, so a left-out X links none of its code. The CH32 has: Rvswd (oep.wire.rvswd +
 // oep.target.riscv-dm), Console (oep.target.console on the RVSWD wire), Swio (oep.wire.swio, CH32V00x; SwioConsole on
@@ -57,8 +57,6 @@
 #include <OepSwioPhy.h>
 #include <OepTarget.h>
 
-#include "OepFeatures.h"
-
 // The chip the build is for (its board: the profiles ch32x035 / ch32v307 / ch32h417), a name for people and describe's
 // model
 #if defined(ARDUINO_CH32X035)
@@ -70,6 +68,8 @@ static constexpr const char *kProduct = "OEP probe (CH32H417)", *kModel = "ch32h
 #else
 static constexpr const char *kProduct = "OEP probe (CH32)", *kModel = "ch32";
 #endif
+// the names in use: these, or the sketch's FirmwareConfig
+static const char *modelName = kModel, *productName = kProduct;
 
 // The vendor class as the endpoint's Stream (it is a Print with available / read / peek, not a Stream)
 class VendorStream final : public Stream {
@@ -250,7 +250,6 @@ void oepAddRvswd() {
   endpoint.add(r.wire);
   riscvDmIn = &riscvDm.make(r.port, 0);
   endpoint.add(*riscvDmIn);
-  oepWithConsole();
 }
 
 void oepAddConsole() {
@@ -287,7 +286,6 @@ void oepAddSwio() {
     riscvDmIn = &riscvDm.make(w.port, 0);
     endpoint.add(*riscvDmIn);
   }
-  oepWithSwioConsole();
 }
 
 void oepAddSwioConsole() {
@@ -419,62 +417,23 @@ void oepAddSpiController() {
   endpoint.add(spi.make(pins));
 }
 
-// The sketch's own parts (OepFeatures.h): none here; a sketch's oepUserSetup / oepUserLoop replace these
-__attribute__((weak)) void oepUserSetup(oep::Endpoint &, oep::PinTable &) {}
-__attribute__((weak)) void oepUserLoop() {}
-
-// This build's choices (OepFeatures.h: a sketch's own replaces one). The CH32X035's 62 KiB take the WCH set (RVSWD,
-// console, gpio, link, HID: 62.4 KB); SWD, uart and the settings are left out by default.
+// What this chip has (oep::kAvailable) and the distributed firmware's set (oep::kDefaults). The CH32X035's 62 KiB take
+// the WCH set (RVSWD, console, gpio, link, vendor bulk, HID); the larger chips take SWD, SWIO, uart, the I2C / SPI
+// targets and controllers, analog, logic, counter, dac and the settings too.
 #if defined(ARDUINO_CH32X035)
 static constexpr bool kRoomy = false;
 #else
 static constexpr bool kRoomy = true;
 #endif
-__attribute__((weak)) void oepWithBulk() { oepAddBulk(); }
-__attribute__((weak)) void oepWithHid() { oepAddHid(); }
-__attribute__((weak)) void oepWithCdc() {}
-__attribute__((weak)) void oepWithBridge() {}
-__attribute__((weak)) void oepWithRvswd() { oepAddRvswd(); }
-__attribute__((weak)) void oepWithConsole() { oepAddConsole(); }
-__attribute__((weak)) void oepWithSwd() {
-  if (kRoomy) oepAddSwd();
-}
-__attribute__((weak)) void oepWithGpio() { oepAddGpio(); }
-__attribute__((weak)) void oepWithUart() {
-  if (kRoomy) oepAddUart();
-}
-__attribute__((weak)) void oepWithI2c() {
-  if (kRoomy) oepAddI2c();
-}
-__attribute__((weak)) void oepWithSpi() {
-  if (kRoomy) oepAddSpi();
-}
-__attribute__((weak)) void oepWithAnalog() {
-  if (kRoomy) oepAddAnalog();
-}
-__attribute__((weak)) void oepWithLogic() {
-  if (kRoomy) oepAddLogic();
-}
-__attribute__((weak)) void oepWithCounter() {
-  if (kRoomy) oepAddCounter();
-}
-__attribute__((weak)) void oepWithDac() {
-  if (kRoomy) oepAddDac();
-}
-__attribute__((weak)) void oepWithSwio() {
-  if (kRoomy) oepAddSwio();
-}
-__attribute__((weak)) void oepWithSwioConsole() { oepAddSwioConsole(); }
-__attribute__((weak)) void oepWithSettings() {
-  if (kRoomy) oepAddSettings();
-}
-__attribute__((weak)) void oepWithLink() { oepAddLink(); }
-__attribute__((weak)) void oepWithI2cController() {
-  if (kRoomy) oepAddI2cController();
-}
-__attribute__((weak)) void oepWithSpiController() {
-  if (kRoomy) oepAddSpiController();
-}
+namespace oep {
+inline constexpr uint64_t kAvailable = kBulk | kHid | kCdc | kBridge | kRvswd | kConsole | kSwio | kSwioConsole | kSwd |
+                                       kGpio | kUart | kI2cTarget | kAnalog | kLogic | kCounter | kDac | kSpiTarget |
+                                       kSettings | kLink | kI2cController | kSpiController;
+inline constexpr uint64_t kDefaults = kBulk | kHid | kRvswd | kConsole | kGpio | kLink |
+                                      (kRoomy ? kSwd | kUart | kI2cTarget | kSpiTarget | kAnalog | kLogic | kCounter | kDac | kSwio |
+                                                     kSwioConsole | kSettings | kI2cController | kSpiController
+                                               : 0);
+}  // namespace oep
 
 // oep.probe.restart (oep-if-restart): off the bus first (kRestartDetachMs, Oep.h), then CH32RV.restart(). restart_max_ms:
 // an estimate (the boot, the host's enumeration), to be measured on the bench.
@@ -488,53 +447,62 @@ static void restartProbe() {
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, kModel, id, oep::platformUnitId(id, sizeof id), 64);
+  oep::describeCore(w, modelName, id, oep::platformUnitId(id, sizeof id), 64);
   oep::describeChip(w);
   return w.ok() ? w.length() : 0;
 }
 
-void setup() {
+template <uint64_t F>
+void firmwareSetup(const oep::FirmwareConfig &cfg) {
+  if (cfg.model) modelName = cfg.model;
+  if (cfg.product) productName = cfg.product;
   oep::platformUnitId(reinterpret_cast<uint8_t *>(serial), sizeof serial);
   CH32RVUsbDeviceConfig usb;
   usb.vid = oep::reg::kUsbProjectVid;   // the project's VID:PID (registry usb, PID-USE.md)
   usb.pid = oep::reg::kUsbProjectPid;
   usb.manufacturer = "Open Embedded Probe";
-  usb.product = kProduct;
+  usb.product = productName;
   usb.serialNumber = serial;   // the unit id, lowercase (transports §3)
   // every channel a floating input until the host takes one (oep-core §8): before the transports, a UART bridge's pins
   // among them
   oep::platformParkMask(kChannels);
-  oepWithBulk();   // the transports before USBDevice.begin (their interfaces laid out in this order)
-  oepWithHid();
-  oepWithCdc();
-  oepWithBridge();
+  if constexpr ((F & oep::kBulk) != 0) oepAddBulk();   // the transports before USBDevice.begin (their interfaces laid out in this order)
+  if constexpr ((F & oep::kHid) != 0) oepAddHid();
+  if constexpr ((F & oep::kCdc) != 0) oepAddCdc();
+  if constexpr ((F & oep::kBridge) != 0) oepAddBridge();
   USBDevice.begin(usb);
   afterUsb.run();
   endpoint.setProbeDescription(probeTlv, describeProbe());
   endpoint.setRestart(restartProbe, kRestartMaxMs);
   // The fns in this order, whichever are in (a build's set numbers them; a host finds each by name); the settings last,
   // after the ones they hold
-  oepWithRvswd();   // and the console's choice
-  oepWithSwd();
-  oepWithGpio();
-  oepWithUart();
-  oepWithI2c();
-  oepWithSwio();   // and its console's choice
-  oepWithLink();
-  oepWithI2cController();
-  oepWithSpiController();
-  oepWithSpi();
-  oepWithAnalog();
-  oepWithLogic();
-  oepWithCounter();
-  oepWithDac();
-  oepUserSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
-  oepWithSettings();
+  if constexpr ((F & oep::kRvswd) != 0) {
+    oepAddRvswd();
+    if constexpr ((F & oep::kConsole) != 0) oepAddConsole();
+  }   // and the console's choice
+  if constexpr ((F & oep::kSwd) != 0) oepAddSwd();
+  if constexpr ((F & oep::kGpio) != 0) oepAddGpio();
+  if constexpr ((F & oep::kUart) != 0) oepAddUart();
+  if constexpr ((F & oep::kI2cTarget) != 0) oepAddI2c();
+  if constexpr ((F & oep::kSwio) != 0) {
+    oepAddSwio();
+    if constexpr ((F & oep::kSwioConsole) != 0) oepAddSwioConsole();
+  }   // and its console's choice
+  if constexpr ((F & oep::kLink) != 0) oepAddLink();
+  if constexpr ((F & oep::kI2cController) != 0) oepAddI2cController();
+  if constexpr ((F & oep::kSpiController) != 0) oepAddSpiController();
+  if constexpr ((F & oep::kSpiTarget) != 0) oepAddSpi();
+  if constexpr ((F & oep::kAnalog) != 0) oepAddAnalog();
+  if constexpr ((F & oep::kLogic) != 0) oepAddLogic();
+  if constexpr ((F & oep::kCounter) != 0) oepAddCounter();
+  if constexpr ((F & oep::kDac) != 0) oepAddDac();
+  oep::firmware.runSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
+  if constexpr ((F & oep::kSettings) != 0) oepAddSettings();
 }
 
-void loop() {
+inline void firmwareLoop() {
   deliverEvents();   // the HID output reports' callback runs only here (the core's 0.3.0)
   endpoint.poll();
   loopWork.run();
-  oepUserLoop();
+  oep::firmware.runLoop();
 }

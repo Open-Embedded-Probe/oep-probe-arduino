@@ -38,7 +38,7 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
 
 - [ ] X035（62 KiB）には既定で入れません。`.cpp` 全体を `#if !defined(ARDUINO_CH32X035)` で囲みます。
       ライブラリの `.cpp` はリンクの対象になり、そこから参照するだけで core の割り込みハンドラなどが入ってしまうためです。
-      `Ch32.h` では `kRoomy` の時だけ足します。
+      `src/firmware/Ch32.h` では `kRoomy` の時だけ既定（`oep::kDefaults`）に入れます。
 - [ ] X035 のビルドの大きさが変わっていないことを確かめます（`--clean` で。古い include のキャッシュが残ることがあります）。
 
 ## 4. host の試験
@@ -49,15 +49,17 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
 
 ## 5. firmware に配線する
 
-チップのヘッダ（`examples/Firmware/OepProbe/Rp2.h`、`Esp32P4.h`、`Esp32.h`、`Ch32.h`）のうち、持つものすべてに次を足します。
+- [ ] `src/OepFirmwareParts.h` に機能のビット `k<Name>`（次の空きの番号）を足します。
+
+チップのヘッダ（`src/firmware/Rp2.h`、`Esp32P4.h`、`Esp32.h`、`Ch32.h`）のうち、持つものすべてに次を足します。
 
 - [ ] `#include <Oep<Name>.h>`
 - [ ] `void oepAdd<Name>()`：`static oep::Slot<oep::<Class>> x; endpoint.add(x.make(pins));`。静的な RAM が足りないチップでは
-      `HeapSlot` を使います（classic ESP32 の DRAM）。`loop()` の仕事は `loopWork.add(...)` で渡します。
-- [ ] `__attribute__((weak)) void oepWith<Name>() { oepAdd<Name>(); }`（既定で入れないなら `{}`。CH32 は `if (kRoomy)`）
-- [ ] `setup()` の `oepWith...()` の並びの**最後**に `oepWith<Name>();` を足します。途中に入れると、既存の fn の番号と保存した
-      設定の読み戻しがずれます。
-- [ ] `OepFeatures.h` に `oepWith<Name>()` と `oepAdd<Name>()` を宣言します。
+      `HeapSlot` を使います（classic ESP32 の DRAM）。`loop()` の仕事は `loopWork.add(...)` で渡します。`static` にはしません
+      （`OepChoice.h`）。
+- [ ] `oep::kAvailable` に `k<Name>` を足し、既定で入れるなら `oep::kDefaults` にも入れます（CH32 は `kRoomy` の側）。
+- [ ] `firmwareSetup()` の並びの**最後**に `if constexpr ((F & oep::k<Name>) != 0) oepAdd<Name>();` を足します。途中に入れると、
+      既存の fn の番号と保存した設定の読み戻しがずれます。
 
 ## 6. ビルド
 
@@ -68,7 +70,7 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
 
 - [ ] [probe を書く](writing-a-probe.ja.md) §5 の表（英・日）
 - [ ] [ボード](boards.ja.md) の表（英・日）：チップごとの有無と上限、確かめたかどうか
-- [ ] `examples/Firmware/OepProbe/OepProbe.ino` の冒頭の一覧、[firmware の機能](firmware-features.ja.md) の X の表
+- [ ] `src/OepFirmware.h` の冒頭の一覧、[firmware の機能](firmware-features.ja.md) の X の表
 - [ ] README の構成の表（英・日）、`CHANGELOG.md`
 
 ## 8. host 側と実機

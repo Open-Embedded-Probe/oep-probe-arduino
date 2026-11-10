@@ -2,95 +2,108 @@
 
 [English](firmware-features.md)
 
-配布している firmware（`examples/Firmware/OepProbe`）は、そのチップでできることを既定で全部入れています。この手引きでは、
-次の 2 つを説明します。
+配布している firmware は、ライブラリの部品 `OepFirmware.h` です。そのチップでできることを既定で全部入れています。
+スケッチは `begin()` を呼ぶだけで、ライブラリの版を上げれば firmware の本体も新しくなります。この手引きでは、次の 2 つを
+説明します。
 
-- 要らない機能を外す（小さいチップに収める、使わないものを出さない）
+- 要らない機能を外す、要るものだけで組む（小さいチップに収める、使わないものを出さない）
 - 自分のインターフェースを足す（firmware の残りはそのまま）
 
-どちらも `OepProbe` のフォルダに自分の `.cpp` を 1 つ置くだけで、配布元のファイルは書き換えません。
-
-## 1. 仕組み
-
-firmware の部品（経路とインターフェース）は、それぞれが 1 つの選択です。
+## 1. いちばん短いスケッチ
 
 ```cpp
-// チップのヘッダ（Rp2.h など）の中
-void oepAddPwm() { static oep::Slot<oep::FixturePwm> pwm; endpoint.add(pwm.make(pins)); }   // 部品を作って足す
-__attribute__((weak)) void oepWithPwm() { oepAddPwm(); }                                       // 既定: 足す
+#include <OepFirmware.h>
+
+void setup() { oep::firmware.begin(); }   // そのチップの既定の機能を全部
+
+void loop() { oep::firmware.loop(); }
 ```
 
-- `oepAddX()` だけが部品 X を名指します。呼ばなければ、X のコードは何もリンクされません。
-- `oepWithX()` は weak です。スケッチが同じ名前の関数を定義すると、そちらが使われます。
+配布の [OepProbe](../../examples/Firmware/OepProbe/OepProbe.ino) も、この形です。
 
-一覧は [OepFeatures.h](../../examples/Firmware/OepProbe/OepFeatures.h) にあります。チップごとに何が既定で入っているかは、
-[OepProbe.ino](../../examples/Firmware/OepProbe/OepProbe.ino) の冒頭と [ボード](boards.ja.md) にあります。
+- `OepFirmware.h` は、スケッチの `.ino` の 1 か所だけで含めます。2 つのファイルで含めると、リンクで止まります。
+  ほかのファイルからは `OepFirmwareParts.h`（機能の名前と、下の `add` / `onSetup` / `onLoop`）を含めます。
+- ESP32-P4 / P4X では、スケッチの `sketch.yaml` に EspUsbDevice のライブラリを入れます（配布の OepProbe の profile と同じ）。
 
-## 2. 機能を外す・足す
+## 2. 機能を選ぶ
 
-`OepProbe` のフォルダに、たとえば `MyChoices.cpp` を置きます。
+機能は `begin<F>()` の F（コンパイル時の定数）で選びます。F に入れなかった機能は、コードが何もリンクされません。
 
 ```cpp
-#include "OepFeatures.h"
-
-void oepWithSwd() {}                 // oep.wire.swd / oep.target.arm-adi を外す
-void oepWithPwm() {}                 // oep.fixture.pwm を外す
-void oepWithCdc() { oepAddCdc(); }   // 既定で外れている USB CDC を足す（そのチップに oepAddCdc があるとき）
+oep::firmware.begin<oep::kDefaults & ~oep::kSwd & ~oep::kPwm>();          // 既定から SWD と PWM を外す
+oep::firmware.begin<oep::kDefaults | oep::kCdc>();                         // 既定に、既定で外れている USB CDC を足す
+oep::firmware.begin<oep::kNone | oep::kBulk | oep::kRvswd | oep::kConsole>(); // 全部なしから、これだけ
 ```
 
-| X | 中身 |
+| 名前 | 中身 |
 |---|---|
-| `Bulk`、`Hid`、`Cdc`、`Usj`、`Bridge`、`Wifi` | 経路: USB vendor bulk、HID、CDC、USB-Serial/JTAG、UART ブリッジ、Wi-Fi の TCP |
-| `Dfu`、`PortSpeed` | ESP32-P4 の DFU（OEP の外）、fn 0 の port_speed |
-| `Rvswd`、`Swio`、`Swd` | debug の線（と、その target） |
-| `Console`、`SwioConsole` | target のコンソール（RVSWD の線のもの、SWIO の線のもの） |
-| `Gpio`、`Uart`、`I2c`、`Spi` | fixture: GPIO、UART、I2C / SPI の target |
-| `I2cController`、`SpiController`、`Pwm`、`Counter`、`Dac` | fixture: I2C / SPI の controller、PWM、エッジの計数、DAC |
-| `Capture`、`Logic`、`Analog`、`Group` | キャプチャ: ロジック（P4 / classic ESP32 / RP2 / CH32）、アナログ、同時に始める group |
-| `Settings`、`Link` | core の設定（保存）、`oep.probe.link`（線の試験） |
+| `kBulk`、`kHid`、`kCdc`、`kUsj`、`kBridge`、`kWifi` | 経路: USB vendor bulk、HID、CDC、USB-Serial/JTAG、UART ブリッジ、Wi-Fi の TCP |
+| `kDfu`、`kPortSpeed` | ESP32-P4 の DFU（OEP の外）、UART ブリッジの port_speed |
+| `kRvswd`、`kSwio`、`kSwd` | debug の線（と、その target） |
+| `kConsole`、`kSwioConsole` | target のコンソール（RVSWD の線のもの、SWIO の線のもの） |
+| `kGpio`、`kUart`、`kI2cTarget`、`kSpiTarget` | fixture: GPIO、UART、I2C / SPI の target |
+| `kI2cController`、`kSpiController`、`kPwm`、`kCounter`、`kDac` | fixture: I2C / SPI の controller、PWM、エッジの計数、DAC |
+| `kCapture`、`kLogic`、`kAnalog`、`kGroup` | キャプチャ: ロジック（`kCapture` は ESP32-P4 / classic ESP32、`kLogic` は RP2 / CH32）、アナログ、同時に始める group |
+| `kSettings`、`kLink`、`kMemo` | core の設定（保存）、`oep.probe.link`（線の試験）、`oep.probe.memo` |
 
-- チップのヘッダに `oepAddX` が無い X は、そのチップでは足せません（リンクで失敗します）。
+- `oep::kDefaults` は配布の firmware の機能、`oep::kAvailable` はそのチップが持つ機能です。チップごとの中身は
+  [ボード](boards.ja.md) にあります。
+- 次の組はコンパイル時に止まり、理由が出ます: そのチップが持たない機能、経路が 1 つも無い、`kConsole` に `kRvswd` が無い、
+  `kSwioConsole` に `kSwio` が無い、`kPortSpeed` に `kBridge` が無い。
 - 外すと、それより後のインターフェースの fn の番号が変わります。host は名前で探すので困りませんが、保存した設定は
   そのインターフェースの並びのときにだけ読み戻せます。外したら設定を入れ直してください。
 
-## 3. 自分のインターフェースを足す
+## 3. 実行時の値
 
-同じ `.cpp` に `oepUserSetup` と `oepUserLoop` を定義します。どちらも定義しなければ何もしません。
+名前は `FirmwareConfig` で変えられます。書かなかったものは配布の firmware の値です。
 
 ```cpp
-#include <OepEndpoint.h>
-#include <OepPinTable.h>
-#include "OepFeatures.h"
+oep::FirmwareConfig cfg;
+cfg.model = "my-jig";              // fn 0 の describe の model
+cfg.product = "My jig";            // USB の製品名（人が見る名前。host はこれでプローブを見分けない）
+oep::firmware.begin(cfg);          // begin<F>(cfg) も同じ
+```
+
+## 4. 自分のインターフェースを足す
+
+`begin()` の前に登録します。どのファイルからでも呼べます（`OepFirmwareParts.h`）。
+
+```cpp
+#include <OepFirmware.h>
 
 class Hello final : public oep::Interface { /* はじめてのインターフェースの Hello */ };
 static Hello hello;
 
-void oepUserSetup(oep::Endpoint &endpoint, oep::PinTable &pins) {
-  endpoint.add(hello);   // firmware の部品の後ろに足す
+void setup() {
+  oep::firmware.onSetup([](oep::Endpoint &endpoint, oep::PinTable &pins) {
+    pins.claim(4, oep::owners::kSketch);   // 自分が使うピン
+  });
+  oep::firmware.add(hello);                // firmware の部品の後ろに足す
+  oep::firmware.onLoop([] { /* loop() で進める仕事があれば */ });
+  oep::firmware.begin();
 }
-void oepUserLoop() {
-  // hello に loop() で進める仕事があれば、ここで（待たないこと）
-}
+
+void loop() { oep::firmware.loop(); }
 ```
 
-- `oepUserSetup` は `setup()` の中で 1 回、firmware の部品をすべて足した後に呼ばれます。保存した設定はその後で適用されます。
-- `oepUserLoop` は毎回の `loop()` で、firmware 自身の仕事の後に呼ばれます。
-- ピンを使うなら、渡された `pins` から取ります。持ち主の番号は `oep::owners::kSketch`（0x80）から上を使い、firmware の部品と
-  重ならないようにします。
+- `add` したインターフェースは、firmware の部品をすべて足した後に、登録の順に足されます。保存した設定はその後で適用されます。
+- `onSetup` は `begin()` の中で、自分のインターフェースを足す直前に呼ばれます。ピンは渡された `pins` から取り、持ち主の番号は
+  `oep::owners::kSketch`（0x80）から上を使います。
+- `onLoop` は毎回の `loop()` で、firmware 自身の仕事の後に呼ばれます。待たないでください。
+- 登録はヒープに数 byte ずつ取ります（数の上限はありません）。
 - インターフェースの書き方は [はじめてのインターフェース](your-first-interface.ja.md) を見てください。
 
 例: [extras/LibraryTest](../../extras/LibraryTest/README.ja.md) は、試したいライブラリの呼び出しをプローブの上で動かし、そのログ
 （`OepProbeLog.h`: RAM に書いてプローブの時計を付ける）をキャプチャの波形に紐付ける例です。
 
-## 4. ビルドする
+## 5. ビルドする
 
-- **Arduino IDE**：`ファイル > スケッチ例 > OpenEmbeddedProbe > Firmware > OepProbe` を開き、名前を付けて保存してから、自分の
-  `.cpp` をタブで足します（保存したスケッチは、入れたライブラリを使います）。
-- **arduino-cli**：`OepProbe` のフォルダを写して `.cpp` を足し、写した `sketch.yaml` の `libraries: - dir:` をこのライブラリの
-  場所に直します（元は `../../..`）。そのうえで `arduino-cli compile --profile <profile> <フォルダ>` を実行します。
-- 大きさに気を付けてください。CH32X035 の 62 KiB は既定の構成でほぼ埋まっています。
-  何かを外して空けてください。
+- **Arduino IDE**：新しいスケッチに上の形を書きます（`ファイル > スケッチ例 > OpenEmbeddedProbe > Firmware > OepProbe` から始めても
+  同じです）。
+- **arduino-cli**：配布の `OepProbe` の `sketch.yaml` を自分のスケッチに写し、`libraries: - dir:` をこのライブラリの場所に直します
+  （元は `../../..`）。そのうえで `arduino-cli compile --profile <profile> <フォルダ>` を実行します。
+- 大きさに気を付けてください。CH32X035 の 62 KiB は既定の構成でほぼ埋まっています。何かを外して空けてください。
 
-## 5. 確かめる
+## 6. 確かめる
 
 `oep dump --port <port>` で、足したインターフェースが list に載り、外した部品が消えていることを確かめます。

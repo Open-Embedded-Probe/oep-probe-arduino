@@ -1,6 +1,24 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The released firmware is a library part: `#include <OepFirmware.h>`, `oep::firmware.begin()` in setup() and
+  `oep::firmware.loop()` in loop() (examples/Firmware/OepProbe is that sketch). A newer library brings a newer firmware;
+  no sketch folder is copied any more. The features are `begin<F>()`'s compile-time bits - `oep::kDefaults` (the
+  released set), `oep::kDefaults & ~oep::kSwd`, `oep::kNone | oep::kBulk | oep::kRvswd | oep::kConsole` - and one left
+  out links none of its code; a feature the chip lacks, no transport, a console without its wire stop the build with a
+  message. `oep::FirmwareConfig` sets the model and USB product names. The sketch's own parts: `oep::firmware.add`,
+  `onSetup`, `onLoop` before begin(), from any file (`OepFirmwareParts.h`). Gone: OepFeatures.h, the weak
+  `oepWithX()` / `oepUserSetup()` / `oepUserLoop()`; the i2c / spi targets' bits are `kI2cTarget` / `kSpiTarget`. The
+  released firmware's size: flash and RAM as before within 0.7 KB (the CH32 +16-20 bytes, the others smaller).
+- (JA) 配布の firmware をライブラリの部品にした: `#include <OepFirmware.h>`、setup() で `oep::firmware.begin()`、loop() で
+  `oep::firmware.loop()`（examples/Firmware/OepProbe はこのスケッチ）。ライブラリの版を上げれば firmware も新しくなり、スケッチの
+  フォルダは写さない。機能は `begin<F>()` のコンパイル時のビットで選ぶ（`oep::kDefaults` が配布の構成、
+  `oep::kDefaults & ~oep::kSwd`、`oep::kNone | oep::kBulk | oep::kRvswd | oep::kConsole`）。外した機能はコードがリンクされない。
+  チップが持たない機能、経路が無い、wire の無いコンソールはビルドで理由を出して止まる。`oep::FirmwareConfig` で model と USB の
+  製品名を変えられる。自分の部品は begin() の前に `oep::firmware.add`、`onSetup`、`onLoop`（どのファイルからでも:
+  `OepFirmwareParts.h`）。OepFeatures.h、弱いシンボルの `oepWithX()` / `oepUserSetup()` / `oepUserLoop()` は無くした。i2c / spi の
+  target のビットは `kI2cTarget` / `kSpiTarget`。配布の firmware の大きさは、flash も RAM も 0.7 KB 以内で前と同じ（CH32 は
+  +16〜20 byte、ほかは小さくなった）。
 - (EN) I2C controller (the GPIO-timed one): SCL rises at least a quarter period after SDA changes as well as half a
   period after SCL fell. The code between SCL's fall and SDA's change is not all in internal RAM (the transfer's loop
   between the START and the first byte, between bytes); an interrupt or a cache miss there held SDA up to SCL's rise
