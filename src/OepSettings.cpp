@@ -198,6 +198,7 @@ Settings::Spec Settings::spec(uint8_t entry) const {
       return {reg::target_console::kSettingPassthroughSwdio, k::kSettingFormChannel, k::kSettingKeyKindTransport, 0, 0, 0};
     case kConSwclk:
       return {reg::target_console::kSettingPassthroughSwclk, k::kSettingFormChannel, k::kSettingKeyKindTransport, 0, 0, 0};
+    case kUsb: return {k::kSettingUsbTransports, k::kSettingFormEnum, k::kSettingKeyKindNone, 0, k::kSettingFlagRestart, 0};
     case kConSpeed:
       return {reg::target_console::kSettingPassthroughMaxSpeed, k::kSettingFormU32, k::kSettingKeyKindTransport, 0, 0, 0};
     case kConMechanism:
@@ -300,6 +301,13 @@ bool Settings::setWifi(WifiControl *wifi) {
   if (wifi && entryOf(kSsid) == kNoEntry)
     for (uint8_t id = kSsid; id <= kIpDns; ++id) addEntry(id, nullptr, nullptr);
   return true;
+}
+
+void Settings::setUsbTransports(const char *const *choices, uint8_t count) {
+  if (!count || entryOf(kUsb) != kNoEntry) return;
+  usb_choices_ = choices;
+  usb_count_ = count;
+  addEntry(kUsb, nullptr, nullptr);
 }
 
 bool Settings::addSetting(const Interface &owner, const char *name, uint8_t form, uint16_t keys, uint8_t max_len,
@@ -517,6 +525,7 @@ size_t Settings::storedValue(uint8_t entry, const uint8_t *d, size_t n, uint8_t 
       if (n != 1) return 0;
       const uint8_t id = entries_[entry].id;
       if (id == kPassFormat) return formatName(d[0], s) ? 3 : 0;
+      if (id == kUsb) return d[0] < usb_count_ ? putText(s, usb_choices_[d[0]]) : 0;
       const Choice *c = id == kIdle ? kIdleChoices : id == kIpMode ? kModeChoices : kRestChoices;
       const size_t count = id == kIdle ? 5 : id == kIpMode ? 2 : 3;
       for (size_t i = 0; i < count; ++i)
@@ -1212,6 +1221,44 @@ void Settings::readBlob(bool all) {
   storage_state_ = bad ? reg::core::kStorageStatePartial : reg::core::kStorageStateApplied;
   reason_ = !bad ? 0 : capacity_short ? reg::core::kStorageReasonCapacity : reg::core::kStorageReasonItem;
   saved_generation_ = bad ? 0 : 1;
+}
+
+// Before the settings are up (the USB device starts on it): the core's usb.transports in the save, read by name as
+// applySaved() would - a save that is not whole is none (core §13.7).
+int Settings::savedUsbTransports(const char *const *choices, uint8_t count) {
+  if (kNoStore || !count) return -1;
+  const size_t capacity = SettingsSizes::kDefaultBlob;
+  uint8_t *blob = static_cast<uint8_t *>(malloc(capacity));
+  if (!blob) return -1;
+  size_t length = 0;
+  int found = -1;
+  const bool whole = storeRead(blob, capacity, length) && length >= 5 &&
+                     getU32(blob + length - 4) == crc32Ieee(blob, length - 4) && blob[0] == kBlobVersion;
+  const size_t end = whole ? length - 4 : 0;
+  for (size_t at = 1; at < end && found < 0;) {
+    const size_t cl = blob[at];
+    if (at + 4 + cl > end) break;
+    const uint8_t items = blob[at + 3 + cl];
+    at += 4 + cl;
+    for (uint8_t i = 0; i < items && at < end; ++i) {
+      const size_t nl = blob[at];
+      if (at + 3 + nl > end) { at = end; break; }
+      const bool mine = cl == 0 && sameText(blob + at + 1, nl, reg::core::kSettingUsbTransports);
+      const uint16_t values = getU16(blob + at + 1 + nl);
+      at += 3 + nl;
+      for (uint16_t v = 0; v < values; ++v) {
+        if (at + 2 > end || at + 2 + blob[at] > end || at + 2 + blob[at] + blob[at + 1 + blob[at]] > end) { at = end; break; }
+        const size_t kl = blob[at], vl = blob[at + 1 + kl];
+        const uint8_t *val = blob + at + 2 + kl;
+        if (mine && kl == 0)
+          for (uint8_t c = 0; c < count && found < 0; ++c)
+            if (sameText(val, vl, choices[c])) found = c;
+        at += 2 + kl + vl;
+      }
+    }
+  }
+  free(blob);
+  return found;
 }
 
 void Settings::load() {

@@ -16,6 +16,7 @@
 // place among its owner's entries, from 1):
 //   fn 0 (setPins)    channel.{}.label (text 1-32), channel.{}.idle (enum), channel.{}.disable (bool)        core §13.8
 //   fn 0 (setWifi)    wifi.{}.ssid, wifi.{}.passphrase (secret), ipv4.{}.mode / address / prefix / gateway / dns  transports §7
+//   fn 0 (setUsbTransports) usb.transports (enum of the probe's sets, restart)                               transports §3.1
 //   a debug wire      channel.{}.rest (rvswd), channel.{}.hold                                                                debug §2, §3.1
 //   a fixture uart    passthrough.{}.rx / baud / format                                                       fixture §2.1
 //   a console         passthrough.{}.wire / swdio / swclk / max-speed / mechanism                             console §2.1
@@ -44,7 +45,7 @@ namespace oep {
 namespace setting_id {
 enum : uint8_t {
   kLabel = 1, kIdle, kDisable, kSsid, kPassphrase, kIpMode, kIpAddress, kIpPrefix, kIpGateway, kIpDns,
-  kRest, kHold, kPassRx, kPassBaud, kPassFormat, kConWire, kConSwdio, kConSwclk, kConSpeed, kConMechanism, kOwn,
+  kRest, kHold, kPassRx, kPassBaud, kPassFormat, kConWire, kConSwdio, kConSwclk, kConSpeed, kConMechanism, kUsb, kOwn,
 };
 }
 
@@ -144,6 +145,13 @@ class Settings final : public SettingsCore {
   // The Wi-Fi station: netif "wifi", its items and the network op. false (and nothing declared) when a transport's
   // max_frame is below wifi_min_max_frame (transports §7: the longest value must fit every transport).
   bool setWifi(WifiControl *wifi);
+  // usb.transports (transports §3.1): the sets of OEP transports the probe's own USB device can start, choice i named
+  // choices[i] (`bulk-hid-cdc2`; kept, not copied). It takes effect at the next boot: the probe reads it with
+  // savedUsbTransports() before it starts the device. count 0: not declared.
+  void setUsbTransports(const char *const *choices, uint8_t count);
+  // The saved usb.transports, before the settings and the USB device are up (core §13.7: by name): its place in
+  // choices, or -1 (no save, no value, or a name not among them: the probe's default set).
+  static int savedUsbTransports(const char *const *choices, uint8_t count);
   // An item of the sketch's own under `owner` (an interface it added; core §13.1): its name (labels of a-z 0-9 - joined
   // by '.', one "{}" where a key goes), form (bytes, text, u32, ipv4, bool), keys (key_kind index: 1 or more; 0: no
   // key), max_len (bytes / text), flags (secret, restart). Before applySaved(). false: no room or not a valid one.
@@ -197,6 +205,8 @@ class Settings final : public SettingsCore {
     void *context;            // the uart, the place, the hold site
     uint8_t id, own;          // own: own_[own] for kOwn
   };
+  const char *const *usb_choices_ = nullptr;
+  uint8_t usb_count_ = 0;
   struct Place { WireRvswd *wire = nullptr; TargetConsoleStream *console = nullptr; };
   struct Own { const char *name = nullptr; uint8_t form = 0, max_len = 0, flags = 0; uint16_t keys = 0; };
   struct HoldSite { const Interface *wire = nullptr; void (*check)(void *) = nullptr; void *port = nullptr; };

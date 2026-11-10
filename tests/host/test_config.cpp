@@ -428,7 +428,56 @@ static void testChannelNames() {
   CHECK(names == (std::vector<std::string>{"GPIO0", "GPIO1", "GPIO2"}));
 }
 
+// usb.transports (transports §3.1): a core enum item with the restart flag, its choices the probe's sets; a set outside
+// them unsupported; saved by name and read back before the settings are up (savedUsbTransports), by name again so a
+// firmware whose list moved still finds it, and -1 without one.
+static void testUsbTransports() {
+  static const char *const kSets[] = {"bulk-hid-cdc", "bulk-hid-cdc2", "bulk-cdc3"};
+  fakeConfigStore(nullptr, 0);
+  Bytes out;
+  CHECK(Settings::savedUsbTransports(kSets, 3) == -1);
+  {
+    Probe p(false);
+    p.settings.setUsbTransports(kSets, 3);
+    const uint8_t usb = p.number(0, rc::kSettingUsbTransports);
+    CHECK(usb != 0);
+    int choices = 0;
+    bool restart = false, named = false;
+    for (const auto &t : p.describe(0)) {
+      if (t.first == reg::kDescribeSetting && std::string(t.second.begin() + 6, t.second.end()) == rc::kSettingUsbTransports)
+        restart = t.second[0] == rc::kSettingFormEnum && t.second[1] == rc::kSettingKeyKindNone && t.second[5] == rc::kSettingFlagRestart;
+      if (t.first == reg::kDescribeSettingChoice && t.second[0] == usb) {
+        ++choices;
+        named |= t.second[1] == 1 && Bytes(t.second.begin() + 2, t.second.end()) == text("bulk-hid-cdc2");
+      }
+    }
+    CHECK(restart && choices == 3 && named);
+    p.settings.load();
+    p.settings.applySaved();
+    const Result r = p.op(rc::kOpSet, set({value(0, usb, 0, {3})}), out);   // not one of its sets
+    CHECK(r.resolution == kResolutionRejected && r.detail == kRejectUnsupported);
+    CHECK(ok(p.op(rc::kOpSet, set({value(0, usb, 0, {1})}), out)) && has(values(p), 0, usb, 0, {1}));
+    CHECK(ok(p.op(rc::kOpSave, {}, out)));
+  }
+  CHECK(Settings::savedUsbTransports(kSets, 3) == 1);
+  static const char *const kMoved[] = {"bulk-cdc3", "bulk-hid-cdc2"};   // another firmware's list: found by its name
+  CHECK(Settings::savedUsbTransports(kMoved, 2) == 1);
+  static const char *const kOther[] = {"bulk-hid-cdc"};
+  CHECK(Settings::savedUsbTransports(kOther, 1) == -1);
+  {
+    Probe q(false);
+    q.settings.setUsbTransports(kSets, 3);
+    q.settings.load();
+    q.settings.applySaved();
+    const uint8_t usb = q.number(0, rc::kSettingUsbTransports);
+    CHECK(has(values(q), 0, usb, 0, {1}));
+    CHECK(ok(q.op(rc::kOpUnset, {1, 0, 0, usb, 0, 0}, out)) && ok(q.op(rc::kOpSave, {}, out)));
+  }
+  CHECK(Settings::savedUsbTransports(kSets, 3) == -1);
+}
+
 int main() {
+  testUsbTransports();
   testDescribe();
   testInitialValues();
   testLabelsUnique();
