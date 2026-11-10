@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X on EspUsbDevice 3.1.0: the vendor port's bulk IN is doubled whatever the CDC ports take
+  (EspUsbBulkStreamConfig::bulkInBuffering, the per-function setting), and the DFU is no longer manifestation
+  tolerant (3.1.0 answers GETSTATUS / GETSTATE in dfuMANIFEST-WAIT-RESET). P4X, 8 lines streaming 5 s, CDC ports
+  closed: bulk-hid-cdc 40 / 42 MB/s 3 of 3 each; bulk-hid-cdc2 and bulk-cdc3 at 40 MB/s pass again (were 0 of 3).
+  An open CDC tty takes about 2 MB/s of the bus (the host polls its IN).
+- (JA) ESP32-P4 / P4X を EspUsbDevice 3.1.0 にした: vendor の口の bulk IN を、CDC の数によらず二重にする
+  （EspUsbBulkStreamConfig::bulkInBuffering、口ごとの指定）。DFU は manifestation tolerant をやめた（3.1.0 は
+  dfuMANIFEST-WAIT-RESET でも GETSTATUS / GETSTATE に答える）。P4X、8 本の流し続け 5 秒、CDC の tty を閉じた状態:
+  bulk-hid-cdc は 40 / 42 MB/s とも 3 回中 3 回、bulk-hid-cdc2 と bulk-cdc3 は 40 MB/s がまた通る（前は 3 回中 0 回）。
+  CDC の tty を開くと、1 口あたり約 2 MB/s を bus から取る（host がその IN を問い合わせ続ける）。
 - (EN) `oep::SimpleInterface` (OepSimpleInterface.h): an interface of the sketch's own from functions -
   `op(code, name, {request fields}, {answer fields}, fn, flags)` with the field types u8-u64, i8-i64, boolean, bytes,
   text and lists of the number types. It shows each op's name and fields in its describe (oep-spec core §7.4

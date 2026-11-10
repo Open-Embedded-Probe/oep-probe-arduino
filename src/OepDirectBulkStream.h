@@ -40,6 +40,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
     EspUsbVendorConfig c = vendor_.configuration();
     c.rxMode = EspUsbBulkRxMode::Callback;   // each packet straight into rx_ (callback mode has no ring of its own)
     c.rxCapacity = 0;
+    c.bulkInBuffering = EspUsbBulkInBuffering::Double;   // this port's bulk IN doubled whatever the CDC ports take
     if (vendor_.configure(c) != ESP_OK) return false;
     for (int i = 0; i < 2; ++i) {
       result_[i] = static_cast<uint8_t *>(heap_caps_aligned_alloc(64, kResultBytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));

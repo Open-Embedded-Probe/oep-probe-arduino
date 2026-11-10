@@ -18,7 +18,12 @@ struct EspUsbTransferSubmission {
   explicit operator bool() const { return error == EspUsbTransferError::None; }
 };
 struct EspUsbTransferResult { const void *buffer = nullptr; size_t actualBytes = 0; };
-struct EspUsbBulkStreamConfig { size_t rxCapacity = 512; EspUsbBulkRxMode rxMode = EspUsbBulkRxMode::Stream; };
+enum class EspUsbBulkInBuffering : uint8_t { Auto, Double, Single };
+struct EspUsbBulkStreamConfig {
+  size_t rxCapacity = 512;
+  EspUsbBulkRxMode rxMode = EspUsbBulkRxMode::Stream;
+  EspUsbBulkInBuffering bulkInBuffering = EspUsbBulkInBuffering::Auto;
+};
 using EspUsbVendorConfig = EspUsbBulkStreamConfig;
 class EspUsbDeviceVendor {
  public:
