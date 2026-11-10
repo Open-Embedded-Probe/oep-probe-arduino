@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X: usb.transports (oep-spec transports §3.1, draft): the HS device's set of OEP transports is a
+  setting - `bulk-hid-cdc` (the default), `bulk-hid`, `bulk-hid-cdc2`, `bulk-cdc3` - read from the save before the
+  device starts and in effect from the next restart (`oep settings set --save PROBE core usb.transports=bulk-hid-cdc2`).
+  A set the device refuses to start falls back to the default for that boot (the value stays). More than one CDC
+  port takes the vendor port's bulk IN double buffering away (EspUsbDevice 3.0.0 doubles all bulk IN or none): a
+  40 MB/s capture stream does not pass with bulk-hid-cdc2 / bulk-cdc3 until a per-function setting comes.
+  `oep::Settings::setUsbTransports` / `savedUsbTransports`, `oep::Slot::destroy`.
+- (JA) ESP32-P4 / P4X: usb.transports（oep-spec transports §3.1、案）: HS の device が出す OEP の経路の組を設定にした。
+  `bulk-hid-cdc`（既定）、`bulk-hid`、`bulk-hid-cdc2`、`bulk-cdc3`。device の開始の前に保存から読み、次の再起動から効く
+  （`oep settings set --save PROBE core usb.transports=bulk-hid-cdc2`）。device が開始できない組は、その起動では既定にする（値は残す）。
+  CDC が 2 本以上だと vendor の口の bulk IN が二重にならない（EspUsbDevice 3.0.0 は bulk IN を全部二重か、どれもしない）ので、
+  口ごとの指定が出るまで bulk-hid-cdc2 / bulk-cdc3 では 40 MB/s の流し続けが通らない。`oep::Settings::setUsbTransports` /
+  `savedUsbTransports`、`oep::Slot::destroy`。
 - (EN) ESP32-P4 / P4X: EspUsbDevice 3.0.0 (its own USB stack, no TinyUSB). The sketches' build_opt.h are gone (the
   vendor port's borrowed transfers need no build flag; the DFU block, 4 KiB, is set with configure()); a P4 build no
   longer needs --clean. `oep::DirectBulkStream::begin()` is called before the device's begin() (callbacks are
