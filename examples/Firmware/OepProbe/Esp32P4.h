@@ -298,7 +298,8 @@ void oepAddDfu() {
   EspUsbDfuConfig c = dfu->configuration();
   c.transferBytes = 4096;   // the block dfu-util sends (4 KiB: a flash sector a block)
   // Back to dfuIDLE after the manifest, so the host's GETSTATUS there is answered (not stalled, as DFU 1.1 has a device
-  // that is not manifestation tolerant do) before restartAfterDfu takes it off the bus
+  // that is not manifestation tolerant do) before restartAfterDfu takes it off the bus. Until EspUsbDevice 3.0.1, which
+  // answers GETSTATUS / GETSTATE in dfuMANIFEST-WAIT-RESET too
   c.manifestationTolerant = true;
   dfu->configure(c);
   dfu->restartWhenComplete(false);   // restartAfterDfu, from loop()
