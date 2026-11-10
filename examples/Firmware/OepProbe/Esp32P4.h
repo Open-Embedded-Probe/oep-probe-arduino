@@ -231,18 +231,59 @@ void oepAddUsj() {   // USB-Serial/JTAG: opening and closing the port must not r
   afterUsb.add([] { endpoint.addTransport(Serial, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbSerialJtag); });
 }
 
+// usb.transports (transports §3.1): the sets of the HS device's OEP transports this probe can start - the vendor bulk
+// port always (the first transport), the HID or not, 0-3 CDC ports - each one the HS controller's 7 IN endpoints and
+// FIFO hold (begin() checked them on the bench: HID + vendor + 3 CDC does not fit). Named by transports §3.1's rule;
+// the first is the default (no value, or one this firmware does not list). Chosen at boot from the save
+// (savedUsbTransports), before the device starts; a set the device refuses to start falls back to the default.
+struct UsbSet { const char *name; bool hid; uint8_t cdc; };
+static constexpr UsbSet kUsbSets[] = {
+    {"bulk-hid-cdc", true, 1}, {"bulk-hid", true, 0}, {"bulk-hid-cdc2", true, 2}, {"bulk-cdc3", false, 3}};
+static constexpr uint8_t kUsbSetCount = sizeof kUsbSets / sizeof kUsbSets[0], kMaxCdc = 3;
+static const char *const kUsbSetNames[kUsbSetCount] = {kUsbSets[0].name, kUsbSets[1].name, kUsbSets[2].name, kUsbSets[3].name};
+static uint8_t usbSet = 0;   // the set this boot runs
+
 static oep::Slot<OepHid> hid;
 static oep::Slot<HidStream> hidStream;
-void oepAddHid() {
+static bool hidMade = false, hidChosen = false;   // chosen: the build has the HID (oepWithHid)
+static void makeHid() {
+  if (!hidChosen || !kUsbSets[usbSet].hid || hidMade) return;
   hidStream.make(hid.make(usbDevice, HidStream::kReport));
-  afterUsb.add([] { endpoint.addTransport(*hidStream, frameBuffer(kRxFrame), kRxFrame, oep::Endpoint::kHid, hid->number, true); });
+  hidMade = true;
+}
+void oepAddHid() {
+  hidChosen = true;
+  makeHid();
+  afterUsb.add([] {
+    if (hidMade) endpoint.addTransport(*hidStream, frameBuffer(kRxFrame), kRxFrame, oep::Endpoint::kHid, hid->number, true);
+  });
 }
 
-static oep::Slot<OepCdc> cdc;
-static oep::Slot<CdcStream> cdcStream;
+// The CDC ports of the set, each a name to show (every CDC of the probe speaks OEP; a composite that repeats a class
+// needs a name to tell them apart)
+static oep::Slot<OepCdc> cdcs[kMaxCdc];
+static oep::Slot<CdcStream> cdcStreams[kMaxCdc];
+static const char *const kCdcNames[kMaxCdc] = {"OEP", "OEP 2", "OEP 3"};
+static uint8_t cdcMade = 0;
+static bool cdcChosen = false;   // the build has the CDC ports (oepWithCdc)
+static void makeCdcs() {
+  for (; cdcChosen && cdcMade < kUsbSets[usbSet].cdc; ++cdcMade) cdcStreams[cdcMade].make(cdcs[cdcMade].make(usbDevice, kCdcNames[cdcMade]));
+}
 void oepAddCdc() {
-  cdcStream.make(cdc.make(usbDevice, "OEP"));   // a name to show; every CDC of the probe speaks OEP
-  afterUsb.add([] { endpoint.addTransport(*cdcStream, frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbCdc, cdc->number, true); });
+  cdcChosen = true;
+  makeCdcs();
+  afterUsb.add([] {
+    for (uint8_t i = 0; i < cdcMade; ++i)
+      endpoint.addTransport(*cdcStreams[i], frameBuffer(kRxSerial), kRxSerial, oep::Endpoint::kUsbCdc, cdcs[i]->number, true);
+  });
+}
+// The device refused the set (begin() false): its HID and CDC ports undone, the default's made in their place
+static void fallBackUsbSet() {
+  while (cdcMade) { --cdcMade; cdcs[cdcMade].destroy(); cdcStreams[cdcMade].destroy(); }
+  if (hidMade) { hid.destroy(); hidStream.destroy(); hidMade = false; }
+  usbSet = 0;
+  makeHid();
+  makeCdcs();
 }
 
 // A UART bridge (transports §1: a serial transport, COBS): UART3 on UART0's pads, GPIO37 (TX) / GPIO38 (RX), 115200 -
@@ -411,6 +452,7 @@ void oepAddSettings() {
     if (uart1In) config->addUart(*uart1In);
     if (uart2In) config->addUart(*uart2In);
     config->setPins(&pins);   // the idle item sets these pins' free state
+    config->setUsbTransports(kUsbSetNames, kUsbSetCount);   // read at the next boot (setup, savedUsbTransports)
     loopWork.add([] { config->poll(); });
   });
   // Last, once every interface is added: the saved settings name fns, and are kept only for the same interface list
@@ -596,6 +638,8 @@ void setup() {
   usb.product = kUsbProduct;   // a name for people; no host identifies the probe by it
   usb.serialNumber = serial_;
   usb.controller = EspUsbController::HighSpeed;
+  const int saved = oep::Settings::savedUsbTransports(kUsbSetNames, kUsbSetCount);
+  usbSet = saved < 0 ? 0 : static_cast<uint8_t>(saved);
   // The transports in the describe's order, their functions made before the device starts
   oepWithBulk();
   oepWithUsj();
@@ -603,7 +647,10 @@ void setup() {
   oepWithCdc();
   oepWithBridge();
   oepWithDfu();
-  usbDevice.begin(usb);
+  if (!usbDevice.begin(usb) && usbSet != 0) {   // a set the device cannot start: the default this boot (value kept)
+    fallBackUsbSet();
+    usbDevice.begin(usb);
+  }
   endpoint.setAnswerBuffer(frameBuffer(kAnswerBytes), kAnswerBytes);
   afterUsb.run();
   endpoint.setRestart(restartProbe, kRestartMaxMs);

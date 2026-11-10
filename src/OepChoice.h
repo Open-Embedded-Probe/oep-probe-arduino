@@ -30,6 +30,7 @@ class Slot {
   }
   T *operator->() { return reinterpret_cast<T *>(bytes_); }
   T &operator*() { return *operator->(); }
+  void destroy() { operator->()->~T(); }   // the object made, ended (it may be made again)
 
  private:
   alignas(T) uint8_t bytes_[sizeof(T)];
