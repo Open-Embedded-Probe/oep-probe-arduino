@@ -5,7 +5,9 @@
 // (writeDirect) and its packets received in callback mode. One IN transfer is in flight at a time; the next is armed
 // from the completion callback, so a stream of full buffers runs gapless (wch-protocols E110 / E116 / E117). Results
 // are written into one of two 64-aligned buffers and sent on flush(); they go before queued data. A result ends the
-// host's transfer (a zero-length packet after a whole number of packets); an interface's data does not.
+// host's transfer (a zero-length packet after a whole number of packets); an interface's data does not. Up to
+// kInFlight transfers are handed to the library at once, so the next is armed as one completes; a library that takes
+// one at a time answers the second with Busy, and it goes when the first completes.
 #pragma once
 
 #include <Arduino.h>
@@ -25,7 +27,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
  public:
   // kRxBytes: two whole max_frame requests; the USB worker can land a frame faster than loop() reads it byte by byte
   // kResultBytes: one buffer holds the largest frame whole (16 KiB + its length)
-  static constexpr size_t kResultBytes = 16384 + 128, kRxBytes = 32768, kQueue = 32;
+  static constexpr size_t kResultBytes = 16384 + 128, kRxBytes = 32768, kQueue = 32, kInFlight = 2;
   // A result waits this long for a buffer the host has taken (IN); after it, the result is dropped whole.
   static constexpr uint32_t kWaitMs = 2000;
 
@@ -120,7 +122,7 @@ class DirectBulkStream final : public Stream, public DirectTransport {
     kick();
     return true;
   }
-  size_t queued() const override { return (data_head_ - data_tail_) + (in_flight_ ? 1 : 0); }
+  size_t queued() const override { return (data_head_ - data_tail_) + in_flight_; }
   bool mounted() const { return vendor_.mounted(); }
   uint32_t refused() const { return refused_; }
 
@@ -136,8 +138,10 @@ class DirectBulkStream final : public Stream, public DirectTransport {
   portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
   Entry results_[kQueue], data_[kQueue];
   volatile size_t results_head_ = 0, results_tail_ = 0, data_head_ = 0, data_tail_ = 0;
-  volatile bool in_flight_ = false;
-  Entry sending_ = {};
+  // the transfers handed to the library, oldest first (they complete in that order)
+  Entry sending_[kInFlight] = {};
+  volatile size_t sent_head_ = 0, sent_tail_ = 0, in_flight_ = 0;
+  volatile bool kicking_ = false, again_ = false;   // one kick() submits at a time; another asks it to look again
   volatile uint32_t refused_ = 0;
 
   static void resultSent(void *context, const uint8_t *buffer) {
@@ -184,38 +188,65 @@ class DirectBulkStream final : public Stream, public DirectTransport {
     portEXIT_CRITICAL(&mux_);
     return ok;
   }
-  // Arm the next transfer if none is in flight: results first.
+  // Hand the next transfers to the library while fewer than kInFlight are with it: results first. One caller submits at a
+  // time (the order on the wire is the order taken); a caller meanwhile (loop() or the USB worker's completion) leaves
+  // it to look again.
   void kick() {
+    portENTER_CRITICAL(&mux_);
+    if (kicking_) { again_ = true; portEXIT_CRITICAL(&mux_); return; }
+    kicking_ = true;
+    portEXIT_CRITICAL(&mux_);
     for (;;) {
-      Entry e;
       portENTER_CRITICAL(&mux_);
-      if (in_flight_ || (results_head_ == results_tail_ && data_head_ == data_tail_)) { portEXIT_CRITICAL(&mux_); return; }
-      if (results_head_ != results_tail_) {
-        const size_t at = results_tail_;
-        e = results_[at % kQueue];
-        results_tail_ = at + 1;
-      } else {
-        const size_t at = data_tail_;
-        e = data_[at % kQueue];
-        data_tail_ = at + 1;
+      again_ = false;
+      const bool result = results_head_ != results_tail_;
+      const bool any = in_flight_ < kInFlight && (result || data_head_ != data_tail_);
+      Entry e = {};
+      if (any) {   // taken from its queue only once the library has it (only this caller takes)
+        e = result ? results_[results_tail_ % kQueue] : data_[data_tail_ % kQueue];
+        sending_[sent_head_ % kInFlight] = e;
+        sent_head_ = sent_head_ + 1;
+        in_flight_ = in_flight_ + 1;
       }
-      in_flight_ = true;
-      sending_ = e;
       portEXIT_CRITICAL(&mux_);
-      if (vendor_.writeDirect(e.buffer, e.length, e.ends ? EspUsbTransferTermination::EndWithShortPacket
-                                                         : EspUsbTransferTermination::Continue))
-        return;
-      refused_ = refused_ + 1;   // not mounted, or a contract mistake: the buffer is given back unsent
+      if (!any) {
+        if (finishKick()) return;
+        continue;
+      }
+      const EspUsbTransferSubmission sub = vendor_.writeDirect(
+          e.buffer, e.length, e.ends ? EspUsbTransferTermination::EndWithShortPacket : EspUsbTransferTermination::Continue);
+      const bool busy = !sub && sub.error == EspUsbTransferError::Busy;   // stays queued for the next look
       portENTER_CRITICAL(&mux_);
-      in_flight_ = false;
+      if (!busy) {
+        if (result) results_tail_ = results_tail_ + 1; else data_tail_ = data_tail_ + 1;
+      }
+      if (!sub) {   // not taken: out of the in-flight list again (a completion meanwhile took only older ones)
+        sent_head_ = sent_head_ - 1;
+        in_flight_ = in_flight_ - 1;
+      }
       portEXIT_CRITICAL(&mux_);
+      if (sub) continue;
+      if (busy) {   // the library takes one at a time: it goes when the one before completes (its kick looks again)
+        if (finishKick()) return;
+        continue;
+      }
+      refused_ = refused_ + 1;   // not mounted, or a contract mistake: the buffer is given back unsent
       if (e.done) e.done(e.context, e.buffer);
     }
   }
-  void completed() {   // the USB worker: the buffer is back (sent, or cancelled by a reset or the device's end)
+  // Done looking unless someone asked meanwhile.
+  bool finishKick() {
     portENTER_CRITICAL(&mux_);
-    const Entry e = sending_;
-    in_flight_ = false;
+    const bool done = !again_;
+    if (done) kicking_ = false;
+    portEXIT_CRITICAL(&mux_);
+    return done;
+  }
+  void completed() {   // the USB worker: the oldest buffer is back (sent, or cancelled by a reset or the device's end)
+    portENTER_CRITICAL(&mux_);
+    const Entry e = sending_[sent_tail_ % kInFlight];
+    sent_tail_ = sent_tail_ + 1;
+    in_flight_ = in_flight_ - 1;
     portEXIT_CRITICAL(&mux_);
     if (e.done) e.done(e.context, e.buffer);
     kick();

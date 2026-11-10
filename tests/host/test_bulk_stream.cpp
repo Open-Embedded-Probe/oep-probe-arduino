@@ -3,6 +3,7 @@
 
 // Host tests: the vendor bulk stream writes a result frame whole or drops it whole (never half a frame).
 #include <stdio.h>
+#include <string.h>
 #include <vector>
 
 #include "OepDirectBulkStream.h"
@@ -104,6 +105,24 @@ int main() {
     CHECK(s.queueData(data, sizeof data, nullptr, nullptr));
     for (int k = 0; k < 4 && v.in_flight; ++k) v.complete();
     CHECK(v.sent.size() == 2 && v.sent[0].size() == 512 && v.ended[0] && !v.ended[1]);
+  }
+  for (int lib = 1; lib <= 2; ++lib) {   // a library taking one transfer at a time (Busy), and one taking two
+    EspUsbDeviceVendor v;
+    v.max_in_flight = lib;
+    g_vendor = &v;
+    oep::DirectBulkStream s(v);
+    CHECK(s.begin());
+    static uint8_t data[4][1024];
+    int done = 0;
+    for (int k = 0; k < 4; ++k) {
+      memset(data[k], 100 + k, sizeof data[k]);
+      CHECK(s.queueData(data[k], sizeof data[k], [](void *c, const uint8_t *) { ++*static_cast<int *>(c); }, &done));
+    }
+    CHECK(v.in_flight == lib && v.sent.size() == size_t(lib));   // as many as the library takes, at once
+    CHECK(s.queued() == 4);
+    for (int k = 0; k < 8 && v.in_flight; ++k) v.complete();
+    CHECK(done == 4 && v.sent.size() == 4 && s.refused() == 0 && s.queued() == 0);
+    for (int k = 0; k < 4; ++k) CHECK(v.sent[k][0] == 100 + k);   // in the order queued
   }
   printf("TEST done %d/%d\n", checks - failures, checks);
   return failures ? 1 : 0;

@@ -12,7 +12,7 @@ typedef int esp_err_t;
 #define ESP_OK 0
 enum class EspUsbBulkRxMode : uint8_t { Stream, Callback, Borrowed, Disabled };
 enum class EspUsbTransferTermination : uint8_t { Continue, EndWithShortPacket };
-enum class EspUsbTransferError : uint8_t { None = 0, NotMounted };
+enum class EspUsbTransferError : uint8_t { None = 0, NotMounted, Busy };
 struct EspUsbTransferSubmission {
   EspUsbTransferError error = EspUsbTransferError::None;
   explicit operator bool() const { return error == EspUsbTransferError::None; }
@@ -28,6 +28,7 @@ class EspUsbDeviceVendor {
   std::vector<bool> ended;                  // each one's termination: EndWithShortPacket
   EspUsbBulkStreamConfig config;
   int in_flight = 0;
+  int max_in_flight = 1;                    // what the library takes at once (3.0.0: one; more answer Busy)
   bool mounted_ = true;
   static bool directWriteSupported() { return true; }
   const EspUsbBulkStreamConfig &configuration() const { return config; }
@@ -36,6 +37,7 @@ class EspUsbDeviceVendor {
   esp_err_t onDirectTxComplete(std::function<void(const EspUsbTransferResult &)> f) { tx_done = f; return ESP_OK; }
   EspUsbTransferSubmission writeDirect(const void *p, size_t n, EspUsbTransferTermination t) {
     const uint8_t *b = static_cast<const uint8_t *>(p);
+    if (in_flight >= max_in_flight) { EspUsbTransferSubmission busy; busy.error = EspUsbTransferError::Busy; return busy; }
     sent.emplace_back(b, b + n);
     ended.push_back(t == EspUsbTransferTermination::EndWithShortPacket);
     ++in_flight;
