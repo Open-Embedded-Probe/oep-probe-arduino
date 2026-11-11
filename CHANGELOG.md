@@ -1,6 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Guide: [Adding your own commands](docs/guide/simple-interface.md) - `oep::SimpleInterface` from the smallest
+  example to the worker's jobs, the log, the pins and calling from `oep call` and Python; linked from the README and
+  Your first interface.
+- (JA) ガイド: [自分のコマンドを足す](docs/guide/simple-interface.ja.md)。`oep::SimpleInterface` を、いちばん小さい例から
+  ワーカーのジョブ、ログ、ピン、`oep call` と Python からの呼び方まで。README と「はじめてのインターフェース」からリンク。
 - (EN) extras/LibraryTest on `oep::SimpleInterface`: `run` (0x10) a job on the worker, `status` / `cancel` (0x20 /
   0x21) the worker's, `result` (0x22) the last case's number and value, the log by `addLog` (0x11 - 0x13); the bus is
   begun on the worker at the first case. The host test waits with `call_wait`.

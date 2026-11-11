@@ -62,7 +62,7 @@ classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中�
 - 使い方: [OEP でできること](docs/guide/use-cases.ja.md)（やりたいことごとに、用意するもの、配線、設定）、[デバッグの対応ターゲット](docs/guide/debug-targets.ja.md)、
   [キャプチャの使い分け](docs/guide/capture.ja.md)、[設定項目](docs/guide/settings.ja.md)。
 - 手引き: [使い始める](docs/guide/getting-started.ja.md)（焼く、見つける、Python から使う）、
-  [はじめてのインターフェース](docs/guide/your-first-interface.ja.md)、[firmware の機能](docs/guide/firmware-features.ja.md)（外す、自分のものを足す）、
+  [自分のコマンドを足す](docs/guide/simple-interface.ja.md)（関数を登録するだけ）、[はじめてのインターフェース](docs/guide/your-first-interface.ja.md)、[firmware の機能](docs/guide/firmware-features.ja.md)（外す、自分のものを足す）、
   [probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[ボード](docs/guide/boards.ja.md)（チップごとにできること、ほかのボード向けのビルド）。
 - 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)（凍結までは日本語の文書が正。英語は凍結のときに作る）—
   まず [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.ja.md) と [レビューの手引き](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md) から。
@@ -165,7 +165,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `tests/compile/`, `.github/workflows/tests.yml` | P4 / P4X の profile と Release の model の回帰テスト、各 P4 対応 example を両 profile でビルド。`python3 tests/compile/test_profiles.py`、firmware の識別情報は `tools/check_p4_firmware.py` で検証 |
 | `tools/sync_registry.sh` | oep-spec の `generated/oep-v1/oep_v1_registry.h` を `src/OepRegistry.h` に、`tests/vectors/*.json` を `tests/vectors/` に写す（`OEP_SPEC_REF` で commit を選ぶ） |
 | `tools/bump_version.py`、`tools/sync_release_assets.py`、`.github/workflows/release.yml` | リリース（arduino-library-release-toolkit のものをそのまま使う。編集しない） |
-| `docs/guide/` | 手引き（英語と日本語）。読む人ごとに: [OEP でできること](docs/guide/use-cases.ja.md)、[デバッグの対応ターゲット](docs/guide/debug-targets.ja.md)、[キャプチャの使い分け](docs/guide/capture.ja.md)、[設定項目](docs/guide/settings.ja.md)（使う人）、[使い始める](docs/guide/getting-started.ja.md)（probe を使う）、[はじめてのインターフェース](docs/guide/your-first-interface.ja.md)（初めての人）、[firmware の機能](docs/guide/firmware-features.ja.md)（firmware が持つものを選ぶ、自分のものを足す）、[probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[標準インターフェースを足す](docs/guide/adding-a-standard-interface.ja.md)（ライブラリに貢献する人）、[ボード](docs/guide/boards.ja.md) |
+| `docs/guide/` | 手引き（英語と日本語）。読む人ごとに: [OEP でできること](docs/guide/use-cases.ja.md)、[デバッグの対応ターゲット](docs/guide/debug-targets.ja.md)、[キャプチャの使い分け](docs/guide/capture.ja.md)、[設定項目](docs/guide/settings.ja.md)（使う人）、[使い始める](docs/guide/getting-started.ja.md)（probe を使う）、[自分のコマンドを足す](docs/guide/simple-interface.ja.md)（関数を登録するだけ）、[はじめてのインターフェース](docs/guide/your-first-interface.ja.md)（初めての人）、[firmware の機能](docs/guide/firmware-features.ja.md)（firmware が持つものを選ぶ、自分のものを足す）、[probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[標準インターフェースを足す](docs/guide/adding-a-standard-interface.ja.md)（ライブラリに貢献する人）、[ボード](docs/guide/boards.ja.md) |
 | `docs/` | この実装の値と限界（implementation limits）、検証と転送の手順 |
 
 スケッチが include するのは、配布する firmware（`examples/Firmware/OepProbe`）が使うヘッダーと同じ部品にする: 本体（`OepEndpoint.h`、

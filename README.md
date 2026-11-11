@@ -64,7 +64,7 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
 - Using OEP: [What OEP does for you](docs/guide/use-cases.md) (by what you want to do: what to prepare, wire and set),
   [Debug targets](docs/guide/debug-targets.md), [Capture: which way](docs/guide/capture.md), [Settings](docs/guide/settings.md).
 - Guides: [Getting started](docs/guide/getting-started.md) (flash, find, use a probe from Python),
-  [Your first interface](docs/guide/your-first-interface.md), [Firmware features](docs/guide/firmware-features.md) (leave parts
+  [Adding your own commands](docs/guide/simple-interface.md) (register functions), [Your first interface](docs/guide/your-first-interface.md), [Firmware features](docs/guide/firmware-features.md) (leave parts
   out, add your own), [Writing a probe](docs/guide/writing-a-probe.md) (the full reference),
   [Boards](docs/guide/boards.md) (what each chip does, building for another board).
 - Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (in Japanese until the freeze; the English text
@@ -175,7 +175,7 @@ one of them against this endpoint).
 | `tests/compile/`, `.github/workflows/tests.yml` | regression tests for P4/P4X profiles and release models; builds every P4 example with both profiles. Run `python3 tests/compile/test_profiles.py`; `tools/check_p4_firmware.py` checks firmware identity |
 | `tools/sync_registry.sh` | copies oep-spec's `generated/oep-v1/oep_v1_registry.h` to `src/OepRegistry.h` and its `tests/vectors/*.json` to `tests/vectors/` (`OEP_SPEC_REF` picks the commit) |
 | `tools/bump_version.py`, `tools/sync_release_assets.py`, `.github/workflows/release.yml` | releases (arduino-library-release-toolkit's, used as is; not edited here) |
-| `docs/guide/` | the guides (English and Japanese), by reader: [what OEP does for you](docs/guide/use-cases.md), [debug targets](docs/guide/debug-targets.md), [capture: which way](docs/guide/capture.md), [settings](docs/guide/settings.md) (users), [getting started](docs/guide/getting-started.md) (use a probe), [your first interface](docs/guide/your-first-interface.md) (beginners), [firmware features](docs/guide/firmware-features.md) (choose what the firmware has, add your own to it), [writing a probe](docs/guide/writing-a-probe.md) (the full reference), [adding a standard interface](docs/guide/adding-a-standard-interface.md) (contributors), [boards](docs/guide/boards.md) |
+| `docs/guide/` | the guides (English and Japanese), by reader: [what OEP does for you](docs/guide/use-cases.md), [debug targets](docs/guide/debug-targets.md), [capture: which way](docs/guide/capture.md), [settings](docs/guide/settings.md) (users), [getting started](docs/guide/getting-started.md) (use a probe), [adding your own commands](docs/guide/simple-interface.md) (register functions), [your first interface](docs/guide/your-first-interface.md) (beginners), [firmware features](docs/guide/firmware-features.md) (choose what the firmware has, add your own to it), [writing a probe](docs/guide/writing-a-probe.md) (the full reference), [adding a standard interface](docs/guide/adding-a-standard-interface.md) (contributors), [boards](docs/guide/boards.md) |
 | `docs/` | this implementation's values and limits, how it is verified and transferred |
 
 A sketch includes the parts the released firmware (`examples/Firmware/OepProbe`) includes: the core (`OepEndpoint.h`,

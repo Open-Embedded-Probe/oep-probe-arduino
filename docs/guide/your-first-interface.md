@@ -6,6 +6,8 @@ How to add a function of your own (an interface) to an OEP probe, starting from 
 that drives a pin. Read it with `examples/02.Interfaces/HelloInterface` and `CustomInterface` open. The full rules are in
 [writing a probe](writing-a-probe.md).
 
+For commands that are just functions to register, [Adding your own commands](simple-interface.md) (`oep::SimpleInterface`) is the shortest way. This guide writes `oep::Interface` directly, from the inside.
+
 ## 1. What an interface is
 
 A probe is a small machine that answers requests from a host (the PC). A request says three things: which interface, which

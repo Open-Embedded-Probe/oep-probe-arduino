@@ -6,6 +6,8 @@ OEP の probe に、自分の機能（インターフェース）を足す手順
 進みます。`examples/02.Interfaces/HelloInterface` と `CustomInterface` を開きながら読んでください。もっと詳しい規則は
 [probe を書く](writing-a-probe.ja.md) にあります。
 
+関数を登録するだけで済むコマンドなら、[自分のコマンドを足す](simple-interface.ja.md)（`oep::SimpleInterface`）がいちばん簡単です。ここでは `oep::Interface` を直に書く手順を、中身から説明します。
+
 ## 1. インターフェースとは
 
 probe は、host（PC）から届く要求に答える小さな機械です。要求は「どのインターフェースの、どの操作（op）を、どんな中身
