@@ -39,6 +39,7 @@ class PositionStream {
   // capacity: a power of two (the ring index is position & (capacity - 1)).
   PositionStream(uint8_t *buffer, size_t capacity, Mark *marks, size_t mark_capacity)
       : buffer_(buffer), capacity_(capacity), marks_(marks), mark_capacity_(mark_capacity) {}
+  bool ok() const { return buffer_ && marks_ && capacity_ && mark_capacity_; }   // its memory given (a heap that had room)
 
   // The oldest byte goes when the ring is full (a read then reports a gap). The first byte that pushes one out marks lost
   // with detail 1, overflow (oep-if-common §1.3), once per overflow episode: the ring stays full and every later byte

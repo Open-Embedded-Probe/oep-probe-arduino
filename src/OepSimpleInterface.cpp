@@ -3,6 +3,8 @@
 
 #include "OepSimpleInterface.h"
 
+#include "OepProbeLog.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -206,6 +208,16 @@ bool SimpleInterface::addWorker(Worker &worker, uint8_t base) {
          add(static_cast<uint8_t>(base + 1), "cancel", {}, {}, kCancel, nullptr, nullptr, 0);
 }
 
+bool SimpleInterface::addLog(ProbeLog &log) {
+  if (log_ || !log.ok() || find(ProbeLog::kOpRead) || find(ProbeLog::kOpMarks) || find(ProbeLog::kOpClear)) return false;
+  if (!add(ProbeLog::kOpRead, "log-read", {}, {}, kLog, nullptr, nullptr, kLockFree) ||
+      !add(ProbeLog::kOpMarks, "log-marks", {}, {}, kLog, nullptr, nullptr, kLockFree) ||
+      !add(ProbeLog::kOpClear, "log-clear", {}, {}, kLog, nullptr, nullptr, 0))
+    return false;
+  log_ = &log;
+  return true;
+}
+
 bool SimpleInterface::add(uint8_t code, const char *name, std::initializer_list<Field> request,
                           std::initializer_list<Field> answer, Kind kind, Handler handler, Worker::JobFn job,
                           uint8_t flags) {
@@ -258,9 +270,12 @@ size_t SimpleInterface::describe(uint8_t *out, size_t capacity) {
   for (const Op *o = ops_; o; o = o->next) {
     const size_t n = strlen(o->name);
     v[0] = o->code;
-    v[1] = static_cast<uint8_t>(reg::core::kOpNameFlagForm | ((o->flags & kLockFree) ? reg::core::kOpNameFlagLockFree : 0));
+    // a log op: its name only (the console's forms, not fields: the marks are records)
+    const uint8_t form = o->kind == kLog ? 0 : reg::core::kOpNameFlagForm;
+    v[1] = static_cast<uint8_t>(form | ((o->flags & kLockFree) ? reg::core::kOpNameFlagLockFree : 0));
     memcpy(v + 2, o->name, n);
     w.put(reg::kDescribeOpName, v, 2 + n);
+    if (o->kind == kLog) continue;
     const struct { uint8_t part; const Field *fields; size_t count; } parts[] = {
         {reg::core::kOpFieldPartRequest, o->request, o->requests},
         {reg::core::kOpFieldPartSuccess, o->answer, o->answers},
@@ -282,6 +297,7 @@ size_t SimpleInterface::describe(uint8_t *out, size_t capacity) {
 Result SimpleInterface::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   const Op *o = find(op);
   if (!o) return rejected(kRejectUnknownOperation);
+  if (o->kind == kLog) return log_->handle(op, payload, length, out, capacity, max_read_);   // the stream ops' own checks
   bool ok = false;
   const size_t fixed = fieldsLength(o->request, o->requests, payload, length, ok);
   if (!ok) return rejected(kRejectMalformed);
@@ -296,7 +312,8 @@ Result SimpleInterface::handle(uint8_t op, const uint8_t *payload, size_t length
     case kCancel:
       worker_->cancel();
       return reply.done();
-    case kPlain: break;
+    case kPlain:
+    case kLog: break;
   }
   if (!(o->flags & kInWorker) || !worker_) return o->handler(in, reply);
   struct Call {

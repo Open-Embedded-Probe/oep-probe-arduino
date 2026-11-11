@@ -15,11 +15,18 @@
 // says so; marks that the mark ring pushed out show as a jump in their serials - a host that sees either knows lines
 // are missing.
 //
-// Call it from loop() or from the interface's handle() (the endpoint's thread): it takes no lock.
+// Any thread may write it (a job on an oep::Worker, loop(), handle()): a line and each op take a short lock - a critical
+// section on an ESP32 / ESP32-P4 and an RP2, nothing on a chip without threads.
+// On an oep::SimpleInterface: iface.addLog(log) gives these ops at their console numbers (oep_client.probe_log reads them).
 #pragma once
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#if defined(ARDUINO_ARCH_RP2040)
+#include <pico/sync.h>
+#endif
 
 #include "Oep.h"
 #include "OepStream.h"
@@ -35,12 +42,23 @@ class ProbeLog {
 
   // capacity: a power of two
   ProbeLog(uint8_t *buffer, size_t capacity, PositionStream::Mark *marks, size_t mark_capacity)
-      : stream_(buffer, capacity, marks, mark_capacity) {}
+      : stream_(buffer, capacity, marks, mark_capacity) {
+    initLock();
+  }
+  // The ring and the marks from the heap (capacity a power of two); ok() false when they did not fit
+  ProbeLog(size_t capacity, size_t mark_capacity)
+      : ProbeLog(static_cast<uint8_t *>(malloc(capacity)), capacity,
+                 static_cast<PositionStream::Mark *>(malloc(sizeof(PositionStream::Mark) * mark_capacity)),
+                 mark_capacity) {}
+  bool ok() const { return stream_.ok(); }
 
   void line(const char *text) {
+    if (!ok()) return;
+    lock();
     stream_.mark(kMarkKindLine);
     for (const char *c = text; *c; ++c) stream_.put(static_cast<uint8_t>(*c));
     stream_.put('\n');
+    unlock();
   }
   void printf(const char *format, ...) __attribute__((format(printf, 2, 3))) {
     char text[kLineMax + 1];
@@ -55,6 +73,15 @@ class ProbeLog {
   static bool handles(uint8_t op) { return op == kOpRead || op == kOpMarks || op == kOpClear; }
   static bool lockFree(uint8_t op) { return op == kOpRead || op == kOpMarks; }
   Result handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity, uint16_t max_read = 1000) {
+    if (!ok()) return failed();
+    lock();
+    const Result r = handleLocked(op, p, n, out, capacity, max_read);
+    unlock();
+    return r;
+  }
+
+ private:
+  Result handleLocked(uint8_t op, const uint8_t *p, size_t n, uint8_t *out, size_t capacity, uint16_t max_read) {
     Tail tail;
     if (op == kOpRead) {   // from(u8) arg(u64) max(u16) [TLV]  ->  start(u64) flags(u8) len(u16) data [TLV]
       const Result parsed = plainTail(tail, p, n, PositionStream::kReadRequest, out, capacity);
@@ -75,7 +102,21 @@ class ProbeLog {
     return completed();
   }
 
- private:
+#if defined(ARDUINO_ARCH_ESP32)
+  void initLock() { lock_ = portMUX_INITIALIZER_UNLOCKED; }
+  void lock() { portENTER_CRITICAL(&lock_); }
+  void unlock() { portEXIT_CRITICAL(&lock_); }
+  portMUX_TYPE lock_;
+#elif defined(ARDUINO_ARCH_RP2040)
+  void initLock() { critical_section_init(&lock_); }
+  void lock() { critical_section_enter_blocking(&lock_); }
+  void unlock() { critical_section_exit(&lock_); }
+  critical_section_t lock_;
+#else
+  void initLock() {}
+  void lock() {}
+  void unlock() {}
+#endif
   PositionStream stream_;
 };
 

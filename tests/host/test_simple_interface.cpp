@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "OepProbeLog.h"
 #include "OepSimpleInterface.h"
 
 uint32_t g_millis = 1000;
@@ -269,6 +270,39 @@ static void testInterfaceName() {
   CHECK(!oneLabel.addWorker(w, 0x40));
 }
 
+static void testLog() {
+  SimpleInterface s("io.github.example.logged", 1);
+  ProbeLog log(256, 8);
+  CHECK(log.ok());
+  CHECK(s.op(0x10, "add", {{"a", i32}, {"b", i32}}, {{"sum", i32}}, addFn));
+  CHECK(s.addLog(log));
+  CHECK(!s.addLog(log));                                                      // one log
+  CHECK(!s.op(ProbeLog::kOpRead, "x", {}, {}, readFn));                      // its codes are taken
+  CHECK(s.offers(ProbeLog::kOpRead) && s.offers(ProbeLog::kOpMarks) && s.offers(ProbeLog::kOpClear));
+  CHECK(s.lockFree(ProbeLog::kOpRead) && s.lockFree(ProbeLog::kOpMarks) && !s.lockFree(ProbeLog::kOpClear));
+  log.line("hello");
+  log.printf("n=%d", 3);
+  Bytes out;
+  Bytes req(11, 0);
+  req[0] = reg::common::kReadFromOldest;
+  req[9] = 100;   // max
+  Result r = call(s, ProbeLog::kOpRead, req, out);
+  const std::string text = success(r) && out.size() >= 11 ? std::string(out.begin() + 11, out.end()) : "";
+  CHECK(text == "hello\nn=3\n");
+  r = call(s, ProbeLog::kOpMarks, {0, 0, 0, 0}, out);
+  CHECK(success(r) && out.size() >= 2 && out[1] == 2);                        // two line marks
+  CHECK(success(call(s, ProbeLog::kOpClear, {}, out)));
+  CHECK(rejectedWith(call(s, ProbeLog::kOpRead, {}, out), kRejectMalformed));   // the stream op's own checks
+  Bytes d(1024);
+  const size_t n = s.describe(d.data(), d.size());
+  const std::string desc(reinterpret_cast<const char *>(d.data()), n);
+  const size_t at = desc.find("log-read");
+  CHECK(at != std::string::npos && at >= 1 && static_cast<uint8_t>(desc[at - 1]) == reg::core::kOpNameFlagLockFree);   // no form
+  SimpleInterface t("io.github.example.taken", 1);
+  CHECK(t.op(ProbeLog::kOpMarks, "mine", {}, {}, readFn));
+  CHECK(!t.addLog(log));                                                     // a code it needs is the sketch's
+}
+
 static void testWorker() {
   SimpleInterface s("io.github.example.jobs", 1);
   Worker w;
@@ -339,6 +373,7 @@ int main() {
   testAnswers();
   testWorker();
   testInterfaceName();
+  testLog();
   printf("simple-interface: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

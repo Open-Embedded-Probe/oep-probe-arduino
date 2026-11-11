@@ -25,6 +25,8 @@
 
 namespace oep {
 
+class ProbeLog;
+
 // A field's type (core §7.4 op_field type)
 using FieldType = uint8_t;
 inline constexpr FieldType u8 = reg::core::kOpFieldTypeU8;
@@ -133,19 +135,24 @@ class SimpleInterface : public Interface {
   // 1 running, 2 done, 3 failed, 4 cancelled), op(u8: the last job's), code(i32), message(text) - Worker::fail()'s -,
   // start_ns(u64), end_ns(u64) on the probe's clock (a capture's markers' one); cancel at base + 1 asks the job to stop
   bool addWorker(Worker &worker, uint8_t base);
+  // A log of the sketch's code (OepProbeLog.h), its lines on the probe's clock: log-read, log-marks (lock-free) and
+  // log-clear at the console's numbers 0x11 - 0x13 (oep-if-common §1; oep_client.probe_log reads them). false when one
+  // of those codes is taken, the log's memory missing or a log already added
+  bool addLog(ProbeLog &log);
 
   const char *name() const override { return name_; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return revision_; }
   bool offers(uint8_t op) const override { return find(op) != nullptr; }
   bool lockFree(uint8_t op) const override;
+  void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 16 ? static_cast<uint16_t>(max_frame - 16) : 0; }
   size_t describe(uint8_t *out, size_t capacity) override;
   Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 
   static bool validName(const char *name);
 
  private:
-  enum Kind : uint8_t { kPlain, kJob, kStatus, kCancel };
+  enum Kind : uint8_t { kPlain, kJob, kStatus, kCancel, kLog };
   struct Op {
     uint8_t code, flags;
     Kind kind;
@@ -161,6 +168,8 @@ class SimpleInterface : public Interface {
   Result status(Reply &out) const;
   const Op *find(uint8_t code) const;
   Worker *worker_ = nullptr;
+  ProbeLog *log_ = nullptr;
+  uint16_t max_read_ = 1000;
   const char *name_;
   uint8_t revision_;
   uint16_t instance_;

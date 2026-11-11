@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `SimpleInterface::addLog(log)`: an `oep::ProbeLog` on the same interface - log-read, log-marks (lock-free) and
+  log-clear at the console's numbers 0x11 - 0x13, so `oep_client.probe_log.ProbeLog(hst, interface)` reads it; in the
+  describe by name (no form). `ProbeLog(capacity, marks)` takes its memory from the heap (`ok()`), and a line and each
+  op take a short lock, so a job on the worker may write while the endpoint reads.
+- (JA) `SimpleInterface::addLog(log)`: `oep::ProbeLog` を同じインターフェースに載せる。log-read、log-marks（ロック不要）、
+  log-clear をコンソールの番号 0x11〜0x13 に置くので、`oep_client.probe_log.ProbeLog(hst, interface)` でそのまま読める。describe
+  には名前だけ出す（形なし）。`ProbeLog(容量, マークの数)` はヒープから取る（`ok()`）。1 行の書き込みと各 op は短いロックを取るので、
+  ワーカーのジョブが書くのと endpoint が読むのが重なってよい。
 - (EN) `oep::Worker` (OepWorker.h) and jobs on `oep::SimpleInterface`: `addWorker(worker, base)` adds a status op
   (lock-free: state idle / running / done / failed / cancelled, the job's op, code, message, start_ns and end_ns on the
   probe's clock) and a cancel op; `job(code, name, {request fields}, fn)` copies the request, starts `fn(in, worker)` on
