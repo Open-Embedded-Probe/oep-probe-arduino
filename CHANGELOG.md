@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) extras/LibraryTest on `oep::SimpleInterface`: `run` (0x10) a job on the worker, `status` / `cancel` (0x20 /
+  0x21) the worker's, `result` (0x22) the last case's number and value, the log by `addLog` (0x11 - 0x13); the bus is
+  begun on the worker at the first case. The host test waits with `call_wait`.
+- (JA) extras/LibraryTest を `oep::SimpleInterface` で作り直した: `run`（0x10）はワーカーのジョブ、`status` / `cancel`（0x20 /
+  0x21）はワーカーのもの、`result`（0x22）は最後のケースの番号と値、ログは `addLog`（0x11〜0x13）。バスは最初のケースでワーカーの
+  上で始める。ホストの試験は `call_wait` で待つ。
 - (EN) OepFirmwareParts.h includes OepEndpoint.h and OepPinTable.h: a sketch's own file that registers with
   `oep::firmware.onSetup` can use the endpoint and the pin table (`pins.claim`) without including them itself.
 - (JA) OepFirmwareParts.h が OepEndpoint.h と OepPinTable.h を include する。`oep::firmware.onSetup` で登録するスケッチの

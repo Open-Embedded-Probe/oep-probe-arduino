@@ -9,19 +9,16 @@ log in the capture by the probe's clock.
 25,26, RP2040 / RP2350 26,27.)
 """
 import os
-import struct
 import time
 
 import pytest
 
-from oep_client import capture, core, link
+from oep_client import call as c, capture, core, link
 from oep_client.probe_log import ProbeLog, sample_of
 
 PORT = os.environ.get("OEP_LIBTEST_PORT")
 SDA, SCL = (int(p) for p in os.environ.get("OEP_LIBTEST_PINS", "32,33").split(","))
 NAME = "io.github.example.library-test"
-RUN, STATUS = 0x10, 0x20
-IDLE, RUNNING, DONE = 0, 1, 2
 
 pytestmark = pytest.mark.skipif(not PORT, reason="OEP_LIBTEST_PORT names the probe")
 
@@ -35,18 +32,19 @@ def probe():
     hst.link.close()                                         # the port free for the next test
 
 
-def run_case(hst, log, case, timeout_s=10.0):
-    """Start a case and wait for its end by status (the probe answers all along). -> (result, the states seen)."""
-    hst.call(log.fn, RUN, bytes([case]))
-    seen, deadline = [], time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        state, which, result = struct.unpack("<BBi", hst.call(log.fn, STATUS, locked=False).payload[:6])
-        seen.append(state)
-        if state == DONE:
-            assert which == case
-            return result, seen
-        time.sleep(0.005)
-    raise TimeoutError(f"case {case} still running after {timeout_s} s")
+def run_case(hst, case, timeout_s=10.0):
+    """Start a case (the job "run") and wait for its end by status (the probe answers all along).
+    -> (its result, the states the status said while it waited)."""
+    seen = []
+
+    def wait(seconds):
+        seen.append(c.call(hst, NAME, "status")["state"])   # lock-free, beside call_wait's own reads
+        time.sleep(seconds)
+
+    c.call_wait(hst, NAME, "run", case=case, timeout=timeout_s, interval=0.005, wait=wait)
+    r = c.call(hst, NAME, "result")
+    assert r["case"] == case
+    return r["result"], seen
 
 
 def captured(lc, log, hst, case, rate, samples):
@@ -54,7 +52,7 @@ def captured(lc, log, hst, case, rate, samples):
     log.clear()
     cfg = lc.configure(rate=rate, samples=samples, trigger=(capture.EDGE, 0, 1), pretrigger=200)
     lc.start()
-    result, seen = run_case(hst, log, case)
+    result, seen = run_case(hst, case)
     (seg,) = lc.wait(timeout=5.0)
     data = lc.read_segment(seg)
     lines = log.log()
@@ -93,7 +91,7 @@ def test_a_long_sequence_runs_while_the_probe_answers(probe):
     core.plan_apply(probe, [(lc.fn, 0, SDA), (lc.fn, 1, SCL)])
     try:
         cfg, seg, data, result, seen, at, tolerance = captured(lc, log, probe, 4, 1_000_000, 200_000)
-        assert RUNNING in seen, f"status never saw the case running: {seen}"
+        assert c.JOB_STATES["running"] in seen, f"status never saw the case running: {seen}"
         samples = [s for _, s in at]
         assert samples == sorted(samples), at
         sda = lc.channel(data, 0, seg.samples)
