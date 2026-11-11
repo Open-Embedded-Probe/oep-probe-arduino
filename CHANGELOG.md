@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.54
 - (EN) Guide: [Adding your own commands](docs/guide/simple-interface.md) - `oep::SimpleInterface` from the smallest
   example to the worker's jobs, the log, the pins and calling from `oep call` and Python; linked from the README and
   Your first interface.
