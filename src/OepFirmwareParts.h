@@ -10,6 +10,8 @@
 #include <stdint.h>
 
 #include "Oep.h"   // interfaceName(), Interface
+#include "OepEndpoint.h"   // onSetup's Endpoint and PinTable: complete for the sketch's own files
+#include "OepPinTable.h"
 
 namespace oep {
 

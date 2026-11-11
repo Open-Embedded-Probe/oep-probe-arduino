@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) OepFirmwareParts.h includes OepEndpoint.h and OepPinTable.h: a sketch's own file that registers with
+  `oep::firmware.onSetup` can use the endpoint and the pin table (`pins.claim`) without including them itself.
+- (JA) OepFirmwareParts.h が OepEndpoint.h と OepPinTable.h を include する。`oep::firmware.onSetup` で登録するスケッチの
+  別ファイルは、自分で include しなくても endpoint とピン表（`pins.claim`）を使える。
 - (EN) `SimpleInterface::addLog(log)`: an `oep::ProbeLog` on the same interface - log-read, log-marks (lock-free) and
   log-clear at the console's numbers 0x11 - 0x13, so `oep_client.probe_log.ProbeLog(hst, interface)` reads it; in the
   describe by name (no form). `ProbeLog(capacity, marks)` takes its memory from the heap (`ok()`), and a line and each
