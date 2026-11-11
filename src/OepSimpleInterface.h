@@ -21,6 +21,7 @@
 
 #include "Oep.h"
 #include "OepRegistry.h"
+#include "OepWorker.h"
 
 namespace oep {
 
@@ -47,6 +48,7 @@ struct Field {
 
 // An op's flags
 inline constexpr uint8_t kLockFree = 0x01;   // taken without the lock: it changes nothing (core §6)
+inline constexpr uint8_t kInWorker = 0x02;   // runs on the interface's oep::Worker, answered when it ends (addWorker)
 
 // A run of bytes in a request (bytes, text: not terminated)
 struct Span {
@@ -120,9 +122,17 @@ class SimpleInterface : public Interface {
  public:
   SimpleInterface(const char *name, uint8_t revision, uint16_t instance = 0)
       : name_(name), revision_(revision), instance_(instance) {}
-  // false: a code below 0x10 or taken, a bad name, a field list that is not a fixed part (core §7.4), no memory
+  // false: the interface's name not one core §13 rule 1 allows (endpoint.add() refuses it), a code below 0x10 or
+  // taken, a bad name, a field list that is not a fixed part (core §7.4), no memory
   bool op(uint8_t code, const char *name, std::initializer_list<Field> request, std::initializer_list<Field> answer,
           Handler handler, uint8_t flags = 0);
+  // A job: the op copies its request's fields, starts fn on the worker and answers at once with no fields (busy while
+  // a job runs); the status op says how it went. false as op(), or before addWorker()
+  bool job(uint8_t code, const char *name, std::initializer_list<Field> request, Worker::JobFn fn);
+  // The worker the jobs and the kInWorker ops run on, and its two ops: status at base (lock-free) -> state(u8: 0 idle,
+  // 1 running, 2 done, 3 failed, 4 cancelled), op(u8: the last job's), code(i32), message(text) - Worker::fail()'s -,
+  // start_ns(u64), end_ns(u64) on the probe's clock (a capture's markers' one); cancel at base + 1 asks the job to stop
+  bool addWorker(Worker &worker, uint8_t base);
 
   const char *name() const override { return name_; }
   uint16_t instance() const override { return instance_; }
@@ -135,15 +145,22 @@ class SimpleInterface : public Interface {
   static bool validName(const char *name);
 
  private:
+  enum Kind : uint8_t { kPlain, kJob, kStatus, kCancel };
   struct Op {
     uint8_t code, flags;
+    Kind kind;
     const char *name;
     Field *request, *answer;
     uint8_t requests, answers;
     Handler handler;
+    Worker::JobFn job;
     Op *next;
   };
+  bool add(uint8_t code, const char *name, std::initializer_list<Field> request, std::initializer_list<Field> answer,
+           Kind kind, Handler handler, Worker::JobFn job, uint8_t flags);
+  Result status(Reply &out) const;
   const Op *find(uint8_t code) const;
+  Worker *worker_ = nullptr;
   const char *name_;
   uint8_t revision_;
   uint16_t instance_;

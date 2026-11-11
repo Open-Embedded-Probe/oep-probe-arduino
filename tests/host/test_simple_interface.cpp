@@ -6,7 +6,9 @@
 // op_field TLVs (the failed part's code / message), the request's fields checked before the function (short, a bool
 // not 0 / 1, bytes / text / list lengths, a tail with an unknown critical TLV refused unsupported, a non-critical one
 // left), the answer packed in order (all the types), fail(), an answer that is not the registered one said as failed,
-// lockFree, unsupported() and busy().
+// lockFree, unsupported() and busy(). oep::Worker without a task (poll()): a job's request copied and run at poll(),
+// busy while it runs, the status (lock-free) through running / done / failed (code, message) / cancelled with its times,
+// a kInWorker op answered in the request, job() refused before addWorker(), the worker's ops in the describe.
 #include <stdio.h>
 #include <string.h>
 
@@ -221,11 +223,122 @@ static void testAnswers() {
   CHECK(rejectedWith(call(s, 0x13, {1}, out), kRejectUnavailable));
 }
 
+static uint8_t g_seen = 0;
+static void countJob(Args &in, Worker &w) {
+  g_seen = in.u8();
+  g_millis += 5;   // the job's time
+  if (g_seen == 9) w.fail(9, "nine refused");
+  if (g_seen == 7) w.fail(1, "first");   // a second fail(): the last one stands
+  if (g_seen == 7) w.fail(2, "second");
+}
+static void stopJob(Args &, Worker &w) { g_seen = w.cancelled() ? 1 : 0; }
+static Result inWorkerFn(Args &in, Reply &out) {
+  out.u8(static_cast<uint8_t>(in.u8() + 1));
+  return out.done();
+}
+
+struct Status {
+  uint8_t state, op;
+  int32_t code;
+  std::string message;
+  uint64_t start, end;
+};
+static Status readStatus(SimpleInterface &s) {
+  Bytes out;
+  const Result r = call(s, 0x40, {}, out);
+  Status st{};
+  if (!success(r)) return {0xFF, 0, 0, "", 0, 0};
+  st.state = out[0];
+  st.op = out[1];
+  st.code = static_cast<int32_t>(getU32(out.data() + 2));
+  const size_t n = getU16(out.data() + 6);
+  st.message.assign(reinterpret_cast<const char *>(out.data() + 8), n);
+  st.start = getU64(out.data() + 8 + n);
+  st.end = getU64(out.data() + 16 + n);
+  return st;
+}
+
+static void testInterfaceName() {
+  // a name endpoint.add() would refuse (core §13 rule 1): the ops are refused at registration, where the sketch sees it
+  SimpleInterface tooLong("io.github.example.a-name-that-runs-past-the-limit-of-48", 1);
+  CHECK(strlen(tooLong.name()) > 48);
+  CHECK(!tooLong.op(0x10, "add", {{"a", i32}, {"b", i32}}, {{"sum", i32}}, addFn));
+  SimpleInterface oneLabel("mine", 1);
+  CHECK(!oneLabel.op(0x10, "add", {{"a", i32}, {"b", i32}}, {{"sum", i32}}, addFn));
+  Worker w;
+  CHECK(!oneLabel.addWorker(w, 0x40));
+}
+
+static void testWorker() {
+  SimpleInterface s("io.github.example.jobs", 1);
+  Worker w;
+  CHECK(!s.job(0x10, "count", {{"n", u8}}, countJob));   // no worker yet
+  CHECK(s.addWorker(w, 0x40));
+  CHECK(!s.addWorker(w, 0x50));                           // one worker
+  CHECK(s.job(0x10, "count", {{"n", u8}}, countJob));
+  CHECK(s.job(0x11, "stop", {}, stopJob));
+  CHECK(s.op(0x12, "inc", {{"v", u8}}, {{"w", u8}}, inWorkerFn, kInWorker));
+  CHECK(!s.job(0x40, "x", {}, countJob));                 // the status's code
+  CHECK(s.lockFree(0x40) && !s.lockFree(0x41) && !s.lockFree(0x10));
+  Status st = readStatus(s);
+  CHECK(st.state == Worker::kIdle && st.op == 0 && st.code == 0 && st.message.empty());
+
+  Bytes out;
+  g_seen = 0;
+  Result r = call(s, 0x10, {5}, out);
+  CHECK(success(r) && out.empty() && g_seen == 0);
+  st = readStatus(s);
+  CHECK(st.state == Worker::kRunning && st.op == 0x10 && st.end == 0);
+  CHECK(rejectedWith(call(s, 0x10, {6}, out), kRejectUnavailable));   // one runs
+  CHECK(rejectedWith(call(s, 0x12, {1}, out), kRejectUnavailable));   // the worker is the job's
+  const uint64_t before = st.start;
+  w.poll();
+  CHECK(g_seen == 5);
+  st = readStatus(s);
+  CHECK(st.state == Worker::kDone && st.op == 0x10 && st.code == 0 && st.message.empty() && st.start >= before &&
+        st.end >= st.start + 5000000);
+  w.poll();   // nothing asked: nothing runs
+  CHECK(readStatus(s).state == Worker::kDone);
+
+  CHECK(success(call(s, 0x10, {9}, out)));
+  w.poll();
+  st = readStatus(s);
+  CHECK(st.state == Worker::kFailed && st.code == 9 && st.message == "nine refused");
+  CHECK(success(call(s, 0x10, {7}, out)));
+  st = readStatus(s);
+  CHECK(st.state == Worker::kRunning && st.code == 0 && st.message.empty());   // the last job's not shown while running
+  w.poll();
+  st = readStatus(s);
+  CHECK(st.state == Worker::kFailed && st.code == 2 && st.message == "second");
+
+  CHECK(success(call(s, 0x11, {}, out)));
+  CHECK(success(call(s, 0x41, {}, out)));   // cancel
+  w.poll();
+  st = readStatus(s);
+  CHECK(g_seen == 1 && st.state == Worker::kCancelled && st.op == 0x11);
+  CHECK(success(call(s, 0x41, {}, out)));   // cancel with nothing running: nothing
+  CHECK(success(call(s, 0x11, {}, out)));
+  w.poll();
+  CHECK(g_seen == 0 && readStatus(s).state == Worker::kDone);   // the last cancel did not stay
+
+  r = call(s, 0x12, {41}, out);
+  CHECK(success(r) && out.size() == 1 && out[0] == 42);
+  CHECK(rejectedWith(call(s, 0x10, {}, out), kRejectMalformed));   // the job's field missing
+
+  Bytes d(1024);
+  const size_t n = s.describe(d.data(), d.size());
+  const std::string text(reinterpret_cast<const char *>(d.data()), n);
+  CHECK(n > 0 && text.find("status") != std::string::npos && text.find("cancel") != std::string::npos &&
+        text.find("start_ns") != std::string::npos);
+}
+
 int main() {
   testRegistration();
   testDescribe();
   testRequests();
   testAnswers();
+  testWorker();
+  testInterfaceName();
   printf("simple-interface: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

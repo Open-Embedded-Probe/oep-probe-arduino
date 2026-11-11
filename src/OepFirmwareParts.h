@@ -9,6 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "Oep.h"   // interfaceName(), Interface
+
 namespace oep {
 
 class Endpoint;
@@ -66,7 +68,12 @@ class Firmware {
 
   // An interface of the sketch's own: added after the firmware's, before the saved settings are applied, in the order
   // registered (endpoint.add)
-  void add(Interface &interface) { append(interfaces_, new Node{&interface, nullptr, nullptr, nullptr}); }
+  // false: a name the endpoint refuses (core §13 rule 1: at most 48 bytes of a reverse domain name)
+  bool add(Interface &interface) {
+    if (!interfaceName(interface.name())) return false;
+    append(interfaces_, new Node{&interface, nullptr, nullptr, nullptr});
+    return true;
+  }
   // Called in begin(), before the sketch's interfaces are added: take pins (owners::kSketch and up), set things up
   void onSetup(SetupFn fn) { append(setups_, new Node{nullptr, fn, nullptr, nullptr}); }
   // Called every loop(), after the firmware's own work; it must not wait

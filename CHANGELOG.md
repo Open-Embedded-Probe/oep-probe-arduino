@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) `oep::Worker` (OepWorker.h) and jobs on `oep::SimpleInterface`: `addWorker(worker, base)` adds a status op
+  (lock-free: state idle / running / done / failed / cancelled, the job's op, code, message, start_ns and end_ns on the
+  probe's clock) and a cancel op; `job(code, name, {request fields}, fn)` copies the request, starts `fn(in, worker)` on
+  the worker and answers at once (busy while one runs); in the job, `cancelled()` and `fail(code, message)`. An op
+  flagged `kInWorker` runs on the worker to its end before its answer (a peripheral begun there takes its interrupts
+  on that core). ESP32 / ESP32-P4: a task pinned off loop()'s core (an ESP32-P4's core 0); RP2 and CH32: the job runs
+  at `worker.poll()`, a kInWorker op in the request's thread.
+- (JA) `oep::Worker`（OepWorker.h）と `oep::SimpleInterface` のジョブ: `addWorker(worker, base)` で status の op（ロック不要。
+  状態 idle / running / done / failed / cancelled、ジョブの op、code、message、プローブの時計の start_ns と end_ns）と cancel の
+  op を足す。`job(番号, 名前, {要求の欄}, 関数)` は要求を写してワーカーで `関数(in, worker)` を始め、すぐ答える（走っている間は
+  busy）。ジョブの中では `cancelled()` と `fail(番号, 文)`。`kInWorker` の印の op はワーカーで終わりまで走ってから答える（そこで
+  始めた周辺回路の割り込みはそのコアに付く）。ESP32 / ESP32-P4 は loop() と別のコアに固定したタスク（ESP32-P4 はコア 0）。RP2 と
+  CH32 は `worker.poll()` でジョブを走らせ、kInWorker の op は要求のスレッドで走る。
 - (EN) ESP32-P4 / P4X on EspUsbDevice 3.1.0: the vendor port's bulk IN is doubled whatever the CDC ports take
   (EspUsbBulkStreamConfig::bulkInBuffering, the per-function setting), and the DFU is no longer manifestation
   tolerant (3.1.0 answers GETSTATUS / GETSTATE in dfuMANIFEST-WAIT-RESET). P4X, 8 lines streaming 5 s, CDC ports

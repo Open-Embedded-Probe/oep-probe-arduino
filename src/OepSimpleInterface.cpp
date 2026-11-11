@@ -189,8 +189,29 @@ bool SimpleInterface::validName(const char *name) {
 
 bool SimpleInterface::op(uint8_t code, const char *name, std::initializer_list<Field> request,
                          std::initializer_list<Field> answer, Handler handler, uint8_t flags) {
-  if (code < 0x10 || find(code) || !handler || !validName(name) || request.size() > 0xFF || answer.size() > 0xFF)
-    return false;
+  return handler && add(code, name, request, answer, kPlain, handler, nullptr, flags);
+}
+
+bool SimpleInterface::job(uint8_t code, const char *name, std::initializer_list<Field> request, Worker::JobFn fn) {
+  return worker_ && fn && add(code, name, request, {}, kJob, nullptr, fn, 0);
+}
+
+bool SimpleInterface::addWorker(Worker &worker, uint8_t base) {
+  if (worker_ || base == 0xFF || find(base) || find(base + 1)) return false;
+  worker_ = &worker;
+  return add(base, "status", {},
+             {{"state", oep::u8}, {"op", oep::u8}, {"code", oep::i32}, {"message", oep::text},
+              {"start_ns", oep::u64}, {"end_ns", oep::u64}},
+             kStatus, nullptr, nullptr, kLockFree) &&
+         add(static_cast<uint8_t>(base + 1), "cancel", {}, {}, kCancel, nullptr, nullptr, 0);
+}
+
+bool SimpleInterface::add(uint8_t code, const char *name, std::initializer_list<Field> request,
+                          std::initializer_list<Field> answer, Kind kind, Handler handler, Worker::JobFn job,
+                          uint8_t flags) {
+  // the interface's own name too (core §13 rule 1, at most 48 bytes): endpoint.add() would refuse it later, unseen
+  if (!interfaceName(name_)) return false;
+  if (code < 0x10 || find(code) || !validName(name) || request.size() > 0xFF || answer.size() > 0xFF) return false;
   for (const Op *o = ops_; o; o = o->next) if (strcmp(o->name, name) == 0) return false;
   for (const std::initializer_list<Field> *list : {&request, &answer}) {
     for (const Field &f : *list) {
@@ -199,12 +220,26 @@ bool SimpleInterface::op(uint8_t code, const char *name, std::initializer_list<F
     for (const Field *a = list->begin(); a != list->end(); ++a)
       for (const Field *b = a + 1; b != list->end(); ++b) if (strcmp(a->name, b->name) == 0) return false;
   }
-  Op *o = new Op{code, flags, name, copyFields(request), copyFields(answer), static_cast<uint8_t>(request.size()),
-                 static_cast<uint8_t>(answer.size()), handler, nullptr};
+  Op *o = new Op{code, flags, kind, name, copyFields(request), copyFields(answer), static_cast<uint8_t>(request.size()),
+                 static_cast<uint8_t>(answer.size()), handler, job, nullptr};
   Op **at = &ops_;
   while (*at) at = &(*at)->next;
   *at = o;
   return true;
+}
+
+Result SimpleInterface::status(Reply &out) const {
+  const Worker &w = *worker_;
+  const uint8_t state = w.state_;
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);   // the code, message and times the job published before its state
+  const bool ended = state != Worker::kRunning;
+  out.u8(state);
+  out.u8(w.op_);
+  out.i32(ended ? w.code_ : 0);
+  out.text(ended ? w.message() : "");
+  out.u64(w.start_ns_);
+  out.u64(ended ? w.end_ns_ : 0);
+  return out.done();
 }
 
 const SimpleInterface::Op *SimpleInterface::find(uint8_t code) const {
@@ -255,7 +290,27 @@ Result SimpleInterface::handle(uint8_t op, const uint8_t *payload, size_t length
   if (refused(parsed)) return parsed;
   Args in(payload, fixed);
   Reply reply(out, capacity, o->answer, o->answers);
-  return o->handler(in, reply);
+  switch (o->kind) {
+    case kJob: return worker_->startJob(o->code, o->job, payload, fixed) ? reply.done() : reply.busy();
+    case kStatus: return status(reply);
+    case kCancel:
+      worker_->cancel();
+      return reply.done();
+    case kPlain: break;
+  }
+  if (!(o->flags & kInWorker) || !worker_) return o->handler(in, reply);
+  struct Call {
+    Handler handler;
+    Args *in;
+    Reply *reply;
+    Result result;
+  } call{o->handler, &in, &reply, {}};
+  if (!worker_->runSync([](void *c) {
+        Call &k = *static_cast<Call *>(c);
+        k.result = k.handler(*k.in, *k.reply);
+      }, &call))
+    return reply.busy();   // a job runs on the worker
+  return call.result;
 }
 
 }  // namespace oep
