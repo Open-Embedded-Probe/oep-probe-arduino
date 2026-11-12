@@ -28,10 +28,10 @@ uint32_t gcd(uint32_t a, uint32_t b) {
   return a;
 }
 
-// The divider of F_CPU nearest the rate asked, at or above the one kMaxHz takes
+// The divider of CH32RV_HCLK_HZ nearest the rate asked, at or above the one kMaxHz takes
 uint32_t dividerOf(uint32_t rate) {
-  const uint32_t least = (F_CPU + Ch32LogicCapture::kMaxHz - 1) / Ch32LogicCapture::kMaxHz;
-  uint32_t d = (F_CPU + rate / 2) / rate;
+  const uint32_t least = (CH32RV_HCLK_HZ + Ch32LogicCapture::kMaxHz - 1) / Ch32LogicCapture::kMaxHz;
+  uint32_t d = (CH32RV_HCLK_HZ + rate / 2) / rate;
   return d < least ? least : d;
 }
 
@@ -50,7 +50,7 @@ size_t Ch32LogicCapture::describe(uint8_t *out, size_t capacity) {
   w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   uint8_t range[8];   // min_hz(u32) max_hz(u32) (capture §3.5)
   putU32(range, kMinHz);
-  putU32(range + 4, F_CPU / dividerOf(kMaxHz));
+  putU32(range + 4, CH32RV_HCLK_HZ / dividerOf(kMaxHz));
   w.put(cap::kTlvDescribeRateRange, range, sizeof range);
   w.u8(cap::kTlvDescribeChannels, kMaxChannels);
   uint8_t trig[9];
@@ -101,7 +101,7 @@ void Ch32LogicCapture::halt() {
 }
 
 bool Ch32LogicCapture::begin() {
-  if (!logic_.begin(static_cast<CH32RVLogicPort>(port_), F_CPU / divider_)) return false;
+  if (!logic_.begin(static_cast<CH32RVLogicPort>(port_), CH32RV_HCLK_HZ / divider_)) return false;
   rate_ = logic_.sampleRate();
   if (!logic_.startContinuous(gStage, 2 * kHalf)) { logic_.end(); return false; }
   overruns_ = logic_.overruns();
@@ -209,7 +209,7 @@ Result Ch32LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, siz
   if (refused(unknown_critical)) return unknown_critical;
   if (mode_tlv.v[0] != cap::kModeOneShot) return Tail::refuse(kTagMode, mode_tlv.critical, out, capacity);
   const uint32_t rate = getU32(rate_tlv.v);
-  if (rate < kMinHz || rate > F_CPU / dividerOf(kMaxHz)) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
+  if (rate < kMinHz || rate > CH32RV_HCLK_HZ / dividerOf(kMaxHz)) return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   const Result misplaced = captureMisplaced(mode_tlv.v[0], ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv),
                                             ask(pretrigger_tlv), out, capacity);
   if (refused(misplaced)) return misplaced;
@@ -235,7 +235,7 @@ Result Ch32LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, siz
   }
   if (channels_ == 0 || (trig_type != 0 && trig_role >= channels_)) return wrongState(out, capacity);
   if ((state_ == cap::kStateCapturing || state_ == cap::kStateWaiting) && !query) return wrongState(out, capacity);
-  const uint32_t divider = dividerOf(rate), g = gcd(F_CPU, divider);
+  const uint32_t divider = dividerOf(rate), g = gcd(CH32RV_HCLK_HZ, divider);
   if (!query) {
     halt();
     if (capacity_ < samples) {
@@ -255,7 +255,7 @@ Result Ch32LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, siz
   }
   TlvWriter w(out, capacity);
   uint8_t r[8];
-  putU32(r, F_CPU / g);
+  putU32(r, CH32RV_HCLK_HZ / g);
   putU32(r + 4, divider / g);
   w.put(cap::kTlvConfigureAnswerActualRate, r, sizeof r);
   uint8_t layout[2 + kMaxChannels] = {8, channels_};

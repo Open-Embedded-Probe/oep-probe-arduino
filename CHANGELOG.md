@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The CH32 Firmware builds on ArduinoCore-CH32RV 0.7.1 (clang). The CH32X035 profile takes `opt=ozltosr` (-Oz,
+  LTO, -msave-restore; the 0.4.0 menu's `osltosr` is gone). The core's register headers are included from `internal/`
+  (`internal/ch32rv_gpio.h`, `internal/ch32rv_registers.h`), the heap is taken with `sbrk`, and the logic capture's rate
+  and the SWIO wire's SysTick count `CH32RV_HCLK_HZ` (the clock the timers count; the H41x runs the sketch on the V5F,
+  whose F_CPU is not the timers'). Checked on the bench: the V307 runs, the H417 enumerates and answers `oep dump`.
+- (JA) CH32 の Firmware を ArduinoCore-CH32RV 0.7.1（clang）でビルドする。CH32X035 のプロファイルは `opt=ozltosr`（-Oz、LTO、
+  -msave-restore。0.4.0 のメニューの `osltosr` は無くなった）。コアのレジスタのヘッダーは `internal/` から include する
+  （`internal/ch32rv_gpio.h`、`internal/ch32rv_registers.h`）。ヒープは `sbrk` から取る。ロジックキャプチャの速さと SWIO の SysTick は
+  `CH32RV_HCLK_HZ`（タイマーが数えるクロック。H41x はスケッチを V5F で動かし、その F_CPU はタイマーのものではない）で数える。
+  ベンチで確認: V307 が動き、H417 が列挙して `oep dump` に答える。
 
 ## 0.0.54
 - (EN) Guide: [Adding your own commands](docs/guide/simple-interface.md) - `oep::SimpleInterface` from the smallest

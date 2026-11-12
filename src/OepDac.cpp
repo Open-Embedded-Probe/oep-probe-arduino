@@ -7,7 +7,7 @@
 #if !defined(ARDUINO_CH32X035)
 
 #if defined(ARDUINO_ARCH_CH32RV) && !defined(OEP_HOST_FAKE_DAC)
-#include "ch32rv_registers.h"
+#include <internal/ch32rv_registers.h>   // the core's register layer (its README's escape hatch)
 #elif defined(ARDUINO_ARCH_ESP32)
 #include <soc/soc_caps.h>   // SOC_DAC_SUPPORTED: the classic ESP32 (and S2) only
 #endif

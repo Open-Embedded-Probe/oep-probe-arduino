@@ -2,15 +2,15 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 // Host test fake of ArduinoCore-CH32RV's CH32RVLogicCapture (0.4.0), for OEP_HOST_FAKE_CH32_LOGIC: begin() rounds the rate
-// to F_CPU / a whole divider, the DMA's two halves (hostSample puts port samples in; a half filled again before it was
+// to CH32RV_HCLK_HZ / a whole divider, the DMA's two halves (hostSample puts port samples in; a half filled again before it was
 // taken is an overrun) and readBuffer().
 #pragma once
 
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef F_CPU
-#define F_CPU 144000000UL
+#ifndef CH32RV_HCLK_HZ   // the clock the core's timers count (F_CPU but on the H41x V5F)
+#define CH32RV_HCLK_HZ 144000000UL
 #endif
 
 enum CH32RVLogicPort : uint8_t { PORT_A = 0, PORT_B, PORT_C, PORT_D, PORT_E, PORT_F };
@@ -22,7 +22,7 @@ class CH32RVLogicCapture {
   bool begin(CH32RVLogicPort p, uint32_t sampleRate) {
     if (!sampleRate) return false;
     port = p;
-    rate_ = F_CPU / ((F_CPU + sampleRate / 2) / sampleRate);
+    rate_ = CH32RV_HCLK_HZ / ((CH32RV_HCLK_HZ + sampleRate / 2) / sampleRate);
     begun = true;
     return true;
   }

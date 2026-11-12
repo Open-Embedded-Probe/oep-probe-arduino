@@ -653,13 +653,13 @@ class ResourceNumbers {
 
 // One offered interface. The endpoint gives it fn = 1, 2, ... in registration order.
 // Memory taken once, at start-up, and kept for the boot (never given back): the tables sized by what the sketch added.
-// nullptr when there is no room. A CH32 takes it from its core's _sbrk (the heap malloc would use, without malloc's
+// nullptr when there is no room. A CH32 takes it from its core's sbrk (the heap malloc would use, without malloc's
 // code); the others from malloc. Zeroed.
 #if defined(ARDUINO_ARCH_CH32RV)
-extern "C" void *_sbrk(ptrdiff_t increment);
+extern "C" void *sbrk(ptrdiff_t increment);
 inline void *takeForGood(size_t bytes) {
   bytes = (bytes + 7) & ~static_cast<size_t>(7);
-  void *p = _sbrk(static_cast<ptrdiff_t>(bytes));
+  void *p = sbrk(static_cast<ptrdiff_t>(bytes));
   if (p == reinterpret_cast<void *>(-1)) return nullptr;
   memset(p, 0, bytes);
   return p;

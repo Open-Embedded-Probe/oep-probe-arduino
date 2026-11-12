@@ -501,7 +501,7 @@ bool gDriven = false;   // configured: the line an output, high between frames
 constexpr uint8_t kDmControl = 0x10, kDmCfgr = 0x7d, kDmShadowCfgr = 0x7e;
 constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
 constexpr uint32_t kOutMode = CH32RV_GPIO_CFG_OUT_PP_10M, kInMode = CH32RV_GPIO_CFG_IN_PULL;
-constexpr uint32_t kTickHz = CH32RV_SYSTICK_V103 ? F_CPU / 8u : F_CPU;
+constexpr uint32_t kTickHz = CH32RV_SYSTICK_V103 ? CH32RV_HCLK_HZ / 8u : CH32RV_HCLK_HZ;
 
 uint32_t ticksFor(uint32_t ns) { return static_cast<uint32_t>((uint64_t{ns} * kTickHz + 999999999u) / 1000000000u); }
 inline uint32_t now() { return CH32RV_SYSTICK_CNT; }

@@ -75,7 +75,7 @@ class Ch32LogicCapture final : public Interface {
   uint8_t state_ = reg::fixture_logic::kStateUnconfigured;
   uint8_t error_ = reg::fixture_logic::kErrorPeripheral;
   uint32_t generation_ = 0;
-  uint32_t samples_ = 0, divider_ = 0;   // the rate: F_CPU / divider_
+  uint32_t samples_ = 0, divider_ = 0;   // the rate: CH32RV_HCLK_HZ / divider_
   uint8_t trig_type_ = 0, trig_role_ = 0;
   uint32_t trig_value_ = 0, pretrigger_ = 0;
   uint8_t when_ = 0;

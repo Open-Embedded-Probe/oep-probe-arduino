@@ -11,7 +11,7 @@
 #if defined(ARDUINO_ARCH_CH32RV)
 
 #include <Arduino.h>
-#include <ch32rv_gpio.h>
+#include <internal/ch32rv_gpio.h>   // the core's register layer (its README's escape hatch)
 
 namespace oep {
 namespace ch32 {
