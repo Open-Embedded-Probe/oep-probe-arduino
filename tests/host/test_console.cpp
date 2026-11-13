@@ -50,16 +50,22 @@ class FakePhy final : public DmiPhy {
   // after a change of hart state)
   int bad_havereset = 0, lose_data0 = 0, reinits = 0;
   bool dropped = false;
+  // DMCONTROL.dmactive: cleared by the target's own reset of its debug module (a CH32V203 waking from standby); while
+  // clear, the mailbox is dead - DATA0 reads 0 and the probe's writes to it do not land
+  bool dmactive = true;
+  int dmactive_writes = 0;
   void reinit() override { dropped = false; ++reinits; }
   bool attach() override { attached_flag = true; return true; }
   void release() override { attached_flag = false; }
   bool attached() const override { return attached_flag; }
   void write(uint8_t address, uint32_t value) override {
     if (dropped) return;
-    if (address == 0x04 && lose_data0 > 0) { --lose_data0; return; }
+    if (address == 0x04 && (lose_data0 > 0 || !dmactive)) { if (dmactive) --lose_data0; return; }
     if (address == 0x04) { data0 = value; data0_writes.push_back(value); }
     if (address == 0x05) data1 = value;
     if (address == 0x10) {
+      if ((value & 1u) && !dmactive) ++dmactive_writes;
+      dmactive = (value & 1u) != 0;
       if (value & (1u << 31)) halted = true;
       if (value & (1u << 30)) halted = false;
       if (value & (1u << 28)) havereset = false;
@@ -86,9 +92,9 @@ class FakePhy final : public DmiPhy {
     ++reads;
     if (dropped) { value = 0xffffffffu; return true; }
     switch (address) {
-      case 0x04: value = data0; ++data0_reads; order.push_back(0x04); break;
+      case 0x04: value = dmactive ? data0 : 0; ++data0_reads; order.push_back(0x04); break;
       case 0x05: value = data1; break;
-      case 0x10: value = 1; break;
+      case 0x10: value = dmactive ? 1 : 0; break;
       case 0x11:
         ++status_reads;
         order.push_back(0x11);
@@ -583,6 +589,53 @@ int main() {
     CHECK(ok(r));
     run(100 * 1000);
     CHECK(target.rx == std::vector<uint8_t>({'o', 'k'}));
+  }
+
+  // ---- the target reset its own debug module (dmactive clear, no havereset: a CH32V203 waking from standby,
+  // 2026-11-13): the console sets dmactive again, the restarted target's SYN resyncs dmseq with a restart mark
+  // (console §2, detail 2), and a line reaches the target. Without it the stream stayed open and silent: DATA0 read 0
+  // for ever ----
+  {
+    static FakePhy phy4;
+    static Ch32Dm dm4(phy4);
+    static DebugPort port4{dm4, 6, 7};
+    static WireRvswd wire4(port4, 3);
+    static DmConsole driver4(dm4, phy4);
+    static TargetConsoleStream console4(port4, driver4, 3);
+    r = call(wire4, WireRvswd::kOpAttach, attachRequest(6, 7), out);
+    CHECK(ok(r) && port4.connected);
+    r = call(console4, TargetConsoleStream::kOpOpen, cat(le32(port4.number), {console4.numberOf(TargetConsoleStream::kDriverDmseq)}), out);
+    CHECK(ok(r));
+    const uint32_t s4 = getU32(out.data());
+    SeqTarget *target = new SeqTarget(phy4.data0);
+    uint32_t next = millis();
+    auto run = [&](uint32_t us) {
+      for (uint32_t t = 0; t < us; t += 250) {
+        advanceMicros(250);
+        console4.poll();
+        // the target's side of the mailbox works only with the module active
+        if (int32_t(millis() - next) >= 0) { if (phy4.dmactive) target->available(); next += 5; }
+      }
+    };
+    run(100 * 1000);   // synced
+    CHECK(driver4.resyncs() == 1);
+    const size_t marks_before = marksOf(console4, s4).size();
+    // standby and the wake: the module reset (dmactive 0, DATA0 0), the target starts over (SYN, S 0)
+    phy4.dmactive = false;
+    phy4.data0 = 0;
+    delete target;
+    target = new SeqTarget(phy4.data0);
+    run(200 * 1000);
+    CHECK(phy4.dmactive && phy4.dmactive_writes == 1 && console4.isOpen());
+    CHECK(driver4.resyncs() == 2);
+    const std::vector<MarkSeen> marks = marksOf(console4, s4);
+    CHECK(marks.size() == marks_before + 1 && marks.back().kind == reg::target_console::kMarkKindRestart &&
+          marks.back().detail == reg::target_console::kMarkDetailRestartResync);
+    r = call(console4, TargetConsoleStream::kOpWrite, cat(le32(s4), {2, 0, 'o', 'k'}), out);
+    CHECK(ok(r));
+    run(100 * 1000);
+    CHECK(target->rx == std::vector<uint8_t>({'o', 'k'}));
+    delete target;
   }
 
   // ---- the console's write latency (oep-if-console §2): a host's line goes in one write and reaches the target one

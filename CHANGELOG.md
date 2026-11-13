@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Target console: a target that resets its own debug module (DMCONTROL's dmactive clear, no havereset - a
+  CH32V203 waking from standby) no longer leaves the stream open and silent. The console sets dmactive again; the
+  restarted target's new SYN resyncs dmseq and marks the restart (oep-if-console §2, detail 2).
+- (JA) target のコンソール: target が自分でデバッグモジュールをリセットしたとき（DMCONTROL の dmactive が 0、havereset なし。
+  standby から起きた CH32V203）に、ストリームが開いたまま黙らなくなった。コンソールが dmactive を立て直し、起動し直した target の新しい SYN
+  で dmseq が同期し直して restart の印が付く（oep-if-console §2、detail 2）。
 
 ## 0.0.55
 - (EN) The CH32 Firmware builds on ArduinoCore-CH32RV 0.7.1 (clang). The CH32X035 profile takes `opt=ozltosr` (-Oz,

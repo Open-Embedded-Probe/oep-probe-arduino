@@ -106,6 +106,19 @@ void DmConsole::poll() {
       last_status_ms_ = millis() - kStatusMs;
       return;
     }
+    if (!(control & 1u)) {
+      // dmactive clear under a module that answers: the target reset its debug module on its own - a CH32V203 waking
+      // from standby (2026-11-13, 5-1: DMCONTROL 0, DMSTATUS 0x00000c82, no havereset) - and its mailbox is dead until
+      // dmactive is set again; the console read DATA0 0 for ever with the stream open. Taken only when a second read
+      // agrees and is not DMSTATUS's word (a missed read gives the read before it), and only for a running hart (the
+      // write lowers haltreq). The dmseq state stays: the restarted target's new SYN resyncs it and marks the restart
+      // (oep-if-console §2, detail 2).
+      uint32_t control_again = 0;
+      if (readData(0x10, control_again) && control_again == control && control != status && !(status & (1u << 9)))
+        phy_.write(0x10, 0x00000001);   // dmactive
+      last_status_ms_ = millis() - kStatusMs;   // DMSTATUS again before any DATA0 read
+      return;
+    }
     if (status & (3u << 18)) {   // havereset: the target restarted on its own
       // Only once ackHaveReset's own read confirms it: one bad read with bit 18 set unsynced dmseq, which dropped the
       // input chunk on its way (up to 2 bytes of a command the target then never answered) and took the next repeat of
