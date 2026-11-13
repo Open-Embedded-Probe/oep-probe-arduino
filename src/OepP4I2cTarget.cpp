@@ -250,6 +250,13 @@ bool P4I2cTarget::start() {
     return false;
   }
   lock();
+  // The glitch filter on SCL and SDA. The IDF slave driver leaves it at the reset value (threshold 0: nothing
+  // filtered; its master driver sets 7 by default). Unfiltered, a slow SCL edge on the weak internal pull-up counted
+  // twice: the target ran one clock ahead (2026-11-13 bench: a CH32V203's Wire read 02 fa cf for 02 fa 67 - the last
+  // byte's MSB sent in the controller's ACK clock -, and a CH32V205's SoftWire got a NACK for a written byte).
+  // 7 source-clock cycles: 175 ns on the P4's 40 MHz XTAL, well below SCL's high time at 1 MHz.
+  i2c_ll_master_set_filter(kDev, kGlitchCycles);
+  i2c_ll_update(kDev);
   i2c_ll_rxfifo_rst(kDev);
   rx_count_ = 0;
   reloadTx();

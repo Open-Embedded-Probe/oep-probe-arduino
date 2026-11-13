@@ -56,6 +56,7 @@ class P4I2cTarget final : public Interface {
   static constexpr bool kInternalPullups = true;
 #endif
   static constexpr size_t kQueueDepth = 4;   // received frames kept, and unread preload slots (fixture §3)
+  static constexpr uint8_t kGlitchCycles = 7;   // SCL / SDA pulses shorter than this many source-clock cycles ignored
 #if defined(CONFIG_IDF_TARGET_ESP32P4) || defined(OEP_HOST_FAKE_I2C_SLAVE)
   // stretch: the P4's slave holds SCL itself (slave_scl_stretch_en, with slave_byte_ack_ctl_en a hold at every
   // received byte's ACK) and service() lets go after stretch_us, so the limit is the bench's: 0.1-20 ms measured with

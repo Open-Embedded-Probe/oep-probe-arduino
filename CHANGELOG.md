@@ -1,6 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) I2C target (ESP32 builds): the glitch filter on SCL and SDA is on (7 source-clock cycles; the IDF slave driver
+  left it at 0). Unfiltered, a slow SCL edge on the internal pull-ups was counted twice and the target ran one clock
+  ahead: a read's byte sent shifted by one bit, or a written byte not acknowledged.
+- (JA) I2C の相手（ESP32 のビルド）: SCL と SDA のグリッチフィルタを有効にした（ソースクロック 7 周期。IDF の slave の driver は 0 のままにしていた）。
+  フィルタが無いと、内蔵 pull-up の遅い SCL の立ち上がりを 2 回と数え、相手が 1 クロック先に進んでいた（読みのバイトが 1 ビットずれる、書かれたバイトに ACK を返さない）。
 - (EN) Target console: a target that resets its own debug module (DMCONTROL's dmactive clear, no havereset - a
   CH32V203 waking from standby) no longer leaves the stream open and silent. The console sets dmactive again; the
   restarted target's new SYN resyncs dmseq and marks the restart (oep-if-console §2, detail 2).
