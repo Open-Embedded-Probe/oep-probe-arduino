@@ -68,10 +68,10 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350 or an RP2040 into suc
   out, add your own), [Writing a probe](docs/guide/writing-a-probe.md) (the full reference),
   [Boards](docs/guide/boards.md) (what each chip does, building for another board).
 - Specification: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (in Japanese until the freeze; the English text
-  comes with it) - start with its [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.md) and [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md);
-  [getting started](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.ja.md) builds the smallest probe and host, the protocol core is
-  [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md), what a probe must do to conform is
-  [docs/conformance.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.ja.md), and the wire numbers are
+  comes with it) - start with its [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.md) and [the review guide](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.md);
+  [getting started](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.md) builds the smallest probe and host, the protocol core is
+  [docs/oep-core.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.md), what a probe must do to conform is
+  [docs/conformance.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.md), and the wire numbers are
   [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml).
 - Host library: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python) (`pip install oep-client-python`, the
   `oep` command, a fake probe for tests).
@@ -143,8 +143,8 @@ This library does not deal with voltage levels: the probe's pins are the MCU's o
 ## This library
 
 A library for writing Open Embedded Probe (OEP) probes with Arduino, and the firmware of each probe (`examples/`). It speaks
-the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.ja.md`, `docs/oep-transports.ja.md`
-and the interfaces `interfaces/oep-if-*.ja.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
+the v1 protocol of [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec) (`docs/oep-core.md`, `docs/oep-transports.md`
+and the interfaces `interfaces/oep-if-*.md`), v1 before the freeze: until the freeze the spec may still break. This is an experimental stage: breaking changes are expected and
 no compatibility is promised.
 
 **The spec this implements: the oep-spec commit in `tests/vectors/SPEC_COMMIT`** (no `v0.x` tag yet, versioning §6),
