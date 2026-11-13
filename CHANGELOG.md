@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.55
 - (EN) The CH32 Firmware builds on ArduinoCore-CH32RV 0.7.1 (clang). The CH32X035 profile takes `opt=ozltosr` (-Oz,
   LTO, -msave-restore; the 0.4.0 menu's `osltosr` is gone). The core's register headers are included from `internal/`
   (`internal/ch32rv_gpio.h`, `internal/ch32rv_registers.h`), the heap is taken with `sbrk`, and the logic capture's rate
