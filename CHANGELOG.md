@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.56
 - (EN) I2C target (ESP32 builds): the glitch filter on SCL and SDA is on (7 source-clock cycles; the IDF slave driver
   left it at 0). Unfiltered, a slow SCL edge on the internal pull-ups was counted twice and the target ran one clock
   ahead: a read's byte sent shifted by one bit, or a written byte not acknowledged.
