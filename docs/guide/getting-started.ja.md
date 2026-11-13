@@ -46,15 +46,14 @@ chip は eFuse から読んだ実際のリビジョン（例 `esp32p4 v3.2`）�
 ## 2. host のライブラリを入れる
 
 ```sh
-pip install "oep-client-python[usb-async,hid]"
+pip install oep-client-python
 ```
 
 `oep` の命令と Python の `oep_client` が入ります。ほかの host（ch32rv、ArduinoCore-CH32RV の書き込み）も同じプロトコルを
 話します。この手引きでは Python のものを使います。
 
-このコマンドは、次の手順で `--port usb` を使うための追加依存も入れます。`usb-async` は vendor bulk の非同期転送用の
-`libusb1`、`hid` は HID 接続用の `hidapi` です。Windows では、probe が HID を提供していれば、WinUSB へのドライバ変更なしで
-HID 経由で接続できます。シリアルの口（`COM5` や `/dev/ttyACM0`）だけを使う場合は `pip install oep-client-python` で足ります。
+次の手順の `--port usb` に要るもの（vendor bulk の非同期転送の `libusb1`、HID 接続の `hidapi`）も一緒に入ります。Windows では、
+probe が HID を提供していれば、WinUSB へのドライバ変更なしで HID 経由で接続できます。
 
 Linux で probe の vendor bulk、DFU、HID のインターフェースを一般の利用者で開くには、oep-client-python が配る udev の規則
 [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) が要ります（シリアルの口はいつもの `dialout` の

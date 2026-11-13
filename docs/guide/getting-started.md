@@ -46,16 +46,15 @@ protection: check the file carefully on the first update. To return to an older 
 ## 2. Install the host library
 
 ```sh
-pip install "oep-client-python[usb-async,hid]"
+pip install oep-client-python
 ```
 
 This gives the `oep` command and the Python package `oep_client`. Other hosts speak the same protocol (ch32rv, the
 ArduinoCore-CH32RV upload tool); this guide uses the Python one.
 
-This command also installs the extras for `--port usb` in the next step: `usb-async` provides `libusb1` for asynchronous
-vendor bulk transfers, and `hid` provides `hidapi` for HID connections. On Windows, a probe that offers HID can be
-opened through HID without changing its driver to WinUSB. For serial ports alone (`COM5` or `/dev/ttyACM0`),
-`pip install oep-client-python` is enough.
+It also installs what `--port usb` in the next step needs: `libusb1` for asynchronous vendor bulk transfers and
+`hidapi` for HID connections. On Windows, a probe that offers HID can be opened through HID without changing its driver
+to WinUSB.
 
 On Linux, opening a probe's vendor bulk, DFU and HID interfaces as an ordinary user needs the udev rule shipped in
 oep-client-python, [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) (the serial ports need only the
