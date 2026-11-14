@@ -417,6 +417,15 @@ Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, s
   return completed();
 }
 
+// The bytes poll() takes from a stream at a time, on the stack: 2 KiB where a stream copies in bulk (readBytes virtual:
+// DirectBulkStream, CDC); 256 on a CH32, whose core's Stream reads byte by byte anyway and whose stacks are small (the
+// H41x's was 2 KiB in ArduinoCore-CH32RV 0.8.0: this buffer alone overran it into the heap)
+#if defined(ARDUINO_ARCH_CH32RV)
+static constexpr size_t kPollChunk = 256;
+#else
+static constexpr size_t kPollChunk = 2048;
+#endif
+
 void Endpoint::poll() {
   if (restarting_) return;   // restart answered: nothing more is served or sent (oep-if-restart §2)
   freeze();
@@ -429,7 +438,7 @@ void Endpoint::poll() {
       if (restarting_) return;   // what came after the restart is not served (oep-if-restart §2)
     } else {
       if (t.conn && !tcp_slot_(t)) continue;   // a TCP slot (addTcpListener): no connection on it now
-      uint8_t chunk[2048];
+      uint8_t chunk[kPollChunk];
       for (int avail; (avail = t.stream->available()) > 0;) {
         size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
         n = t.stream->readBytes(chunk, n);   // a stream that copies in bulk (DirectBulkStream, CDC) does it here
