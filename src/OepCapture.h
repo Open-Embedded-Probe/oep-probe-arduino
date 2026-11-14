@@ -51,10 +51,10 @@ class LogicCapture final : public Interface, public GroupTrack {
   // delimiter's valid line; a one-shot with an immediate trigger only. The fastest clock declared: not measured beyond
   // the bench's (PWM on the same pin).
   static constexpr uint32_t kExtClockMaxHz = 40000000;
-  // The glitch filter (capture §3.8): the GPIO flex filters (8) on the data pins, clocked by XTAL - 25 ns steps, a
-  // 6-bit window: 25 .. 1600 ns
-  static constexpr uint32_t kGlitchStepNs = 25, kGlitchMaxNs = 64 * kGlitchStepNs;
-  static constexpr uint8_t kGlitchFilters = 8;
+  // The glitch filter (capture §3.8): the GPIO pin filter on each data pin, fixed at 2 cycles of 80 MHz (pulses under
+  // 25 ns dropped). The flex filters (any window) are not used: on slow, noisy edges (an I2C line on 45 kOhm pull-ups)
+  // their output stopped following the input, or oscillated, whatever their clock - data silently lost.
+  static constexpr uint32_t kGlitchNs = 25;
   enum : uint8_t {
     kOpConfigure = reg::fixture_logic::kOpConfigure, kOpStart = reg::fixture_logic::kOpStart,
     kOpStop = reg::fixture_logic::kOpStop, kOpForce = reg::fixture_logic::kOpForce,
@@ -205,8 +205,13 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t clock_edge_ = 0, qual_level_ = 1;
   uint32_t clock_unc_ns_ = 0;            // external clock: the first edge's time is known only within this
   uint32_t glitch_ns_ = 0;               // the glitch filter in use (0: none)
-  gpio_glitch_filter_handle_t filters_[kGlitchFilters] = {};
+  gpio_glitch_filter_handle_t filters_[kMaxChannels] = {};
   void setGlitch(uint32_t ns);           // the filters on the data pins (0: off)
+  // the data pins' input hysteresis (capture §3.8, on unless configure says otherwise); the pins it is on, to take it
+  // off at the next configure or the plan's release
+  int hys_pins_[kMaxChannels];
+  uint8_t hys_lines_ = 0;
+  void setHysteresis(bool on);
   size_t max_read_ = 1000;
   bool subscribed_ = false;
   // configured

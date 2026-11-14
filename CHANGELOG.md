@@ -1,6 +1,17 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Logic capture (ESP32-P4 / P4X, capture §3.8): the glitch filter is the GPIO pin filter, 25 ns only (describe
+  min = max = step = 25; another width unsupported, no 8-line limit). The flex filters (25-1600 ns) are gone: on slow,
+  noisy edges (an I2C line on 45 kOhm pull-ups) their output stopped following the input or oscillated, whatever the
+  clock source - data silently lost. New: the pads' input hysteresis on every data line (describe input_hysteresis off /
+  on, configure 0x0C, hysteresis_used in every answer), on unless configure says 0: on that line it cut SCL's edges from
+  1108-1142 to 1008-1014 against 1000 real ones, with nothing changed on clean edges up to 10 MHz.
+- (JA) ロジックの取り込み（ESP32-P4 / P4X、capture §3.8）: グリッチフィルタは GPIO のピンフィルタで、25 ns だけ（describe は min = max = step = 25、
+  ほかの幅は unsupported、8 本の制限はなくなった）。flex フィルタ（25〜1600 ns）はやめた。遅くて雑音の乗った縁（45 kΩ のプルアップの I2C）で、
+  クロック源によらず出力が入力に従わなくなるか発振し、データが黙って欠けた。新しく、データの線の pad の入力のヒステリシス（describe の
+  input_hysteresis は切り / 入り、configure 0x0C、応答には毎回 hysteresis_used）。configure が 0 と言わない限り入れる。その線で SCL の縁が、
+  実際の 1000 に対して 1108〜1142 から 1008〜1014 になり、10 MHz までのきれいな縁では何も変わらない。
 - (EN) spi-target (ESP32-P4 / P4X): CS goes through the pad's glitch filter (pulses under 25 ns dropped). A spike onto CS
   inside a frame (a neighbouring line's edge) made the slave end the transfer there and count again: MISO slipped from
   that bit. 6-2 (an H417 master, CS next to MOSI): 3 frames in 25 before, none in 120 with the filter.

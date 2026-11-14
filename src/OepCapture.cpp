@@ -12,6 +12,7 @@
 #include <esp_heap_caps.h>
 #include <esp_memory_utils.h>
 #include <esp_timer.h>
+#include <hal/gpio_ll.h>
 #include <hal/hal_utils.h>
 #include <soc/hp_sys_clkrst_struct.h>
 #include <string.h>
@@ -1273,11 +1274,12 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   clock[4] = 0b011;
   clock[5] = 1;
   w.put(cap::kTlvDescribeExternalClock, clock, sizeof clock);
-  uint8_t glitch[13] = {0};   // glitch_filter: group 0 (every channel) min_ns max_ns step_ns
-  putU32(glitch + 1, kGlitchStepNs);
-  putU32(glitch + 5, kGlitchMaxNs);
-  putU32(glitch + 9, kGlitchStepNs);
+  uint8_t glitch[13] = {0};   // glitch_filter: group 0 (every channel) min_ns max_ns step_ns - one fixed width
+  putU32(glitch + 1, kGlitchNs);
+  putU32(glitch + 5, kGlitchNs);
+  putU32(glitch + 9, kGlitchNs);
   w.put(cap::kTlvDescribeGlitchFilter, glitch, sizeof glitch);
+  w.u8(cap::kTlvDescribeInputHysteresis, 0b11);   // input_hysteresis: off and on (capture §3.8)
   return w.ok() ? w.length() : 0;
 }
 
@@ -1323,6 +1325,7 @@ void LogicCapture::forget() {
   mode_ = cap::kModeOneShot;
   clock_pin_ = qual_pin_ = -1;
   setGlitch(0);
+  setHysteresis(false);
   triggered_ = follow_ = linked_ = rep_trig_ = false;
   rearm_ = 0;
   trig_type_ = 0;
@@ -1550,18 +1553,26 @@ void LogicCapture::setGlitch(uint32_t ns) {
   }
   glitch_ns_ = 0;
   if (!ns) return;
-  for (uint8_t k = 0; k < data_lines_ && k < kGlitchFilters; ++k) {
-    gpio_flex_glitch_filter_config_t c = {};
-    c.clk_src = GLITCH_FILTER_CLK_SRC_XTAL;
+  for (uint8_t k = 0; k < data_lines_; ++k) {
+    gpio_pin_glitch_filter_config_t c = {};
+    c.clk_src = GLITCH_FILTER_CLK_SRC_DEFAULT;   // PLL_F80M: 2 cycles, 25 ns
     c.gpio_num = static_cast<gpio_num_t>(data_pins_[k]);
-    c.window_width_ns = ns;
-    c.window_thres_ns = ns;
-    if (gpio_new_flex_glitch_filter(&c, &filters_[k]) != ESP_OK || gpio_glitch_filter_enable(filters_[k]) != ESP_OK) {
+    if (gpio_new_pin_glitch_filter(&c, &filters_[k]) != ESP_OK || gpio_glitch_filter_enable(filters_[k]) != ESP_OK) {
       setGlitch(0);
       return;
     }
   }
   glitch_ns_ = ns;
+}
+
+void LogicCapture::setHysteresis(bool on) {
+  for (uint8_t k = 0; k < hys_lines_; ++k) gpio_ll_pin_input_hysteresis_disable(&GPIO, static_cast<uint32_t>(hys_pins_[k]));
+  hys_lines_ = 0;
+  if (!on) return;
+  for (uint8_t k = 0; k < data_lines_; ++k) {
+    gpio_ll_pin_input_hysteresis_enable(&GPIO, static_cast<uint32_t>(data_pins_[k]));
+    hys_pins_[hys_lines_++] = data_pins_[k];
+  }
 }
 
 Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t capacity, bool query) {
@@ -1572,7 +1583,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // the values, then the plan, the group and the state (unavailable).
   static const uint8_t kKnown[] = {kTagMode, kTagRate, kTagSamples, kTagSegments, kTagTrigger, kTagPretrigger,
                                    capture_tag::kTriggerOpts, cap::kTlvConfigureFormat, cap::kTlvConfigureCarriage,
-                                   cap::kTlvConfigureBlockMax, cap::kTlvConfigureClock, cap::kTlvConfigureGlitchFilter};
+                                   cap::kTlvConfigureBlockMax, cap::kTlvConfigureClock, cap::kTlvConfigureGlitchFilter,
+                                   cap::kTlvConfigureInputHysteresis};
   Tail tail;
   Result unknown_critical;
   const Result parsed = tail.parse(p, n, kKnown, out, capacity, &unknown_critical);
@@ -1581,10 +1593,11 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   Item items[] = {{kTagMode, 1, nullptr, false},    {kTagRate, 4, nullptr, false},    {kTagSamples, 4, nullptr, false},
                   {kTagSegments, 4, nullptr, false}, {kTagTrigger, 6, nullptr, false}, {kTagPretrigger, 4, nullptr, false},
                   {capture_tag::kTriggerOpts, kTriggerOptsBytes, nullptr, false}, {cap::kTlvConfigureFormat, 1, nullptr, false},
-                  {cap::kTlvConfigureBlockMax, 4, nullptr, false}, {cap::kTlvConfigureClock, 4, nullptr, false}};
+                  {cap::kTlvConfigureBlockMax, 4, nullptr, false}, {cap::kTlvConfigureClock, 4, nullptr, false},
+                  {cap::kTlvConfigureInputHysteresis, 1, nullptr, false}};
   Item &mode_tlv = items[0], &rate_tlv = items[1], &samples_tlv = items[2], &segments_tlv = items[3],
        &trigger_tlv = items[4], &pretrigger_tlv = items[5], &opts_tlv = items[6], &format_tlv = items[7],
-       &block_max_tlv = items[8], &clock_tlv = items[9];
+       &block_max_tlv = items[8], &clock_tlv = items[9], &hys_tlv = items[10];
   for (Item &it : items) {   // a length other than its definition: malformed (core §2.3)
     const Result r = tail.fixed(it.tag, it.size, it.v, out, capacity, &it.critical);
     if (refused(r)) return r;
@@ -1620,18 +1633,21 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     return Tail::refuse(kTagRate, rate_tlv.critical, out, capacity);
   uint32_t glitch = 0;
   bool glitch_asked = false;
-  {   // group 0 only (every channel); 0 none, else 25 .. 1600 ns, the nearest step
+  {   // group 0 only (every channel); 0 none, else the one width
     size_t at = 0, vlen = 0;
     uint8_t raw = 0;
     const uint8_t *v = nullptr;
     while (tail.next(at, raw, v, vlen)) {
       if ((raw & ~kTagCritical) != cap::kTlvConfigureGlitchFilter) continue;
       const uint32_t ns = getU32(v + 1);
-      if (v[0] != 0 || (ns && (ns < kGlitchStepNs || ns > kGlitchMaxNs))) return unsupportedTag(out, capacity, raw);
-      glitch = (ns + kGlitchStepNs / 2) / kGlitchStepNs * kGlitchStepNs;
+      if (v[0] != 0 || (ns && ns != kGlitchNs)) return unsupportedTag(out, capacity, raw);
+      glitch = ns;
       glitch_asked = true;
     }
   }
+  // input_hysteresis (§3.8): 0 off, 1 on (unsent: on); another value unsupported
+  if (hys_tlv.v && hys_tlv.v[0] > 1) return Tail::refuse(cap::kTlvConfigureInputHysteresis, hys_tlv.critical, out, capacity);
+  const bool hysteresis = !hys_tlv.v || hys_tlv.v[0] == 1;
   // samples in streaming, segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
   const Result misplaced = captureMisplaced(mode, ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv), ask(pretrigger_tlv), out, capacity);
   if (refused(misplaced)) return misplaced;
@@ -1780,7 +1796,6 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   // nothing to sample but the clock; the qualifier's valid line past 15 data lines: this probe's own limits
   if (clk && (lines == 0 || (clk[2] != 0xFF && width >= PARLIO_RX_UNIT_MAX_DATA_WIDTH)))
     return Tail::refuse(cap::kTlvConfigureClock, clock_tlv.critical, out, capacity);
-  if (glitch && lines > kGlitchFilters) return Tail::refuse(cap::kTlvConfigureGlitchFilter, false, out, capacity);
   // format 1's block (§1.3): L a multiple of 8 and of every D, at most block_max and kMaxBlock, its worst within a stage
   blocks::Plan plan;
   uint8_t lane_of[kMaxChannels];   // the capture's lane (bit) for each role: the role itself, but in format 1
@@ -1841,6 +1856,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     qual_level_ = clk ? clk[3] : 1;
     setGlitch(glitch);
     if (glitch && !glitch_ns_) return failed();   // the filters would not start
+    setHysteresis(hysteresis);
   }
   uint32_t num = 0, den = 1;
   if (query && clk) {
@@ -1955,6 +1971,7 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
     putU32(g + 1, glitch);
     w.put(cap::kTlvConfigureAnswerGlitchUsed, g, sizeof g);
   }
+  w.u8(cap::kTlvConfigureAnswerHysteresisUsed, hysteresis ? 1 : 0);   // always (§3.8)
   // streaming: what it holds unsent (capture §3.3 stream_buffer) - the zero-copy stages (those held, or what internal
   // RAM gives now), else the store
   if (mode == cap::kModeStreaming) w.u32(cap::kTlvConfigureAnswerStreamBuffer, streamBuffer(samples, width, actual_segments));
