@@ -119,8 +119,12 @@ def main(argv=None):
     a.add_argument('--intf', type=int, required=True)
     a.add_argument('image')
     a = a.parse_args(argv)
-    devs = [d for d in usb.core.find(find_all=True, idVendor=0x1209, idProduct=0x4F45)
-            if usb.util.get_string(d, d.iSerialNumber) == a.serial]
+    def serial_of(d):   # another probe whose strings cannot be read now (busy, suspended) is not this one
+        try:
+            return usb.util.get_string(d, d.iSerialNumber)
+        except (usb.core.USBError, ValueError):
+            return None
+    devs = [d for d in usb.core.find(find_all=True, idVendor=0x1209, idProduct=0x4F45) if serial_of(d) == a.serial]
     if len(devs) != 1:
         sys.exit(f'DFU: {len(devs)} devices with serial {a.serial}')
     dev = devs[0]
