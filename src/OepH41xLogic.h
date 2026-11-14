@@ -20,8 +20,10 @@
 // last frame open (DirectTransport::queueDataOpen): results wait for the frame's end (core §10.4), so when some wait
 // the open frame's tail goes alone and the next run starts with its header alone.
 // Behind the writer by more than half the ring, the oldest finished buffers are dropped (the next frame's position
-// jumps, status flags bit0); a buffer the UHSIF wrote again while it was being sent stops the capture (state 6, error
-// 2, capture §2.2: the host drops data from the write position on).
+// jumps, status flags bit0). A host slower than the stream holds a run out while the writer comes round: two buffers
+// short of it the UHSIF stops, and once everything finished is out it starts again - the time it stood still is a
+// drop (the position jumps by it). A buffer written again while it went out all the same stops the capture (state 6,
+// error 2, capture §2.2: the host drops data from the write position on).
 //
 // OEP_HOST_FAKE_UHSIF: a host test's fake of CH32RVUhsif (tests/host/shim).
 #pragma once
@@ -102,7 +104,12 @@ class H41xLogicCapture final : public Interface {
   uint8_t *ring_ = nullptr;      // buffers_ x (kGapBytes + buffer_bytes_), 32-byte aligned
   uint8_t buffers_ = 0;          // in the ring (configure: as many as fit, kMaxBuffers down to kMinBuffers)
   size_t buffer_bytes_ = 0;      // at configure, from the host's frame
-  uint64_t start_ns_ = 0;
+  // the epoch the buffers from epoch_b_ on were taken in: the start, or the restart after a pause (their positions from
+  // epoch_pos_, their times from epoch_ns_)
+  uint32_t epoch_b_ = 0;
+  uint64_t epoch_pos_ = 0, epoch_ns_ = 0;
+  bool paused_ = false;          // the writer stopped short of the run going out (pause / resume)
+  uint32_t pauses_ = 0;
   // buffers by number since the start (buffer b is ring slot b % buffers_, stream position b x buffer_bytes_)
   uint32_t finished_ = 0;        // the UHSIF finished these
   uint32_t next_ = 0;            // the next to send
@@ -127,6 +134,10 @@ class H41xLogicCapture final : public Interface {
   uint32_t runMax() const { return buffers_ / 4; }
   uint32_t finishedNow();
   bool begin();
+  uint64_t positionOf(uint32_t b) const;
+  uint64_t nsOf(uint32_t b) const;
+  void pause();
+  void resume();
   void halt();
   void fail(uint8_t error);
   void stopped(uint8_t reason, uint8_t error = 0);

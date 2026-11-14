@@ -98,7 +98,7 @@ size_t H41xLogicCapture::describe(uint8_t *out, size_t capacity) {
 // Roles 0 .. n-1, each once, each on a UHSIF data line
 uint8_t H41xLogicCapture::planCheck(const RoleAssignment *roles, size_t count) {
   plan_cause_ = reg::core::kUnavailableCauseWrongState;
-  if (running_ || draining_) return kRejectUnavailable;
+  if (running_ || draining_ || paused_) return kRejectUnavailable;
   plan_cause_ = reg::core::kUnavailableCauseLimit;
   uint32_t seen = 0;
   for (size_t i = 0; i < count; ++i) {
@@ -122,6 +122,7 @@ bool H41xLogicCapture::planApply(const RoleAssignment *roles, size_t count) {
 
 void H41xLogicCapture::planRelease() {
   halt();
+  paused_ = false;
   draining_ = false;
   channels_ = 0;
   state_ = cap::kStateUnconfigured;
@@ -145,7 +146,7 @@ uint32_t H41xLogicCapture::finishedNow() {
     bytes_[n] += now - raw_[n];
     raw_[n] = now;
   }
-  return static_cast<uint32_t>(bytes_[0] / buffer_bytes_ + bytes_[1] / buffer_bytes_);
+  return epoch_b_ + static_cast<uint32_t>(bytes_[0] / buffer_bytes_ + bytes_[1] / buffer_bytes_);
 }
 
 void H41xLogicCapture::halt() {
@@ -156,6 +157,7 @@ void H41xLogicCapture::halt() {
 // The finished buffers not yet sent go; the open frame is still closed (draining) so the host's framing holds.
 void H41xLogicCapture::fail(uint8_t error) {
   halt();
+  paused_ = false;
   next_ = finished_;
   draining_ = frame_open_ || run_out_ || head_out_;
   state_ = cap::kStateError;
@@ -192,10 +194,48 @@ bool H41xLogicCapture::begin() {
       !uhsif_.setRing(0, slot(0), static_cast<uint16_t>(buffer_bytes_), buffers_ / 2, stride) ||
       !uhsif_.setRing(1, slot(1), static_cast<uint16_t>(buffer_bytes_), buffers_ / 2, stride))
     return false;
+  raw_[0] = raw_[1] = 0;
+  bytes_[0] = bytes_[1] = 0;
   if (!uhsif_.start()) return false;
-  start_ns_ = nowNs();
+  epoch_ns_ = nowNs();
   running_ = true;
   return true;
+}
+
+// Buffer b's stream position and its first sample's time: from the epoch it was taken in (the start, or the restart
+// after a pause)
+uint64_t H41xLogicCapture::positionOf(uint32_t b) const {
+  return epoch_pos_ + static_cast<uint64_t>(b - epoch_b_) * buffer_bytes_;
+}
+uint64_t H41xLogicCapture::nsOf(uint32_t b) const {
+  const uint64_t first = static_cast<uint64_t>(b - epoch_b_) * (buffer_bytes_ / 2);
+  const uint64_t q = first / num_, r = first % num_;
+  return epoch_ns_ + q * den_ * 1000000000ull + static_cast<uint64_t>(static_cast<double>(r * den_) * 1e9 / num_);
+}
+
+// The writer about to come round onto the run going out (the host is not taking IN as fast as the UHSIF writes): the
+// UHSIF stops rather than write over it. Once every finished buffer is out and the frame closed, it starts again at
+// the ring's first buffer; the samples it did not take are a drop - the stream position jumps by the time it stood
+// still (capture §2.1 rule 1: the next frame's position shows the gap, status flags bit0).
+void H41xLogicCapture::pause() {
+  halt();
+  paused_ = true;
+  ++pauses_;
+}
+void H41xLogicCapture::resume() {
+  const uint64_t was = positionOf(finished_);
+  const uint64_t now = nowNs();
+  // the samples since the epoch's start at the rate, in whole samples (2 bytes): where the new epoch starts
+  const uint64_t dns = now - epoch_ns_;
+  const uint64_t taken = static_cast<uint64_t>(static_cast<double>(dns) * num_ / den_ / 1e9);
+  uint64_t at = epoch_pos_ + taken * 2;
+  if (at < was) at = was;
+  epoch_b_ = (finished_ + buffers_ - 1) / buffers_ * buffers_;   // the ring starts again at slot 0
+  epoch_pos_ = at;
+  finished_ = next_ = epoch_b_;
+  dropped_bytes_ += at - was;
+  paused_ = false;
+  if (!begin()) fail(cap::kErrorPeripheral);
 }
 
 // Frame b's push header: the 17 bytes ending at its data
@@ -207,23 +247,20 @@ void H41xLogicCapture::putHeader(uint8_t *s, uint32_t b) {
   s[2] = kRolePush;
   putU16(s + 3, fn);
   putU16(s + 5, endpoint_.takeSeq(fn));
-  putU64(s + 7, static_cast<uint64_t>(b) * buffer_bytes_);
+  putU64(s + 7, positionOf(b));
   putU16(s + 15, static_cast<uint16_t>(buffer_bytes_));
 }
 
 // Frame b's TLV tail: generation, segment_info (the segment is the buffer: its start the start's time plus its samples
 // at the rate), the padding
 void H41xLogicCapture::putTail(uint8_t *t, uint32_t b) {
-  const uint64_t first = static_cast<uint64_t>(b) * (buffer_bytes_ / 2);
-  const uint64_t q = first / num_, r = first % num_;
-  const uint64_t ns = q * den_ * 1000000000ull + static_cast<uint64_t>(static_cast<double>(r * den_) * 1e9 / num_);
   putTlvHeader(t, cap::kTlvDataGeneration, 4);
   putU32(t + kTlvHeader, generation_);
   uint8_t *info = t + kTlvHeader + 4;
   putTlvHeader(info, cap::kTlvDataSegmentInfo, kInfoBytes);
-  putU64(info + kTlvHeader, static_cast<uint64_t>(b) * buffer_bytes_);
+  putU64(info + kTlvHeader, positionOf(b));
   putU32(info + kTlvHeader + 8, static_cast<uint32_t>(buffer_bytes_ / 2));
-  putU64(info + kTlvHeader + 12, start_ns_ + ns);
+  putU64(info + kTlvHeader + 12, nsOf(b));
   putU32(info + kTlvHeader + 20, kStartUncertaintyNs);
   uint8_t *pad = info + kTlvHeader + kInfoBytes;
   putTlvHeader(pad, reg::kTagDataPadding, kPadValue);
@@ -239,10 +276,20 @@ void H41xLogicCapture::sendRun() {
   uint16_t fn = 0, min_bytes = 0;
   uint32_t max_delay = 0;
   if (!t || !endpoint_.directPush(*this, fn, min_bytes, max_delay)) {   // nobody may receive it: the buffers go
+    // a frame begun is finished all the same (core §10.3: the subscription's end does not cut a frame), or the port's
+    // results would wait for its end for ever: a header that went alone gets its buffer, then the open frame its tail
+    if (head_sent_) {
+      if (run_out_ || head_out_ || tail_out_ || !t || !t->queueDataOpen(slot(next_), buffer_bytes_, runDone, this)) return;
+      run_first_ = next_;
+      run_out_ = frame_open_ = true;
+      head_sent_ = false;
+      tail_of_ = next_++;
+    }
     if (finished_ > next_) {
       dropped_bytes_ += static_cast<uint64_t>(finished_ - next_) * buffer_bytes_;
       next_ = finished_;
     }
+    closeFrame();
     return;
   }
   if (frame_open_ && t->resultsWaiting()) { closeFrame(); return; }
@@ -297,8 +344,10 @@ void H41xLogicCapture::closeFrame() {
 }
 
 void H41xLogicCapture::poll() {
-  if (!running_ && !draining_) return;
+  if (!running_ && !draining_ && !paused_) return;
   if (running_) finished_ = finishedNow();
+  // two buffers from the run going out: stop the writer before it gets there
+  if (running_ && run_out_ && finished_ + 2 >= run_first_ + buffers_) pause();
   if (overwritten_ && running_) {   // capture §2.2: the data from the write position on is not to be trusted
     lost_at_ = lost_first_;     // status's write_pos: the first buffer written again while it went out
     fail(cap::kErrorStorage);   // (the open frame still closes: draining)
@@ -312,6 +361,10 @@ void H41xLogicCapture::poll() {
     next_ = keep;
   }
   sendRun();
+  if (paused_ && next_ >= finished_ && !run_out_ && !head_out_) {   // all out: close the frame, then start again
+    closeFrame();
+    if (!frame_open_ && !tail_out_) resume();
+  }
   if (draining_ && next_ >= finished_ && !run_out_ && !head_out_) {
     closeFrame();
     if (!frame_open_ && !tail_out_) draining_ = false;
@@ -355,7 +408,7 @@ Result H41xLogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, siz
   const size_t bytes = bufferBytesFor(max_frame_);
   if (!bytes) return unavailable(out, capacity, reg::core::kUnavailableCauseLimit);   // the host's frame holds no buffer
   if (channels_ == 0) return wrongState(out, capacity);
-  if ((running_ || draining_) && !query) return wrongState(out, capacity);
+  if ((running_ || draining_ || paused_) && !query) return wrongState(out, capacity);
   if (!query) {
     halt();
     if (!ring_ || buffer_bytes_ != bytes || buffers_ != kMaxBuffers) {   // as many buffers as the heap has room for
@@ -405,9 +458,10 @@ Result H41xLogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t 
       if (capacity < 4) return failed();
       halt();
       finished_ = next_ = run_first_ = 0;
-      head_sent_ = false;
-      raw_[0] = raw_[1] = 0;
-      bytes_[0] = bytes_[1] = 0;
+      head_sent_ = paused_ = false;
+      epoch_b_ = 0;
+      epoch_pos_ = 0;
+      pauses_ = 0;
       dropped_bytes_ = 0;
       overwritten_ = 0;
       error_ = 0;
@@ -423,9 +477,10 @@ Result H41xLogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t 
     case cap::kOpStop: {
       const Result parsed = plainTail(tail, p, n, 0, out, capacity);
       if (refused(parsed)) return parsed;
-      if (running_) {
-        finished_ = finishedNow();   // the buffers finished before the stop still go (capture §2.1 rule 2)
+      if (running_ || paused_) {
+        if (running_) finished_ = finishedNow();   // the buffers finished before the stop still go (capture §2.1 rule 2)
         halt();
+        paused_ = false;
         draining_ = true;
         state_ = cap::kStateConfigured;
         stopped(cap::kStoppedReasonHost);
@@ -442,8 +497,7 @@ Result H41xLogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t 
       putU32(out + 1, finished_);
       // write_pos (capture §3.2): the finished buffers' end; stopped on data written again while it went out, that
       // buffer's start (§2.2: the host drops what it got from there on)
-      putU64(out + 5, static_cast<uint64_t>(state_ == cap::kStateError && error_ == cap::kErrorStorage ? lost_at_ : finished_) *
-                          buffer_bytes_);
+      putU64(out + 5, positionOf(state_ == cap::kStateError && error_ == cap::kErrorStorage ? lost_at_ : finished_));
       out[13] = dropped_bytes_ ? cap::kStatusFlagDropped : 0;
       putU32(out + 14, generation_);
       size_t used = 18;
@@ -460,7 +514,7 @@ Result H41xLogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t 
       if (getU32(p) != generation_) return wrongState(out, capacity);
       if (capacity < 11) return failed();
       poll();
-      putU64(out, static_cast<uint64_t>(finished_) * buffer_bytes_);
+      putU64(out, positionOf(finished_));
       out[8] = reg::common::kReadFlagsGap;
       putU16(out + 9, 0);
       return completed(11);

@@ -301,6 +301,50 @@ static void testBehindAndOverwritten() {
   CHECK(parse(rig.direct.all(), frames, &rest) && rest == 0);
   CHECK(frameContent(frames, generation, bytes, &jumps) && jumps >= 1);
 
+  // the host holds a run while the writer comes round: polled as it goes, the UHSIF stops two buffers short of the
+  // run; given back, everything finished goes, the frame closes and the UHSIF starts again - no error, the position
+  // jumps past what was not taken, the framing holds
+  Rig r3;
+  CHECK(r3.setup(100000000, 4096 + 64));
+  CHECK(ok(r3.op(cap::kOpStart)));
+  const uint32_t gen3 = getU32(r3.out.data());
+  CH32RVUhsif &u3 = r3.logic.hostUhsif();
+  u3.hostWrite(bytes / 2, pattern);
+  r3.logic.poll();   // header + run [0] out, held
+  for (uint8_t k = 0; k < r3.logic.hostBuffers(); ++k) { u3.hostWrite(bytes / 2, pattern); r3.logic.poll(); }
+  CHECK(!u3.running());   // stopped short of buffer 0
+  const int starts = u3.starts;
+  for (int i = 0; i < 6; ++i) { r3.direct.giveBack(); r3.logic.poll(); }
+  CHECK(u3.running() && u3.starts == starts + 1);   // started again
+  CHECK(ok(r3.op(cap::kOpStatus)) && r3.out[0] == cap::kStateCapturing && (r3.out[13] & cap::kStatusFlagDropped));
+  u3.hostRewind();   // the new epoch's samples: the pattern from its own first sample (positions say where they are)
+  for (int i = 0; i < 3; ++i) { u3.hostWrite(bytes / 2, pattern); r3.logic.poll(); r3.direct.giveBack(); }
+  CHECK(ok(r3.op(cap::kOpStop)));
+  for (int i = 0; i < 4; ++i) { r3.logic.poll(); r3.direct.giveBack(); }
+  std::vector<Frame> f3;
+  CHECK(parse(r3.direct.all(), f3, &rest) && rest == 0);
+  size_t j3 = 0;
+  bool positions_up = true;
+  for (size_t i = 1; i < f3.size(); ++i) {
+    if (f3[i].position != f3[i - 1].position + bytes) ++j3;
+    if (f3[i].position < f3[i - 1].position + bytes) positions_up = false;
+    if (f3[i].generation != gen3) positions_up = false;
+  }
+  CHECK(positions_up && j3 >= 1);
+
+  // the subscription ends with a frame open (the host went away): the frame is finished all the same, so the port's
+  // results do not wait for it for ever (core §10.3)
+  Rig r4;
+  CHECK(r4.setup(100000000, 4096 + 64));
+  CHECK(ok(r4.op(cap::kOpStart)));
+  CH32RVUhsif &u4 = r4.logic.hostUhsif();
+  for (int i = 0; i < 3; ++i) { u4.hostWrite(bytes / 2, pattern); r4.logic.poll(); r4.direct.giveBack(); }
+  CHECK(r4.request(1, reg::kOpUnsubscribe, {}));
+  for (int i = 0; i < 3; ++i) { u4.hostWrite(bytes / 2, pattern); r4.logic.poll(); r4.direct.giveBack(); }
+  std::vector<Frame> f4;
+  CHECK(parse(r4.direct.all(), f4, &rest) && rest == 0 && !f4.empty());
+
+  // a buffer written again while it went out all the same (a pause cannot come: not polled meanwhile): state 6
   Rig r2;
   CHECK(r2.setup(100000000, 4096 + 64));
   CHECK(ok(r2.op(cap::kOpStart)));
