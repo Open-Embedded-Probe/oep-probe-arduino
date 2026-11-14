@@ -1,6 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) spi-target (ESP32-P4 / P4X): CS goes through the pad's glitch filter (pulses under 25 ns dropped). A spike onto CS
+  inside a frame (a neighbouring line's edge) made the slave end the transfer there and count again: MISO slipped from
+  that bit. 6-2 (an H417 master, CS next to MOSI): 3 frames in 25 before, none in 120 with the filter.
+- (JA) spi-target（ESP32-P4 / P4X）: CS をパッドのグリッチフィルタに通す（25 ns より短いパルスを捨てる）。フレームの途中で CS に乗ったひげ（隣の線の縁）を
+  スレーブが転送の終わりと見て数え直し、そこから MISO がずれていた。6-2（H417 がマスター、CS が MOSI の隣）で、前は 25 フレーム中 3、フィルタありで 120 中 0。
 - (EN) Channels past 64: a CH32 firmware's channels are every port's pads (port x 24 + pin) - a V307 PA0-PE15, an H41x
   PA0-PF15 (the X035 keeps PA0-PC15: its pads past 63 are its own). The pin table, role_channels, the settings'
   disables and the debug wires' pin choices take them (oep::ChannelMask, OepChannelMask.h: a uint64_t where 64 are
