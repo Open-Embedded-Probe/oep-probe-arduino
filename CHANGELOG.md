@@ -1,6 +1,11 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) spi-controller: a configure while it runs keeps the lines driven and puts SCK straight at the new mode's CPOL;
+  it used to let SCK, MOSI and CS float in between, so SCK moved twice (and CS could) with CS high - seen on every
+  bench's SPI test.
+- (JA) spi-controller: 動いている間の configure では線を出したままにし、SCK を新しいモードの CPOL へ直接動かす。前は間で SCK・MOSI・CS を
+  浮かせていたので、CS が High のまま SCK が 2 回動いた（CS も動きうる）。どの台の SPI の試験でも見えていた。
 - (EN) Logic capture (ESP32-P4 / P4X, capture §3.8): the glitch filter is the GPIO pin filter, 25 ns only (describe
   min = max = step = 25; another width unsupported, no 8-line limit). The flex filters (25-1600 ns) are gone: on slow,
   noisy edges (an I2C line on 45 kOhm pull-ups) their output stopped following the input or oscillated, whatever the

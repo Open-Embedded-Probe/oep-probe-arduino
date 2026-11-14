@@ -275,14 +275,22 @@ Result SpiController::handle(uint8_t operation, const uint8_t *payload, size_t l
       if (!(kModes >> payload[0] & 1) || clock < kMinClockHz || clock > kMaxClockHz) return unsupportedValue(out, capacity);
       if (sck_ < 0) return wrongState(out, capacity);   // needs a plan (fixture §6: unavailable cause 6)
       if (capacity < 4) return failed();
-      stop();
+      // already driving: the lines stay driven (CS high, MOSI low) and SCK goes straight to the new CPOL - letting them
+      // float in between moved SCK twice and CS once while CS was high (a target counted them)
+      const bool driving = started_;
       mode_ = payload[0]; bit_order_ = payload[1]; transfers_ = 0;
       const uint32_t cpu = tickHz();
       half_ = (cpu + 2 * clock - 1) / (2 * clock);   // the SCK used: the nearest at or below the one asked
 #if !defined(OEP_HOST_FAKE_SPI_BUS)
       late_ = cyclesOf(kLateNs) < 2 ? 2 : cyclesOf(kLateNs);   // micros() elsewhere: 2, past one tick's step
 #endif
-      if (!start()) { stop(); mode_ = bit_order_ = 0; return failed(); }
+      if (driving) {
+#if !defined(OEP_HOST_FAKE_SPI_BUS)
+        set(sck_pad_, mode_ >> 1);
+#endif
+      } else if (!start()) {
+        stop(); mode_ = bit_order_ = 0; return failed();
+      }
       putU32(out, cpu / (2 * half_));
       return completed(4);
     }
