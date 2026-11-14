@@ -92,7 +92,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
 #else
   static constexpr size_t kMaxBytes = 32768;   // one segment: samples x channels x 2
 #endif
-  AnalogCapture(Endpoint &endpoint, uint64_t adc_pins, uint16_t instance = 0)
+  AnalogCapture(Endpoint &endpoint, ChannelMask adc_pins, uint16_t instance = 0)
       : endpoint_(endpoint), adc_pins_(adc_pins), instance_(instance) {}
   const char *name() const override { return reg::fixture_analog::kName; }
   uint16_t instance() const override { return instance_; }
@@ -171,7 +171,7 @@ class AnalogCapture final : public Interface, public GroupTrack {
   void fail(uint8_t error);    // state 6 with stopped reason 2 and `error` (capture §3.2)
   Endpoint &endpoint_;
   uint32_t generation_ = 0;   // one up at every start (nextGeneration); 0 before the first
-  uint64_t adc_pins_;
+  ChannelMask adc_pins_;
   uint16_t instance_;
   int pins_[kMaxChannels] = {-1, -1, -1, -1};   // by role
   uint8_t channels_ = 0;

@@ -49,12 +49,12 @@ struct DebugPort {
   // The target's reset line (attach's reset TLV): the host names the channel every time - there is no default
   // (oep-if-debug §3). Only channels in reset_allowed may be pulled (describe role_channels, role reset), and not one
   // another interface holds in `pins`.
-  uint64_t reset_allowed = 0;
+  ChannelMask reset_allowed = {};
   PinTable *pins = nullptr;
   // Host-chosen pins (oep-if-debug §1): the channels this wire may take as SWDIO / SWCLK, declared as role_channels;
   // 0 = the one fixed pair in swdio / swclk (a channel group). swdio / swclk are then the pair the link is on now, and a
   // live connection holds them in `pins` under pin_owner (core §8.1). A one-wire link keeps swclk 0xffff.
-  uint64_t pin_choice = 0;
+  ChannelMask pin_choice = {};
   uint8_t pin_owner = owners::kRiscvWire;
   // Who uses the connection (oep-if-common §2): the host through attach, a slot (the settings (core §13)) through its
   // automatic attach or the console its bind opened. A host's detach drops only its own use; the link goes when nobody

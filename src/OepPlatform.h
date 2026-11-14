@@ -213,8 +213,8 @@ inline uint64_t platformInputOnlyPins() {
 #endif
 }
 
-inline void platformParkMask(uint64_t mask) {
-  for (int pin = 0; pin < 64; ++pin) if ((mask >> pin) & 1) platformGpio(pin, kGpioInputFloating);
+inline void platformParkMask(const ChannelMask &mask) {
+  for (int pin = 0; pin < kChannelCount; ++pin) if (hasChannel(mask, static_cast<uint16_t>(pin))) platformGpio(pin, kGpioInputFloating);
 }
 
 // The unit id (oep-core §7.5): the chip's own number as lowercase hex text - the RP2's flash unique id (16), the

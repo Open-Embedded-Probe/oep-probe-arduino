@@ -20,6 +20,7 @@
 #endif
 
 #include "OepResult.h"
+#include "OepChannelMask.h"
 #include "OepRegistry.h"
 #include "openembeddedprobe_version.h"
 
@@ -573,15 +574,21 @@ class TlvWriter {
     return put(kTagChannelGroup, group, swclk == 0xffff ? 5 : sizeof group);
   }
   // role_channels for each role: role(u8) base(u16 = 0) bitmap of the channels it may take.
+#if OEP_CHANNEL_WORDS == 1
   OEP_NOIPA bool roleChannels(const uint8_t *roles, size_t count, uint64_t mask) {
     uint8_t value[3 + 8];
     int top = 63;
     while (top >= 0 && !((mask >> top) & 1)) --top;
+#else
+  OEP_NOIPA bool roleChannels(const uint8_t *roles, size_t count, const ChannelMask &mask) {
+    uint8_t value[3 + kChannelCount / 8];
+    const int top = topChannel(mask);
+#endif
     const size_t bytes = top < 0 ? 0 : static_cast<size_t>(top / 8 + 1);
     for (size_t r = 0; r < count; ++r) {
       value[0] = roles[r];
       value[1] = value[2] = 0;
-      for (size_t i = 0; i < bytes; ++i) value[3 + i] = static_cast<uint8_t>(mask >> (8 * i));
+      for (size_t i = 0; i < bytes; ++i) value[3 + i] = channelByte(mask, i);
       put(kTagRoleChannels, value, 3 + bytes);
     }
     return ok_;
@@ -776,6 +783,14 @@ class DirectTransport {
   virtual bool queueData(const uint8_t *buffer, size_t length, Done done, void *context) = 0;
   // Data transfers queued or in flight (0: the link is idle - a buffer queued now goes straight out, alone).
   virtual size_t queued() const = 0;
+  // A buffer that ends inside a frame (its last frame's rest comes in the next buffer queued): until a buffer that ends
+  // on a frame's end is queued, results wait (core §10.4: nothing between a frame's bytes). false: not offered.
+  virtual bool queueDataOpen(const uint8_t *buffer, size_t length, Done done, void *context) {
+    (void)buffer; (void)length; (void)done; (void)context;
+    return false;
+  }
+  // Results waiting to go (a capture with a frame open closes it so they can).
+  virtual bool resultsWaiting() const { return false; }
 
  protected:
   ~DirectTransport() = default;

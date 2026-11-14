@@ -57,7 +57,7 @@ uint8_t FixtureDac::planCheck(const RoleAssignment *roles, size_t count) {
   refusal_cause_ = reg::core::kUnavailableCauseWrongState;
   for (size_t i = 0; i < count; ++i) {
     const uint16_t ch = roles[i].channel;
-    if (roles[i].role >= kMaxChannels || ((seen >> roles[i].role) & 1) || ch > 63 || !((dac_pins_ >> ch) & 1))
+    if (roles[i].role >= kMaxChannels || ((seen >> roles[i].role) & 1) || !hasChannel(dac_pins_, ch))
       return kRejectUnsupported;
     seen |= 1u << roles[i].role;
     for (size_t j = i + 1; j < count; ++j) if (roles[j].channel == ch) return kRejectUnsupported;

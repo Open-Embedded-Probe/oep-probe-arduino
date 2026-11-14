@@ -131,6 +131,14 @@ g++ -std=gnu++17 -g -fsanitize=address -Wall -Wextra -Wno-unused-parameter -DOEP
   "$src/OepSettings.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" \
   "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepFixture.cpp"
 "$out-config"
+# the same settings and wire tests on a pin table past 64 channels (a CH32 V307 / H41x's: OEP_CHANNEL_WORDS 2 / 3)
+g++ -std=gnu++17 -g -fsanitize=address -Wall -Wextra -Wno-unused-parameter -DOEP_CHANNEL_WORDS=3 -DOEP_HOST_FAKE_CONFIG -I"$here/shim" -I"$src" -o "$out-config-wide" "$here/test_config.cpp" \
+  "$src/OepSettings.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" \
+  "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepFixture.cpp"
+"$out-config-wide"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_CHANNEL_WORDS=3 -I"$here/shim" -I"$src" -o "$out-wire-wide" "$here/test_wire.cpp" \
+  "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepFrame.cpp" "$src/OepDmConsole.cpp"
+"$out-wire-wide"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -I"$here/shim" -I"$src" -o "$out-capture" \
   "$here/test_capture.cpp" "$src/OepCapture.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
   "$src/OepCaptureGroup.cpp"
@@ -162,6 +170,12 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_CH32_LOGIC 
   "$here/test_logic_ch32.cpp" "$src/OepCh32Logic.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" \
   "$src/OepCaptureGroup.cpp"
 "$out-logic-ch32"
+# the H41x UHSIF logic stream on a fake of the core's CH32RVUhsif (channels past 64: OEP_CHANNEL_WORDS 3, the H41x's):
+# the rates, the data lines' pads, whole frames from runs over the ring and its gaps, a waiting result, drops, an overwrite
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_CHANNEL_WORDS=3 -DOEP_HOST_FAKE_UHSIF -I"$here/shim" -I"$src" \
+  -o "$out-logic-uhsif" "$here/test_logic_uhsif.cpp" "$src/OepH41xLogic.cpp" "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" \
+  "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp"
+"$out-logic-uhsif"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOEP_HOST_FAKE_I2C_SLAVE -DOEP_HOST_FAKE_CONFIG \
   -DOEP_HOST_FAKE_SPI_SLAVE -DOEP_HOST_FAKE_UART -DOEP_VECTORS_DIR="\"$here/../vectors\"" -I"$here/shim" -I"$src" -o "$out-vectors" "$here/test_vectors.cpp" \
   "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" "$src/OepCapture.cpp" \

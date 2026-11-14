@@ -30,7 +30,7 @@ class FixtureDac final : public Interface {
   static constexpr int32_t kMinMv = 0, kMaxMv = 3300;   // nominal: the supply
   enum : uint8_t { kOpSet = reg::fixture_dac::kOpSet, kOpStatus = reg::fixture_dac::kOpStatus };
 
-  FixtureDac(PinTable &pins, uint64_t dac_pins, uint16_t instance = 0) : pins_(pins), dac_pins_(dac_pins), instance_(instance) {}
+  FixtureDac(PinTable &pins, ChannelMask dac_pins, uint16_t instance = 0) : pins_(pins), dac_pins_(dac_pins), instance_(instance) {}
   const char *name() const override { return reg::fixture_dac::kName; }
   uint16_t instance() const override { return instance_; }
   uint8_t revision() const override { return reg::fixture_dac::kRevision; }
@@ -52,7 +52,7 @@ class FixtureDac final : public Interface {
  private:
   struct Out { int channel = -1; uint32_t value = 0; bool on = false; };
   PinTable &pins_;
-  uint64_t dac_pins_;
+  ChannelMask dac_pins_;
   uint16_t instance_;
   uint8_t refusal_cause_ = reg::core::kUnavailableCauseWrongState;
   Out out_[kMaxChannels];

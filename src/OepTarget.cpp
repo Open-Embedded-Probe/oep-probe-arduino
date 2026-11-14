@@ -253,9 +253,9 @@ bool checkConnection(DebugPort &port) {
 bool pairAllowed(const DebugPort &port, uint16_t swdio, uint16_t swclk) {
   if (!port.pin_choice) return swdio == port.swdio && swclk == port.swclk;
   const bool one_wire = port.swclk == 0xffff;
-  if (swdio > 63 || !((port.pin_choice >> swdio) & 1)) return false;
+  if (!hasChannel(port.pin_choice, swdio)) return false;
   if (one_wire) return swclk == 0xffff;
-  return swclk <= 63 && swclk != swdio && ((port.pin_choice >> swclk) & 1);
+  return swclk != swdio && hasChannel(port.pin_choice, swclk);
 }
 
 // A channel of the pair the settings disable (core §13.8), or 0xFFFF.
@@ -535,7 +535,7 @@ Result WireRvswd::attach(const uint8_t *payload, size_t length, uint8_t *out, si
   if (reset_value) {
     reset_channel = getU16(reset_value);
     hold_ms = getU16(reset_value + 2);
-    if (reset_channel > 63 || !((port_.reset_allowed >> reset_channel) & 1) || hold_ms > kMaxOpMs)
+    if (!hasChannel(port_.reset_allowed, reset_channel) || hold_ms > kMaxOpMs)
       return Tail::refuse(wire::kTlvAttachReset, reset_critical, out, capacity);
     with_reset = true;
   }

@@ -48,6 +48,8 @@
 #include <OepRvswdPhy.h>
 #include <OepAnalog.h>   // its CH32 build not on the X035 (its flash)
 #include <OepCh32Logic.h>   // empty on the X035 (its flash)
+#include <OepCh32DirectBulkStream.h>
+#include <OepH41xLogic.h>   // the H41x's UHSIF only
 #include <OepCh32SpiTarget.h>   // empty on the X035 (its flash)
 #include <OepCounter.h>
 #include <OepDac.h>
@@ -143,31 +145,50 @@ class HidStream final : public Stream {
 };
 
 static uint8_t txBuffer[512];
+#if defined(OEP_LOGIC_UHSIF)
+// The H41x: frames of a UHSIF buffer (16 KiB) and its 64 bytes on the vendor bulk port (its rx holds one whole), so a
+// logic stream goes in pushes of that size (OepH41xLogic.h); the other ports' own max_frame stays theirs
+static constexpr uint16_t kMaxFrame = 16384 + 64;
+static oep::Endpoint endpoint(txBuffer, sizeof txBuffer, {kMaxFrame, 4 * kMaxFrame, 8});
+#else
+static constexpr uint16_t kMaxFrame = 512;
 static oep::Endpoint endpoint(txBuffer, sizeof txBuffer, {512, 1024, 2});
+#endif
 static uint8_t probeTlv[160];
 static char serial[17];
 
-// The channels (platformPad: port x 24 + bit): the pads PA, PB and PC have (CH32RV_GPIO_PORT_WIDTH a port; the
-// CH32X035's 24: PA0-PA23, PB0-PB23, PC0-PC15), less the chip's own: the X035's USB pads (PC16 / PC17) and SWD (PC18 /
-// PC19) are past channel 63; a V307's USBFS (PA11 / PA12, the core's controller there) and SWD (PA13 / PA14); an H417's
-// SWD (PB8 / PB9; its USBSS has pads of its own). Which of these a package brings out is the board's; a pad it does not
-// is left alone by the host.
-static constexpr uint64_t kPortPads = (1ull << (CH32RV_GPIO_PORT_WIDTH < 24 ? CH32RV_GPIO_PORT_WIDTH : 24)) - 1;
-static constexpr uint64_t kPads = kPortPads | (kPortPads << 24) | (kPortPads << 48);
+// The channels (platformPad: port x 24 + bit): every port's pads (CH32RV_GPIO_PORT_WIDTH a port, the last port the
+// core's pin map has) up to oep::kChannelCount (OepChannelMask.h: the X035 stops at 64 - PA0-PA23, PB0-PB23, PC0-PC15 -
+// its USB pads PC16 / PC17 and SWD PC18 / PC19 past it; a V307 PA0-PE15, an H41x PA0-PF15), less the chip's own: a V307's
+// USBFS (PA11 / PA12, the core's controller there) and SWD (PA13 / PA14); an H417's SWD (PB8 / PB9; its USBSS has pads
+// of its own). Which of these a package brings out is the board's; a pad it does not is left alone by the host.
+static constexpr int kPorts = (NUM_DIGITAL_PINS - 1) / 32 - 1;   // pin = ((port + 2) << 5) | bit
+static constexpr int kPortWidth = CH32RV_GPIO_PORT_WIDTH < 24 ? CH32RV_GPIO_PORT_WIDTH : 24;
+static constexpr oep::ChannelMask padsOf(int ports) {
+  oep::ChannelMask m = {};
+  for (int p = 0; p < ports; ++p)
+    for (int b = 0; b < kPortWidth && p * 24 + b < oep::kChannelCount; ++b) m = m | oep::channelBit(static_cast<uint16_t>(p * 24 + b));
+  return m;
+}
 #if defined(ARDUINO_CH32V307)
-static constexpr uint64_t kChipOwn = 0xfull << 11;   // PA11-PA14
+static constexpr oep::ChannelMask kChipOwn = 0xfull << 11;   // PA11-PA14
 #elif defined(ARDUINO_CH32H417)
-static constexpr uint64_t kChipOwn = 0x3ull << (24 + 8);   // PB8 / PB9
+static constexpr oep::ChannelMask kChipOwn = 0x3ull << (24 + 8);   // PB8 / PB9
 #else
-static constexpr uint64_t kChipOwn = 0;
+static constexpr oep::ChannelMask kChipOwn = 0;
 #endif
-static constexpr uint64_t kChannels = kPads & ~kChipOwn;
+static constexpr oep::ChannelMask kChannels = padsOf(kPorts) & ~kChipOwn;
+#if defined(ARDUINO_CH32H417)
+static_assert(oep::kChannelCount >= 5 * 24 + 16, "the H41x's channels reach PF15");
+#elif defined(ARDUINO_CH32V307)
+static_assert(oep::kChannelCount >= 4 * 24 + 16, "the V307's channels reach PE15");
+#endif
 static constexpr uint16_t kUnset = 0xfffe;   // no pair chosen yet
 static oep::PinTable pins(kChannels);
 
 // What a choice leaves to run later, each added only from its own oepAddX(): what waits for the USB device, its loop work
 static oep::Hooks<void (*)(), 1> afterUsb;
-static oep::Hooks<void (*)(), 7> loopWork;
+static oep::Hooks<void (*)(), 8> loopWork;
 
 // What a choice leaves for another to find, each set only from its own oepAddX(); the code using both is the other's (the
 // settings', the SWIO wire's), so neither names the other's code: a serial transport (the settings' pass-throughs), the
@@ -190,10 +211,20 @@ static oep::FixtureUart *uartIn = nullptr;
 
 void oepAddBulk() {
   static oep::Slot<CH32RVUsbDeviceVendor> usbVendor;
+  usbVendor.make(USBDevice, 64).setInterfaceProtocol(oep::reg::kUsbVendorBulkSubclass, oep::reg::kUsbVendorBulkProtocol);
+#if defined(OEP_LOGIC_UHSIF)
+  // the zero-copy port (borrowed IN transfers, the USBSS DMA reading the buffers itself): results and a capture's runs
+  // (OepCh32DirectBulkStream.h); set up before the device starts
+  static oep::Slot<oep::Ch32DirectBulkStream> stream;
+  static uint8_t rx[kMaxFrame + 2];
+  const bool direct = stream.make(*usbVendor).begin();
+  endpoint.addTransport(*stream, rx, sizeof rx, oep::Endpoint::kVendorBulk, 0);   // the first interface
+  if (direct) endpoint.setDirect(&*stream);
+#else
   static oep::Slot<VendorStream> stream;
   static uint8_t rx[520];
-  usbVendor.make(USBDevice, 64).setInterfaceProtocol(oep::reg::kUsbVendorBulkSubclass, oep::reg::kUsbVendorBulkProtocol);
   endpoint.addTransport(stream.make(*usbVendor), rx, sizeof rx, oep::Endpoint::kVendorBulk, 0);   // the first interface
+#endif
 }
 
 void oepAddHid() {
@@ -332,9 +363,9 @@ void oepAddI2c() {
 // measured now, before a host: the first ADC input's pad goes analog for it, then floats again.
 void oepAddAnalog() {
 #if defined(OEP_ANALOG_CH32)
-  uint64_t adc = 0;
-  for (int c = 0; c < 64; ++c)
-    if (((kChannels >> c) & 1) && digitalPinHasADC(oep::platformPad(c))) adc |= uint64_t{1} << c;
+  oep::ChannelMask adc = {};
+  for (uint16_t c = 0; c < oep::kChannelCount; ++c)
+    if (oep::hasChannel(kChannels, c) && digitalPinHasADC(oep::platformPad(c))) adc = adc | oep::channelBit(c);
   static oep::Slot<oep::AnalogCapture> analog;
   analog.make(endpoint, adc, 0).setPins(&pins, oep::owners::kAnalog);
   analog->measureRates();
@@ -350,6 +381,12 @@ void oepAddLogic() {
   endpoint.add(logic.make(endpoint, pins, 0));
   loopWork.add([] { logic->poll(); });
 #endif
+#if defined(OEP_LOGIC_UHSIF)
+  // the H41x's UHSIF: 16 data lines streamed at up to 200 MS/s over the vendor port's zero-copy path (instance 1)
+  static oep::Slot<oep::H41xLogicCapture> fast;
+  endpoint.add(fast.make(endpoint, pins, 1));
+  loopWork.add([] { fast->poll(); });
+#endif
 }
 
 // oep.fixture.counter (it only listens: no owner)
@@ -363,12 +400,12 @@ void oepAddCounter() {
 // oep.fixture.dac on the DAC pads the core names (CH32RV_DAC1_PIN / 2: PA4 / PA5 on a V307 / H417; owners::kDac)
 void oepAddDac() {
 #if defined(CH32RV_DAC1_PIN) && !defined(ARDUINO_CH32X035)
-  uint64_t dac = 0;
-  for (int c = 0; c < 64; ++c) {
+  oep::ChannelMask dac = {};
+  for (uint16_t c = 0; c < oep::kChannelCount; ++c) {
     const int pad = oep::platformPad(c);
-    if (pad == CH32RV_DAC1_PIN) dac |= uint64_t{1} << c;
+    if (pad == CH32RV_DAC1_PIN) dac = dac | oep::channelBit(c);
 #if defined(CH32RV_DAC2_PIN)
-    if (pad == CH32RV_DAC2_PIN) dac |= uint64_t{1} << c;
+    if (pad == CH32RV_DAC2_PIN) dac = dac | oep::channelBit(c);
 #endif
   }
   static oep::Slot<oep::FixtureDac> d;
@@ -447,7 +484,7 @@ static void restartProbe() {
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
   uint8_t id[17];
-  oep::describeCore(w, modelName, id, oep::platformUnitId(id, sizeof id), 64);
+  oep::describeCore(w, modelName, id, oep::platformUnitId(id, sizeof id), static_cast<uint16_t>(oep::topChannel(kChannels) + 1));
   oep::describeChip(w);
   return w.ok() ? w.length() : 0;
 }

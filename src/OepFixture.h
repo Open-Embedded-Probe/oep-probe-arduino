@@ -56,8 +56,8 @@ class FixtureGpio final : public Interface {
   PinTable &pins_;
   uint16_t instance_;
   uint8_t owner_;
-  uint64_t planned_ = 0;
-  bool planned(uint16_t channel) const { return channel < 64 && ((planned_ >> channel) & 1); }
+  ChannelMask planned_ = {};
+  bool planned(uint16_t channel) const { return hasChannel(planned_, channel); }
 };
 
 class FixtureUart final : public Interface, public BindSource {
@@ -93,7 +93,7 @@ class FixtureUart final : public Interface, public BindSource {
   bool passStart(uint16_t rx, uint32_t baud, uint8_t format, PassSink sink, void *context);
   void passStop();
   bool passing() const { return pass_sink_ != nullptr; }
-  bool rxAllowed(uint16_t ch) const { return ch < 64 && ((rx_mask_ >> ch) & 1); }   // an RX candidate (role_channels)
+  bool rxAllowed(uint16_t ch) const { return hasChannel(rx_mask_, ch); }   // an RX candidate (role_channels)
   bool planned() const { return (rx_ >= 0 || tx_ >= 0) && !pass_sink_; }
   void setFrameLimit(size_t max_frame) override { max_read_ = max_frame > 14 ? static_cast<uint16_t>(max_frame - 14) : 0; }
   void setFrameLimits(size_t, size_t largest) override { setFrameLimit(largest); }   // reads sized by their route
@@ -113,7 +113,7 @@ class FixtureUart final : public Interface, public BindSource {
   // The channels the peripheral can take as RX and as TX (platform wiring: an RP2 UART reaches a few pins each way).
   // describe declares role_channels from these, planCheck refuses others as unsupported - before the core's pin
   // setters are reached (arduino-pico's SerialUART::setRX / setTX panic on a pin the UART cannot use).
-  void setRoleChannels(uint64_t rx_mask, uint64_t tx_mask) { rx_mask_ = rx_mask; tx_mask_ = tx_mask; }
+  void setRoleChannels(ChannelMask rx_mask, ChannelMask tx_mask) { rx_mask_ = rx_mask; tx_mask_ = tx_mask; }
   // ESP32 (dual core): the core the UART's interrupt runs on (platformUartBegin), set before the first plan. A sketch
   // whose loop() turns its core's interrupts off for bit-banged frames puts it on the other core; -1 (the default):
   // loop()'s.
@@ -125,7 +125,7 @@ class FixtureUart final : public Interface, public BindSource {
   size_t bindInput(const uint8_t *data, size_t length) override;
 
  private:
-  uint64_t rx_mask_ = ~uint64_t{0}, tx_mask_ = ~uint64_t{0};   // setRoleChannels
+  ChannelMask rx_mask_ = ~ChannelMask{}, tx_mask_ = ~ChannelMask{};   // setRoleChannels
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   // a port forwarded over USB may not be drained for 90 ms and more (usbip): 8 KiB overflowed at 921600 (P7)
   static constexpr size_t kDefaultCapacity = 32768, kMarks = 16;

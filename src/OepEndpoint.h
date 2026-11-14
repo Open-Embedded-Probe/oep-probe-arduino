@@ -263,9 +263,9 @@ class Endpoint {
   Result planUnavailable(uint8_t *out, size_t capacity) const {
     return unavailable(out, capacity, plan_refusal_.cause, plan_refusal_.channel);
   }
-  // The channels the settings' channel.{}.disable takes away (channel < 64): a plan_apply naming one is refused
+  // The channels the settings' channel.{}.disable takes away: a plan_apply naming one is refused
   // unavailable cause 5 (held by settings) with the channel (core §13.8).
-  void setDisabled(uint64_t mask) { disabled_ = mask; }
+  void setDisabled(const ChannelMask &mask) { disabled_ = mask; }
   // The settings (core §13): fn 0's get / set / unset / save / state / network, and every fn's setting TLVs. Settings
   // sets it itself; without one fn 0 offers none of them.
   void setSettings(SettingsCore *settings) { settings_ = settings; }
@@ -278,7 +278,7 @@ class Endpoint {
   // The pin table the interfaces' plans claim from: a plan replacement releases only the channels leaving the plan
   // (PinTable::deferIdle; oep-core §8). Settings::setPins sets it too.
   void setPins(PinTable *pins) { pins_ = pins; }
-  bool disabled(uint16_t channel) const { return channel < 64 && (disabled_ >> channel) & 1; }
+  bool disabled(uint16_t channel) const { return hasChannel(disabled_, channel); }
   // fn 0's describe: the probe itself, as TLV bytes (kept by the caller). Declarations only (core §7.3).
   void setProbeDescription(const uint8_t *tlv, size_t length) { probe_tlv_ = tlv; probe_tlv_length_ = length; }
   const uint8_t *probeDescription(size_t &length) const { length = probe_tlv_length_; return probe_tlv_; }
@@ -457,7 +457,7 @@ class Endpoint {
   const uint8_t *probe_tlv_ = nullptr;
   SettingsCore *settings_ = nullptr;
   size_t probe_tlv_length_ = 0;
-  uint64_t disabled_ = 0;                        // the settings' disabled channels (setDisabled)
+  ChannelMask disabled_ = {};                    // the settings' disabled channels (setDisabled)
   PinTable *pins_ = nullptr;                     // setPins
   // What the last plan replacement refused unavailable met (core §4.3's payload: cause, channel; 0xFFFF = left out).
   // replaceFns fills it.

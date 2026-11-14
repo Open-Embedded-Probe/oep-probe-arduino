@@ -47,12 +47,12 @@ size_t FixtureGpio::describe(uint8_t *out, size_t capacity) {
 }
 
 uint8_t FixtureGpio::planCheck(const RoleAssignment *roles, size_t count) {
-  uint64_t seen = 0;
+  ChannelMask seen = {};
   for (size_t i = 0; i < count; ++i) {
     const uint16_t c = roles[i].channel;
-    if (roles[i].role != gp::kRoleLine || !pins_.allowed(c) || ((seen >> c) & 1)) return kRejectUnsupported;
+    if (roles[i].role != gp::kRoleLine || !pins_.allowed(c) || hasChannel(seen, c)) return kRejectUnsupported;
     if (!pins_.freeFor(c, owner_)) return kRejectUnavailable;
-    seen |= uint64_t{1} << c;
+    seen = seen | channelBit(c);
   }
   return 0;
 }
@@ -60,13 +60,13 @@ uint8_t FixtureGpio::planCheck(const RoleAssignment *roles, size_t count) {
 bool FixtureGpio::planApply(const RoleAssignment *roles, size_t count) {
   for (size_t i = 0; i < count; ++i) {
     if (!pins_.claim(roles[i].channel, owner_)) { planRelease(); return false; }
-    planned_ |= uint64_t{1} << roles[i].channel;
+    planned_ = planned_ | channelBit(roles[i].channel);
   }
   return true;
 }
 
 void FixtureGpio::planRelease() {
-  planned_ = 0;
+  planned_ = ChannelMask{};
   pins_.release(owner_);   // each channel to its idle state
 }
 
@@ -136,11 +136,11 @@ uint8_t FixtureUart::planCheck(const RoleAssignment *roles, size_t count) {
   int rx = -1, tx = -1;
   for (size_t i = 0; i < count; ++i) {
     const uint16_t c = roles[i].channel;
-    const uint64_t role_mask = roles[i].role == ua::kRoleRx ? rx_mask_ : tx_mask_;
+    const ChannelMask role_mask = roles[i].role == ua::kRoleRx ? rx_mask_ : tx_mask_;
     if (roles[i].role == ua::kRoleRx && rx < 0) rx = c;
     else if (roles[i].role == ua::kRoleTx && tx < 0) tx = c;
     else return kRejectUnsupported;
-    if (!pins_.allowed(c) || c > 63 || !((role_mask >> c) & 1)) return kRejectUnsupported;   // not a pin this role can take
+    if (!pins_.allowed(c) || !hasChannel(role_mask, c)) return kRejectUnsupported;   // not a pin this role can take
     if (roles[i].role == ua::kRoleTx && !pins_.canOutput(c)) return kRejectUnsupported;     // TX on an input-only pin
   }
   if (rx >= 0 && tx >= 0 && rx == tx) return kRejectUnsupported;

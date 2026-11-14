@@ -14,6 +14,7 @@
 
 #include <Arduino.h>
 
+#include "OepChannelMask.h"
 #include "OepPlatform.h"
 
 namespace oep {
@@ -39,24 +40,27 @@ constexpr uint8_t kSecondWire = 0xf2;   // a second DebugPort beside the first (
 
 class PinTable {
  public:
-  static constexpr uint8_t kChannels = 64;
+  static constexpr uint16_t kChannels = kChannelCount;
   explicit PinTable(const uint8_t *allowed, size_t count) {
-    for (size_t i = 0; i < count && allowed[i] < kChannels; ++i) allowed_ |= uint64_t{1} << allowed[i];
+    for (size_t i = 0; i < count && allowed[i] < kChannels; ++i) allowed_ = allowed_ | channelBit(allowed[i]);
+    for (ChannelIndex c = 0; c < kChannels; ++c) idle_[c] = kIdleUnset;
   }
-  explicit constexpr PinTable(uint64_t allowed) : allowed_(allowed) {}
-  bool allowed(uint16_t channel) const { return channel < kChannels && (allowed_ >> channel) & 1; }
+  explicit constexpr PinTable(ChannelMask allowed) : allowed_(allowed) {
+    for (ChannelIndex c = 0; c < kChannels; ++c) idle_[c] = kIdleUnset;
+  }
+  bool allowed(uint16_t channel) const { return hasChannel(allowed_, channel); }
   // Channels taken away at start-up (pins the chip in this package uses itself: platformUnusablePins).
-  void forbid(uint64_t mask) { allowed_ &= ~mask; }
+  void forbid(ChannelMask mask) { allowed_ = allowed_ & ~mask; }
   // The settings' disabled channels (core §13.8 disable). A channel enabled again is free: it goes to its idle
   // state now. One disabled is left as it is (the settings refuse to disable a channel in use).
-  void setDisabled(uint64_t mask) {
-    const uint64_t back = disabled_ & ~mask;
+  void setDisabled(ChannelMask mask) {
+    const ChannelMask back = disabled_ & ~mask;
     disabled_ = mask;
-    for (uint8_t c = 0; c < kChannels; ++c)
-      if (((back >> c) & 1) && allowed(c) && owner_[c] == 0) applyIdle(c);
+    for (ChannelIndex c = 0; c < kChannels; ++c)
+      if (hasChannel(back, c) && allowed(c) && owner_[c] == 0) applyIdle(c);
   }
-  bool disabled(uint16_t channel) const { return channel < kChannels && (disabled_ >> channel) & 1; }
-  uint64_t disabledMask() const { return disabled_; }
+  bool disabled(uint16_t channel) const { return hasChannel(disabled_, channel); }
+  ChannelMask disabledMask() const { return disabled_; }
   bool free(uint16_t channel) const { return allowed(channel) && !disabled(channel) && owner_[channel] == 0; }
   // Free, or held by `owner` itself: a plan_apply's check of the plan that replaces `owner`'s own (oep-if-plan §2.1)
   bool freeFor(uint16_t channel, uint8_t owner) const {
@@ -65,7 +69,7 @@ class PinTable {
   bool claim(uint16_t channel, uint8_t owner) {
     if (!free(channel)) return false;
     owner_[channel] = owner;
-    pending_ &= ~(uint64_t{1} << channel);   // taken again within a replacement: its pad untouched
+    pending_ = pending_ & ~channelBit(channel);   // taken again within a replacement: its pad untouched
     return true;
   }
   // A plan replacement (oep-core §8, oep-if-fixture §1): between deferIdle and settleIdle a released channel is only
@@ -74,18 +78,18 @@ class PinTable {
   void deferIdle() { ++deferring_; }
   void settleIdle() {
     if (deferring_ && --deferring_) return;
-    const uint64_t pending = pending_;
-    pending_ = 0;
-    for (uint8_t c = 0; c < kChannels; ++c)
-      if (((pending >> c) & 1) && owner_[c] == 0 && !disabled(c)) applyIdle(c);
+    const ChannelMask pending = pending_;
+    pending_ = ChannelMask{};
+    for (ChannelIndex c = 0; c < kChannels; ++c)
+      if (hasChannel(pending, c) && owner_[c] == 0 && !disabled(c)) applyIdle(c);
   }
   // A released channel goes to its idle state (oep-core §8): Hi-Z unless the probe's settings (or its fixed wiring)
   // say pull-up / pull-down / output low / output high. Nothing but the settings' idle drives a pin nobody owns.
   void release(uint8_t owner) {
-    for (uint8_t c = 0; c < kChannels; ++c)
+    for (ChannelIndex c = 0; c < kChannels; ++c)
       if (owner_[c] == owner) {
         owner_[c] = 0;
-        if (deferring_) pending_ |= uint64_t{1} << c;
+        if (deferring_) pending_ = pending_ | channelBit(c);
         else if (!disabled(c)) applyIdle(c);
       }
   }
@@ -93,19 +97,19 @@ class PinTable {
   // set is touched, so a channel without one keeps the PHY's state (on the ESP32-P4 a pinMode takes a pin out of the
   // dedicated GPIO bundle; the PHY routes it back at its next attach).
   void releaseToIdle(uint8_t owner) {
-    for (uint8_t c = 0; c < kChannels; ++c)
+    for (ChannelIndex c = 0; c < kChannels; ++c)
       if (owner_[c] == owner) { owner_[c] = 0; if (!disabled(c) && idle_[c] != kIdleUnset) applyIdle(c); }
   }
   // Without touching the pads: for an owner taking its own pins again (holdPins, a plan applied over its old one).
   void releaseQuiet(uint8_t owner) {
-    for (uint8_t c = 0; c < kChannels; ++c)
+    for (ChannelIndex c = 0; c < kChannels; ++c)
       if (owner_[c] == owner) owner_[c] = 0;
   }
   // A free channel something used without claiming it (attach's reset line) back to its idle state: as releaseToIdle.
   void rest(uint16_t channel) {
-    if (free(channel) && idle_[channel] != kIdleUnset) applyIdle(static_cast<uint8_t>(channel));
+    if (free(channel) && idle_[channel] != kIdleUnset) applyIdle(static_cast<ChannelIndex>(channel));
   }
-  uint64_t allowedMask() const { return allowed_; }
+  ChannelMask allowedMask() const { return allowed_; }
   uint8_t owner(uint16_t channel) const { return channel < kChannels ? owner_[channel] : 0xff; }
   // Idle states (the settings (core §13) idle: 0 Hi-Z, 1 pull-up, 2 pull-down, 3 output low, 4 output high; kIdleUnset =
   // Hi-Z). Applied now to a free channel (apply false: only kept, for a channel about to be disabled), and at every
@@ -120,7 +124,7 @@ class PinTable {
     if ((mode == kIdleOutputLow || mode == kIdleOutputHigh) && !canOutput(channel)) return false;
     if ((mode == kIdlePullUp || mode == kIdlePullDown) && !canPull(channel)) return false;
     idle_[channel] = mode;
-    if (apply && owner_[channel] == 0 && !disabled(channel)) applyIdle(static_cast<uint8_t>(channel));
+    if (apply && owner_[channel] == 0 && !disabled(channel)) applyIdle(static_cast<ChannelIndex>(channel));
     return true;
   }
   uint8_t idle(uint16_t channel) const { return channel < kChannels ? idle_[channel] : kIdleUnset; }
@@ -129,26 +133,23 @@ class PinTable {
   // probe's, fixture §1) - a pad a peripheral left at another one goes back to the default, so whoever takes the pin next
   // starts from the pad's own. Used by the idle states and the gpio fixture's set; never by the wires or the other
   // fixtures.
-  void setPad(uint8_t c, uint8_t mode) {
+  void setPad(ChannelIndex c, uint8_t mode) {
     const DriveLevels d = platformDriveLevels();
-    const uint64_t bit = uint64_t{1} << c;
     if (d.count && (mode == kGpioOutputLow || mode == kGpioOutputHigh)) {
       platformGpioDriven(c, mode, d.default_level);
     } else {
       platformGpio(c, mode);
-      if (strong_ & bit) platformDrive(c, d.default_level);
+      if (hasChannel(strong_, c)) platformDrive(c, d.default_level);
     }
-    strong_ &= ~bit;
+    strong_ = strong_ & ~channelBit(c);
   }
   // For a fixture that takes a channel for its own peripheral (UART, I2C / SPI target): a pad an output idle left at
   // another strength goes back to the default, as setPad does when a pad leaves mode 3 / 4. Not for a debug wire (its
   // PHY sets the weakest itself, and claims its pins only once they run) nor the gpio fixture (it keeps the idle state).
   void ownStrength(uint16_t channel) {
-    if (channel >= kChannels) return;
-    const uint64_t bit = uint64_t{1} << channel;
-    if (!(strong_ & bit)) return;
+    if (!hasChannel(strong_, channel)) return;
     platformDrive(channel, platformDriveLevels().default_level);
-    strong_ &= ~bit;
+    strong_ = strong_ & ~channelBit(channel);
   }
   // The same, then the pad at `level` (a level of platformDriveLevels) for a line the fixture's peripheral drives; a
   // level other than the default is marked, so the next owner gets the default back.
@@ -156,36 +157,29 @@ class PinTable {
     ownStrength(channel);
     if (channel >= kChannels || !platformDriveLevels().count) return;
     platformDrive(channel, level);
-    if (level != platformDriveLevels().default_level) strong_ |= uint64_t{1} << channel;
+    if (level != platformDriveLevels().default_level) strong_ = strong_ | channelBit(channel);
   }
   // Channels the probe can only read (the classic ESP32's GPIO34-39): no output idle on them (core §13.8), and left
   // out of the role_channels of the roles that drive a line (outputMask: UART TX, I2C SDA / SCL, SPI MISO).
-  void setInputOnly(uint64_t mask) { input_only_ = mask; }
-  bool canOutput(uint16_t channel) const { return allowed(channel) && !((input_only_ >> channel) & 1); }
-  uint64_t outputMask() const { return allowed_ & ~input_only_; }
+  void setInputOnly(ChannelMask mask) { input_only_ = mask; }
+  bool canOutput(uint16_t channel) const { return allowed(channel) && !hasChannel(input_only_, channel); }
+  ChannelMask outputMask() const { return allowed_ & ~input_only_; }
   // Channels without internal pull-up / pull-down (the classic ESP32's GPIO34-39): no idle with mode 1 / 2 on them
   // (core §13.8, rejected unsupported).
-  void setNoPull(uint64_t mask) { no_pull_ = mask; }
-  bool canPull(uint16_t channel) const { return allowed(channel) && !((no_pull_ >> channel) & 1); }
+  void setNoPull(ChannelMask mask) { no_pull_ = mask; }
+  bool canPull(uint16_t channel) const { return allowed(channel) && !hasChannel(no_pull_, channel); }
 
  private:
-  uint64_t allowed_ = 0;
-  uint64_t disabled_ = 0;   // the settings' disable items
-  uint64_t input_only_ = 0;   // setInputOnly
-  uint64_t no_pull_ = 0;      // setNoPull
-  uint64_t pending_ = 0;      // released during a replacement, not yet settled (deferIdle)
-  uint64_t strong_ = 0;       // pads setPad left at another strength than the default
+  ChannelMask allowed_ = {};
+  ChannelMask disabled_ = {};     // the settings' disable items
+  ChannelMask input_only_ = {};   // setInputOnly
+  ChannelMask no_pull_ = {};      // setNoPull
+  ChannelMask pending_ = {};      // released during a replacement, not yet settled (deferIdle)
+  ChannelMask strong_ = {};       // pads setPad left at another strength than the default
   uint8_t deferring_ = 0;
   uint8_t owner_[kChannels] = {};
-  uint8_t idle_[kChannels] = {kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
-                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
-                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
-                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
-                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
-                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
-                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset,
-                              kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset, kIdleUnset};
-  void applyIdle(uint8_t c) {
+  uint8_t idle_[kChannels] = {};   // kIdleUnset each (the constructors)
+  void applyIdle(ChannelIndex c) {
     const uint8_t m = idle_[c];
     setPad(c, m == kIdlePullUp       ? kGpioInputPullUp
               : m == kIdlePullDown   ? kGpioInputPullDown

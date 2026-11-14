@@ -41,8 +41,8 @@ size_t Ch32LogicCapture::describe(uint8_t *out, size_t capacity) {
   TlvWriter w(out, capacity);
   uint8_t roles[kMaxChannels];
   for (uint8_t k = 0; k < kMaxChannels; ++k) roles[k] = k;
-  uint64_t sampled = 0;   // every port's pins 0-15
-  for (uint32_t c = 0; c < 64; ++c) if (c % kChannelsPerPort < kSampledPins) sampled |= uint64_t{1} << c;
+  ChannelMask sampled = {};   // every port's pins 0-15
+  for (uint16_t c = 0; c < kChannelCount; ++c) if (c % kChannelsPerPort < kSampledPins) sampled = sampled | channelBit(c);
   w.roleChannels(roles, kMaxChannels, table_.allowedMask() & sampled);
   uint8_t mode[9] = {cap::kModeOneShot};
   putU32(mode + 1, kMaxSamples);

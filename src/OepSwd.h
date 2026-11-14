@@ -68,7 +68,7 @@ struct SwdPort {
   uint32_t dpidr = 0;          // the DPIDR the attach read (connections' tid, scheme 2)
   // Host-chosen pins (oep-if-debug §1), as DebugPort: the channels SWDIO / SWCLK may take (role_channels); 0 = the fixed
   // pair above. swdio / swclk are then the pair the link is on, held in `pins` under pin_owner while it is live.
-  uint64_t pin_choice = 0;
+  ChannelMask pin_choice = {};
   PinTable *pins = nullptr;
   uint8_t pin_owner = owners::kSwdWire;
   WireLossClock loss{};        // oep-if-debug §2: the live connection closes only once the wire is lost

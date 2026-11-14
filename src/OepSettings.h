@@ -173,7 +173,7 @@ class Settings final : public SettingsCore {
   // first); applySaved() reads the save again and applies every value it can (core §13.7): after the sketch's last
   // endpoint.add() and every add* here.
   void load();
-  uint64_t savedDisabled() const { return saved_disabled_; }
+  ChannelMask savedDisabled() const { return saved_disabled_; }
   void applySaved();
   void poll();   // from loop(): the pass-throughs, the holds
   // The pass-throughs (fixture §2.1, console §2.1: a uart's or a console's bytes to a serial port's raw stream, binds):
@@ -245,7 +245,7 @@ class Settings final : public SettingsCore {
   uint32_t saved_generation_ = 0;
   uint32_t saved_crc_ = 0;       // the save as it is (its blob's CRC and length): a save of the same is not written
   size_t saved_size_ = 0;
-  uint64_t saved_disabled_ = 0;
+  ChannelMask saved_disabled_ = {};
   // Each transport's pass-through state, made the first time the pass-throughs run (every transport added by then) and
   // taken for good: the context passIn gets, the uarts_ index passing to the port now and the places_ index whose
   // console does (-1: none).
@@ -268,7 +268,7 @@ class Settings final : public SettingsCore {
   Result checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_t n, uint8_t item, uint8_t *out, size_t capacity) const;
   Result checkWhole(const uint8_t *items, size_t length, uint8_t *out, size_t capacity) const;
   uint8_t idlePlainOf(const uint8_t *items, size_t length, uint16_t channel) const;   // PinTable::kIdleUnset: none
-  uint64_t disabledIn(const uint8_t *items, size_t length) const;
+  ChannelMask disabledIn(const uint8_t *items, size_t length) const;
   uint16_t labelClash(const uint8_t *items, size_t length) const;   // 0xffff: the labels are unique (core §13.8)
   const uint8_t *in(const uint8_t *items, size_t length, uint8_t id, const void *owner, uint16_t key, size_t &n) const;
   // The place of console `owner` (the front, common §2) on the wire of fn `fn`; -1: none of its places

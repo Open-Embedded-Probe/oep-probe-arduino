@@ -418,15 +418,15 @@ const uint8_t *Settings::in(const uint8_t *items, size_t length, uint8_t id, con
   return v + 2;
 }
 
-uint64_t Settings::disabledIn(const uint8_t *items, size_t length) const {
-  uint64_t mask = 0;
+ChannelMask Settings::disabledIn(const uint8_t *items, size_t length) const {
+  ChannelMask mask = {};
   const uint8_t e = entryOf(kDisable);
-  if (e == kNoEntry) return 0;
+  if (e == kNoEntry) return mask;
   size_t at = 0, vlen = 0;
   uint8_t tag = 0;
   const uint8_t *v = nullptr;
   while (nextItem(items, length, at, tag, v, vlen))
-    if (tag == e + 1 && vlen == 3 && v[2] && getU16(v) < 64) mask |= uint64_t{1} << getU16(v);
+    if (tag == e + 1 && vlen == 3 && v[2] && getU16(v) < kChannelCount) mask = mask | channelBit(getU16(v));
   return mask;
 }
 
@@ -670,8 +670,8 @@ Result Settings::checkValue(uint8_t entry, uint16_t key, const uint8_t *d, size_
 Result Settings::checkWhole(const uint8_t *items, size_t length, uint8_t *out, size_t capacity) const {
   const uint16_t clash = labelClash(items, length);   // two labels equal but for ASCII case (core §13.8): cause 5
   if (clash != 0xffff) return unavailable(out, capacity, reg::core::kUnavailableCauseHeldBySettings, clash);
-  const uint64_t disabled = disabledIn(items, length);
-  auto isDisabled = [&](uint16_t ch) { return ch < 64 && ((disabled >> ch) & 1); };
+  const ChannelMask disabled = disabledIn(items, length);
+  auto isDisabled = [&](uint16_t ch) { return hasChannel(disabled, ch); };
   auto heldBy = [&](uint16_t ch) {
     const uint8_t idle = idlePlainOf(items, length, ch);
     return isDisabled(ch) || idle == PinTable::kIdleOutputLow || idle == PinTable::kIdleOutputHigh;
@@ -965,7 +965,7 @@ void Settings::adopt(const uint8_t *items, size_t length) {
   items_length_ = length;
   if (wifi_hand_) (this->*wifi_hand_)();
   if (!pins_) return;
-  const uint64_t disabled = disabledIn(items_, items_length_);
+  const ChannelMask disabled = disabledIn(items_, items_length_);
   pins_->setDisabled(disabled);
   endpoint_.setDisabled(disabled);
   for (uint16_t ch = 0; ch < PinTable::kChannels; ++ch) {
@@ -1177,8 +1177,8 @@ void Settings::readBlob(bool all) {
           if (!all) {   // the core's disabled channels, by name
             char buf[16];
             if (!disable || vl != 1 || !val[0]) continue;
-            for (uint16_t ch = 0; ch < channels_ && ch < 64; ++ch)
-              if (platformChannelName(ch, buf) == kl && memcmp(buf, key, kl) == 0) saved_disabled_ |= uint64_t{1} << ch;
+            for (uint16_t ch = 0; ch < channels_ && ch < kChannelCount; ++ch)
+              if (platformChannelName(ch, buf) == kl && memcmp(buf, key, kl) == 0) saved_disabled_ = saved_disabled_ | channelBit(ch);
             continue;
           }
           if ((pass == 0) != disable) continue;
@@ -1187,7 +1187,7 @@ void Settings::readBlob(bool all) {
           size_t wl = 0;
           bool ok = e != kNoEntry && keyNamed(e, key, kl, k) && wireValue(e, val, vl, w + 2, wl) &&
                     !refused(checkValue(e, k, w + 2, wl, 0, sink, sizeof sink));
-          if (ok && entries_[e].id == kIdle && ((disabledIn(applied, alen) >> k) & 1)) ok = false;   // disable wins
+          if (ok && entries_[e].id == kIdle && hasChannel(disabledIn(applied, alen), k)) ok = false;   // disable wins
           if (ok && entries_[e].id == kLabel) {   // labels unique but for case (core §13.7): the lower channel's stays
             for (uint16_t other = 0; ok && other < PinTable::kChannels; ++other) {
               size_t ol = 0;
@@ -1211,7 +1211,7 @@ void Settings::readBlob(bool all) {
   if (!whole) {
     storage_state_ = reg::core::kStorageStateUnreadable;
     reason_ = reg::core::kStorageReasonForm;
-    saved_disabled_ = 0;
+    saved_disabled_ = ChannelMask{};
     return;
   }
   if (!all) return;
@@ -1262,7 +1262,7 @@ int Settings::savedUsbTransports(const char *const *choices, uint8_t count) {
 }
 
 void Settings::load() {
-  saved_disabled_ = 0;
+  saved_disabled_ = ChannelMask{};
   readBlob(false);
 }
 

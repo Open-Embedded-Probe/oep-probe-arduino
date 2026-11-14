@@ -161,7 +161,7 @@ uint8_t AnalogCapture::planCheck(const RoleAssignment *roles, size_t count) {
     const uint8_t role = roles[i].role;
     const uint16_t ch = roles[i].channel;
     // a role it does not have, a pin without an ADC channel (outside role_channels): unsupported (core §8, capture §3.1)
-    if (role >= kMaxChannels || ch > 63 || !((adc_pins_ >> ch) & 1)) return kRejectUnsupported;
+    if (role >= kMaxChannels || !hasChannel(adc_pins_, ch)) return kRejectUnsupported;
     if (role >= count || ((seen >> role) & 1)) return kRejectUnavailable;
     if (table_ && table_->owner(ch) != 0 && table_->owner(ch) != owner_) return kRejectUnavailable;   // a wire, a slot
     seen |= 1u << role;
@@ -917,7 +917,7 @@ void AnalogCapture::drainNow() {
 // a floating input again (core §8's free state).
 bool AnalogCapture::measureRates() {
   int channel = -1;
-  for (int c = 0; c < 64 && channel < 0; ++c) if ((adc_pins_ >> c) & 1) channel = c;
+  for (int c = 0; c < kChannelCount && channel < 0; ++c) if (hasChannel(adc_pins_, static_cast<uint16_t>(c))) channel = c;
   if (channel < 0) return false;
   const pin_size_t pad = static_cast<pin_size_t>(platformPad(channel));
   gStepCount = 0;

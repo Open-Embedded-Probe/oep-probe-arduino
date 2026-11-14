@@ -1,6 +1,24 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Channels past 64: a CH32 firmware's channels are every port's pads (port x 24 + pin) - a V307 PA0-PE15, an H41x
+  PA0-PF15 (the X035 keeps PA0-PC15: its pads past 63 are its own). The pin table, role_channels, the settings'
+  disables and the debug wires' pin choices take them (oep::ChannelMask, OepChannelMask.h: a uint64_t where 64 are
+  enough, so the other builds are as before).
+- (JA) 64 本を超えるチャネル: CH32 の Firmware のチャネルは、どのポートの端子も（ポート × 24 + ピン）。V307 は PA0〜PE15、H41x は
+  PA0〜PF15（X035 は PA0〜PC15 のまま。63 を超える端子はチップ自身のもの）。ピンの表、role_channels、設定の disable、デバッグの線の
+  ピンの選択がそれを扱う（oep::ChannelMask、OepChannelMask.h。64 本で足りるビルドは uint64_t のままで、今までと同じ）。
+- (EN) H41x: oep.fixture.logic instance 1 on the UHSIF (`oep::H41xLogicCapture`): the 16 data lines (PD10-PD15,
+  PF0-PF2, PC6-PC9, PA13-PA15) streamed at SYSCLK / n (up to 200 MS/s) or the crystal's 480 MHz / n, w 16, over the
+  vendor bulk port without a copy: the UHSIF's ring of 16 KiB buffers with a 64-byte gap before each holds the frames'
+  headers and tails, and the finished buffers go out as one transfer (up to 64 KiB). The vendor port is
+  `oep::Ch32DirectBulkStream` there (every IN through the core's writeDirect; results wait for a frame's end), max_frame
+  16448. A frame's tail ends with the padding TLV (oep-spec core §10.2) that makes tail and header the gap.
+- (JA) H41x: UHSIF の oep.fixture.logic（instance 1、`oep::H41xLogicCapture`）。データ線 16 本（PD10〜PD15、PF0〜PF2、PC6〜PC9、
+  PA13〜PA15）を SYSCLK / n（200 MS/s まで）か水晶の 480 MHz / n で、w 16、vendor bulk の口からコピーせずにストリーミングする。UHSIF の
+  16 KiB のバッファーの輪の、各バッファーの前の 64 バイトの隙間にフレームの見出しと尾を置き、取り終えたバッファーを 1 つの転送
+  （64 KiB まで）で出す。そこでの vendor の口は `oep::Ch32DirectBulkStream`（IN はすべてコアの writeDirect。応答はフレームの終わりを待つ）、
+  max_frame 16448。フレームの尾の最後は詰め物の TLV（oep-spec core §10.2）で、尾と見出しで隙間を埋める。
 
 ## 0.0.56
 - (EN) I2C target (ESP32 builds): the glitch filter on SCL and SDA is on (7 source-clock cycles; the IDF slave driver

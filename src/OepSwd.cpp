@@ -131,7 +131,7 @@ size_t WireSwd::describe(uint8_t *out, size_t capacity) { return describePins(po
 
 bool WireSwd::allowed(uint16_t swdio, uint16_t swclk) const {
   if (!port_.pin_choice) return swdio == port_.swdio && swclk == port_.swclk;
-  return swdio < 64 && swclk < 64 && swdio != swclk && ((port_.pin_choice >> swdio) & 1) && ((port_.pin_choice >> swclk) & 1);
+  return swdio != swclk && hasChannel(port_.pin_choice, swdio) && hasChannel(port_.pin_choice, swclk);
 }
 
 uint16_t WireSwd::disabledOf(uint16_t swdio, uint16_t swclk) const {
