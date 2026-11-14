@@ -3,7 +3,8 @@
 
 // OEP v1 logic capture (oep.fixture.logic revision 1, oep-spec oep-if-capture) on a WCH CH32H415 / H416 / H417's UHSIF
 // (ArduinoCore-CH32RV's CH32RVUhsif): the 16 data lines latched every clock and written by the UHSIF's own DMA, streamed
-// over the USB vendor bulk port without a copy. Streaming only (mode 3), immediate, format 0, w 16 (DATAn on bit n).
+// over the USB vendor bulk port without a copy. Streaming only (mode 3), immediate, format 0: w 8 (the UHSIF's 8-bit bus,
+// a byte a sample) when every role is on DATA0-7, else w 16; DATAn on bit n.
 //
 // The data lines and their pads: DATA0-5 PD10-PD15, DATA6-8 PF0-PF2, DATA9-12 PC6-PC9, DATA13-15 PA13-PA15. A role
 // goes on one of those channels; the sample is the UHSIF's 16 bits whatever the plan (pos[k] = the role's DATA line).
@@ -92,6 +93,7 @@ class H41xLogicCapture final : public Interface {
   uint8_t plan_cause_ = reg::core::kUnavailableCauseLimit;
   int8_t line_[kMaxChannels] = {};   // role k's DATA line
   uint8_t channels_ = 0;
+  uint8_t width_ = 16;           // the UHSIF's bus and w: 8 when every role is on DATA0-7 (PD10-PD15, PF0, PF1), else 16
   size_t max_frame_ = 1024;
   bool subscribed_ = false;
   uint8_t state_ = reg::fixture_logic::kStateUnconfigured;
@@ -132,6 +134,7 @@ class H41xLogicCapture final : public Interface {
   size_t bufferBytesFor(size_t max_frame) const;
   uint8_t *slot(uint32_t b) const { return ring_ + (b % buffers_) * (kGapBytes + buffer_bytes_) + kGapBytes; }
   uint32_t runMax() const { return buffers_ / 4; }
+  uint32_t samplesPerBuffer() const { return static_cast<uint32_t>(buffer_bytes_ / (width_ / 8)); }
   uint32_t finishedNow();
   bool begin();
   uint64_t positionOf(uint32_t b) const;

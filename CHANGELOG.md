@@ -14,11 +14,17 @@
   headers and tails, and the finished buffers go out as one transfer (up to 64 KiB). The vendor port is
   `oep::Ch32DirectBulkStream` there (every IN through the core's writeDirect; results wait for a frame's end), max_frame
   16448. A frame's tail ends with the padding TLV (oep-spec core §10.2) that makes tail and header the gap.
+  Every role on DATA0-7 (PD10-PD15, PF0, PF1): the UHSIF's 8-bit bus, w 8, a byte a sample. A host slower than the
+  stream pauses the UHSIF short of the data going out; the time it stood still is a drop (the position jumps by it).
 - (JA) H41x: UHSIF の oep.fixture.logic（instance 1、`oep::H41xLogicCapture`）。データ線 16 本（PD10〜PD15、PF0〜PF2、PC6〜PC9、
   PA13〜PA15）を SYSCLK / n（200 MS/s まで）か水晶の 480 MHz / n で、w 16、vendor bulk の口からコピーせずにストリーミングする。UHSIF の
   16 KiB のバッファーの輪の、各バッファーの前の 64 バイトの隙間にフレームの見出しと尾を置き、取り終えたバッファーを 1 つの転送
   （64 KiB まで）で出す。そこでの vendor の口は `oep::Ch32DirectBulkStream`（IN はすべてコアの writeDirect。応答はフレームの終わりを待つ）、
   max_frame 16448。フレームの尾の最後は詰め物の TLV（oep-spec core §10.2）で、尾と見出しで隙間を埋める。
+  役割がすべて DATA0〜7（PD10〜PD15、PF0、PF1）にあれば UHSIF の 8 ビットのバスで、w 8、1 サンプル 1 バイト。ホストが流れより遅いときは、
+  送っている途中のデータの手前で UHSIF を止める。止めていた時間は読み捨て（位置がその分飛ぶ）。
+- (EN) The CH32 Firmware builds on ArduinoCore-CH32RV 0.8.0.
+- (JA) CH32 の Firmware を ArduinoCore-CH32RV 0.8.0 でビルドする。
 
 ## 0.0.56
 - (EN) I2C target (ESP32 builds): the glitch filter on SCL and SDA is on (7 source-clock cycles; the IDF slave driver

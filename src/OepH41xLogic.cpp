@@ -81,7 +81,7 @@ size_t H41xLogicCapture::describe(uint8_t *out, size_t capacity) {
   for (int n = 0; n < 16; ++n) lines = lines | channelBit(static_cast<uint16_t>(kLinePort[n] * kChannelsPerPort + kLinePin[n]));
   w.roleChannels(roles, kMaxChannels, table_.allowedMask() & lines);
   uint8_t mode[9] = {cap::kModeStreaming};   // segments of a buffer each, pushed (needs a subscription)
-  putU32(mode + 1, kMaxBufferBytes / 2);
+  putU32(mode + 1, kMaxBufferBytes);   // a segment's samples at most (w 8)
   putU32(mode + 5, kMaxBuffers);
   w.put(cap::kTlvDescribeMode, mode, sizeof mode);
   uint8_t range[8];
@@ -114,7 +114,11 @@ uint8_t H41xLogicCapture::planCheck(const RoleAssignment *roles, size_t count) {
 // Taking the plan changes no pin: the UHSIF reads its lines whatever their mode (capture §1.2, core §8)
 bool H41xLogicCapture::planApply(const RoleAssignment *roles, size_t count) {
   halt();
-  for (size_t i = 0; i < count; ++i) line_[roles[i].role] = static_cast<int8_t>(dataLineOf(roles[i].channel));
+  width_ = 8;   // every role on DATA0-7: the UHSIF's 8-bit bus, a byte a sample (half the bytes of 16)
+  for (size_t i = 0; i < count; ++i) {
+    line_[roles[i].role] = static_cast<int8_t>(dataLineOf(roles[i].channel));
+    if (line_[roles[i].role] >= 8) width_ = 16;
+  }
   channels_ = static_cast<uint8_t>(count);
   state_ = cap::kStateUnconfigured;
   return true;
@@ -189,8 +193,9 @@ bool H41xLogicCapture::begin() {
   };
   const CH32RVUhsifTransition first = {0, S, P | CH32RVUhsif::ResetDataCount | t0};
   const uint32_t stride = 2 * (kGapBytes + buffer_bytes_);
-  const uint32_t samples = static_cast<uint32_t>(buffer_bytes_ / 2);
-  if (!uhsif_.begin(divider_, source_) || !uhsif_.setStates(states, 4, first) || !uhsif_.setDataCounter(samples - 2) ||
+  const uint32_t samples = samplesPerBuffer();
+  if (!uhsif_.begin(divider_, source_) || !uhsif_.setBusWidth(width_) || !uhsif_.setStates(states, 4, first) ||
+      !uhsif_.setDataCounter(samples - 2) ||
       !uhsif_.setRing(0, slot(0), static_cast<uint16_t>(buffer_bytes_), buffers_ / 2, stride) ||
       !uhsif_.setRing(1, slot(1), static_cast<uint16_t>(buffer_bytes_), buffers_ / 2, stride))
     return false;
@@ -208,7 +213,7 @@ uint64_t H41xLogicCapture::positionOf(uint32_t b) const {
   return epoch_pos_ + static_cast<uint64_t>(b - epoch_b_) * buffer_bytes_;
 }
 uint64_t H41xLogicCapture::nsOf(uint32_t b) const {
-  const uint64_t first = static_cast<uint64_t>(b - epoch_b_) * (buffer_bytes_ / 2);
+  const uint64_t first = static_cast<uint64_t>(b - epoch_b_) * samplesPerBuffer();
   const uint64_t q = first / num_, r = first % num_;
   return epoch_ns_ + q * den_ * 1000000000ull + static_cast<uint64_t>(static_cast<double>(r * den_) * 1e9 / num_);
 }
@@ -228,7 +233,7 @@ void H41xLogicCapture::resume() {
   // the samples since the epoch's start at the rate, in whole samples (2 bytes): where the new epoch starts
   const uint64_t dns = now - epoch_ns_;
   const uint64_t taken = static_cast<uint64_t>(static_cast<double>(dns) * num_ / den_ / 1e9);
-  uint64_t at = epoch_pos_ + taken * 2;
+  uint64_t at = epoch_pos_ + taken * (width_ / 8);
   if (at < was) at = was;
   epoch_b_ = (finished_ + buffers_ - 1) / buffers_ * buffers_;   // the ring starts again at slot 0
   epoch_pos_ = at;
@@ -259,7 +264,7 @@ void H41xLogicCapture::putTail(uint8_t *t, uint32_t b) {
   uint8_t *info = t + kTlvHeader + 4;
   putTlvHeader(info, cap::kTlvDataSegmentInfo, kInfoBytes);
   putU64(info + kTlvHeader, positionOf(b));
-  putU32(info + kTlvHeader + 8, static_cast<uint32_t>(buffer_bytes_ / 2));
+  putU32(info + kTlvHeader + 8, samplesPerBuffer());
   putU64(info + kTlvHeader + 12, nsOf(b));
   putU32(info + kTlvHeader + 20, kStartUncertaintyNs);
   uint8_t *pad = info + kTlvHeader + kInfoBytes;
@@ -434,12 +439,12 @@ Result H41xLogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, siz
   putU32(r, num);
   putU32(r + 4, den);
   w.put(cap::kTlvConfigureAnswerActualRate, r, sizeof r);
-  uint8_t layout[2 + kMaxChannels] = {16, channels_};
+  uint8_t layout[2 + kMaxChannels] = {width_, channels_};
   for (uint8_t k = 0; k < channels_; ++k) layout[2 + k] = static_cast<uint8_t>(line_[k]);
   w.put(cap::kTlvConfigureAnswerLayout, layout, 2 + channels_);
   // the stream's bytes a second (2 a sample, rounded up) and what waits to be sent at most (half the ring: poll drops
   // past it)
-  const uint64_t data_rate = (uint64_t{2} * num + den - 1) / den;
+  const uint64_t data_rate = (uint64_t{width_ / 8u} * num + den - 1) / den;
   w.u32(cap::kTlvConfigureAnswerDataRate, data_rate > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(data_rate));
   w.u32(cap::kTlvConfigureAnswerStreamBuffer, static_cast<uint32_t>((query && !buffers_ ? kMaxBuffers : buffers_) / 2 * bytes));
   return w.ok() ? completed(w.length()) : failed();

@@ -361,11 +361,50 @@ static void testBehindAndOverwritten() {
   CHECK(parse(r2.direct.all(), f2, &rest) && rest == 0);   // the frame left open is closed even so
 }
 
+// Every role on DATA0-7 (PD10-PD15, PF0, PF1): the 8-bit bus, w 8, a byte a sample - a buffer holds twice the samples
+static void testEightBit() {
+  Rig rig;
+  RoleAssignment roles[2] = {{1, 0, 3 * 24 + 10}, {1, 1, 5 * 24 + 1}};   // PD10 (DATA0), PF1 (DATA7)
+  CHECK(rig.logic.planCheck(roles, 2) == 0);
+  rig.logic.planApply(roles, 2);
+  CHECK(rig.request(0, kOpOpen, {0xd0, 0x07, 0, 0, 0}) && rig.request(1, reg::kOpSubscribe, {0, 0, 0, 0, 0, 0}));
+  rig.logic.setFrameLimit(4096 + 64);
+  Bytes c;
+  tlv(c, cap::kTlvConfigureMode | 0x80, {cap::kModeStreaming});
+  tlv(c, cap::kTlvConfigureRate | 0x80, u32(200000000));
+  CHECK(ok(rig.op(cap::kOpConfigure, c)));
+  bool w8 = false;
+  uint32_t data_rate = 0;
+  for (size_t at = 0; at + kTlvHeader <= rig.out.size(); at += kTlvHeader + getU16(rig.out.data() + at + 1)) {
+    const uint8_t *v = rig.out.data() + at + kTlvHeader;
+    if (rig.out[at] == cap::kTlvConfigureAnswerLayout) w8 = v[0] == 8 && v[1] == 2 && v[2] == 0 && v[3] == 7;
+    if (rig.out[at] == cap::kTlvConfigureAnswerDataRate) data_rate = getU32(v);
+  }
+  CHECK(w8);
+  CHECK(data_rate == 200000000);   // a byte a sample
+  CHECK(ok(rig.op(cap::kOpStart)));
+  const uint32_t generation = getU32(rig.out.data());
+  CH32RVUhsif &u = rig.logic.hostUhsif();
+  for (int i = 0; i < 6; ++i) { u.hostWrite(4096, pattern); rig.logic.poll(); rig.direct.giveBack(); }
+  CHECK(ok(rig.op(cap::kOpStop)));
+  for (int i = 0; i < 4; ++i) { rig.logic.poll(); rig.direct.giveBack(); }
+  std::vector<Frame> frames;
+  size_t rest = 0;
+  CHECK(parse(rig.direct.all(), frames, &rest) && rest == 0 && frames.size() == 6);
+  bool same = true;
+  for (const Frame &f : frames) {
+    same = same && f.generation == generation && f.samples == 4096 && f.data.size() == 4096;
+    for (size_t k = 0; k < f.data.size() && same; ++k) same = f.data[k] == static_cast<uint8_t>(pattern(f.position + k));
+  }
+  CHECK(same);
+}
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0);
   testRates();
   testStream();
   testBehindAndOverwritten();
+  testEightBit();
   printf("logic-uhsif: %d checks, %d failures\n", checks, failures);
   return failures ? 1 : 0;
 }

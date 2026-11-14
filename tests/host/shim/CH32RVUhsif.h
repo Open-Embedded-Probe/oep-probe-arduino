@@ -31,10 +31,12 @@ class CH32RVUhsif {
     divider_ = divider;
     source_ = source;
     begun_ = true;
+    width_ = 16;
     threads_ = 0;
     return true;
   }
   void end() { begun_ = running_ = false; }
+  bool setBusWidth(uint8_t bits) { if (!begun_ || (bits != 8 && bits != 16 && bits != 32)) return false; width_ = bits; return true; }
   bool setStates(const CH32RVUhsifState *, uint8_t count, const CH32RVUhsifTransition &) { return begun_ && count; }
   bool setDataCounter(uint32_t limit) { limit_ = limit; return begun_; }
   bool setRing(uint8_t n, void *first, uint16_t bytes, uint8_t count, uint32_t stride) {
@@ -47,7 +49,7 @@ class CH32RVUhsif {
   }
   uint32_t bytesWritten(uint8_t n) const { return written_[n]; }
   bool start() {
-    if (!begun_ || (threads_ & 3) != 3 || limit_ + 2 != ring_[0].bytes / 2u) return false;
+    if (!begun_ || (threads_ & 3) != 3 || limit_ + 2 != ring_[0].bytes / (width_ / 8u)) return false;
     written_[0] = written_[1] = 0;
     at_ = 0;
     buffer_ = 0;
@@ -66,16 +68,18 @@ class CH32RVUhsif {
       const Ring &r = ring_[t];
       uint8_t *buf = r.first + ((buffer_ >> 1) % r.count) * r.stride;
       const uint16_t v = next(sample_);
-      memcpy(buf + at_, &v, 2);
+      const uint32_t step = width_ / 8u;   // 8 bits: the sample's low byte (DATA0-7)
+      memcpy(buf + at_, &v, step);
       ++sample_;
-      at_ += 2;
-      written_[t] += 2;
+      at_ += step;
+      written_[t] += step;
       if (at_ == r.bytes) { at_ = 0; ++buffer_; }
     }
   }
   void hostRewind() { sample_ = 0; }
   int starts = 0;
   uint8_t divider_ = 0;
+  uint8_t width_ = 16;
   CH32RVUhsifClock source_ = CH32RVUhsifClock::Sysclk;
 
  private:
