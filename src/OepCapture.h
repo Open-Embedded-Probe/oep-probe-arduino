@@ -207,7 +207,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint32_t glitch_ns_ = 0;               // the glitch filter in use (0: none)
   gpio_glitch_filter_handle_t filters_[kMaxChannels] = {};
   void setGlitch(uint32_t ns);           // the filters on the data pins (0: off)
-  // the data pins' input hysteresis (capture §3.8, on unless configure says otherwise); the pins it is on, to take it
+  // the data pins' input hysteresis (capture §3.8, when configure asks for it); the pins it is on, to take it
   // off at the next configure or the plan's release
   int hys_pins_[kMaxChannels];
   uint8_t hys_lines_ = 0;

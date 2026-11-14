@@ -1813,8 +1813,8 @@ static void testRepeatTriggerBusyLine() {
 // capture §3.8: the external clock - the clock's role is no sample line (the unit's data lines the others, its clock
 // input the role's pin), actual_rate 0 / 1, the edge; a qualifier as a level delimiter on its valid line; only a
 // one-shot with an immediate trigger, up to max_hz. The glitch filter: the pin filter (25 ns, the one width) on each
-// data line, glitch_used, off again at the plan's release. The input hysteresis: on each data line unless configure
-// says 0, hysteresis_used always, off again at the plan's release.
+// data line, glitch_used, off again at the plan's release. The input hysteresis: on each data line when configure
+// says 1, hysteresis_used always, off again at the plan's release.
 static void testExternalClockAndGlitch() {
   board(512 * 1024, size_t(32) << 20);
   Rig rig(4);
@@ -1883,14 +1883,15 @@ static void testExternalClockAndGlitch() {
                      kRejectUnsupported));
   }
   CHECK(ok(configure(rig.cap, c, out)) && g_fake_glitch_filters == 0);
-  // the input hysteresis: unsent on (each data line), 0 off, 1 on, 2 refused; hysteresis_used (1 byte) each time
-  CHECK(answered(cap::kTlvConfigureAnswerHysteresisUsed, 0) == (1L << 16 | 1));
-  CHECK(g_fake_hysteresis[0] && g_fake_hysteresis[1] && g_fake_hysteresis[2] && g_fake_hysteresis[3] && !g_fake_hysteresis[4]);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureInputHysteresis, {0}), out)));
+  // the input hysteresis: unsent off, 1 on (each data line), 0 off, 2 refused; hysteresis_used (1 byte) each time
   CHECK(answered(cap::kTlvConfigureAnswerHysteresisUsed, 0) == (1L << 16 | 0));
   CHECK(!g_fake_hysteresis[0] && !g_fake_hysteresis[3]);
   CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureInputHysteresis, {1}), out)));
-  CHECK(answered(cap::kTlvConfigureAnswerHysteresisUsed, 0) == (1L << 16 | 1) && g_fake_hysteresis[0] && g_fake_hysteresis[3]);
+  CHECK(answered(cap::kTlvConfigureAnswerHysteresisUsed, 0) == (1L << 16 | 1));
+  CHECK(g_fake_hysteresis[0] && g_fake_hysteresis[1] && g_fake_hysteresis[2] && g_fake_hysteresis[3] && !g_fake_hysteresis[4]);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureInputHysteresis, {0}), out)));
+  CHECK(answered(cap::kTlvConfigureAnswerHysteresisUsed, 0) == (1L << 16 | 0) && !g_fake_hysteresis[0] && !g_fake_hysteresis[3]);
+  CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureInputHysteresis, {1}), out)));
   CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureInputHysteresis, {2}), out),
                    kRejectUnsupported) && out[0] == (kCrit | cap::kTlvConfigureInputHysteresis));
   CHECK(rejectedAs(raw(rig.cap, LogicCapture::kOpConfigure, with(request(c), cap::kTlvConfigureInputHysteresis, {1, 0}), out),

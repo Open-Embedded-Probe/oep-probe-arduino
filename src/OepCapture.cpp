@@ -1645,9 +1645,9 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
       glitch_asked = true;
     }
   }
-  // input_hysteresis (§3.8): 0 off, 1 on (unsent: on); another value unsupported
+  // input_hysteresis (§3.8): 0 off, 1 on (unsent: off); another value unsupported
   if (hys_tlv.v && hys_tlv.v[0] > 1) return Tail::refuse(cap::kTlvConfigureInputHysteresis, hys_tlv.critical, out, capacity);
-  const bool hysteresis = !hys_tlv.v || hys_tlv.v[0] == 1;
+  const bool hysteresis = hys_tlv.v && hys_tlv.v[0] == 1;
   // samples in streaming, segments outside repeat, a pretrigger without a trigger: unsupported whatever the value
   const Result misplaced = captureMisplaced(mode, ask(samples_tlv), ask(segments_tlv), ask(trigger_tlv), ask(pretrigger_tlv), out, capacity);
   if (refused(misplaced)) return misplaced;
