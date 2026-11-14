@@ -218,7 +218,8 @@ void oepAddBulk() {
   static oep::Slot<oep::Ch32DirectBulkStream> stream;
   static uint8_t rx[kMaxFrame + 2];
   const bool direct = stream.make(*usbVendor).begin();
-  endpoint.addTransport(*stream, rx, sizeof rx, oep::Endpoint::kVendorBulk, 0);   // the first interface
+  // flushed after each poll that wrote: a result goes out on flush (one buffer, one transfer)
+  endpoint.addTransport(*stream, rx, sizeof rx, oep::Endpoint::kVendorBulk, 0, true);   // the first interface
   if (direct) endpoint.setDirect(&*stream);
 #else
   static oep::Slot<VendorStream> stream;
