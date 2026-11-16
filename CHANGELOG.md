@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) SWIO on the RP2040 / RP2350: the frames' timing helpers (the SysTick read, the waits, the pin writes) are forced
+  inline. A plain `inline` left two of them in flash, called from the RAM frames through a veneer; a flash cache miss
+  there stretched a 262 ns short low into a long one, and a CH32V003 answered nothing (scan: nothing answered; ch32rv:
+  transfer failed). Now a CH32V003F4P6 on a Pico's GPIO1 attaches, identifies and takes a 12 KB image in 2.9 s.
+- (JA) RP2040 / RP2350 の SWIO: フレームの時間の関数（SysTick の読み、待ち、ピンの書き込み）を必ずインライン化した。ただの `inline` では
+  2 つがフラッシュに残り、RAM のフレームから veneer 経由で呼ばれていた。そこでフラッシュのキャッシュが外れると 262 ns の短い low が長い low に
+  延び、CH32V003 が何も答えなかった（スキャンは無応答、ch32rv は転送の失敗）。直したあと、Pico の GPIO1 の CH32V003F4P6 に attach し、
+  識別し、12 KB を 2.9 秒で書けた。
 - (EN) spi-controller: a configure while it runs keeps the lines driven and puts SCK straight at the new mode's CPOL;
   it used to let SCK, MOSI and CS float in between, so SCK moved twice (and CS could) with CS high - seen on every
   bench's SPI test.

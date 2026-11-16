@@ -710,19 +710,19 @@ constexpr uint32_t kCfgr = 0x5aa50400;   // key + outen (E123)
 uint32_t ticksFor(uint32_t ns) { return static_cast<uint32_t>((uint64_t{ns} * rp2040.f_cpu() + 999999999u) / 1000000000u); }
 // SysTick counts down: its distance from the reload, climbing, in 24 bits; a deadline is passed once the difference,
 // as a signed 24-bit number, is not negative
-inline uint32_t now() { return (0u - systick_hw->cvr) & 0xffffffu; }
-inline bool before(uint32_t deadline) { return static_cast<int32_t>((now() - deadline) << 8) < 0; }
-inline void until(uint32_t deadline) { while (before(deadline)) {} }
-inline uint32_t since(uint32_t t) { return (now() - t) & 0xffffffu; }
-inline void low(uint32_t m) { sio_hw->gpio_clr = m; }
-inline void high(uint32_t m) { sio_hw->gpio_set = m; }
-inline void outputOn(uint32_t m) { sio_hw->gpio_oe_set = m; }
-inline void outputOff(uint32_t m) { sio_hw->gpio_oe_clr = m; }
-inline bool sample(uint32_t m) { return (sio_hw->gpio_in & m) != 0; }
+__force_inline uint32_t now() { return (0u - systick_hw->cvr) & 0xffffffu; }
+__force_inline bool before(uint32_t deadline) { return static_cast<int32_t>((now() - deadline) << 8) < 0; }
+__force_inline void until(uint32_t deadline) { while (before(deadline)) {} }
+__force_inline uint32_t since(uint32_t t) { return (now() - t) & 0xffffffu; }
+__force_inline void low(uint32_t m) { sio_hw->gpio_clr = m; }
+__force_inline void high(uint32_t m) { sio_hw->gpio_set = m; }
+__force_inline void outputOn(uint32_t m) { sio_hw->gpio_oe_set = m; }
+__force_inline void outputOff(uint32_t m) { sio_hw->gpio_oe_clr = m; }
+__force_inline bool sample(uint32_t m) { return (sio_hw->gpio_in & m) != 0; }
 
 // As the P4's: each low timed from the moment the line fell, the high after it from the moment it rose (an XIP cache
 // miss or a bus stall before an edge lengthens the high before it, never shortens a long low into a short one).
-inline uint32_t sendBits(uint32_t m, const Times &tm, uint64_t bits, int count, uint32_t t) {
+__force_inline uint32_t sendBits(uint32_t m, const Times &tm, uint64_t bits, int count, uint32_t t) {
   for (uint64_t mask = uint64_t{1} << (count - 1); mask; mask >>= 1) {
     const uint32_t lowFor = (bits & mask) ? tm.shortLow : tm.longLow;
     until(t);
@@ -736,7 +736,7 @@ inline uint32_t sendBits(uint32_t m, const Times &tm, uint64_t bits, int count, 
 }
 
 // One bit read, as the P4's (2 = the line never came back: left released)
-inline int readBit(uint32_t m, const Times &tm, uint32_t &rise_left) {
+__force_inline int readBit(uint32_t m, const Times &tm, uint32_t &rise_left) {
   uint32_t t = now();
   low(m);
   until(t = (t + tm.shortLow) & 0xffffffu);
