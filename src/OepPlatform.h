@@ -404,6 +404,12 @@ inline uint64_t platformUartTxMask(int uart_index) {
 // period (about 55 us) on the core that runs the interrupt. At 32 the rest is 96 bytes: 480 us at 2000000.
 constexpr uint8_t kUartRxFifoFull = 32;
 constexpr uint32_t kUartRxFifo = 128;
+// Core 0's tasks: a logic capture's harvest above a fixture UART's event task. At 2 Mbaud the UART's interrupt comes
+// every 160 us and wakes the event task each time; at the top priority it kept core 0 for 10-13 ms at a stretch, the
+// harvest waited past what the DMA ring holds (21 ms at 20 MS/s) and the stream lost a segment (two P4X probes, a
+// CH32X035 sending 2048 bytes at 2 Mbaud, 2026-11-17). The harvest takes about 200 us a pass; the event queue (20)
+// holds more than 3 ms of 2 Mbaud events.
+constexpr unsigned kHarvestTaskPriority = 5, kUartEventTaskPriority = kHarvestTaskPriority - 1;
 #if !CONFIG_FREERTOS_UNICORE
 namespace detail {
 struct UartBeginJob {

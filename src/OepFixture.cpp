@@ -371,8 +371,9 @@ UartEvent eventType(uart_event_type_t type) {
 }
 }  // namespace
 
-// On the driver's interrupt core, at arduino-esp32's event-task priority: the interrupt never runs halfway through
-// this task's look, so "no event waiting" means every byte in the ring was counted unless an event was dropped.
+// On the driver's interrupt core, below a capture's harvest (kUartEventTaskPriority): its look reads the driver's count
+// and then finds no event waiting, so every byte in the ring was counted unless an event was dropped - the interrupt
+// may come anywhere in between (it posts its event with its bytes), and a task that preempts it touches neither.
 void FixtureUart::eventTask(void *arg) {
   FixtureUart *self = static_cast<FixtureUart *>(arg);
   QueueHandle_t events = static_cast<QueueHandle_t>(self->events_);
@@ -413,7 +414,7 @@ void FixtureUart::startEvents() {
   stopping_.store(false, std::memory_order_release);
   const int core = irq_core_ >= 0 ? irq_core_ : static_cast<int>(xPortGetCoreID());   // where begin() put the interrupt
   TaskHandle_t task = nullptr;
-  if (!stopped_ || xTaskCreatePinnedToCore(eventTask, "oep_uart_events", 3072, this, configMAX_PRIORITIES - 1, &task, core) != pdPASS)
+  if (!stopped_ || xTaskCreatePinnedToCore(eventTask, "oep_uart_events", 3072, this, kUartEventTaskPriority, &task, core) != pdPASS)
     task = nullptr;
   task_ = task;
   ledger_on_ = task != nullptr;

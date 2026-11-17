@@ -1039,7 +1039,7 @@ Result LogicCapture::startTriggered(uint8_t *out, size_t capacity) {
   if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }
   xQueueReset(queue_);
   harvesting_ = true;
-  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, kHarvestCore) != pdPASS) {
+  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, kHarvestTaskPriority, &task_, kHarvestCore) != pdPASS) {
     harvesting_ = false;
     return failed();
   }
@@ -2110,7 +2110,7 @@ Result LogicCapture::startRepeat(uint8_t *out, size_t capacity) {
   // than a 64 KiB ring lasts at 80 MB/s)
   if (format_ == cap::kDataFormatLogicBlocks && !share_task_)
     xTaskCreatePinnedToCore(shareTask, "oep_share", 3072, this, 3, &share_task_, 1);
-  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, 5, &task_, kHarvestCore) != pdPASS) {
+  if (xTaskCreatePinnedToCore(harvestTask, "oep_harvest", 4096, this, kHarvestTaskPriority, &task_, kHarvestCore) != pdPASS) {
     harvesting_ = false;
     return failed();
   }

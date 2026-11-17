@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X: a fixture UART's event task runs below a logic capture's harvest on core 0
+  (kUartEventTaskPriority 4, kHarvestTaskPriority 5). At the top priority, a UART receiving 2 Mbaud woke it every
+  160 us and it kept core 0 for 10-13 ms at a stretch; the harvest waited past the DMA ring's 21 ms at 20 MS/s and
+  the stream lost a segment (two P4X probes, a CH32X035 sending 2048 bytes at 2 Mbaud: 10 of 11 runs; with it 4 of 4
+  passed, the UART's bytes all there). Found with a core-0 sampler in a diagnostic build.
+- (JA) ESP32-P4 / P4X: フィクスチャの UART のイベントのタスクを、コア 0 でロジックの取り込みの回収より下の優先度にした
+  （kUartEventTaskPriority 4、kHarvestTaskPriority 5）。最高の優先度だと、2 Mbaud を受ける UART が 160 µs ごとにこれを起こし、コア 0 を一度に
+  10〜13 ms 占めた。回収が 20 MS/s の DMA の輪（21 ms）より長く待たされ、流し続けが区画を失っていた（P4X 2 台、CH32X035 が 2 Mbaud で
+  2048 バイト送る試験で 11 回中 10 回。直した後は 4 回とも通り、UART のバイトも全部そろった）。診断の版のコア 0 の見張りで見つけた。
 - (EN) Breaking (oep-spec 1c80768, transports §1): HID reports carry first(u16) after count, where the first frame
   starting in the report begins (kHidNoStart when none). OepHid.h: HidFrameStarts counts where frames start,
   hidPackReport() writes each input report's first, and HidIn takes the output reports by the HID rules 6 and 7 - a
