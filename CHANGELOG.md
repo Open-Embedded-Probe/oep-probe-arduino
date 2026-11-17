@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) RVSWD: a CH32V103 on its 8 MHz HSI (nothing in its flash, or just reset before its program raises the clock)
+  answers about 1.2 us after the clock edge - at the table's slowest half period (500 ns) on the probe's sampling edge,
+  half the frames a clock late, and no attach, reset-halt or flash got through (bench, 80f1b2d80a34 v103evt after its
+  flash was erased: a wireskein capture read answer_delay 1.0 period). The long ask, and retune after a reset, now try
+  1000 and 2000 ns before giving up (askLong before the short frame), and the period found is the connection's slowest
+  until the next attach or retune. Bench: attach, reset --halt and two flashes at the default speed then passed (6.4 KB
+  in 12.5 s); a fast target attaches as before (host test 122 ms). Host tests: a late-answering V103, its retune after a
+  reset to HSI and back. docs: the long frame and the slow periods (implementation-limits §3.1).
+- (JA) RVSWD: 8 MHz の HSI で動く CH32V103（フラッシュが空のとき、またはリセット直後でプログラムがクロックを上げる前）は、クロックのエッジから
+  約 1.2 µs 遅れて答える。速さの表のいちばん遅い半周期（500 ns）では答えがプローブの読み取りのエッジに重なり、フレームの半分が 1 クロック
+  ずれて、attach も reset-halt も書き込みも通らなかった（ベンチ、80f1b2d80a34 の v103evt でフラッシュを消した後。wireskein の取り込みで
+  answer_delay 1.0 周期）。長い形の問い合わせと、リセットの後の速さの選び直し（retune）は、諦める前に 1000 ns と 2000 ns でも試す
+  （askLong は短い形に移る前に）。見つかった周期は、次の attach か選び直しまでその接続のいちばん遅い周期にする。ベンチで、既定の速さの
+  まま attach、reset --halt、書き込み 2 回が通った（6.4 KB で 12.5 秒）。速い相手の attach は変わらない（ホストの試験で 122 ms）。ホストの
+  試験: 遅れて答える V103、リセットで HSI に戻ったときの選び直しとその戻り。文書: 長い形と遅い周期（implementation-limits §3.1）。
 - (EN) ESP32-P4 i2c-target: configure's nack_from (oep-spec 1b5d056, fixture §3, features bit1): the n-th data byte of
   each write and every one after NACKed, the level chosen in the ACK stretch interrupt (slave_byte_ack_ctl_en /
   slave_byte_ack_lvl), every byte still in the frame. Measured first on the bench with a CH32V205's Wire at 20-100 kHz

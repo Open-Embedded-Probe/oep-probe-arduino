@@ -70,6 +70,9 @@ struct Target {
   // the long frame (a CH32V103: link-to-target#long-frame, E173): long_only answers nothing else; a write lands only
   // when the host's bit 83 is 0. long_seen: frames of 80 clocks or more any target met.
   bool long_only = false;
+  // long_min_half: a V103 on its 8 MHz HSI (nothing in its flash) answers about a clock late at a faster half period
+  // (bench, 80f1b2d80a34 v103evt, 2026-11-18): its echo, data and status come one cell late there
+  uint32_t long_min_half = 0;
   // sticky: what the bench's V103 does once active (dmactive set) - a short frame, or its lines let go, and it answers
   // every long frame after with status 2 (failed), its writes not taken, until its power goes (80f1b2d80a34 v103evt)
   bool sticky = false;
@@ -153,10 +156,11 @@ struct Target {
   }
   bool targetBit() const {
     if (long_only) {   // the target's phase: the address echoed, the data (read, or the write's echoed), status 0
-      if (!in_frame || pos < 42 || pos > 82) return pulled;   // no wake needed (a WCH-LinkE sends none)
-      if (pos <= 48) return (address >> (48 - pos)) & 1;
-      if (pos <= 80) return ((op == 1 ? out : data) >> (80 - pos)) & 1;
-      return sticky && pos == 81;   // status: 2 when sticky, else 0
+      const int p = half_ns < long_min_half ? pos - 1 : pos;   // late: the cell before's answer
+      if (!in_frame || p < 42 || p > 82) return pulled;   // no wake needed (a WCH-LinkE sends none)
+      if (p <= 48) return (address >> (48 - p)) & 1;
+      if (p <= 80) return ((op == 1 ? out : data) >> (80 - p)) & 1;
+      return sticky && p == 81;   // status: 2 when sticky, else 0
     }
     if (!awake || !header_ok || write || !in_frame) return pulled;
     if (pos >= 14 && pos <= 45) return (out >> (45 - pos)) & 1;
@@ -261,6 +265,34 @@ int main() {
     // an active V103 left by another tool (DMCONTROL already 1): the first attach asks in the long frame only
     t.reset(); t.begun = true; t.long_only = true; t.dmcontrol = 1;
     CHECK(phy.attach() && phy.noAutoexec() && !t.sticky && t.frames == t.long_seen);
+    phy.free();
+  }
+
+  // ---- a V103 with nothing in its flash (8 MHz HSI) answers the long frame a clock late at the 500 ns half period:
+  // the long ask is tried slower before the short frame, and the connection keeps that period as its slowest ----
+  {
+    t.reset(); t.begun = true; t.long_only = true; t.long_min_half = 1000;
+    CHECK(phy.attach());
+    CHECK(phy.noAutoexec() && !t.sticky && t.frames == t.long_seen);   // never a short frame
+    CHECK(phy.halfNs() >= 1000);
+    CHECK(t.long_writes > 0 && t.progbuf0 == 0x12345678u);
+    phy.free();
+    // one slower still
+    t.reset(); t.begun = true; t.long_only = true; t.long_min_half = 2000;
+    CHECK(phy.attach() && phy.halfNs() >= 2000 && t.frames == t.long_seen);
+    phy.free();
+    // a part on the short frame meets the slow long asks too, then attaches as before
+    t.reset(); t.begun = true;
+    CHECK(phy.attach() && !phy.noAutoexec() && phy.halfNs() < 1000);
+    phy.free();
+    // a V103 attached on a fast clock, then reset: back on its HSI it follows only slower, and retune finds that; once
+    // its program has raised the clock again, the next retune is fast again
+    t.reset(); t.begun = true; t.long_only = true;
+    CHECK(phy.attach() && phy.halfNs() < 1000);
+    t.long_min_half = 1000;
+    CHECK(phy.retune() && phy.halfNs() >= 1000 && !t.sticky && t.frames == t.long_seen);
+    t.long_min_half = 0;
+    CHECK(phy.retune() && phy.halfNs() < 1000);
     phy.free();
   }
 

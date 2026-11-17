@@ -646,22 +646,43 @@ bool RvswdPhy::wakeModule(uint32_t &dmstatus) {
   return false;
 }
 
+// Half periods slower than the table's, for a part on the long frame (a CH32V103) running on its 8 MHz HSI - nothing in
+// its flash, or just out of a reset before its program raises the clock: it answers about 1.2 us after the clock edge
+// (askLong, retune).
+constexpr uint32_t kSlowerLongNs[] = {1000, 2000};
+
 // The long frame first, as a WCH-LinkE asks every part (link-to-target#long-frame, E173): a part on the short frame
 // answers none of it and takes no harm, while a CH32V103 that is active - from an earlier connection, ours or another
 // tool's - and is asked in the short frame answers every long frame after with status 2 (failed) until its power goes
 // (bench, 80f1b2d80a34 v103evt). Both lines high, no wake and no configuration pair (neither goes to a V103); a read of
 // DMCONTROL - twice, a module just woken answering busy first - before anything is written, so a part on the short
 // frame is never written in the long one. Found, the connection stays on it (long_); not found, long_ is false again.
+//
+// Asked slower too (kSlowerLongNs) before the short frame: a CH32V103 with nothing in its flash runs on its 8 MHz HSI and answers about
+// 1.2 us after the clock edge, a clock late at the 500 ns half period, so no ask there got through (bench, 80f1b2d80a34
+// v103evt after its flash was erased, 2026-11-18: a wireskein capture read answer_delay 1.0 period, half the frames
+// late; it attached at 1000 ns and slower). Found slower, that period becomes the connection's slowest (the floor a
+// host's max_speed sets, kept apart from it; the next attach starts without it).
 bool RvswdPhy::askLong(uint32_t &dmstatus) {
   long_ = true;
   configureBus(false);
-  uint32_t control = 0;
-  bool there = false;
-  for (int i = 0; i < 2 && !there; ++i) there = readRaw(kDmControl, control);
-  if (there) {
+  const uint32_t first = half_ns_;
+  for (size_t k = 0; k <= sizeof kSlowerLongNs / sizeof kSlowerLongNs[0]; ++k) {
+    const uint32_t half = k ? kSlowerLongNs[k - 1] : first;
+    if (k && half <= first) continue;
+    if (k) setHalf(half);
+    uint32_t control = 0;
+    bool there = false;
+    for (int i = 0; i < 2 && !there; ++i) there = readRaw(kDmControl, control);
+    if (!there) continue;
     activate();
-    if (readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus)) return true;
+    if (readRaw(kDmStatus, dmstatus) && moduleAnswered(dmstatus)) {
+      if (k) slow_ask_ns_ = half;   // the link's slowest from now on (until the next attach)
+      return true;
+    }
+    break;   // it answered and is not a module now: not slower either
   }
+  if (half_ns_ != first) setHalf(first);
   long_ = false;
   return false;
 }
@@ -678,6 +699,7 @@ bool RvswdPhy::bringUp(uint32_t &dmstatus) {
 
 bool RvswdPhy::probeOnce(uint32_t half_ns, uint32_t &dmstatus, bool keep_driven) {
   if (!ready_) return false;
+  slow_ask_ns_ = 0;
   ioReclaim(swdio_, swclk_);
   setHalf(slowestNs());   // the asks, the wake / configuration and dmactive at the slowest period (oep-if-debug §1, §3.1)
   dmstatus = 0;
@@ -823,10 +845,21 @@ bool RvswdPhy::retune() {
       if (phy.rest_free_) { ioRelease(phy.swdio_, phy.swclk_); ioClkPull(phy.swclk_, phy.park_low_ ? -1 : 1); }
     }
   } search(*this);
-  const uint32_t floor = floorNs(), slowest = slowestNs();
+  slow_ask_ns_ = 0;   // the table's periods first: a V103's program may have raised its clock since
+  uint32_t floor = floorNs(), slowest = slowestNs();
   size_t good = kCount;   // index of the fastest period that passed
   resyncAt(slowest);
-  if (!keepScratch(kSlowestRetries)) { useSafeSpeed(); return false; }
+  bool there = keepScratch(kSlowestRetries);
+  // a V103 on its HSI (just reset, before its program raises the clock) follows only slower (kSlowerLongNs)
+  for (size_t k = 0; !there && long_ && k < sizeof kSlowerLongNs / sizeof kSlowerLongNs[0]; ++k) {
+    if (kSlowerLongNs[k] <= slowest || pastDeadline()) continue;
+    slow_ask_ns_ = kSlowerLongNs[k];
+    resyncAt(kSlowerLongNs[k]);
+    there = keepScratch(kSlowestRetries);
+  }
+  if (!there) { useSafeSpeed(); return false; }
+  floor = floorNs();
+  slowest = slowestNs();
   for (size_t i = kCount; i-- > 0;) {
     if ((kHalfNs[i] < floor && i != kCount - 1) || pastDeadline()) break;
     const uint32_t half = kHalfNs[i] > floor ? kHalfNs[i] : floor;
@@ -866,19 +899,21 @@ bool RvswdPhy::attach() {
   if (!ready_) return false;
   if (attached_) return true;
   rest_free_ = false;
+  slow_ask_ns_ = 0;   // a new target may be a fast one: asked at the table's periods first
   ioReclaim(swdio_, swclk_);
   ioClkPull(swclk_, 0);
-  const uint32_t floor = floorNs();
-  const uint32_t slowest = slowestNs();
   // Two passes. A cold debug module can need more waking than one pass's eight attempts (2026-09-23: the first pass
   // failed where the same period attached immediately on the second).
   for (int pass = 0; pass < 2; ++pass) {
     if (pass) ++search_retries_;
     if (pastDeadline()) break;
     uint32_t first = 0;
-    if (!wakeModule(first) || pastDeadline() || !readsStable(first, kSlowestRetries) ||
-        !keepScratch(kSlowestRetries))
-      continue;
+    if (!wakeModule(first)) continue;
+    // after the wake: a long ask answered only slower sets the floor (askLong)
+    const uint32_t floor = floorNs();
+    const uint32_t slowest = slowestNs();
+    if (half_ns_ != slowest) setHalf(slowest);
+    if (pastDeadline() || !readsStable(first, kSlowestRetries) || !keepScratch(kSlowestRetries)) continue;
     const uint32_t slowest_dmi_ns = dmi_ns_;
     // Faster, reading only. The first period that fails ends the search.
     size_t chosen = kCount;   // kCount = the slowest period (which may be a floor between the table's entries)

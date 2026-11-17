@@ -94,7 +94,8 @@ class RvswdPhy final : public DmiPhy {
   int swdio_ = -1, swclk_ = -1;
   bool ready_ = false, attached_ = false;
   uint32_t cap_half_ns_ = 0;
-  uint32_t floorNs() const { return cap_half_ns_; }
+  uint32_t slow_ask_ns_ = 0;   // the half period a long ask found the target at, slower than the table's (askLong)
+  uint32_t floorNs() const { return cap_half_ns_ > slow_ask_ns_ ? cap_half_ns_ : slow_ask_ns_; }
   uint32_t half_cycles_ = 0, half_ns_ = 0, retries_ = 0, transactions_ = 0, dmi_ns_ = 0;
   // Longest quiet spell the target's debug interface tolerates before the link has to be
   // brought up again. It measured out at about 1 ms; this leaves margin.
