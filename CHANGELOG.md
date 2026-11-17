@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X: a triggered one-shot takes the PSRAM ring (1 MiB) when there is one, its chunk queue and ring map
+  sized for it - the internal 64 KiB ring lasted 1.6 ms at 40 MB/s and a 160 MS/s x 2 one-shot lost data inside its
+  segment. Its pretrigger is what that ring gives back at the capture's speed: a quarter of it up to 30 MB/s, an
+  eighth faster (the pretrigger is copied out at once when the trigger comes; at 40 MB/s 187 KB kept up and 250 KB did
+  not), the internal ring's half without PSRAM; configure refuses a longer one and describe's max_pretrigger (w = 1,
+  160 MS/s) follows. The task priorities (kHarvestTaskPriority, kUartEventTaskPriority) are seen by every build again
+  (the host tests did not build since e20cd8e).
+- (JA) ESP32-P4 / P4X: トリガ付きのワンショットは、PSRAM があれば 1 MiB の PSRAM のリングを使い、塊の知らせの列とリングの地図もその大きさにした。
+  内部の 64 KiB のリングは 40 MB/s で 1.6 ms しか持たず、160 MS/s × 2 線のワンショットが区画の中でデータを失っていた。トリガの前の分は、
+  取り込みの速さでそのリングが返せる量まで: 30 MB/s まで 4 分の 1、それより速いと 8 分の 1（トリガの時にまとめて写すため。40 MB/s で
+  187 KB は追いつき、250 KB は追いつかなかった）。PSRAM が無ければ内部のリングの半分。configure はそれより長い pretrigger を断り、
+  describe の max_pretrigger（w = 1、160 MS/s）もそれに合わせた。タスクの優先度の定数（kHarvestTaskPriority、kUartEventTaskPriority）は
+  どのビルドからも見えるようにした（e20cd8e からホストの試験がビルドできなかった）。
 - (EN) ESP32-P4 / P4X: a fixture UART's event task runs below a logic capture's harvest on core 0
   (kUartEventTaskPriority 4, kHarvestTaskPriority 5). At the top priority, a UART receiving 2 Mbaud woke it every
   160 us and it kept core 0 for 10-13 ms at a stretch; the harvest waited past the DMA ring's 21 ms at 20 MS/s and

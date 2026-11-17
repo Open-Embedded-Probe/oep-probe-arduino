@@ -106,9 +106,11 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 ### 1.7 キャプチャ（capture）と fixture
 
 - **pretrigger の上限**（capture §3.3: max_pretrigger を超えるか samples 以上なら unsupported）:
-  - ESP32-P4 の logic: describe の max_pretrigger は w = 1 のときの値 523263（1 区画の最大 523264 サンプル − 1）。リングが返せるのは
-    64 KiB なので、w が広いと少ない（w = 2 で 262144、w = 16 で 32768）。それを超える pretrigger は configure / query が unsupported
-    （pretrigger の tag）で断る（宣言は目安で、configure の応答が正、capture §3.5）。samples − 1 までの pretrigger を受ける。区画は
+  - ESP32-P4 の logic: トリガ付きのワンショットは PSRAM の 1 MiB のリングを使い（PSRAM の無いボードは内部の 64 KiB）、トリガの前の分は
+    そこから返す。返せる量はデータの速さ（rate × w / 8）で決まる: 30 MB/s までリングの 4 分の 1（256 KiB）、それより速いと 8 分の 1
+    （128 KiB）。PSRAM の無いボードは 32 KiB。トリガが来た時にトリガの前の分をまとめて写し、DMA に追いつく前にリングが回ると区画が欠ける
+    ため。describe の max_pretrigger は w = 1、最も速い 160 MS/s（20 MB/s）での値（PSRAM があれば 2097152）。w が広いと少ない
+    （w = 2、160 MS/s で 524288）。それを超える pretrigger は configure / query が unsupported（pretrigger の tag）で断る。samples − 1 までの pretrigger を受ける。区画は
     トリガの pretrigger サンプル前から始まる（w < 8 で byte の途中からでも。trigger_index = pretrigger）。pretrigger が溜まる前の
     トリガと force は短い区画になる（capture §3.3: trigger_index はあった分、samples はそのぶん少ない）。force のトリガはその瞬間の
     サンプル（start からの時間で決める。DMA の 1 塊を待たない）。リングはストリームをそのまま並べたものではない（DMA は

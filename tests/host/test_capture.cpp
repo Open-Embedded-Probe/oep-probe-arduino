@@ -1459,28 +1459,32 @@ static void testSerialsWrap() {
 }
 
 // A triggered one-shot whose ring came round over its segment before the harvest copied it (capture §2.2): no
-// segment, state 6, error 2, write_pos 0, stopped reason 3.
+// segment, state 6, error 2, write_pos 0, stopped reason 3. With PSRAM its ring is the PSRAM one (kStreamRingBytes),
+// without the internal one (kRingBytes): the round that overwrites it is that ring's.
 static void testTriggeredHole() {
-  board(512 * 1024, size_t(32) << 20);
-  Rig rig(2);
-  Dma dma;
-  Bytes out;
-  Config c;
-  c.samples = 200000;   // 50000 bytes
-  c.trigger = true;
-  c.pretrigger = 100;
-  CHECK(ok(configure(rig.cap, c, out)));
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
-  dma.deliver(1000, 0xFF);
-  dma.deliver(2000, 0x00);   // the edge: filling
-  dma.run();
-  dma.deliver(LogicCapture::kRingBytes + 8192, 0x00, 1024);   // over the ring before the harvest runs again
-  dma.run();
-  rig.cap.poll();
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 22 && out[0] == cap::kStateError &&
-        getU32(out.data() + 1) == 0 && getU64(out.data() + 5) == 0 && (out[13] & cap::kStatusFlagDropped) &&
-        out[21] == cap::kErrorStorage);
-  CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
+  for (const size_t psram : {size_t(32) << 20, size_t(0)}) {
+    board(512 * 1024, psram);
+    Rig rig(2);
+    Dma dma;
+    Bytes out;
+    Config c;
+    c.samples = 200000;   // 50000 bytes
+    c.trigger = true;
+    c.pretrigger = 100;
+    CHECK(ok(configure(rig.cap, c, out)));
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+    dma.deliver(1000, 0xFF);
+    dma.deliver(2000, 0x00);   // the edge: filling
+    dma.run();
+    const size_t ring = psram ? LogicCapture::kStreamRingBytes : LogicCapture::kRingBytes;
+    dma.deliver(ring + 8192, 0x00, 1024);   // over the ring before the harvest runs again
+    dma.run();
+    rig.cap.poll();
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpStatus, {}, out)) && out.size() >= 22 && out[0] == cap::kStateError &&
+          getU32(out.data() + 1) == 0 && getU64(out.data() + 5) == 0 && (out[13] & cap::kStatusFlagDropped) &&
+          out[21] == cap::kErrorStorage);
+    CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 0);
+  }
 }
 
 // A triggered one-shot longer than the DMA's one receive (kSegmentBytes): copied out of the ring into the store chunk

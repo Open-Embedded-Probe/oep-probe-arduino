@@ -1255,7 +1255,7 @@ size_t LogicCapture::describe(uint8_t *out, size_t capacity) {
   uint8_t trig[9];                                 // types(u32) max_pretrigger(u32) opts(u8)
   putTriggerDecl(trig, (1u << cap::kTriggerImmediate) | (1u << cap::kTriggerLevel) | (1u << cap::kTriggerEdge) |
                            (1u << cap::kTriggerLinked),
-                 kSegmentBytes * 8 - 1, kTriggerOpts);   // at w = 1 (below the segment); a wider sample's is less
+                 static_cast<uint32_t>(historyBytes(kSourceHz / 8) * 8), kTriggerOpts);   // at w = 1; a wider sample's is less
   w.put(cap::kTlvDescribeTrigger, trig, sizeof trig);
   w.u16(cap::kTlvDescribeTriggerRecords, kTriggerRecords);   // rearm 1's records kept (§3.9)
   // beyond 0 (capture §3.5): 1 the logic blocks (streaming over the vendor port's stages: configure says), 4 the test
@@ -1764,8 +1764,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   if (mode == 1) {
     // Immediate, the DMA writes the segment itself: one receive, kSegmentBytes at most. With a trigger the harvest
     // copies it out of the ring into the store: as long as the store's room, at a rate the harvest keeps up with (the
-    // internal ring 20 MB/s, the PSRAM one a linked track takes 40 MB/s - P4X, 2026-10-20); faster, kSegmentBytes
-    const bool linked_psram = trig_type == cap::kTriggerLinked && streamRingAvailable();
+    // internal ring 20 MB/s, the PSRAM one a triggered track takes 40 MB/s - P4X, 2026-10-20); faster, kSegmentBytes
+    const bool linked_psram = trig_type != cap::kTriggerImmediate && streamRingAvailable();
     const uint64_t speed = static_cast<uint64_t>(rate) * width / 8;
     size_t most = kSegmentBytes;
     if (trig_type != cap::kTriggerImmediate && speed <= (linked_psram ? kLinkedLongMaxBytes : kTriggeredLongMaxBytes) &&
@@ -1783,8 +1783,8 @@ Result LogicCapture::configure(const uint8_t *p, size_t n, uint8_t *out, size_t 
   }
   // the pretrigger is what the ring can give back at this sample width (describe declares the most, at w = 1), less
   // than the segment's samples as rounded (capture §3.3); only with a trigger (above), so a one-shot
-  // (linked: the PSRAM ring's half when there is one - a linked track takes it, judging or following)
-  const size_t history = trig_type == cap::kTriggerLinked && streamRingAvailable() ? kStreamRingBytes / 2 : kPretriggerBytes;
+  // (the PSRAM ring's half when there is one - a triggered or linked track takes it, judging or following)
+  const size_t history = historyBytes(static_cast<uint64_t>(rate) * width / 8);
   const uint32_t max_pretrigger = static_cast<uint32_t>(history * 8 / width);
   if (pretrigger && (pretrigger >= samples || pretrigger > max_pretrigger))
     return Tail::refuse(kTagPretrigger, pretrigger_tlv.critical, out, capacity);
@@ -2030,7 +2030,9 @@ LogicCapture::Open LogicCapture::openRepeat(uint32_t rate_hz, uint8_t width, uin
 }
 
 LogicCapture::Open LogicCapture::openTriggered(uint32_t rate_hz, uint8_t width, uint32_t bytes, uint32_t &num, uint32_t &den) {
-  queue_ = xQueueCreate(128, sizeof(Chunk));
+  // the chunks a lap of its ring holds: the PSRAM one start takes when there is one (a 1 M-sample pretrigger copied at
+  // once kept the harvest from the queue for longer than 128 chunks last at 30 MB/s - P4X 2026-11-17), else the internal
+  queue_ = xQueueCreate(streamRingAvailable() ? kStreamRingBytes / 2048 : 128, sizeof(Chunk));
   uint32_t caps = 0;
   storeBudget(caps);                         // PSRAM when there is some: the segment is filled by the CPU, not the DMA
   buffer_ = static_cast<uint8_t *>(heap_caps_malloc(bytes + 1, caps));   // + the byte a mid-byte start reaches into
@@ -2406,9 +2408,10 @@ Result LogicCapture::handle(uint8_t op, const uint8_t *p, size_t n, uint8_t *out
       if (mode_ == 2 || mode_ == 3) return startRepeat(out, capacity);
       if (linked_ && !bound()) return wrongState(out, capacity);   // linked: the group's event cuts it (§3.3, cause 6)
       follow_ = false;
-      // its own trigger: the internal ring; linked (judging a group's condition), the PSRAM one when there is one -
-      // its pretrigger may be that ring's half
-      useRing(linked_ && takeStreamRing());
+      // a trigger of its own or linked (judging a group's condition): the PSRAM ring when there is one - the harvest
+      // copies the segment out of it, and the internal ring's 1.6 ms at 40 MB/s was less than the harvest's pass
+      // (a 160 MS/s x 2 one-shot lost data inside its segment, P4X 2026-11-17); its pretrigger may be that ring's half
+      useRing((linked_ || triggered_) && takeStreamRing());
       if (triggered_) return startTriggered(out, capacity);
       if (capacity < 4) return failed();
       if (!reopenUnit()) { fail(cap::kErrorPeripheral); return failed(); }   // a unit made for this start

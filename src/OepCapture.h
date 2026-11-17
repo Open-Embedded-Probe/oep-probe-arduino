@@ -152,7 +152,7 @@ class LogicCapture final : public Interface, public GroupTrack {
   // DMA's lead (kDmaAhead) to spare
   bool trackCanKeep(uint32_t p, uint64_t late_ns) const override {
     const uint8_t w = width_ ? width_ : 1;
-    const size_t history = linked_ && streamRingAvailable() ? kStreamRingBytes / 2 : kPretriggerBytes;
+    const size_t history = historyBytes(samplesIn(1000000000ull, rate_num_, rate_den_) * w / 8);
     if (p && (p >= samples_ || p > static_cast<uint32_t>(history * 8 / w))) return false;
     const uint64_t late = samplesIn(late_ns, rate_num_, rate_den_) + 1;
     const size_t ring = streamRingAvailable() ? kStreamRingBytes : kRingBytes;   // a follower takes the PSRAM one
@@ -338,6 +338,16 @@ class LogicCapture final : public Interface, public GroupTrack {
   static constexpr uint32_t kStopDrainMs = 500;   // at stop the stream ring goes out within this (or the rest is dropped)
   // one-shot with a trigger (or a pretrigger): the ring and the harvest task, searching
   static constexpr size_t kPretriggerBytes = kRingBytes / 2;   // history the ring can give back (half of it)
+  // what a triggered or linked one-shot's ring gives back before its trigger, at `speed` bytes a second: the PSRAM ring
+  // it takes when there is one (start) - a quarter of it, an eighth past 30 MB/s - else the internal one's half.
+  // The pretrigger is copied out at once when the trigger comes, and the copy has to catch up with the DMA before the
+  // ring laps: at 40 MB/s 187 KB kept up and 250 KB did not, at 30 MB/s 250 KB did; near the ring's half nothing does
+  // whatever the speed (the DMA's lead) - P4X 2026-11-17. configure's limit; describe's at w = 1 (20 MB/s at most).
+  static constexpr uint64_t kHistoryFastBytes = 30000000;
+  size_t historyBytes(uint64_t speed) const {
+    if (!streamRingAvailable()) return kPretriggerBytes;
+    return speed > kHistoryFastBytes ? kStreamRingBytes / 8 : kStreamRingBytes / 4;
+  }
   // the harvest's core: 0, away from loop() (core 1), which answers the host while it streams - on core 1 the harvest
   // kept loop() from the keepalive and the host's link resynced (P4X, 2026-10-20); the USB task is unpinned
   static constexpr BaseType_t kHarvestCore = 0;
@@ -379,7 +389,11 @@ class LogicCapture final : public Interface, public GroupTrack {
   // The pretrigger is copied through it, chunk by chunk.
   struct Span { uint64_t stream; uint32_t ring; uint32_t length; };
   static constexpr uint32_t kUnmapped = 0xFFFFFFFFu;
-  static constexpr size_t kSpans = 64;   // a lap of the ring is 33 descriptors and the early closes
+  // a lap of the largest ring a triggered one-shot takes (the PSRAM one: its descriptors and the early closes), so a
+  // pretrigger as long as that ring's half is still mapped - 64, an internal ring's lap, left a 1 M-sample pretrigger
+  // at 160 MS/s x 2 unmapped (P4X 2026-11-17); a power of 2 (the newest kept by the wrapping count)
+  static constexpr size_t kSpans = 512;
+  static_assert(kSpans >= kStreamRingBytes / kChunkMax + kStreamRingBytes / kSegmentBytes + 2, "a lap of the PSRAM ring");
   Span spans_[kSpans];
   uint32_t span_count_ = 0;   // spans recorded (the newest kSpans kept)
   void addSpan(uint64_t stream, uint32_t ring, uint32_t length);
