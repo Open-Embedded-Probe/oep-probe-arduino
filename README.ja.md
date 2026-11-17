@@ -85,8 +85,9 @@ classic ESP32、RP2040 / RP2350、WCH CH32）の市販の開発ボードにこ�
 - **debug の線と GPIO の線は、空いている GPIO のどれにつないでもよい。** debug の線（RVSWD、SWIO、SWD）はどれもビットバンギング
   で動かし、GPIO の治具のピンも、要求ごとに host が選ぶ。ESP32 では UART、SPI、I2C の治具も GPIO マトリクスを通るので、これらも
   どのピンでもよい。
-- **ピンが決まるのは、ハードウェアの周辺回路を使うときだけ。** RP2040 / RP2350 の UART の治具はチップの UART0 なので、RX / TX は
-  GP1 / GP0、GP13 / GP12、GP17 / GP16、GP29 / GP28 のどれかにつなぐ。アナログのキャプチャはどのチップでも ADC のピン（RP2 は
+- **ピンが決まるのは、ハードウェアの周辺回路を使うときだけ。** RP2040 / RP2350 の UART の治具はチップの UART で、instance 0
+  （UART0）は RX を GP1、13、17、29、TX を GP0、12、16、28 のどれかに、instance 1（UART1）は RX を GP5、9、21、25、TX を GP4、8、20、24 の
+  どれかにつなぐ（RP2040 のもの。RP2350 は自分の候補を出す）。アナログのキャプチャはどのチップでも ADC のピン（RP2 は
   GP26〜28、ESP32-P4 は GPIO16〜23、classic ESP32 は GPIO32〜36 / 39）を使い、classic ESP32 の SWIO は GPIO32 より下の出力が
   要る。これらの線は、そのピンにつなぐ。チップごとの一覧は [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン) にある。
 - **target がどこにつながっているかは、host が探す。** oep-client-python の `oep pins` は、probe の pull をかけて probe が出す

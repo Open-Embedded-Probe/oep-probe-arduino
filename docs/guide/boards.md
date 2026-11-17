@@ -52,7 +52,7 @@ plans it; a pin one interface holds is refused to another. The others are the bo
 | ESP32-P4 / P4X | GPIO0-GPIO54 but 24, 25, 37, 38 | GPIO24 / 25 (USB-Serial/JTAG), 37 / 38 (UART0's pads: the UART bridge transport) |
 | classic ESP32 | GPIO4, 5, 13, 14, 16-19 (16 / 17 dropped at start-up on a PICO-D4 / PICO-V3 / D2WD, or with a PSRAM the build enabled), 21-23, 25-27, 32, 33, 34-36, 39 (34-39 input only); SWIO on the outputs below 32 | 1, 3 (UART0: the transport), 6-11 (flash), 0, 2, 12, 15 (boot straps) |
 
-The UART fixture on an RP2 uses UART0, whose RX / TX may be GP1/0, GP13/12, GP17/16 or GP29/28. On the ESP32s any pin
+The UART fixtures on an RP2 are its UARTs: instance 0 (UART0) RX on GP1, 13, 17 or 29 and TX on GP0, 12, 16 or 28; instance 1 (UART1) RX on GP5, 9, 21 or 25 and TX on GP4, 8, 20 or 24 (an RP2040's; instance 1 is not there in a build whose UART bridge or trace has UART1). On the ESP32s any pin
 works (the GPIO matrix).
 
 ## USB identity

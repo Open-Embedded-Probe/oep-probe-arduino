@@ -52,7 +52,7 @@ firmware の選択と DFU の互換性チェックは[使い始める](getting-s
 | ESP32-P4 / P4X | GPIO0〜GPIO54（24、25、37、38 以外） | GPIO24 / 25（USB-Serial/JTAG）、37 / 38（UART0 のピン: UART bridge の経路） |
 | classic ESP32 | GPIO4、5、13、14、16〜19（16 / 17 は PICO-D4 / PICO-V3 / D2WD と、ビルドで PSRAM を有効にしたときは起動時に外す）、21〜23、25〜27、32、33、34〜36、39（34〜39 は入力だけ）。SWIO は 32 未満の出力のピン | 1、3（UART0: 経路）、6〜11（flash）、0、2、12、15（起動のストラップ） |
 
-RP2 の UART の fixture は UART0 で、RX / TX は GP1/0、GP13/12、GP17/16、GP29/28 のどれかです。ESP32 はどのピンでも使えます
+RP2 の UART の fixture はチップの UART です。instance 0（UART0）は RX が GP1、13、17、29、TX が GP0、12、16、28 のどれか、instance 1（UART1）は RX が GP5、9、21、25、TX が GP4、8、20、24 のどれかです（RP2040 のもの。UART のブリッジかトレースが UART1 を使うビルドには instance 1 がありません）。ESP32 はどのピンでも使えます
 （GPIO の行列）。
 
 ## USB の名乗り

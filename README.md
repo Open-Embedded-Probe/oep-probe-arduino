@@ -90,8 +90,9 @@ follow. Nor is there a fixed pin map:
 - **Any free GPIO can be wired to a debug or GPIO line.** Every debug wire (RVSWD, SWIO, SWD) is bit-banged and every GPIO
   fixture pin is the host's choice, per request. On the ESP32s the UART, SPI and I2C fixtures also go through the GPIO
   matrix, so any pin works for them as well.
-- **Fixed pins only where a hardware peripheral is used.** On an RP2040 / RP2350 the UART fixture is the chip's UART0, so
-  its RX / TX go on GP1 / GP0, GP13 / GP12, GP17 / GP16 or GP29 / GP28. Analog capture uses the ADC pins on every chip
+- **Fixed pins only where a hardware peripheral is used.** On an RP2040 / RP2350 the UART fixtures are the chip's UARTs:
+  instance 0 (UART0) takes RX on GP1, 13, 17 or 29 and TX on GP0, 12, 16 or 28, instance 1 (UART1) RX on GP5, 9, 21 or 25
+  and TX on GP4, 8, 20 or 24 (RP2040's; an RP2350 offers its own). Analog capture uses the ADC pins on every chip
   (RP2 GP26-28, ESP32-P4 GPIO16-23, classic ESP32 GPIO32-36 / 39), and the classic ESP32's SWIO needs an output below
   GPIO32. Wire those lines to such a pin; [Boards](docs/guide/boards.md#pins-of-the-released-firmware) lists them per chip.
 - **The host finds where the target is.** `oep pins` (oep-client-python) reads every offered pin under the probe's pulls,
