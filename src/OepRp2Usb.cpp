@@ -173,7 +173,7 @@ void UsbStream::kick(uint8_t rhport) {
 }
 
 void UsbStream::armOut(uint8_t rhport) {
-  if (!opened_ || out_armed_ || rx_.room() < kPacket || !tud_ready()) return;
+  if (!opened_ || out_armed_ || outRoom() < kPacket || !tud_ready()) return;
   if (!usbd_edpt_claim(rhport, ep_out_)) return;
   out_armed_ = usbd_edpt_xfer(rhport, ep_out_, out_, kPacket);
   if (!out_armed_) usbd_edpt_release(rhport, ep_out_);
@@ -296,24 +296,38 @@ bool HidStream::control(uint8_t rhport, uint8_t stage, const void *request) {
   return false;
 }
 
-// One report: count (u16 LE), up to 62 bytes of the stream, the rest 0
+// One report: count, first (where its first frame starts), up to 60 bytes of the stream, the rest 0 (transports §1)
 size_t HidStream::fillIn() {
+  uint8_t data[kPacket - kHidHead];
   size_t n = 0;
-  while (n < kPacket - 2 && tx_.used()) in_[2 + n++] = tx_.take();
+  while (n < sizeof data && tx_.used()) data[n++] = tx_.take();
   if (!n) return 0;
-  in_[0] = static_cast<uint8_t>(n);
-  in_[1] = 0;
-  memset(in_ + 2 + n, 0, kPacket - 2 - n);
-  return kPacket;
+  return hidPackReport(in_, sizeof data, data, n, starts_);
 }
 
-// One report: its count's bytes (a count over what it carries: that report and those up to the pause after dropped,
-// transports §1)
-void HidStream::takeOut(uint32_t bytes) {
-  if (bytes < 2) return;
-  const size_t n = out_[0] | (out_[1] << 8);
-  if (!guard_.accept(n > bytes - 2, millis())) return;
-  for (size_t i = 0; i < n && rx_.room(); ++i) rx_.put(out_[2 + i]);
+// One report: its count bytes, by the HID rules 6 and 7 (a report missing or broken: read on from the next first)
+void HidStream::takeOut(uint32_t bytes) { hid_in_.take(out_, bytes); }
+
+int HidStream::available() {
+  CoreMutex m(&USB.mutex, false);
+  if (!m) return 0;
+  tud_task();
+  armOut(0);
+  return static_cast<int>(hid_in_.available());
+}
+
+int HidStream::read() {
+  CoreMutex m(&USB.mutex, false);
+  if (!m) return -1;
+  tud_task();
+  const int c = hid_in_.read();
+  armOut(0);
+  return c;
+}
+
+int HidStream::peek() {
+  CoreMutex m(&USB.mutex, false);
+  return m ? hid_in_.peek() : -1;
 }
 
 namespace {

@@ -1,6 +1,24 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Breaking (oep-spec 1c80768, transports §1): HID reports carry first(u16) after count, where the first frame
+  starting in the report begins (kHidNoStart when none). OepHid.h: HidFrameStarts counts where frames start,
+  hidPackReport() writes each input report's first, and HidIn takes the output reports by the HID rules 6 and 7 - a
+  report whose first disagrees with its own reading had one missing before it (an OS HID driver drops reports read too
+  late), one broken or whose bytes do not fit breaks the stream, and the reading goes on from the next first behind a
+  mark at which the endpoint's frame reader starts over (Endpoint::useHidInput; a length over max_frame breaks it too).
+  The ESP32-P4 / P4X, RP2040 / RP2350 and CH32 HID streams use them; HID has no 200 ms gap rule any more, and
+  HidCountGuard is gone. Host tests: the shared vectors hid_reports.json (test_vectors), test_hid_in.
+  The CH32X035's default set drops HID (its vendor bulk binds WinUSB through MS OS 2.0, so every host reaches it; HID
+  is still a choice): with it the X035 was 584 bytes past its flash.
+- (JA) 互換のない変更（oep-spec 1c80768、transports §1）: HID の report は count の後ろに first(u16) を持つ。その report で最初に始まるフレームの
+  位置で、無ければ kHidNoStart。OepHid.h: HidFrameStarts がフレームの始まりを数え、hidPackReport() が input の report の first を書き、HidIn が
+  output の report を HID の規則 6 と 7 で受ける。first が自分の読みと違う report の前には欠けた report がある（OS の HID のドライバーは読むのが
+  遅れた report を捨てる）。壊れた report と、置けなかった report は列を壊す。どれも次の first から読み直し、その手前の印で endpoint のフレームの
+  読み手が読み直す（Endpoint::useHidInput。max_frame を超える長さも列を壊す）。ESP32-P4 / P4X、RP2040 / RP2350、CH32 の HID の流れがこれを
+  使う。HID には 200 ms の途切れの規則を掛けない。HidCountGuard はなくした。ホストの試験: 共有ベクタ hid_reports.json（test_vectors）、test_hid_in。
+  CH32X035 の既定の組から HID を外した（vendor bulk は MS OS 2.0 で WinUSB に結び付くので、どの host からもつながる。HID は選べる
+  機能として残る）。HID があると、X035 はフラッシュを 584 バイト超えた。
 - (EN) RP2040 / RP2350 firmware: a second oep.fixture.uart (instance 1) on Serial2 = UART1, offering the pins UART1
   reaches (RP2040: RX GP5/9/21/25, TX GP4/8/20/24), beside instance 0 on UART0 (issue #3). It is there while neither
   the UART bridge nor the bench's trace has Serial2, listed after the fns that were there before it (their numbers

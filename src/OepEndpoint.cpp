@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Open Embedded Probe
 
 #include "OepEndpoint.h"
+#include "OepHid.h"
 
 #include <new>
 #include "OepLog.h"
@@ -97,6 +98,11 @@ void Endpoint::freeze() {
   for (size_t i = 0; i < count_; ++i) interfaces_[i]->setFrameLimits(smallest, limits_.max_frame);
 }
 
+void Endpoint::useHidInput(Stream &stream, HidIn &in) {
+  for (size_t i = 0; i < transport_count_; ++i)
+    if (tr(i).stream == &stream && tr(i).kind == kHid) tr(i).hid = &in;
+}
+
 bool Endpoint::addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capacity, uint8_t kind, uint8_t usb_interface,
                               bool flush_after_burst) {
   if (listener_) return false;
@@ -117,7 +123,7 @@ bool Endpoint::addTransportOf(Stream &stream, uint8_t *rx_buffer, size_t rx_capa
   // answer (transports §1), however much the shared decode buffer holds
   if (serialKind(kind)) t.serial.reset(rx_buffer, rx_capacity, decode_, t.max_frame + 2);
   else t.reader.reset(rx_buffer, rx_capacity, t.max_frame);
-  t.reader.setTcp(kind == kTcp);   // no restart on a pause inside a frame (transports §2)
+  t.reader.setTcp(kind == kTcp || kind == kHid);   // no restart on a pause inside a frame (transports §2; HID: §1's first)
   t.flush_after_burst = flush_after_burst;
   ++transport_count_;
   return true;
@@ -439,7 +445,9 @@ void Endpoint::poll() {
     } else {
       if (t.conn && !tcp_slot_(t)) continue;   // a TCP slot (addTcpListener): no connection on it now
       uint8_t chunk[kPollChunk];
-      for (int avail; (avail = t.stream->available()) > 0;) {
+      for (int avail;;) {
+        if (t.hid && t.hid->takeRestart()) t.reader.consume();   // the frame begun is dropped (HID rule 6)
+        if ((avail = t.stream->available()) <= 0) break;
         size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
         n = t.stream->readBytes(chunk, n);   // a stream that copies in bulk (DirectBulkStream, CDC) does it here
         if (!n) break;
@@ -454,6 +462,7 @@ void Endpoint::poll() {
           t.conn->drop();
           break;
         }
+        if (t.hid && t.reader.overlong()) t.hid->askBreak();   // HID: broken till the next report with a first
       }
     }
   }

@@ -4,6 +4,7 @@
 // Streams over the P4 HS port's EspUsbDevice functions: the vendor HID (count(u16) report framing, report ID first on
 // output) and a CDC port that never waits long (a serial port: frames and raw bytes, oep-transports §4).
 #pragma once
+#include <OepHid.h>
 #include <EspUsbDevice.h>
 #include <OepFrame.h>
 
@@ -32,51 +33,38 @@ class CdcStream final : public Stream {
 
 class HidStream final : public Stream {
  public:
-  static constexpr size_t kReport = 511, kPayload = kReport - 2;
+  static constexpr size_t kReport = 511, kPayload = kReport - oep::kHidHead;
   explicit HidStream(EspUsbDeviceHidVendor &h) : h_(h) {
     h_.onOutputReport([this](const EspUsbDeviceHidReport &r) {
       // The host puts the report ID (6) first, as HID wants when the descriptor declares one. EspUsbDevice strips it
       // only when several HID classes are merged; with this single HID it arrives as data[0] of a kReport + 1 report.
       const uint8_t *d = r.data;
       size_t len = r.length;
-      if (r.reportId != 0 && r.reportId != ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) return;   // another ID: dropped (rule 4)
+      if (r.reportId != 0 && r.reportId != ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) return;   // another ID: dropped (rule 5)
       if (d && r.reportId == 0 && len == kReport + 1) {
-        if (d[0] != ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) return;   // another ID: dropped, not a bad count (rule 4)
+        if (d[0] != ESP_USB_DEVICE_HID_REPORT_ID_VENDOR) return;   // another ID: dropped, not a bad count (rule 5)
         ++d;
         --len;
       }
-      if (len < 2 || !d) return;
-      size_t n = d[0] | (d[1] << 8);
-      if (!guard_.accept(n > len - 2, millis())) return;   // a count over what it carries, and up to the pause after
-      for (size_t i = 0; i < n; ++i) { const size_t next = (head_ + 1) % sizeof rx_; if (next == tail_) return; rx_[head_] = d[2 + i]; head_ = next; }
+      in_.take(d, len);   // count, first and the stream's bytes (transports §1, rules 6 and 7)
     });
   }
-  int available() override { return (head_ + sizeof rx_ - tail_) % sizeof rx_; }
-  int read() override { if (head_ == tail_) return -1; const uint8_t c = rx_[tail_]; tail_ = (tail_ + 1) % sizeof rx_; return c; }
-  size_t readBytes(char *b, size_t n) override {   // in at most two copies
-    size_t done = 0;
-    while (done < n && head_ != tail_) {
-      const size_t t = tail_, h = head_;
-      const size_t run = h > t ? h - t : sizeof rx_ - t;
-      const size_t k = run < n - done ? run : n - done;
-      memcpy(b + done, rx_ + t, k);
-      tail_ = (t + k) % sizeof rx_;
-      done += k;
-    }
-    return done;
-  }
-  int peek() override { return head_ == tail_ ? -1 : rx_[tail_]; }
+  oep::HidIn &in() { return in_; }   // for Endpoint::useHidInput
+  int available() override { return static_cast<int>(in_.available()); }
+  int read() override { return in_.read(); }
+  size_t readBytes(char *b, size_t n) override { return in_.read(reinterpret_cast<uint8_t *>(b), n); }
+  int peek() override { return in_.peek(); }
   size_t write(uint8_t c) override { return write(&c, 1); }
   size_t write(const uint8_t *b, size_t n) override {
-    for (size_t i = 0; i < n; ++i) { tx_[2 + fill_++] = b[i]; if (fill_ == kPayload) flush(); }
+    for (size_t i = 0; i < n; ++i) { payload_[fill_++] = b[i]; if (fill_ == kPayload) flush(); }
     return n;
   }
   void flush() override {
     if (!fill_) return;
-    tx_[0] = fill_ & 0xff; tx_[1] = fill_ >> 8;
-    memset(tx_ + 2 + fill_, 0, kPayload - fill_);
-    // a report still in flight makes sendInput return false: wait for it (dropping the report broke the framing) - but
-    // once a report could not go (nobody reads HID), later ones do not wait again until one goes
+    oep::hidPackReport(tx_, kPayload, payload_, fill_, out_);   // first: where its first frame starts
+    // a report still in flight makes sendInput return false: wait for it - but once a report could not go (nobody
+    // reads HID), later ones do not wait again until one goes. A report dropped here costs the host the frames it
+    // cut, not the stream: the next report's first shows where to read on (transports §1)
     bool sent = h_.sendInput(tx_, kReport, stuck_ ? 0 : 200);
     for (uint32_t t = millis(); !sent && !stuck_ && millis() - t < 500;) {
       delayMicroseconds(50);
@@ -88,9 +76,10 @@ class HidStream final : public Stream {
   int availableForWrite() override { return 4096; }
  private:
   EspUsbDeviceHidVendor &h_;
-  oep::HidCountGuard guard_;
   uint8_t rx_[8192];
-  volatile size_t head_ = 0, tail_ = 0;
+  oep::HidIn in_{rx_, sizeof rx_};
+  oep::HidFrameStarts out_;   // the frames written: each report's first
+  uint8_t payload_[kPayload];
   uint8_t tx_[kReport];
   size_t fill_ = 0;
   bool stuck_ = false;   // the last report could not go

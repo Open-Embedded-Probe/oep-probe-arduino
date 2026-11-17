@@ -20,6 +20,7 @@
 #include <Arduino.h>
 
 #include "OepFrame.h"
+#include "OepHid.h"
 
 namespace oep {
 namespace rp2usb {
@@ -57,6 +58,7 @@ class UsbStream : public Stream {
  protected:
   static constexpr size_t kPacket = 64;
   virtual size_t fillIn() = 0;              // the next IN transfer into in_ (0: nothing)
+  virtual size_t outRoom() const { return rx_.room(); }   // what the next OUT transfer may bring (armOut)
   virtual void takeOut(uint32_t bytes) = 0;   // an OUT transfer's bytes in out_
   void kick(uint8_t rhport);                 // an IN transfer when none is under way
   void armOut(uint8_t rhport);               // the next OUT transfer, when the ring has room for it
@@ -89,13 +91,21 @@ class HidStream final : public UsbStream {
   void begin();
   uint16_t open(uint8_t rhport, const uint8_t *desc, uint16_t max_len) override;
   bool control(uint8_t rhport, uint8_t stage, const void *request) override;
+  // the endpoint reads the reports' bytes through HidIn (transports §1: count, first, the rules 6 and 7)
+  int available() override;
+  int read() override;
+  int peek() override;
+  HidIn &hidIn() { return hid_in_; }   // for Endpoint::useHidInput
 
  protected:
   size_t fillIn() override;
   void takeOut(uint32_t bytes) override;
+  size_t outRoom() const override { return hid_in_.room(); }
 
  private:
-  HidCountGuard guard_;
+  uint8_t ring_[2048];
+  HidIn hid_in_{ring_, sizeof ring_};
+  HidFrameStarts starts_;   // the frames sent: each report's first
 };
 
 // The pico-sdk's reset interface (what `picotool reboot -f` and a page's WebUSB use, outside OEP like the P4's DFU):

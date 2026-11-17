@@ -21,6 +21,8 @@
 
 namespace oep {
 
+class HidIn;
+
 // The raw side of the serial ports (transports §4): what a serial port carries outside the frames. The binds implement it
 // (oep.console §2.1); the endpoint calls it from poll(), the one writer of every port.
 class PinTable;
@@ -177,6 +179,9 @@ class Endpoint {
   // The serial transports (USB CDC, a UART bridge, USB-Serial/JTAG): their COBS frames, port_speed / port_state (with
   // setPortSpeed) and raw ports (setRawPorts) - called by addTransport and the constructor for a serial kind.
   void useSerialTransports();
+  // A HID transport (kHid) added with `stream` reads its reports through `in` (transports §1, the HID rules): the
+  // reader starts over at each of its marks, and a length over max_frame breaks the stream till the next first.
+  void useHidInput(Stream &stream, HidIn &in);
   // Buffers given later than the constructor - memory that is up only by setup() (an ESP32's PSRAM): transport 0's
   // receive buffer (one whole frame of its max_frame, + 2) and the answer buffer (an answer is at most its size: a probe
   // may answer within less than its max_frame, core §4.4). Before the first poll. false: the receive buffer too small
@@ -378,6 +383,7 @@ class Endpoint {
     uint32_t seen = 0;            // the slot's connection the reader belongs to
     FrameReader reader;
     SerialReader serial;
+    HidIn *hid = nullptr;         // a HID transport's reports (useHidInput): its marks restart the reader
     uint8_t kind = kVendorBulk, usb_interface = 0xff, index = 0;
     Endpoint *owner = nullptr;
     bool flush_after_burst = false, wrote = false;

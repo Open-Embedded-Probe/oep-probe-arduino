@@ -257,7 +257,9 @@ void oepAddHid() {
   hidChosen = true;
   makeHid();
   afterUsb.add([] {
-    if (hidMade) endpoint.addTransport(*hidStream, frameBuffer(kRxFrame), kRxFrame, oep::Endpoint::kHid, hid->number, true);
+    if (!hidMade) return;
+    endpoint.addTransport(*hidStream, frameBuffer(kRxFrame), kRxFrame, oep::Endpoint::kHid, hid->number, true);
+    endpoint.useHidInput(*hidStream, hidStream->in());   // the reports' first: where to read on (transports §1)
   });
 }
 

@@ -42,8 +42,8 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-bulk" "$here/test_bulk_stream.cpp"
 "$out-bulk"
 # HID's output reports: a count over what a report carries drops it and the reports up to the pause after
-g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-hid-count" "$here/test_hid_count.cpp"
-"$out-hid-count"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-hid-in" "$here/test_hid_in.cpp" "$src/OepFrame.cpp" "$src/OepHid.cpp"
+"$out-hid-in"
 # oep::SimpleInterface: registration, the describe's op_name / op_field, the request's fields checked, the answer packed
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-simple" "$here/test_simple_interface.cpp" \
   "$src/OepSimpleInterface.cpp" "$src/OepWorker.cpp"
@@ -180,7 +180,7 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_PARLIO -DOE
   -DOEP_HOST_FAKE_SPI_SLAVE -DOEP_HOST_FAKE_UART -DOEP_VECTORS_DIR="\"$here/../vectors\"" -I"$here/shim" -I"$src" -o "$out-vectors" "$here/test_vectors.cpp" \
   "$src/OepEndpoint.cpp" "$src/OepFrame.cpp" "$src/OepBind.cpp" "$src/OepCaptureGroup.cpp" "$src/OepCapture.cpp" \
   "$src/OepSettings.cpp" "$src/OepConsole.cpp" "$src/OepDmConsole.cpp" "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" \
-  "$src/OepFixture.cpp" "$src/OepP4I2cTarget.cpp" "$src/OepP4SpiTarget.cpp"
+  "$src/OepFixture.cpp" "$src/OepP4I2cTarget.cpp" "$src/OepP4SpiTarget.cpp" "$src/OepHid.cpp"
 "$out-vectors"
 # A platform without a chip number does not build without OEP_UNIT_ID, nor with one outside a-z 0-9 - (core §7.5).
 for bad in -DOEP_HOST_NO_UNIT_ID "-DOEP_UNIT_ID=\"Host\"" "-DOEP_UNIT_ID=\"\""; do

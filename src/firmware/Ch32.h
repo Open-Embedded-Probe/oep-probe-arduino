@@ -42,6 +42,7 @@
 #include <OepDmConsole.h>
 #include <OepEndpoint.h>
 #include <OepFixture.h>
+#include <OepHid.h>
 #include <OepP4I2cTarget.h>
 #include <OepPinTable.h>
 #include <OepPlatform.h>
@@ -88,60 +89,45 @@ class VendorStream final : public Stream {
   CH32RVUsbDeviceVendor &vendor_;
 };
 
-// The HID transport (transports §1): a report carries count(u16) and that many bytes of the length-prefixed stream, the
-// rest padding; the reports are the core's vendor HID ones (report ID 6, 63 bytes at full speed: 61 of the stream).
+// The HID transport (transports §1): a report carries count(u16), first(u16) (where its first frame starts) and count
+// bytes of the length-prefixed stream, the rest padding; the reports are the core's vendor HID ones (report ID 6, 63
+// bytes at full speed: 59 of the stream). A report found missing or broken: read on from the next first.
 class HidStream final : public Stream {
  public:
-  static constexpr size_t kReport = 63, kPayload = kReport - 2;
+  static constexpr size_t kReport = 63, kPayload = kReport - oep::kHidHead;
   explicit HidStream(CH32RVUsbDeviceHidVendor &h) : h_(h) {
-    h_.onOutputReport([this](const CH32RVUsbDeviceHidReport &r) { take(r.data, r.length); });
+    h_.onOutputReport([this](const CH32RVUsbDeviceHidReport &r) { in_.take(r.data, r.length); });
   }
-  int available() override { return static_cast<int>((head_ + sizeof rx_ - tail_) % sizeof rx_); }
-  int read() override {
-    if (head_ == tail_) return -1;
-    const uint8_t c = rx_[tail_];
-    tail_ = (tail_ + 1) % sizeof rx_;
-    return c;
-  }
-  int peek() override { return head_ == tail_ ? -1 : rx_[tail_]; }
+  oep::HidIn &in() { return in_; }   // for Endpoint::useHidInput
+  int available() override { return static_cast<int>(in_.available()); }
+  int read() override { return in_.read(); }
+  int peek() override { return in_.peek(); }
   size_t write(uint8_t c) override { return write(&c, 1); }
   size_t write(const uint8_t *b, size_t n) override {
     for (size_t i = 0; i < n; ++i) {
-      tx_[2 + fill_++] = b[i];
+      payload_[fill_++] = b[i];
       if (fill_ == kPayload) flush();
     }
     return n;
   }
   void flush() override {
     if (!fill_) return;
-    tx_[0] = static_cast<uint8_t>(fill_);
-    tx_[1] = 0;
-    memset(tx_ + 2 + fill_, 0, kPayload - fill_);   // the padding 0 (transports §1 rule 3)
-    // a report still in flight: wait for it (dropping one breaks the stream) - but once one could not go (nobody reads
-    // HID), later ones do not wait again until one goes
+    oep::hidPackReport(tx_, kPayload, payload_, fill_, out_);   // count, first, the bytes, padding 0
+    // a report still in flight: wait for it - but once one could not go (nobody reads HID), later ones do not wait
+    // again until one goes (a report dropped costs the frames it cut; the next one's first shows where to read on)
     stuck_ = !h_.sendInput(tx_, kReport, stuck_ ? 0 : 200);
     fill_ = 0;
   }
 
  private:
-  void take(const uint8_t *d, size_t len) {   // one output report: its count bytes into the ring (transports §1)
-    if (!d || len < 2) return;
-    const size_t n = d[0] | (d[1] << 8);
-    if (!guard_.accept(n > len - 2, millis())) return;   // a count over what it carries, and up to the pause after
-    for (size_t i = 0; i < n; ++i) {
-      const size_t next = (head_ + 1) % sizeof rx_;
-      if (next == tail_) return;
-      rx_[head_] = d[2 + i];
-      head_ = next;
-    }
-  }
   CH32RVUsbDeviceHidVendor &h_;
-  oep::HidCountGuard guard_;
   uint8_t rx_[640];
-  volatile size_t head_ = 0, tail_ = 0;
+  oep::HidIn in_{rx_, sizeof rx_};
+  oep::HidFrameStarts out_;   // the frames written: each report's first
+  uint8_t payload_[kPayload];
   uint8_t tx_[kReport];
   size_t fill_ = 0;
-  bool stuck_ = false;
+  bool stuck_ = false;   // the last report could not go
 };
 
 static uint8_t txBuffer[512];
@@ -235,6 +221,7 @@ void oepAddHid() {
   stream.make(usbHid.make(USBDevice, HidStream::kReport));
   usbHid->setUsage(oep::reg::kUsbHidUsagePage, oep::reg::kUsbHidUsage);   // 0xFF4F / 0x45 (registry usb)
   endpoint.addTransport(*stream, rx, sizeof rx, oep::Endpoint::kHid, 0xff, true);   // the device's one HID interface (the core numbers it)
+  endpoint.useHidInput(*stream, stream->in());   // the reports' first: where to read on (transports §1)
 }
 
 // The ports are the firmware's own, not the core's SerialUSB / Serial1 / Serial: naming one of those links it (and its
@@ -456,8 +443,9 @@ void oepAddSpiController() {
 }
 
 // What this chip has (oep::kAvailable) and the distributed firmware's set (oep::kDefaults). The CH32X035's 62 KiB take
-// the WCH set (RVSWD, console, gpio, link, vendor bulk, HID); the larger chips take SWD, SWIO, uart, the I2C / SPI
-// targets and controllers, analog, logic, counter, dac and the settings too.
+// the WCH set (RVSWD, console, gpio, link, vendor bulk: its MS OS 2.0 descriptor binds WinUSB, so no host needs HID
+// there); the larger chips take HID, SWD, SWIO, uart, the I2C / SPI targets and controllers, analog, logic, counter,
+// dac and the settings too.
 #if defined(ARDUINO_CH32X035)
 static constexpr bool kRoomy = false;
 #else
@@ -467,8 +455,8 @@ namespace oep {
 inline constexpr uint64_t kAvailable = kBulk | kHid | kCdc | kBridge | kRvswd | kConsole | kSwio | kSwioConsole | kSwd |
                                        kGpio | kUart | kI2cTarget | kAnalog | kLogic | kCounter | kDac | kSpiTarget |
                                        kSettings | kLink | kI2cController | kSpiController;
-inline constexpr uint64_t kDefaults = kBulk | kHid | kRvswd | kConsole | kGpio | kLink |
-                                      (kRoomy ? kSwd | kUart | kI2cTarget | kSpiTarget | kAnalog | kLogic | kCounter | kDac | kSwio |
+inline constexpr uint64_t kDefaults = kBulk | kRvswd | kConsole | kGpio | kLink |
+                                      (kRoomy ? kHid | kSwd | kUart | kI2cTarget | kSpiTarget | kAnalog | kLogic | kCounter | kDac | kSwio |
                                                      kSwioConsole | kSettings | kI2cController | kSpiController
                                                : 0);
 }  // namespace oep

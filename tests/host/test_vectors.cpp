@@ -43,6 +43,7 @@
 #include "OepLogicBlocks.h"
 #include "test_ids.h"
 #include "OepCapture.h"
+#include "OepHid.h"
 #include "OepSettings.h"
 #include "OepConsole.h"
 #include "OepDmConsole.h"
@@ -356,6 +357,96 @@ static void testCobs() {
     bool got = false;
     while (n && !got) got = reader.feed(p, n, [](void *, const uint8_t *, size_t) {}, nullptr);
     CHECK(got && Bytes(reader.message(), reader.message() + reader.length()) == m);
+  }
+}
+
+// HID reports (transports §1): hidPackReport's count and first against hid_reports.json's "pack", and HidIn with the
+// endpoint's way of reading it (its marks restart a FrameReader) against "read" - a reader just opened.
+static void testHidReports() {
+  const Json v = load("hid_reports.json");
+  const size_t room = static_cast<size_t>(v["room"].number) - kHidHead;
+  CHECK(v["hid_no_frame_start"].number == kHidNoStart);
+  for (const Json &c : v["pack"].items) {
+    ++cases;
+    Bytes stream;
+    for (const Json &m : c["messages_hex"].items) {
+      const Bytes msg = hex(m.string);
+      stream.push_back(static_cast<uint8_t>(msg.size()));
+      stream.push_back(static_cast<uint8_t>(msg.size() >> 8));
+      stream.insert(stream.end(), msg.begin(), msg.end());
+    }
+    HidFrameStarts starts;
+    std::vector<Bytes> reports;
+    for (size_t at = 0; at < stream.size(); at += room) {
+      const size_t n = stream.size() - at < room ? stream.size() - at : room;
+      Bytes r(kHidHead + room);
+      r.resize(hidPackReport(r.data(), room, stream.data() + at, n, starts));
+      reports.push_back(r);
+    }
+    CHECK(reports.size() == c["reports_hex"].items.size());
+    for (size_t i = 0; i < reports.size() && i < c["reports_hex"].items.size(); ++i)
+      CHECK(same("hid pack", c["name"].string, reports[i], hex(c["reports_hex"].items[i].string)));
+  }
+  for (const Json &c : v["read"].items) {
+    ++cases;
+    static uint8_t ring[256], frame[256];
+    HidIn in(ring, sizeof ring);
+    FrameReader reader(frame, sizeof frame, 1024);
+    reader.setTcp(true);   // no gap rule on HID
+    std::vector<Bytes> got;
+    auto drain = [&] {
+      for (;;) {
+        if (in.takeRestart()) reader.consume();
+        uint8_t chunk[64];
+        size_t n = in.read(chunk, sizeof chunk);
+        if (!n) break;
+        const uint8_t *p = chunk;
+        while (n)
+          if (reader.feed(p, n)) {
+            if (reader.length()) got.emplace_back(reader.message(), reader.message() + reader.length());
+            reader.consume();
+          }
+      }
+    };
+    for (const Json &r : c["reports_hex"].items) {
+      const Bytes b = hex(r.string);
+      in.take(b.data(), b.size());
+      drain();
+    }
+    std::vector<Bytes> want;
+    for (const Json &m : c["messages_hex"].items) want.push_back(hex(m.string));
+    if (got != want) printf("FAIL hid read %s: %zu messages, want %zu\n", c["name"].string.c_str(), got.size(), want.size());
+    CHECK(got == want);
+  }
+  // a reader that falls behind: the marks wait for it, and the frames between them are read whole
+  {
+    ++cases;
+    static uint8_t ring[256], frame[256];
+    HidIn in(ring, sizeof ring);
+    FrameReader reader(frame, sizeof frame, 1024);
+    reader.setTcp(true);
+    const Bytes all = [&] { Bytes b; for (const Json &r : v["read"].items[0]["reports_hex"].items) { Bytes x = hex(r.string); b.insert(b.end(), x.begin(), x.end()); } return b; }();
+    const size_t rl = kHidHead + room;
+    for (int k = 0; k < 2; ++k) {               // reports 0, 2, 3 twice: two losses before the reader reads
+      in.take(all.data(), rl);
+      in.take(all.data() + 2 * rl, rl);
+      in.take(all.data() + 3 * rl, rl);
+    }
+    std::vector<Bytes> got;
+    for (;;) {
+      if (in.takeRestart()) reader.consume();
+      uint8_t chunk[64];
+      size_t n = in.read(chunk, sizeof chunk);
+      if (!n && !in.takeRestart()) break;
+      if (!n) { reader.consume(); continue; }
+      const uint8_t *p = chunk;
+      while (n)
+        if (reader.feed(p, n)) {
+          if (reader.length()) got.emplace_back(reader.message(), reader.message() + reader.length());
+          reader.consume();
+        }
+    }
+    CHECK(got.size() == 2 && in.losses() == 2);   // the last message after each loss (as the vector's "missing" case)
   }
 }
 
@@ -1683,6 +1774,7 @@ static void testAnalogBlocks() {
 int main() {
   testHeaders();
   testCobs();
+  testHidReports();
   testChecks();
   testConfirm();
   testDiscovery();

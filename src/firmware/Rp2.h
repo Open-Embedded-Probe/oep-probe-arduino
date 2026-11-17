@@ -151,6 +151,7 @@ void oepAddHid() {
   afterCdc.add([] {
     static uint8_t rx[1026];
     endpoint.addTransport(hid, rx, sizeof rx, oep::Endpoint::kHid, hid.interfaceNumber(), true);
+    endpoint.useHidInput(hid, hid.hidIn());   // the reports' first: where to read on (transports §1)
   });
 }
 
