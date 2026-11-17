@@ -1581,6 +1581,88 @@ static void testTriggerIndexMidByte() {
   }
 }
 
+// The trigger search's quiet stretches four bytes at a time (P4X: the per-byte look fell behind 40 MB/s and a wait
+// longer than the ring lost the segment) find what the per-sample reading finds: edges and levels (when 0 and 1), on
+// a role among noisy others, quiet runs of any length at any alignment, at w 1 / 2 / 4 / 8.
+static void testTriggerSearchQuietWords() {
+  uint32_t seed = 12345;
+  auto rnd = [&]() { return seed = seed * 1103515245u + 12345u, seed >> 8; };
+  struct Kind { uint8_t type; uint32_t value; uint8_t when; };
+  const Kind kinds[] = {{cap::kTriggerEdge, 0, 0}, {cap::kTriggerEdge, 1, 0}, {cap::kTriggerEdge, 2, 0},
+                        {cap::kTriggerLevel, 0, 0}, {cap::kTriggerLevel, 1, 0}, {cap::kTriggerLevel, 0, 1},
+                        {cap::kTriggerLevel, 1, 1}};
+  const uint32_t pre = 64, samples = 512;
+  for (const uint8_t w : {uint8_t(1), uint8_t(2), uint8_t(4), uint8_t(8)}) {
+    for (const Kind &kd : kinds) {
+      for (int round = 0; round < 6; ++round) {
+        const uint8_t role = static_cast<uint8_t>(rnd() % w), per = static_cast<uint8_t>(8 / w);
+        // quiet runs (the role's line held, the others noise) between a few random bytes
+        Bytes data;
+        bool level = rnd() & 1;
+        while (data.size() < 12000) {
+          const bool whole = rnd() & 1;   // half the time on word boundaries: a change from one word to the next
+          const size_t run = rnd() % 3000 & (whole ? ~size_t(3) : ~size_t(0)), lead = whole ? 0 : rnd() % 4;
+          for (size_t i = 0; i < lead; ++i) data.push_back(static_cast<uint8_t>(rnd()));
+          for (size_t i = 0; i < run; ++i) {
+            uint8_t b = static_cast<uint8_t>(rnd());
+            for (uint8_t q = 0; q < per; ++q) b = static_cast<uint8_t>((b & ~(1u << (q * w + role))) | (level << (q * w + role)));
+            data.push_back(b);
+          }
+          if (rnd() % 3 == 0) level = !level;
+        }
+        // the reference: sample by sample
+        auto at = [&](uint64_t s) { return (data[s / per] >> (s % per * w + role)) & 1; };
+        const uint64_t n = data.size() * per;
+        int64_t t = -1;
+        bool have = false, last = false, was_false = false;
+        for (uint64_t smp = 0; smp < n && t < 0; ++smp) {
+          const bool v = at(smp);
+          if (smp >= pre) {
+            if (kd.type == cap::kTriggerEdge) {
+              if (have && v != last && (kd.value == 2 || (kd.value == 0) == v)) t = static_cast<int64_t>(smp);
+            } else if (v != (kd.value & 1)) {
+              was_false = true;
+            } else if (kd.when || was_false) {   // when 1: true is enough; when 0: true after false
+              t = static_cast<int64_t>(smp);
+            }
+          }
+          last = v, have = true;
+        }
+        if (t < 0 || static_cast<uint64_t>(t) + samples > n) continue;   // none, or not room for the segment: another round
+        board(512 * 1024, size_t(32) << 20);
+        Rig rig(w);
+        Dma dma;
+        Bytes p = request(Config{1, LogicCapture::kMinHz, samples});
+        Bytes trig = {kd.type, role};
+        const Bytes v = u32(kd.value);
+        trig.insert(trig.end(), v.begin(), v.end());
+        tlv(p, kCrit | cap::kTlvConfigureTrigger, trig);
+        tlv(p, kCrit | cap::kTlvConfigurePretrigger, u32(pre));
+        tlv(p, kCrit | cap::kTlvConfigureTriggerOpts, {1, 0, kd.when, 0, 0, 0, 0});
+        Bytes out;
+        CHECK(ok(raw(rig.cap, LogicCapture::kOpConfigure, p, out)));
+        CHECK(ok(raw(rig.cap, LogicCapture::kOpStart, {}, out)));
+        const uint32_t generation = getU32(out.data());
+        for (size_t off = 0; off < data.size(); ) {   // chunks of odd lengths: the words fall anywhere
+          const size_t k = std::min(data.size() - off, static_cast<size_t>(1 + rnd() % 1500));
+          dma.put(Bytes(data.begin() + off, data.begin() + off + k));
+          off += k;
+        }
+        dma.run();
+        rig.cap.poll();
+        CHECK(rig.cap.trackState() == cap::kStateDone);
+        CHECK(ok(raw(rig.cap, LogicCapture::kOpSegments, {0, 0, 0, 0}, out)) && out[1] == 1);
+        CHECK(getU32(out.data() + 2 + 28) == pre);
+        CHECK(ok(raw(rig.cap, LogicCapture::kOpRead, readReq(generation, 0, 64), out)) && getU16(out.data() + 9) == 64);
+        bool same = true;
+        for (uint32_t i = 0; i < 64 * per; ++i)
+          if (((out[11 + i / per] >> (i % per * w + role)) & 1) != at(static_cast<uint64_t>(t) - pre + i)) same = false;
+        CHECK(same);
+      }
+    }
+  }
+}
+
 // force (capture §3.3): triggered at the sample of that instant, trigger_index = the pretrigger when that many are in;
 // a force (or, with arm 0, an edge) before then: the segment is short - the samples there are, the trigger's and samples - pretrigger -
 // 1 after it - with trigger_index the samples before it.
@@ -1911,6 +1993,7 @@ int main() {
   testRepeatTriggerBusyLine();
   testRepeatTrigger();
   testTriggerIndexMidByte();
+  testTriggerSearchQuietWords();
   testLongTriggeredSegment();
   testForcedAndEarly();
   testFollowerKeeps();

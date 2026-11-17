@@ -793,8 +793,29 @@ bool LogicCapture::findTrigger(const uint8_t *data, size_t length, uint64_t firs
     const uint8_t per = 8 / w;
     uint8_t mask = 0;
     for (uint8_t s = 0; s < per; ++s) mask |= static_cast<uint8_t>(1u << (s * w + k));
+    const uint32_t mask4 = mask * 0x01010101u;
     for (size_t b = 0; b < length; ++b) {
       const uint64_t first = first_sample + static_cast<uint64_t>(b) * per;
+      // a quiet stretch four bytes at a time (the per-byte look below cannot keep up with 40 MB/s; a wait for the
+      // trigger longer than the ring then lost the segment): words whose line stays where it was, past the arming
+      if ((reinterpret_cast<uintptr_t>(data + b) & 3) == 0 && first >= from && (edge ? have_level_ : true)) {
+        const uint32_t keep = edge ? (last_level_ ? mask4 : 0) : (want ? 0 : mask4);   // edge: unchanged; level: false
+        uint32_t idle = edge || when_ || level_false_ ? keep : (want ? mask4 : 0);   // level: true, not yet false
+        size_t e = b;
+        while (e + 4 <= length) {
+          const uint32_t v4 = *reinterpret_cast<const uint32_t *>(data + e) & mask4;
+          if (v4 == keep) {
+            if (!edge) level_false_ = true, idle = keep;   // from here the level true is the trigger
+          } else if (v4 != idle) {
+            break;
+          }
+          e += 4;
+        }
+        if (e != b) {
+          b = e - 1;
+          continue;
+        }
+      }
       const uint8_t v = data[b] & mask;
       if (first >= from) {
         if (edge ? have_level_ && v == (last_level_ ? mask : 0)

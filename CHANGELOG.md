@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X: a triggered one-shot's trigger search goes over a quiet stretch four bytes at a time. Byte by
+  byte it fell behind 40 MB/s: a wait for the trigger longer than the ring (26 ms at 160 MS/s x 2) lost data inside the
+  segment (a 20 Hz trigger failed every time, 1 kHz passed). Now a 10 Hz one passes at 160 MS/s x 2, 80 MS/s x 4.
+- (JA) ESP32-P4 / P4X: トリガ付きのワンショットのトリガ探しは、変化のない区間を 4 バイトずつ見る。1 バイトずつでは 40 MB/s に追いつかず、
+  トリガまでの待ちがリング（160 MS/s × 2 線で 26 ms）より長いと区画の中でデータを失っていた（20 Hz のトリガで毎回、1 kHz では通った）。
+  直した後は 160 MS/s × 2 線、80 MS/s × 4 線で 10 Hz のトリガが通る。
 - (EN) ESP32-P4 / P4X: a triggered one-shot takes the PSRAM ring (1 MiB) when there is one, its chunk queue and ring map
   sized for it - the internal 64 KiB ring lasted 1.6 ms at 40 MB/s and a 160 MS/s x 2 one-shot lost data inside its
   segment. Its pretrigger is what that ring gives back at the capture's speed: a quarter of it up to 30 MB/s, an
