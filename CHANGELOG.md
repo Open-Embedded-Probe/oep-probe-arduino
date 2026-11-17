@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Dependencies: EspUsbDevice 3.3.0 (ESP32-P4 / P4X, was 3.1.0) and arduino-pico 6.3.2 (RP2040 / RP2350, was 6.2.0)
+  in every sketch.yaml.
+- (JA) 依存の版: すべての sketch.yaml で EspUsbDevice を 3.3.0（ESP32-P4 / P4X、前は 3.1.0）、arduino-pico を 6.3.2（RP2040 / RP2350、
+  前は 6.2.0）にした。
 - (EN) ESP32-P4 / P4X: a triggered one-shot's trigger search goes over a quiet stretch four bytes at a time. Byte by
   byte it fell behind 40 MB/s: a wait for the trigger longer than the ring (26 ms at 160 MS/s x 2) lost data inside the
   segment (a 20 Hz trigger failed every time, 1 kHz passed). Now a 10 Hz one passes at 160 MS/s x 2, 80 MS/s x 4.
