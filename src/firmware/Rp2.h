@@ -9,13 +9,14 @@
 // iProduct "OEP probe (RP2040)" / "(RP2350)" is a name for people.
 //
 // Interfaces (revision 1): fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm + oep.target.console (WCH CH32, 2 wires);
-// oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart; oep.fixture.analog (GP26-28, 500 kS/s in all);
+// oep.wire.swd + oep.target.arm-adi (ARM); oep.fixture.gpio / uart (x2); oep.fixture.analog (GP26-28, 500 kS/s in all);
 // oep.probe.link; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last). Each is a feature (OepFirmware.h:
 // oep::kX, begin<F>() adding it; oep::kAvailable / kDefaults below; OepChoice.h): Rvswd (and Console in it), Swd, Gpio, Uart,
 // Config, Analog, Link, I2c (oep.fixture.i2c-target), Logic (oep.fixture.logic), Group (oep.fixture.capture-group:
 // the logic with the analog), Swio (oep.wire.swio, CH32V00x; SwioConsole in it), and Cdc (the transport), all in by default (the UART bridge not).
 // Every channel below may be SWDIO / SWCLK of either
-// wire, the reset line of attach's reset TLV, a gpio or a UART pin (UART0: GP0/1, GP12/13, GP16/17, GP28/29); a live
+// wire, the reset line of attach's reset TLV, a gpio or a UART pin (uart instance 0 = UART0: RX GP1/13/17/29, TX GP0/12/16/28; instance 1 = UART1: RX
+// GP5/9/21/25, TX GP4/8/20/24, while neither the UART bridge nor the bench's trace has it; RP2350: its own); a live
 // debug connection holds its pair, a plan holds its pins (oep-core §8.1). What a target needs of its line (idle_clock,
 // max_speed) comes from the host (oep-if-debug §3). the settings (core §13) keeps a jig's settings in flash (slots on any pair,
 // a bind of the CDC port - the target's console on the same line as OEP -, labels, idle states).
@@ -108,7 +109,7 @@ static oep::Rp2LogicCapture *logicIn = nullptr;   // the logic and the analog, f
 static oep::AnalogCapture *analogIn = nullptr;
 static oep::SwdPort *swdIn = nullptr;
 static oep::WireSwd *swdWireIn = nullptr;   // its interface: the owner of its hold item (core §13.1)
-static oep::FixtureUart *uartIn = nullptr;
+static oep::FixtureUart *uartIn = nullptr, *uart2In = nullptr;
 
 // The RVSWD wire's parts, the console's too (its choice is made in the wire's: no wire, no console)
 struct RvswdParts {
@@ -198,12 +199,25 @@ void oepAddGpio() {
   endpoint.add(gpio.make(pins, 0, oep::owners::kGpio));
 }
 
+// oep.fixture.uart: instance 0 on Serial1 (UART0), instance 1 on Serial2 (UART1), each offering the pins its UART
+// reaches. Instance 1 only while nothing else of the probe's has Serial2 (the UART bridge, the bench's trace). It is
+// made here, for the settings' pass-through, and added last (oepAddUart2): the fns before it keep their numbers.
+static oep::Slot<oep::FixtureUart> uart2Slot;
 void oepAddUart() {
   static oep::Slot<oep::FixtureUart> uart;
   endpoint.add(uart.make(pins, Serial1, 0, oep::owners::kUart));
   uart->setRoleChannels(oep::platformUartRxMask(0), oep::platformUartTxMask(0));   // Serial1 = UART0: the pins it reaches
   uartIn = &*uart;
   loopWork.add([] { uart->poll(); });
+#if !OEP_DEBUG_LOG
+  if (ownPins & ((1ull << PIN_SERIAL2_TX) | (1ull << PIN_SERIAL2_RX))) return;   // the UART bridge has Serial2
+  uart2In = &uart2Slot.make(pins, Serial2, 1, oep::owners::kUart2);
+  uart2In->setRoleChannels(oep::platformUartRxMask(1), oep::platformUartTxMask(1));   // Serial2 = UART1
+  loopWork.add([] { uart2Slot->poll(); });
+#endif
+}
+void oepAddUart2() {
+  if (uart2In) endpoint.add(*uart2In);
 }
 
 // The at-boot slots' attach waits for the host to have configured the device (or BootGuard::kAttachGraceMs without one):
@@ -231,6 +245,7 @@ void oepAddSettings() {
     if (consoleIn) config->addPlace(rvswd->wire, *consoleIn);
     if (swdIn) config->addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);   // oep.wire.swd's hold after a close (oep-if-debug §2): channel.{}.hold
     if (uartIn) config->addUart(*uartIn);
+    if (uart2In) config->addUart(*uart2In);
     config->setPins(&pins);   // the idle item sets these pins' free state
     loopWork.add([] { config->poll(); });
   });
@@ -437,6 +452,7 @@ void firmwareSetup(const oep::FirmwareConfig &cfg) {
   if constexpr ((F & oep::kPwm) != 0) oepAddPwm();
   if constexpr ((F & oep::kCounter) != 0) oepAddCounter();
   if constexpr ((F & oep::kSpiTarget) != 0) oepAddSpi();
+  if constexpr ((F & oep::kUart) != 0) oepAddUart2();   // the second uart, after the fns that were there before it
   if constexpr ((F & oep::kMemo) != 0) oepAddMemo();   // last: it has no settings, and the fns before it keep their numbers
   oep::firmware.runSetup(endpoint, pins);   // the sketch's own, after the build's (and before the saved settings)
   lastly.run();

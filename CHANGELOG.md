@@ -1,6 +1,16 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) RP2040 / RP2350 firmware: a second oep.fixture.uart (instance 1) on Serial2 = UART1, offering the pins UART1
+  reaches (RP2040: RX GP5/9/21/25, TX GP4/8/20/24), beside instance 0 on UART0 (issue #3). It is there while neither
+  the UART bridge nor the bench's trace has Serial2, listed after the fns that were there before it (their numbers
+  and the saved settings stay: a Pico's saved labels read back after the update), and its pass-through settings are
+  the first's. Checked on a Pico: instance 1 sends on GP4 (taken by the probe's own capture); its receive side has no
+  wire on the bench yet.
+- (JA) RP2040 / RP2350 のファーム: 2 つ目の oep.fixture.uart（instance 1）を Serial2 = UART1 に置き、UART1 の届くピンを出す（RP2040: RX
+  GP5/9/21/25、TX GP4/8/20/24）。instance 0 は UART0 のまま（issue #3）。UART のブリッジとベンチのトレースが Serial2 を使わないときだけ出し、
+  前からある fn の後ろに並べる（その番号と保存した設定は変わらない: Pico の保存したラベルは更新の後も読めた）。素通しの設定は 1 つ目と
+  同じ。Pico で、instance 1 が GP4 で送ることを確かめた（プローブ自身の取り込みで読んだ）。受ける側は、ベンチにまだ線がない。
 - (EN) SWIO on the RP2040 / RP2350: the frames' timing helpers (the SysTick read, the waits, the pin writes) are forced
   inline. A plain `inline` left two of them in flash, called from the RAM frames through a veneer; a flash cache miss
   there stretched a 262 ns short low into a long one, and a CH32V003 answered nothing (scan: nothing answered; ch32rv:
