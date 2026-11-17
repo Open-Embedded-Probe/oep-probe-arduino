@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 i2c-target: configure's nack_from (oep-spec 1b5d056, fixture §3, features bit1): the n-th data byte of
+  each write and every one after NACKed, the level chosen in the ACK stretch interrupt (slave_byte_ack_ctl_en /
+  slave_byte_ack_lvl), every byte still in the frame. Measured first on the bench with a CH32V205's Wire at 20-100 kHz
+  (n = 1-4 exactly there; the hold is the interrupt's latency, up to about 50 us a byte). The cores' Wire slaves (CH32,
+  RP2) and the classic ESP32 do not declare it and refuse the critical TLV. Registry synced.
+- (JA) ESP32-P4 の i2c-target: configure の nack_from（oep-spec 1b5d056、fixture §3、features bit1）。書き込みごとに n 番目のデータの byte
+  から NACK を返す。ACK の前で止めた割り込みで ACK か NACK かを決め（slave_byte_ack_ctl_en / slave_byte_ack_lvl）、どの byte もフレームに入る。
+  先にベンチで CH32V205 の Wire を 20〜100 kHz で使って測った（n = 1〜4 がちょうどその位置。止まる長さは割り込みの遅れで、byte ごとに最大約
+  50 µs）。コアの Wire の従（CH32、RP2）と classic ESP32 は宣言せず、critical の TLV を断る。registry を同期した。
 - (EN) Dependencies: EspUsbDevice 3.3.0 (ESP32-P4 / P4X, was 3.1.0) and arduino-pico 6.3.2 (RP2040 / RP2350, was 6.2.0)
   in every sketch.yaml.
 - (JA) 依存の版: すべての sketch.yaml で EspUsbDevice を 3.3.0（ESP32-P4 / P4X、前は 3.1.0）、arduino-pico を 6.3.2（RP2040 / RP2350、

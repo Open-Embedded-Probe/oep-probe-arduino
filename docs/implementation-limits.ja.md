@@ -357,6 +357,8 @@ FS の領域がマウントできないときは、領域を初期化する。�
 - i2c-target: ESP-IDF の slave ドライバ（v1）は受けた byte の数を知らせず、送信は区切りの無い流れなので、この実装は周辺の割り込みを
   自分で受け、トランザクションの byte を数え、TX FIFO を置き場から埋める（空なら 0xFF）。チップの FIFO の癖（読み出しの最後に余分な byte を
   出す、など）はこの実装が吸収する。stretch は 100000 µs まで（max_stretch_us）。
+  nack_from（features bit1）は P4 だけが持つ。受けた byte の ACK の前で SCL を止め、その割り込みで ACK か NACK かを決めるので、
+  nack_from を使う間は byte ごとに割り込みの遅れの分だけ SCL が延びる（ベンチで最大約 50 µs）。アドレスの byte はいつも ACK する。
   書き込みは STOP と START（repeated START を含む）の割り込みで区切る。START の割り込みが、次のトランザクションの最初のデータの byte が
   届くまで（アドレスと合わせて 18 クロック）より遅れると、その byte は前のフレームに入る。
 

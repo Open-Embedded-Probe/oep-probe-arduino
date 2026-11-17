@@ -58,7 +58,7 @@ void P4I2cTarget::planRelease() {
   stop();
   pins_.release(kOwnerId);   // each pin to its idle state
   sda_ = scl_ = -1;
-  address_ = 0; stretch_us_ = 0;
+  address_ = 0; stretch_us_ = 0; nack_from_ = 0;
   clearTarget();
 }
 
@@ -73,7 +73,7 @@ size_t P4I2cTarget::describe(uint8_t *out, size_t capacity) {
   w.u32(kTagMaxClockHz, kMaxClockHz);
   namespace i2c = reg::fixture_i2c_target;
   // bit0 the internal pull-ups start() enables (fixture §3); stretch is in the ops tag (offers)
-  w.u32(kTagFeatures, kInternalPullups ? i2c::kFeaturesInternalPullups : 0);
+  w.u32(kTagFeatures, (kInternalPullups ? i2c::kFeaturesInternalPullups : 0) | (kNackFrom ? i2c::kFeaturesNackFrom : 0));
   w.u8(i2c::kTlvDescribeQueueDepth, kQueueDepth);
   if (kStretch) w.u32(i2c::kTlvDescribeMaxStretchUs, kMaxStretchUs);
   return w.ok() ? w.length() : 0;
@@ -127,6 +127,7 @@ i2c_dev_t *const kDev = I2C_LL_GET_HW(0);
 // DET_START: a START, repeated or not, also ends the transaction before it (TRANS_COMPLETE comes at a STOP only)
 constexpr uint32_t kTransactionEnd = I2C_TRANS_COMPLETE_INT_ENA_M | I2C_DET_START_INT_ENA_M;
 constexpr uint32_t kIntrMask = I2C_LL_SLAVE_RX_INT | I2C_LL_SLAVE_TX_INT | I2C_SLAVE_STRETCH_INT_ENA_M | kTransactionEnd;
+constexpr uint32_t kStretchCauseSendingAck = I2C_SLAVE_STRETCH_CAUSE_SENDING_ACK;   // sr.stretch_cause at a byte's ACK
 #else
 // No START interrupt in the slave: a repeated START does not end the write before it (only the STOP does)
 constexpr uint32_t kTransactionEnd = I2C_TRANS_COMPLETE_INT_ENA_M;
@@ -182,6 +183,7 @@ void P4I2cTarget::isr(void *context) {
   portENTER_CRITICAL_ISR(&self->lock_);
   self->drainRx();
   if (status & kTransactionEnd) {
+    self->ack_index_ = 0;   // nack_from counts each write's data bytes from its START
     // the read, if any, took bytes out of the TX FIFO (a STOP of another target's transaction took none). Before the
     // stretch below: a read after a repeated START gets the next slot before SCL goes.
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
@@ -198,6 +200,11 @@ void P4I2cTarget::isr(void *context) {
   }
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (status & I2C_SLAVE_STRETCH_INT_ENA_M) {   // SCL held: at a received byte's ACK, or a read's address
+    if (self->nack_from_ && kDev->sr.stretch_cause == kStretchCauseSendingAck) {   // nack_from: this byte's ACK level
+      self->ack_index_ = static_cast<uint16_t>(self->ack_index_ + 1);
+      kDev->scl_stretch_conf.slave_byte_ack_lvl = self->ack_index_ >= self->nack_from_ ? 1 : 0;
+      i2c_ll_update(kDev);
+    }
     self->fillTx();
     if (self->stretch_us_) {
       self->stretch_held_ = true;
@@ -213,7 +220,7 @@ void P4I2cTarget::isr(void *context) {
 
 void P4I2cTarget::applyStretch() {
 #if defined(CONFIG_IDF_TARGET_ESP32P4)
-  const bool on = stretch_us_ != 0;
+  const bool on = stretch_us_ != 0 || nack_from_ != 0;   // nack_from decides each ACK in the stretch interrupt
   kDev->scl_stretch_conf.slave_byte_ack_lvl = 0;   // the ACK it then sends
   kDev->scl_stretch_conf.slave_byte_ack_ctl_en = on;
   i2c_ll_slave_enable_scl_stretch(kDev, on);
@@ -367,6 +374,7 @@ void P4I2cTarget::stop() { started_ = false; }
 bool P4I2cTarget::hostTransaction(const uint8_t *data, size_t count, size_t read, uint8_t *got) {
   if (!started_) return false;
   for (size_t i = 0; i < count; ++i, ++rx_count_) if (rx_count_ < sizeof rx_) rx_[rx_count_] = data[i];
+  host_nacked_ = nack_from_ && count >= nack_from_ ? nack_from_ : 0;   // every byte still in the frame (fixture §3)
   for (size_t i = 0; i < read; ++i) got[i] = txByte(i);
   onTransaction(read != 0);
   return true;
@@ -381,9 +389,17 @@ void P4I2cTarget::stop() { started_ = false; }
 Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (operation) {
-    case kOpConfigure: {   // address(u8) [TLV]
-      const Result parsed = plainTail(tail, payload, length, 1, out, capacity);
+    case kOpConfigure: {   // address(u8) [TLV nack_from(u16)]
+      if (length < 1) return rejected(kRejectMalformed);
+      static constexpr uint8_t kKnown[] = {reg::fixture_i2c_target::kTlvConfigureNackFrom};
+      // without it the tag is an unknown one: critical refused unsupported (fixture §3, core §2.3)
+      const Result parsed = tail.parse(payload + 1, length - 1, kKnown, kNackFrom ? 1 : 0, out, capacity);
       if (refused(parsed)) return parsed;
+      const uint8_t *nack = nullptr;
+      if (kNackFrom) {
+        const Result r = tail.fixed(reg::fixture_i2c_target::kTlvConfigureNackFrom, 2, nack, out, capacity);
+        if (refused(r)) return r;
+      }
       if (payload[0] > 0x7f) return rejected(kRejectMalformed);
       // the addresses the I2C specification reserves (general call, start byte, the 10-bit prefix, ...): 0x00 - 0x07 and
       // 0x78 - 0x7F, unsupported, payload 0x00 (fixture §3)
@@ -392,6 +408,7 @@ Result P4I2cTarget::handle(uint8_t operation, const uint8_t *payload, size_t len
       stop();
       clearTarget();   // frames, slots, rx_frames and errors go; stretch stays
       address_ = payload[0];
+      nack_from_ = nack ? getU16(nack) : 0;   // replaced by each configure (fixture §3)
       if (!start()) { clearTarget(); return failed(); }   // state 0: queue, slots and counters gone, stretch kept (fixture §3)
       return completed();
     }

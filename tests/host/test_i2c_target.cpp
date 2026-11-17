@@ -141,15 +141,16 @@ int main() {
     CHECK(!t.offers(0x02) && !t.offers(0x06));
     CHECK(rejectedAs(call(t, 0x02, {0, 1}, out), kRejectUnknownOperation));
     CHECK(rejectedAs(call(t, 0x06, {}, out), kRejectUnknownOperation));
-    // features: only bit2, the internal pull-ups start() enables (fixture §3); no other tag past queue_depth (0x40) and
-    // max_stretch_us (0x41)
+    // features: the internal pull-ups start() enables and nack_from (fixture §3); no other tag past queue_depth (0x40)
+    // and max_stretch_us (0x41)
     uint32_t features = 0xffffffff;
     bool other = false;
     for (size_t i = 0; i + kTlvHeader <= n; i += kTlvHeader + getU16(d + i + 1)) {
       if (d[i] == reg::kDescribeFeatures && getU16(d + i + 1) == 4) features = getU32(d + i + 3);
       if (d[i] > reg::fixture_i2c_target::kTlvDescribeMaxStretchUs) other = true;
     }
-    CHECK(features == reg::fixture_i2c_target::kFeaturesInternalPullups && !other);
+    CHECK(features == (reg::fixture_i2c_target::kFeaturesInternalPullups | reg::fixture_i2c_target::kFeaturesNackFrom) &&
+          !other);
     CHECK(P4I2cTarget::kQueueDepth >= 2);
   }
 
@@ -280,6 +281,23 @@ int main() {
   CHECK(ok(stretch(t, P4I2cTarget::kMaxStretchUs)));
   CHECK(rejectedAs(stretch(t, P4I2cTarget::kMaxStretchUs + 1), kRejectUnsupported));
   CHECK(t.hostStretchUs() == P4I2cTarget::kMaxStretchUs);
+
+  // ---- nack_from (fixture §3): configure's TLV, from the n-th data byte of each write NACKed, every byte in the frame;
+  // a configure without it ACKs all again; its length is fixed (2: malformed otherwise), critical or not
+  {
+    const uint8_t tag = reg::fixture_i2c_target::kTlvConfigureNackFrom | kTagCritical;
+    CHECK(ok(call(t, P4I2cTarget::kOpConfigure, {0x42, tag, 2, 0, 3, 0}, out)));
+    write(t, {1, 2, 3, 4});
+    CHECK(t.hostNacked() == 3);
+    write(t, {5, 6});
+    CHECK(t.hostNacked() == 0);   // shorter than n: every byte ACKed
+    CHECK(readRx(t) == Bytes({1, 2, 3, 4}) && readRx(t) == Bytes({5, 6}));
+    CHECK(rejectedAs(call(t, P4I2cTarget::kOpConfigure, {0x42, tag, 1, 0, 3}, out), kRejectMalformed));
+    CHECK(ok(configure(t, 0x42)));
+    write(t, {1, 2, 3, 4});
+    CHECK(t.hostNacked() == 0);
+    CHECK(readRx(t) == Bytes({1, 2, 3, 4}));
+  }
 
   // ---- releasing the plan, then a new one: describe's state (state 0, nothing kept, stretch 0)
   write(t, {1, 2});

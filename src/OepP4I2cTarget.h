@@ -63,9 +63,15 @@ class P4I2cTarget final : public Interface {
   // a CH32 Wire controller (2026-09-22), 30 ms used to make it time out.
   static constexpr bool kStretch = true;
   static constexpr uint32_t kMaxStretchUs = 100000;
+  // nack_from (fixture §3, features bit1): the same hold at every received byte's ACK, its level chosen in the stretch
+  // interrupt by the byte's place in the write (slave_byte_ack_lvl). The address byte never stretches, so it is always
+  // ACKed. Bench (2026-11-17, a CH32V205's Wire at 20-100 kHz): n = 1-4 NACKed exactly there; the hold is the
+  // interrupt's latency, up to about 50 us at a byte.
+  static constexpr bool kNackFrom = true;
 #else
   static constexpr bool kStretch = false;   // the classic ESP32's I2C slave cannot hold SCL
   static constexpr uint32_t kMaxStretchUs = 0;
+  static constexpr bool kNackFrom = false;  // the cores' Wire slaves ACK every byte
 #endif
 
   // start() enables the pads' internal pull-ups on SDA / SCL while configured (fixture §3: declared with features bit0).
@@ -107,6 +113,7 @@ class P4I2cTarget final : public Interface {
   // then, with `read` > 0, a repeated START and a read of `read` bytes into `got`. false: the target is not running.
   bool hostTransaction(const uint8_t *data, size_t count, size_t read = 0, uint8_t *got = nullptr);
   uint32_t hostStretchUs() const { return stretch_us_; }
+  size_t hostNacked() const { return host_nacked_; }   // the last write's first NACKed data byte (1 = the first), 0: none
 #endif
 
  private:
@@ -116,6 +123,8 @@ class P4I2cTarget final : public Interface {
   uint8_t address_ = 0;
   bool started_ = false;
   uint32_t stretch_us_ = 0;   // kept by configure, 0 again when the plan goes (fixture §3)
+  uint16_t nack_from_ = 0;     // configure's nack_from: NACK the n-th data byte of a write and after (0: none)
+  uint16_t ack_index_ = 0;     // the data bytes of the write under way whose ACK the interrupt has decided
   // the state the interrupt handler shares (under lock_)
   uint32_t rx_frames_ = 0;
   uint32_t errors_ = 0;
@@ -134,6 +143,9 @@ class P4I2cTarget final : public Interface {
   bool tx_stale_ = false;   // a preload went into an empty set while the bus was busy: reload when it is idle
   bool stretch_held_ = false;
   uint32_t stretch_since_ = 0;
+#if defined(OEP_HOST_FAKE_I2C_SLAVE)
+  size_t host_nacked_ = 0;
+#endif
 #if defined(ARDUINO_ARCH_ESP32)
   portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
   i2c_slave_dev_handle_t slave_ = nullptr;
