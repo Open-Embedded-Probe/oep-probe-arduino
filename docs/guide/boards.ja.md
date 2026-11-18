@@ -9,7 +9,7 @@
 
 | | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32（X035 / V307 / H417） | ほかの ESP32（S3、C3、C6 など） |
 |---|---|---|---|---|---|
-| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | 無し: 自分でビルド（下） |
+| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | 無し: example から部品を選んで自分でビルド（下。全部入りの `OepFirmware.h` はこれらのチップに無い）。この列は、その部品で組めるもの |
 | 経路 | USB CDC、vendor bulk、HID（UART bridge は選べば: GP8 / GP9） | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge（GPIO37 / 38、115200） | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID（X035 は vendor bulk だけ）。USB CDC と UART bridge は選べば | USB-Serial/JTAG か USB CDC |
 | RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | あり | あり | あり（dedicated GPIO） |
 | SWIO（CH32V00x の 1 線） | あり | あり | あり | あり（X035 以外） | 無し |

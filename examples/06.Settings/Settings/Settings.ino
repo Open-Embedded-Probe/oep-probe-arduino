@@ -15,8 +15,8 @@
 //                          the wire, no halt)
 //
 // Every item is declared by its owner (fn 0 for the channels, the interface for its own) and named; values name pins and
-// ports by name (GPIO2, cdc0). The host sets them with `oep settings` (oep-client-python), saves them to flash (NVS on
-// ESP32, the last sector on RP2040 / RP2350, by name), and exports them to a file to put back after a firmware update:
+// ports by name (GPIO2, cdc0). The host sets them with `oep settings` (oep-client-python), saves them to flash (a
+// LittleFS file, by name), and exports them to a file to put back after a firmware update:
 //
 //   oep settings set <probe> core channel.GPIO2.label=dut.swdio channel.GPIO3.label=dut.swclk channel.GPIO5.idle=pull-up
 //   oep settings set <probe> oep.target.console/0 passthrough.cdc0.wire=oep.wire.rvswd/0 passthrough.cdc0.swdio=GPIO2 \

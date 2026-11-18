@@ -18,12 +18,15 @@
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
 | ESP32-P4X（v3.x） | `OepProbe-esp32p4x-<version>.merged.bin` | 同じ（esptool のチップ名は `esp32p4`） |
 | classic ESP32（DevKitC など） | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |
-| WCH CH32X035 / CH32V307 / CH32H417 | `OepProbe-ch32x035-<version>.bin` / `-ch32v307-` / `-ch32h417-` | code flash の先頭（0x08000000）から、そのチップを書ける道具で |
+| WCH CH32X035 / CH32V307 / CH32H417 | `OepProbe-ch32x035-<version>.bin` / `-ch32v307-` / `-ch32h417-` | 別の OEP プローブ（または WCH-LinkE）から [ch32rv](https://github.com/ch32-riscv-ug/ch32rv) で、code flash の先頭から: `ch32rv flash --probe oep://<書く側の unit_id>/<口> <file> --offset 0x08000000`（下） |
 
 firmware には配線を焼き込んでいません。どのピンを使うかは、host が probe を使うときに決めます。同じファイルで、どの治具にも
 使えます。ほかのチップ（ESP32-S3、C3、C6 など）のリリースされた firmware はありません。自分でビルドします（[ボード](boards.ja.md)）。
 
 使う前に焼いてください。ボードに何が入っているかは分かりません。
+
+CH32 のプローブは、別のプローブの SWIO / RVSWD でつないで書きます。`<口>` は、書く側のプローブでその CH32 の線に付けたラベルの口の名前です
+（`<口>.swdio`、`<口>.swclk` など）。チップの factory bootloader（USB か UART）からも書けます（`ch32rv isp`）。
 
 OepProbe が動いている ESP32-P4 は、HS の口だけで更新できます: `dfu-util -D OepProbe-esp32p4-<version>.bin`（merged ではなく
 app の image）が、もう一方の app の領域に書き、確かめてから再起動します。設定は残ります（まっさらにしたいときは

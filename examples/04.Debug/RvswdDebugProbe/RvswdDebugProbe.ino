@@ -15,11 +15,11 @@
 // max_speed: a CH32L103 wants SWCLK low and at most 1 MHz right after a reset).
 //
 // From Python (oep-client-python):
-//   from oep_client import link, target
+//   from oep_client import link, riscv
 //   hst = link.open_host("<port>"); hst.open(3000)
-//   wire = target.Wire(hst)
+//   wire = riscv.Wire(hst)
 //   conn, dmstatus = wire.attach(halt=True)          # add idle_clock="low", max_speed=1_000_000 for a CH32L103
-//   dm = target.RiscvDm(hst, conn)
+//   dm = riscv.RiscvDm(hst, conn)
 //   print(dm.read_block(0x08000000, 4).hex())        # the first 4 words of flash
 //   dm.resume(); wire.detach(conn)
 #include <OepCh32Dm.h>

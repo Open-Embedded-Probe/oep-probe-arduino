@@ -187,10 +187,10 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | Example | ボード（profile） | 示すこと |
 |---|---|---|
 | `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、classic ESP32（esp32）、WCH CH32（ch32x035、ch32v307、ch32h417） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
-| `01.Basics/MinimalProbe` | RP2040（rp2040）、classic ESP32（esp32） | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
-| `01.Basics/FixtureProbe` | RP2040（rp2040）、classic ESP32（esp32） | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
-| `02.Interfaces/HelloInterface` | RP2040（rp2040）、classic ESP32（esp32） | **はじめてのインターフェース**: 名前、2 つの op、ロック。ピンは使わない |
-| `02.Interfaces/CustomInterface` | RP2040（rp2040）、classic ESP32（esp32） | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
+| `01.Basics/MinimalProbe` | RP2040（rp2040）、RP2350（rp2350）、classic ESP32（esp32） | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
+| `01.Basics/FixtureProbe` | RP2040（rp2040）、RP2350（rp2350）、classic ESP32（esp32） | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
+| `02.Interfaces/HelloInterface` | RP2040（rp2040）、RP2350（rp2350）、classic ESP32（esp32） | **はじめてのインターフェース**: 名前、2 つの op、ロック。ピンは使わない |
+| `02.Interfaces/CustomInterface` | RP2040（rp2040）、RP2350（rp2350）、classic ESP32（esp32） | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
 | `03.Transports/MultipleTransports` | ESP32-P4（esp32p4）/ P4X（esp32p4x） | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
 | `03.Transports/WifiTcp` | classic ESP32（esp32） | Wi-Fi の TCP で OEP: シリアルの口と TCP の待ち受け（3 接続）、ネットワークは設定の wifi の項目から、mDNS |
 | `04.Debug/RvswdDebugProbe` | RP2040（rp2040）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、ESP32-S3（esp32s3） | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |

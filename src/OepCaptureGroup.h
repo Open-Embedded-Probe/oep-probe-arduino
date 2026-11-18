@@ -47,20 +47,19 @@ class GroupTrack {
   // in state 6, why (status's error): 1 the peripheral, 2 a segment lost to the queue or the ring (capture §2.2)
   virtual uint8_t trackError() const { return reg::fixture_logic::kErrorPeripheral; }
   virtual uint32_t trackGeneration() const { return 0; }   // the generation the last start made (the group's start answer)
-  // Following another track's trigger (the group's trigger_track): trackCanFollow at bind (no side effects; false:
-  // this track cannot, as configured), trackStartFollowing at start (running into its ring, waiting for
-  // trackTriggerAt), trackTriggerAt(ns) with the trigger's time on the probe's clock. The trigger track:
-  // trackTriggerNs once its trigger is found, trackForce.
+  // Following the group's event (capture §4.4, the condition another track judges): trackCanFollow at bind (no side
+  // effects; false: this track cannot, as configured), trackStartFollowing at start (running into its ring, waiting
+  // for trackTriggerAt), trackTriggerAt(ns) with the event's time on the probe's clock. The judging track:
+  // trackTriggerNs once its condition is met, trackForce.
   virtual bool trackCanFollow() const { return false; }
   virtual bool trackStartFollowing() { return false; }
   virtual void trackTriggerAt(uint64_t ns) { (void)ns; }
   virtual bool trackTriggerNs(uint64_t &ns) const { (void)ns; return false; }
   virtual void trackForce() {}
   virtual bool trackArmed() const { return true; }   // following: it holds its pretrigger's worth of samples
-  // The group's pretrigger (capture §4.1): the trigger track's own P samples (trackPretrigger) at its actual rate
-  // (trackRate), kept by every follower k as the same time, P_k samples at its rate (groupPretrigger). trackCanKeep: a
-  // follower can keep p samples before the trigger (within its max_pretrigger and, mode 1 / 2, below its samples);
-  // trackKeep(p) sets what its following keeps.
+  // Each track keeps its own pretrigger (trackPretrigger, configured with its linked trigger) at its actual rate
+  // (trackRate). trackCanKeep: a follower can keep p samples before the event with the judging track's latency on top
+  // (within its max_pretrigger and, mode 1 / 2, below its samples); trackKeep(p) sets what its following keeps.
   virtual bool trackRate(uint32_t &num, uint32_t &den) const { num = den = 0; return false; }
   virtual uint32_t trackPretrigger() const { return 0; }
   // The trigger is known to the group only some time after its sample (trackLatencyNs, the trigger track's most: a
