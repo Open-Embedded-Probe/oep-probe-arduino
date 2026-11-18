@@ -34,7 +34,8 @@ uv run --project tests --env-file tests/.env pytest tests/equipment --junitxml=/
 ## 流し続けの速さ（ESP32-P4 / P4X）
 
 `test_stream_rate.py` は、ロジックのキャプチャを[キャプチャ](../../docs/guide/capture.ja.md)の表の速さで流し続け、何も落ちないことを確かめます。
-速さは 40 MB/s で、2 本 160 MHz、4 本 80 MHz、8 本 40 MHz、16 本 20 MHz の 4 つの場合を流します。受けたバイトは数えてすぐ捨てるので、
+速さは 40 MB/s で、2 本 160 MHz、4 本 80 MHz、8 本 40 MHz、16 本 20 MHz の 4 つの場合を流します。もう 1 つ、4 本 80 MHz の流し続けの横で、
+ロックの要らない要求（core の clock）を毎秒 400 回、1 つずつ送る場合を流します（応答と流し続けの push が同じ vendor bulk の IN を使う）。受けたバイトは数えてすぐ捨てるので、
 host のメモリと CPU は測る対象に入りません。
 
 | 変数 | 中身 |
@@ -51,6 +52,6 @@ uv run --project tests --env-file tests/.env pytest tests/equipment/test_stream_
 
 - 何も設定しないときは skip です。チャネルが足りない場合と、ESP32-P4 / P4X でない probe も skip です。
 - host のロードアベレージが `OEP_STREAM_MAX_LOAD`（既定はコアの数の 2 倍）を超えているときは、速さを判断できないので skip にします（理由に「host busy」と出ます）。
-- 区画の落ち、途切れ、push の抜け、エラーでの停止、届いたバイトが 95 % に足りないことのどれかがあれば FAIL です。
+- 区画の落ち、途切れ、push の抜け、エラーでの停止、届いたバイトが 95 % に足りないこと、要求が 90 % に足りないことのどれかがあれば FAIL です。
 - JUnit の property に、ロードアベレージ、頼んだ速さと実際の速さ、届いたバイト、秒数、途切れの数が残ります。
 - lease だけを取ります（bench のロックは取りません）。

@@ -20,6 +20,7 @@ from oep_client import capture, core, link, registry as reg
 STREAM_BYTES_PER_S = 40_000_000          # the guide's streaming rate on HS USB (capture.ja.md)
 SLICE_S = 0.5                            # bytes are counted and dropped after each slice
 SUBSCRIBE_MIN_BYTES, SUBSCRIBE_MAX_DELAY_MS = 16384, 20   # batched pushes, as oep_client.acquire subscribes a stream
+REQUESTS_PER_S = 400                     # lock-free requests beside the stream: their answers share the IN with it
 P4_MODELS = ("esp32p4", "esp32p4x")
 
 
@@ -46,6 +47,17 @@ def _channel_numbers(hst, names):
 @pytest.mark.equipment
 @pytest.mark.parametrize("lines", [2, 4, 8, 16])
 def test_stream_at_the_guides_rate(lines, record_property):
+    _stream(lines, 0, record_property)
+
+
+@pytest.mark.equipment
+def test_stream_with_requests_beside_it(record_property):
+    """4 lines at 80 MHz while lock-free requests (core clock) go one after another at REQUESTS_PER_S: the answers
+    and the stream's pushes share the vendor bulk IN."""
+    _stream(4, REQUESTS_PER_S, record_property)
+
+
+def _stream(lines, requests_per_s, record_property):
     address, unit, names, seconds = _env()
     if len(names) < lines:
         pytest.skip(f"{len(names)} channels given, {lines} needed")
@@ -71,11 +83,22 @@ def test_stream_at_the_guides_rate(lines, record_property):
             record_property("actual_rate", str(cfg.rate))
             cap.subscribe(SUBSCRIBE_MIN_BYTES, SUBSCRIBE_MAX_DELAY_MS)
             cap.start()
-            got, total, gaps, skipped = capture.Received(), 0, 0, 0
+            got, total, gaps, skipped, sent = capture.Received(), 0, 0, 0, 0
             t0 = time.monotonic()
+            next_request = t0
             try:
                 while time.monotonic() - t0 < seconds:
-                    cap.stream(hst.link, seconds=SLICE_S, into=got)
+                    if requests_per_s:                 # short slices, a request whenever one is due
+                        slice_end = time.monotonic() + SLICE_S
+                        while time.monotonic() < slice_end:
+                            due = time.monotonic() >= next_request
+                            cap.stream(hst.link, seconds=0 if due else 0.002, into=got)
+                            if due:
+                                hst.clock()
+                                sent += 1
+                                next_request = max(next_request + 1 / requests_per_s, time.monotonic() - SLICE_S)
+                    else:
+                        cap.stream(hst.link, seconds=SLICE_S, into=got)
                     total += len(got.data)
                     gaps += len(got.gaps)
                     skipped += sum(n for _, n in got.gaps)
@@ -97,10 +120,12 @@ def test_stream_at_the_guides_rate(lines, record_property):
         record_property("bytes_per_s", round(total / took))
         record_property("gaps", gaps)
         record_property("seq_lost", got.seq_lost)
+        record_property("requests_per_s", round(sent / took))
         assert st.state != capture.STATE["error"], f"the capture stopped with error {st.error}"
         assert not gaps and not got.seq_lost, \
             f"{gaps} gaps ({skipped} bytes the probe dropped), {got.seq_lost} frames lost in {total} bytes"
         assert total >= STREAM_BYTES_PER_S * seconds * 0.95, f"{total} bytes in {took:.1f} s"
+        assert sent >= requests_per_s * seconds * 0.9, f"{sent} requests in {took:.1f} s"
     finally:
         try:
             hst.end()
