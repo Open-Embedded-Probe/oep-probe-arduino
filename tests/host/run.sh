@@ -93,6 +93,8 @@ g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o 
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -DOEP_HOST_FAKE_BOOT -I"$here/shim" -I"$src" -o "$out-boot-guard" \
   "$here/test_boot_guard.cpp" "$src/OepBootGuard.cpp"
 "$out-boot-guard"
+g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-pad-filter" "$here/test_pad_filter.cpp"
+"$out-pad-filter"
 g++ -std=gnu++17 -Wall -Wextra -Wno-unused-parameter -I"$here/shim" -I"$src" -o "$out-wire" "$here/test_wire.cpp" \
   "$src/OepTarget.cpp" "$src/OepCh32Dm.cpp" "$src/OepFrame.cpp" "$src/OepDmConsole.cpp"
 "$out-wire"

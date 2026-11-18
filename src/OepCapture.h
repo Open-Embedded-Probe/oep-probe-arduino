@@ -31,7 +31,7 @@
 
 // OEP_HOST_FAKE_PARLIO: a host test with fakes of the PARLIO RX driver and the heap (tests/host/shim)
 #if (defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)) || defined(OEP_HOST_FAKE_PARLIO)
-#include <driver/gpio_filter.h>
+#include "OepPadFilter.h"
 #include <driver/parlio_rx.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
@@ -205,7 +205,8 @@ class LogicCapture final : public Interface, public GroupTrack {
   uint8_t clock_edge_ = 0, qual_level_ = 1;
   uint32_t clock_unc_ns_ = 0;            // external clock: the first edge's time is known only within this
   uint32_t glitch_ns_ = 0;               // the glitch filter in use (0: none)
-  gpio_glitch_filter_handle_t filters_[kMaxChannels] = {};
+  int filtered_[kMaxChannels];            // the data pins whose pad filter this capture holds (OepPadFilter)
+  uint8_t filtered_n_ = 0;
   void setGlitch(uint32_t ns);           // the filters on the data pins (0: off)
   // the data pins' input hysteresis (capture §3.8, when configure asks for it); the pins it is on, to take it
   // off at the next configure or the plan's release

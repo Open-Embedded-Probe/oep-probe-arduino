@@ -1,6 +1,12 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X: the pad's glitch filter is held by count (OepPadFilter): the spi-target's CS and a logic capture
+  with its glitch filter listening on that same pin each keep it on while they want it. A capture's end removed the
+  filter from under the spi-target's CS before. Host tests (pad filter).
+- (JA) ESP32-P4 / P4X: パッドのグリッチフィルタを数えて持つようにした（OepPadFilter）。spi-target の CS と、同じピンをグリッチフィルタ
+  付きで聞くロジックのキャプチャが、それぞれ要る間フィルタを保つ。前は、キャプチャの終わりに spi-target の CS のフィルタも外れていた。
+  ホストの試験（pad filter）。
 
 ## 0.0.58
 - (EN) Test vectors from oep-spec 526d273 (the settings file carries the memo area). The probe check around a

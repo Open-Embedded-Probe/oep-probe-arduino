@@ -128,13 +128,7 @@ bool P4SpiTarget::begin() {
   // about 1 in 12). One step weaker none in 48 (the weakest none either).
   pins_.ownStrength(static_cast<uint16_t>(miso_), kMisoDrive);
 #if defined(OEP_SPI_CS_FILTER)   // CS through the pad's glitch filter (the header): a CS spike does not end the frame
-  gpio_pin_glitch_filter_config_t filter = {};
-  filter.clk_src = GLITCH_FILTER_CLK_SRC_DEFAULT;
-  filter.gpio_num = static_cast<gpio_num_t>(cs_);
-  if (!cs_filter_ && gpio_new_pin_glitch_filter(&filter, &cs_filter_) == ESP_OK && gpio_glitch_filter_enable(cs_filter_) != ESP_OK) {
-    gpio_del_glitch_filter(cs_filter_);
-    cs_filter_ = nullptr;
-  }
+  if (!cs_filtered_) cs_filtered_ = PadFilter::take(cs_);
 #endif
   return true;
 }
@@ -271,10 +265,9 @@ void P4SpiTarget::stop() {
 #endif
   if (started_) spi_slave_free(SPI2_HOST);
 #if defined(OEP_SPI_CS_FILTER)
-  if (cs_filter_) {   // the pad as it was for whoever takes CS next
-    gpio_glitch_filter_disable(cs_filter_);
-    gpio_del_glitch_filter(cs_filter_);
-    cs_filter_ = nullptr;
+  if (cs_filtered_) {   // given back: the pad as it was, unless a capture listening on CS holds the filter too
+    PadFilter::give(cs_);
+    cs_filtered_ = false;
   }
 #endif
 #if defined(OEP_SPI_MISO_GATE)

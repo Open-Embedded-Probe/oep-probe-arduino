@@ -1563,25 +1563,19 @@ Result LogicCapture::noStorage(uint8_t *out, size_t capacity) {
   return unavailable(out, capacity, reg::core::kUnavailableCauseStorageFull);
 }
 
-// The GPIO flex glitch filters on the data pins (capture §3.8): a pulse shorter than ns is not seen, by the data and so
-// by the trigger. The filter is the pad's: another fn reading the pin sees it filtered as well while it is on.
+// The pad's glitch filter on the data pins (capture §3.8): a pulse shorter than ns is not seen, by the data and so by
+// the trigger. The filter is the pad's: another fn reading the pin sees it filtered as well while it is on, and one
+// that holds it too (the spi-target's CS) keeps it on after this capture lets go (OepPadFilter).
 void LogicCapture::setGlitch(uint32_t ns) {
-  for (gpio_glitch_filter_handle_t &f : filters_) {
-    if (!f) continue;
-    gpio_glitch_filter_disable(f);
-    gpio_del_glitch_filter(f);
-    f = nullptr;
-  }
+  while (filtered_n_) PadFilter::give(filtered_[--filtered_n_]);
   glitch_ns_ = 0;
   if (!ns) return;
   for (uint8_t k = 0; k < data_lines_; ++k) {
-    gpio_pin_glitch_filter_config_t c = {};
-    c.clk_src = GLITCH_FILTER_CLK_SRC_DEFAULT;   // PLL_F80M: 2 cycles, 25 ns
-    c.gpio_num = static_cast<gpio_num_t>(data_pins_[k]);
-    if (gpio_new_pin_glitch_filter(&c, &filters_[k]) != ESP_OK || gpio_glitch_filter_enable(filters_[k]) != ESP_OK) {
+    if (!PadFilter::take(data_pins_[k])) {
       setGlitch(0);
       return;
     }
+    filtered_[filtered_n_++] = data_pins_[k];
   }
   glitch_ns_ = ns;
 }

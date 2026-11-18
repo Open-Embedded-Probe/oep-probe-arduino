@@ -44,7 +44,7 @@
 // MOSI: at the 24 MHz declared a half period is 21 ns.
 #if defined(OEP_SPI_SLAVE_DRIVER) && defined(SOC_GPIO_SUPPORT_PIN_GLITCH_FILTER) && !defined(OEP_HOST_FAKE_SPI_SLAVE)
 #define OEP_SPI_CS_FILTER 1
-#include <driver/gpio_filter.h>
+#include "OepPadFilter.h"
 #endif
 // The classic ESP32's slave drives MISO from spi_slave_initialize to spi_slave_free, CS high as well (bench,
 // 2026-10-02: low while CS is high, configured, armed and between frames; the ESP32-P4's leaves it undriven). A target
@@ -125,7 +125,7 @@ class P4SpiTarget final : public Interface {
   spi_slave_transaction_t trans_ = {};
   spi_slave_transaction_t idle_trans_ = {};
 #if defined(OEP_SPI_CS_FILTER)
-  gpio_glitch_filter_handle_t cs_filter_ = nullptr;   // on CS while started (OEP_SPI_CS_FILTER)
+  bool cs_filtered_ = false;   // this target holds CS's pad filter while started (OEP_SPI_CS_FILTER, OepPadFilter)
 #endif
   // What the interrupt saw since service() last looked (under lock_): the armed one ended (its bits), unarmed
   // transfers, and a load that failed (service() retries it).
