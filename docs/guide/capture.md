@@ -204,4 +204,4 @@ checking.
 - Expectations are written as `square` (period and duty), `uart`, `i2c`, `voltage` and so on. The result is pass/fail with the
   measured values, and also JUnit XML.
 - Naming lines by label keeps the test code unchanged when the fixture's wiring changes.
-- The steps are in [WireSkein's capture tests](https://github.com/Open-Embedded-Probe/wireskein/blob/main/docs/capture-test-guide.ja.md).
+- The steps are in [WireSkein's capture tests](https://github.com/Open-Embedded-Probe/wireskein/blob/main/docs/capture-test-guide.md).
