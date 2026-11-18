@@ -6,7 +6,8 @@ from probe_checks import check_after, check_identity
 def snapshot():
     return {'unit_id': 'unit-a', 'model': 'esp32', 'firmware': 'candidate',
             'missing_declarations': [],
-            'settings_file': {'oep_settings': 1, 'settings': {'core': {'channel.GPIO1.label': 'a'}}},
+            'settings_file': {'oep_settings': 1, 'settings': {'core': {'channel.GPIO1.label': 'a'}},
+                              'memo': {'oep.probe.memo/port/a': '{}'}},
             'state': {'storage': 'applied', 'saved_generation': 1, 'reason': None}}
 
 
@@ -26,6 +27,8 @@ def test_same_individual_with_wrong_model_is_rejected():
     ({'firmware': 'old'}, 'unexpected firmware'),
     ({'missing_declarations': ['ops']}, 'missing declarations'),
     ({'settings_file': {'oep_settings': 1, 'settings': {}}}, 'saved settings changed'),
+    ({'settings_file': {'oep_settings': 1, 'settings': {'core': {'channel.GPIO1.label': 'a'}}, 'memo': {}}},
+     'memo area changed'),
     ({'state': {'storage': 'partial', 'saved_generation': 0, 'reason': 'item'}}, 'not applied'),
 ])
 def test_update_failure_is_detected(change, error):

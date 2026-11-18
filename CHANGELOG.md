@@ -1,6 +1,10 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Test vectors from oep-spec 526d273 (the settings file carries the memo area). The probe check around a
+  firmware update also fails when the memo area changed (it reads the settings file with memo, oep-client-python).
+- (JA) テストベクタを oep-spec 526d273 にそろえた（設定のファイルがメモ欄も運ぶ）。ファームの更新の前後の確かめは、メモ欄が変わった
+  ときも失敗にする（oep-client-python の memo を含む設定のファイルで読む）。
 
 ## 0.0.57
 - (EN) The probe's LittleFS is mounted up to three times before its area is formatted (ESP32 / ESP32-P4 and RP2, whose

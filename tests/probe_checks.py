@@ -83,5 +83,7 @@ def check_after(before, after, firmware):
         raise RuntimeError(f"missing declarations: {after['missing_declarations']}")
     if 'settings_file' in before and before['settings_file']['settings'] != after.get('settings_file', {}).get('settings'):
         raise RuntimeError('saved settings changed')     # by name (core §13.7): the same values whatever moved
+    if 'memo' in before.get('settings_file', {}) and before['settings_file']['memo'] != after.get('settings_file', {}).get('memo'):
+        raise RuntimeError('memo area changed')           # on the same LittleFS as the settings: kept alike
     if before.get('state', {}).get('storage') == 'applied' and after.get('state', {}).get('storage') != 'applied':
         raise RuntimeError('saved settings were not applied')
