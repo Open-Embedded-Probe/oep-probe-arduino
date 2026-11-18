@@ -2,46 +2,50 @@
 
 [日本語](getting-started.ja.md)
 
-From a bare board to a probe your PC drives, in four steps: flash the firmware, install the host library, find the probe,
-use it. Nothing here needs the Arduino IDE.
+From an empty board to a probe a PC drives, in 4 stages: flash the firmware, install the host library, find the probe, use it.
+The Arduino IDE is not needed.
 
 ## 1. Flash the firmware
 
 Take the firmware for your chip from the [Releases](https://github.com/Open-Embedded-Probe/oep-probe-arduino/releases)
-(`firmware-<version>.json` lists the files with their sha256):
+(`firmware-<version>.json` lists the files and their sha256).
 
-| Chip | File | How |
+| Chip | File | How to write |
 |---|---|---|
-| RP2040 (Pico, RP2040-Zero, ...) | `OepProbe-rp2040-<version>.uf2` | hold BOOTSEL, plug it in, copy the file to the drive that appears |
-| RP2350 (Pico 2, ...) | `OepProbe-rp2350-<version>.uf2` | the same |
-| SparkFun Pro Micro RP2350 | `OepProbe-rp2350-<version>.uf2` (the Pico 2 one) | the Pico 2's pins (GP19 is its PSRAM select: the host leaves it alone) |
+| RP2040 (Pico, RP2040-Zero and so on) | `OepProbe-rp2040-<version>.uf2` | plug in while holding BOOTSEL and copy to the drive that appears |
+| RP2350 (Pico 2 and so on) | `OepProbe-rp2350-<version>.uf2` | the same |
+| SparkFun Pro Micro RP2350 | `OepProbe-rp2350-<version>.uf2` (the same as Pico 2) | the same pins as Pico 2 (GP19 is the PSRAM select, so the host does not use it) |
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
-| ESP32-P4X (v3.x) | `OepProbe-esp32p4x-<version>.merged.bin` | the same (esptool's chip name remains `esp32p4`) |
-| classic ESP32 (DevKitC, ...) | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |
+| ESP32-P4X (v3.x) | `OepProbe-esp32p4x-<version>.merged.bin` | the same (esptool's chip name is `esp32p4`) |
+| classic ESP32 (DevKitC and so on) | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |
+| WCH CH32X035 / CH32V307 / CH32H417 | `OepProbe-ch32x035-<version>.bin` / `-ch32v307-` / `-ch32h417-` | from another OEP probe (or WCH-LinkE) with [ch32rv](https://github.com/ch32-riscv-ug/ch32rv), from the start of the code flash: `ch32rv flash --probe oep://<unit_id of the writing probe>/<port> <file> --offset 0x08000000` (below) |
 
-The firmware has nothing wired in: every pin is chosen by the host when it uses the probe. The same file serves every
-jig. Other chips (ESP32-S3, C3, C6, ...) have no released firmware yet: build one yourself ([Boards](boards.md)).
+No wiring is built into the firmware. The host decides which pins to use when it uses the probe. The same file serves every
+fixture. Other chips (ESP32-S3, C3, C6 and so on) have no released firmware. Build it yourself ([Boards](boards.md)).
 
-Flash before you use a board: you cannot tell what is on it.
+Flash it before use. You cannot tell what is on a board.
 
-Updating an ESP32-P4 that runs OepProbe needs only its HS port: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the app
-image, not the merged one) writes the other app partition, checks it and restarts into it; the settings stay (clear
-them with `oep settings unset --all <port>` and a save when you want a fresh probe). The new firmware is kept as soon as it starts: no
-later reset goes back to the one before. If the bootloader did not start it, the describe's firmware text says so
-after the version, e.g. `<version> (update to app1 did not reach setup: software)`; any reset that was not a power-on or
-a restart the probe made shows there the same way (`brownout at 3 s`). A chip that was never flashed, or one that does
-not start, is flashed with esptool on USB-Serial/JTAG as above.
+A CH32 probe is written by connecting it to another probe's SWIO / RVSWD. `<port>` is the port name of the labels given to that
+CH32's wires on the writing probe (`<port>.swdio`, `<port>.swclk` and so on). It can also be written from the chip's factory
+bootloader (USB or UART) (`ch32rv isp`).
 
-P4 and P4X use separate firmware. Build P4X with the `esp32p4x` profile and update it over DFU with
-`OepProbe-esp32p4x-<version>.bin`. In `oep dump --port <port>`, model is `esp32p4` or `esp32p4x`, while chip reports
-the actual revision read from eFuse (e.g. `esp32p4 v3.2`). The HS USB product names are
-`OEP probe (ESP32-P4)` and `OEP probe (ESP32-P4X)` respectively.
-The pinned Arduino core 3.3.12 builds app images for v0.1–v1.99 (P4) and v3.1–v3.99 (P4X; v3.0 is excluded).
-Arduino's generated image header does not include these bounds, so the firmware embeds its variant and revision
-range in a [custom app descriptor](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32p4/api-reference/system/app_image_format.html#adding-a-custom-structure-to-an-application).
-Firmware with this check refuses a DFU image with the wrong variant, an unsupported revision, or no descriptor
-(including older images), restores the running boot partition and does not restart. Older firmware lacks this
-protection: check the file carefully on the first update. To return to an older image, use esptool on USB-Serial/JTAG.
+An ESP32-P4 running OepProbe can be updated over the HS port alone: `dfu-util -D OepProbe-esp32p4-<version>.bin` (the app image,
+not merged) writes to the other app area, checks it, and restarts. Settings remain (to start clean, `oep settings unset --all
+<port>` then save). The new firmware stays once it boots: no later reset goes back to the previous firmware. When the bootloader
+did not boot the new firmware, describe's firmware string says so after the version (for example `<version> (update to app1 did
+not reach setup: software)`). A reset that was neither power on nor the probe's own restart shows there the same way
+(`brownout at 3 s`). A chip that was never flashed, or that does not boot, is flashed with esptool over USB-Serial/JTAG as above.
+
+The P4 and P4X firmware are different. P4X is built with the `esp32p4x` profile, and DFU uses
+`OepProbe-esp32p4x-<version>.bin`. In `oep dump --port <port>`, model is `esp32p4` / `esp32p4x`, and chip is the actual
+revision read from eFuse (for example `esp32p4 v3.2`). The HS USB product names also differ: `OEP probe (ESP32-P4)` /
+`OEP probe (ESP32-P4X)`. The app image range of the Arduino core pinned in `sketch.yaml` is v0.1–v1.99 for P4 and v3.1–v3.99
+for P4X (v3.0 is not covered). The image header Arduino generates does not carry this restriction, so the firmware embeds the
+model and the supported revisions as a
+[custom app descriptor](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32p4/api-reference/system/app_image_format.html#adding-a-custom-structure-to-an-application).
+A DFU on firmware with this check refuses a mismatched, out-of-range or old image without identification, puts the boot target
+back, and does not restart. A DFU from firmware without this check writes without checking, so check the file before updating.
+To write an image without the check, use esptool over USB-Serial/JTAG.
 
 ## 2. Install the host library
 
@@ -49,44 +53,44 @@ protection: check the file carefully on the first update. To return to an older 
 pip install oep-client-python
 ```
 
-This gives the `oep` command and the Python package `oep_client`. Other hosts speak the same protocol (ch32rv, the
-ArduinoCore-CH32RV upload tool); this guide uses the Python one.
+This installs the `oep` command and Python's `oep_client`. Other hosts (ch32rv, ArduinoCore-CH32RV's upload) speak the same
+protocol. This guide uses the Python one.
 
-It also installs what `--port usb` in the next step needs: `libusb1` for asynchronous vendor bulk transfers and
-`hidapi` for HID connections. On Windows, a probe that offers HID can be opened through HID without changing its driver
-to WinUSB.
+What `--port usb` in the next step needs (`libusb1` for asynchronous vendor bulk transfers, `hidapi` for HID connections) is
+installed with it. On Windows, if the probe offers HID, it can connect over HID without changing the driver to WinUSB.
 
-On Linux, opening a probe's vendor bulk, DFU and HID interfaces as an ordinary user needs the udev rule shipped in
-oep-client-python, [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) (the serial ports need only the
-usual `dialout` group). Install it once with administrator rights:
+On Linux, opening the probe's vendor bulk, DFU and HID interfaces as an ordinary user needs the udev rule shipped by
+oep-client-python, [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules)
+(serial ports need only the usual `dialout` group). Install it once with administrator rights:
 
 ```sh
-sudo install -m 0644 udev/70-oep-probe.rules /etc/udev/rules.d/   # from an oep-client-python checkout or sdist
+sudo install -m 0644 udev/70-oep-probe.rules /etc/udev/rules.d/   # inside an oep-client-python checkout or sdist
 sudo udevadm control --reload-rules && sudo udevadm trigger   # or unplug and replug the probe
 ```
 
-## 3. Find the probe and see what it offers
+## 3. Find the probe and see what it has
 
 ```sh
 oep dump --port /dev/ttyACM0        # the probe's serial port (COM5 on Windows)
-oep dump --port usb                 # or: the first OEP probe on USB (its vendor bulk / HID interface)
+oep dump --port usb                 # or the first OEP probe on USB (vendor bulk / HID interface)
 ```
 
-`dump` lists every interface the probe offers - by name, with its pins, limits and features - and needs no lock, so it
-never disturbs another program using the probe. An ESP32-P4 shows four transports (HS vendor bulk, USB-Serial/JTAG, HID,
-a CDC port); the others show one.
+`dump` lists the interfaces the probe has, with names, pins, limits and features. It needs no lock, so it does not get in the
+way of another program using the probe. It also shows the list of transports (ESP32-P4: HS vendor bulk, USB-Serial/JTAG, HID,
+the CDC port, UART bridge; RP2040 / RP2350: the CDC port, vendor bulk, HID).
 
-USB probes enumerate with the project's VID:PID, `1209:4F45`, and say their unit_id as the USB serial number. A host finds
-them by that VID:PID (`usb`), and a probe you name by its unit_id (`usb:<unit_id>`). The iProduct `OEP probe (...)` is
-only a name for people. A port with a fixed ID (a USB-UART bridge, the ESP32-P4's USB-Serial/JTAG) is one you name.
+A USB probe enumerates with the project's VID:PID `1209:4F45`, and its USB serial number is the unit_id. The host finds probes
+by this VID:PID (`usb`), and finds a probe named by unit_id (`usb:<unit_id>`) by serial number. iProduct `OEP probe (...)` is a
+name for people to read. Ports with fixed IDs (USB-UART bridge, the ESP32-P4's USB-Serial/JTAG) are used by naming them.
 
 ## 4. Use it
 
-A host takes the session lock, plans the pins it needs, uses the interfaces, and ends the session. The lock keeps two
-programs from driving the probe at once; the lease (5 s below) frees it if the program dies. Ending the session - or
-its lease running out - releases everything it made (its plan, its share of connections and console streams,
-subscriptions): nothing passes to the next program. What should stay between programs is the settings' (a slot keeps
-its connection, a bind its console), and a console reopened at the same place gives its stream back with what it read.
+The host takes the session lock, decides the needed pins with the plan, uses the interfaces, and ends the session. The lock
+keeps two programs from driving the probe at the same time. When the lease (5 seconds below) runs out, the lock is released
+even if the program crashed. When the session ends or the lease runs out, everything the session made (the plan, its share of
+connections and console streams, subscriptions) is released, and nothing passes to the next program. What should remain
+between programs goes in the settings (pass-through carries the target's console or UART to the probe's serial port while there
+is no session). A console reopened at the same place returns its stream together with what was read.
 
 ### GPIO and UART (a test fixture)
 
@@ -95,12 +99,12 @@ from oep_client import core, link
 from oep_client.fixture import FixtureUartIO, Gpio
 
 hst = link.open_host("/dev/ttyACM0")
-core.take(hst, 5000, owner="my-test")               # the lock, taken by force if a crashed program left it
+core.take(hst, 5000, owner="my-test")               # the lock. Takes over a lock left by a crashed program
 
 gpio = Gpio(hst)
 uart = FixtureUartIO(hst)
-core.plan_apply(hst, [(gpio.fn, 1, 15),             # (fn, role, channel): gpio's line on pin 15
-                      (uart.uart.fn, 1, 1), (uart.uart.fn, 2, 0)])   # uart RX on pin 1, TX on pin 0
+core.plan_apply(hst, [(gpio.fn, 1, 15),             # (fn, role, channel): the gpio line to pin 15
+                      (uart.uart.fn, 1, 1), (uart.uart.fn, 2, 0)])   # the uart's RX to pin 1, TX to pin 0
 gpio.set([(15, Gpio.OUTPUT_HIGH)])
 print(gpio.read([15]))
 uart.configure(115200)
@@ -109,33 +113,34 @@ print(uart.read(64))
 hst.end()
 ```
 
-A pin one interface holds is refused to another (`rejected: unavailable`), so a test cannot short two drivers.
+A pin held by one interface is refused to the others (`rejected: unavailable`). A test never drives two outputs against each
+other.
 
-### Debug a CH32 on RVSWD
+### Debugging a CH32 over RVSWD
 
 ```python
-from oep_client import core, link, target
+from oep_client import core, link, riscv
 
 hst = link.open_host("/dev/ttyACM0")
 core.take(hst, 5000, owner="my-debugger")
-wire = target.Wire(hst)                              # oep.wire.rvswd
-found = wire.scan()                                  # try every free pin pair: where does a debug module answer?
+wire = riscv.Wire(hst)                               # oep.wire.rvswd
+found = wire.scan()                                  # tries every free pin pair: where does a debug module answer
 conn, dmstatus = wire.attach(halt=True, pins=found[0].pins)
-dm = target.RiscvDm(hst, conn)
+dm = riscv.RiscvDm(hst, conn)
 print(dm.read_block(0x08000000, 4).hex())            # the first words of flash
 dm.resume()
 wire.detach(conn)
 hst.end()
 ```
 
-What a target needs of its line is the host's to say: a CH32L103 wants `idle_clock="low"` and `max_speed=1_000_000`
-at attach (max_speed is required). To reset a target through its NRST pin, name the channel in attach's reset TLV
-(`wire.attach(halt=True, reset=(channel, hold_ms))`: stopped before its first instruction; `halt=False`: left running) -
-there is no default reset line.
+The host states what the target needs from the wire (rest state, speed). For CH32L103, pass `idle_clock="low"` and
+`max_speed=1_000_000` to attach (max_speed is required). To reset the target with an NRST pin, name that channel in attach's
+reset TLV (`wire.attach(halt=True, reset=(channel, hold_ms))`: halts before the first instruction; with `halt=False` it keeps
+running). There is no default reset line.
 
-Flashing, the console and the rest are the host tools' job: ch32rv and the ArduinoCore-CH32RV upload do it over OEP.
+Flashing, the console and so on are the host tools' work. ch32rv and ArduinoCore-CH32RV's upload do them over OEP.
 
-### Capture signals (ESP32-P4)
+### Capturing signals (ESP32-P4)
 
 ```python
 from oep_client import capture, core, link
@@ -143,65 +148,68 @@ from oep_client import capture, core, link
 hst = link.open_host("usb")
 core.take(hst, 5000, owner="my-capture")
 lc = capture.LogicCapture(hst)
-core.plan_apply(hst, [(lc.fn, 0, 20), (lc.fn, 1, 21)])   # channel 0 on GPIO20, channel 1 on GPIO21
+core.plan_apply(hst, [(lc.fn, 0, 20), (lc.fn, 1, 21)])   # channel 0 to GPIO20, channel 1 to GPIO21
 cfg = lc.configure(rate=20_000_000, samples=200_000)
 lc.start()
 (segment,) = lc.wait()
 data = lc.read_segment(segment)
-lc.to_sr("capture.sr", data, segment.samples)          # open it in PulseView
+lc.to_sr("capture.sr", data, segment.samples)          # opens in PulseView
 hst.end()
 ```
 
-Up to 16 channels, on any pins - also pins another interface holds (a capture only listens), so you can watch the SPI
-device you are testing. The top rates are in the table in [Capture](capture.md#esp32-p4--p4x-speeds-and-lines).
+Up to 16 channels, on any pins. Pins held by other interfaces can be captured too (capture only listens), so you can capture
+while watching the SPI device under test. The rate limits are in the table in [Capture](capture.md#esp32-p4--p4x-speeds-and-lines).
 
-To catch an event, give the one-shot a trigger - a level or an edge on one channel - and how much to keep before it:
+To catch an event, give a one-shot a trigger (the level or edge of one channel) and how much to keep before it:
 
 ```python
 lc.configure(rate=20_000_000, samples=200_000,
-             trigger=(capture.EDGE, 1, 1),   # channel 1 falling (value 0 rising, 1 falling, 2 either)
-             pretrigger=1_000)               # keep 1000 samples before it
-lc.start()                                   # waiting for the trigger
-(segment,) = lc.wait(timeout=30)             # lc.force() starts it without the trigger
-data = lc.read_segment(segment)              # the trigger is sample segment.trigger_index
+             trigger=(capture.EDGE, 1, 1),   # falling edge of channel 1 (value 0 rising, 1 falling, 2 both)
+             pretrigger=1_000)               # keep the 1000 samples before it
+lc.start()                                   # waits for the trigger
+(segment,) = lc.wait(timeout=30)             # lc.force() starts without a trigger
+data = lc.read_segment(segment)              # the trigger is sample number segment.trigger_index
 ```
 
-The classic ESP32's sampler takes triggers too (8 channels, 1 kHz to 300 kHz). It samples with interrupts off, so it
-searches in bursts of up to 250 ms: an edge that falls in the gap between two bursts (about 1 ms) is missed. An
-immediate capture's window and the SWIO wire never run together: while it samples, no SWIO frame goes out - a request
-(riscv-dm, the wire's ops) waits for the window to end, the console reads nothing - and a window waits for a request in
-progress to end. A trigger search gives the wire turns inside its bursts and samples on through them (a waiting request
-at once, the console up to 5 ms a burst), so what a command or a reset sent during the search makes the target do is
-sampled; a trigger before the pretrigger has filled gives a shorter segment (a smaller trigger_index). An immediate capture's window lasts samples / rate (at most
-200 ms: a configure rounds samples down to 200 ms of them, 60000 at 300 kHz), so a console command or a debug reset sent after its start
-reaches the target only after it and is not in it. To capture what the target does after something you send, use a
-trigger: arm, then send the command or the reset - it goes out in a turn of the search, and the event it causes
-fires the trigger (docs/implementation-limits.ja.md §4.1). Each interrupts-off span ends by the clock: a segment whose
-samples fell behind (frames of a request already running at the trigger) ends early, with fewer samples and slipped
-set. The sampler has core 1 to itself (the firmware builds with LoopCore=0 and EventsCore=0; OEP, the Wi-Fi driver and
-the TCP/IP stack run on core 0), so Wi-Fi changes none of these limits; radio traffic may still make a sample late (slipped).
+The classic ESP32's sampler can trigger too (8 channels, 1 kHz-300 kHz). It samples with interrupts stopped, so it searches in
+slices of up to 250 ms. Edges that come in the gap between slices (about 1 ms) are missed. An immediate capture window and the
+SWIO wire do not run at the same time: while sampling, no SWIO frame goes out (requests (riscv-dm, wire ops) wait for the window
+to end, and the console does not read). The window waits for the request in progress to end. The trigger search gives the wire
+turns within a slice and keeps sampling meanwhile (at once for a waiting request, up to 5 ms per slice for the console). What
+the target does because of commands or resets sent during the search is sampled. If the trigger fires before the pretrigger has
+filled, the segment is short and trigger_index is small. An immediate capture window lasts samples ÷ rate (at most 200 ms:
+configure rounds samples down to 200 ms worth; 60000 at 300 kHz), so console commands or debug resets sent after the start reach
+the target after the window and do not show in the capture. To capture what the target does after something you send, use a
+trigger: arm, then send a command or reset; it arrives within a search turn, and the event it causes fires the trigger
+([implementation limits §4.1](../implementation-limits.md#41-classic-esp32)). One interrupts-off stretch is bounded by the clock:
+a segment whose samples were late (frames of a request running at the time of the trigger) ends early, with fewer samples and
+slipped set. The sampler has core 1 to itself (the firmware is built with LoopCore=0, EventsCore=0, and OEP, the Wi-Fi driver
+and the TCP/IP stack are on core 0), so these limits do not change with Wi-Fi on. Radio traffic can delay samples (slipped).
 
-Logic and analog together, on the logic's trigger (the capture-group): the analog follows it, and each track's segment
-marks the same instant.
+To capture logic and analog together on a logic event, use a capture-group event source (ESP32-P4). Configure every track with
+a linked trigger, and the group's event cuts every segment at the same instant.
 
 ```python
 an = capture.AnalogCapture(hst)
 grp = capture.CaptureGroup(hst)
 core.plan_apply(hst, [(lc.fn, 0, 20), (lc.fn, 1, 21), (an.fn, 0, 16)])
-lc.configure(rate=20_000_000, samples=200_000, trigger=(capture.EDGE, 1, 1), pretrigger=1_000)
-an.configure(rate=40_000, samples=4_000, pretrigger=40)    # no trigger of its own: it follows the logic's
-grp.bind([lc, an], trigger=lc)
+linked = (capture.LINKED, 0, 0)
+lc.configure(rate=20_000_000, samples=200_000, trigger=linked, pretrigger=1_000)
+an.configure(rate=40_000, samples=4_000, trigger=linked, pretrigger=40)
+edge = capture.Cond.edge(lc, 1, 1)                          # falling edge of logic channel 1
+grp.bind([lc, an], capture.TriggerSource([capture.Stage([[edge]])]))
 grp.start()
-st = grp.wait(timeout=30)                                   # st.trigger_ns: when it fired
+st = grp.wait(timeout=30)                                   # st.trigger: (the judging fn, time ns, ±ns)
 (logic,), (analog,) = lc.segments(), an.segments()          # logic.trigger_index, analog.trigger_index: that instant
 ```
 
-A track that follows starts with the group and keeps converting until the trigger; its pretrigger counts its own
-samples. The classic ESP32's sampler can be the trigger but not follow one (its bursts leave gaps).
+Every track starts with the group and keeps capturing until the event. pretrigger is that track's own sample count. The RP2's
+PIO logic and the classic ESP32's sampler have no linked trigger, so they cannot be in a group with an event source
+([Boards](boards.md#what-each-chip-can-do)).
 
-## 5. Keep a jig's settings in the probe
+## 5. Give the probe the fixture's settings
 
-A jig is the firmware plus its settings. Write them once and save them; the probe applies them at every boot:
+A jig = the firmware + its settings. Write them once and save, and the probe applies them again at every boot.
 
 ```sh
 oep settings set /dev/ttyACM0 core channel.GPIO2.label=dut.swdio channel.GPIO3.label=dut.swclk   # port dut (oep://<probe>/dut)
@@ -209,41 +217,41 @@ oep settings set /dev/ttyACM0 oep.target.console/0 passthrough.cdc0.wire=oep.wir
     passthrough.cdc0.swclk=GPIO3 passthrough.cdc0.mechanism=dmseq
 oep settings set /dev/ttyACM0 core channel.GPIO5.idle=pull-up channel.GPIO28.disable=true channel.GPIO29.disable=true --save
 oep settings show /dev/ttyACM0
-oep settings export /dev/ttyACM0 jig.oep-settings.json   # before a firmware update; import puts it back
+oep settings export /dev/ttyACM0 jig.oep-settings.json   # export before updating the firmware, import after the update
 ```
 
-Now a terminal on the probe's serial port shows the target's console from boot, and a flash tool still talks OEP on the
-same port. `06.Settings/Settings` explains each item.
+Now, while there is no session, the target's console shows in a terminal on the probe's serial port. A flash tool keeps
+speaking OEP on the same port (pass-through stops meanwhile). Each item is explained in `06.Settings/Settings`.
 
 ## 6. Over Wi-Fi (classic ESP32)
 
-The classic ESP32 firmware also speaks OEP over TCP on port 7450, up to three connections at once, once it is on a
-network. The networks are a setting, not part of the build: the core's settings `wifi.{}.ssid` and `wifi.{}.passphrase`
-(oep-spec transports §7.1; this implementation's values in [implementation limits §6.3](../implementation-limits.ja.md)) hold up to four
-entries, tried in key order; set them over the serial port and save. The passphrase is write-only: `oep settings show` and
-every answer leave it out:
+Once on a network, the classic ESP32 firmware also speaks OEP on TCP port 7450 (up to 3 connections at once). Which network to
+join is a setting, not a build option: put up to 4 entries in the core settings' `wifi.{}.ssid` and `wifi.{}.passphrase`
+(oep-spec transports §7.1; this implementation's values are in [implementation limits §6.3](../implementation-limits.md)), and
+they are tried in number order. Set and save them from the serial port. The passphrase is write-only and appears neither in
+`oep settings show` nor in any answer:
 
 ```sh
 oep settings set /dev/ttyUSB0 core wifi.0.ssid=lab wifi.0.passphrase=... --save
 ```
 
-Then the probe announces itself by mDNS (`oep-<unit_id>.local`, service `_oep._tcp`, TXT `unit_id`), and the config
-state's wifi field gives its address too:
+Once connected, the probe announces itself over mDNS (`oep-<unit_id>.local`, service `_oep._tcp`, TXT `unit_id`). The address
+is also available from fn 0's network (`oep settings network <port>`):
 
 ```sh
-oep dump --port tcp://oep-50029191fe34.local:7450
-oep linktest tcp://192.168.1.128:7450
+oep dump --port tcp://oep-<unit_id>.local:7450
+oep linktest tcp://<address>:7450
 ```
 
-Use it only on a network you trust (or inside an authenticated tunnel): OEP has no authentication. The serial port keeps
-working alongside, and every connection shares the one lock. `03.Transports/WifiTcp` is the smallest sketch that does this.
+Use it only on a trusted network (or inside an authenticated tunnel). OEP has no authentication. The serial port keeps working,
+and every connection shares one lock. The smallest example is `03.Transports/WifiTcp`.
 
 ## Next
 
-- [What OEP does for you](use-cases.md): by what you want to do, what to prepare, wire and set. [Debug targets](debug-targets.md),
+- [What OEP does for you](use-cases.md): per thing you want to do, what to prepare, wiring, settings. [Debug targets](debug-targets.md),
   [Capture: which way](capture.md), [Settings](settings.md).
-- [Firmware features](firmware-features.md): leave parts out of the released firmware, add your own interface to it.
+- [Firmware features](firmware-features.md): leave features out of the released firmware, add your own interface.
 - [Your first interface](your-first-interface.md): your own interface, step by step.
-- [Writing a probe](writing-a-probe.md): the full reference to the library from the inside.
-- [Boards](boards.md): what each chip can do, building for a board with no released firmware.
-- The protocol: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec).
+- [Writing a probe](writing-a-probe.md): the detailed guide to the library's internals.
+- [Boards](boards.md): what each chip can do, building for boards without a released firmware.
+- Protocol: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec).
