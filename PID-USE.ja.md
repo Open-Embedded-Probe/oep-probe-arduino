@@ -4,7 +4,7 @@
 
 プロジェクトの USB の VID:PID は **`1209:4F45`**（VID 0x1209、PID 0x4F45）で、[pid.codes](https://pid.codes/1209/4F45/) が割り当てた
 （oep-spec の registry の `usb`: `project_vid` / `project_pid`）。host は OEP の probe をこの VID:PID だけで自動で見分ける（oep-spec
-core §3.3）。iProduct は人のための名前で、何の見分けにも使わない。この VID:PID を持てない口の probe（USB-UART ブリッジ、ID を
+transports §3）。iProduct は人のための名前で、何の見分けにも使わない。この VID:PID を持てない口の probe（USB-UART ブリッジ、ID を
 ハードウェアが決めている内蔵の USB シリアル）は、利用者が口を選ぶか、probe を unit_id で名指したとき（`oep://<unit_id>`）に開く。
 probe が何をできるかは ID ではなく probe 自身から読む（confirm、list、describe）。
 
@@ -25,8 +25,8 @@ device**（ライブラリが対応するどの基板でもよい）で、Open E
 2. **仕様どおりに OEP を話す**: confirm、list、describe に oep-spec の core のとおりに答え、`oep.` の名前で出すインターフェースは、
    どれもそのインターフェースの仕様に従う。自分のインターフェースには自分の逆 DNS の名前（`io.github.<you>.<name>`）を付け、
    `oep.` を使わない。
-3. **正直に名乗る**: USB の serial number を probe の `unit_id` にする（個体ごとに違い、firmware の版で変えない。oep-spec core
-   §3.3 / §7.5）。fn 0 の describe に `unit_id`、経路の一覧、`discoverable = 1` を出す。
+3. **正直に名乗る**: USB の serial number を probe の `unit_id` にする（個体ごとに違い、firmware の版で変えない。oep-spec transports
+   §3 / core §7.5）。fn 0 の describe に `unit_id` と経路の一覧を出す。
 4. **プロトコルを非互換に変えない。** wire の形を変えた firmware、仕様が許さない形で OEP の要求に答える firmware は OEP の probe
    ではなく、自分の USB の ID を使う。
 
