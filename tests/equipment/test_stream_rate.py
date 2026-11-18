@@ -1,13 +1,14 @@
 """Explicit equipment only: an ESP32-P4 / P4X probe streams its logic capture at the rate the guide states (docs/guide
 capture.ja.md, "流し続け"): 40 MB/s - 2 lines at 160 MHz, 4 at 80, 8 at 40, 16 at 20 - for OEP_STREAM_SECONDS with
 nothing lost. The bytes are counted and dropped as they come (a 20 s run is 800 MB), so the host's memory and CPU stay
-out of the measurement; a host busier than its cores (load average) cannot judge it and the case is skipped as busy.
+out of the measurement; a host busier than twice its cores (load average) cannot judge it and the case is skipped as busy.
 
   OEP_STREAM_ADDRESS   the probe (oep://<unit_id>, a serial port, ...)
   OEP_STREAM_UNIT_ID   the unit id it must answer with
   OEP_STREAM_CHANNELS  free channels by name, comma separated (GPIO12,GPIO13,...): the first n make an n-line case
   OEP_STREAM_SECONDS   optional, default 20
-  OEP_STREAM_MAX_LOAD  optional: the load average over which the case is skipped as busy (default: the cores)
+  OEP_STREAM_MAX_LOAD  optional: the load average over which the case is skipped as busy (default: twice the cores -
+                       on a 4-core host every case kept 40 MB/s at 6-9, 8 lines lost segments at 12-15)
 """
 import os
 import struct
@@ -49,7 +50,7 @@ def test_stream_at_the_guides_rate(lines, record_property):
     if len(names) < lines:
         pytest.skip(f"{len(names)} channels given, {lines} needed")
     load = os.getloadavg()[0]
-    most = float(os.environ.get("OEP_STREAM_MAX_LOAD", os.cpu_count() or 1))
+    most = float(os.environ.get("OEP_STREAM_MAX_LOAD", 2 * (os.cpu_count() or 1)))
     record_property("load_average", load)
     if load > most:
         pytest.skip(f"host busy: load average {load:.1f} over {most:g} - the rate needs an idle host")

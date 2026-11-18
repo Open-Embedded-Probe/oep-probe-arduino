@@ -43,14 +43,14 @@ host のメモリと CPU は測る対象に入りません。
 | `OEP_STREAM_UNIT_ID` | その個体の unit ID。ほかの個体なら止まる |
 | `OEP_STREAM_CHANNELS` | 空いているチャネルの名前をコンマで区切って（`GPIO12,GPIO13,...`）。先頭から本数の分を使う |
 | `OEP_STREAM_SECONDS` | 任意。1 つの場合を流す秒数。既定は 20 |
-| `OEP_STREAM_MAX_LOAD` | 任意。これを超えるロードアベレージでは busy として skip する。既定はコアの数 |
+| `OEP_STREAM_MAX_LOAD` | 任意。これを超えるロードアベレージでは busy として skip する。既定はコアの数の 2 倍 |
 
 ```sh
 uv run --project tests --env-file tests/.env pytest tests/equipment/test_stream_rate.py --junitxml=/absolute/path/to/new-run.xml
 ```
 
 - 何も設定しないときは skip です。チャネルが足りない場合と、ESP32-P4 / P4X でない probe も skip です。
-- host のロードアベレージが `OEP_STREAM_MAX_LOAD`（既定はコアの数）を超えているときは、速さを判断できないので skip にします（理由に「host busy」と出ます）。
+- host のロードアベレージが `OEP_STREAM_MAX_LOAD`（既定はコアの数の 2 倍）を超えているときは、速さを判断できないので skip にします（理由に「host busy」と出ます）。
 - 区画の落ち、途切れ、push の抜け、エラーでの停止、届いたバイトが 95 % に足りないことのどれかがあれば FAIL です。
 - JUnit の property に、ロードアベレージ、頼んだ速さと実際の速さ、届いたバイト、秒数、途切れの数が残ります。
 - lease だけを取ります（bench のロックは取りません）。
