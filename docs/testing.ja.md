@@ -11,7 +11,7 @@ Arduino の実行環境は `tests/` の uv / pytest workspace にまとめます
 | 入口 | 保証する範囲 |
 |---|---|
 | `cd tests && uv run pytest` | 転送判定、既存 host 検査、release profile 検査。実機は操作しない |
-| `uv run --env-file .env pytest -c pyproject.toml ../examples/Firmware/OepProbe/test_transfer.py --profile esp32` | 選択した ESP32 / P4 / P4X / Pico の build・個体／image 照合・転送・再列挙・宣言と設定／slot の再確認 |
+| `uv run --env-file .env pytest -c pyproject.toml ../examples/Firmware/OepProbe/test_transfer.py --profile esp32` | 選択した ESP32 / P4 / P4X / Pico の build・個体／image 照合・転送・再列挙・宣言と設定・メモ欄の再確認 |
 | `tests/host/run.sh` | host 上の shim と C++ による portable な protocol・状態・資源の検査 |
 | `uv run --project tests --env-file tests/.env pytest tests/equipment`（[実機の適合検査](../tests/equipment/README.ja.md)） | 実機の firmware を、選んだ oep-spec の checkout に照らした core と共通の宣言の検査。書き込みと設定の変更はしない |
 | `cd tests && uv run pytest oneshot/<名前> --profile <profile> --port <ポート>`（下の「単発の試験」） | 決まった機材と配線でだけ流せる実機の試験。プラグインがビルドし、機器ロックの中でそのポートから書き込んでから確かめる。自動では集めない |
@@ -45,7 +45,7 @@ testpaths に入れないので、`uv run pytest` では集めません。流す
 1. 変更で影響する契約と platform/profile/transport の差分を選び、必須と対象外を明記します。
 2. 単体・生成整合・build を通し、候補 image の source commit/dirty、SPEC 対応版、profile、hash を記録します。
 3. 設備設定、個体、給電、配線を照合し、共有ロックを取得します。変更前の firmware と保存設定、更新後の終了状態の方針を記録します。
-4. 対象 image と更新経路を明示して更新します。再接続後に identity、申告版、revision、ops/limits、slot/bind と設定を照合します。
+4. 対象 image と更新経路を明示して更新します。再接続後に identity、申告版、revision、ops/limits、設定（素通しを含む）とメモ欄を照合します。
 5. protocol/session/config、transport、wire/DM、fixture/capture と、変更に関係する実機契約を検査します。宣言漏れを設備不足による skip にしません。
 6. 影響する利用プロジェクトの既存テスト入口を使い、flash/debug、upload/monitor、DUT 動作等を回帰確認します。利用側の期待値を設備設定で緩めません。
 7. 更新と回帰の結果、未検証の軸、cleanup と残った image/設定を保存し、必須契約が成立した範囲でリリース判断します。

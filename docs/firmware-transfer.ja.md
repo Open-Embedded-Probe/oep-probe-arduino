@@ -58,9 +58,9 @@ build 後、共有ロックを非待機で取得し、個体照合から upload�
 
 通常の Arduino CLI upload を使い、Flash の退避と旧 firmware の復元は行いません。転送した候補を残して利用します。通常の upload は、設定とメモ欄を置く LittleFS の領域を消しませんが、保存設定の維持は転送後の実測で判定します。
 
-`transfer.json` には source commit/dirty、SPEC commit、build image の SHA-256、個体、転送前後の版、宣言、保存設定、slot 状態、合否を記録します。upload 中の失敗は pytest の setup error とログにも残ります。結果には設備情報が入るため、Git 管理外の保存先を使います。
+`transfer.json` には source commit/dirty、SPEC commit、build image の SHA-256、個体、転送前後の版、宣言、保存設定とメモ欄、設定の状態、合否を記録します。upload 中の失敗は pytest の setup error とログにも残ります。結果には設備情報が入るため、Git 管理外の保存先を使います。
 
-この入口は identity、confirm/list/describe と必須宣言、boot ID の変化、保存項目の一致、保存設定の適用、既存 slot の再接続を確認します。DUT の flash/debug、fixture/capture の精度、Arduino Core の upload/monitor の全面回帰まで通ったとは扱いません。それらは [プローブ検証方針](testing.ja.md)に沿って別の契約として追加します。
+この入口は identity、confirm/list/describe と必須宣言、boot ID の変化、保存設定とメモ欄の一致、保存設定の適用を確認します。DUT の flash/debug、fixture/capture の精度、Arduino Core の upload/monitor の全面回帰まで通ったとは扱いません。それらは [プローブ検証方針](testing.ja.md)に沿って別の契約として追加します。
 
 ## P4 / P4X と再列挙
 
