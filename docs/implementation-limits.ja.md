@@ -135,7 +135,7 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
     届いたとき（loop() が 100 ms より長く止まった）は、区画の頭が上書きされているので state 6、error 2 で止まる。
   - 束ねるトラックとその速さの合計には、トラックが共有する資源の予算がある（どこにも宣言しない。host は bind を試して知る、capture §4.3）。
 - **区画の serial**（capture §2.2）: u32 で一周する。ESP32-P4 のリピートとストリーミングは、区画の情報を 255 個まで覚え（1 つは埋めて
-  いる区画）、segments はその範囲で共通部品 §1.3 のとおり答える。
+  いる区画）、segments はその範囲で、[共通部品](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/interfaces/oep-if-common.ja.md) §1.3 の通し番号のページングのとおり答える。
 - **連続でない区画は出さない**（capture §2.2）: ESP32-P4 の logic で取り込みのキュー（128 個）があふれたか、DMA のリング（128 KiB）が
   まだ写していないバイトの上を回ったときは、埋めていた区画を捨て（segments に載せず、read でもストリーミングでも返さない）、トラックを
   state 6、stopped reason 2、error 2 で止める。status の write_pos はその区画の先頭、flags bit0 が立つ。それより前に終わった区画は
@@ -279,7 +279,7 @@ FS の領域が 3 回試してもマウントできないときは、領域を�
 
 ### 3.2 SWIO（classic ESP32）
 
-- ビットの時間は CPU のサイクルで数える: 1 は low 262.5 ns、0 は low 862.5 ns、high は 262.5 ns。0 の区切りの速さを min_clock_hz に宣言する。
+- ビットの時間は CPU のサイクルで数える: 1 は low 262.5 ns、0 は low 862.5 ns、high は 262.5 ns。0 のビット 1 つの時間（low と high の合計、1125 ns）から決まる速さを min_clock_hz に宣言する（wire はこの速さだけで動く）。
 - low の駆動をやめた後と 0 を読んだ後に、30 ns 以下の充電のパルスで線を high に駆動する。
 - attach の最初のフレームの前に、線をプルアップだけにして 2 ms おき、low に読めれば target は無いとする。
 - フレームの間、割り込みを止める（多くても 200 µs）。

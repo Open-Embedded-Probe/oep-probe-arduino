@@ -1,5 +1,7 @@
 # プローブ実装と更新の検証
 
+[English](testing.md)
+
 プローブ firmware の実装品質、image、更新、更新後の復帰と利用経路への影響は、このリポジトリが検証・判定します。テストコードが Python client 側にあっても責任は移りません。
 
 共通の保証対象と判定は [OEP 全体のテスト方針](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/testing-policy.ja.md)、設置済みプローブを使う側の責任は [利用プロジェクト向けガイド](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/docs/testing-consumers.ja.md)を参照します。通信の規範は oep-spec が所有し、設備設定の TOML を wire protocol の一部にしません。

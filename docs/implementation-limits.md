@@ -155,7 +155,7 @@ preparation fails, it writes them back and then answers stopped 3 (did not run).
   - The grouped tracks and the sum of their rates have a budget of the resources the tracks share (declared nowhere; the host
     learns it by trying bind, capture §4.3).
 - **Segment serial** (capture §2.2): u32, wraps around. The ESP32-P4's repeat and streaming remember the information of up to
-  255 segments (one is the segment being filled), and segments answers within that range as in shared parts §1.3.
+  255 segments (one is the segment being filled), and segments answers within that range by the serial-number paging of [common](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/interfaces/oep-if-common.md) §1.3.
 - **Non-contiguous segments are not delivered** (capture §2.2): when the ESP32-P4 logic's capture queue (128 entries)
   overflows or the DMA ring (128 KiB) wraps over bytes not yet copied, the segment being filled is dropped (not listed in
   segments, not returned by read or streaming), and the track stops with state 6, stopped reason 2, error 2. status's
@@ -325,8 +325,8 @@ save then counts as absent (storage_state 0). A normal firmware write (arduino-c
 
 ### 3.2 SWIO (classic ESP32)
 
-- Bit times are counted in CPU cycles: 1 is low for 262.5 ns, 0 is low for 862.5 ns, high is 262.5 ns. The 0-delimited speed is
-  declared as min_clock_hz.
+- Bit times are counted in CPU cycles: 1 is low for 262.5 ns, 0 is low for 862.5 ns, high is 262.5 ns. The speed set by one 0 bit's time
+  (its low and high, 1125 ns) is declared as min_clock_hz (the wire runs at that speed only).
 - After stopping driving low and after reading a 0, the line is driven high with a charging pulse of 30 ns or less.
 - Before attach's first frame, the line is left on the pull-up only for 2 ms; if it reads low, there is taken to be no target.
 - Interrupts are stopped during a frame (at most 200 µs).

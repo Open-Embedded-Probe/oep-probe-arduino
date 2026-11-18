@@ -1,5 +1,7 @@
 # 実機の適合検査
 
+[English](README.md)
+
 この入口は、実機の probe で動いている firmware を、選んだ oep-spec の checkout に照らして検査します。検査器は Python client の `oep_client.conformance` です。firmware の書き込みや設定の変更はしません。
 
 ## 流し方
@@ -52,6 +54,6 @@ uv run --project tests --env-file tests/.env pytest tests/equipment/test_stream_
 
 - 何も設定しないときは skip です。チャネルが足りない場合と、ESP32-P4 / P4X でない probe も skip です。
 - host のロードアベレージが `OEP_STREAM_MAX_LOAD`（既定はコアの数の 2 倍）を超えているときは、速さを判断できないので skip にします（理由に「host busy」と出ます）。
-- 区画の落ち、途切れ、push の抜け、エラーでの停止、届いたバイトが 95 % に足りないこと、要求が 90 % に足りないことのどれかがあれば FAIL です。
+- 区画の落ち、途切れ、push の抜け、エラーでの停止、届いたバイトが 95 % に足りないこと、送れた要求が、毎秒 400 回 × 秒数の 90 % に足りないことのどれかがあれば FAIL です。
 - JUnit の property に、ロードアベレージ、頼んだ速さと実際の速さ、届いたバイト、秒数、途切れの数が残ります。
 - lease だけを取ります（bench のロックは取りません）。

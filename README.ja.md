@@ -275,7 +275,7 @@ tag から各 example の各 profile をビルドし、`<Example>-<profile>-<ver
 | `schema` | 1。読む側は違う番号を断る。フィールドは足すだけ |
 | `kind` | `merged`（ESP32、`flash_offset` 0 から書く全体）、`app`（ESP32、app の image。もう片方の app の区画への更新、P4 の DFU）、`uf2`（RP2040 / RP2350）、`flash`（CH32、code flash の先頭 0x08000000 から。`flash_offset` 0） |
 | `model` | この image が describe の model で返す値（`esp32p4`、`esp32p4x`、`esp32`、`rp2040`、`rp2350`、`ch32x035`、`ch32v307`、`ch32h417`）。ビルドの対象のチップ。describe の chip の TLV は動いている部品の `<part> v<rev>`（P4X でも例 `esp32p4 v3.2`） |
-| `fqbn`、`flash_offset` | ビルドに使ったもの。`merged` を書く位置（ほかは `null`） |
+| `fqbn`、`flash_offset` | ビルドに使ったもの。`flash_offset` は書く位置で、`merged` と `flash` は 0、ほかは `null` |
 | `sha256` | ファイルの sha256 |
 
 このライブラリでビルドした sketch の describe の firmware の文字列は、ライブラリのリリースの版（

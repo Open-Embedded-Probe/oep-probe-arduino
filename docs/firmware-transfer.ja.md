@@ -1,5 +1,7 @@
 # uv / pytest によるプローブ転送
 
+[English](firmware-transfer.md)
+
 Arduino 側の Python 環境は `tests/` にまとめます。`pytest-embedded-arduino-cli` が pinned profile の build と Arduino CLI upload を担当し、OEP client が転送前の個体照合と転送後の通信を検査します。依存は `tests/pyproject.toml` と `tests/uv.lock` で管理します。入口の設計はプラグインの [初回テストガイド](https://github.com/tanakamasayuki/pytest-embedded-arduino-cli/blob/main/FIRST_TEST.ja.md)に沿います。
 
 ## 最小入口

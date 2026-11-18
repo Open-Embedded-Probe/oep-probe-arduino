@@ -54,6 +54,6 @@ uv run --project tests --env-file tests/.env pytest tests/equipment/test_stream_
 
 - It is skip when nothing is set. Too few channels and a probe that is not an ESP32-P4 / P4X are skip too.
 - When the host's load average is above `OEP_STREAM_MAX_LOAD` (default twice the number of cores), the rate cannot be judged, so it is skip (the reason says "host busy").
-- Any of a lost segment, a gap, a missing push, a stop on error, less than 95 % of the bytes arriving, or less than 90 % of the requests is FAIL.
+- Any of a lost segment, a gap, a missing push, a stop on error, less than 95 % of the bytes arriving, or fewer requests sent than 90 % of 400 a second times the seconds is FAIL.
 - The JUnit properties keep the load average, the requested and actual rates, the bytes received, the seconds and the number of gaps.
 - It takes only a lease (not the bench lock).

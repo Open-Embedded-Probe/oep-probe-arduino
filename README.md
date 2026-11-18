@@ -297,7 +297,7 @@ check them). The probe reports the same version in describe's firmware string.
 | `schema` | 1. A reader refuses another number. Fields are only added |
 | `kind` | `merged` (ESP32, the whole image written from `flash_offset` 0), `app` (ESP32, the app image: an update into the other app partition, the P4's DFU), `uf2` (RP2040 / RP2350), `flash` (CH32, from the start of the code flash, 0x08000000; `flash_offset` 0) |
 | `model` | the value this image reports as describe's model (`esp32p4`, `esp32p4x`, `esp32`, `rp2040`, `rp2350`, `ch32x035`, `ch32v307`, `ch32h417`): the chip it was built for. describe's chip TLV is `<part> v<rev>` of the running part (for example `esp32p4 v3.2` even on a P4X) |
-| `fqbn`, `flash_offset` | what it was built with; where a `merged` image is written (`null` for the others) |
+| `fqbn`, `flash_offset` | what it was built with; `flash_offset` is where the image is written: 0 for `merged` and `flash`, `null` for the others |
 | `sha256` | the file's sha256 |
 
 The describe firmware string of a sketch built with this library is the library's release version
