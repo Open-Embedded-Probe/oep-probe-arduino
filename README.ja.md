@@ -29,11 +29,11 @@ OEP のフレームはどのリンクでも同じで、違うのは包み方だ�
 
 | リンク | 何に向くか | probe → host | host → probe | 往復 | このライブラリのチップ |
 |---|---|---|---|---|---|
-| **USB vendor bulk**（high speed） | ロジック・アナログのキャプチャのストリーミング、大きな flash の書き込み。2 チャネル 150 Msample/s のロジック（37.5 MB/s）に足りる唯一のリンク | 33〜37 MB/s | 5.5〜10 MB/s | 0.37 ms | ESP32-P4（HS の口） |
-| **USB HID**（vendor 定義の report） | どの OS でもドライバ不要、ブラウザ（WebHID）からも開ける。**ソフトウェア（bit-bang）の USB デバイス**が出せる唯一の class: low speed のデバイスには bulk の endpoint が無いので、USB のペリフェラルを持たないチップで作った probe も HID なら OEP の probe になれる | 0.8〜1.1 MB/s（HS）。low speed のデバイスなら約 8 KB/s | 1.0 MB/s（HS） | 0.66 ms | ESP32-P4（HS の口） |
-| **USB CDC**（シリアルの口） | COM ポートとして見える: Arduino IDE のポートとシリアルモニターがそのまま使え、target のコンソールが OEP と 1 本の線を共有する | 8.1 MB/s（HS） | 6.7 MB/s（HS） | 0.60 ms | ESP32-P4（HS の口）、RP2040 / RP2350（full speed） |
+| **USB vendor bulk**（high speed） | ロジック・アナログのキャプチャのストリーミング、大きな flash の書き込み。2 チャネル 150 Msample/s のロジック（37.5 MB/s）に足りる唯一のリンク | 33〜37 MB/s | 5.5〜10 MB/s | 0.37 ms | ESP32-P4（HS の口）。RP2040 / RP2350 と WCH CH32 は full speed |
+| **USB HID**（vendor 定義の report） | どの OS でもドライバ不要、ブラウザ（WebHID）からも開ける。**ソフトウェア（bit-bang）の USB デバイス**が出せる唯一の class: low speed のデバイスには bulk の endpoint が無いので、USB のペリフェラルを持たないチップで作った probe も HID なら OEP の probe になれる | 0.8〜1.1 MB/s（HS）。low speed のデバイスなら約 8 KB/s | 1.0 MB/s（HS） | 0.66 ms | ESP32-P4（HS の口）、RP2040 / RP2350、WCH CH32（full speed） |
+| **USB CDC**（シリアルの口） | COM ポートとして見える: Arduino IDE のポートとシリアルモニターがそのまま使え、target のコンソールが OEP と 1 本の線を共有する | 8.1 MB/s（HS） | 6.7 MB/s（HS） | 0.60 ms | ESP32-P4（HS の口）、RP2040 / RP2350（full speed）、WCH CH32（選べば） |
 | **USB-Serial/JTAG**（ESP32 の内蔵のシリアルの口） | firmware に USB のスタックが要らない。同じ口で probe 自身を書き込める（esptool） | 約 0.8 MB/s（full speed） | — | — | ESP32-P4（FS の口）、ESP32-S3 / C3 / C6 |
-| **UART**（USB-UART の変換チップ経由: CP2102、CH340 など） | UART と変換チップがあるボード（安いボードのほとんど）なら probe になれる。遅いが、小さな target の書き込みとデバッグには足りる | 約 11 KB/s（115200 baud） | 約 11 KB/s | 約 5 ms | classic ESP32 |
+| **UART**（USB-UART の変換チップ経由: CP2102、CH340 など） | UART と変換チップがあるボード（安いボードのほとんど）なら probe になれる。遅いが、小さな target の書き込みとデバッグには足りる | 約 11 KB/s（115200 baud） | 約 11 KB/s | 約 5 ms | classic ESP32、ESP32-P4（GPIO37 / 38）。RP2040 / RP2350 と WCH CH32 は選べば |
 | **TCP**（Wi-Fi） | ケーブルが要らない: 作業台のネットワークの probe を mDNS（`_oep._tcp`）で見つけ、複数の host の接続が 1 つのロックを共有する。信頼できるネットワークだけ（認証なし） | 26〜103 KB/s | 23〜31 KB/s | 約 9 ms（中央値） | classic ESP32 |
 
 数値は試験台で測ったおよその値です（classic ESP32 は 115200 baud）。low speed の HID の値は class そのものの上限
@@ -47,8 +47,8 @@ OEP のフレームはどのリンクでも同じで、違うのは包み方だ�
 すべての口について自動で試すことはできず、利用者がその口を明示的に選ぶ必要があります。
 さらに上のリンクには、シリアルの口でない USB のデバイスが要ります（速さのための vendor bulk、ソフトウェア USB とブラウザのための
 HID）。host が自動で OEP の probe と見分けるのはプロジェクトの USB の VID:PID `1209:4F45` だけで、unit_id（USB の serial number）で
-名指した probe は開いて describe で確かめます（oep-spec transports §3、docs/usb-identity.ja.md）。firmware が自分で持つ USB の口
-（ESP32-P4 の high-speed の口、RP2040 / RP2350 の USB）は `1209:4F45` で列挙します。USB-UART の変換チップの後ろの口と ESP32-P4 の
+名指した probe は開いて describe で確かめます（oep-spec の transports §3 と docs/usb-identity.ja.md）。firmware が自分で持つ USB の口
+（ESP32-P4 の high-speed の口、RP2040 / RP2350 と WCH CH32 の USB）は `1209:4F45` で列挙します。USB-UART の変換チップの後ろの口と ESP32-P4 の
 USB-Serial/JTAG の口は決まった ID のままで、利用者が選びます。
 
 UART の 115200 baud は、どのボードと変換チップでも通る速さです。それより速い速さを probe は前提にできません（921600 を安定して
@@ -64,13 +64,13 @@ classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中�
 - 手引き: [使い始める](docs/guide/getting-started.ja.md)（焼く、見つける、Python から使う）、
   [自分のコマンドを足す](docs/guide/simple-interface.ja.md)（関数を登録するだけ）、[はじめてのインターフェース](docs/guide/your-first-interface.ja.md)、[firmware の機能](docs/guide/firmware-features.ja.md)（外す、自分のものを足す）、
   [probe を書く](docs/guide/writing-a-probe.ja.md)（詳しい手引き）、[ボード](docs/guide/boards.ja.md)（チップごとにできること、ほかのボード向けのビルド）。
-- 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)（凍結までは日本語の文書が正。英語は凍結のときに作る）—
+- 仕様: [oep-spec](https://github.com/Open-Embedded-Probe/oep-spec)（凍結までは日本語の文書が正）—
   まず [README](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/README.ja.md) と [レビューの手引き](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/review-guide.ja.md) から。
   [使い始める](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/getting-started.ja.md) が最小の probe と host を作り、プロトコルの本体は
   [docs/oep-core.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/oep-core.ja.md)、適合に要ることは
   [docs/conformance.ja.md](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/docs/conformance.ja.md)、番号の表は [registry/oep-v1.toml](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/registry/oep-v1.toml)。
 - host のライブラリ: [oep-client-python](https://github.com/Open-Embedded-Probe/oep-client-python)（`pip install oep-client-python`、
-  `oep` の命令、試験のための偽の probe）。
+  `oep` の命令、試験のための仮想ベンチ）。
 - USB の VID:PID: プロジェクト自身の `1209:4F45`（pid.codes）。使ってよい範囲は [PID-USE.ja.md](PID-USE.ja.md)。Linux で vendor bulk / DFU の
   インターフェース（libusb）と HID（hidraw）を一般の利用者で開くには、oep-client-python が配る udev の規則
   [`udev/70-oep-probe.rules`](https://github.com/Open-Embedded-Probe/oep-client-python/blob/main/udev/70-oep-probe.rules) を、管理者の権限で 1 回入れる
@@ -140,7 +140,7 @@ ESP32-P4 の基板 1 枚を、見たいピンをすべて CH32L103 につない�
 Open Embedded Probe（OEP）の probe を Arduino で書くためのライブラリと、各 probe のファームウェア（`examples/`）。
 v1（oep-spec の `docs/oep-core.ja.md`、`docs/oep-transports.ja.md` とインターフェースの `interfaces/oep-if-*.ja.md`）を話す。凍結の前の v1 で、凍結までは仕様が壊れることがある。破壊的変更を前提とする実験段階で、互換は約束しない。
 
-**実装している仕様: `tests/vectors/SPEC_COMMIT` にある oep-spec の commit**（`v0.x` の tag はまだ無い。versioning §6）。
+**実装している仕様: `tests/vectors/SPEC_COMMIT` にある oep-spec の commit**（凍結の前の実装は、実装する仕様の commit を示す。versioning §6）。
 `tools/sync_registry.sh` で写し、それぞれで何が変わったかは [CHANGELOG.md](CHANGELOG.md) にある。凍結までは日本語の文（`*.ja.md`）が作業の文。
 
 wire 上の数値は oep-spec の `registry/oep-v1.toml` が唯一の定義で、その生成物を `src/OepRegistry.h` に写している。仕様の共通の
@@ -158,8 +158,10 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `src/OepTarget.*`、`src/OepSwd.*`、`src/OepConsole.*`、`src/OepFixture.*`、`src/OepCapture.*`、`src/OepSampler.*`、`src/OepSettings.*` | 標準インターフェース: 線と target（`oep.wire.rvswd` / `swio` / `swd`、`oep.target.riscv-dm` / `arm-adi`）、コンソール、fixture（gpio / uart / capture）。core の設定（core §13: 項目の宣言、初期値、大小文字を区別しない一意の label、名前での保存。ESP32 と RP2040 / RP2350 は LittleFS のファイル）。各ファイルの冒頭に対応する仕様の節がある |
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*`、`src/OepRp2SpiTarget.*`、`src/OepCh32SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1。ESP-IDF の I2C / SPI スレーブ、RP2 の PIO、CH32 の core の SPI スレーブで実装） |
 | `src/OepI2cController.*`、`src/OepSpiController.*`、`src/OepPwm.*`、`src/OepCounter.*`、`src/OepDac.*` | target を動かす fixture: `oep.fixture.i2c-controller` / `spi-controller`（どの GPIO でもビットを刻む）、`pwm`、`counter`、`dac` |
-| `src/OepAnalog.*`、`src/OepRp2Logic.*`、`src/OepCh32Logic.*`、`src/OepCaptureGroup.*` | チップごとのキャプチャ: `oep.fixture.analog`、RP2 の PIO と CH32 の `oep.fixture.logic`、`oep.fixture.capture-group` |
-| `src/OepChoice.h` | firmware の各部品を、外せば何もリンクしない選択にする仕組み（`Slot`、`HeapSlot`、`Hooks`。[firmware の機能](docs/guide/firmware-features.ja.md)） |
+| `src/OepAnalog.*`、`src/OepRp2Logic.*`、`src/OepCh32Logic.*`、`src/OepH41xLogic.*`、`src/OepCaptureGroup.*` | チップごとのキャプチャ: `oep.fixture.analog`、RP2 の PIO と CH32 の `oep.fixture.logic`（CH32H41x は UHSIF も）、`oep.fixture.capture-group` |
+| `src/OepFirmware.h`、`src/OepFirmwareParts.h`、`src/firmware/` | 配布の firmware を部品にしたもの（`oep::firmware`）。チップごとの中身は `src/firmware/` のヘッダ（`Rp2.h`、`Esp32P4.h`、`Esp32.h`、`Ch32.h`） |
+| `src/OepChoice.h` | firmware の各部品を、外せば何もリンクしない選択にする仕組み（`begin<F>()` が F の機能ごとに `oepAddX()` を呼ぶ。`Slot`、`HeapSlot`、`Hooks`。[firmware の機能](docs/guide/firmware-features.ja.md)） |
+| `src/OepSimpleInterface.*`、`src/OepWorker.*`、`src/OepProbeLog.h` | 関数を登録するだけのインターフェース（`oep::SimpleInterface`）、時間の掛かる処理を動かすワーカー、プローブの時計を付けるログ（[自分のコマンドを足す](docs/guide/simple-interface.ja.md)） |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表とその持ち主（`oep::owners`）と空きの状態、Arduino の core の差、フレーム） |
 | `examples/` | ボードの firmware と学ぶための example: [Example](#example) を参照 |
 | `tests/host/` | 移植できる部分（シリアルの口の読み、endpoint の共用の規則、bind）の host の試験: `tests/host/run.sh`（g++） |
@@ -185,18 +187,18 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 | Example | ボード（profile） | 示すこと |
 |---|---|---|
 | `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、classic ESP32（esp32）、WCH CH32（ch32x035、ch32v307、ch32h417） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
-| `01.Basics/MinimalProbe` | RP2040 / RP2350、classic ESP32 | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
-| `01.Basics/FixtureProbe` | RP2040 / RP2350、classic ESP32 | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
-| `02.Interfaces/HelloInterface` | RP2040 / RP2350、classic ESP32 | **はじめてのインターフェース**: 名前、2 つの op、ロック。ピンは使わない |
-| `02.Interfaces/CustomInterface` | RP2040 / RP2350、classic ESP32 | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
-| `03.Transports/MultipleTransports` | ESP32-P4 / P4X | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
-| `03.Transports/WifiTcp` | classic ESP32 | Wi-Fi の TCP で OEP: シリアルの口と TCP の待ち受け（3 接続）、ネットワークは設定の wifi の項目から、mDNS |
-| `04.Debug/RvswdDebugProbe` | RP2040 / RP2350、ESP32-P4 / P4X | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |
-| `04.Debug/SwioDebugProbe` | classic ESP32 | 1 本線の SWIO の CH32V00x のデバッガ |
-| `04.Debug/SwdDebugProbe` | RP2040 / RP2350 | SWD の ARM のデバッガ: wire、arm-adi |
-| `05.Capture/LogicCapture` | ESP32-P4 / P4X | 全速のロジアナ（16 ch まで、流し続けで 2 ch 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
-| `06.Settings/Settings` | RP2040 / RP2350 | 設定を持つ治具: ピンの呼び名、空きの状態、使わないピン、素通し（target のコンソールを probe の口に）。flash に名前で保存 |
-| `Tools/SwdPinSurvey` | RP2040 / RP2350 | 立ち上げの道具（Serial に文字で出す。OEP ではない）: どのピンが debug port か |
+| `01.Basics/MinimalProbe` | RP2040（rp2040）、classic ESP32（esp32） | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
+| `01.Basics/FixtureProbe` | RP2040（rp2040）、classic ESP32（esp32） | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
+| `02.Interfaces/HelloInterface` | RP2040（rp2040）、classic ESP32（esp32） | **はじめてのインターフェース**: 名前、2 つの op、ロック。ピンは使わない |
+| `02.Interfaces/CustomInterface` | RP2040（rp2040）、classic ESP32（esp32） | **OEP の拡張**: 自分の名前で自分のインターフェース。describe、plan、op、TLV の後ろの部分 |
+| `03.Transports/MultipleTransports` | ESP32-P4（esp32p4）/ P4X（esp32p4x） | 1 つの endpoint を 4 つの USB の経路で同時に（HS vendor bulk、HID、CDC、USB-Serial/JTAG）、USB の名乗り |
+| `03.Transports/WifiTcp` | classic ESP32（esp32） | Wi-Fi の TCP で OEP: シリアルの口と TCP の待ち受け（3 接続）、ネットワークは設定の wifi の項目から、mDNS |
+| `04.Debug/RvswdDebugProbe` | RP2040（rp2040）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、ESP32-S3（esp32s3） | RVSWD の CH32 のデバッガ: wire、riscv-dm、コンソール |
+| `04.Debug/SwioDebugProbe` | classic ESP32（esp32） | 1 本線の SWIO の CH32V00x のデバッガ |
+| `04.Debug/SwdDebugProbe` | RP2040（rp2040）/ RP2350（rp2350） | SWD の ARM のデバッガ: wire、arm-adi |
+| `05.Capture/LogicCapture` | ESP32-P4（esp32p4）/ P4X（esp32p4x） | 全速のロジアナ（16 ch まで、流し続けで 2 ch 160 Msps）、HS でストリーミング。`host/stream_test.py` 付き |
+| `06.Settings/Settings` | RP2040（rp2040）/ RP2350（rp2350） | 設定を持つ治具: ピンの呼び名、空きの状態、使わないピン、素通し（target のコンソールを probe の口に）。flash に名前で保存 |
+| `Tools/SwdPinSurvey` | RP2040-Zero（rp2040zero）、RP2350（rp2350） | 立ち上げの道具（Serial に文字で出す。OEP ではない）: どのピンが debug port か |
 
 ## 使い始める
 
@@ -204,8 +206,9 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 
 1. **firmware**: [Releases](https://github.com/Open-Embedded-Probe/oep-probe-arduino/releases) のビルド済みを使う
    （どの RP2040 / RP2350 のボードにも `OepProbe-rp2040-<version>.uf2` / `OepProbe-rp2350-<version>.uf2` を BOOTSEL のボードに
-   コピー。ESP32-P4 / classic ESP32 は `OepProbe-esp32p4-<version>.merged.bin` / `OepProbe-esp32-<version>.merged.bin`。ピンは host が選ぶ。ESP32 は `<Example>-<profile>-<version>.merged.bin` を `esptool.py write_flash 0x0 <file>`。sha256 は
-   `firmware-<version>.json`）。自分でビルドするなら、Arduino のライブラリマネージャーで
+   コピー。ESP32-P4 / classic ESP32 は `OepProbe-esp32p4-<version>.merged.bin` / `OepProbe-esp32-<version>.merged.bin` を
+   `esptool.py write_flash 0x0 <file>`。WCH CH32 は `OepProbe-ch32x035-<version>.bin` などを code flash の先頭から。ピンは host が選ぶ。
+   sha256 は `firmware-<version>.json`）。自分でビルドするなら、Arduino のライブラリマネージャーで
    **OpenEmbeddedProbe** を入れ、`ファイル > スケッチ例 > OpenEmbeddedProbe` を開き、その `sketch.yaml` の profile（core の版と
    ライブラリを固定してある）でビルドする:
 
