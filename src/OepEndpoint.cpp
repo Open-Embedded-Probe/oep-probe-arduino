@@ -192,9 +192,16 @@ void Endpoint::send(size_t length) {
 
 
 // A serial port's bytes this poll (transports §1, §4): COBS frames to handleMessage, raw bytes to the binds.
+// The bytes pollSerial() reads at a time, on the stack: 512 on an ESP32, 256 elsewhere (small stacks: kPollChunk)
+#if defined(ARDUINO_ARCH_ESP32)
+static constexpr size_t kSerialChunk = 512;
+#else
+static constexpr size_t kSerialChunk = 256;
+#endif
+
 void Endpoint::pollSerial(Endpoint &e, size_t i) {
   Transport &t = e.tr(i);
-  uint8_t chunk[512];
+  uint8_t chunk[kSerialChunk];
   for (int avail; (avail = t.stream->available()) > 0;) {
     size_t n = static_cast<size_t>(avail) < sizeof chunk ? static_cast<size_t>(avail) : sizeof chunk;
     n = t.stream->readBytes(chunk, n);
@@ -423,13 +430,16 @@ Result Endpoint::subscription(uint16_t fn, uint8_t op, const uint8_t *payload, s
   return completed();
 }
 
-// The bytes poll() takes from a stream at a time, on the stack: 2 KiB where a stream copies in bulk (readBytes virtual:
-// DirectBulkStream, CDC); 256 on a CH32, whose core's Stream reads byte by byte anyway and whose stacks are small (the
-// H41x's was 2 KiB in ArduinoCore-CH32RV 0.8.0: this buffer alone overran it into the heap)
-#if defined(ARDUINO_ARCH_CH32RV)
-static constexpr size_t kPollChunk = 256;
-#else
+// The bytes poll() takes from a stream at a time, on the stack: 2 KiB on an ESP32, where a stream copies in bulk
+// (readBytes virtual: the vendor bulk port's DirectBulkStream); 256 elsewhere, whose streams here are HID reports of 64
+// bytes or a core's Stream read byte by byte, and whose stacks are small: a CH32 H41x's was 2 KiB in ArduinoCore-CH32RV
+// 0.8.0 (this buffer alone overran it into the heap), and the RP2040's core 0 has 2 KiB (arduino-pico 6.3.2,
+// __StackBottom): poll()'s frame was 2080 bytes, and a Pico on a busy hub took a HardFault after a few back-to-back
+// requests with its SP 2.8 KB down (bench, 152a3f44e811780e, 2026-11-18)
+#if defined(ARDUINO_ARCH_ESP32)
 static constexpr size_t kPollChunk = 2048;
+#else
+static constexpr size_t kPollChunk = 256;
 #endif
 
 void Endpoint::poll() {
@@ -1090,7 +1100,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
   // released, so that a refusal changes nothing (a configured UART, a running capture keep their state and data).
   for (size_t i = 0; i < count_; ++i) {
     if (!fn_[i].mark_a) continue;
-    RoleAssignment mine[kMaxRoles];
+    RoleAssignment *const mine = plan_mine_;
     size_t m = 0, had = 0, kept = 0;
     for (size_t r = 0; r < count; ++r) if (roles[r].function == i + 1 && m < kMaxRoles) mine[m++] = roles[r];
     for (size_t r = 0; r < plan_count_; ++r) {
@@ -1119,7 +1129,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
       return reason;
     }
   }
-  RoleAssignment old[kMaxRoles];
+  RoleAssignment *const old = plan_old_;   // kept until the change is done (undo puts them back)
   size_t old_count = 0;
   for (size_t i = 0; i < count_; ++i) fn_[i].mark_b = false;   // the old persistent
   size_t keep = 0;
@@ -1138,7 +1148,7 @@ uint16_t Endpoint::replaceFns(const RoleAssignment *roles, size_t count, const u
   auto applyAll = [this](const RoleAssignment *set, size_t n, bool check) -> uint16_t {
     for (size_t i = 0; i < count_; ++i) {
       if (!fn_[i].mark_a) continue;
-      RoleAssignment mine[kMaxRoles];
+      RoleAssignment *const mine = plan_mine_;   // one fn at a time (not the old set: plan_old_)
       size_t m = 0;
       for (size_t r = 0; r < n; ++r) if (set[r].function == i + 1) mine[m++] = set[r];
       if (!m) continue;

@@ -1067,17 +1067,15 @@ size_t Settings::saveBlob(uint8_t *blob, size_t capacity) const {
   size_t put = 0;
   if (capacity < 1 + 4) return 0;
   blob[put++] = kBlobVersion;
-  // the owners in entry order, each once: the core first
-  const Interface *owners[kNoEntry + 1];
-  size_t owner_count = 0;
-  owners[owner_count++] = nullptr;
-  for (uint8_t e = 0; e < entry_count_; ++e) {
-    bool seen = false;
-    for (size_t o = 0; o < owner_count; ++o) seen |= owners[o] == entries_[e].owner;
-    if (!seen) owners[owner_count++] = entries_[e].owner;
-  }
-  for (size_t o = 0; o < owner_count; ++o) {
-    const Interface *owner = owners[o];
+  // the owners in entry order, each once: the core first. Found by walking the entries (an owner where it first comes),
+  // not kept in an array: 256 pointers on the stack overran the RP2040's 2 KiB (a save HardFaulted, bench 2026-11-18)
+  for (int first = -1; first < static_cast<int>(entry_count_); ++first) {
+    const Interface *owner = first < 0 ? nullptr : entries_[first].owner;
+    if (first >= 0) {
+      bool earlier = owner == nullptr;   // the core's: done first
+      for (int e = 0; e < first && !earlier; ++e) earlier = entries_[e].owner == owner;
+      if (earlier) continue;
+    }
     size_t group = put, items = 0;
     const char *cat = owner ? owner->name() : "";
     const size_t cl = strlen(cat);

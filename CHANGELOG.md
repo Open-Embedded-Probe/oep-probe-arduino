@@ -1,6 +1,21 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) RP2040: the request path's stack fits core 0's 2 KiB again (arduino-pico 6.3.2, __StackBottom). poll()'s frame
+  was 2080 bytes (its 2 KiB chunk, for the ESP32's vendor bulk port only now; 256 elsewhere, pollSerial's 512 too),
+  replaceFns() kept two 64-role arrays on the stack (members now) and a settings save's saveBlob() 256 owner pointers
+  (walked instead): a Pico on a busy hub took a HardFault after a few back-to-back requests with its SP 2.8 KB down, and
+  a settings save did too (bench, 152a3f44e811780e). Twenty runs of a list and every describe back to back, a save and
+  dumps then held. The request path's deepest frames: poll 288, pollSerial 296, handleMessage 96, planApply 504 bytes.
+  An RP2's crash record says what it was: "crash at <n> s: hardfault pc 0x...", ": panic from 0x..." or ": stall"
+  (watchdog scratch 3), in fn 0's firmware text. Host tests (boot guard).
+- (JA) RP2040: 要求を処理する道のスタックが、コア 0 の 2 KiB（arduino-pico 6.3.2 の __StackBottom）に収まるようにした。poll() の枠は
+  2080 バイトあった（2 KiB の塊。ESP32 の vendor bulk の口のためだけにして、ほかは 256。pollSerial の 512 も 256 に）。replaceFns() は
+  64 個の役割の並び 2 つをスタックに置き（メンバーに移した）、設定の保存の saveBlob() は持ち主のポインタ 256 個を置いていた（項目を
+  たどる形に）。混んだハブの Pico で、要求を続けて送ると数個で HardFault になり、SP は 2.8 KB 下だった。設定の保存でも落ちた（ベンチ、
+  152a3f44e811780e）。直した後、list と全部の describe を続けて 20 回、保存、dump が通った。要求の道で深い枠は poll 288、pollSerial 296、
+  handleMessage 96、planApply 504 バイト。RP2 のクラッシュの記録に種類と場所を足した（「crash at <n> s: hardfault pc 0x...」「: panic from
+  0x...」「: stall」。見張りのタイマーのスクラッチ 3）。fn 0 のファームの文字列に出る。ホストの試験（boot guard）。
 - (EN) RVSWD: a CH32V103 on its 8 MHz HSI (nothing in its flash, or just reset before its program raises the clock)
   answers about 1.2 us after the clock edge - at the table's slowest half period (500 ns) on the probe's sampling edge,
   half the frames a clock late, and no attach, reset-halt or flash got through (bench, 80f1b2d80a34 v103evt after its

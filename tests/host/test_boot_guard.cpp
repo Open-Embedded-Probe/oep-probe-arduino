@@ -108,6 +108,22 @@ static void testLastBoot() {
   run(1000);
   reset(5, 0x150000);                            // the mark is gone with the boot that read it
   CHECK(is("") && BootGuard::crashes() == 0);
+  // what crashed() was for: a HardFault's PC, a panic's caller, the stall watch (watchdog scratch 3 on the RP2)
+  run(3000);
+  BootGuard::crashed(BootGuard::kWhereFault, 0x1000a5b2u);
+  reset(5, 0x150000);
+  CHECK(is("crash at 3 s: hardfault pc 0x1000a5b0"));
+  run(3000);
+  BootGuard::crashed(BootGuard::kWherePanic, 0x10001234u);
+  reset(5, 0x150000);
+  CHECK(is("crash at 3 s: panic from 0x10001234"));
+  run(3000);
+  BootGuard::crashed(BootGuard::kWhereStall);
+  reset(5, 0x150000);
+  CHECK(is("crash at 3 s: stall"));
+  run(1000);
+  reset(5, 0x150000);                            // read once: the next unmarked boot says nothing
+  CHECK(is(""));
 }
 
 int main() {

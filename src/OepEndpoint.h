@@ -567,6 +567,10 @@ class Endpoint {
   uint16_t newest_corr_ = 0;   // the last session's newest request (core §4.1: the host numbers them in order)
   bool have_newest_ = false;
   RoleAssignment plan_roles_[kMaxRoles] = {};
+  // replaceFns()'s working sets, kept here rather than on the stack (64 x 6 bytes each; with poll() and planApply()
+  // they took the RP2040's 2 KiB core-0 stack past its end): one fn's roles at a time, and the listed fns' old roles
+  RoleAssignment plan_mine_[kMaxRoles] = {};
+  RoleAssignment plan_old_[kMaxRoles] = {};
   size_t plan_count_ = 0;
   Result checkSession(uint32_t session, uint8_t *out, size_t capacity);
   void lapse();

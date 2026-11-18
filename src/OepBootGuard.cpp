@@ -63,6 +63,10 @@ void recordWrite(const Record &r) {
   watchdog_hw->scratch[1] = r.count;
   watchdog_hw->scratch[2] = r.up_s;
 }
+// Watchdog scratch 3: what crashed() was called for - the kind (BootGuard::Where) in bits 0-1, the address's bits
+// 31-2 above it (an instruction's address to within 4 bytes: enough to find the function in the map).
+uint32_t whereRead() { return watchdog_hw->scratch[3]; }
+void whereWrite(uint32_t w) { watchdog_hw->scratch[3] = w; }
 // A watchdog reset is every reboot's way on the RP2: crashed() (a panic, a HardFault, loop() stalled), rp2040.reboot()
 // (planned() marks it), picotool's reboot and the boot ROM's (into and out of BOOTSEL), a debugger's. Only crashed()'s
 // carries the crash mark (kCrashedFast / kCrashedLate); the reset kind alone tells no crash.
@@ -83,6 +87,9 @@ void recordWrite(const Record &r) {
   gKept = r;
   gKeptCheck = recordCheck(r);
 }
+// The ESP32's panic handler keeps its own reasons (resetName): nothing more is kept here.
+uint32_t whereRead() { return 0; }
+void whereWrite(uint32_t) {}
 Reset resetKind() {
   switch (esp_reset_reason()) {
     case ESP_RST_POWERON: return Reset::kPowerOn;
@@ -133,6 +140,9 @@ bool recordRead(Record &r) {
   return g_boot_record.valid;
 }
 void recordWrite(const Record &r) { g_boot_record = {true, r.state, r.count, r.up_s, r.next}; }
+uint32_t gFakeWhere = 0;   // the RP2's watchdog scratch 3
+uint32_t whereRead() { return gFakeWhere; }
+void whereWrite(uint32_t w) { gFakeWhere = w; }
 Reset resetKind() { return g_boot_reset_crash ? Reset::kPanic : static_cast<Reset>(g_boot_reset_kind); }
 bool crashReset(Reset r) { return r == Reset::kPanic || r == Reset::kTaskWdt; }
 uint32_t runningSlot() { return g_boot_running_slot; }
@@ -141,6 +151,8 @@ const char *slotName(uint32_t address) { return address == 0x10000 ? "app0" : ad
 #else
 bool recordRead(Record &) { return false; }
 void recordWrite(const Record &) {}
+uint32_t whereRead() { return 0; }
+void whereWrite(uint32_t) {}
 Reset resetKind() { return Reset::kPowerOn; }
 bool crashReset(Reset) { return false; }
 uint32_t runningSlot() { return 0; }
@@ -155,7 +167,7 @@ bool markedCrash(const Record &r) { return r.state == kCrashedFast || r.state ==
 // everything else: a power-on, a restart on purpose, and a reset from outside that the firmware cannot tell from a
 // planned reboot (the reset pin, esptool's DTR / RTS, the USB-Serial/JTAG's reset, a debugger's, a software restart not
 // by the probe, an RTC watchdog reset with no panic behind it; RP2: picotool's and the boot ROM's watchdog reboots).
-void describeLastBoot(bool valid, const Record &before, Reset reset, bool crash) {
+void describeLastBoot(bool valid, const Record &before, Reset reset, bool crash, uint32_t where) {
   gLastBoot[0] = 0;
   if (!valid) return;
   const uint32_t running = runningSlot();
@@ -164,8 +176,16 @@ void describeLastBoot(bool valid, const Record &before, Reset reset, bool crash)
   if (before.state == kPlanned && before.next && running != before.next) {
     snprintf(gLastBoot, sizeof gLastBoot, "update to %s did not reach setup: %s", slotName(before.next), resetName(reset));
   } else if (crash || reset == Reset::kBrownout) {
-    snprintf(gLastBoot, sizeof gLastBoot, "%s at %lu s", markedCrash(before) ? "crash" : resetName(reset),
-             static_cast<unsigned long>(before.up_s));
+    const int n = snprintf(gLastBoot, sizeof gLastBoot, "%s at %lu s", markedCrash(before) ? "crash" : resetName(reset),
+                           static_cast<unsigned long>(before.up_s));
+    const uint32_t kind = where & 3u, address = where & ~3u;
+    if (markedCrash(before) && kind && n > 0 && static_cast<size_t>(n) < sizeof gLastBoot) {
+      if (kind == BootGuard::kWhereStall)
+        snprintf(gLastBoot + n, sizeof gLastBoot - n, ": stall");
+      else
+        snprintf(gLastBoot + n, sizeof gLastBoot - n, kind == BootGuard::kWhereFault ? ": hardfault pc 0x%08lx" :
+                 ": panic from 0x%08lx", static_cast<unsigned long>(address));
+    }
   }
 }
 
@@ -173,7 +193,8 @@ void describeLastBoot(bool valid, const Record &before, Reset reset, bool crash)
 #if defined(ARDUINO_ARCH_RP2040)
 repeating_timer_t gFeed;
 bool feed(repeating_timer_t *) {
-  if (static_cast<uint32_t>(time_us_64() / 1000u) - gBeatMs > BootGuard::kStallMs) BootGuard::crashed();   // loop() stuck
+  if (static_cast<uint32_t>(time_us_64() / 1000u) - gBeatMs > BootGuard::kStallMs)
+    BootGuard::crashed(BootGuard::kWhereStall);   // loop() stuck
   watchdog_update();
   return true;
 }
@@ -217,7 +238,8 @@ void BootGuard::begin() {
   const bool crash = (valid && markedCrash(before)) || crashReset(reset);
   const bool fast = valid && (before.state == kCrashedFast || (before.state == kRunning && crashReset(reset)));
   gCrashes = fast ? static_cast<uint8_t>(before.count >= 254 ? 255 : before.count + 1) : 0;
-  describeLastBoot(valid, before, reset, crash);
+  describeLastBoot(valid, before, reset, crash, whereRead());
+  whereWrite(0);
   gSettled = gUsbSeen = gAttachOpen = false;
   gUsbSince = 0;
   gRecord = {kRunning, gCrashes, 0, 0};
@@ -256,8 +278,9 @@ void BootGuard::planned() {
 }
 
 #if defined(ARDUINO_ARCH_RP2040)
-void BootGuard::crashed() {
+void BootGuard::crashed(Where where, uint32_t address) {
   (void)save_and_disable_interrupts();
+  whereWrite((address & ~3u) | where);
   gRecord.state = gRecord.state == kSettled ? kCrashedLate : kCrashedFast;   // this reset is a crash (lastBoot, the count)
   recordWrite(gRecord);
   // off the bus (the pull-up off) for the host to see an unplug, unless the controller is still held in reset
@@ -267,9 +290,10 @@ void BootGuard::crashed() {
   for (;;) {}
 }
 #elif defined(ARDUINO_ARCH_ESP32)
-void BootGuard::crashed() { abort(); }   // the panic handler resets the chip
+void BootGuard::crashed(Where, uint32_t) { abort(); }   // the panic handler resets the chip
 #elif defined(OEP_HOST_FAKE_BOOT)
-void BootGuard::crashed() {   // as the RP2's: the mark, then the (fake) watchdog reset is the test's next boot
+void BootGuard::crashed(Where where, uint32_t address) {   // as the RP2's: the mark, then the (fake) watchdog reset is the test's next boot
+  whereWrite((address & ~3u) | where);
   gRecord.state = gRecord.state == kSettled ? kCrashedLate : kCrashedFast;
   recordWrite(gRecord);
 }

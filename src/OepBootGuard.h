@@ -69,10 +69,14 @@ class BootGuard {
   // RP2: the panic / HardFault handlers' and the stall watch's end - the reset marked a crash (the RP2 cannot tell its
   // own crash from another watchdog reset otherwise), the USB device off the bus for kRestartDetachMs, then a reset.
   // Host tests: the mark only (the test's next begin() is the reset).
+  // What ended in crashed(), kept for the next boot's lastBoot() (RP2: watchdog scratch 3): a HardFault with the PC its
+  // exception frame holds, a panic (_exit) with its caller, the stall watch. lastBoot then reads "crash at <n> s:
+  // hardfault pc 0x...", "...: panic from 0x...", "...: stall".
+  enum Where : uint8_t { kWhereUnknown = 0, kWhereFault = 1, kWherePanic = 2, kWhereStall = 3 };
 #if defined(OEP_HOST_FAKE_BOOT)
-  static void crashed();
+  static void crashed(Where where = kWhereUnknown, uint32_t address = 0);
 #else
-  [[noreturn]] static void crashed();
+  [[noreturn]] static void crashed(Where where = kWhereUnknown, uint32_t address = 0);
 #endif
   // The at-boot attach's gate on a USB probe: `configured` is the host having configured the device now.
   static bool attachReady(bool configured);

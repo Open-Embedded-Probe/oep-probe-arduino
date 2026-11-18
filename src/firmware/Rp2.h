@@ -389,8 +389,32 @@ static constexpr uint32_t kRestartMaxMs = 2000;
 // bench (0.0.29-dev+3c0cd99, Pro Micro RP2350, SWD): TinyUSB 0.18's "Can't continue xfer on inactive ep" panic in the
 // USB interrupt while the host enumerated the probe after a restart; the breakpoint escalated to a HardFault, whose own
 // breakpoint stopped the core with the pull-up on, and the host failed the device descriptor request until a replug.
-extern "C" void _exit(int) { oep::BootGuard::crashed(); }
-extern "C" void isr_hardfault() { oep::BootGuard::crashed(); }
+// The address each one records (BootGuard::Where): _exit its caller's, the HardFault the PC of the exception frame
+// on the stack the fault came from (MSP or PSP, by EXC_RETURN bit 2; Thumb-1, so a Cortex-M0+ takes it too).
+extern "C" void _exit(int) {
+  oep::BootGuard::crashed(oep::BootGuard::kWherePanic, reinterpret_cast<uint32_t>(__builtin_return_address(0)));
+}
+extern "C" void oepHardFaultFrom(const uint32_t *frame) {
+  oep::BootGuard::crashed(oep::BootGuard::kWhereFault, frame[6]);   // r0 r1 r2 r3 r12 lr pc xpsr
+}
+#if defined(__arm__)
+extern "C" __attribute__((naked)) void isr_hardfault() {
+  __asm volatile(
+      "movs r0, #4\n"
+      "mov r1, lr\n"
+      "tst r0, r1\n"
+      "beq 1f\n"
+      "mrs r0, psp\n"
+      "b 2f\n"
+      "1:\n"
+      "mrs r0, msp\n"
+      "2:\n"
+      "ldr r1, =oepHardFaultFrom\n"
+      "bx r1\n");
+}
+#else
+extern "C" void isr_hardfault() { oep::BootGuard::crashed(oep::BootGuard::kWhereFault); }
+#endif
 
 static size_t describeProbe() {
   oep::TlvWriter w(probeTlv, sizeof probeTlv);
