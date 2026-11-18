@@ -7,6 +7,7 @@ out of the measurement; a host busier than its cores (load average) cannot judge
   OEP_STREAM_UNIT_ID   the unit id it must answer with
   OEP_STREAM_CHANNELS  free channels by name, comma separated (GPIO12,GPIO13,...): the first n make an n-line case
   OEP_STREAM_SECONDS   optional, default 20
+  OEP_STREAM_MAX_LOAD  optional: the load average over which the case is skipped as busy (default: the cores)
 """
 import os
 import struct
@@ -47,10 +48,11 @@ def test_stream_at_the_guides_rate(lines, record_property):
     address, unit, names, seconds = _env()
     if len(names) < lines:
         pytest.skip(f"{len(names)} channels given, {lines} needed")
-    load, cores = os.getloadavg()[0], os.cpu_count() or 1
+    load = os.getloadavg()[0]
+    most = float(os.environ.get("OEP_STREAM_MAX_LOAD", os.cpu_count() or 1))
     record_property("load_average", load)
-    if load > cores:
-        pytest.skip(f"host busy: load average {load:.1f} over {cores} cores - the rate needs an idle host")
+    if load > most:
+        pytest.skip(f"host busy: load average {load:.1f} over {most:g} - the rate needs an idle host")
     rate = STREAM_BYTES_PER_S * 8 // lines
     hst = link.open_host(address)
     try:
