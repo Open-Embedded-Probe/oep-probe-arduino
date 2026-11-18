@@ -18,9 +18,10 @@
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
 | ESP32-P4X（v3.x） | `OepProbe-esp32p4x-<version>.merged.bin` | 同じ（esptool のチップ名は `esp32p4`） |
 | classic ESP32（DevKitC など） | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |
+| WCH CH32X035 / CH32V307 / CH32H417 | `OepProbe-ch32x035-<version>.bin` / `-ch32v307-` / `-ch32h417-` | code flash の先頭（0x08000000）から、そのチップを書ける道具で |
 
 firmware には配線を焼き込んでいません。どのピンを使うかは、host が probe を使うときに決めます。同じファイルで、どの治具にも
-使えます。ほかのチップ（ESP32-S3、C3、C6 など）のリリースされた firmware はまだありません。自分でビルドします（[ボード](boards.ja.md)）。
+使えます。ほかのチップ（ESP32-S3、C3、C6 など）のリリースされた firmware はありません。自分でビルドします（[ボード](boards.ja.md)）。
 
 使う前に焼いてください。ボードに何が入っているかは分かりません。
 
@@ -36,12 +37,12 @@ P4 と P4X の firmware は別です。P4X は `esp32p4x` profile でビルド�
 `OepProbe-esp32p4x-<version>.bin` を使います。`oep dump --port <port>` の model は `esp32p4` / `esp32p4x`、
 chip は eFuse から読んだ実際のリビジョン（例 `esp32p4 v3.2`）です。HS USB の製品名も
 `OEP probe (ESP32-P4)` / `OEP probe (ESP32-P4X)` に分かれます。
-現在固定している Arduino core 3.3.12 の app image の対応範囲は、P4 が v0.1–v1.99、P4X が v3.1–v3.99
+`sketch.yaml` で固定している Arduino core の app image の対応範囲は、P4 が v0.1–v1.99、P4X が v3.1–v3.99
 （v3.0 は対象外）です。Arduino の生成する image ヘッダーにはこの制限が入らないため、firmware に
 [カスタム app descriptor](https://docs.espressif.com/projects/esp-idf/en/v5.5.5/esp32p4/api-reference/system/app_image_format.html#adding-a-custom-structure-to-an-application)
 としてモデルと対応リビジョンを埋め込みます。このチェックを持つ firmware の DFU は、不一致・範囲外・識別情報のない旧 image を
-拒否して起動先を元に戻し、再起動しません。旧 firmware にはこの保護がないので、最初の更新はファイルを確認して行ってください。
-旧 image に戻す場合は USB-Serial/JTAG から esptool を使います。
+拒否して起動先を元に戻し、再起動しません。このチェックを持たない firmware からの DFU は確かめずに書くので、ファイルを確認してから
+更新してください。チェックを持たない image を書くときは USB-Serial/JTAG から esptool を使います。
 
 ## 2. host のライブラリを入れる
 
@@ -72,8 +73,8 @@ oep dump --port usb                 # または USB の最初の OEP の probe�
 ```
 
 `dump` は、probe が持つインターフェースを名前、ピン、上限、機能つきで並べます。ロックが要らないので、ほかのプログラムが
-probe を使っていても邪魔しません。ESP32-P4 は 4 つの経路（HS vendor bulk、USB-Serial/JTAG、HID、CDC の口）を、ほかは 1 つを
-出します。
+probe を使っていても邪魔しません。経路の一覧も出ます（ESP32-P4 は HS vendor bulk、USB-Serial/JTAG、HID、CDC の口、UART bridge、
+RP2040 / RP2350 は CDC の口、vendor bulk、HID）。
 
 USB の probe はプロジェクトの VID:PID `1209:4F45` で列挙し、USB の serial number が unit_id です。host はこの VID:PID で probe を
 見つけ（`usb`）、unit_id で名指した probe（`usb:<unit_id>`）は serial number で見つけます。iProduct `OEP probe (...)` は人が読む
@@ -84,8 +85,8 @@ USB の probe はプロジェクトの VID:PID `1209:4F45` で列挙し、USB �
 host はセッションのロックを取り、要るピンを plan で決め、インターフェースを使い、セッションを終えます。ロックは 2 つの
 プログラムが同時に probe を動かすのを防ぎます。リース（下では 5 秒）が切れれば、プログラムが落ちてもロックは外れます。
 セッションを終えるか、リースが切れると、そのセッションが作ったもの（plan、接続とコンソールのストリームの分、購読）はすべて
-解放され、次のプログラムには何も渡りません。プログラムの間で残したいものは設定のものです（スロットは接続を保ち、bind は
-コンソールを流す）。同じ場所で開き直したコンソールは、読んだものごとストリームを返します。
+解放され、次のプログラムには何も渡りません。プログラムの間で残したいものは設定に置きます（素通しは、セッションの無い間
+target のコンソールや UART を probe のシリアルの口に流す）。同じ場所で開き直したコンソールは、読んだものごとストリームを返します。
 
 ### GPIO と UART（試験の治具）
 
@@ -114,14 +115,14 @@ hst.end()
 ### RVSWD で CH32 をデバッグする
 
 ```python
-from oep_client import core, link, target
+from oep_client import core, link, riscv
 
 hst = link.open_host("/dev/ttyACM0")
 core.take(hst, 5000, owner="my-debugger")
-wire = target.Wire(hst)                              # oep.wire.rvswd
+wire = riscv.Wire(hst)                               # oep.wire.rvswd
 found = wire.scan()                                  # 空いているピンの組をすべて試す: どこで debug module が答えるか
 conn, dmstatus = wire.attach(halt=True, pins=found[0].pins)
-dm = target.RiscvDm(hst, conn)
+dm = riscv.RiscvDm(hst, conn)
 print(dm.read_block(0x08000000, 4).hex())            # flash の最初の数語
 dm.resume()
 wire.detach(conn)
@@ -174,28 +175,30 @@ classic ESP32 の sampler もトリガを取れます（8 チャネル、1 kHz�
 溜まる前にトリガが立てば、区画は短く trigger_index は小さくなります。即時のキャプチャの窓は samples ÷ rate（最長
 200 ms: configure が samples を 200 ms 分に切り下げる。300 kHz で 60000）続くので、開始の後に送ったコンソールのコマンドやデバッグのリセットは窓の
 後に target に届き、キャプチャには写りません。送ったものの後に target がすることを写すにはトリガを使います: arm してからコマンドか
-リセットを送ると、探索の番の中で届き、それが起こす出来事でトリガが立ちます（docs/implementation-limits.ja.md §4.1）。
+リセットを送ると、探索の番の中で届き、それが起こす出来事でトリガが立ちます（[implementation limits §4.1](../implementation-limits.ja.md#41-classic-esp32)）。
 割り込みを止める 1 回は時計で区切ります: サンプルが遅れた区画（トリガの時に動いていた要求のフレーム）は早く終わり、samples が
 少なく slipped が立ちます。sampler は core 1 を 1 人で使う（firmware は LoopCore=0、EventsCore=0 でビルドし、OEP と Wi-Fi の driver と
 TCP/IP の stack は core 0）ので、Wi-Fi が点いていてもこれらの限界は変わりません。radio の行き来でサンプルが遅れることはあります（slipped）。
 
-ロジックとアナログを一緒に、ロジックのトリガで取るには capture-group を使います。アナログはロジックのトリガに従い、どちらの
-区画も同じ瞬間に印を付けます。
+ロジックとアナログを一緒に、ロジックの出来事で取るには capture-group の出来事の元を使います（ESP32-P4）。どのトラックも
+linked のトリガで configure し、組の出来事が、どの区画も同じ瞬間で切ります。
 
 ```python
 an = capture.AnalogCapture(hst)
 grp = capture.CaptureGroup(hst)
 core.plan_apply(hst, [(lc.fn, 0, 20), (lc.fn, 1, 21), (an.fn, 0, 16)])
-lc.configure(rate=20_000_000, samples=200_000, trigger=(capture.EDGE, 1, 1), pretrigger=1_000)
-an.configure(rate=40_000, samples=4_000, pretrigger=40)    # 自分のトリガは無し: ロジックのトリガに従う
-grp.bind([lc, an], trigger=lc)
+linked = (capture.LINKED, 0, 0)
+lc.configure(rate=20_000_000, samples=200_000, trigger=linked, pretrigger=1_000)
+an.configure(rate=40_000, samples=4_000, trigger=linked, pretrigger=40)
+edge = capture.Cond.edge(lc, 1, 1)                          # ロジックのチャネル 1 の立ち下がり
+grp.bind([lc, an], capture.TriggerSource([capture.Stage([[edge]])]))
 grp.start()
-st = grp.wait(timeout=30)                                   # st.trigger_ns: トリガが立った時刻
+st = grp.wait(timeout=30)                                   # st.trigger: (判定した fn, 時刻 ns, ±ns)
 (logic,), (analog,) = lc.segments(), an.segments()          # logic.trigger_index、analog.trigger_index: その瞬間
 ```
 
-従うトラックは組と一緒に始まり、トリガまで取り続けます。その pretrigger は、そのトラック自身のサンプル数です。classic ESP32 の
-sampler はトリガのトラックにはなれますが、ほかのトリガには従えません（区切りの間にすき間があるため）。
+どのトラックも組と一緒に始まり、出来事まで取り続けます。pretrigger は、そのトラック自身のサンプル数です。RP2 の PIO のロジックと
+classic ESP32 の sampler は linked のトリガを持たないので、出来事の元のある組には入れません（[ボード](boards.ja.md#チップごとにできること)）。
 
 ## 5. 治具の設定を probe に持たせる
 
@@ -224,11 +227,12 @@ classic ESP32 の firmware は、ネットワークに入ると TCP の port 745
 oep settings set /dev/ttyUSB0 core wifi.0.ssid=lab wifi.0.passphrase=... --save
 ```
 
-つながると probe は mDNS（`oep-<unit_id>.local`、service `_oep._tcp`、TXT `unit_id`）で名乗り、設定の state の wifi でもアドレスが分かります:
+つながると probe は mDNS（`oep-<unit_id>.local`、service `_oep._tcp`、TXT `unit_id`）で名乗ります。アドレスは fn 0 の network
+（`oep settings network <port>`）でも分かります:
 
 ```sh
-oep dump --port tcp://oep-50029191fe34.local:7450
-oep linktest tcp://192.168.1.128:7450
+oep dump --port tcp://oep-<unit_id>.local:7450
+oep linktest tcp://<アドレス>:7450
 ```
 
 信頼できるネットワーク（か、認証したトンネルの中）でだけ使ってください。OEP は認証を持ちません。シリアルの口はそのまま使え、どの接続も
