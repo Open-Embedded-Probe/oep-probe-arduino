@@ -62,6 +62,8 @@ static Result arm(P4SpiTarget &t, uint16_t length, const Bytes &tx) {
   return call(t, P4SpiTarget::kOpArm, p, out);
 }
 
+static bool rejectedAs(const Result &r, uint8_t detail) { return r.resolution == kResolutionRejected && r.detail == detail; }
+
 // The channel bitmap role_channels (role u8, base u16, bitmap) declares for `role` in a describe (base 0), 0 when absent.
 // TLVs are tag(u8) len(u16 LE) value.
 static uint64_t roleMask(const uint8_t *d, size_t n, uint8_t role) {
@@ -331,7 +333,7 @@ int main() {
     CHECK(g_fake_ipc_deadlocks == 0);
     CHECK(g_fake_gpio_error_logs == 0);
     CHECK(g_fake_tasks == 1);
-    uint8_t d[64];
+    uint8_t d[128];
     const size_t n = t.describe(d, sizeof d);
     bool found = false;
     for (size_t at = 0; at + kTlvHeader <= n; at += kTlvHeader + getU16(d + at + 1))
@@ -342,6 +344,26 @@ int main() {
     for (size_t at = 0; at + kTlvHeader <= n; at += kTlvHeader + getU16(d + at + 1))
       if (d[at] == reg::fixture_spi_target::kTlvDescribeModes && getU16(d + at + 1) == 1) modes = d[at + 3] == P4SpiTarget::kModes;
     CHECK(modes && P4SpiTarget::kModes == 0x05);
+    // sck_filter (fixture §4): features bit1 with sck_filter_ns, the pad filter's 25 ns
+    uint32_t features = 0, filter_ns = 0;
+    for (size_t at = 0; at + kTlvHeader <= n; at += kTlvHeader + getU16(d + at + 1)) {
+      if (d[at] == kTagFeatures && getU16(d + at + 1) == 4) features = getU32(d + at + 3);
+      if (d[at] == reg::fixture_spi_target::kTlvDescribeSckFilterNs && getU16(d + at + 1) == 4) filter_ns = getU32(d + at + 3);
+    }
+    CHECK(features == (reg::fixture_spi_target::kFeaturesLsbFirst | reg::fixture_spi_target::kFeaturesSckFilter));
+    CHECK(filter_ns == P4SpiTarget::kSckFilterNs && filter_ns == 25);
+  }
+
+  // ---- sck_filter (fixture §4): configure's TLV (u8, critical) - 1 on, 0 off as without it, 2 or more malformed, another
+  // length malformed; replaced by each configure
+  {
+    const uint8_t tag = reg::fixture_spi_target::kTlvConfigureSckFilter | kTagCritical;
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0, tag, 1, 0, 1}, out)) && t.sckFilter());
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)) && !t.sckFilter());
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0, tag, 1, 0, 0}, out)) && !t.sckFilter());
+    CHECK(rejectedAs(call(t, P4SpiTarget::kOpConfigure, {0, 0, tag, 1, 0, 2}, out), kRejectMalformed));
+    CHECK(rejectedAs(call(t, P4SpiTarget::kOpConfigure, {0, 0, tag, 2, 0, 1, 0}, out), kRejectMalformed));
+    CHECK(ok(call(t, P4SpiTarget::kOpConfigure, {0, 0}, out)));
   }
 
   // Modes 1 and 3 are not offered on the classic (its slave drives 0 on MISO before the first SCK edge, whatever the

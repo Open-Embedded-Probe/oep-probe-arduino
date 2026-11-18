@@ -152,6 +152,10 @@ attach の応答の search_retries（仕様では「診断用、数え方は実�
 - **spi-target の bits**: ESP-IDF の SPI slave は、arm した length × 8 を超えて数えないので、bits は length × 8 を超えない
   （0xFFFFFFFF に届かない）。read_rx は ns の TLV を返さない（i2c-target も同じ）。部分の byte の、来なかったビットは 0 にする
   （SPI の work register には arm した tx が残っている）。
+- **ESP32-P4 / P4X の spi-target の入力**: CS にはいつもパッドのグリッチフィルタ（25 ns 未満を落とす）を掛ける。SCK には、動いている間いつも
+  パッドの入力ヒステリシスを掛け、configure の sck_filter（fixture §4）を選べばグリッチフィルタも掛ける（describe の sck_filter_ns は 25）。
+  フィルタを掛けると、SCK の High と Low がどちらも 25 ns より長い転送だけを受ける（約 16 MHz まで）。遅い SCK の縁にひげが乗る配線
+  （GPIO で SCK を作る相手）では sck_filter を選ぶ。
 - **arm の答えの意味**（fixture §4: arm は次の 1 回の転送を待つ）: arm は、slave が arm した転送を持った（ドライバの割り込みが載せ、
   post_setup_cb で分かる）後に success を答える。その後に CS が有効になった転送は arm したもの。ドライバの割り込みは loop() の core で、
   そこが割り込みを止めている間（SWIO のフレーム）は待つ。2 ms 以内に載らなければ arm は failed（何も arm しない）。i2c-target の preload_tx

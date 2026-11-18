@@ -40,8 +40,11 @@
 // CS through the pad's glitch filter where the chip has one (the ESP32-P4: pulses under 2 cycles of 80 MHz, 25 ns,
 // dropped): CS needs no speed, and a spike onto it inside a frame (a neighbouring line's edge) made the slave end the
 // transfer there and count again - 6-2, an H417 master with CS next to MOSI: 3 frames in 25 had a CS high of one 80 MS/s
-// sample, the slave took 50 or 22 bits of 56 and MISO slipped; with the filter 120 in 120 (2026-11-14). Not on SCK and
-// MOSI: at the 24 MHz declared a half period is 21 ns.
+// sample, the slave took 50 or 22 bits of 56 and MISO slipped; with the filter 120 in 120 (2026-11-14). Not on MOSI,
+// and on SCK only when configure asks for it (sck_filter, fixture §4): at the 24 MHz declared a half period is 21 ns.
+// SCK's pad always has its input hysteresis while the target runs: a slow SCK edge with a spike on it (an H417's GPIO
+// SoftSPI at its 10 MHz pin speed) crossed the threshold twice and the slave shifted MISO a bit early; hysteresis took
+// 4 failing runs of 4 to 1 slip in 3 runs, with sck_filter none in 3 (h417qeu6-pico, 250 kHz / 1 MHz, modes 0-3).
 #if defined(OEP_SPI_SLAVE_DRIVER) && defined(SOC_GPIO_SUPPORT_PIN_GLITCH_FILTER) && !defined(OEP_HOST_FAKE_SPI_SLAVE)
 #define OEP_SPI_CS_FILTER 1
 #include "OepPadFilter.h"
@@ -101,11 +104,14 @@ class P4SpiTarget final : public Interface {
   void planRelease() override;
   void service();  // call from loop(): collects the finished transaction into the queue
 
+  bool sckFilter() const { return sck_filter_; }   // configure's sck_filter (fixture §4)
+
  private:
   PinTable &pins_;
   uint16_t instance_;
   int sck_ = -1, mosi_ = -1, miso_ = -1, cs_ = -1;
   uint8_t mode_ = 0, bit_order_ = 0;
+  bool sck_filter_ = false;   // configure's sck_filter (fixture §4): SCK through the pad's glitch filter while started
   bool started_ = false, armed_ = false;
   uint32_t transactions_ = 0;
   uint32_t errors_ = 0;
@@ -125,7 +131,8 @@ class P4SpiTarget final : public Interface {
   spi_slave_transaction_t trans_ = {};
   spi_slave_transaction_t idle_trans_ = {};
 #if defined(OEP_SPI_CS_FILTER)
-  bool cs_filtered_ = false;   // this target holds CS's pad filter while started (OEP_SPI_CS_FILTER, OepPadFilter)
+  bool cs_filtered_ = false;
+  bool sck_filtered_ = false;   // this target holds SCK's pad filter while started with sck_filter   // this target holds CS's pad filter while started (OEP_SPI_CS_FILTER, OepPadFilter)
 #endif
   // What the interrupt saw since service() last looked (under lock_): the armed one ended (its bits), unarmed
   // transfers, and a load that failed (service() retries it).
@@ -179,6 +186,15 @@ class P4SpiTarget final : public Interface {
 
  private:
 #endif
+ public:
+#if defined(OEP_SPI_CS_FILTER) || defined(OEP_HOST_FAKE_SPI_SLAVE)
+  static constexpr bool kSckFilter = true;     // configure takes sck_filter (features bit1)
+#else
+  static constexpr bool kSckFilter = false;
+#endif
+  static constexpr uint32_t kSckFilterNs = 25;   // the pad filter's: pulses under 2 cycles of 80 MHz not seen (OepPadFilter)
+
+ private:
   bool start();
   void stop();
   bool arm(const uint8_t *tx, size_t tx_length, size_t length);

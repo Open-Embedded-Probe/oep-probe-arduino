@@ -74,7 +74,8 @@ size_t P4SpiTarget::describe(uint8_t *out, size_t capacity) {
   w.roleChannels(kMiso, sizeof kMiso, pins_.outputMask());   // MISO is driven: no input-only pin
   w.u16(kTagMaxLength, kMaxFrame);
   w.u32(kTagMaxClockHz, kMaxClockHz);
-  w.u32(kTagFeatures, 1);   // bit0 LSB first
+  w.u32(kTagFeatures, reg::fixture_spi_target::kFeaturesLsbFirst | (kSckFilter ? reg::fixture_spi_target::kFeaturesSckFilter : 0));
+  if (kSckFilter) w.u32(reg::fixture_spi_target::kTlvDescribeSckFilterNs, kSckFilterNs);
   w.u8(reg::fixture_spi_target::kTlvDescribeQueueDepth, kQueueDepth);
   w.u8(reg::fixture_spi_target::kTlvDescribeModes, kModes);   // required (fixture §4): the modes configure takes
 #if defined(OEP_SPI_MISO_GATE)
@@ -129,6 +130,11 @@ bool P4SpiTarget::begin() {
   pins_.ownStrength(static_cast<uint16_t>(miso_), kMisoDrive);
 #if defined(OEP_SPI_CS_FILTER)   // CS through the pad's glitch filter (the header): a CS spike does not end the frame
   if (!cs_filtered_) cs_filtered_ = PadFilter::take(cs_);
+  gpio_ll_pin_input_hysteresis_enable(&GPIO, static_cast<uint32_t>(sck_));
+  if (sck_filter_ && !sck_filtered_) {
+    sck_filtered_ = PadFilter::take(sck_);
+    if (!sck_filtered_) return false;   // asked for and not there: configure fails (state 0)
+  }
 #endif
   return true;
 }
@@ -265,6 +271,11 @@ void P4SpiTarget::stop() {
 #endif
   if (started_) spi_slave_free(SPI2_HOST);
 #if defined(OEP_SPI_CS_FILTER)
+  if (sck_ >= 0) gpio_ll_pin_input_hysteresis_disable(&GPIO, static_cast<uint32_t>(sck_));
+  if (sck_filtered_) {
+    PadFilter::give(sck_);
+    sck_filtered_ = false;
+  }
   if (cs_filtered_) {   // given back: the pad as it was, unless a capture listening on CS holds the filter too
     PadFilter::give(cs_);
     cs_filtered_ = false;
@@ -350,14 +361,24 @@ void P4SpiTarget::service() {}
 Result P4SpiTarget::handle(uint8_t operation, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) {
   Tail tail;
   switch (operation) {
-    case kOpConfigure: {   // mode(u8) bit_order(u8) [TLV]
-      const Result parsed = plainTail(tail, payload, length, 2, out, capacity);
+    case kOpConfigure: {   // mode(u8) bit_order(u8) [TLV sck_filter(u8)]
+      if (length < 2) return rejected(kRejectMalformed);
+      static constexpr uint8_t kKnown[] = {reg::fixture_spi_target::kTlvConfigureSckFilter};
+      // without it the tag is an unknown one: critical refused unsupported (fixture §4, core §2.3)
+      const Result parsed = tail.parse(payload + 2, length - 2, kKnown, kSckFilter ? 1 : 0, out, capacity);
       if (refused(parsed)) return parsed;
+      const uint8_t *filter = nullptr;
+      if (kSckFilter) {
+        const Result r = tail.fixed(reg::fixture_spi_target::kTlvConfigureSckFilter, 1, filter, out, capacity);
+        if (refused(r)) return r;
+        if (filter && filter[0] > 1) return rejected(kRejectMalformed);
+      }
       if (payload[0] > 3 || payload[1] > 1) return rejected(kRejectMalformed);   // not a mode / order of the table
       if (!(kModes >> payload[0] & 1)) return unsupportedValue(out, capacity);   // a mode this target does not offer
       if (sck_ < 0) return wrongState(out, capacity);  // needs a plan (fixture §4: unavailable cause 6)
       stop();   // the queue and the wait go
       mode_ = payload[0]; bit_order_ = payload[1]; transactions_ = 0; errors_ = 0;
+      sck_filter_ = filter && filter[0];   // replaced by each configure (fixture §4)
       if (!start()) {   // state 0: mode, order, the arm, the queue and the counters all 0 (fixture §4)
         stop();
         mode_ = bit_order_ = 0;

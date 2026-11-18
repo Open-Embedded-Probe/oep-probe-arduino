@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-P4 / P4X spi-target: SCK's pad has its input hysteresis while the target runs, and configure takes
+  sck_filter (oep-spec baa2605, fixture §4: features bit1, describe sck_filter_ns 25) - SCK through the pad's glitch
+  filter, for a controller whose SCK high and low are each longer than 25 ns. An H417 GPIO SoftSPI (10 MHz pins, 250 kHz /
+  1 MHz, modes 0-3) shifted MISO a bit early in 4 runs of 4; with hysteresis 1 slip in 3 runs, with the filter none in 3
+  (bench, e8f60ae84dc2). Host tests (spi-target).
+- (JA) ESP32-P4 / P4X の spi-target: 動いている間、SCK のパッドに入力ヒステリシスを掛ける。configure の sck_filter（oep-spec baa2605、
+  fixture §4: features bit1、describe の sck_filter_ns 25）で、SCK にパッドのグリッチフィルタも掛ける（SCK の High と Low がどちらも 25 ns
+  より長い相手に）。H417 の GPIO の SoftSPI（端子 10 MHz、250 kHz / 1 MHz、mode 0〜3）で MISO が 1 ビット先に進むのが 4 回中 4 回、ヒステリシスで
+  3 回中 1 か所、フィルタも掛けて 3 回中 0（ベンチ、e8f60ae84dc2）。ホストの試験（spi-target）。
 - (EN) ESP32-P4 / P4X: the pad's glitch filter is held by count (OepPadFilter): the spi-target's CS and a logic capture
   with its glitch filter listening on that same pin each keep it on while they want it. A capture's end removed the
   filter from under the spi-target's CS before. Host tests (pad filter).
