@@ -120,7 +120,7 @@ void sessionOver() override { total_ = 0; }
 
 1. **役（role）を決める**：「1 = 出力の線」のように番号を付けます。
 2. **describe で候補を宣言する**：`w.roleChannels(roles, n, pins.allowedMask())`。host はこれを読んで割り当てます。
-3. **plan の 3 つを書く**：
+3. **plan の 4 つを書く**：
    - `planRoles()` は true を返します。
    - `planCheck()` は何も変えずに確かめます。宣言していない役やピンなら `kRejectUnsupported`、ほかが使っているピンなら `kRejectUnavailable` を返します。
    - `planApply()` で `pins.claim(channel, 持ち主)` してピンを取り、`planRelease()` で `pins.release(持ち主)` して返します。
@@ -134,4 +134,4 @@ void sessionOver() override { total_ = 0; }
 
 - できあいの firmware（`Firmware/OepProbe`）に、自分のインターフェースを足す：[firmware の機能](firmware-features.ja.md)
 - 通知を送る、設定を持つ、debug の線など、詳しい規則：[probe を書く](writing-a-probe.ja.md)
-- 仕様そのもの：oep-spec の `docs/oep-core.ja.md`（§2 要求と結果、§6 ロック、§7 describe、§8 plan）
+- 仕様そのもの：oep-spec の `docs/oep-core.ja.md`（§4 要求と結果、§6 ロック、§7 describe、§8 channel）と `interfaces/oep-if-plan.ja.md`（plan）

@@ -31,7 +31,7 @@ void loop() { oep::firmware.loop(); }
 
 ```cpp
 oep::firmware.begin<oep::kDefaults & ~oep::kSwd & ~oep::kPwm>();          // 既定から SWD と PWM を外す
-oep::firmware.begin<oep::kDefaults | oep::kCdc>();                         // 既定に、既定で外れている USB CDC を足す
+oep::firmware.begin<oep::kDefaults | oep::kCdc>();                         // CH32 で、既定で外れている USB CDC を足す
 oep::firmware.begin<oep::kNone | oep::kBulk | oep::kRvswd | oep::kConsole>(); // 全部なしから、これだけ
 ```
 

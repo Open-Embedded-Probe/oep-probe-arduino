@@ -28,7 +28,7 @@
 
 ### 用意するもの
 
-- **プローブにするボード**: RP2040 / RP2350（Pico、Pico 2 など）、ESP32-P4 / P4X、classic ESP32（DevKitC など）。どの機能が
+- **プローブにするボード**: RP2040 / RP2350（Pico、Pico 2 など）、ESP32-P4 / P4X、classic ESP32（DevKitC など）、WCH CH32（X035 / V307 / H417）。どの機能が
   どのボードにあるかは [ボード](boards.ja.md#チップごとにできること) の表で確かめます。迷ったら次を目安にします。
   - デバッグと通信を手軽に: RP2040 / RP2350。
   - 速い波形の取り込み、多チャネル、据え置きの治具: ESP32-P4 / P4X。
@@ -274,7 +274,7 @@ wireskein convert i2c.wireskein i2c.sr   # PulseView で開くとき
 **用意するもの**: Wi-Fi を持つプローブ（classic ESP32）。
 
 **設定**: シリアルポートから `wifi.<番号>.ssid` と `wifi.<番号>.passphrase` を設定して保存します（[使い始める](getting-started.ja.md#6-wi-fi-でclassic-esp32)）。
-固定アドレスにするときは `ipv4.<番号>.*` を使います。
+固定アドレスにするときは `ipv4.<netif>.*` を使います。
 
 **使い方**: `oep find` で見つけ、`oep://<プローブ>?via=net` で開きます。どの道具も同じアドレスで使えます。
 

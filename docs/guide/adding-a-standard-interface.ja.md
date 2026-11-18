@@ -21,7 +21,6 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
   - 従う仕様の節
   - op の一覧（`0x10 set(...) -> ...` の形）
   - チップごとの実装の違い
-  - 実機で確かめていないなら、そのこと（例 `NOT YET RUN ON HARDWARE`）
 - [ ] 名前、revision、op は `reg::<interface>::kName` / `kRevision` / `kOp...` から取ります。describe の tag も registry のものを
       使います。
 - [ ] `offers()` には、表の必須の op すべてと、この実装が持つ任意の op を挙げます。`lockFree()` は何も変えない op（status など）だけにします。
@@ -69,13 +68,12 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
 ## 7. 文書
 
 - [ ] [probe を書く](writing-a-probe.ja.md) §5 の表（英・日）
-- [ ] [ボード](boards.ja.md) の表（英・日）：チップごとの有無と上限、確かめたかどうか
+- [ ] [ボード](boards.ja.md) の表（英・日）：チップごとの有無と上限
 - [ ] `src/OepFirmware.h` の冒頭の一覧、[firmware の機能](firmware-features.ja.md) の X の表
 - [ ] README の構成の表（英・日）、`CHANGELOG.md`
 
 ## 8. host 側と実機
 
 - [ ] oep-client-python にクラス、単体の試験、hw の試験を足します。hw の試験は、配線が要るなら label で opt-in にし、無ければ
-      skip します。配線を固定で仮定しません。oep-client-js にも足します。
-- [ ] ベンチで hw の試験を通し、結果（`tests/hw/results`）を残します。確かめられないものは、確かめていないとクラスの冒頭と
-      ボードの表に書きます。
+      skip します。配線を固定で仮定しません。
+- [ ] ベンチで hw の試験を通し、結果（`tests/hw/results`）を残します。
