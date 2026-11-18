@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) The probe's LittleFS is mounted up to three times before its area is formatted (ESP32 / ESP32-P4 and RP2, whose
+  core formatted on the first failure): one failed mount on an RP2040 whose flash reads failed now and then lost the
+  saved settings and the memo area (bench, 152a3f44e811780e). Bench: a save survives a reflash and thirty saves in a
+  row (53032847491a571c).
+- (JA) プローブの LittleFS は、領域をフォーマットする前に 3 回までマウントを試す（ESP32 / ESP32-P4 と、最初の失敗でフォーマットしていた
+  RP2）。フラッシュの読み出しがときどき失敗した RP2040 で、1 回のマウントの失敗で保存した設定とメモ欄が消えていた（ベンチ、
+  152a3f44e811780e）。ベンチ: 焼き直しの後も保存が残り、続けて 30 回の保存も通った（53032847491a571c）。
 - (EN) RP2040: the request path's stack fits core 0's 2 KiB again (arduino-pico 6.3.2, __StackBottom). poll()'s frame
   was 2080 bytes (its 2 KiB chunk, for the ESP32's vendor bulk port only now; 256 elsewhere, pollSerial's 512 too),
   replaceFns() kept two 64-role arrays on the stack (members now) and a settings save's saveBlob() 256 owner pointers
