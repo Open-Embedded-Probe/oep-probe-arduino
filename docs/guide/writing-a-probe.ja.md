@@ -100,8 +100,8 @@ class Blink final : public oep::Interface {
 - **ロック**は endpoint が見ます。どの要求も見出しに session_id を持ちます（0 = なし）。`lockFree` でない op は、ロックを持つ
   セッションにだけ実行されます（session_id 0 は `session_required`）。そのセッションのロックが終わるたびに（end、リースの
   期限切れ、ほかの host の force、どれも同じ。core §6.4、§9）`sessionOver()` が呼ばれるので、作ったものと共有の分（線の接続の
-  分、コンソールのストリームの分）をすべて外します。次のセッションには何も渡しません。設定が持つもの（スロットの接続）は
-  残ります。資源がほかのインターフェースの資源の上にあるもの（線の接続の上のコンソールのストリーム）は `sessionOverFirst()` で
+  分、コンソールのストリームの分）をすべて外します。次のセッションには何も渡しません。設定が持つもの（素通しの接続）は
+  OEP の資源ではないので、この外です。資源がほかのインターフェースの資源の上にあるもの（線の接続の上のコンソールのストリーム）は `sessionOverFirst()` で
   そう言い、先に外されます。
 - **describe** は `TlvWriter` で書きます。共通の tag（`roleChannels`、`u32(kTagMaxClockHz, ...)`、op でない任意の機能には
   `u32(kTagFeatures, ...)`）と、自分の tag（0x40 から）。`ops` の tag は書きません（endpoint が書きます）。
@@ -110,7 +110,7 @@ class Blink final : public oep::Interface {
 - **oep.probe.restart**（任意、oep-if-restart）: `setup()` で最初の `poll()` の前に `endpoint.setRestart(oep::platformRestart, max_ms)`
   を呼ぶと出ます（restart 0x01、describe に `restart_max_ms`）。`max_ms` は、応答から同じ経路で confirm にまた答えるまでの最長の時間で、起動と USB の列挙し直しを
   含みます。ボードごとに見積もり、余裕を持たせます。endpoint は先に答えて flush し、セッションを終え、どのインターフェースにも
-  `probeRestart()` を呼び（設定が持つもの - スロットの接続 - も、target には触れずに放す）、すべての plan を解いてから handler を
+  `probeRestart()` を呼び（設定が持つもの - 素通しの接続 - も、target には触れずに放す）、すべての plan を解いてから handler を
   呼びます。handler は戻りません（`esp_restart`、`rp2040.reboot()`）。自分の USB device を先に外すなら包んで渡します。
 
 ## 4. ピン: 表と plan
@@ -140,14 +140,16 @@ class Blink final : public oep::Interface {
 | `TargetConsoleStream` + `DmConsole` | `oep.target.console` | debug module を通した target のコンソール（dmseq、DMDATA、SDI） |
 | `WireSwd` + `SwdPort`、`TargetArmAdi` | `oep.wire.swd`、`oep.target.arm-adi` | ARM の SWD。RP2040 / RP2350 |
 | `FixtureGpio`、`FixtureUart` | `oep.fixture.gpio` / `uart` | plan で決めたピンで |
-| `LogicCapture` / `SamplerCapture` | `oep.fixture.logic` | ESP32-P4 の PARLIO / classic ESP32 の GPIO の sampler。レベル / エッジのトリガ |
+| `LogicCapture` / `SamplerCapture` | `oep.fixture.logic` | ESP32-P4 の PARLIO / classic ESP32 の GPIO の sampler。レベル / エッジのトリガ（P4 は linked も） |
 | `AnalogCapture` | `oep.fixture.analog` | ADC のチャネルを順に、ワンショット、生の値、しきい値のトリガ（ESP32 は連続変換、RP2 は FIFO + DMA）。frontend、基準電圧、出荷時の較正 |
-| `CaptureGroup`（+ `GroupTrack`） | `oep.fixture.capture-group` | トラックを一緒に始める。`GroupTrack` を持つ capture を束ねられる |
+| `CaptureGroup`（+ `GroupTrack`） | `oep.fixture.capture-group` | トラックを一緒に始める。`GroupTrack` を持つ capture を束ねられる。出来事の元（1 段、条件 1 つ）で linked のトラックを切る |
 | `P4I2cTarget`、`P4SpiTarget`、`Rp2SpiTarget`、`Ch32SpiTarget` | `oep.fixture.i2c-target` / `spi-target` | ESP-IDF の I2C / SPI スレーブ（I2C はほかのチップでは core の Wire のスレーブ）、RP2 の PIO、CH32 の core の SPI スレーブで実装 |
-| `Rp2LogicCapture`、`Ch32LogicCapture` | `oep.fixture.logic` | RP2 の PIO + DMA（rearm 付きの repeat）、CH32 の core のロジックキャプチャ |
+| `Rp2LogicCapture`、`Ch32LogicCapture`、`H41xLogicCapture` | `oep.fixture.logic` | RP2 の PIO + DMA（rearm 付きの repeat）、CH32 の core のロジックキャプチャ、CH32H41x の UHSIF（流し続けだけ） |
 | `I2cController`、`SpiController` | `oep.fixture.i2c-controller` / `spi-controller` | host が plan で決めたどの GPIO でもビットを刻む |
 | `FixturePwm`、`FixtureCounter`、`FixtureDac` | `oep.fixture.pwm` / `counter` / `dac` | LEDC / RP2 の PWM スライス。GPIO の割り込みでエッジを数える（聞くだけで、ピンを共有する）。classic ESP32 と CH32 の DAC |
-| `Settings` + `Binds` | fn 0 の設定（core §13） | flash に名前で保存し、起動時に行う設定（§7） |
+| `Settings` + `Binds` | fn 0 の設定（core §13） | LittleFS のファイルに名前で保存し、起動時に行う設定（§7） |
+| `Link`、`Memo` | `oep.probe.link`、`oep.probe.memo` | 線の試験と port_speed、host の名前つきのオブジェクトを LittleFS に置くメモ欄 |
+| `SimpleInterface`（+ `Worker`、`ProbeLog`） | 自分の名前のインターフェース | 関数を登録するだけのインターフェース（[自分のコマンドを足す](simple-interface.ja.md)） |
 
 各ソースファイルの冒頭に、従う仕様の節があります。
 
@@ -160,7 +162,7 @@ class Blink final : public oep::Interface {
 - 線の設定（休ませ方、速さの上限）は target のもので、host が attach で渡します。probe はチップごとの既定を持ちません。
 - **debug の線は、線のタイミングが許すいちばん弱い出力の強さで駆動します。** 線の鋭いエッジは、同じ治具の隣の fixture の線に
   乗ります。classic ESP32 の既定の強さでは、コンソールを読んでいる間、SWIO の線が隣の SPI target の bit を落としたり
-  ずらしたりしました（最弱にすると直り、線の速さは変わりません）。このライブラリの PHY はどれもそうしています（RVSWD: ESP32-P4 は `GPIO_DRIVE_CAP_0`、RP2 は 2 mA。SWIO: classic と P4 は `GPIO_DRIVE_CAP_0`、
+  ずらしたりします（最弱なら起きず、線の速さは変わりません）。このライブラリの PHY はどれもそうしています（RVSWD: ESP32-P4 は `GPIO_DRIVE_CAP_0`、RP2 は 2 mA。SWIO: classic と P4 は `GPIO_DRIVE_CAP_0`、
   `OEP_SWIO_DRIVE_CAP`）。新しい PHY や別のチップへの移植でも必ず設定します。
   線がピンを取るたびに設定し直します（RVSWD の PHY は attach のたびにそうします）。host が選ぶ組は接続と接続の間は空いていて、
   周辺の機能（spi-target の MISO など）が別の強さを残すことがあるためです。
@@ -175,8 +177,8 @@ class Blink final : public oep::Interface {
 
 ## 7. シリアルの口、bind、設定
 
-- シリアルの口は OEP のフレームと、その間の生のバイトを運びます。生のバイトは **bind** のとおり（スロットのコンソール、fixture の
-  UART。口ごとに 1 本）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
+- シリアルの口は OEP のフレームと、その間の生のバイトを運びます。生のバイトは **bind** のとおり（コンソールの素通し、UART の
+  素通し。口ごとに 1 本）です。`endpoint.setRawPorts(&binds)` で有効になります。セッションがロックを持つ間、それが使う口の
   生の流れは止まり、終わった後に止めた位置から続きます（その間にあふれていれば残っている一番古いバイトから。transports §4、
   console §2.1）。
 - `Settings` は core の設定（core §13）: fn 0 の get / set / unset / save / state と、各 fn の describe の項目。channel の項目
@@ -185,16 +187,16 @@ class Blink final : public oep::Interface {
   で宣言します。スケッチ自身の項目は自分のインターフェースの下に `addSetting(owner, "name.{}", form, keys, max_len)`。初期値は
   `initialValue(owner, "name", key, data, len)`、口の名前なら `initialLabel(channel, "V003.swio")`（host ガイド §5.3）で、保存の無い起動
   （保存を持たない probe では毎回の起動）に入り、その後はほかの値と同じです（core §13.4）。`setChangeable(false)` で、初期値だけの
-  probe（set / unset なし、core §13.5）になります。保存（ESP32 は NVS、RP2 は flash の最後の領域）は名前で持つので、fn の
+  probe（set / unset なし、core §13.5）になります。保存（ESP32 と RP2 は LittleFS のファイル）は名前で持つので、fn の
   番号が変わっても読み戻せます。インターフェースではないので `endpoint.add` しません（作ると endpoint に付きます）。`load()` はスケッチが
   ピンを空きの状態にする前に呼び、保存が無効にした channel を除きます: `settings.load(); pins.setDisabled(settings.savedDisabled());
   platformParkMask(mask & ~pins.disabledMask());`（無効にした channel には起動時も触れない）。最後に、全部の `endpoint.add` と add* の後で
   `applySaved()`（`06.Settings/Settings`）。PinTable は設定の無効（外せる）と `forbid`（firmware のもの、ずっと）を分けて持ち、
   どの値も forbid したピンを使えるようにはしません。
-- 自分の USB デバイスを transport にする probe は、host がデバイスを構成し終えるまで at boot のスロットの attach を待たせます:
+- 自分の USB デバイスを transport にする probe は、host がデバイスを構成し終えるまで、保存した素通しの起動時の attach を待たせます:
   `applySaved()` の前に `settings.setAttachGate([] { return BootGuard::attachReady(tud_mounted()); })`（P4 は `usbDevice.ready()`）。
   起動時から target を読むコンソールはフレームごとに割り込みを止め、host がデバイスを列挙している間に遅れた USB の割り込みが
-  USB スタックを落とすことがあります（RP2: TinyUSB 0.18 の "Can't continue xfer on inactive ep" の panic）。`BootGuard`
+  USB スタックを落とすことがあります（RP2: TinyUSB の "Can't continue xfer on inactive ep" の panic）。`BootGuard`
   （`OepBootGuard.h`）: `setup()` の最初に `begin()`、`loop()` で `poll()`。watchdog を動かし、すぐに落ちた起動を数え、
   `kSafeAfter` 回続いたら `safe()` が真になるので、その起動では `settings.skipBootAttach()` を呼びます。RP2 では SDK の `_exit` と
   `isr_hardfault` を `BootGuard::crashed()` に向けます（`src/firmware/Rp2.h`）。panic で止まらず、チップを reset します。
@@ -224,7 +226,7 @@ class Blink final : public oep::Interface {
   窓が開きません）。sampler のループは `OepSamplerRun.h` で、host の試験も同じコードを動かします。コンソールの poll は、線を
   もらえないときは読みません（次の poll で読む）。oep-if-console §3 は読む間隔を決めず、
   その connection の要求の後は DATA0 の前に DMSTATUS を読むことと、hart が止まっている間 DATA0 / DATA1 に触れないことだけを
-  求めます（docs/implementation-limits.ja.md §4.1）。
+  求めます（[implementation limits §4.1](../implementation-limits.ja.md#41-classic-esp32)）。
 
 ## 8. push と出来事
 
@@ -250,7 +252,7 @@ describe は VID:PID について何も宣言しません（core §7.5）。host
 
 - `tests/host/run.sh` は、移植できる部分を PC でビルド（g++）して試します: シリアルの口の読み、endpoint の規則（ロック、plan、
   共用）、bind。
-- host の側には、仕様どおりに答える偽の probe があります（`oep-client-python`: `python -m oep_client.fake_serve`）。probe が
+- host の側には、仕様どおりに答える仮想ベンチがあります（`oep-client-python`: `python -m oep_client.virtual_bench_serve`）。probe が
   無くても host を試せ、自分の probe の答えと比べられます。
 - 実機では、`oep dump --port <port>` が probe の宣言をすべて読みます。その後、Python から動かします。
 
@@ -263,5 +265,4 @@ describe は VID:PID について何も宣言しません（core §7.5）。host
 - debug の線が忙しいとき（コンソールの読み取り、flash の書き込み）だけ壊れる fixture は、CPU より線のエッジを先に疑います。
   線が休んでいるとき（コンソールを外す）と忙しいときで試し、まず出力の強さを見ます。直ったかは前後を同じ手順で測り、arm した
   frame の直後に読みます（DUT の周期より長く待つと、arm していない次の frame が入って失敗に見えます）。
-- 問題を直したら、同じ仕組みの箇所（ほかの PHY、ほかの SoC、線を駆動する fixture）を探して一つずつ確かめ、どれが大丈夫でどれが
-  未確認かを書き残します。
+- 問題を直したら、同じ仕組みの箇所（ほかの PHY、ほかの SoC、線を駆動する fixture）を探して一つずつ確かめます。
