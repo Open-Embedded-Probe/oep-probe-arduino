@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.57
 - (EN) The probe's LittleFS is mounted up to three times before its area is formatted (ESP32 / ESP32-P4 and RP2, whose
   core formatted on the first failure): one failed mount on an RP2040 whose flash reads failed now and then lost the
   saved settings and the memo area (bench, 152a3f44e811780e). Bench: a save survives a reflash and thirty saves in a
