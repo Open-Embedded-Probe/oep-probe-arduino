@@ -2,111 +2,114 @@
 
 [日本語](capture.ja.md)
 
-An OEP probe captures signals as a logic analyzer. What you prepare, set and do differs between using the probe **for
-capture alone** and **capturing on the labels of a debug or test jig**. This page puts the differences side by side.
-How many channels each board takes is in [Boards](boards.md#what-each-chip-does); the ESP32-P4 / P4X speed limits are in
-[the section below](#esp32-p4--p4x-speeds-and-lines).
+An OEP probe can capture signals as a logic analyzer. What you prepare, the settings and the steps differ between using the
+probe **for capture only** and **combining it with debug or fixture labels**. This document sums up the differences.
+How many channels each board captures is in [Boards](boards.md#what-each-chip-can-do), and the ESP32-P4 / P4X rate limits are
+in [the section below](#esp32-p4--p4x-speeds-and-lines).
 
 ## Which to choose
 
-| Way | Suits | Probe settings | Channels named by |
+| Way | Good for | Settings on the probe | How channels are named |
 |---|---|---|---|
-| [A. Capture alone](#a-capture-alone) | Look at signals in a circuit, decode protocols | none | the probe's pin names (`GPIO47`) |
-| [B. On labelled wiring](#b-on-labelled-wiring) | Watch the lines a debug or test jig wired, as they are | wiring labels (a fixed jig's settings) | the port's line names (`mcu.swdio`, `mcu@pb6`) |
-| [C. Along with an operation](#c-along-with-an-operation) | Record what flashing, a reset or a transfer did on the lines | as B | as B |
-| [D. Checked in tests](#d-checked-in-tests) | Judge automatically whether the waveform is as expected | as B | as B |
+| [A. Capture only](#a-capture-only) | watching signals of the circuit at hand, decoding protocols | none | the probe's pin names (`GPIO47`) |
+| [B. Capture by labeled wiring](#b-capture-by-labeled-wiring) | observing the wires connected for debugging or a fixture as they are | wiring labels (persistent settings) | the port's line names (`mcu.swdio`, `mcu@pb6`) |
+| [C. Capture together with operations](#c-capture-together-with-operations) | recording what happened during an operation such as flashing, reset or communication | the same as B | the same as B |
+| [D. Check in tests](#d-check-in-tests) | judging automatically whether waveforms are as expected | the same as B | the same as B |
 
 ## Common points
 
-- **It only listens**: capture never drives a pin. It takes pins other functions use (debug lines, UART, SPI) as they are.
-- **Analog is apart**: analog capture switches its pins to the analog function while it runs, so they are not shared.
-  To see one signal both as logic and analog, wire it to two pins.
-- **Modes**:
-  - One shot (`--mode oneshot`): a set number of samples in the probe's memory, with a trigger (edge or level) and the
-    samples kept before it (pretrigger).
-  - Streaming (`--mode stream`): sent to the PC as taken, longer than the probe's memory; the link (USB speed) sets the rate.
-  - Repeat (`--mode repeat`): a one shot per trigger, gathered in one file.
-- **Link**: fast captures read back best over USB (the ESP32-P4's HS vendor bulk, `oep://<probe>?via=usb`). A probe on
-  a UART (classic ESP32) raises its link speed for the read back only (WireSkein picks the rate).
-- **File**: a capture is kept as WireSkein's format (`.wireskein`), with the rate actually used, the trigger position,
-  the probe's clock and the channel names. `wireskein convert` makes PulseView's `.sr` or VCD.
+- **Listen only**: capture does not drive pins. Pins used by other features (debug wires, UART, SPI and so on) can be captured
+  as they are.
+- **Analog is different**: analog capture switches its pins to the analog function while it runs, so they cannot be shared
+  with other features. To watch the same signal with both logic and analog, wire it to two pins.
+- **Kinds of capture**:
+  - One-shot (`--mode oneshot`): captures a fixed number into the probe's memory. You can give a trigger (edge or level) and
+    how many to keep before it (pretrigger).
+  - Streaming (`--mode stream`): sends to the PC while capturing. It can capture longer than the probe's memory. The rate
+    depends on the transport (the USB speed).
+  - Repeat (`--mode repeat`): repeats a one-shot at every trigger and gathers them into one file.
+- **Transport**: USB suits reading out fast captures (the ESP32-P4's HS vendor bulk; `oep://<probe>?via=usb`). A probe
+  connected over UART (classic ESP32) raises the link speed only while reading out (WireSkein chooses it automatically).
+- **Files**: captures are kept in WireSkein's format (`.wireskein`). They contain the rate actually used, the trigger
+  position, the probe's time and the channel names. `wireskein convert` turns them into PulseView's `.sr` or VCD.
 
 ## ESP32-P4 / P4X speeds and lines
 
-The probe captures at the rate it can keep nearest to the one asked and answers the rate it used (`actual_rate` in the
-configure answer; the WireSkein file keeps it too). Before capturing, a query (an ask that sets nothing) tells the rate
-this line count and mode get: in Python the `rate` of `oep_client.capture.LogicCapture(hst).configure(query=True,
-rate=…, mode=…)`, asked once the plan has set the lines. The table below is how that answer comes about.
+The probe captures at the sustainable rate closest to the requested one and answers the rate actually used (`actual_rate` in
+configure's answer; it is also kept in the WireSkein file). Before capturing, ask the probe with query (an inquiry that does
+not change the settings) to learn the rate actually available for that line count and mode. In Python it is the `rate` of the
+answer of `oep_client.capture.LogicCapture(hst).configure(query=True, rate=…, mode=…)` (ask after fixing the line count with
+the plan). The tables below show how that answer is decided.
 
-### Rates
+### Available rates
 
-- 627.451 kHz to 160 MHz: the value nearest the one asked among 160 MHz divided by a whole number and a fraction. A rate
-  in 10 MHz steps such as 60 MHz can be asked.
-- At a rate that divides 160 MHz evenly (160, 80, 53.3, 40, 32 MHz and so on) the samples are evenly spaced. Any other
-  rate uses a fractional divider: the samples fall on the 160 MHz grid (6.25 ns) and are not evenly spaced. Capturing a
-  crystal-driven square and fitting its rising edges to an ideal grid, the largest distance was half a sample plus less
-  than 1 ns with whole dividers, and half a sample plus 2 to 5.5 ns with fractional ones (60, 64, 70, 90, 100, 120 MHz).
-  The answer's `actual_rate` is the mean rate and does not show this. For fine timing choose a whole-divider rate.
+- From 627.451 kHz to 160 MHz. Of the values 160 MHz divided by integers and fractions, the one closest to the requested value
+  is used. Values in 10 MHz steps such as 60 MHz can be requested too.
+- At rates that divide 160 MHz by an integer (160, 80, 53.3, 40, 32 MHz and so on), the sample intervals are even. Other rates
+  use fractional division, and the sample times sit on the 160 MHz grid (6.25 ns), so the intervals are uneven. Capturing a
+  crystal-driven square wave and fitting its rising edges to an ideal grid, the largest deviation is under half a sample + 1 ns
+  for integer division, and half a sample + 2-5.5 ns for fractional division (60, 64, 70, 90, 100, 120 MHz). The answer's
+  `actual_rate` is the average rate and does not show this jitter. For captures that look closely at timing, choose an
+  integer-division rate.
 
-### Lines and sample width
+### Line count and sample width
 
-The bits a sample takes (its width) follow from the number of lines; streaming's limits follow from the width.
+The number of bits in one sample (the width) depends on the number of lines captured. The streaming limit depends on this
+width.
 
 | Lines | 1 | 2 | 3-4 | 5-8 | 9-16 |
 |---|---|---|---|---|---|
 | Width (bits) | 1 | 2 | 4 | 8 | 16 |
 
-### Limits by mode
+### Limits per mode
 
-A rate above the limit is not refused: the probe captures at the nearest rate within it.
+A rate above the limit is captured at the closest rate within the limit (not refused).
 
-| Mode | Limit | Checked on hardware |
+| Mode | Limit | Notes |
 |---|---|---|
-| One-shot (no trigger) | 160 MHz (1 to 16 lines) | the square's periods right at 1, 2, 4, 8, 16 lines and 160 / 120 / 100 / 80 MHz |
-| One-shot (with a trigger) | 100 MB/s: 100 MHz at 8 lines, 50 MHz at 16 (160 MHz up to 4) | the first capture after a boot kept 110 MB/s 3 of 3 and stopped part way at 120 MB/s 3 of 3; later captures keep 200 MB/s |
-| Repeat | the one-shot's limit does not apply | no limit checked |
-| Streaming (HS USB, enough send stages) | 40 MB/s: 160 MHz up to 2 lines, 80 MHz at 4, 40 MHz at 8, 20 MHz at 16 | no loss at 2 lines 160 MHz, 4 lines 80 / 60 / 40 MHz (10 s), 8 lines 40 MHz (30 s, P4X); with a dmseq console too at 8 lines 40 MHz and 4 at 80 |
-| Streaming (through ch32rv's broker, P4X) | measured (20 s, 4 lines) | nothing else: no loss up to 40 MB/s (80 MHz). With a dmseq console: no loss up to 35 MB/s (70 MHz), segments dropped at 40 MB/s |
-| Streaming (little internal RAM, small send stages) | 36 MB/s: 36 MHz at 8 lines | no loss at 8 lines 36 MHz (30 s); about 30 % lost at 40 MHz |
-| Streaming (a route without send stages, or not enough internal RAM) | 8.5 MB/s: 8.42 MHz at 8 lines | no loss at 8 lines 8.42 MHz; 11 % lost at 16 MHz |
-| Streaming with per-line resolution (below) | width raised to 8, 13.4 MB/s: 13.3 MHz | not checked (a value from the worst case) |
+| One-shot (no trigger) | 160 MHz (1-16 lines) | |
+| One-shot (with trigger) | 100 MB/s. 8 lines 100 MHz, 16 lines 50 MHz (up to 4 lines 160 MHz) | the first capture after boot stops midway at 120 MB/s, so the limit is set below that |
+| Repeat | the one-shot limits do not apply | |
+| Streaming (USB HS, when enough send segments can be allocated) | 40 MB/s. Up to 2 lines 160 MHz, 4 lines 80 MHz, 8 lines 40 MHz, 16 lines 20 MHz | the same together with the dmseq console |
+| Streaming (through the ch32rv broker, P4X) | 40 MB/s (4 lines 80 MHz) | 35 MB/s (4 lines 70 MHz) together with the dmseq console. At 40 MB/s segments are dropped |
+| Streaming (little internal RAM, small send segments) | 36 MB/s. 8 lines 36 MHz | 8 lines at 40 MHz lose data |
+| Streaming (a transport that cannot use segments, not enough internal RAM) | 8.5 MB/s. 8 lines 8.42 MHz | |
+| Streaming, per-line resolution (below) | 13.4 MB/s with the width at 8. 13.3 MHz | a value set from the worst case |
 
-- Which limit applies depends on the probe's memory and the route at the time. The answer gives the rate used
-  (`actual_rate`) and what it can hold before sending (`stream_buffer`).
-- Limits while streaming alongside other functions (a console, spi-controller and so on) have not been checked.
+- Which limit applies depends on the probe's memory and the transport at the time. The actual rate is answered in
+  `actual_rate`, and how much can be held before sending in `stream_buffer`.
 
 ### Per-line resolution
 
-Data format 1 (logic blocks, oep-if-capture §1.3) carries each line its own way.
+With data format 1 (logic blocks, oep-if-capture §1.3), the way of carrying can be chosen per line.
 
-- **raw**: every sample.
-- **events**: a record only when the line changed within a tick of D samples (a power of 2). A short pulse inside a tick
-  is not lost: the count of changes stays. Only where in the tick it happened is lost. Slow lines such as CS carried as
-  events take less bandwidth.
-- In Python, name the events lines and their D: `oep_client.acquire.Request(..., resolution={"CS": 64})`. The other
-  lines are raw.
-- Up to 8 lines. Streaming takes it only over a route with send stages.
+- **raw**: carries every sample.
+- **events**: records only when there was a change, per step of D samples (a power of 2). Short pulses within a step do not
+  vanish, and the number of changes is kept. Only the position within the step is lost. Making a slow line such as CS events
+  reduces the amount carried.
+- In Python, give the lines to make events and D like `oep_client.acquire.Request(..., resolution={"CS": 64})`. The other lines
+  are raw.
+- Available up to 8 lines. In streaming, only on transports that can use send segments.
 
-### With other operations
+### Using it together with other operations
 
-- While streaming, the capturing client keeps reading (inside `during`, `wait` reads). Waiting inside `during` for another
-  process to finish (a ch32rv flash, say) stops the reading for that long: data past what the probe or the broker can
-  hold (`stream_buffer` in the configure answer, and so on) is lost. Run a long operation that does not use the session
-  through `wait.beside(fn)` (it runs in another thread and the stream is read until it returns).
-- ch32rv's broker up to 0.29 stalls on sending to a client that does not read, and so do other clients' requests (the
-  session lapses meanwhile). Its next version fixes it.
+- While streaming, the capture client keeps reading (inside `during`, `wait` reads). If you wait inside `during` for another
+  process to finish (such as a ch32rv write), nothing is read meanwhile. Data beyond what the probe or the broker can hold
+  (configure's answer's `stream_buffer` and so on) is lost. Run long operations that do not use the session with
+  `wait.beside(fn)` (it runs them in another thread and keeps reading until they finish).
 
-## A. Capture alone
+## A. Capture only
 
-The probe as a logic analyzer. Nothing to set in the probe.
+Use the probe as a logic analyzer. The probe needs no settings.
 
-**What you need**: a probe that captures, WireSkein (`pip install "wireskein[oep]"`).
+**What to prepare**: a probe that supports capture, WireSkein (`pip install "wireskein[oep]"`).
 
-**Wiring**: the signals to free probe pins, GND shared. Avoid pins wired to the board's parts (LEDs, buttons, boot straps).
+**Wiring**: the signals you want to watch to free pins of the probe, with a common GND. Avoid pins connected to parts on the
+board (LED, buttons, boot straps).
 
 **Steps**:
 
-1. Find the pin names: `oep dump --port oep://<probe>` lists the pins that capture (`GPIO47` and so on).
+1. Check the pin names: `oep dump --port oep://<probe>` shows the pins that can be captured (`GPIO47` and so on).
 2. Capture:
 
    ```sh
@@ -115,28 +118,29 @@ The probe as a logic analyzer. Nothing to set in the probe.
        --trigger SCL:fall --pretrigger 1000 -o i2c.wireskein
    ```
 
-   `NAME` in `NAME=ID` is the channel's name in the file, given each time.
-3. Look and decode:
+   The `NAME` of `NAME=ID` is the channel's name in the file. You give it yourself on every capture.
+3. View and decode:
 
    ```sh
-   wireskein gui i2c.wireskein                 # show it in the browser
-   wireskein analyze i2c.wireskein             # find the buses and decode them (UART, SPI, I2C, CAN, LIN and more)
+   wireskein gui i2c.wireskein                 # show in a browser
+   wireskein analyze i2c.wireskein             # find buses and decode (UART, SPI, I2C, CAN, LIN and so on)
    wireskein decode i2c.wireskein --spec '{"buses":[{"protocol":"i2c","pins":{"sda":"SDA","scl":"SCL"}}]}'
    ```
 
-**Given each time**: channels, rate, samples (or a duration when streaming), trigger, pretrigger. None stays in the probe.
+**What you decide (given on every capture)**: channels, rate, sample count (time when streaming), trigger, pretrigger. None of
+them stays on the probe.
 
-## B. On labelled wiring
+## B. Capture by labeled wiring
 
-On a probe whose wiring has names (labels) for debugging or a test jig, channels are named by line. When the wiring
-changes, fix the labels and the same command still works.
+On a probe whose wiring has names (labels) for debugging or a fixture, channels can be named by line name. When the wiring
+changes, fixing the labels lets the same command capture.
 
-**What you need**: A's, plus the wiring labels.
+**What to prepare**: A, plus wiring labels.
 
-**Settings (once, saved in the probe)**:
+**Settings (once, saved on the probe)**:
 
-- `oep pins --wire <rvswd|swio> --name <port> --save` finds the debug lines and makes them labels.
-- Other lines: `oep settings set <probe> core channel.GPIO12.label=mcu.rx@pa9 channel.GPIO6.label=mcu@pb6 --save`.
+- Debug wires can be found and turned into labels with `oep pins --wire <rvswd|swio> --name <port> --save`.
+- Other wires are written like `oep settings set <probe> core channel.GPIO12.label=mcu.rx@pa9 channel.GPIO6.label=mcu@pb6 --save`.
   The naming rules are in [Settings](settings.md#pin-labels-port-and-line-names).
 
 **Steps**:
@@ -144,25 +148,25 @@ changes, fix the labels and the same command still works.
 ```sh
 wireskein capture --source oep:oep://<probe> \
     --channels SWDIO=mcu.swdio,SWCLK=mcu.swclk,RX=mcu.rx --rate 40M --samples 1M -o debug.wireskein
-wireskein analyze debug.wireskein           # decodes the CH32 debug lines (RVSWD, SWIO) too
+wireskein analyze debug.wireskein           # CH32 debug wires (RVSWD, SWIO) can be decoded too
 ```
 
-**How it differs from A**:
+**Differences from A**:
 
-| | A. Capture alone | B. Labelled |
+| | A. Capture only | B. Labeled |
 |---|---|---|
-| Probe settings | none | labels (saved, a fixed jig) |
-| Channels named by | `GPIO47` | `mcu.swdio`, `mcu@pb6` (case does not matter) |
-| When the wiring changes | fix the pins in the command | fix the labels; the command stays |
-| Other PCs, other tools | someone tells them the pin mapping | the same name reaches the same line |
+| Probe settings | none | labels (saved, persistent) |
+| How channels are named | `GPIO47` | `mcu.swdio`, `mcu@pb6` (case-insensitive) |
+| When the wiring changes | fix the pins in the command | fix the labels. The command stays |
+| Other PCs, other tools | a person passes on the pin mapping | the same names point at the same lines |
 
-## C. Along with an operation
+## C. Capture together with operations
 
-Capture while flashing, resetting, attaching a debugger or making an I2C transfer, and you have a record of what the
-operation did on the lines. Run the operation on the same probe while capturing its lines (with B's labels, the
-operation and the capture use the same names).
+Capturing while flashing, resetting, connecting the debugger, doing I2C transfers and so on records what the operation did to
+the lines. Operate with other pins of the same probe while capturing those lines (with B's labels, the operation and the
+capture use the same names).
 
-**Steps (Python)**: run the operation inside the capture.
+**Steps (Python)**: write it so the operation runs during the capture.
 
 ```python
 from oep_client import acquire, core, link, riscv
@@ -175,7 +179,7 @@ try:
     w = riscv.Wire(hst, "oep.wire.rvswd")
     def steps(wait):
         wait(0.01)
-        conn, _ = w.attach(halt=True, pins=(18, 17))   # the operation, while capturing
+        conn, _ = w.attach(halt=True, pins=(18, 17))   # an operation during the capture
         w.detach(conn)
         wait(0.01)
     res = acquire.capture(hst, acquire.Request([("dio", "GPIO18"), ("clk", "GPIO17")], 40_000_000, 0,
@@ -185,18 +189,19 @@ finally:
     hst.end()
 ```
 
-- With a trigger, "arm, then operate" makes the event the operation causes fire the trigger.
-- The classic ESP32's sampler holds the SWIO line while its window runs. To catch what an operation does, use a trigger
-  ([Getting started](getting-started.md#capture-signals-esp32-p4)).
-- For logic and analog cut on one trigger, use the capture-group (give `--analog` with `--trigger` and WireSkein pairs them).
+- If the operation uses a trigger in the form "arm, then operate", the event the operation causes fires the trigger.
+- The classic ESP32's sampler stops the SWIO wire during its capture window. Use a trigger to capture the operation's effect
+  ([Getting started](getting-started.md#capturing-signals-esp32-p4)).
+- To cut logic and analog on the same trigger, use capture-group (giving `--analog` and `--trigger` together makes WireSkein
+  group them).
 
-## D. Checked in tests
+## D. Check in tests
 
-Not just capture: judge in a test whether the waveform is as expected. Write the test's steps and expectations in
-WireSkein's record (runlog) and check it with `wireskein verify`. Under pytest, pytest-embedded-wireskein keeps and
-checks the record per test.
+Besides capturing waveforms, judge in tests whether they are as expected. Write the test steps and expectations in WireSkein's
+record (runlog) and check them with `wireskein verify`. In pytest, pytest-embedded-wireskein handles the per-test recording and
+checking.
 
-- Expectations are written as `square` (period and duty), `uart`, `i2c`, `voltage` and more. Results are pass / fail
-  with the measured values, and JUnit XML.
-- Name lines by label, and the test code survives changes to the jig's wiring.
-- The steps are in [WireSkein's capture tests](https://github.com/Open-Embedded-Probe/wireskein/blob/main/docs/capture-test-guide.md).
+- Expectations are written as `square` (period and duty), `uart`, `i2c`, `voltage` and so on. The result is pass/fail with the
+  measured values, and also JUnit XML.
+- Naming lines by label keeps the test code unchanged when the fixture's wiring changes.
+- The steps are in [WireSkein's capture tests](https://github.com/Open-Embedded-Probe/wireskein/blob/main/docs/capture-test-guide.ja.md).
