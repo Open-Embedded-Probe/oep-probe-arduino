@@ -10,25 +10,28 @@
 | | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32（X035 / V307 / H417） | ほかの ESP32（S3、C3、C6 など） |
 |---|---|---|---|---|---|
 | リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | 無し: 自分でビルド（下） |
-| 実機での確認 | 済み | 済み | 済み | 無し（ビルドと host テストのみ） | 無し |
-| 経路 | USB CDC、vendor bulk、HID | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge（GPIO37 / 38、115200） | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID | USB-Serial/JTAG か USB CDC |
-| RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | あり | あり | あり（dedicated GPIO。ビルドのみ、未確認） |
+| 経路 | USB CDC、vendor bulk、HID（UART bridge は選べば: GP8 / GP9） | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge（GPIO37 / 38、115200） | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID（X035 は vendor bulk だけ）。USB CDC と UART bridge は選べば | USB-Serial/JTAG か USB CDC |
+| RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | あり | あり | あり（dedicated GPIO） |
 | SWIO（CH32V00x の 1 線） | あり | あり | あり | あり（X035 以外） | 無し |
 | SWD（ARM） | あり | あり | あり | あり（X035 以外） | 無し |
 | target のコンソール（debug module 経由） | あり | あり | あり | あり | あり |
 | GPIO、UART の fixture | あり | あり（UART 2 つ） | あり | GPIO。UART は X035 以外 | あり |
-| ロジックのキャプチャ | PIO + DMA: 8 ch、ワンショット、エッジ / レベルのトリガ | PARLIO: 16 ch まで。速さは [キャプチャ](capture.ja.md#esp32-p4--p4x-の速さと本数) の表。ワンショットのレベル / エッジのトリガ、プリトリガは 32 Ki サンプルまで（16 ch） | GPIO の sampler: 8 ch、1〜300 kHz、ワンショット。レベル / エッジのトリガを区切りごとに探す | 1 つのポートの 0〜15 番から 8 ch、250 kS/s まで、ワンショット、エッジ / レベルのトリガ（X035 以外） | 無し |
+| ロジックのキャプチャ | PIO + DMA: 8 ch、ワンショット、エッジ / レベルのトリガ | PARLIO: 16 ch まで。速さは [キャプチャ](capture.ja.md#esp32-p4--p4x-の速さと本数) の表。ワンショットのレベル / エッジのトリガ。プリトリガの上限は [implementation limits §1.7](../implementation-limits.ja.md#17-キャプチャcaptureと-fixture) | GPIO の sampler: 8 ch、1〜300 kHz、ワンショット。レベル / エッジのトリガを区切りごとに探す | 1 つのポートの 0〜15 番から 8 ch、250 kS/s まで、ワンショット、エッジ / レベルのトリガ（X035 以外）。H417 は UHSIF の 16 ch も（流し続け、200 MS/s まで） | 無し |
 | アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | ADC1、4 ch、ADC のサンプル時間の段（数十〜数百 kS/s）。X035 以外 | 無し（ビルドしていない） |
-| トラックを一緒に始める（capture-group） | ロジック + アナログ | ロジック + アナログ | ロジック（sampler）+ アナログ | 無し | 無し |
-| SPI / I2C の target（DUT の controller の相手） | I2C、SPI（PIO。未検証） | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | あり（未確認） |
+| トラックを一緒に始める（capture-group） | ロジック + アナログ。出来事の元はアナログの横切り（アナログのトラックだけ） | ロジック + アナログ。出来事の元はロジックのレベル / エッジかアナログの横切り | ロジック（sampler）+ アナログ。出来事の元はアナログの横切り（アナログのトラックだけ） | 無し | 無し |
+| SPI / I2C の target（DUT の controller の相手） | I2C、SPI（PIO） | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | あり |
 | SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 750 kHz まで） | あり（P4 と同じ） | あり（X035 以外。GPIO、250 kHz まで） | 無し（ビルドしていない） |
 | PWM の出力 | あり（PWM のスライス） | あり（LEDC） | あり（LEDC） | 無し | 無し（ビルドしていない） |
 | エッジを数える（counter） | あり（割り込み、100 kHz まで） | あり（PCNT、40 MHz まで） | あり（PCNT、10 MHz まで） | あり（X035 以外） | 無し（ビルドしていない） |
 | アナログの出力（DAC） | 無し | 無し | GPIO25 / 26、8 bit | PA4 / PA5、12 bit（V307、H417） | 無し |
-| 設定の保存 | LittleFS のファイル（FS の領域: 256 KB / 512 KB） | LittleFS のファイル（パーティション `spiffs`） | LittleFS のファイル（パーティション `spiffs`） | 無し（保存の場所がまだ無い。X035 は設定そのものが無い） | LittleFS のファイル（パーティション `spiffs`） |
-| メモ欄（`oep.probe.memo`） | 2 KB のオブジェクトが 52 個（RP2040）/ 64 個（RP2350） | 2 KB のオブジェクトが 64 個 | 2 KB のオブジェクトが 64 個 | 無し | 2 KB のオブジェクトが 64 個（確かめていない） |
+| 設定の保存 | LittleFS のファイル（FS の領域: 256 KB / 512 KB） | LittleFS のファイル（パーティション `spiffs`） | LittleFS のファイル（パーティション `spiffs`） | 無し（保存しない。X035 は設定そのものが無い） | LittleFS のファイル（パーティション `spiffs`） |
+| メモ欄（`oep.probe.memo`） | 2 KB のオブジェクトが 52 個（RP2040）/ 64 個（RP2350） | 2 KB のオブジェクトが 64 個 | 2 KB のオブジェクトが 64 個 | 無し | 2 KB のオブジェクトが 64 個 |
 
-「無し」は、そのチップ向けの実装がライブラリにまだ無いという意味で、チップにできないという意味ではありません。
+「無し」は、そのチップ向けの実装がライブラリに無いという意味で、チップにできないという意味ではありません。
+
+capture-group の出来事の元（oep-spec capture §4.4）は、1 つのトラックの条件で、束ねたトラックすべての区画を同じ瞬間で切ります。
+束ねるトラックはどれも linked のトリガで configure します。RP2 の PIO のロジックと classic ESP32 の sampler は linked のトリガを
+持たないので、出来事の元のある組には入れません（出来事の元の無い組で一緒に始めることはできます）。
 
 アナログのキャプチャは、取っている間その pad をアナログの機能に切り替え、デジタルの入出力を切ります。そのためアナログの
 チャネルは誰とも共有しません。そこにロジックのキャプチャ、fixture、線を載せる plan も、それらのピンにアナログを載せる plan も
