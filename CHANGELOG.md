@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.58
 - (EN) Test vectors from oep-spec 526d273 (the settings file carries the memo area). The probe check around a
   firmware update also fails when the memo area changed (it reads the settings file with memo, oep-client-python).
 - (JA) テストベクタを oep-spec 526d273 にそろえた（設定のファイルがメモ欄も運ぶ）。ファームの更新の前後の確かめは、メモ欄が変わった
