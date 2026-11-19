@@ -1,4 +1,11 @@
 name: Tests
+# a manual run's title says the core versions it asked for (the list of runs shows it); a push or a pull request keeps
+# its usual title
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('Tests - ESP32 {0}, arduino-pico {1}', inputs.esp32_core || 'pinned', inputs.rp2040_core || 'pinned')
+      || github.event_name == 'pull_request' && github.event.pull_request.title
+      || github.event.head_commit.message }}
 
 on:
   push:
@@ -57,7 +64,6 @@ jobs:
             !~/.arduino15/staging
           key: arduino15-${{ runner.os }}-${{ matrix.cache }}-${{ inputs.esp32_core }}-${{ inputs.rp2040_core }}
       - name: Use the requested core versions
-        if: ${{ inputs.esp32_core != '' || inputs.rp2040_core != '' }}
         env:
           ESP32_CORE: ${{ inputs.esp32_core }}
           RP2040_CORE: ${{ inputs.rp2040_core }}
@@ -68,10 +74,10 @@ jobs:
             fi
           done
           files=$(find examples tests -name sketch.yaml)
+          echo "Cores: ESP32 ${ESP32_CORE:-pinned}, arduino-pico ${RP2040_CORE:-pinned}" >> "$GITHUB_STEP_SUMMARY"
           [ -n "$ESP32_CORE" ] && sed -i -E "s/esp32:esp32 \([^)]*\)/esp32:esp32 ($ESP32_CORE)/" $files
           [ -n "$RP2040_CORE" ] && sed -i -E "s/rp2040:rp2040 \([^)]*\)/rp2040:rp2040 ($RP2040_CORE)/" $files
-          grep -rhoE "(esp32:esp32|rp2040:rp2040) \([^)]*\)" $files | sort | uniq -c
-          echo "Built with ESP32 ${ESP32_CORE:-pinned}, arduino-pico ${RP2040_CORE:-pinned} (the repository pins its own)." >> "$GITHUB_STEP_SUMMARY"
+          grep -rhoE "(esp32:esp32|rp2040:rp2040) \([^)]*\)" $files | sort | uniq -c | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Update board and library indexes
         env:
           BOARD_INDEX_URLS: ${{ matrix.index_urls }}
