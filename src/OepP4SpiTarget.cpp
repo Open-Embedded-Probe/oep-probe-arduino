@@ -130,7 +130,9 @@ bool P4SpiTarget::begin() {
   pins_.ownStrength(static_cast<uint16_t>(miso_), kMisoDrive);
 #if defined(OEP_SPI_CS_FILTER)   // CS through the pad's glitch filter (the header): a CS spike does not end the frame
   if (!cs_filtered_) cs_filtered_ = PadFilter::take(cs_);
+#if defined(SOC_GPIO_SUPPORT_PIN_HYS_FILTER)   // the ESP32-P4's pads (not the S3's)
   gpio_ll_pin_input_hysteresis_enable(&GPIO, static_cast<uint32_t>(sck_));
+#endif
   if (sck_filter_ && !sck_filtered_) {
     sck_filtered_ = PadFilter::take(sck_);
     if (!sck_filtered_) return false;   // asked for and not there: configure fails (state 0)
@@ -271,7 +273,9 @@ void P4SpiTarget::stop() {
 #endif
   if (started_) spi_slave_free(SPI2_HOST);
 #if defined(OEP_SPI_CS_FILTER)
+#if defined(SOC_GPIO_SUPPORT_PIN_HYS_FILTER)
   if (sck_ >= 0) gpio_ll_pin_input_hysteresis_disable(&GPIO, static_cast<uint32_t>(sck_));
+#endif
   if (sck_filtered_) {
     PadFilter::give(sck_);
     sck_filtered_ = false;
