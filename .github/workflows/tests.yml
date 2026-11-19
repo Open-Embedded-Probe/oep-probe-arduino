@@ -3,7 +3,8 @@ name: Tests
 # its usual title
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch'
-      && format('Tests - ESP32 {0}, arduino-pico {1}', inputs.esp32_core || 'pinned', inputs.rp2040_core || 'pinned')
+      && format('Tests - ESP32 {0}, arduino-pico {1}, CH32RV {2}', inputs.esp32_core || 'pinned',
+                inputs.rp2040_core || 'pinned', inputs.ch32rv_core || 'pinned')
       || github.event_name == 'pull_request' && github.event.pull_request.title
       || github.event.head_commit.message }}
 
@@ -21,6 +22,10 @@ on:
         default: ""
       rp2040_core:
         description: "arduino-pico core version to build with (empty = pinned)"
+        required: false
+        default: ""
+      ch32rv_core:
+        description: "ArduinoCore-CH32RV core version to build with (empty = pinned)"
         required: false
         default: ""
 
@@ -62,22 +67,24 @@ jobs:
           path: |
             ~/.arduino15
             !~/.arduino15/staging
-          key: arduino15-${{ runner.os }}-${{ matrix.cache }}-${{ inputs.esp32_core }}-${{ inputs.rp2040_core }}
+          key: arduino15-${{ runner.os }}-${{ matrix.cache }}-${{ inputs.esp32_core }}-${{ inputs.rp2040_core }}-${{ inputs.ch32rv_core }}
       - name: Use the requested core versions
         env:
           ESP32_CORE: ${{ inputs.esp32_core }}
           RP2040_CORE: ${{ inputs.rp2040_core }}
+          CH32RV_CORE: ${{ inputs.ch32rv_core }}
         run: |
-          for v in "$ESP32_CORE" "$RP2040_CORE"; do
+          for v in "$ESP32_CORE" "$RP2040_CORE" "$CH32RV_CORE"; do
             if [ -n "$v" ] && ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
               echo "::error::a core version must look like 3.3.13 or 4.0.0-RC1, got '$v'"; exit 1
             fi
           done
           files=$(find examples tests -name sketch.yaml)
-          echo "Cores: ESP32 ${ESP32_CORE:-pinned}, arduino-pico ${RP2040_CORE:-pinned}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Cores: ESP32 ${ESP32_CORE:-pinned}, arduino-pico ${RP2040_CORE:-pinned}, CH32RV ${CH32RV_CORE:-pinned}" >> "$GITHUB_STEP_SUMMARY"
           [ -n "$ESP32_CORE" ] && sed -i -E "s/esp32:esp32 \([^)]*\)/esp32:esp32 ($ESP32_CORE)/" $files
           [ -n "$RP2040_CORE" ] && sed -i -E "s/rp2040:rp2040 \([^)]*\)/rp2040:rp2040 ($RP2040_CORE)/" $files
-          grep -rhoE "(esp32:esp32|rp2040:rp2040) \([^)]*\)" $files | sort | uniq -c | tee -a "$GITHUB_STEP_SUMMARY"
+          [ -n "$CH32RV_CORE" ] && sed -i -E "s/ch32-riscv-ug:ch32rv \([^)]*\)/ch32-riscv-ug:ch32rv ($CH32RV_CORE)/" $files
+          grep -rhoE "(esp32:esp32|rp2040:rp2040|ch32-riscv-ug:ch32rv) \([^)]*\)" $files | sort | uniq -c | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Update board and library indexes
         env:
           BOARD_INDEX_URLS: ${{ matrix.index_urls }}
