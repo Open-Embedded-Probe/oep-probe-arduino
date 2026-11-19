@@ -24,7 +24,7 @@ jobs:
       builds: ${{ steps.matrix.outputs.builds }}
     steps:
       - uses: actions/checkout@v5
-      - name: List P4 and P4X builds
+      - name: List every (example, profile) the release builds or checks
         id: matrix
         run: python3 tests/compile/test_profiles.py --matrix >> "$GITHUB_OUTPUT"
 
@@ -55,7 +55,7 @@ jobs:
           PROFILE: ${{ matrix.profile }}
         run: arduino-cli compile --clean --warnings all --profile "$PROFILE" --output-dir build "$SKETCH"
       - name: Verify firmware identity
-        if: matrix.release
+        if: matrix.release && startsWith(matrix.profile, 'esp32p4')
         env:
           PROFILE: ${{ matrix.profile }}
         run: python3 tools/check_p4_firmware.py build "$PROFILE"

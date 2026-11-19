@@ -3,7 +3,8 @@
 # Copyright (c) 2026 Open Embedded Probe
 """Test the release workflow's actual profile discovery and model selection.
 
---matrix emits its P4/P4X build matrix for the test workflow.
+--matrix emits the test workflow's build matrix: every (example, profile) the release builds or checks, so a push
+builds what a release does.
 """
 import json
 from pathlib import Path
@@ -68,7 +69,6 @@ class BuildProfilesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["--matrix"]:
-        print("builds=" + json.dumps([b for b in release_builds()
-                                     if b["profile"] in ("esp32p4", "esp32p4x")]))
+        print("builds=" + json.dumps(release_builds()))
     else:
         unittest.main()
