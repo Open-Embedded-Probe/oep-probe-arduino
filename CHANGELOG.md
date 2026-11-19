@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.59
 - (EN) ESP32-P4 / P4X spi-target: SCK's pad has its input hysteresis while the target runs, and configure takes
   sck_filter (oep-spec baa2605, fixture §4: features bit1, describe sck_filter_ns 25) - SCK through the pad's glitch
   filter, for a controller whose SCK high and low are each longer than 25 ns. An H417 GPIO SoftSPI (10 MHz pins, 250 kHz /
