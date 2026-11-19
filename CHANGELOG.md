@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Every sketch.yaml on Arduino-ESP32 3.3.13 and arduino-pico 6.4.0 (every example and profile built in CI:
+  Tests run #112). CI: a push builds every (example, profile) the release does, and a manual run builds them with other
+  core versions (esp32_core, rp2040_core, ch32rv_core), its title naming them. ESP32-S3: the spi-target's SCK
+  hysteresis only on pads that have it (the S3 build failed).
+- (JA) 全部の sketch.yaml を Arduino-ESP32 3.3.13 と arduino-pico 6.4.0 にした（全部の例とプロファイルを CI でビルド: Tests #112）。CI: push の
+  たびにリリースと同じ全部の組をビルドし、手で回すときはほかのコアの版（esp32_core、rp2040_core、ch32rv_core）でビルドして、実行の名前に
+  その版を出す。ESP32-S3: spi-target の SCK のヒステリシスは、それを持つ端子だけにした（S3 のビルドが落ちていた）。
 
 ## 0.0.59
 - (EN) ESP32-P4 / P4X spi-target: SCK's pad has its input hysteresis while the target runs, and configure takes

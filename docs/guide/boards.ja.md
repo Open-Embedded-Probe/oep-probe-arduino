@@ -87,7 +87,7 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
      esp32s3:
        fqbn: esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc
        platforms:
-         - platform: esp32:esp32 (3.3.12)
+         - platform: esp32:esp32 (3.3.13)
            platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
        libraries:
          - OpenEmbeddedProbe (<ライブラリの版>)
