@@ -82,10 +82,22 @@ class VendorStream final : public Stream {
   int read() override { return vendor_.read(); }
   int peek() override { return vendor_.peek(); }
   size_t write(uint8_t c) override { return vendor_.write(c); }
-  size_t write(const uint8_t *data, size_t length) override { return vendor_.write(data, length); }
+  // The core's write takes what fits in its 256-byte FIFO and starts sending it; a result is longer, so the rest is
+  // written as the FIFO drains (the core's write runs its USB task) - a frame cut short broke the host's framing (the
+  // X035's describe never got through). Given up when the host is gone or has not taken IN for kWaitMs.
+  size_t write(const uint8_t *data, size_t length) override {
+    size_t at = 0;
+    const uint32_t start = millis();
+    while (at < length) {
+      at += vendor_.write(data + at, length - at);
+      if (at < length && (!vendor_.mounted() || millis() - start > kWaitMs)) break;
+    }
+    return at;
+  }
   void flush() override { vendor_.flush(); }
 
  private:
+  static constexpr uint32_t kWaitMs = 2000;
   CH32RVUsbDeviceVendor &vendor_;
 };
 

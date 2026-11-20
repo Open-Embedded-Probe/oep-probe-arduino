@@ -1,6 +1,13 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) CH32 vendor bulk (X035, V307): a result is written whole. The core's vendor write takes what fits in its
+  256-byte FIFO, so any answer longer than that (describe) was cut short and the host never read a frame (the X035
+  probe answered nothing). Now the rest is written as the FIFO drains, given up after 2 s without the host taking IN.
+  Checked on a CH32X035F8U6: oep dump answers.
+- (JA) CH32 の vendor bulk（X035、V307）: 答えをまるごと書く。コアの vendor の write は 256 byte の FIFO に入る分しか受け取らないので、
+  それより長い答え（describe）は途中で切れ、host はフレームを読めなかった（X035 のプローブは何も答えなかった）。FIFO が空くたびに残りを
+  書き、host が 2 秒 IN を取らなければやめる。CH32X035F8U6 で oep dump が答えることを確かめた。
 - (EN) ESP32 / P4 / P4X pwm: a start or a new frequency runs the asked duty from the first period's head. The line
   stays low until then; before it, there was a short pulse and then about 10 periods of the channel's old duty (a 1 MHz
   0.25 set after 100 kHz 0.5 showed 975 ns highs first). LEDC through ESP-IDF's driver (low-speed): output k has timer
