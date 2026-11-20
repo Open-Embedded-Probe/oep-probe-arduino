@@ -1,6 +1,19 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32 / P4 / P4X pwm: a start or a new frequency runs the asked duty from the first period's head. The line
+  stays low until then; before it, there was a short pulse and then about 10 periods of the channel's old duty (a 1 MHz
+  0.25 set after 100 kHz 0.5 showed 975 ns highs first). LEDC through ESP-IDF's driver (low-speed): output k has timer
+  k and two channels it takes in turn, the one whose stop has landed set up before the line is connected to it. A new
+  duty at the same frequency takes effect from the next period. Checked on e8f60ae84dd7 (P4X), captured on the PWM's
+  own channel at 80 MS/s and 1 MS/s: from stopped, 100 kHz to 1 MHz, 1 kHz to 2 kHz, a duty change - no pulse off the
+  duty after the set. Host tests (pwm).
+- (JA) ESP32 / P4 / P4X の pwm: 始めるときと周波数を替えるとき、最初の周期の頭から指定の duty で出す。それまで線は low のまま。前は、
+  短いパルスが 1 つ出たあと、約 10 周期はチャネルの前の duty が出ていた（100 kHz 0.5 の後に 1 MHz 0.25 にすると、最初は high が 975 ns）。
+  LEDC は ESP-IDF のドライバ（低速）で使う。出力 k はタイマー k と 2 つのチャネルを交互に使い、止まったことが確かなほうを設定してから線を
+  つなぐ。同じ周波数で duty だけを替えると、次の周期から効く。e8f60ae84dd7（P4X）で、PWM の線を同じチャネルで 80 MS/s と 1 MS/s で
+  取り込んで確かめた: 止まった状態から、100 kHz から 1 MHz、1 kHz から 2 kHz、duty だけの変更で、設定の後に duty から外れたパルスは無い。
+  ホストの試験（pwm）。
 - (EN) Every sketch.yaml on Arduino-ESP32 3.3.13 and arduino-pico 6.4.0 (every example and profile built in CI:
   Tests run #112). CI: a push builds every (example, profile) the release does, and a manual run builds them with other
   core versions (esp32_core, rp2040_core, ch32rv_core), its title naming them. ESP32-S3: the spi-target's SCK

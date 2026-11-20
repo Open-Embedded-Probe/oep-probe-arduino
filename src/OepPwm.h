@@ -7,8 +7,9 @@
 // Role k is output k (0 .. kMaxChannels - 1). hz 0 stops an output and drives its line low. The frequency and duty made
 // are the nearest the hardware takes, answered as a fraction (Hz) and the duty on the request's scale.
 //
-//   ESP32 (classic, P4)   LEDC through arduino-esp32 (ledcAttach / ledcWrite / ledcReadFreq): the resolution the most
-//                         bits the 80 MHz clock leaves at that frequency (14 at most), the frequency as the driver reads it
+//   ESP32 (classic, P4)   LEDC (ESP-IDF's driver, low-speed): output k on timer k and channels 2k / 2k + 1, the resolution
+//                         the most bits LEDC's clock leaves at that frequency (14 at most); a start or a new frequency
+//                         holds the line low until a period begins, then runs the duty from its head
 //   RP2040 / RP2350       a PWM slice a pin: clk_sys / (divider x (wrap + 1)), the divider in 1/16 steps; two roles on
 //                         one slice are refused at the plan (a slice has one frequency)
 // OEP_HOST_FAKE_PWM: a host test's fake (the frequency as asked, the duty on 8 bits).
