@@ -9,6 +9,7 @@
 #elif defined(ARDUINO_ARCH_ESP32)
 #define OEP_PWM_ESP 1
 #include <driver/ledc.h>
+#include <esp_timer.h>
 #include <esp_rom_gpio.h>
 #include <soc/gpio_sig_map.h>
 #include <soc/ledc_periph.h>
@@ -55,8 +56,8 @@ struct Ledc {
   int8_t live = -1, last = 1;              // the channel (0 / 1) driving the line, -1 none; the one used last
   uint32_t hz = 0;
   uint8_t bits = 0;
-  bool stopping[2] = {false, false};       // a stop not landed for certain before settled[k] (micros)
-  uint32_t settled[2] = {0, 0};
+  bool stopping[2] = {false, false};       // a stop not landed for certain before settled[k] (esp_timer, us)
+  int64_t settled[2] = {0, 0};             // 64 bits: a stop kept for hours is never read as in the future
 };
 Ledc ledc[4];
 
@@ -71,7 +72,7 @@ void retire(int role, int pad) {
   esp_rom_gpio_connect_out_signal(pad, SIG_GPIO_OUT_IDX, false, false);
   ledc_stop(kMode, ledcChannel(role, l.live), 0);
   l.stopping[l.live] = true;
-  l.settled[l.live] = micros() + periodUs(l.hz);
+  l.settled[l.live] = esp_timer_get_time() + periodUs(l.hz);
   l.live = -1;
 }
 #elif defined(OEP_PWM_RP2)
@@ -97,7 +98,7 @@ bool startOutput(int role, int pad, uint32_t hz, uint16_t duty, uint32_t &num, u
     retire(role, pad);
     const int k = 1 - l.last;
     if (l.stopping[k]) {                     // set twice within a period: wait for that channel's stop to land
-      while (static_cast<int32_t>(micros() - l.settled[k]) < 0) {}
+      while (esp_timer_get_time() < l.settled[k]) {}
       l.stopping[k] = false;
     }
     digitalWrite(pad, LOW);                  // the line low from the GPIO until the channel takes it
@@ -110,7 +111,7 @@ bool startOutput(int role, int pad, uint32_t hz, uint16_t duty, uint32_t &num, u
     t.freq_hz = hz;
     t.clk_cfg = kClockSource;
     if (ledc_timer_config(&t) != ESP_OK) return false;
-    const uint32_t now = micros();
+    const int64_t now = esp_timer_get_time();
     if (l.stopping[1 - k]) l.settled[1 - k] = now + periodUs(hz);   // the timer started again: one new period
     const ledc_channel_t ch = ledcChannel(role, k);
     if (ledc_bind_channel_timer(kMode, ch, t.timer_num) != ESP_OK ||
