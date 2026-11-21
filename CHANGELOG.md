@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.61
 - (EN) CH32X035 SWIO: a read bit is sampled after a fixed count of loop rounds from RAM, not on a SysTick deadline. The
   wait's jitter (a loop round, some 100 ns) was as wide as the window where a one has risen and a zero is still held
   (710-790 ns after the release), so bits were mis-read now and then and a flash write could lose its session midway.
