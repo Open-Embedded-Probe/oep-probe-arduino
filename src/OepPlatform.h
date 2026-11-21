@@ -191,18 +191,27 @@ inline void platformParkPins(const uint8_t *pins, size_t count) {
 
 // The same, for every channel set in `mask`.
 // Pins this very chip uses itself and a sketch must never touch, found at start-up from what the chip says it is: one
-// firmware image runs on every board of a chip family, so the pin list cannot be fixed at build time. ESP32: the
-// ESP32-PICO-D4 / PICO-V3 / PICO-V3-02 and the D2WD wire their in-package flash to GPIO16 / 17 (always taken), and a
-// PSRAM in use (WROVER, D0WDR2) takes them too - only when the build enabled it: psramFound() is false on a build with
-// PSRAM off, and the pins are then free. Parking them Hi-Z crashed the PICO-D4 of an M5Stack ATOM at boot (TG1WDT,
-// 2026-10-01). The other ESP32s: the GPIOs ESP-IDF reserved as it started (esp_gpio_reserve: the flash's and the
+// firmware image runs on every board of a chip family, so the pin list cannot be fixed at build time. Classic ESP32,
+// from what the chip declares (esp_chip_info, from the package in eFuse): a chip with in-package flash
+// (CHIP_FEATURE_EMB_FLASH: the PICO-D4 / PICO-V3 / PICO-V3-02 and the D2WD) wires it to GPIO16 / 17 (always taken); a
+// PSRAM in the package and nothing more (CHIP_FEATURE_EMB_PSRAM: the D0WDR2-V3) has its CE# on GPIO16 and leaves GPIO17
+// free (ESP32-WROOM-32E datasheet, Table 3 note 3); a PSRAM outside the package and in use (WROVER) takes the pins the
+// build gives it (CONFIG_D0WD_PSRAM_CS_IO / CLK_IO, 16 / 17) - only when the build enabled it: psramFound() is false
+// on a build with PSRAM off, and the pins are then free. Parking them Hi-Z crashed the PICO-D4 of an M5Stack ATOM at
+// boot (TG1WDT). The other ESP32s: the GPIOs ESP-IDF reserved as it started (esp_gpio_reserve: the flash's and the
 // PSRAM's pads, which change with the module - an ESP32-S3R8's octal PSRAM takes GPIO33-37), read from the chip at run
 // time, so no chip or module needs a list here. Other chips: none found so far.
 inline uint64_t platformUnusablePins() {
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
-  const char *model = ESP.getChipModel();
-  const bool flash = model && (strstr(model, "PICO") || strstr(model, "D2WD"));
-  if (flash || psramFound()) return (uint64_t{1} << 16) | (uint64_t{1} << 17);
+  esp_chip_info_t info;
+  esp_chip_info(&info);
+  if (info.features & CHIP_FEATURE_EMB_FLASH) return (uint64_t{1} << 16) | (uint64_t{1} << 17);
+  if (info.features & CHIP_FEATURE_EMB_PSRAM) return uint64_t{1} << 16;
+#if defined(CONFIG_D0WD_PSRAM_CS_IO) && defined(CONFIG_D0WD_PSRAM_CLK_IO)
+  if (psramFound()) return (uint64_t{1} << CONFIG_D0WD_PSRAM_CS_IO) | (uint64_t{1} << CONFIG_D0WD_PSRAM_CLK_IO);
+#else
+  if (psramFound()) return (uint64_t{1} << 16) | (uint64_t{1} << 17);
+#endif
 #elif defined(ARDUINO_ARCH_ESP32)
   uint64_t reserved = 0;
   for (int pin = 0; pin < SOC_GPIO_PIN_COUNT; ++pin)

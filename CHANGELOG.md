@@ -1,6 +1,14 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Classic ESP32: the pins its own flash / PSRAM take come from what the chip declares (esp_chip_info, from the
+  package in eFuse), no longer from its model name - in-package flash (CHIP_FEATURE_EMB_FLASH) GPIO16 / 17 as before;
+  a PSRAM in the package alone (CHIP_FEATURE_EMB_PSRAM, the D0WDR2-V3 of an ESP32-WROOM-32E N*R2) GPIO16 only, GPIO17
+  is a channel again; a PSRAM outside the package in use the build's CONFIG_D0WD_PSRAM_CS_IO / CLK_IO (16 / 17).
+- (JA) classic ESP32: 自分の flash / PSRAM が使う端子を、型番の名前でなくチップの宣言（esp_chip_info、eFuse のパッケージ）で決める。
+  パッケージ内の flash（CHIP_FEATURE_EMB_FLASH）は今までどおり GPIO16 / 17。パッケージ内の PSRAM だけ（CHIP_FEATURE_EMB_PSRAM、
+  ESP32-WROOM-32E N*R2 の D0WDR2-V3）は GPIO16 だけで、GPIO17 はチャネルに戻る。パッケージ外の PSRAM を使うときはビルドの
+  CONFIG_D0WD_PSRAM_CS_IO / CLK_IO（16 / 17）。
 - (EN) ESP32-S3 firmware (profile esp32s3, `OepProbe-esp32s3`): the ESP32 family but the classic and the P4 builds
   `OepFirmware.h` from `src/firmware/EspSoc.h`, whose parts follow what ESP-IDF declares the SoC has (soc/soc_caps.h),
   never the chip's name - USB-OTG (vendor bulk, HID, CDC; full speed on the S3) or USB-Serial/JTAG, a UART bridge on
