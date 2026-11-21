@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.60
 - (EN) CH32X035 firmware: SWIO (oep.wire.swio and its console) is in the distributed set, so a CH32X035 board attaches a
   CH32V00x on one wire as well as RVSWD targets. The CH32's SWIO frames run from RAM with their waits inlined and each
   step's own lateness taken off (as captured on the line, its lows and highs come out as the ESP32-P4's own), the read
