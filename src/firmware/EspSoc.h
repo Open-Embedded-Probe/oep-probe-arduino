@@ -22,9 +22,11 @@
 //
 // Interfaces (revision 1), each where the SoC has what it needs: fn 0 (the core); oep.wire.rvswd + oep.target.riscv-dm +
 // oep.target.console (SOC_DEDICATED_GPIO_SUPPORTED); oep.fixture.gpio / uart (one per UART beside UART0: SOC_UART_NUM);
-// oep.fixture.spi-target; the settings (core §13) (saved in NVS); oep.probe.link; oep.wire.swd + oep.target.arm-adi;
+// oep.fixture.i2c-target (SOC_I2C_SUPPORT_SLAVE); oep.fixture.spi-target; the settings (core §13) (saved in NVS);
+// oep.fixture.analog (ADC1, SOC_ADC_DMA_SUPPORTED); oep.probe.link; oep.wire.swd + oep.target.arm-adi;
 // oep.fixture.i2c-controller / spi-controller (GPIOs); oep.fixture.pwm (SOC_LEDC_SUPPORTED) / counter
-// (SOC_PCNT_SUPPORTED); oep.probe.memo; oep.probe.plan and oep.probe.restart (the endpoint's own, listed last).
+// (SOC_PCNT_SUPPORTED); oep.wire.swio and its console place (SOC_DEDICATED_GPIO_SUPPORTED); oep.probe.memo;
+// oep.probe.plan and oep.probe.restart (the endpoint's own, listed last).
 //
 // Channels, found at start-up: the SoC's valid GPIOs (SOC_GPIO_VALID_GPIO_MASK) but those ESP-IDF reserved as it started
 // (the flash's and the PSRAM's pads, which change with the module: platformUnusablePins), the USB pads while a USB
@@ -67,6 +69,15 @@
 #include <OepConsole.h>
 #include <OepDmConsole.h>
 #include <OepRvswdPhy.h>
+#include <OepSwioPhy.h>
+#endif
+#if defined(SOC_I2C_SUPPORT_SLAVE) && SOC_I2C_SUPPORT_SLAVE
+#define OEP_SOC_I2C_TARGET 1   // I2C0's slave mode
+#include <OepP4I2cTarget.h>
+#endif
+#if defined(SOC_ADC_DMA_SUPPORTED) && SOC_ADC_DMA_SUPPORTED
+#define OEP_SOC_ANALOG 1   // ADC1 in continuous mode (DMA)
+#include <OepAnalog.h>
 #endif
 #if defined(SOC_LEDC_SUPPORTED) && SOC_LEDC_SUPPORTED
 #define OEP_SOC_PWM 1
@@ -281,11 +292,13 @@ struct RvswdParts {
 };
 static oep::Slot<RvswdParts> rvswd;
 static oep::Slot<oep::TargetRiscvDm> riscvDm;
+static oep::TargetRiscvDm *riscvDmIn = nullptr;
 
 void oepAddRvswd() {
   RvswdParts &r = rvswd.make();
   endpoint.add(r.wire);
-  endpoint.add(riscvDm.make(r.port, 0));
+  riscvDmIn = &riscvDm.make(r.port, 0);
+  endpoint.add(*riscvDmIn);
 }
 
 void oepAddConsole() {
@@ -293,6 +306,42 @@ void oepAddConsole() {
   static oep::Slot<oep::TargetConsoleStream> console;
   consoleIn = &console.make(rvswd->port, driver.make(rvswd->dm, rvswd->phy), 0);
   addConsolePlace(*consoleIn);
+  loopWork.add([] { console->poll(); });
+}
+
+// The one-wire link (CH32V00x) on the same dedicated GPIO: its own wire fn, its connections served by the RVSWD wire's
+// riscv-dm target (or one of its own without that wire), its console a second place of the one oep.target.console
+static oep::TargetConsoleStream *swioConsoleIn = nullptr;
+struct SwioParts {
+  oep::SwioPhy phy;
+  oep::Ch32Dm dm{phy};
+  oep::DebugPort port{dm, kUnset, 0xffff};   // one wire: swclk stays 0xffff
+  oep::WireRvswd wire{port, 0, "oep.wire.swio"};
+  SwioParts() {
+    port.pin_choice = channels;
+    port.pins = &pins;
+    port.pin_owner = oep::owners::kSecondWire;
+    port.reset_allowed = channels;
+  }
+};
+static oep::Slot<SwioParts> swio;
+
+void oepAddSwio() {
+  SwioParts &w = swio.make();
+  endpoint.add(w.wire);
+  if (riscvDmIn) {
+    riscvDmIn->addPort(w.port);
+  } else {
+    riscvDmIn = &riscvDm.make(w.port, 0);
+    endpoint.add(*riscvDmIn);
+  }
+}
+
+void oepAddSwioConsole() {
+  static oep::Slot<oep::DmConsole> driver;
+  static oep::Slot<oep::TargetConsoleStream> console;
+  swioConsoleIn = &console.make(swio->port, driver.make(swio->dm, swio->phy), 0);
+  addConsolePlace(*swioConsoleIn);
   loopWork.add([] { console->poll(); });
 }
 #endif
@@ -326,6 +375,34 @@ void oepAddUart() {
     if (uart2In) uart2In->poll();
   });
 }
+
+#if defined(OEP_SOC_I2C_TARGET)
+void oepAddI2c() {
+  static oep::Slot<oep::P4I2cTarget> i2c;
+  endpoint.add(i2c.make(pins));
+  loopWork.add([] { i2c->service(); });
+}
+#endif
+
+#if defined(OEP_SOC_ANALOG)
+static oep::AnalogCapture *analogIn = nullptr;
+// ADC1's pads, as the driver maps its channels
+static uint64_t adc1Pins() {
+  uint64_t m = 0;
+  for (int ch = 0; ch < SOC_ADC_CHANNEL_NUM(0); ++ch) {
+    int io = -1;
+    if (adc_continuous_channel_to_io(ADC_UNIT_1, adc_channel_t(ch), &io) == ESP_OK && io >= 0) m |= uint64_t{1} << io;
+  }
+  return m;
+}
+void oepAddAnalog() {
+  static oep::Slot<oep::AnalogCapture> analog;
+  analogIn = &analog.make(endpoint, adc1Pins() & channels, 0);
+  analog->setPins(&pins, oep::owners::kAnalog);   // its pads go analog: claimed against wires and settings
+  endpoint.add(*analog);
+  loopWork.add([] { analog->poll(); });
+}
+#endif
 
 void oepAddSpi() {
   static oep::Slot<oep::P4SpiTarget> spi;
@@ -364,6 +441,9 @@ void oepAddSettings() {
   });
   lastly.add([] {
     if (swdIn) config->addHold(*swdWireIn, swdIn->hold, oep::checkSwdHold, swdIn);
+#if defined(OEP_SOC_RVSWD)
+    if (swioConsoleIn) config->addPlace(swio->wire, *swioConsoleIn);   // a slot on the one wire: the second place
+#endif
     if (oep::BootGuard::safe()) config->skipBootAttach();
     config->setAttachGate(autoAttachReady);
     config->applySaved();
@@ -428,7 +508,19 @@ inline constexpr uint64_t kSocUsb =
 #endif
 inline constexpr uint64_t kSocRvswd =
 #if defined(OEP_SOC_RVSWD)
-    kRvswd | kConsole;
+    kRvswd | kConsole | kSwio | kSwioConsole;
+#else
+    0;
+#endif
+inline constexpr uint64_t kSocI2cTarget =
+#if defined(OEP_SOC_I2C_TARGET)
+    kI2cTarget;
+#else
+    0;
+#endif
+inline constexpr uint64_t kSocAnalog =
+#if defined(OEP_SOC_ANALOG)
+    kAnalog;
 #else
     0;
 #endif
@@ -444,8 +536,9 @@ inline constexpr uint64_t kSocCounter =
 #else
     0;
 #endif
-inline constexpr uint64_t kAvailable = kSocUsb | kBridge | kSocRvswd | kGpio | kUart | kSpiTarget | kSettings | kSwd |
-                                       kI2cController | kSpiController | kSocPwm | kSocCounter | kMemo | kLink;
+inline constexpr uint64_t kAvailable = kSocUsb | kBridge | kSocRvswd | kGpio | kUart | kSocI2cTarget | kSpiTarget |
+                                       kSettings | kSocAnalog | kSwd | kI2cController | kSpiController | kSocPwm |
+                                       kSocCounter | kMemo | kLink;
 inline constexpr uint64_t kDefaults = kAvailable;
 }  // namespace oep
 
@@ -524,8 +617,14 @@ void firmwareSetup(const oep::FirmwareConfig &cfg) {
 #endif
   if constexpr ((F & oep::kGpio) != 0) oepAddGpio();
   if constexpr ((F & oep::kUart) != 0) oepAddUart();
+#if defined(OEP_SOC_I2C_TARGET)
+  if constexpr ((F & oep::kI2cTarget) != 0) oepAddI2c();
+#endif
   if constexpr ((F & oep::kSpiTarget) != 0) oepAddSpi();
   settingsFn.run();
+#if defined(OEP_SOC_ANALOG)
+  if constexpr ((F & oep::kAnalog) != 0) oepAddAnalog();   // after the settings: the fns before it keep their numbers
+#endif
   if constexpr ((F & oep::kLink) != 0) oepAddLink();
   if constexpr ((F & oep::kSwd) != 0) oepAddSwd();
   if constexpr ((F & oep::kI2cController) != 0) oepAddI2cController();
@@ -535,6 +634,12 @@ void firmwareSetup(const oep::FirmwareConfig &cfg) {
 #endif
 #if defined(OEP_SOC_COUNTER)
   if constexpr ((F & oep::kCounter) != 0) oepAddCounter();
+#endif
+#if defined(OEP_SOC_RVSWD)
+  if constexpr ((F & oep::kSwio) != 0) {
+    oepAddSwio();
+    if constexpr ((F & oep::kSwioConsole) != 0) oepAddSwioConsole();
+  }
 #endif
   if constexpr ((F & oep::kMemo) != 0) oepAddMemo();
   oep::platformParkMask(channels & ~pins.disabledMask());

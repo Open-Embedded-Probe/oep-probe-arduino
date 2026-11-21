@@ -12,7 +12,8 @@
 #if defined(CONFIG_IDF_TARGET_ESP32)
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
-#elif defined(CONFIG_IDF_TARGET_ESP32P4)
+#elif __has_include(<esp_efuse_rtc_calib.h>)
+#define OEP_ANALOG_RTC_CALIB 1   // ESP-IDF's eFuse ADC calibration (the P4, the S3, ...)
 #include <esp_efuse_rtc_calib.h>
 #endif
 #elif defined(OEP_ANALOG_RP2)
@@ -519,9 +520,9 @@ Result AnalogCapture::configure(const uint8_t *payload, size_t length, uint8_t *
 
 Result AnalogCapture::calibration(uint8_t *out, size_t capacity) const {
   TlvWriter w(out, capacity);
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
+#if defined(OEP_ANALOG_RTC_CALIB)
   // ESP-IDF's eFuse ADC calibration of ADC1: the version, then per attenuation the initial code and a reference point
-  static const char kScheme[] = "com.espressif.esp32p4.rtc-calib";
+  static const char kScheme[] = "com.espressif." CONFIG_IDF_TARGET ".rtc-calib";
   const int ver = esp_efuse_rtc_calib_get_ver();
   for (const Frontend &f : kFrontends) {
     uint32_t digi = 0, mv = 0;

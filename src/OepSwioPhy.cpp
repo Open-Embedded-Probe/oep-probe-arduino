@@ -3,6 +3,15 @@
 
 #include "OepSwioPhy.h"
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include <soc/soc_caps.h>
+// Every ESP32 but the classic with the CPU's dedicated GPIO (ESP32-P4, -S3, the C series...): one branch, picked by
+// what ESP-IDF declares the SoC has, never the chip's name.
+#if !defined(CONFIG_IDF_TARGET_ESP32) && defined(SOC_DEDICATED_GPIO_SUPPORTED)
+#define OEP_SWIO_DEDIC 1
+#endif
+#endif
+
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
 #include <driver/gpio.h>
 #include <soc/gpio_struct.h>
@@ -206,7 +215,7 @@ void SwioPhy::backgroundSent() { gWireGate.endTurn(); }
 
 }  // namespace oep
 
-#elif defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32P4)
+#elif defined(OEP_SWIO_DEDIC)
 #include <driver/dedic_gpio.h>
 #ifndef OEP_SWIO_DRIVE_CAP
 #define OEP_SWIO_DRIVE_CAP GPIO_DRIVE_CAP_0   // see the classic block: sharp edges couple into fixture lines
@@ -223,11 +232,12 @@ void SwioPhy::backgroundSent() { gWireGate.endTurn(); }
 #include <soc/gpio_sig_map.h>
 #include <soc/gpio_struct.h>
 
-// ESP32-P4 (RISC-V, 360 MHz): the classic's frames and read recharge, on the CPU's dedicated GPIO (one channel out,
-// its output enable and one channel in, all CSR accesses of a cycle; a GPIO register access takes about 260 ns here,
-// 2026-10-02, as long as a whole short pulse) and timed in nanoseconds against the cycle counter, every edge at a
-// deadline from the one before - so the bit timing does not depend on the clock. Any GPIO0-54. The pin is in the
-// dedicated GPIO bundle only while attached; release gives it back as a plain GPIO input with its pull-up.
+// The ESP32s with the CPU's dedicated GPIO (the P4, the S3, ...): the classic's frames and read recharge, on one
+// channel out and one channel in (on the P4 CSR accesses of a cycle, its output enable too; a GPIO register access
+// takes about 260 ns there, 2026-10-02, as long as a whole short pulse; the S3 has no output enable in the CPU: the
+// GPIO enable register) and timed in nanoseconds against the cycle counter, every edge at a deadline from the one
+// before - so the bit timing does not depend on the clock. Any output-capable GPIO. The pin is in the dedicated GPIO
+// bundle only while attached; release gives it back as a plain GPIO input with its pull-up.
 namespace oep {
 namespace {
 // The classic's coefficient-8 timing (262.5 / 862.5 ns low, the high as long as a short low: the WCH-LinkE's 240 /
@@ -251,11 +261,21 @@ uint32_t cyclesFor(uint32_t ns, uint32_t mhz) { return (ns * mhz + 999) / 1000; 
 
 inline uint32_t IRAM_ATTR now() { return esp_cpu_get_cycle_count(); }
 inline void IRAM_ATTR until(uint32_t deadline) { while (static_cast<int32_t>(now() - deadline) < 0) {} }
-inline void IRAM_ATTR low(uint32_t m) { RV_CLEAR_CSR(CSR_GPIO_OUT_USER, m); }
-inline void IRAM_ATTR high(uint32_t m) { RV_SET_CSR(CSR_GPIO_OUT_USER, m); }
+inline void IRAM_ATTR low(uint32_t m) { dedic_gpio_cpu_ll_write_mask(m, 0); }
+inline void IRAM_ATTR high(uint32_t m) { dedic_gpio_cpu_ll_write_mask(m, m); }
+inline bool IRAM_ATTR sample(uint32_t in) { return (dedic_gpio_cpu_ll_read_in() & in) != 0; }
+#if defined(CSR_GPIO_OEN_USER)
+// RISC-V cores with the bundle's output enable as a CSR (the P4): the pad's enable follows the bundle's OEN bit.
+constexpr bool kBundleOen = true;
 inline void IRAM_ATTR outputOn(uint32_t m) { RV_CLEAR_CSR(CSR_GPIO_OEN_USER, m); }   // OEN: active low
 inline void IRAM_ATTR outputOff(uint32_t m) { RV_SET_CSR(CSR_GPIO_OEN_USER, m); }
-inline bool IRAM_ATTR sample(uint32_t in) { return (RV_READ_CSR(CSR_GPIO_IN_USER) & in) != 0; }
+#else
+// No output enable in the CPU (the S3's Xtensa instructions drive the level only): the pad's enable from the GPIO
+// enable register, one write each way.
+constexpr bool kBundleOen = false;
+inline void IRAM_ATTR outputOn(uint32_t) { gpio_ll_output_enable(&GPIO, gPin); }
+inline void IRAM_ATTR outputOff(uint32_t) { gpio_ll_output_disable(&GPIO, gPin); }
+#endif
 
 // `count` bits of `bits`, most significant first, from deadline t (the previous high's end): each a low (short for a
 // 1, long for a 0) then a high. The next bit's length is worked out before the wait (deciding it after the wait
@@ -364,7 +384,7 @@ bool configureIo() {
   }
   high(gOut);
   outputOn(gOut);
-  gpio_ll_set_output_enable_ctrl(&GPIO, gPin, true, false);   // the pad's output enable: the bundle's OEN bit
+  gpio_ll_set_output_enable_ctrl(&GPIO, gPin, kBundleOen, false);   // the pad's output enable: the bundle's OEN bit, or the enable register
   gpio_ll_input_enable(&GPIO, gPin);
   gpio_ll_pullup_en(&GPIO, gPin);
   return true;
@@ -385,7 +405,7 @@ void unconfigureIo() {
 }  // namespace
 
 bool SwioPhy::begin(int swio) {
-  if (swio < 0 || swio > 54) return false;   // GPIO0-54
+  if (!GPIO_IS_VALID_OUTPUT_GPIO(swio)) return false;
   gPin = swio;
   const uint32_t mhz = getCpuFrequencyMhz();
   gT = {cyclesFor(kShortLowNs, mhz), cyclesFor(kLongLowNs, mhz), cyclesFor(kHighNs, mhz), cyclesFor(kHalfNs, mhz),
@@ -397,7 +417,7 @@ bool SwioPhy::begin(int swio) {
 
 bool SwioPhy::usePins(int swdio, int swclk) {
   if (swdio == gPin && swclk < 0) return true;
-  if (attached_ || swclk >= 0 || swdio < 0 || swdio > 54) return false;
+  if (attached_ || swclk >= 0 || !GPIO_IS_VALID_OUTPUT_GPIO(swdio)) return false;
   if (gPin >= 0) { unconfigureIo(); pinMode(gPin, INPUT); }   // the old pin Hi-Z, without the pull-up it had
   return begin(swdio);
 }
@@ -472,7 +492,7 @@ void SwioPhy::free() {
   if (gPin >= 0) pinMode(gPin, INPUT);
 }
 
-// The P4's capture is PARLIO's DMA (no sampler, no window): the wire never pauses.
+// These ESP32s capture by DMA (no sampler, no window): the wire never pauses.
 bool SwioPhy::backgroundTurn() { return true; }
 void SwioPhy::backgroundDone() {}
 void SwioPhy::backgroundSent() {}
@@ -1010,9 +1030,9 @@ void SwioPhy::free() { release(); }
 
 #endif
 
-#if (defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32P4))) || \
+#if (defined(ARDUINO_ARCH_ESP32) && (defined(CONFIG_IDF_TARGET_ESP32) || defined(OEP_SWIO_DEDIC))) || \
     defined(ARDUINO_ARCH_CH32RV) || defined(ARDUINO_ARCH_RP2040) || defined(OEP_HOST_FAKE_SWIO)
-// ---- shared by the classic ESP32, the ESP32-P4, a CH32 and an RP2 -------------------------------------------------------------
+// ---- shared by the classic ESP32, the dedicated-GPIO ESP32s, a CH32 and an RP2 -------------------------------------------------------------
 namespace oep {
 namespace {
 constexpr uint8_t kSwDmStatus = 0x11, kSwAbstractAuto = 0x18, kSwProgBuf0 = 0x20;

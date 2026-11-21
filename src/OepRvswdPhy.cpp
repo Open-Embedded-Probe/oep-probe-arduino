@@ -30,7 +30,7 @@ dedic_gpio_bundle_handle_t gOut = nullptr;
 dedic_gpio_bundle_handle_t gIn = nullptr;
 int gDio = -1;
 uint32_t gHalfCycles = 0;
-uint32_t gDioSig = 0, gClkSig = 0;   // the pins' output signals once in the bundle (ioReclaim)
+uint32_t gDioSig = 0, gClkSig = 0;   // the pins' output routing (whole register: the signal field's name differs by chip) once in the bundle (ioReclaim)
 // The pads' drive: SWDIO the weakest; SWCLK one step up, for wiring whose ground is poor. A CH32X035F8U6 (chip id
 // 0x035e0611) whose ground reached the probe only the long way took one SWCLK falling edge as two: each 1 it answered
 // stood ~100 ns and fell, DMSTATUS 0xc82 read 0x800. On a P4X (80f1b2d80a34) with a WCH-LinkE on the lines CAP_0 failed
@@ -89,10 +89,8 @@ bool ioBegin(int dio, int clk) {
     gpio_set_drive_capability(gpio_num_t(dio), kDioDrive);
     gpio_set_drive_capability(gpio_num_t(clk), kClkDrive);
     gIo.bothHigh();
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
-    gDioSig = GPIO.func_out_sel_cfg[dio].out_sel;
-    gClkSig = GPIO.func_out_sel_cfg[clk].out_sel;
-#endif
+    gDioSig = GPIO.func_out_sel_cfg[dio].val;
+    gClkSig = GPIO.func_out_sel_cfg[clk].val;
   }
   return true;
 }
@@ -110,7 +108,7 @@ bool ioMove(int old_dio, int old_clk, int dio, int clk) {
   return ioBegin(dio, clk);
 }
 
-// The pins back in the bundles if something else routed them away since (ESP32-P4: oep.wire.swio takes any channel,
+// The pins back in the bundles if something else routed them away since (oep.wire.swio takes any channel,
 // the RVSWD pair's too, into its own bundle and leaves it a plain GPIO; a pair unchanged since would otherwise stay
 // cut off from its bundle). Nothing done while they are still routed here.
 // The wire's strengths are put back too: a fixture gpio output or an output idle on these pins since (a host-chosen
@@ -121,13 +119,9 @@ void ioReclaim(int dio, int clk) {
     gpio_set_drive_capability(gpio_num_t(clk), kClkDrive);
     gpio_ll_pullup_en(&GPIO, dio);   // the data line idles high while the target drives it (ioFree took it off)
   }
-#if defined(CONFIG_IDF_TARGET_ESP32P4)
   if (!gOut || dio < 0) return;
-  if (GPIO.func_out_sel_cfg[dio].out_sel == gDioSig && GPIO.func_out_sel_cfg[clk].out_sel == gClkSig) return;
+  if (GPIO.func_out_sel_cfg[dio].val == gDioSig && GPIO.func_out_sel_cfg[clk].val == gClkSig) return;
   ioMove(dio, clk, dio, clk);
-#else
-  (void)dio; (void)clk;
-#endif
 }
 
 void ioDrive(int dio, int clk) { gpio_ll_output_enable(&GPIO, clk); gpio_ll_output_enable(&GPIO, dio); }

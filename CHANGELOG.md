@@ -18,6 +18,21 @@
   `platformUnusablePins()` / `platformInputOnlyPins()` は、どの ESP32 でも同じ宣言を読む（classic の結果は変わらない）。ESP32-S3（QFN56
   v0.2、8 MB の octal の PSRAM）で確かめた: USB の `OEP probe (ESP32-S3)` と UART bridge の両方で oep dump が答え、チャネルは
   GPIO0〜18、21、38〜42、45〜48。
+- (EN) ESP32-S3 and the other `EspSoc.h` builds: SWIO and its console (oep.wire.swio) on any ESP32 with the CPU's
+  dedicated GPIO but the classic - the P4's frames, the output enable from the GPIO enable register where the CPU has
+  none (the S3); the RVSWD PHY puts its pins back in its bundles after SWIO took them on every such ESP32, not only the
+  P4. I2C target where the SoC declares I2C slave mode (the classic's behaviour: no stretch, no nack_from). Analog
+  capture where the SoC declares ADC DMA: ADC1's pads as the driver maps its channels (GPIO1-10 on the S3), the eFuse
+  calibration scheme `com.espressif.<target>.rtc-calib` on every chip with ESP-IDF's rtc-calib. Checked on the
+  ESP32-S3 with nothing wired: tests/hw (oep-client-python) gpio, uart, analog, pwm / counter, i2c / spi target and
+  controller, config, session pass; SWIO and RVSWD attaches end at once with no target.
+- (JA) ESP32-S3 ほかの `EspSoc.h` のビルド: SWIO とそのコンソール（oep.wire.swio）を、classic 以外の CPU の dedicated GPIO を
+  持つ ESP32 で（P4 のフレーム。CPU に出力の有効化が無いチップ（S3）は GPIO の enable レジスタで）。RVSWD の PHY が SWIO に取られた
+  ピンをバンドルへ戻すのを、P4 だけでなくそれらの ESP32 すべてで。SoC が I2C の slave を宣言していれば I2C の target（classic と
+  同じ動き: ストレッチと nack_from は無し）。SoC が ADC の DMA を宣言していればアナログのキャプチャ: ADC1 の端子はドライバのチャネルの
+  対応から（S3 は GPIO1〜10）、eFuse の較正の scheme `com.espressif.<target>.rtc-calib` を ESP-IDF の rtc-calib を持つどのチップでも。
+  ESP32-S3（配線なし）で確かめた: tests/hw（oep-client-python）の gpio、uart、アナログ、pwm / counter、I2C / SPI の target と
+  controller、config、session が通り、SWIO と RVSWD の attach は相手が無いとすぐ終わる。
 
 ## 0.0.61
 - (EN) CH32X035 SWIO: a read bit is sampled after a fixed count of loop rounds from RAM, not on a SysTick deadline. The
