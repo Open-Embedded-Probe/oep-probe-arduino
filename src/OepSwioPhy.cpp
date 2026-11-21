@@ -493,18 +493,19 @@ namespace {
 constexpr uint32_t kShortLowNs = 262, kLongLowNs = 862, kHighNs = 262;
 constexpr uint32_t kHalfNs = 131, kRechargeNs = 30, kZeroNs = 524;
 constexpr uint32_t kRiseTimeoutNs = 100000;   // a read frame's whole wait for the line to rise (the P4's)
-// The CH32X035 (48 MHz) reads a bit without the first recharge: even a short push high there (two stores, some 40 ns)
-// broke the CH32V003's answer (every bit read 1), so the line rises on the pull-ups alone and is sampled kSampleNs after
-// the release - where a one has risen and a zero is still held: a CH32V003 at a WeAct X035 board's PA0 read every bit
-// right from 710 to 790 ns (34 - 38 counts at 48 MHz; 680 and 830 ns mis-read about a third of 512 pattern bits). The
-// faster chips keep the ESP32-P4's recharge.
+// The CH32X035 (48 MHz) reads a bit without the first recharge: a push high anywhere in the answer (even two stores
+// back to back) broke the CH32V003's answer (every bit read 1), so the line rises on the pull-ups alone and is sampled
+// where a one has risen and a zero is still held - a window too narrow for a SysTick wait (a loop round, some 100 ns,
+// of jitter: 512 pattern bits read right only from 710 to 790 ns), so the wait from the release to the sample is
+// kSampleSpins rounds of a two-instruction loop from RAM, the same every time: a CH32V003 at a WeAct X035 board's PA0
+// read every bit right from 2 to 8 rounds (1 read all zeros, 9 mis-read). The faster chips keep the ESP32-P4's recharge.
 #if defined(ARDUINO_CH32X035)
 constexpr bool kReadRecharge = false;
 #else
 constexpr bool kReadRecharge = true;
 #endif
-constexpr uint32_t kSampleNs = 750;
-struct Times { uint32_t shortLow, longLow, high, half, recharge, zero, riseTimeout, sample; };
+constexpr uint32_t kSampleSpins = 5;
+struct Times { uint32_t shortLow, longLow, high, half, recharge, zero, riseTimeout; };
 Times gT = {};
 int gPin = -1;   // the channel
 ch32::Pin gIo;
@@ -577,7 +578,9 @@ OEP_SWIO_INLINE int readBit(const Words &w, const Times &tm, uint32_t &rise_left
     w.release();
     until(t += tm.half);
   } else {
-    until(t += tm.sample);
+    uint32_t n = kSampleSpins;
+    __asm__ volatile("1: addi %0, %0, -1\n bnez %0, 1b" : "+r"(n));
+    t = now();
   }
   if (w.read()) {
     w.drive();
@@ -658,7 +661,7 @@ bool SwioPhy::begin(int swio) {
   gPin = swio;
   gT = {stepTicks(kShortLowNs, kShortLate), stepTicks(kLongLowNs, kLongLate), stepTicks(kHighNs, kHighLate),
         stepTicks(kHalfNs, kHalfLate), stepTicks(kRechargeNs, kStepLate), stepTicks(kZeroNs, kStepLate),
-        ticksFor(kRiseTimeoutNs), ticksFor(kSampleNs)};
+        ticksFor(kRiseTimeoutNs)};
   gIo.config(CH32RV_GPIO_CFG_IN_FLOAT);   // free until a connection takes it (oep-core §8); attach pulls it up
   gDriven = false;
   ready_ = true;

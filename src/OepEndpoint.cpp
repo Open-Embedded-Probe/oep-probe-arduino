@@ -235,7 +235,19 @@ Result Endpoint::portStateOf(Endpoint &e, const uint8_t *payload, size_t length,
   return e.portState(payload, length, out, capacity);
 }
 
+// Without port_speed (no setPortSpeed: a USB CDC port, say) the serial part leaves its timers and ops out, so a sketch
+// that never sets it links none of them (port_speed and port_state are not offered then: Link::offers)
+void Endpoint::afterRaw(Endpoint &e, bool pushed) {
+  if (pushed) e.rawOut();
+}
+void Endpoint::answeredPlain(Endpoint &) {}
+
 void Endpoint::useSerialTransports() {
+  static const SerialOps kOps = {pollSerial, writeCobsFrame, afterRaw, answeredPlain, nullptr, nullptr};
+  if (!serial_) serial_ = &kOps;   // never in place of the port_speed part
+}
+
+void Endpoint::useSerialSpeed() {
   static const SerialOps kOps = {pollSerial, writeCobsFrame, afterSerial, answeredSerial, portSpeedOf, portStateOf};
   serial_ = &kOps;
 }
@@ -1336,12 +1348,14 @@ Result Link::handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *
       if (refused(parsed)) return parsed;
       return completed();
     }
-    case reg::probe_link::kOpPortSpeed:   // a serial port's (useSerialTransports): unknown without one
-      return endpoint_.serial_ ? endpoint_.serial_->portSpeed(endpoint_, payload, length, out, capacity)
-                               : rejected(kRejectUnknownOperation);
+    case reg::probe_link::kOpPortSpeed:   // a serial port's with port_speed (useSerialSpeed): unknown without
+      return endpoint_.serial_ && endpoint_.serial_->portSpeed
+                 ? endpoint_.serial_->portSpeed(endpoint_, payload, length, out, capacity)
+                 : rejected(kRejectUnknownOperation);
     case reg::probe_link::kOpPortState:
-      return endpoint_.serial_ ? endpoint_.serial_->portState(endpoint_, payload, length, out, capacity)
-                               : rejected(kRejectUnknownOperation);
+      return endpoint_.serial_ && endpoint_.serial_->portState
+                 ? endpoint_.serial_->portState(endpoint_, payload, length, out, capacity)
+                 : rejected(kRejectUnknownOperation);
     default: return rejected(kRejectUnknownOperation);
   }
 }

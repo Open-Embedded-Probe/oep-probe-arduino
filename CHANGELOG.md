@@ -1,6 +1,25 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) CH32X035 SWIO: a read bit is sampled after a fixed count of loop rounds from RAM, not on a SysTick deadline. The
+  wait's jitter (a loop round, some 100 ns) was as wide as the window where a one has risen and a zero is still held
+  (710-790 ns after the release), so bits were mis-read now and then and a flash write could lose its session midway.
+  2 to 8 rounds read every pattern bit right; 5 are taken. Checked on a WeAct CH32X035F8U6 with a CH32V003F4P6 at PA0:
+  10 of 10 attaches, 40 random RAM block round trips alike, 4 KiB and 16 KiB written to flash and verified, HelloDMSeq
+  written to the V003 and its output and input through ch32rv monitor (dmseq).
+- (JA) CH32X035 の SWIO: 読みのビットを、SysTick の締め切りではなく、RAM の決まった回数の空ループのあとでサンプルする。待ちのぶれ
+  （ループ 1 周、約 100 ns）が、1 が上がりきって 0 がまだ引かれている窓（放してから 710〜790 ns）と同じくらい広く、ときどきビットを読み
+  違え、flash の書き込みが途中でセッションを失うことがあった。空ループ 2〜8 回で模様のビットを全部正しく読み、5 回にした。WeAct の
+  CH32X035F8U6 の PA0 に CH32V003F4P6 をつないで確かめた: attach 10 回中 10 回、RAM のブロックの乱数の読み書き 40 回が一致、flash に
+  4 KiB と 16 KiB を書いて照合、V003 に書いた HelloDMSeq の出力と入力が ch32rv monitor（dmseq）で通る。
+- (EN) The endpoint links port_speed's timers and ops only where setPortSpeed is called (a UART bridge): a probe whose
+  serial ports are USB CDC alone no longer carries them (the CH32X035 with CDC: some 0.9 KB less). port_speed and
+  port_state were offered only with setPortSpeed before too.
+- (JA) endpoint は、port_speed のタイマーと op を、setPortSpeed を呼ぶとき（UART bridge）だけリンクする。シリアルの口が USB CDC だけの
+  プローブは、それを持たなくなった（CDC を入れた CH32X035 で約 0.9 KB 減）。port_speed と port_state を出すのは、前から setPortSpeed の
+  あるときだけ。
+- (EN) The tests' environment: oep-client-python 0.0.60 and pytest-embedded-arduino-cli 1.12.0.
+- (JA) 試験の環境: oep-client-python 0.0.60 と pytest-embedded-arduino-cli 1.12.0。
 
 ## 0.0.60
 - (EN) CH32X035 firmware: SWIO (oep.wire.swio and its console) is in the distributed set, so a CH32X035 board attaches a

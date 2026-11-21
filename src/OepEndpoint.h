@@ -179,6 +179,7 @@ class Endpoint {
   // The serial transports (USB CDC, a UART bridge, USB-Serial/JTAG): their COBS frames, port_speed / port_state (with
   // setPortSpeed) and raw ports (setRawPorts) - called by addTransport and the constructor for a serial kind.
   void useSerialTransports();
+  void useSerialSpeed();   // the serial part with port_speed's timers and ops (setPortSpeed)
   // A HID transport (kHid) added with `stream` reads its reports through `in` (transports §1, the HID rules): the
   // reader starts over at each of its marks, and a length over max_frame breaks the stream till the next first.
   void useHidInput(Stream &stream, HidIn &in);
@@ -304,7 +305,7 @@ class Endpoint {
   // runs at. `base` is the boot speed every revert goes back to. A rate further than port_speed_tolerance_pct from the
   // baud asked is refused unsupported (the endpoint checks it).
   using PortSpeedFn = uint32_t (*)(uint8_t port, uint32_t baud, bool apply);
-  void setPortSpeed(PortSpeedFn fn, uint32_t base) { useSerialTransports(); port_speed_ = fn; speed_base_ = base; }
+  void setPortSpeed(PortSpeedFn fn, uint32_t base) { useSerialSpeed(); port_speed_ = fn; speed_base_ = base; }
   // TEST HOOK (host tests): port `port` at `rate` in phase `phase` (1 trying, 2 committed, 3 a return pending after a
   // try - `committed` false - or a committed rate), as if a port_speed had got it there.
   void testSpeed(uint8_t port, uint32_t rate, uint8_t phase, bool committed = false) {
@@ -409,6 +410,8 @@ class Endpoint {
   static void pollSerial(Endpoint &e, size_t index);
   static void afterSerial(Endpoint &e, bool pushed);
   static void answeredSerial(Endpoint &e);
+  static void afterRaw(Endpoint &e, bool pushed);
+  static void answeredPlain(Endpoint &e);
   static Result portSpeedOf(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   static Result portStateOf(Endpoint &e, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity);
   static void rawSink(void *context, const uint8_t *data, size_t length);
