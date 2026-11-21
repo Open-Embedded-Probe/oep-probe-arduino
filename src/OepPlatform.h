@@ -26,6 +26,12 @@
 #endif
 #elif defined(ARDUINO_ARCH_ESP32)
 #include <driver/gpio.h>
+#include <esp_chip_info.h>
+#include <esp_private/esp_gpio_reserve.h>
+#include <soc/soc_caps.h>
+#if __has_include(<soc/spi_pins.h>)
+#include <soc/spi_pins.h>
+#endif
 #include <freertos/semphr.h>
 #elif defined(ARDUINO_ARCH_CH32RV)
 #include <CH32RV.h>
@@ -189,12 +195,38 @@ inline void platformParkPins(const uint8_t *pins, size_t count) {
 // ESP32-PICO-D4 / PICO-V3 / PICO-V3-02 and the D2WD wire their in-package flash to GPIO16 / 17 (always taken), and a
 // PSRAM in use (WROVER, D0WDR2) takes them too - only when the build enabled it: psramFound() is false on a build with
 // PSRAM off, and the pins are then free. Parking them Hi-Z crashed the PICO-D4 of an M5Stack ATOM at boot (TG1WDT,
-// 2026-10-01). Other chips: none found so far.
+// 2026-10-01). The other ESP32s: the GPIOs ESP-IDF reserved as it started (esp_gpio_reserve: the flash's and the
+// PSRAM's pads, which change with the module - an ESP32-S3R8's octal PSRAM takes GPIO33-37), read from the chip at run
+// time, so no chip or module needs a list here. Other chips: none found so far.
 inline uint64_t platformUnusablePins() {
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
   const char *model = ESP.getChipModel();
   const bool flash = model && (strstr(model, "PICO") || strstr(model, "D2WD"));
   if (flash || psramFound()) return (uint64_t{1} << 16) | (uint64_t{1} << 17);
+#elif defined(ARDUINO_ARCH_ESP32)
+  uint64_t reserved = 0;
+  for (int pin = 0; pin < SOC_GPIO_PIN_COUNT; ++pin)
+    if (((SOC_GPIO_VALID_GPIO_MASK >> pin) & 1) && esp_gpio_is_reserved(uint64_t{1} << pin)) reserved |= uint64_t{1} << pin;
+  // A PSRAM in octal mode: ESP-IDF reserves its chip select but not its octal lines, which a park would cut (an
+  // ESP32-S3R8 then hung at boot, TG1WDT) - the lines the SoC declares (soc/spi_pins.h: GPIO33-37 on the S3). A PSRAM in
+  // the package (CHIP_FEATURE_EMB_PSRAM, where the chip says so) is wired to its pads whether or not this build uses it.
+  esp_chip_info_t info;
+  esp_chip_info(&info);
+  bool octal = false;
+#if defined(CONFIG_SPIRAM_MODE_OCT)
+  octal = psramFound();
+#endif
+  if (octal || (info.features & CHIP_FEATURE_EMB_PSRAM)) {
+#if defined(MSPI_IOMUX_PIN_NUM_CS1)
+    reserved |= uint64_t{1} << MSPI_IOMUX_PIN_NUM_CS1;
+#endif
+#if defined(MSPI_IOMUX_PIN_NUM_D4) && defined(MSPI_IOMUX_PIN_NUM_DQS)
+    reserved |= (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D4) | (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D5) |
+                (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D6) | (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D7) |
+                (uint64_t{1} << MSPI_IOMUX_PIN_NUM_DQS);
+#endif
+  }
+  return reserved;
 #endif
   return 0;
 }
@@ -202,12 +234,13 @@ inline uint64_t platformUnusablePins() {
 // Pins of this chip that are inputs only, with no internal pulls (PinTable::setInputOnly / setNoPull: no output or pull
 // idle, out of the role_channels of a role that drives its line). Classic ESP32: GPIO34-39 (the datasheet's GPIO
 // table). The mask was 0xf0 << 32 in the firmware - GPIO36-39 only - and 34 / 35 went on being offered to I2C SDA / SCL;
-// it is the library's now, where the host tests read it. Other chips: none.
+// it is the library's now, where the host tests read it. Every ESP32: the SoC's declaration, its valid GPIOs that are
+// not valid outputs (SOC_GPIO_VALID_GPIO_MASK, SOC_GPIO_VALID_OUTPUT_GPIO_MASK: the classic's GPIO34-39, none on most).
 constexpr uint64_t kEsp32InputOnlyPins = (uint64_t{1} << 34) | (uint64_t{1} << 35) | (uint64_t{1} << 36) |
                                          (uint64_t{1} << 37) | (uint64_t{1} << 38) | (uint64_t{1} << 39);
 inline uint64_t platformInputOnlyPins() {
-#if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_IDF_TARGET_ESP32)
-  return kEsp32InputOnlyPins;
+#if defined(ARDUINO_ARCH_ESP32)
+  return uint64_t{SOC_GPIO_VALID_GPIO_MASK} & ~uint64_t{SOC_GPIO_VALID_OUTPUT_GPIO_MASK};
 #else
   return 0;
 #endif

@@ -7,24 +7,24 @@ released firmware.
 
 ## What each chip can do
 
-| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32 (X035 / V307 / H417) | Other ESP32s (S3, C3, C6 and so on) |
+| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32 (X035 / V307 / H417) | ESP32-S3 and others (the SoC's declarations pick the parts) |
 |---|---|---|---|---|---|
-| Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | none: choose parts from an example and build it yourself (below; the all-in `OepFirmware.h` does not exist for these chips). This column is what those parts can make |
-| Transports | USB CDC, vendor bulk, HID (UART bridge when chosen: GP8 / GP9) | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG, UART bridge (GPIO37 / 38, 115200) | UART bridge (115200). With the wifi settings, also TCP over Wi-Fi (port 7450, mDNS `_oep._tcp`; Getting started §6) | USB vendor bulk, HID (X035: vendor bulk only). USB CDC and UART bridge when chosen | USB-Serial/JTAG or USB CDC |
+| Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | `OepProbe-esp32s3`. Other chips (C3, C6, ...) build the same `OepFirmware.h` themselves. The parts follow what ESP-IDF declares the SoC has (`soc/soc_caps.h`) |
+| Transports | USB CDC, vendor bulk, HID (UART bridge when chosen: GP8 / GP9) | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG, UART bridge (GPIO37 / 38, 115200) | UART bridge (115200). With the wifi settings, also TCP over Wi-Fi (port 7450, mDNS `_oep._tcp`; Getting started §6) | USB vendor bulk, HID (X035: vendor bulk only). USB CDC and UART bridge when chosen | USB-OTG vendor bulk, HID, USB CDC (full speed on the S3), UART bridge (UART0, 115200). A chip without OTG: USB-Serial/JTAG |
 | RVSWD (CH32's 2 wires) | yes (SIO) | yes (dedicated GPIO) | yes | yes | yes (dedicated GPIO) |
 | SWIO (CH32V00x's 1 wire) | yes | yes | yes | yes | none |
-| SWD (ARM) | yes | yes | yes | yes (except X035) | none |
+| SWD (ARM) | yes | yes | yes | yes (except X035) | yes |
 | Target console (through the debug module) | yes | yes | yes | yes | yes |
-| GPIO, UART fixtures | yes | yes (2 UARTs) | yes | GPIO. UART except X035 | yes |
+| GPIO, UART fixtures | yes | yes (2 UARTs) | yes | GPIO. UART except X035 | yes (a UART for each beside UART0) |
 | Logic capture | PIO + DMA: 8 ch, one-shot, edge / level trigger | PARLIO: up to 16 ch. Rates in the table in [Capture](capture.md#esp32-p4--p4x-speeds-and-lines). One-shot level / edge trigger. The pretrigger limit is in [implementation limits §1.7](../implementation-limits.md#17-capture-and-fixtures) | GPIO sampler: 8 ch, 1-300 kHz, one-shot. Level / edge trigger searched per slice | 8 ch from bits 0-15 of one port, up to 250 kS/s, one-shot, edge / level trigger (except X035). H417 also has UHSIF's 16 ch (streaming, up to 200 MS/s) | none |
-| Analog capture (one-shot, raw values, threshold trigger and pretrigger) | GP26-28, 4 ch, 500 kS/s total | ADC1's GPIO16-23, 4 ch, 46 kHz total, attenuation 0-12 dB | ADC1's GPIO32-36 / 39, 4 ch, 20-100 kHz total | ADC1, 4 ch, steps of the ADC sample time (tens to hundreds of kS/s). Except X035 | none (not built) |
+| Analog capture (one-shot, raw values, threshold trigger and pretrigger) | GP26-28, 4 ch, 500 kS/s total | ADC1's GPIO16-23, 4 ch, 46 kHz total, attenuation 0-12 dB | ADC1's GPIO32-36 / 39, 4 ch, 20-100 kHz total | ADC1, 4 ch, steps of the ADC sample time (tens to hundreds of kS/s). Except X035 | none |
 | Starting tracks together (capture-group) | logic + analog. The event source is an analog crossing (analog tracks only) | logic + analog. The event source is a logic level / edge or an analog crossing | logic (sampler) + analog. The event source is an analog crossing (analog tracks only) | none | none |
-| SPI / I2C target (the peer of the DUT's controller) | I2C, SPI (PIO) | yes | yes (SPI mode 0 / 2) | yes (except X035. SPI up to 200 kHz) | yes |
-| SPI / I2C controller (the peer of the DUT's target) | yes (GPIO, up to 250 kHz) | yes (GPIO, I2C up to 400 kHz / SPI up to 750 kHz) | yes (GPIO, I2C up to 400 kHz / SPI up to 2 MHz) | yes (except X035. GPIO, up to 250 kHz) | none (not built) |
-| PWM output | yes (PWM slices) | yes (LEDC) | yes (LEDC) | none | none (not built) |
-| Counting edges (counter) | yes (interrupts, up to 100 kHz) | yes (PCNT, up to 40 MHz) | yes (PCNT, up to 10 MHz) | yes (except X035) | none (not built) |
+| SPI / I2C target (the peer of the DUT's controller) | I2C, SPI (PIO) | yes | yes (SPI mode 0 / 2) | yes (except X035. SPI up to 200 kHz) | SPI target |
+| SPI / I2C controller (the peer of the DUT's target) | yes (GPIO, up to 250 kHz) | yes (GPIO, I2C up to 400 kHz / SPI up to 750 kHz) | yes (GPIO, I2C up to 400 kHz / SPI up to 2 MHz) | yes (except X035. GPIO, up to 250 kHz) | yes (GPIO) |
+| PWM output | yes (PWM slices) | yes (LEDC) | yes (LEDC) | none | yes (LEDC) |
+| Counting edges (counter) | yes (interrupts, up to 100 kHz) | yes (PCNT, up to 40 MHz) | yes (PCNT, up to 10 MHz) | yes (except X035) | yes (PCNT) |
 | Analog output (DAC) | none | none | GPIO25 / 26, 8 bit | PA4 / PA5, 12 bit (V307, H417) | none |
-| Saving settings | a LittleFS file (FS area: 256 KB / 512 KB) | a LittleFS file (partition `spiffs`) | a LittleFS file (partition `spiffs`) | none (not saved; X035 has no settings at all) | a LittleFS file (partition `spiffs`) |
+| Saving settings | a LittleFS file (FS area: 256 KB / 512 KB) | a LittleFS file (partition `spiffs`) | a LittleFS file (partition `spiffs`) | none (not saved; X035 has no settings at all) | LittleFS files (partition `spiffs`) |
 | Memo area (`oep.probe.memo`) | 52 (RP2040) / 64 (RP2350) objects of 2 KB | 64 objects of 2 KB | 64 objects of 2 KB | none | 64 objects of 2 KB |
 
 "none" means the library has no implementation for that chip, not that the chip cannot do it.
@@ -55,6 +55,7 @@ A pin held by one interface is refused to the others. Pins not in the list belon
 | SparkFun Pro Micro RP2350 (the `rp2350` build) | the same as Pico 2: GP0-GP22, GP26-GP28 | GP23-GP25, GP29 (reserved by the Pico 2 build). GP19 is the PSRAM chip select, so the host does not use it |
 | ESP32-P4 / P4X | GPIO0-GPIO54 (except 24, 25, 37, 38) | GPIO24 / 25 (USB-Serial/JTAG), 37 / 38 (UART0's pins: the UART bridge transport) |
 | classic ESP32 | GPIO4, 5, 13, 14, 16-19 (16 / 17 removed at boot on PICO-D4 / PICO-V3 / D2WD and when the build enables PSRAM), 21-23, 25-27, 32, 33, 34-36, 39 (34-39 input only). SWIO needs an output pin below 32 | 1, 3 (UART0: the transport), 6-11 (flash), 0, 2, 12, 15 (boot straps) |
+| ESP32-S3 and others (`EspSoc.h`) | Found at start-up: the SoC's valid GPIOs (`SOC_GPIO_VALID_GPIO_MASK`) but the pads ESP-IDF reserved as it started (flash, PSRAM), an octal PSRAM's lines, the USB pads (while OTG or USB-Serial/JTAG has them) and UART0's (the bridge). An ESP32-S3R8 board: GPIO0-18, 21, 38-42, 45-48 | The pads left out above. The boot straps (the S3's 0, 3, 45, 46) stay channels (a target holding one at reset boots the probe another way) |
 
 The RP2's UART fixtures are the chip's UARTs. Instance 0 (UART0) takes RX on one of GP1, 13, 17, 29 and TX on one of GP0, 12,
 16, 28; instance 1 (UART1) RX on one of GP5, 9, 21, 25 and TX on one of GP4, 8, 20, 24 (the RP2040's; a build whose UART

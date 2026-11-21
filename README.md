@@ -200,7 +200,7 @@ comment.
 
 | Example | Boards (profile) | What it shows |
 |---|---|---|
-| `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4) / P4X (esp32p4x), classic ESP32 (esp32), WCH CH32 (ch32x035, ch32v307, ch32h417) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host. A jig = its settings |
+| `Firmware/OepProbe` | Pico / Pico 2 and other RP2040 / RP2350 boards (rp2040, rp2350), ESP32-P4 (esp32p4) / P4X (esp32p4x), classic ESP32 (esp32), ESP32-S3 (esp32s3), WCH CH32 (ch32x035, ch32v307, ch32h417) | **The firmware to flash** (also on the Releases): everything the chip can do, every pin chosen by the host. A jig = its settings |
 | `01.Basics/MinimalProbe` | RP2040 (rp2040), RP2350 (rp2350), classic ESP32 (esp32) | the smallest probe: fn 0 (the core) only, no interface. Endpoint, transport, describe |
 | `01.Basics/FixtureProbe` | RP2040 (rp2040), RP2350 (rp2350), classic ESP32 (esp32) | a test fixture: GPIO and UART on pins the host decides with the plan (pin table, owners, plan) |
 | `02.Interfaces/HelloInterface` | RP2040 (rp2040), RP2350 (rp2350), classic ESP32 (esp32) | **your first interface**: a name, two ops, the lock. No pins |
@@ -296,7 +296,7 @@ check them). The probe reports the same version in describe's firmware string.
 |---|---|
 | `schema` | 1. A reader refuses another number. Fields are only added |
 | `kind` | `merged` (ESP32, the whole image written from `flash_offset` 0), `app` (ESP32, the app image: an update into the other app partition, the P4's DFU), `uf2` (RP2040 / RP2350), `flash` (CH32, from the start of the code flash, 0x08000000; `flash_offset` 0) |
-| `model` | the value this image reports as describe's model (`esp32p4`, `esp32p4x`, `esp32`, `rp2040`, `rp2350`, `ch32x035`, `ch32v307`, `ch32h417`): the chip it was built for. describe's chip TLV is `<part> v<rev>` of the running part (for example `esp32p4 v3.2` even on a P4X) |
+| `model` | the value this image reports as describe's model (`esp32p4`, `esp32p4x`, `esp32`, `esp32s3`, `rp2040`, `rp2350`, `ch32x035`, `ch32v307`, `ch32h417`): the chip it was built for. describe's chip TLV is `<part> v<rev>` of the running part (for example `esp32p4 v3.2` even on a P4X) |
 | `fqbn`, `flash_offset` | what it was built with; `flash_offset` is where the image is written: 0 for `merged` and `flash`, `null` for the others |
 | `sha256` | the file's sha256 |
 

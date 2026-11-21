@@ -23,6 +23,9 @@
 //   Ch32.h      WCH CH32 on ArduinoCore-CH32RV: vendor bulk, HID (CDC, UART bridge); RVSWD, console, gpio, link - the
 //               X035's 62 KiB taking these - and on the larger chips SWD, SWIO, uart, I2C / SPI targets, analog,
 //               logic, counter, dac, settings without a store, I2C / SPI controllers
+//   EspSoc.h    the other ESP32s (the S3, and the chips after it): what the SoC declares (soc/soc_caps.h) picks the
+//               parts - USB-OTG (vendor bulk, HID, CDC) or USB-Serial/JTAG, UART bridge; RVSWD and console (dedicated
+//               GPIO), SWD, gpio, uart, SPI target, settings, link, I2C / SPI controllers, pwm (LEDC), counter (PCNT), memo
 //   Esp32.h     classic ESP32: a UART bridge (port_speed), TCP over Wi-Fi; SWIO, RVSWD, SWD, consoles, gpio, uart,
 //               capture (sampler), I2C / SPI targets, settings, analog, group, link, I2C / SPI controllers, pwm,
 //               counter, dac, memo
@@ -36,10 +39,12 @@
 #include "firmware/Esp32P4.h"
 #elif defined(CONFIG_IDF_TARGET_ESP32)
 #include "firmware/Esp32.h"
+#elif defined(ARDUINO_ARCH_ESP32)
+#include "firmware/EspSoc.h"
 #elif defined(ARDUINO_ARCH_CH32RV)
 #include "firmware/Ch32.h"
 #else
-#error "OepFirmware: no firmware for this chip yet (RP2040, RP2350, ESP32-P4, ESP32, CH32)"
+#error "OepFirmware: no firmware for this chip yet (RP2040, RP2350, ESP32 family, CH32)"
 #endif
 
 // The firmware's objects are this file's: a second file including it stops the link here, not two firmwares at run

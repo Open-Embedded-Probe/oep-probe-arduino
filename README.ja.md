@@ -186,7 +186,7 @@ Arduino IDE の `ファイル > スケッチ例 > OpenEmbeddedProbe` から開�
 
 | Example | ボード（profile） | 示すこと |
 |---|---|---|
-| `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、classic ESP32（esp32）、WCH CH32（ch32x035、ch32v307、ch32h417） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
+| `Firmware/OepProbe` | Pico / Pico 2 ほか RP2040 / RP2350 のボード（rp2040、rp2350）、ESP32-P4（esp32p4）/ P4X（esp32p4x）、classic ESP32（esp32）、ESP32-S3（esp32s3）、WCH CH32（ch32x035、ch32v307、ch32h417） | **焼く firmware**（Releases にもある）: そのチップでできることを全部入れ、ピンはすべて host が選ぶ。治具 = その設定 |
 | `01.Basics/MinimalProbe` | RP2040（rp2040）、RP2350（rp2350）、classic ESP32（esp32） | 最小の probe: fn 0（本体）だけでインターフェースは無し。endpoint、経路、describe |
 | `01.Basics/FixtureProbe` | RP2040（rp2040）、RP2350（rp2350）、classic ESP32（esp32） | 試験の治具: host が plan で決めるピンの GPIO と UART（ピンの表、持ち主、plan） |
 | `02.Interfaces/HelloInterface` | RP2040（rp2040）、RP2350（rp2350）、classic ESP32（esp32） | **はじめてのインターフェース**: 名前、2 つの op、ロック。ピンは使わない |
@@ -274,7 +274,7 @@ tag から各 example の各 profile をビルドし、`<Example>-<profile>-<ver
 |---|---|
 | `schema` | 1。読む側は違う番号を断る。フィールドは足すだけ |
 | `kind` | `merged`（ESP32、`flash_offset` 0 から書く全体）、`app`（ESP32、app の image。もう片方の app の区画への更新、P4 の DFU）、`uf2`（RP2040 / RP2350）、`flash`（CH32、code flash の先頭 0x08000000 から。`flash_offset` 0） |
-| `model` | この image が describe の model で返す値（`esp32p4`、`esp32p4x`、`esp32`、`rp2040`、`rp2350`、`ch32x035`、`ch32v307`、`ch32h417`）。ビルドの対象のチップ。describe の chip の TLV は動いている部品の `<part> v<rev>`（P4X でも例 `esp32p4 v3.2`） |
+| `model` | この image が describe の model で返す値（`esp32p4`、`esp32p4x`、`esp32`、`esp32s3`、`rp2040`、`rp2350`、`ch32x035`、`ch32v307`、`ch32h417`）。ビルドの対象のチップ。describe の chip の TLV は動いている部品の `<part> v<rev>`（P4X でも例 `esp32p4 v3.2`） |
 | `fqbn`、`flash_offset` | ビルドに使ったもの。`flash_offset` は書く位置で、`merged` と `flash` は 0、ほかは `null` |
 | `sha256` | ファイルの sha256 |
 

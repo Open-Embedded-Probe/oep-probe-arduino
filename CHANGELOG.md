@@ -1,6 +1,23 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) ESP32-S3 firmware (profile esp32s3, `OepProbe-esp32s3`): the ESP32 family but the classic and the P4 builds
+  `OepFirmware.h` from `src/firmware/EspSoc.h`, whose parts follow what ESP-IDF declares the SoC has (soc/soc_caps.h),
+  never the chip's name - USB-OTG (vendor bulk, HID, CDC; full speed on the S3) or USB-Serial/JTAG, a UART bridge on
+  UART0, RVSWD and console (dedicated GPIO), SWD, gpio, uart (one per UART beside UART0), SPI target, settings, link, I2C
+  / SPI controllers, pwm (LEDC), counter (PCNT), memo. Its channels are found at start-up: the SoC's valid GPIOs but the
+  pads ESP-IDF reserved (flash, PSRAM), an octal PSRAM's lines, the USB pads and UART0's. `platformUnusablePins()` /
+  `platformInputOnlyPins()` read the same declarations on every ESP32 (the classic's results unchanged). Checked on an
+  ESP32-S3 (QFN56 v0.2, 8 MB octal PSRAM): `OEP probe (ESP32-S3)` on USB and the UART bridge both answer oep dump, the
+  channels GPIO0-18, 21, 38-42, 45-48.
+- (JA) ESP32-S3 の firmware（profile esp32s3、`OepProbe-esp32s3`）: classic と P4 以外の ESP32 は `OepFirmware.h` を
+  `src/firmware/EspSoc.h` からビルドする。部品は、チップの名前ではなく、ESP-IDF が宣言する SoC の能力（soc/soc_caps.h）で決まる:
+  USB-OTG（vendor bulk、HID、CDC。S3 は FS）か USB-Serial/JTAG、UART0 の UART bridge、RVSWD とコンソール（dedicated GPIO）、SWD、gpio、
+  uart（UART0 のほかの UART の数だけ）、SPI の target、設定、link、I2C / SPI の controller、pwm（LEDC）、counter（PCNT）、memo。チャネルは
+  起動時に決まる: SoC の有効な GPIO から、ESP-IDF が予約した端子（flash、PSRAM）、octal の PSRAM の線、USB の端子、UART0 の端子を除く。
+  `platformUnusablePins()` / `platformInputOnlyPins()` は、どの ESP32 でも同じ宣言を読む（classic の結果は変わらない）。ESP32-S3（QFN56
+  v0.2、8 MB の octal の PSRAM）で確かめた: USB の `OEP probe (ESP32-S3)` と UART bridge の両方で oep dump が答え、チャネルは
+  GPIO0〜18、21、38〜42、45〜48。
 
 ## 0.0.61
 - (EN) CH32X035 SWIO: a read bit is sampled after a fixed count of loop rounds from RAM, not on a SysTick deadline. The

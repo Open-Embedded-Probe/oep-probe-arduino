@@ -11,7 +11,7 @@
 # <Example>-<profile>-<version>.bin (ESP32: the app image alone, for an update into the other app partition - the P4's
 # `dfu-util -D`), <Example>-<profile>-<version>.uf2 (RP2040 / RP2350), <Example>-<profile>-<version>.bin (CH32: the code
 # flash from its start), and firmware-<version>.json ("schema": 1) listing them with their kind (merged / app / uf2 /
-# flash), model (the describe model: esp32p4, esp32p4x, esp32, rp2040, rp2350, ch32x035, ch32v307, ch32h417) and
+# flash), model (the describe model: esp32p4, esp32p4x, esp32, esp32s3, rp2040, rp2350, ch32x035, ch32v307, ch32h417) and
 # sha256 (the fields: README "Release assets").
 #
 # One job per (example, profile): `plan` lists them, `build` compiles the examples/Firmware ones (the platform's

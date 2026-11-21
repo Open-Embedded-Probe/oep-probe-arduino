@@ -7,22 +7,22 @@
 
 ## チップごとにできること
 
-| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32（X035 / V307 / H417） | ほかの ESP32（S3、C3、C6 など） |
+| | RP2040 / RP2350 | ESP32-P4 / P4X | classic ESP32 | WCH CH32（X035 / V307 / H417） | ESP32-S3 ほか（SoC の宣言で部品が決まる） |
 |---|---|---|---|---|---|
-| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | 無し: example から部品を選んで自分でビルド（下。全部入りの `OepFirmware.h` はこれらのチップに無い）。この列は、その部品で組めるもの |
-| 経路 | USB CDC、vendor bulk、HID（UART bridge は選べば: GP8 / GP9） | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge（GPIO37 / 38、115200） | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID（X035 は vendor bulk だけ）。USB CDC と UART bridge は選べば | USB-Serial/JTAG か USB CDC |
+| リリースされた firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | `OepProbe-esp32s3`。ほかのチップ（C3、C6 など）は同じ `OepFirmware.h` を自分でビルド。部品は ESP-IDF が宣言する SoC の能力（`soc/soc_caps.h`）で決まる |
+| 経路 | USB CDC、vendor bulk、HID（UART bridge は選べば: GP8 / GP9） | HS vendor bulk、HID、USB CDC、USB-Serial/JTAG、UART bridge（GPIO37 / 38、115200） | UART bridge（115200）。wifi の設定を入れると Wi-Fi の TCP も（port 7450、mDNS `_oep._tcp`。はじめに §6） | USB vendor bulk、HID（X035 は vendor bulk だけ）。USB CDC と UART bridge は選べば | USB-OTG の vendor bulk、HID、USB CDC（S3 は FS）、UART bridge（UART0、115200）。OTG の無いチップは USB-Serial/JTAG |
 | RVSWD（CH32 の 2 線） | あり（SIO） | あり（dedicated GPIO） | あり | あり | あり（dedicated GPIO） |
 | SWIO（CH32V00x の 1 線） | あり | あり | あり | あり | 無し |
-| SWD（ARM） | あり | あり | あり | あり（X035 以外） | 無し |
+| SWD（ARM） | あり | あり | あり | あり（X035 以外） | あり |
 | target のコンソール（debug module 経由） | あり | あり | あり | あり | あり |
-| GPIO、UART の fixture | あり | あり（UART 2 つ） | あり | GPIO。UART は X035 以外 | あり |
+| GPIO、UART の fixture | あり | あり（UART 2 つ） | あり | GPIO。UART は X035 以外 | あり（UART は UART0 のほかの数だけ） |
 | ロジックのキャプチャ | PIO + DMA: 8 ch、ワンショット、エッジ / レベルのトリガ | PARLIO: 16 ch まで。速さは [キャプチャ](capture.ja.md#esp32-p4--p4x-の速さと本数) の表。ワンショットのレベル / エッジのトリガ。プリトリガの上限は [implementation limits §1.7](../implementation-limits.ja.md#17-キャプチャcaptureと-fixture) | GPIO の sampler: 8 ch、1〜300 kHz、ワンショット。レベル / エッジのトリガを区切りごとに探す | 1 つのポートの 0〜15 番から 8 ch、250 kS/s まで、ワンショット、エッジ / レベルのトリガ（X035 以外）。H417 は UHSIF の 16 ch も（流し続け、200 MS/s まで） | 無し |
-| アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | ADC1、4 ch、ADC のサンプル時間の段（数十〜数百 kS/s）。X035 以外 | 無し（ビルドしていない） |
+| アナログのキャプチャ（ワンショット、生の値、しきい値のトリガとプリトリガ） | GP26〜28、4 ch、合計 500 kS/s | ADC1 の GPIO16〜23、4 ch、合計 46 kHz、減衰 0〜12 dB | ADC1 の GPIO32〜36 / 39、4 ch、合計 20〜100 kHz | ADC1、4 ch、ADC のサンプル時間の段（数十〜数百 kS/s）。X035 以外 | 無し |
 | トラックを一緒に始める（capture-group） | ロジック + アナログ。出来事の元はアナログの横切り（アナログのトラックだけ） | ロジック + アナログ。出来事の元はロジックのレベル / エッジかアナログの横切り | ロジック（sampler）+ アナログ。出来事の元はアナログの横切り（アナログのトラックだけ） | 無し | 無し |
-| SPI / I2C の target（DUT の controller の相手） | I2C、SPI（PIO） | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | あり |
-| SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 750 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 2 MHz まで） | あり（X035 以外。GPIO、250 kHz まで） | 無し（ビルドしていない） |
-| PWM の出力 | あり（PWM のスライス） | あり（LEDC） | あり（LEDC） | 無し | 無し（ビルドしていない） |
-| エッジを数える（counter） | あり（割り込み、100 kHz まで） | あり（PCNT、40 MHz まで） | あり（PCNT、10 MHz まで） | あり（X035 以外） | 無し（ビルドしていない） |
+| SPI / I2C の target（DUT の controller の相手） | I2C、SPI（PIO） | あり | あり（SPI は mode 0 / 2） | あり（X035 以外。SPI は 200 kHz まで） | SPI の target |
+| SPI / I2C の controller（DUT の target の相手） | あり（GPIO、250 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 750 kHz まで） | あり（GPIO、I2C 400 kHz / SPI 2 MHz まで） | あり（X035 以外。GPIO、250 kHz まで） | あり（GPIO） |
+| PWM の出力 | あり（PWM のスライス） | あり（LEDC） | あり（LEDC） | 無し | あり（LEDC） |
+| エッジを数える（counter） | あり（割り込み、100 kHz まで） | あり（PCNT、40 MHz まで） | あり（PCNT、10 MHz まで） | あり（X035 以外） | あり（PCNT） |
 | アナログの出力（DAC） | 無し | 無し | GPIO25 / 26、8 bit | PA4 / PA5、12 bit（V307、H417） | 無し |
 | 設定の保存 | LittleFS のファイル（FS の領域: 256 KB / 512 KB） | LittleFS のファイル（パーティション `spiffs`） | LittleFS のファイル（パーティション `spiffs`） | 無し（保存しない。X035 は設定そのものが無い） | LittleFS のファイル（パーティション `spiffs`） |
 | メモ欄（`oep.probe.memo`） | 2 KB のオブジェクトが 52 個（RP2040）/ 64 個（RP2350） | 2 KB のオブジェクトが 64 個 | 2 KB のオブジェクトが 64 個 | 無し | 2 KB のオブジェクトが 64 個 |
@@ -54,6 +54,7 @@ firmware の選択と DFU の互換性チェックは[使い始める](getting-s
 | SparkFun Pro Micro RP2350（`rp2350` のビルド） | Pico 2 と同じ: GP0〜GP22、GP26〜GP28 | GP23〜GP25、GP29（Pico 2 のビルドの予約）。GP19 は PSRAM の chip select なので host が使わない |
 | ESP32-P4 / P4X | GPIO0〜GPIO54（24、25、37、38 以外） | GPIO24 / 25（USB-Serial/JTAG）、37 / 38（UART0 のピン: UART bridge の経路） |
 | classic ESP32 | GPIO4、5、13、14、16〜19（16 / 17 は PICO-D4 / PICO-V3 / D2WD と、ビルドで PSRAM を有効にしたときは起動時に外す）、21〜23、25〜27、32、33、34〜36、39（34〜39 は入力だけ）。SWIO は 32 未満の出力のピン | 1、3（UART0: 経路）、6〜11（flash）、0、2、12、15（起動のストラップ） |
+| ESP32-S3 ほか（`EspSoc.h`） | 起動時に決まる: SoC の有効な GPIO（`SOC_GPIO_VALID_GPIO_MASK`）から、ESP-IDF が起動時に予約した端子（flash、PSRAM）、octal の PSRAM の線、USB の端子（OTG か USB-Serial/JTAG を使うとき）、UART0（bridge）を除いたもの。ESP32-S3R8 のボードでは GPIO0〜18、21、38〜42、45〜48 | 上で除いた端子。起動のストラップ（S3 の 0、3、45、46）はチャネルに残る（target が reset の瞬間に引いていると、プローブが別のモードで起動する） |
 
 RP2 の UART の fixture はチップの UART です。instance 0（UART0）は RX が GP1、13、17、29、TX が GP0、12、16、28 のどれか、instance 1（UART1）は RX が GP5、9、21、25、TX が GP4、8、20、24 のどれかです（RP2040 のもの。UART のブリッジかトレースが UART1 を使うビルドには instance 1 がありません）。ESP32 はどのピンでも使えます
 （GPIO の行列）。
