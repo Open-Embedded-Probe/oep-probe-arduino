@@ -1,6 +1,18 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) CH32X035 firmware: SWIO (oep.wire.swio and its console) is in the distributed set, so a CH32X035 board attaches a
+  CH32V00x on one wire as well as RVSWD targets. The CH32's SWIO frames run from RAM with their waits inlined and each
+  step's own lateness taken off (as captured on the line, its lows and highs come out as the ESP32-P4's own), the read
+  bits step on deadlines; on the CH32X035 a read bit has no first recharge - even a short push high broke the
+  CH32V003's answer - and is sampled 750 ns after the release. Checked on a WeAct CH32X035F8U6 with a CH32V003F4P6 at
+  PA0: 5 of 5 and 10 of 10 attaches, target info, 16 KiB of flash read twice alike.
+- (JA) CH32X035 の firmware: 配布の組に SWIO（oep.wire.swio とそのコンソール）を入れた。CH32X035 のボードで、RVSWD の target に
+  加えて CH32V00x にも 1 線で attach する。CH32 の SWIO のフレームは RAM で動かし、待ちをインラインにし、段ごとの遅れを差し引く
+  （線の上で取り込むと、low と high が ESP32-P4 自身のものと同じ長さになる）。読みのビットは締め切りの足し算で進める。CH32X035 では、
+  読みのビットに最初の押し上げ（recharge）を入れない（短い押し上げでも CH32V003 の返事が壊れた）。放してから 750 ns でサンプルする。
+  WeAct の CH32X035F8U6 の PA0 に CH32V003F4P6 をつないで確かめた: attach 5 回中 5 回と 10 回中 10 回、target info、flash 16 KiB の
+  読み出し 2 回が一致。
 - (EN) CH32 vendor bulk (X035, V307): a result is written whole. The core's vendor write takes what fits in its
   256-byte FIFO, so any answer longer than that (describe) was cut short and the host never read a frame (the X035
   probe answered nothing). Now the rest is written as the FIFO drains, given up after 2 s without the host taking IN.

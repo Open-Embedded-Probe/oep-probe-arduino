@@ -12,7 +12,7 @@ released firmware.
 | Released firmware | `OepProbe-rp2040` / `-rp2350` | `OepProbe-esp32p4` / `-esp32p4x` | `OepProbe-esp32` | `OepProbe-ch32x035` / `-ch32v307` / `-ch32h417` | none: choose parts from an example and build it yourself (below; the all-in `OepFirmware.h` does not exist for these chips). This column is what those parts can make |
 | Transports | USB CDC, vendor bulk, HID (UART bridge when chosen: GP8 / GP9) | HS vendor bulk, HID, USB CDC, USB-Serial/JTAG, UART bridge (GPIO37 / 38, 115200) | UART bridge (115200). With the wifi settings, also TCP over Wi-Fi (port 7450, mDNS `_oep._tcp`; Getting started §6) | USB vendor bulk, HID (X035: vendor bulk only). USB CDC and UART bridge when chosen | USB-Serial/JTAG or USB CDC |
 | RVSWD (CH32's 2 wires) | yes (SIO) | yes (dedicated GPIO) | yes | yes | yes (dedicated GPIO) |
-| SWIO (CH32V00x's 1 wire) | yes | yes | yes | yes (except X035) | none |
+| SWIO (CH32V00x's 1 wire) | yes | yes | yes | yes | none |
 | SWD (ARM) | yes | yes | yes | yes (except X035) | none |
 | Target console (through the debug module) | yes | yes | yes | yes | yes |
 | GPIO, UART fixtures | yes | yes (2 UARTs) | yes | GPIO. UART except X035 | yes |

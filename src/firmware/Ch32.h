@@ -455,9 +455,9 @@ void oepAddSpiController() {
 }
 
 // What this chip has (oep::kAvailable) and the distributed firmware's set (oep::kDefaults). The CH32X035's 62 KiB take
-// the WCH set (RVSWD, console, gpio, link, vendor bulk: its MS OS 2.0 descriptor binds WinUSB, so no host needs HID
-// there); the larger chips take HID, SWD, SWIO, uart, the I2C / SPI targets and controllers, analog, logic, counter,
-// dac and the settings too.
+// the WCH set (RVSWD and SWIO with their consoles, gpio, link, vendor bulk: its MS OS 2.0 descriptor binds WinUSB, so
+// no host needs HID there); the larger chips take HID, SWD, uart, the I2C / SPI targets and controllers, analog, logic,
+// counter, dac and the settings too.
 #if defined(ARDUINO_CH32X035)
 static constexpr bool kRoomy = false;
 #else
@@ -467,9 +467,9 @@ namespace oep {
 inline constexpr uint64_t kAvailable = kBulk | kHid | kCdc | kBridge | kRvswd | kConsole | kSwio | kSwioConsole | kSwd |
                                        kGpio | kUart | kI2cTarget | kAnalog | kLogic | kCounter | kDac | kSpiTarget |
                                        kSettings | kLink | kI2cController | kSpiController;
-inline constexpr uint64_t kDefaults = kBulk | kRvswd | kConsole | kGpio | kLink |
-                                      (kRoomy ? kHid | kSwd | kUart | kI2cTarget | kSpiTarget | kAnalog | kLogic | kCounter | kDac | kSwio |
-                                                     kSwioConsole | kSettings | kI2cController | kSpiController
+inline constexpr uint64_t kDefaults = kBulk | kRvswd | kConsole | kSwio | kSwioConsole | kGpio | kLink |
+                                      (kRoomy ? kHid | kSwd | kUart | kI2cTarget | kSpiTarget | kAnalog | kLogic | kCounter | kDac |
+                                                     kSettings | kI2cController | kSpiController
                                                : 0);
 }  // namespace oep
 

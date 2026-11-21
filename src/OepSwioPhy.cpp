@@ -483,9 +483,9 @@ void SwioPhy::backgroundSent() {}
 #include "OepCh32BitBang.h"
 #include "OepPlatform.h"
 
-// A WCH CH32 as the probe (ArduinoCore-CH32RV): the ESP32-P4's frames and read recharge, every edge at a deadline from
-// the one before, against SysTick's count (HCLK; HCLK / 8 on a CH32V103) - the core zeroes it in its 1 ms interrupt,
-// which waits while a frame has interrupts off, so within a frame it only climbs. The line's direction is its 4-bit
+// A WCH CH32 as the probe (ArduinoCore-CH32RV): the ESP32-P4's frames and read recharge (not on the CH32X035: below),
+// every edge at a deadline from the one before, against SysTick's count (HCLK; HCLK / 8 on a CH32V103) - the core
+// zeroes it in its 1 ms interrupt, which waits while a frame has interrupts off, so within a frame it only climbs. The line's direction is its 4-bit
 // CNF+MODE field: both words (driven, and an input with the pull-up) worked out once a frame, each switch one store.
 // Any channel (platformPad: port x 24 + bit). Driven high between frames while attached, as the ESP32s'.
 namespace oep {
@@ -493,7 +493,18 @@ namespace {
 constexpr uint32_t kShortLowNs = 262, kLongLowNs = 862, kHighNs = 262;
 constexpr uint32_t kHalfNs = 131, kRechargeNs = 30, kZeroNs = 524;
 constexpr uint32_t kRiseTimeoutNs = 100000;   // a read frame's whole wait for the line to rise (the P4's)
-struct Times { uint32_t shortLow, longLow, high, half, recharge, zero, riseTimeout; };
+// The CH32X035 (48 MHz) reads a bit without the first recharge: even a short push high there (two stores, some 40 ns)
+// broke the CH32V003's answer (every bit read 1), so the line rises on the pull-ups alone and is sampled kSampleNs after
+// the release - where a one has risen and a zero is still held: a CH32V003 at a WeAct X035 board's PA0 read every bit
+// right from 710 to 790 ns (34 - 38 counts at 48 MHz; 680 and 830 ns mis-read about a third of 512 pattern bits). The
+// faster chips keep the ESP32-P4's recharge.
+#if defined(ARDUINO_CH32X035)
+constexpr bool kReadRecharge = false;
+#else
+constexpr bool kReadRecharge = true;
+#endif
+constexpr uint32_t kSampleNs = 750;
+struct Times { uint32_t shortLow, longLow, high, half, recharge, zero, riseTimeout, sample; };
 Times gT = {};
 int gPin = -1;   // the channel
 ch32::Pin gIo;
@@ -504,76 +515,127 @@ constexpr uint32_t kOutMode = CH32RV_GPIO_CFG_OUT_PP_10M, kInMode = CH32RV_GPIO_
 constexpr uint32_t kTickHz = CH32RV_SYSTICK_V103 ? CH32RV_HCLK_HZ / 8u : CH32RV_HCLK_HZ;
 
 uint32_t ticksFor(uint32_t ns) { return static_cast<uint32_t>((uint64_t{ns} * kTickHz + 999999999u) / 1000000000u); }
-inline uint32_t now() { return CH32RV_SYSTICK_CNT; }
-inline void until(uint32_t deadline) { while (static_cast<int32_t>(now() - deadline) < 0) {} }
+// What each step costs on top of its wait - the wait loop's last SysTick read and branch, the store, the work before the
+// next edge - in SysTick counts (= core cycles, SysTick on HCLK), taken off the step: measured on the line (a CH32X035 at
+// 48 MHz captured by an ESP32-P4 at 80 MS/s) so its lows and highs come out as the ESP32-P4's own do there (short low
+// 312 ns, long low 912 ns, high 312 ns); the read's steps the plain loop cost
+constexpr uint32_t kShortLate = 5, kLongLate = 9, kHighLate = 10, kHalfLate = 2, kStepLate = 6;
+uint32_t stepTicks(uint32_t ns, uint32_t late) { const uint32_t t = ticksFor(ns); return t > late ? t - late : 1; }
+#define OEP_SWIO_INLINE inline __attribute__((always_inline))
+OEP_SWIO_INLINE uint32_t now() { return CH32RV_SYSTICK_CNT; }
+OEP_SWIO_INLINE void until(uint32_t deadline) { while (static_cast<int32_t>(now() - deadline) < 0) {} }
 
-// The pin's configuration register with its field driven / released (the other pins' fields as they are now)
+// The pin for a frame, copied out of gIo into locals so a frame keeps it in registers (read back from gIo, every edge
+// paid its loads - the X035's short low came out 440 - 500 ns, not 262): its set / clear / input registers and masks,
+// and its configuration register with the pin's field driven / released (the other pins' fields as they are now).
 struct Words {
-  volatile uint32_t *reg;
-  uint32_t out, in;
+  volatile uint32_t *reg, *set, *clr, *in;
+  uint32_t out, inMode, setMask, clrMask, inMask;
+  OEP_SWIO_INLINE void high() const { *set = setMask; }
+  OEP_SWIO_INLINE void low() const { *clr = clrMask; }
+  OEP_SWIO_INLINE int read() const { return (*in & inMask) != 0; }
+  OEP_SWIO_INLINE void drive() const { *reg = out; }
+  OEP_SWIO_INLINE void release() const { *reg = inMode; }
 };
 inline Words words() {
   const uint32_t rest = *gIo.cfg & ~(0xFu << gIo.cfg_shift);
-  return {gIo.cfg, rest | (kOutMode << gIo.cfg_shift), rest | (kInMode << gIo.cfg_shift)};
+  return {gIo.cfg, gIo.set, gIo.clr, gIo.in, rest | (kOutMode << gIo.cfg_shift), rest | (kInMode << gIo.cfg_shift),
+          gIo.set_mask, gIo.clr_mask, gIo.in_mask};
 }
 
 // As the P4's: each low timed from the moment the line fell, the high after it from the moment it rose - a stall before
 // an edge lengthens the high before it and never shortens a long low into a short one.
-inline uint32_t sendBits(const Times &tm, uint64_t bits, int count, uint32_t t) {
-  for (uint64_t mask = uint64_t{1} << (count - 1); mask; mask >>= 1) {
-    const uint32_t lowFor = (bits & mask) ? tm.shortLow : tm.longLow;
+// `count` bits of `bits` (up to 32), the highest first
+OEP_SWIO_INLINE uint32_t sendBits(const Words &w, const Times &tm, uint32_t bits, int count, uint32_t t) {
+  for (bits <<= 32 - count; count; --count, bits <<= 1) {
+    const uint32_t lowFor = (bits & 0x80000000u) ? tm.shortLow : tm.longLow;
     until(t);
-    gIo.low();
+    w.low();
     const uint32_t fell = now();
     until(fell + lowFor);
-    gIo.high();
+    w.high();
     t = now() + tm.high;
   }
   return t;
 }
 
 // One bit read, as the P4's: the low start, released (OUTDR 1: the pull-up), recharged high, sampled; a zero gets a
-// second recharge; 2 = the line never came back (left released).
-inline int readBit(const Words &w, const Times &tm, uint32_t &rise_left) {
-  uint32_t t = now();
-  gIo.low();
+// second recharge; 2 = the line never came back (left released). `t` carries the bit's start from one bit to the next
+// and every step is a deadline after it - a SysTick read costs several cycles here, so a one (the line already high:
+// recharged and sampled so) goes on to the next bit without waiting for the rise; the X035's read bits took 1.39 us
+// apart, the ESP32-P4's 0.85 (captured on the line)
+OEP_SWIO_INLINE int readBit(const Words &w, const Times &tm, uint32_t &rise_left, uint32_t &t) {
+  until(t);
+  w.low();
   until(t += tm.shortLow);
-  *w.reg = w.in;
-  gIo.high();
-  until(t += tm.half);
-  *w.reg = w.out;
-  until(t += tm.recharge);
-  *w.reg = w.in;
-  until(t += tm.half);
-  const int sampled = gIo.read();
-  if (!sampled) {
-    until(t += tm.zero);
-    *w.reg = w.out;
+  w.release();
+  w.high();
+  if constexpr (kReadRecharge) {
+    until(t += tm.half);
+    w.drive();
     until(t += tm.recharge);
-    *w.reg = w.in;
+    w.release();
+    until(t += tm.half);
+  } else {
+    until(t += tm.sample);
   }
-  t = now();
+  if (w.read()) {
+    w.drive();
+    t += tm.high;
+    return 1;
+  }
+  until(t += tm.zero);
+  w.drive();
+  until(t += tm.recharge);
+  w.release();
+  const uint32_t from = now();
   do {
-    if (gIo.read()) {
-      *w.reg = w.out;
-      const uint32_t waited = now() - t;
+    if (w.read()) {
+      w.drive();
+      const uint32_t waited = now() - from;
       rise_left = waited < rise_left ? rise_left - waited : 0;
-      until(now() + tm.half);
-      return sampled;
+      t = now() + tm.half;
+      return 0;
     }
-  } while (now() - t < rise_left);
+  } while (now() - from < rise_left);
   return 2;
+}
+
+// The timed frames from RAM (CH32RV_RAMFUNC), every wait and edge inlined, the times and the pin copied into locals
+// that stay in registers (through a reference, each volatile store made the compiler load them again): from flash,
+// through calls, the X035 at 48 MHz overran the 131 ns steps of a read bit, and with the reloads its highs between bits
+// came out 575 - 725 ns, not 262 (captured on the line)
+CH32RV_RAMFUNC void frameWrite(const Times &times, const Words &pin, uint32_t head, uint32_t value) {
+  const Times tm = times;
+  const Words w = pin;
+  w.high();
+  w.drive();
+  until(sendBits(w, tm, value, 32, sendBits(w, tm, head, 9, now() + tm.high)));
+}
+// The read's 9 request bits and its 32 answer bits; false: the line never came back (left released)
+CH32RV_RAMFUNC bool frameRead(const Times &times, const Words &pin, uint32_t head, uint32_t &value) {
+  const Times tm = times;
+  const Words w = pin;
+  w.high();
+  w.drive();
+  uint32_t t = sendBits(w, tm, head, 9, now() + tm.high);
+  uint32_t rise_left = tm.riseTimeout, result = 0;
+  for (int bit = 0; bit < 32; ++bit) {
+    const int decoded = readBit(w, tm, rise_left, t);
+    if (decoded == 2) return false;
+    result = (result << 1) | static_cast<uint32_t>(decoded);
+  }
+  value = result;
+  return true;
 }
 
 void writeRaw(uint8_t address, uint32_t value, bool free_after = false) {
   const Times tm = gT;
-  const uint64_t bits = (uint64_t{1} << 40) | (uint64_t{address & 0x7fu} << 33) | (uint64_t{1} << 32) | value;
+  const uint32_t head = (1u << 8) | ((address & 0x7fu) << 1) | 1u;   // start 1, address, 1 (write); then the value
   noInterrupts();
   const Words w = words();
-  gIo.high();
-  *w.reg = w.out;
-  until(sendBits(tm, bits, 41, now()));
-  if (free_after) *w.reg = w.in;
+  frameWrite(tm, w, head, value);
+  if (free_after) w.release();
   interrupts();
   delayMicroseconds(8);   // E135: LinkE frame gap median 6.7 us
 }
@@ -594,8 +656,9 @@ void unconfigureIo() {   // an input with the pull-up
 bool SwioPhy::begin(int swio) {
   if (swio < 0 || swio > 63 || !gIo.resolve(platformPad(swio))) return false;
   gPin = swio;
-  gT = {ticksFor(kShortLowNs), ticksFor(kLongLowNs), ticksFor(kHighNs), ticksFor(kHalfNs),
-        ticksFor(kRechargeNs), ticksFor(kZeroNs), ticksFor(kRiseTimeoutNs)};
+  gT = {stepTicks(kShortLowNs, kShortLate), stepTicks(kLongLowNs, kLongLate), stepTicks(kHighNs, kHighLate),
+        stepTicks(kHalfNs, kHalfLate), stepTicks(kRechargeNs, kStepLate), stepTicks(kZeroNs, kStepLate),
+        ticksFor(kRiseTimeoutNs), ticksFor(kSampleNs)};
   gIo.config(CH32RV_GPIO_CFG_IN_FLOAT);   // free until a connection takes it (oep-core §8); attach pulls it up
   gDriven = false;
   ready_ = true;
@@ -612,29 +675,20 @@ bool SwioPhy::usePins(int swdio, int swclk) {
 bool SwioPhy::readRaw(uint8_t address, uint32_t &value) {
   const Times tm = gT;
   uint32_t result = 0;
-  const uint64_t bits = (1u << 8) | ((address & 0x7fu) << 1);   // start 1, address, 0 (read)
-  uint32_t rise_left = tm.riseTimeout;
+  const uint32_t bits = (1u << 8) | ((address & 0x7fu) << 1);   // start 1, address, 0 (read)
   noInterrupts();
   const Words w = words();
-  gIo.high();
-  *w.reg = w.out;
-  until(sendBits(tm, bits, 9, now()));
-  for (int bit = 0; bit < 32; ++bit) {
-    result <<= 1;
-    const int decoded = readBit(w, tm, rise_left);
-    if (decoded == 2) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
-      *w.reg = w.in;
-      interrupts();
-      rest_free_ = true;
-      delayMicroseconds(8);
-      return false;
-    }
-    result |= decoded;
+  if (!frameRead(tm, w, bits, result)) {   // no answer: released to the pull-up until a read answers (oep-if-debug §2, §3.2)
+    w.release();
+    interrupts();
+    rest_free_ = true;
+    delayMicroseconds(8);
+    return false;
   }
   const DmiPhy::Outcome outcome = DmiPhy::outcomeOf(address, true, result);
   if (outcome == DmiPhy::kAnswered) rest_free_ = false;
   else if (outcome == DmiPhy::kNoAnswer) rest_free_ = true;   // a DMSTATUS of all ones: the line, no module
-  if (rest_free_) *w.reg = w.in;
+  if (rest_free_) w.release();
   interrupts();
   delayMicroseconds(8);
   value = result;
