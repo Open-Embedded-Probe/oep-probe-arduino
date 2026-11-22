@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Open Embedded Probe
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["oep-client-python>=0.0.63", "wireskein"]
+# dependencies = ["oep-client-python>=0.0.63", "wireskein>=0.0.35"]
 # ///
 """Capture streaming on the LogicCapture example over HS (oep-spec oep-if-capture §3.4): LEDC squares
 of 1 MHz and 250 kHz on GPIO 4 / 5 (io.github.open-embedded-probe.test-signal), captured as 2 channels streaming at
