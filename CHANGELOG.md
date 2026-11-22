@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.62
 - (EN) Classic ESP32: the pins its own flash / PSRAM take come from what the chip declares (esp_chip_info, from the
   package in eFuse), no longer from its model name - in-package flash (CHIP_FEATURE_EMB_FLASH) GPIO16 / 17 as before;
   a PSRAM in the package alone (CHIP_FEATURE_EMB_PSRAM, the D0WDR2-V3 of an ESP32-WROOM-32E N*R2) GPIO16 only, GPIO17
