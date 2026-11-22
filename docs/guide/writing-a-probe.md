@@ -253,8 +253,8 @@ neither op (fn 0 sends nothing; there is no heartbeat, and the host reads the pr
 ## 9. USB identity
 
 A USB probe identifies itself with the project's VID:PID `1209:4F45` (`oep::reg::kUsbProjectVid` / `kUsbProjectPid`; the
-conditions for shipping firmware with it are in [PID-USE.md](../../PID-USE.md)) and a serial number different per unit (unit_id;
-the host tells units apart by it and finds named probes). iProduct is a free string for people to read (`OEP probe (ESP32-P4)`
+conditions for shipping firmware with it are in [PID-USE.md](../../PID-USE.md)) and a serial number different per unit (unit_id).
+The host tells units apart by it and finds named probes by it. iProduct is a free string for people to read (`OEP probe (ESP32-P4)`
 in the firmware), and the host does not tell probes apart by it. Interfaces outside OEP on the same device (such as the
 ESP32-P4's in-app DFU) are part of that device too. The vendor bulk interface has bInterfaceSubClass 0x4F / bInterfaceProtocol
 0x45, and the vendor HID usage page 0xFF4F / usage 0x45 (transports §3; `src/firmware/Esp32P4.h` fixes EspUsbDevice's

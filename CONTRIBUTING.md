@@ -17,7 +17,7 @@ used as is. Add changes under `## Unreleased` in `CHANGELOG.md` with (EN) / (JA)
 (workflow_dispatch). It bumps the version in `library.properties`, writes `src/openembeddedprobe_version.h`, rewrites the
 examples' `sketch.yaml` `dir: ../..` to `OpenEmbeddedProbe (<version>)` on the `release` branch, and makes the ZIP without
 `tests/`, the tag and the GitHub Release. Then the separate `.github/workflows/firmware.yml` (not the toolkit's) builds every
-profile of every example from the tag, and attaches `<Example>-<profile>-<version>.merged.bin` (ESP32, written at 0x0) /
+profile of every example from the tag. It attaches `<Example>-<profile>-<version>.merged.bin` (ESP32, written at 0x0) /
 `.bin` (ESP32, the app image for updates; the P4's DFU) / `.uf2` (RP2040 / RP2350) / `.bin` (CH32, the whole code flash)
 and `firmware-<version>.json` (sha256) to the Release (only those of `examples/Firmware/`; the other examples are built to
 check them). The probe reports the same version in describe's firmware string.

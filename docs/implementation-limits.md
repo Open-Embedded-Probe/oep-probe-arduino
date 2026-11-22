@@ -157,8 +157,8 @@ preparation fails, it writes them back and then answers stopped 3 (did not run).
 - **Segment serial** (capture §2.2): u32, wraps around. The ESP32-P4's repeat and streaming remember the information of up to
   255 segments (one is the segment being filled), and segments answers within that range by the serial-number paging of [common](https://github.com/Open-Embedded-Probe/oep-spec/blob/main/interfaces/oep-if-common.md) §1.3.
 - **Non-contiguous segments are not delivered** (capture §2.2): when the ESP32-P4 logic's capture queue (128 entries)
-  overflows or the DMA ring (128 KiB) wraps over bytes not yet copied, the segment being filled is dropped (not listed in
-  segments, not returned by read or streaming), and the track stops with state 6, stopped reason 2, error 2. status's
+  overflows or the DMA ring (128 KiB) wraps over bytes not yet copied, the segment being filled is dropped: it is not listed
+  in segments and not returned by read or streaming. The track stops with state 6, stopped reason 2, error 2. status's
   write_pos is the start of that segment, and flags bit0 is set. Segments that ended before it stay readable. A one-shot with
   a trigger stops the same way when the ring wraps before the segment is copied (also when the trigger was before the ring's
   oldest byte) (write_pos 0). Analog is the same (the ESP32's conversion overflow, the ring wrapping over a segment on ESP32 /
@@ -351,9 +351,9 @@ save then counts as absent (storage_state 0). A normal firmware write (arduino-c
   the logic sampler stops interrupts on core 1 and keeps reading GPIO. SWIO frames, which use the same peripheral bus, can
   shift during that (SWIO has no parity and DMI writes are not read back, so it cannot be seen on the wire).
 - **Rule: an immediate capture window and SWIO wire traffic (requests and console alike) do not happen at the same time.**
-  While an immediate (trigger type 0) window is sampling, not a single SWIO frame goes out: requests (riscv-dm, wire ops) wait
-  for the window to end, and the console reads neither DMSTATUS nor DATA0 (it is refused its turn on the wire and reads at
-  the poll after the window closes). The window opens after the request in progress ends. The immediate window's length is
+  While an immediate (trigger type 0) window is sampling, not a single SWIO frame goes out. Requests (riscv-dm, wire ops)
+  wait for the window to end. The console reads neither DMSTATUS nor DATA0: it is refused its turn on the wire and reads
+  at the poll after the window closes. The window opens after the request in progress ends. The immediate window's length is
   samples ÷ the actual rate, and configure rounds samples down to 200 ms worth (actual_samples; 60000 at 300 kHz, 20000 at
   100 kHz), so the window is at most 200 ms. So **console commands or debug resets sent after the capture starts do not show
   in an immediate capture** (they reach the target after the window closes).
