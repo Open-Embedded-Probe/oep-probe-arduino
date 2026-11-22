@@ -29,11 +29,11 @@ OEP のフレームはどのリンクでも同じで、違うのは包み方だ�
 
 | リンク | 何に向くか | probe → host | host → probe | 往復 | このライブラリのチップ |
 |---|---|---|---|---|---|
-| **USB vendor bulk**（high speed） | ロジック・アナログのキャプチャのストリーミング、大きな flash の書き込み。2 チャネル 150 Msample/s のロジック（37.5 MB/s）に足りる唯一のリンク | 33〜37 MB/s | 5.5〜10 MB/s | 0.37 ms | ESP32-P4（HS の口）。RP2040 / RP2350 と WCH CH32 は full speed |
-| **USB HID**（vendor 定義の report） | どの OS でもドライバ不要、ブラウザ（WebHID）からも開ける。**ソフトウェア（bit-bang）の USB デバイス**が出せる唯一の class: low speed のデバイスには bulk の endpoint が無いので、USB のペリフェラルを持たないチップで作った probe も HID なら OEP の probe になれる | 0.8〜1.1 MB/s（HS）。low speed のデバイスなら約 8 KB/s | 1.0 MB/s（HS） | 0.66 ms | ESP32-P4（HS の口）、RP2040 / RP2350、WCH CH32（full speed） |
-| **USB CDC**（シリアルの口） | COM ポートとして見える: Arduino IDE のポートとシリアルモニターがそのまま使え、target のコンソールが OEP と 1 本の線を共有する | 8.1 MB/s（HS） | 6.7 MB/s（HS） | 0.60 ms | ESP32-P4（HS の口）、RP2040 / RP2350（full speed）、WCH CH32（選べば） |
-| **USB-Serial/JTAG**（ESP32 の内蔵のシリアルの口） | firmware に USB のスタックが要らない。同じ口で probe 自身を書き込める（esptool） | 約 0.8 MB/s（full speed） | — | — | ESP32-P4（FS の口）、ESP32-S3 / C3 / C6 |
-| **UART**（USB-UART の変換チップ経由: CP2102、CH340 など） | UART と変換チップがあるボード（安いボードのほとんど）なら probe になれる。遅いが、小さな target の書き込みとデバッグには足りる | 約 11 KB/s（115200 baud） | 約 11 KB/s | 約 5 ms | classic ESP32、ESP32-P4（GPIO37 / 38）。RP2040 / RP2350 と WCH CH32 は選べば |
+| **USB vendor bulk**（high speed） | ロジック・アナログのキャプチャのストリーミング、大きな flash の書き込み。2 チャネル 150 Msample/s のロジック（37.5 MB/s）に足りる唯一のリンク | 33〜37 MB/s | 5.5〜10 MB/s | 0.37 ms | ESP32-P4（HS の口）。RP2040 / RP2350、ESP32-S3、WCH CH32 は full speed |
+| **USB HID**（vendor 定義の report） | どの OS でもドライバ不要、ブラウザ（WebHID）からも開ける。**ソフトウェア（bit-bang）の USB デバイス**が出せる唯一の class: low speed のデバイスには bulk の endpoint が無いので、USB のペリフェラルを持たないチップで作った probe も HID なら OEP の probe になれる | 0.8〜1.1 MB/s（HS）。low speed のデバイスなら約 8 KB/s | 1.0 MB/s（HS） | 0.66 ms | ESP32-P4（HS の口）、RP2040 / RP2350、ESP32-S3、WCH CH32（full speed） |
+| **USB CDC**（シリアルの口） | COM ポートとして見える: Arduino IDE のポートとシリアルモニターがそのまま使え、target のコンソールが OEP と 1 本の線を共有する | 8.1 MB/s（HS） | 6.7 MB/s（HS） | 0.60 ms | ESP32-P4（HS の口）、RP2040 / RP2350、ESP32-S3（full speed）、WCH CH32（選べば） |
+| **USB-Serial/JTAG**（ESP32 の内蔵のシリアルの口） | firmware に USB のスタックが要らない。同じ口で probe 自身を書き込める（esptool） | 約 0.8 MB/s（full speed） | — | — | ESP32-P4（FS の口）、USB-OTG の無い ESP32（C3、C6 など） |
+| **UART**（USB-UART の変換チップ経由: CP2102、CH340 など） | UART と変換チップがあるボード（安いボードのほとんど）なら probe になれる。遅いが、小さな target の書き込みとデバッグには足りる | 約 11 KB/s（115200 baud） | 約 11 KB/s | 約 5 ms | classic ESP32、ESP32-P4（GPIO37 / 38）、ESP32-S3（UART0）。RP2040 / RP2350 と WCH CH32 は選べば |
 | **TCP**（Wi-Fi） | ケーブルが要らない: 作業台のネットワークの probe を mDNS（`_oep._tcp`）で見つけ、複数の host の接続が 1 つのロックを共有する。信頼できるネットワークだけ（認証なし） | 26〜103 KB/s | 23〜31 KB/s | 約 9 ms（中央値） | classic ESP32 |
 
 数値は試験台で測ったおよその値です（classic ESP32 は 115200 baud）。low speed の HID の値は class そのものの上限

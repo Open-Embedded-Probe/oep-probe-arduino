@@ -62,7 +62,7 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
 
 ## 6. ビルド
 
-- [ ] 全プロファイルをビルドします：`rp2040`、`rp2350`、`esp32p4`、`esp32p4x`、`esp32`、`ch32x035`、`ch32v307`、`ch32h417`。CI（`.github/workflows/`）
+- [ ] 全プロファイルをビルドします：`rp2040`、`rp2350`、`esp32p4`、`esp32p4x`、`esp32`、`esp32s3`、`ch32x035`、`ch32v307`、`ch32h417`。CI（`.github/workflows/`）
       も examples の `sketch.yaml` をすべてビルドします。
 
 ## 7. 文書

@@ -18,10 +18,11 @@ Take the firmware for your chip from the [Releases](https://github.com/Open-Embe
 | ESP32-P4 | `OepProbe-esp32p4-<version>.merged.bin` | `esptool.py --chip esp32p4 write_flash 0x0 <file>` |
 | ESP32-P4X (v3.x) | `OepProbe-esp32p4x-<version>.merged.bin` | the same (esptool's chip name is `esp32p4`) |
 | classic ESP32 (DevKitC and so on) | `OepProbe-esp32-<version>.merged.bin` | `esptool.py --chip esp32 write_flash 0x0 <file>` |
+| ESP32-S3 | `OepProbe-esp32s3-<version>.merged.bin` | `esptool.py --chip esp32s3 write_flash 0x0 <file>` |
 | WCH CH32X035 / CH32V307 / CH32H417 | `OepProbe-ch32x035-<version>.bin` / `-ch32v307-` / `-ch32h417-` | from another OEP probe (or WCH-LinkE) with [ch32rv](https://github.com/ch32-riscv-ug/ch32rv), from the start of the code flash: `ch32rv flash --probe oep://<unit_id of the writing probe>/<port> <file> --offset 0x08000000` (below) |
 
 No wiring is built into the firmware. The host decides which pins to use when it uses the probe. The same file serves every
-fixture. Other chips (ESP32-S3, C3, C6 and so on) have no released firmware. Build it yourself ([Boards](boards.md)).
+fixture. Other chips (ESP32-C3, C6 and so on) have no released firmware. Build it yourself ([Boards](boards.md)).
 
 Flash it before use. You cannot tell what is on a board.
 

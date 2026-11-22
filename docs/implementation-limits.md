@@ -17,11 +17,11 @@ TCP and Wi-Fi (port, mDNS, Wi-Fi settings, measured values) are in §6.
 | Value | This implementation | Specification |
 |---|---|---|
 | max_op_ms (fn 0's describe) | 10000 ms | 1-600000 ms, the probe chooses the value (core §7.5) |
-| restart_max_ms (`oep.probe.restart`) | ESP32-P4 3000 ms, classic ESP32 15000 ms (the Wi-Fi build, §6.1; 1500 ms in a build without Wi-Fi (`kWifi`)), RP2040 / RP2350 2000 ms, CH32 2000 ms | the probe chooses (oep-if-restart §1) |
+| restart_max_ms (`oep.probe.restart`) | ESP32-P4 / ESP32-S3 3000 ms, classic ESP32 15000 ms (the Wi-Fi build, §6.1; 1500 ms in a build without Wi-Fi (`kWifi`)), RP2040 / RP2350 2000 ms, CH32 2000 ms | the probe chooses (oep-if-restart §1) |
 | default lease (open's lease_ms 0) | 3000 ms | 1000-60000 ms (core §6.4) |
 | resend table | 8 entries; one answer up to 1029 bytes (resending a larger answer is result_lost) | at least max_inflight entries (core §5.1) |
 | console send queue | 256 bytes per stream | the probe chooses the size (oep-if-console §2) |
-| model, chip | the name of the chip built for, in lowercase without hyphens (`esp32p4`, `esp32p4x`, `esp32`, `rp2040`, `rp2350`, `ch32x035`, `ch32v307`, `ch32h417`); the running part's part number and revision (for example `esp32p4 v1.3`) | any free string (core §7.5) |
+| model, chip | the name of the chip built for, in lowercase without hyphens (`esp32p4`, `esp32p4x`, `esp32`, `esp32s3`, `rp2040`, `rp2350`, `ch32x035`, `ch32v307`, `ch32h417`); the running part's part number and revision (for example `esp32p4 v1.3`) | any free string (core §7.5) |
 | unit_id | the chip's unique number in lowercase hex | core §7.5 |
 
 ### 1.2 Wire times and counts

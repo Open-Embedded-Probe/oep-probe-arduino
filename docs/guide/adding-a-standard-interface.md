@@ -65,7 +65,7 @@ In every chip header that has it (`src/firmware/Rp2.h`, `Esp32P4.h`, `Esp32.h`, 
 
 ## 6. Build
 
-- [ ] Build all profiles: `rp2040`, `rp2350`, `esp32p4`, `esp32p4x`, `esp32`, `ch32x035`, `ch32v307`, `ch32h417`. CI
+- [ ] Build all profiles: `rp2040`, `rp2350`, `esp32p4`, `esp32p4x`, `esp32`, `esp32s3`, `ch32x035`, `ch32v307`, `ch32h417`. CI
       (`.github/workflows/`) also builds every `sketch.yaml` in examples.
 
 ## 7. Documents

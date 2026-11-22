@@ -15,11 +15,11 @@ TCP と Wi-Fi（port、mDNS、Wi-Fi の設定、測った値）は §6。
 | 値 | この実装 | 仕様 |
 |---|---|---|
 | max_op_ms（fn 0 の describe） | 10000 ms | 1〜600000 ms、値は probe が決める（core §7.5） |
-| restart_max_ms（`oep.probe.restart`） | ESP32-P4 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。Wi-Fi を外した build（`kWifi`）で 1500 ms）、RP2040 / RP2350 2000 ms、CH32 2000 ms | probe が決める（oep-if-restart §1） |
+| restart_max_ms（`oep.probe.restart`） | ESP32-P4 / ESP32-S3 3000 ms、classic ESP32 15000 ms（Wi-Fi の build、§6.1。Wi-Fi を外した build（`kWifi`）で 1500 ms）、RP2040 / RP2350 2000 ms、CH32 2000 ms | probe が決める（oep-if-restart §1） |
 | lease の既定（open の lease_ms 0） | 3000 ms | 1000〜60000 ms（core §6.4） |
 | 送り直しの表 | 8 件、1 件の応答は 1029 byte まで（それより大きい応答の送り直しは result_lost） | max_inflight 件以上（core §5.1） |
 | コンソールの送りの列 | ストリームごとに 256 byte | 大きさは probe が決める（oep-if-console §2） |
-| model、chip | ビルドの対象のチップの名前をハイフンなしの小文字で（`esp32p4`、`esp32p4x`、`esp32`、`rp2040`、`rp2350`、`ch32x035`、`ch32v307`、`ch32h417`）、動いている部品の型番とリビジョン（例 `esp32p4 v1.3`） | 任意の自由な文字列（core §7.5） |
+| model、chip | ビルドの対象のチップの名前をハイフンなしの小文字で（`esp32p4`、`esp32p4x`、`esp32`、`esp32s3`、`rp2040`、`rp2350`、`ch32x035`、`ch32v307`、`ch32h417`）、動いている部品の型番とリビジョン（例 `esp32p4 v1.3`） | 任意の自由な文字列（core §7.5） |
 | unit_id | チップの固有の番号を小文字の 16 進で | core §7.5 |
 
 ### 1.2 線の時間と回数
