@@ -1,6 +1,15 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+- (EN) Docs follow the current chips and client: ESP32-S3 in the chip lists, ADC pins, USB identities and use cases
+  (`EspSoc.h` among the per-chip headers); RP2040 / RP2350 written with `python -m oep_client.rp2040_swd flash` and
+  GDB through the gdb server of `python -m oep_client.ide`; capture events written as the reductions (sample, any_high,
+  any_low, change_latch); the Blink example in writing-a-probe uses ops 0x10-0x12 (describe tag 0x07, subscribe /
+  unsubscribe 0x01 / 0x02).
+- (JA) 文書を今のチップと client に合わせた: ESP32-S3 をチップの一覧、ADC の端子、USB の識別、使い方に足した（チップごとのヘッダーに
+  `EspSoc.h`）。RP2040 / RP2350 は `python -m oep_client.rp2040_swd flash` で書き、GDB は `python -m oep_client.ide` の gdb サーバー。
+  capture のイベントを縮約（sample・any_high・any_low・change_latch）として書いた。writing-a-probe の Blink の例は op 0x10〜0x12
+  （describe のタグ 0x07、subscribe / unsubscribe は 0x01 / 0x02）。
 
 ## 0.0.63
 - (EN) ESP32-S3 and the other `EspSoc.h` builds: a PSRAM in the package is read from the chip's eFuse (the field and
