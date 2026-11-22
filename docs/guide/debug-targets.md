@@ -86,7 +86,7 @@ reading and writing registers, calling functions placed in the peer's RAM, and s
 | Wiring | SWDIO, SWCLK, GND. NRST if needed |
 | Multidrop peers | give TARGETSEL in attach |
 | Flashing | RP2040 / RP2350: `python -m oep_client.rp2040_swd flash`. For other peers, do their flash procedure from Python |
-| GDB | RP2040 / RP2350: `oep_client.gdb_server`. Not provided for other peers |
+| GDB | RP2040 / RP2350: the gdb server of `python -m oep_client.ide`. Not provided for other peers |
 
 ## Summary of settings on the probe side
 

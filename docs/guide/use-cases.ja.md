@@ -177,7 +177,7 @@ Python から、相手の RAM に置いた関数を呼ぶこともできます�
 （メモリ）、`CortexM`（halt、resume、レジスタ、関数の呼び出し、システムリセット）を使います。
 
 **注意**: flash の書き込みと GDB server があるのは、相手が RP2040 / RP2350 のときだけです（`python -m oep_client.rp2040_swd flash`、
-`oep_client.gdb_server`）。ほかの Cortex-M の flash は、Python から自分で書きます。
+`python -m oep_client.ide` の gdb サーバー）。ほかの Cortex-M の flash は、Python から自分で書きます。
 
 ## 4. 波形を取る
 

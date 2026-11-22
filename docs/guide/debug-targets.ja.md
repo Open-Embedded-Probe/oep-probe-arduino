@@ -81,7 +81,7 @@ SWD で DP と MEM-AP を使い、メモリと周辺レジスタの読み書き�
 | 配線 | SWDIO、SWCLK、GND。必要なら NRST |
 | マルチドロップの相手 | attach で TARGETSEL を指定します |
 | 書き込み | RP2040 / RP2350 は `python -m oep_client.rp2040_swd flash`。ほかの相手は、その flash の手順を Python から行います |
-| GDB | RP2040 / RP2350 は `oep_client.gdb_server`。ほかの相手には用意していません |
+| GDB | RP2040 / RP2350 は `python -m oep_client.ide` の gdb サーバー。ほかの相手には用意していません |
 
 ## プローブの側の設定のまとめ
 

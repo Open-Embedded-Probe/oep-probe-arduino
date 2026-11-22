@@ -189,7 +189,7 @@ it. From Python you can also call functions placed in the peer's RAM.
 (halt, resume, registers, function calls, system reset) of `oep_client.arm`.
 
 **Notes**: flash writing and a GDB server exist only for an RP2040 / RP2350 peer (`python -m oep_client.rp2040_swd flash`,
-`oep_client.gdb_server`). Write the flash of other Cortex-Ms yourself from Python.
+the gdb server of `python -m oep_client.ide`). Write the flash of other Cortex-Ms yourself from Python.
 
 ## 4. Capture waveforms
 
