@@ -28,6 +28,9 @@
 #include <driver/gpio.h>
 #include <esp_chip_info.h>
 #include <esp_private/esp_gpio_reserve.h>
+#include <esp_efuse.h>
+#include <esp_efuse_table.h>
+#include "OepEspPsram.h"
 #include <soc/soc_caps.h>
 #if __has_include(<soc/spi_pins.h>)
 #include <soc/spi_pins.h>
@@ -218,23 +221,34 @@ inline uint64_t platformUnusablePins() {
     if (((SOC_GPIO_VALID_GPIO_MASK >> pin) & 1) && esp_gpio_is_reserved(uint64_t{1} << pin)) reserved |= uint64_t{1} << pin;
   // A PSRAM in octal mode: ESP-IDF reserves its chip select but not its octal lines, which a park would cut (an
   // ESP32-S3R8 then hung at boot, TG1WDT) - the lines the SoC declares (soc/spi_pins.h: GPIO33-37 on the S3). A PSRAM in
-  // the package (CHIP_FEATURE_EMB_PSRAM, where the chip says so) is wired to its pads whether or not this build uses it.
+  // the package is wired to its pads whether or not this build uses it: its chip select always, the octal lines when it
+  // is octal. What the package holds: the eFuse field and the value's kind from OepEspPsram.h (generated from
+  // ESP-IDF-SoC-Check: a quad one leaves the octal lines free, one of unknown interface takes them), else
+  // CHIP_FEATURE_EMB_PSRAM where the chip says so (interface unknown).
   esp_chip_info_t info;
   esp_chip_info(&info);
-  bool octal = false;
+  bool cs = false, lines = false;
 #if defined(CONFIG_SPIRAM_MODE_OCT)
-  octal = psramFound();
+  cs = lines = psramFound();
 #endif
-  if (octal || (info.features & CHIP_FEATURE_EMB_PSRAM)) {
+  esp_psram::Kind emb = (info.features & CHIP_FEATURE_EMB_PSRAM) ? esp_psram::kUnknown : esp_psram::kNone;
+#if defined(OEP_ESP_PSRAM_CAP_FIELD)
+  uint32_t cap = 0;
+  const int bits = esp_efuse_get_field_size(OEP_ESP_PSRAM_CAP_FIELD);
+  if (bits > 0 && bits <= 32 && esp_efuse_read_field_blob(OEP_ESP_PSRAM_CAP_FIELD, &cap, bits) == ESP_OK)
+    emb = cap < sizeof(esp_psram::kByCap) ? esp_psram::kByCap[cap] : esp_psram::kUnknown;
+#endif
+  if (emb != esp_psram::kNone) cs = true;
+  if (emb == esp_psram::kOctal || emb == esp_psram::kUnknown) lines = true;
 #if defined(MSPI_IOMUX_PIN_NUM_CS1)
-    reserved |= uint64_t{1} << MSPI_IOMUX_PIN_NUM_CS1;
+  if (cs) reserved |= uint64_t{1} << MSPI_IOMUX_PIN_NUM_CS1;
 #endif
 #if defined(MSPI_IOMUX_PIN_NUM_D4) && defined(MSPI_IOMUX_PIN_NUM_DQS)
+  if (lines)
     reserved |= (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D4) | (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D5) |
                 (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D6) | (uint64_t{1} << MSPI_IOMUX_PIN_NUM_D7) |
                 (uint64_t{1} << MSPI_IOMUX_PIN_NUM_DQS);
 #endif
-  }
   return reserved;
 #endif
   return 0;
