@@ -550,6 +550,7 @@ form and rules are in oep-spec's transports §7. This implementation's values an
   not appear in describe's items).
 - The **ESP32-P4** has no radio. arduino-esp32 has the ESP-Hosted route that uses another chip (such as an ESP32-C6) over SDIO,
   but this firmware does not use it (`OepWifi.h` is only for chips with SOC_WIFI_SUPPORTED).
+- **ESP32-S3 and others** (`src/firmware/EspSoc.h`): even on chips with a radio, this firmware does not use Wi-Fi.
 - **RP2040 / RP2350** (including the Pro Micro RP2350): no Wi-Fi. The CYW43 of the Pico W / Pico 2 W is not used. WCH CH32 has
   no Wi-Fi either.
 - IPv4 only. No TLS and no authentication (outside OEP; if needed, use it inside a tunnel).

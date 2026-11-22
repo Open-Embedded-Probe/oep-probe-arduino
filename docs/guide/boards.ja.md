@@ -68,6 +68,9 @@ RP2 の UART の fixture はチップの UART です。instance 0（UART0）は 
 | ESP32-P4X（HS の口） | `1209:4F45` | `OEP probe (ESP32-P4X)` | 同じ |
 | ESP32-P4 / P4X（USB-Serial/JTAG） | チップの決まった ID | チップのもの | チップのもの |
 | classic ESP32 | bridge のもの | bridge のもの | bridge のもの |
+| ESP32-S3 ほか（USB-OTG の口） | `1209:4F45` | `OEP probe (ESP32-S3)`（ESP-IDF の target の名前） | unit id（MAC の小文字の 16 進） |
+| ESP32-S3 ほか（USB-Serial/JTAG） | チップの決まった ID | チップのもの | チップのもの |
+| WCH CH32 | `1209:4F45` | `OEP probe (CH32X035)` / `(CH32V307)` / `(CH32H417)` | unit id（チップの 64 bit の unique id の 16 進） |
 
 `1209:4F45` はプロジェクト自身の VID:PID です。host はこれで probe を見分け、serial number（unit id）で個体を区別します。iProduct
 は人が読むための名前です。この VID:PID で firmware を出してよい条件は [PID-USE.ja.md](../../PID-USE.ja.md)。決まった ID の口（USB-UART bridge、
@@ -77,7 +80,7 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
 
 ## ほかのボード向けのビルド
 
-表に無いチップには、リリースされた firmware がありません。自分でビルドするのは数分で済みます。例: ESP32-S3 DevKitC を CH32 のデバッガにする。
+表に無いチップには、リリースされた firmware がありません。自分でビルドするのは数分で済みます。例: ESP32-C6 のボードを CH32 のデバッガにする。
 
 1. **やりたいことに近い example から始める。** CH32 のデバッガなら `04.Debug/RvswdDebugProbe`、治具なら `01.Basics/FixtureProbe`、
    全部なら `Firmware/OepProbe`（`OepFirmware.h`。新しいチップなら、近いチップの部分から始める。例: `src/firmware/Esp32P4.h`）。
@@ -85,8 +88,8 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
 
    ```yaml
    profiles:
-     esp32s3:
-       fqbn: esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc
+     esp32c6:
+       fqbn: esp32:esp32:esp32c6:CDCOnBoot=cdc
        platforms:
          - platform: esp32:esp32 (3.3.13)
            platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
@@ -94,8 +97,7 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
          - OpenEmbeddedProbe (<ライブラリの版>)
    ```
 
-   `RvswdDebugProbe` にはこの profile がもうあり、`arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe` で
-   ビルドできます。
+   `RvswdDebugProbe` の `sketch.yaml` の `esp32s3` の profile が手本になります。
 3. `Serial` が何かで**経路を選ぶ**。USB-Serial/JTAG（`USBMode=hwcdc`: `kUsbSerialJtag`）、TinyUSB の CDC（`USBMode=default`:
    `kUsbCdc`。プロジェクトの VID:PID を使ってよい firmware なら `USB.VID(oep::reg::kUsbProjectVid)`、
    `USB.PID(oep::reg::kUsbProjectPid)`、unit id を `USB.serialNumber(...)` に。[PID-USE.ja.md](../../PID-USE.ja.md)）、
@@ -113,7 +115,7 @@ DFU、HID のインターフェースを開けます。入れるには管理者�
      RP2 の pad は pull-down で起動し、半分だけ配線した target の reset を引いたままにすることがあります。
    - **RP2350 のエラッタ E9**：放した入力が high に張り付くことがあります。ピンを読むときは pad の pull を当てて読みます。
    - 同じ機能の線は隣り合わせに寄せます（RP2 の PIO は連続したピンを前提にします）。
-5. **ビルドして焼く**: `arduino-cli compile --profile esp32s3 <dir>`、`arduino-cli upload -p <port> --profile esp32s3 <dir>`。
+5. **ビルドして焼く**: `arduino-cli compile --profile esp32c6 <dir>`、`arduino-cli upload -p <port> --profile esp32c6 <dir>`。
 6. `oep dump --port <port>` で**確かめ**、Python から target を attach する（[使い始める](getting-started.ja.md)）。
 
 動いたら知らせてください（リポジトリの issue）。

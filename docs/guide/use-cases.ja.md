@@ -28,7 +28,7 @@
 
 ### 用意するもの
 
-- **プローブにするボード**: RP2040 / RP2350（Pico、Pico 2 など）、ESP32-P4 / P4X、classic ESP32（DevKitC など）、WCH CH32（X035 / V307 / H417）。どの機能が
+- **プローブにするボード**: RP2040 / RP2350（Pico、Pico 2 など）、ESP32-P4 / P4X、classic ESP32（DevKitC など）、ESP32-S3、WCH CH32（X035 / V307 / H417）。どの機能が
   どのボードにあるかは [ボード](boards.ja.md#チップごとにできること) の表で確かめます。迷ったら次を目安にします。
   - デバッグと通信を手軽に: RP2040 / RP2350。
   - 速い波形の取り込み、多チャネル、据え置きの治具: ESP32-P4 / P4X。
@@ -176,8 +176,8 @@ Python から、相手の RAM に置いた関数を呼ぶこともできます�
 **使い方**: `oep_client.arm` の `SwdWire`（attach。マルチドロップの相手は TARGETSEL を指定）、`ArmAdi`（DP / AP）、`MemAp`
 （メモリ）、`CortexM`（halt、resume、レジスタ、関数の呼び出し、システムリセット）を使います。
 
-**注意**: Cortex-M の flash に書き込む道具（flash loader）は用意していません。書き込みは Python から自分で行います。
-GDB server もありません。
+**注意**: flash の書き込みと GDB server があるのは、相手が RP2040 / RP2350 のときだけです（`python -m oep_client.rp2040_swd flash`、
+`oep_client.gdb_server`）。ほかの Cortex-M の flash は、Python から自分で書きます。
 
 ## 4. 波形を取る
 

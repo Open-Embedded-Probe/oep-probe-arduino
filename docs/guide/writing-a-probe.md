@@ -73,8 +73,8 @@ class Blink final : public oep::Interface {
   const char *name() const override { return "io.github.you.blink"; }   // your own reverse-DNS name. Not oep.*
   uint16_t instance() const override { return 0; }
   uint8_t revision() const override { return 1; }                      // the form of the fixed parts
-  bool lockFree(uint8_t op) const override { return op == 0x03; }      // a read that changes nothing
-  bool offers(uint8_t op) const override { return op >= 0x01 && op <= 0x03; }   // the ops it has (the ops tag)
+  bool lockFree(uint8_t op) const override { return op == 0x12; }      // a read that changes nothing
+  bool offers(uint8_t op) const override { return op >= 0x10 && op <= 0x12; }   // the ops it has (the ops tag). 0x01-0x0F are the common ops
   size_t describe(uint8_t *out, size_t capacity) override;             // what the host reads before use
   oep::Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 };
@@ -87,7 +87,7 @@ class Blink final : public oep::Interface {
   are not extended at the end. Additions are new TLVs, optional ops or new values, and revision is raised only when a fixed form
   changes.
 - **offers** states the ops it has (core §1.2): every required op of the table and the optional ops this probe has. From it the
-  endpoint writes describe's `ops` tag (0x09, base + bitmap) at the start of every fn's describe, and answers other ops with
+  endpoint writes describe's `ops` tag (0x07, base + bitmap) at the start of every fn's describe, and answers other ops with
   `unknown_operation` before looking at the session. The default has nothing, so an interface that does not override it answers
   nothing. Optional ops are declared here, not in `features`.
 - **handle** takes one request and writes the result payload to `out`.
@@ -139,11 +139,11 @@ class Blink final : public oep::Interface {
 
 | Class | Interface | Notes |
 |---|---|---|
-| `WireRvswd` + `DebugPort` + `Ch32Dm` + `RvswdPhy` | `oep.wire.rvswd` | RVSWD on the RP2's SIO or the ESP32's dedicated GPIO |
-| `WireRvswd` (named `oep.wire.swio`) + `SwioPhy` | `oep.wire.swio` | one wire. classic ESP32 |
+| `WireRvswd` + `DebugPort` + `Ch32Dm` + `RvswdPhy` | `oep.wire.rvswd` | RVSWD. The PHY is per chip (the RP2's SIO, the ESP32's dedicated GPIO and so on) |
+| `WireRvswd` (named `oep.wire.swio`) + `SwioPhy` | `oep.wire.swio` | one wire |
 | `TargetRiscvDm` | `oep.target.riscv-dm` | halt / resume / step / reset, block reads and writes, run. Restores the target's registers and DATA0/1 before letting the target run |
 | `TargetConsoleStream` + `DmConsole` | `oep.target.console` | the target console through the debug module (dmseq, DMDATA, SDI) |
-| `WireSwd` + `SwdPort`, `TargetArmAdi` | `oep.wire.swd`, `oep.target.arm-adi` | ARM SWD. RP2040 / RP2350 |
+| `WireSwd` + `SwdPort`, `TargetArmAdi` | `oep.wire.swd`, `oep.target.arm-adi` | ARM SWD (except CH32X035) |
 | `FixtureGpio`, `FixtureUart` | `oep.fixture.gpio` / `uart` | on pins decided by the plan |
 | `LogicCapture` / `SamplerCapture` | `oep.fixture.logic` | the ESP32-P4's PARLIO / the classic ESP32's GPIO sampler. Level / edge trigger (linked too on P4) |
 | `AnalogCapture` | `oep.fixture.analog` | ADC channels in turn, one-shot, raw values, threshold trigger (continuous conversion on ESP32, FIFO + DMA on RP2). Frontend, reference voltage, factory calibration |
@@ -243,7 +243,7 @@ Each source file starts with the specification sections it follows.
 
 ## 8. Pushes and events
 
-An interface that sends notifications returns true from `notifies()`. The endpoint sets subscribe and unsubscribe (0x30 / 0x32,
+An interface that sends notifications returns true from `notifies()`. The endpoint sets subscribe and unsubscribe (0x01 / 0x02,
 core §10.3) in its ops, answers them itself, and calls `subscribe(true / false)`. Streaming interfaces also have `pull()` and
 `pending()`. While a subscribed host holds the lock, the endpoint sends data frames batched by the subscription's min_bytes /
 max_delay_ms. `endpoint.event(*this, kind, payload, length)` sends an event. Events are not batched; they go out as soon as the

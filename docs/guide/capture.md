@@ -84,11 +84,12 @@ A rate above the limit is captured at the closest rate within the limit (not ref
 With data format 1 (logic blocks, oep-if-capture §1.3), the way of carrying can be chosen per line.
 
 - **raw**: carries every sample.
-- **events**: records only when there was a change, per step of D samples (a power of 2). Short pulses within a step do not
-  vanish, and the number of changes is kept. Only the position within the step is lost. Making a slow line such as CS events
-  reduces the amount carried.
-- In Python, give the lines to make events and D like `oep_client.acquire.Request(..., resolution={"CS": 64})`. The other lines
-  are raw.
+- **Reductions**: carry one value per interval of D samples (2 or more). `sample` is the first sample of the interval,
+  `any_high` / `any_low` whether that level was in the interval, and `change_latch` the last level of the interval and whether
+  it changed within the interval. With change_latch a pulse shorter than the interval still shows as a change; only the
+  position within the interval is lost. Reducing a slow line such as CS cuts the amount carried.
+- In Python, give the lines to reduce, the reduction and D like
+  `oep_client.acquire.Request(..., resolution={"CS": ("change_latch", 64)})`. The other lines are raw.
 - Available up to 8 lines. In streaming, only on transports that can use send segments.
 
 ### Using it together with other operations

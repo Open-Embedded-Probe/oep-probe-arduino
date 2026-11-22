@@ -57,7 +57,7 @@ classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中�
 確かめてから、そのセッションの間その速さに決めます。確かめが来ない、フレームが壊れる、線が黙る、セッションが終わる、の
 どれでも probe は自分で 115200 に戻ります（`begin<oep::kDefaults & ~oep::kPortSpeed>()` で外れる。[firmware の機能](docs/guide/firmware-features.ja.md)）。
 
-このライブラリは、ESP32-P4、classic ESP32、RP2350、RP2040、WCH CH32 をその probe にします。
+このライブラリは、ESP32-P4、classic ESP32、ESP32-S3、RP2350、RP2040、WCH CH32 をその probe にします。
 
 - 使い方: [OEP でできること](docs/guide/use-cases.ja.md)（やりたいことごとに、用意するもの、配線、設定）、[デバッグの対応ターゲット](docs/guide/debug-targets.ja.md)、
   [キャプチャの使い分け](docs/guide/capture.ja.md)、[設定項目](docs/guide/settings.ja.md)。
@@ -79,7 +79,7 @@ classic ESP32 の firmware は任意の `port_speed`（`oep.probe.link` の中�
 ## 配線: 回路図も、決まったピンの割り当ても無い
 
 OpenEmbeddedProbe はファームウェアだけでできています。独自の基板や回路はありません。probe は、対応するマイコン（ESP32-P4、
-classic ESP32、RP2040 / RP2350、WCH CH32）の市販の開発ボードにこのファームウェアを書いたものなので、従うべき回路図がありません。決まった
+classic ESP32、ESP32-S3、RP2040 / RP2350、WCH CH32）の市販の開発ボードにこのファームウェアを書いたものなので、従うべき回路図がありません。決まった
 ピンの割り当てもありません。
 
 - **debug の線と GPIO の線は、空いている GPIO のどれにつないでもよい。** debug の線（RVSWD、SWIO、SWD）はどれもビットバンギング
@@ -88,7 +88,7 @@ classic ESP32、RP2040 / RP2350、WCH CH32）の市販の開発ボードにこ�
 - **ピンが決まるのは、ハードウェアの周辺回路を使うときだけ。** RP2040 / RP2350 の UART の治具はチップの UART で、instance 0
   （UART0）は RX を GP1、13、17、29、TX を GP0、12、16、28 のどれかに、instance 1（UART1）は RX を GP5、9、21、25、TX を GP4、8、20、24 の
   どれかにつなぐ（RP2040 のもの。RP2350 は自分の候補を出す）。アナログのキャプチャはどのチップでも ADC のピン（RP2 は
-  GP26〜28、ESP32-P4 は GPIO16〜23、classic ESP32 は GPIO32〜36 / 39）を使い、classic ESP32 の SWIO は GPIO32 より下の出力が
+  GP26〜28、ESP32-P4 は GPIO16〜23、classic ESP32 は GPIO32〜36 / 39、ESP32-S3 は GPIO1〜10）を使い、classic ESP32 の SWIO は GPIO32 より下の出力が
   要る。これらの線は、そのピンにつなぐ。チップごとの一覧は [ボード](docs/guide/boards.ja.md#リリースされた-firmware-のピン) にある。
 - **target がどこにつながっているかは、host が探す。** oep-client-python の `oep pins` は、probe の pull をかけて probe が出す
   すべてのピンを読み、候補の上で debug の線を scan し、target を ID で見分け、リセットの線を見つける。最後に、保存する
@@ -159,7 +159,7 @@ byte の vector は `tests/vectors/` に写し、`tests/host/test_vectors.cpp` �
 | `src/OepP4I2cTarget.*`、`src/OepP4SpiTarget.*`、`src/OepRp2SpiTarget.*`、`src/OepCh32SpiTarget.*` | 標準インターフェース `oep.fixture.i2c-target` / `spi-target`（revision 1。ESP-IDF の I2C / SPI スレーブ、RP2 の PIO、CH32 の core の SPI スレーブで実装） |
 | `src/OepI2cController.*`、`src/OepSpiController.*`、`src/OepPwm.*`、`src/OepCounter.*`、`src/OepDac.*` | target を動かす fixture: `oep.fixture.i2c-controller` / `spi-controller`（どの GPIO でもビットを刻む）、`pwm`、`counter`、`dac` |
 | `src/OepAnalog.*`、`src/OepRp2Logic.*`、`src/OepCh32Logic.*`、`src/OepH41xLogic.*`、`src/OepCaptureGroup.*` | チップごとのキャプチャ: `oep.fixture.analog`、RP2 の PIO と CH32 の `oep.fixture.logic`（CH32H41x は UHSIF も）、`oep.fixture.capture-group` |
-| `src/OepFirmware.h`、`src/OepFirmwareParts.h`、`src/firmware/` | 配布の firmware を部品にしたもの（`oep::firmware`）。チップごとの中身は `src/firmware/` のヘッダ（`Rp2.h`、`Esp32P4.h`、`Esp32.h`、`Ch32.h`） |
+| `src/OepFirmware.h`、`src/OepFirmwareParts.h`、`src/firmware/` | 配布の firmware を部品にしたもの（`oep::firmware`）。チップごとの中身は `src/firmware/` のヘッダ（`Rp2.h`、`Esp32P4.h`、`Esp32.h`、`EspSoc.h`、`Ch32.h`） |
 | `src/OepChoice.h` | firmware の各部品を、外せば何もリンクしない選択にする仕組み（`begin<F>()` が F の機能ごとに `oepAddX()` を呼ぶ。`Slot`、`HeapSlot`、`Hooks`。[firmware の機能](docs/guide/firmware-features.ja.md)） |
 | `src/OepSimpleInterface.*`、`src/OepWorker.*`、`src/OepProbeLog.h` | 関数を登録するだけのインターフェース（`oep::SimpleInterface`）、時間の掛かる処理を動かすワーカー、プローブの時計を付けるログ（[自分のコマンドを足す](docs/guide/simple-interface.ja.md)） |
 | `src/OepCh32Dm.*`、`src/OepRvswdPhy.*`、`src/OepSwioPhy.*`、`src/OepDmConsole.*`、`src/OepPinTable.h`、`src/OepPlatform.h`、`src/OepFrame.*` など | 部品（CH32 のデバッグモジュール、線の物理層、コンソールの framing、ピンの表とその持ち主（`oep::owners`）と空きの状態、Arduino の core の差、フレーム） |
@@ -256,7 +256,7 @@ GitHub Release には、`examples/Firmware/` の各 profile の firmware が付�
 `firmware-<version>.json`（sha256）。probe は同じ版を describe の firmware の文字列で返します。リリースの作り方は
 [貢献の手引き](CONTRIBUTING.ja.md) にあります。
 
-`firmware-<version>.json` はこのリポジトリの決まり（OEP の規範ではない。oep-spec の凍結の決定 9）:
+`firmware-<version>.json` はこのリポジトリの決まり（OEP の規範ではない）:
 
 ```json
 {"schema": 1, "library": "OpenEmbeddedProbe", "version": "<version>", "firmware": [

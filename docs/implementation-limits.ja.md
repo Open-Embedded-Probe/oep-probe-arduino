@@ -463,5 +463,6 @@ oep-spec の transports §7。この実装の値と動きは次のとおり。
 - Wi-Fi の無い build（`begin<oep::kDefaults & ~oep::kWifi>()`）は、大きさも RAM も大きく減り、wifi の項目を持たない（describe の items に出ない）。
 - **ESP32-P4** は radio を持たない。arduino-esp32 には別のチップ（ESP32-C6 など）を SDIO で使う ESP-Hosted の道があるが、この firmware は
   使わない（`OepWifi.h` は SOC_WIFI_SUPPORTED のチップだけ）。
+- **ESP32-S3 ほか**（`src/firmware/EspSoc.h`）: radio を持つチップでも、この firmware は Wi-Fi を使わない。
 - **RP2040 / RP2350**（Pro Micro RP2350 を含む）: Wi-Fi なし。Pico W / Pico 2 W の CYW43 は使わない。WCH CH32 も Wi-Fi なし。
 - IPv4 だけ。TLS も認証も無い（OEP の外。要るならトンネルの中で使う）。

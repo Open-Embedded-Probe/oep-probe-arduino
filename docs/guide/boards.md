@@ -70,6 +70,9 @@ bridge or trace uses UART1 has no instance 1). On ESP32 any pin works (the GPIO 
 | ESP32-P4X (HS port) | `1209:4F45` | `OEP probe (ESP32-P4X)` | the same |
 | ESP32-P4 / P4X (USB-Serial/JTAG) | the chip's fixed ID | the chip's | the chip's |
 | classic ESP32 | the bridge's | the bridge's | the bridge's |
+| ESP32-S3 and others (USB-OTG port) | `1209:4F45` | `OEP probe (ESP32-S3)` (the ESP-IDF target's name) | unit id (the MAC in lowercase hex) |
+| ESP32-S3 and others (USB-Serial/JTAG) | the chip's fixed ID | the chip's | the chip's |
+| WCH CH32 | `1209:4F45` | `OEP probe (CH32X035)` / `(CH32V307)` / `(CH32H417)` | unit id (the chip's 64-bit unique id in hex) |
 
 `1209:4F45` is the project's own VID:PID. The host recognizes probes by it and tells units apart by serial number (unit id).
 iProduct is a name for people to read. The conditions for shipping firmware with this VID:PID are in
@@ -80,8 +83,8 @@ ordinary users open the vendor bulk, DFU and HID interfaces of `1209:4F45`. Inst
 
 ## Building for other boards
 
-Chips not in the table have no released firmware. Building it yourself takes a few minutes. Example: making an ESP32-S3
-DevKitC a CH32 debugger.
+Chips not in the table have no released firmware. Building it yourself takes a few minutes. Example: making an ESP32-C6
+board a CH32 debugger.
 
 1. **Start from the example closest to what you want.** `04.Debug/RvswdDebugProbe` for a CH32 debugger,
    `01.Basics/FixtureProbe` for a jig, `Firmware/OepProbe` for everything (`OepFirmware.h`; for a new chip, start from the part
@@ -90,8 +93,8 @@ DevKitC a CH32 debugger.
 
    ```yaml
    profiles:
-     esp32s3:
-       fqbn: esp32:esp32:esp32s3:USBMode=hwcdc,CDCOnBoot=cdc
+     esp32c6:
+       fqbn: esp32:esp32:esp32c6:CDCOnBoot=cdc
        platforms:
          - platform: esp32:esp32 (3.3.13)
            platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
@@ -99,8 +102,7 @@ DevKitC a CH32 debugger.
          - OpenEmbeddedProbe (<library version>)
    ```
 
-   `RvswdDebugProbe` already has this profile, and builds with
-   `arduino-cli compile --profile esp32s3 examples/04.Debug/RvswdDebugProbe`.
+   The `esp32s3` profile in `RvswdDebugProbe`'s `sketch.yaml` is a model to follow.
 3. **Choose the transport** by what `Serial` is. USB-Serial/JTAG (`USBMode=hwcdc`: `kUsbSerialJtag`), TinyUSB's CDC
    (`USBMode=default`: `kUsbCdc`; for firmware allowed to use the project's VID:PID, `USB.VID(oep::reg::kUsbProjectVid)`,
    `USB.PID(oep::reg::kUsbProjectPid)`, and the unit id in `USB.serialNumber(...)`; [PID-USE.md](../../PID-USE.md)), a
@@ -118,7 +120,7 @@ DevKitC a CH32 debugger.
      boot with a pull-down and can keep pulling the reset of a half-wired target.
    - **RP2350 erratum E9**: a released input can stick high. When reading a pin, read it with the pad's pull applied.
    - Keep lines of the same function next to each other (the RP2's PIO assumes consecutive pins).
-5. **Build and flash**: `arduino-cli compile --profile esp32s3 <dir>`, `arduino-cli upload -p <port> --profile esp32s3 <dir>`.
+5. **Build and flash**: `arduino-cli compile --profile esp32c6 <dir>`, `arduino-cli upload -p <port> --profile esp32c6 <dir>`.
 6. **Check** with `oep dump --port <port>`, and attach the target from Python ([Getting started](getting-started.md)).
 
 Let us know when it works (an issue in the repository).

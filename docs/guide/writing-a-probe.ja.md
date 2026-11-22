@@ -71,8 +71,8 @@ class Blink final : public oep::Interface {
   const char *name() const override { return "io.github.you.blink"; }   // 自分の逆 DNS の名前。oep.* は使わない
   uint16_t instance() const override { return 0; }
   uint8_t revision() const override { return 1; }                      // 固定部分の形
-  bool lockFree(uint8_t op) const override { return op == 0x03; }      // 何も変えない読み出し
-  bool offers(uint8_t op) const override { return op >= 0x01 && op <= 0x03; }   // 持つ op（ops の tag）
+  bool lockFree(uint8_t op) const override { return op == 0x12; }      // 何も変えない読み出し
+  bool offers(uint8_t op) const override { return op >= 0x10 && op <= 0x12; }   // 持つ op（ops の tag）。0x01〜0x0F は共通の op
   size_t describe(uint8_t *out, size_t capacity) override;             // 使う前に host が読むもの
   oep::Result handle(uint8_t op, const uint8_t *payload, size_t length, uint8_t *out, size_t capacity) override;
 };
@@ -83,7 +83,7 @@ class Blink final : public oep::Interface {
 - **revision** は、すべての固定の形を決めます（core §2.3、§2.7）: payload の固定部分、TLV の値、並びの要素。固定の形は
   後ろに伸ばしません。足すものは新しい TLV、任意の op、新しい値にし、固定の形を変えるときだけ revision を上げます。
 - **offers** は持つ op を言います（core §1.2）: 表の必須の op すべてと、この probe が持つ任意の op。endpoint はそれから
-  describe の `ops` の tag（0x09、base + bitmap）をすべての fn の describe の最初に書き、ほかの op にはセッションを見る前に
+  describe の `ops` の tag（0x07、base + bitmap）をすべての fn の describe の最初に書き、ほかの op にはセッションを見る前に
   `unknown_operation` で答えます。既定は何も持たないので、上書きしないインターフェースは何にも答えません。任意の op は
   ここで宣言し、`features` では宣言しません。
 - **handle** は要求を 1 つ受け、結果の payload を `out` に書きます。
@@ -134,11 +134,11 @@ class Blink final : public oep::Interface {
 
 | クラス | インターフェース | 備考 |
 |---|---|---|
-| `WireRvswd` + `DebugPort` + `Ch32Dm` + `RvswdPhy` | `oep.wire.rvswd` | RP2 の SIO、または ESP32 の dedicated GPIO で RVSWD |
-| `WireRvswd`（名前は `oep.wire.swio`）+ `SwioPhy` | `oep.wire.swio` | 1 本線。classic ESP32 |
+| `WireRvswd` + `DebugPort` + `Ch32Dm` + `RvswdPhy` | `oep.wire.rvswd` | RVSWD。PHY はチップごと（RP2 の SIO、ESP32 の dedicated GPIO など） |
+| `WireRvswd`（名前は `oep.wire.swio`）+ `SwioPhy` | `oep.wire.swio` | 1 本線 |
 | `TargetRiscvDm` | `oep.target.riscv-dm` | halt / resume / step / reset、block の読み書き、run。target を走らせる前に、target のレジスタと DATA0/1 を戻す |
 | `TargetConsoleStream` + `DmConsole` | `oep.target.console` | debug module を通した target のコンソール（dmseq、DMDATA、SDI） |
-| `WireSwd` + `SwdPort`、`TargetArmAdi` | `oep.wire.swd`、`oep.target.arm-adi` | ARM の SWD。RP2040 / RP2350 |
+| `WireSwd` + `SwdPort`、`TargetArmAdi` | `oep.wire.swd`、`oep.target.arm-adi` | ARM の SWD（CH32X035 以外） |
 | `FixtureGpio`、`FixtureUart` | `oep.fixture.gpio` / `uart` | plan で決めたピンで |
 | `LogicCapture` / `SamplerCapture` | `oep.fixture.logic` | ESP32-P4 の PARLIO / classic ESP32 の GPIO の sampler。レベル / エッジのトリガ（P4 は linked も） |
 | `AnalogCapture` | `oep.fixture.analog` | ADC のチャネルを順に、ワンショット、生の値、しきい値のトリガ（ESP32 は連続変換、RP2 は FIFO + DMA）。frontend、基準電圧、出荷時の較正 |
@@ -230,7 +230,7 @@ class Blink final : public oep::Interface {
 
 ## 8. push と出来事
 
-通知を送り出すインターフェースは `notifies()` で true を返します。endpoint はその ops に subscribe と unsubscribe（0x30 / 0x32、
+通知を送り出すインターフェースは `notifies()` で true を返します。endpoint はその ops に subscribe と unsubscribe（0x01 / 0x02、
 core §10.3）を立て、自分で答えて `subscribe(true / false)` を呼びます。流すものは `pull()` と `pending()` も持ちます。endpoint は、
 購読した host がロックを持つ間、購読の min_bytes / max_delay_ms でまとめてデータのフレームを送ります。
 `endpoint.event(*this, kind, payload, length)` で出来事を送ります。出来事はまとめず、先に送る応答を送り終えたらすぐ送ります。

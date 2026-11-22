@@ -62,7 +62,7 @@ a larger transfer in both directions, and then fixes that speed for its session.
 the check does not come, frames break, the wire goes quiet, or the session ends (`begin<oep::kDefaults & ~oep::kPortSpeed>()`
 leaves it out; [firmware features](docs/guide/firmware-features.md)).
 
-This library turns an ESP32-P4, a classic ESP32, an RP2350, an RP2040 or a WCH CH32 into such a probe.
+This library turns an ESP32-P4, a classic ESP32, an ESP32-S3, an RP2350, an RP2040 or a WCH CH32 into such a probe.
 
 - Usage: [What OEP does for you](docs/guide/use-cases.md) (per thing you want to do: what to prepare, wiring, settings),
   [Debug targets](docs/guide/debug-targets.md), [Capture: which way](docs/guide/capture.md), [Settings](docs/guide/settings.md).
@@ -84,7 +84,7 @@ This library turns an ESP32-P4, a classic ESP32, an RP2350, an RP2040 or a WCH C
 ## Wiring: no schematic, no fixed pin map
 
 OpenEmbeddedProbe is firmware only. There is no board or circuit of its own. A probe is a stock development board of a
-supported microcontroller (ESP32-P4, classic ESP32, RP2040 / RP2350, WCH CH32) with this firmware written to it, so there is
+supported microcontroller (ESP32-P4, classic ESP32, ESP32-S3, RP2040 / RP2350, WCH CH32) with this firmware written to it, so there is
 no schematic to follow. There is no fixed pin map either.
 
 - **Debug wires and GPIO wires may go to any free GPIO.** Every debug wire (RVSWD, SWIO, SWD) is bit-banged, and the host
@@ -93,7 +93,7 @@ no schematic to follow. There is no fixed pin map either.
 - **Pins are fixed only where a hardware peripheral is used.** The UART fixtures of an RP2040 / RP2350 are the chip's UARTs.
   On an RP2040, instance 0 (UART0) takes RX on one of GP1, 13, 17, 29 and TX on one of GP0, 12, 16, 28, and instance 1 (UART1)
   RX on one of GP5, 9, 21, 25 and TX on one of GP4, 8, 20, 24. An RP2350 offers its own candidates. Analog capture uses the
-  ADC pins on every chip (RP2 GP26-28, ESP32-P4 GPIO16-23, classic ESP32 GPIO32-36 / 39), and the classic ESP32's SWIO needs
+  ADC pins on every chip (RP2 GP26-28, ESP32-P4 GPIO16-23, classic ESP32 GPIO32-36 / 39, ESP32-S3 GPIO1-10), and the classic ESP32's SWIO needs
   an output below GPIO32. Wire these lines to such a pin. The list per chip is in [Boards](docs/guide/boards.md#pins-of-the-released-firmware).
 - **The host finds where the target is connected.** oep-client-python's `oep pins` reads every pin the probe offers under
   the probe's pulls, scans the debug wire over the candidates, identifies the target by its ID, and finds the reset line. At
@@ -170,7 +170,7 @@ runs all of them against this endpoint.
 | `src/OepP4I2cTarget.*`, `src/OepP4SpiTarget.*`, `src/OepRp2SpiTarget.*`, `src/OepCh32SpiTarget.*` | the standard interfaces `oep.fixture.i2c-target` / `spi-target` (revision 1; implemented on the ESP-IDF I2C / SPI slaves, the RP2's PIO, the CH32 core's SPI slave) |
 | `src/OepI2cController.*`, `src/OepSpiController.*`, `src/OepPwm.*`, `src/OepCounter.*`, `src/OepDac.*` | fixtures that drive the target: `oep.fixture.i2c-controller` / `spi-controller` (bit-banged on any GPIO), `pwm`, `counter`, `dac` |
 | `src/OepAnalog.*`, `src/OepRp2Logic.*`, `src/OepCh32Logic.*`, `src/OepH41xLogic.*`, `src/OepCaptureGroup.*` | captures per chip: `oep.fixture.analog`, the RP2's PIO and the CH32's `oep.fixture.logic` (on CH32H41x also UHSIF), `oep.fixture.capture-group` |
-| `src/OepFirmware.h`, `src/OepFirmwareParts.h`, `src/firmware/` | the released firmware as parts (`oep::firmware`). The contents per chip are the headers in `src/firmware/` (`Rp2.h`, `Esp32P4.h`, `Esp32.h`, `Ch32.h`) |
+| `src/OepFirmware.h`, `src/OepFirmwareParts.h`, `src/firmware/` | the released firmware as parts (`oep::firmware`). The contents per chip are the headers in `src/firmware/` (`Rp2.h`, `Esp32P4.h`, `Esp32.h`, `EspSoc.h`, `Ch32.h`) |
 | `src/OepChoice.h` | how each firmware part becomes a choice that links nothing when left out (`begin<F>()` calls `oepAddX()` for each feature in F; `Slot`, `HeapSlot`, `Hooks`; [firmware features](docs/guide/firmware-features.md)) |
 | `src/OepSimpleInterface.*`, `src/OepWorker.*`, `src/OepProbeLog.h` | an interface made by just registering functions (`oep::SimpleInterface`), a worker that runs long jobs, a log stamped with the probe's clock ([adding your own commands](docs/guide/simple-interface.md)) |
 | `src/OepCh32Dm.*`, `src/OepRvswdPhy.*`, `src/OepSwioPhy.*`, `src/OepDmConsole.*`, `src/OepPinTable.h`, `src/OepPlatform.h`, `src/OepFrame.*` and others | parts (the CH32 debug module, wire physical layers, console framings, the pin table with its owners (`oep::owners`) and idle states, Arduino core differences, frames) |
@@ -274,7 +274,7 @@ written at 0x0) / `.bin` (ESP32, the app image for updates; the P4's DFU) / `.uf
 flash), and `firmware-<version>.json` (sha256). The probe reports the same version in describe's firmware string. How releases are
 made is in [Contributing](CONTRIBUTING.md).
 
-`firmware-<version>.json` is this repository's rule (not an OEP norm; oep-spec freeze decision 9):
+`firmware-<version>.json` is this repository's rule (not an OEP norm):
 
 ```json
 {"schema": 1, "library": "OpenEmbeddedProbe", "version": "<version>", "firmware": [

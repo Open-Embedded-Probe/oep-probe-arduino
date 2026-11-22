@@ -53,7 +53,7 @@ chip header) make good models.
 
 - [ ] Add the feature bit `k<Name>` (the next free number) to `src/OepFirmwareParts.h`.
 
-In every chip header that has it (`src/firmware/Rp2.h`, `Esp32P4.h`, `Esp32.h`, `Ch32.h`), add:
+In every chip header that has it (`src/firmware/Rp2.h`, `Esp32P4.h`, `Esp32.h`, `EspSoc.h`, `Ch32.h`), add:
 
 - [ ] `#include <Oep<Name>.h>`
 - [ ] `void oepAdd<Name>()`: `static oep::Slot<oep::<Class>> x; endpoint.add(x.make(pins));`. On chips short of static RAM, use

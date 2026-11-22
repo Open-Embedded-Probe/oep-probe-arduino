@@ -30,7 +30,7 @@ between ways of capturing in [Capture: which way](capture.md).
 ### What to prepare
 
 - **A board to make the probe**: RP2040 / RP2350 (Pico, Pico 2 and so on), ESP32-P4 / P4X, classic ESP32 (DevKitC and so on),
-  WCH CH32 (X035 / V307 / H417). Check which features each board has in the table in
+  ESP32-S3, WCH CH32 (X035 / V307 / H417). Check which features each board has in the table in
   [Boards](boards.md#what-each-chip-can-do). If unsure, use this as a guide.
   - Debugging and communication made easy: RP2040 / RP2350.
   - Fast waveform capture, many channels, an installed fixture: ESP32-P4 / P4X.
@@ -188,8 +188,8 @@ it. From Python you can also call functions placed in the peer's RAM.
 **How to use**: use `SwdWire` (attach; give TARGETSEL for multidrop peers), `ArmAdi` (DP / AP), `MemAp` (memory) and `CortexM`
 (halt, resume, registers, function calls, system reset) of `oep_client.arm`.
 
-**Notes**: no tool for writing a Cortex-M's flash (flash loader) is provided. Write it yourself from Python. There is no GDB
-server either.
+**Notes**: flash writing and a GDB server exist only for an RP2040 / RP2350 peer (`python -m oep_client.rp2040_swd flash`,
+`oep_client.gdb_server`). Write the flash of other Cortex-Ms yourself from Python.
 
 ## 4. Capture waveforms
 

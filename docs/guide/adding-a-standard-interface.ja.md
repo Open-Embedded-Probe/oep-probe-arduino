@@ -50,7 +50,7 @@ oep-spec が定める `oep.*` のインターフェースを、このライブ�
 
 - [ ] `src/OepFirmwareParts.h` に機能のビット `k<Name>`（次の空きの番号）を足します。
 
-チップのヘッダ（`src/firmware/Rp2.h`、`Esp32P4.h`、`Esp32.h`、`Ch32.h`）のうち、持つものすべてに次を足します。
+チップのヘッダ（`src/firmware/Rp2.h`、`Esp32P4.h`、`Esp32.h`、`EspSoc.h`、`Ch32.h`）のうち、持つものすべてに次を足します。
 
 - [ ] `#include <Oep<Name>.h>`
 - [ ] `void oepAdd<Name>()`：`static oep::Slot<oep::<Class>> x; endpoint.add(x.make(pins));`。静的な RAM が足りないチップでは
