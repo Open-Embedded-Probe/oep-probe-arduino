@@ -70,9 +70,9 @@ class RvswdPhy final : public DmiPhy {
   // resting high drops the link after about 1 ms and its debug module resets, letting a
   // halted hart run again, while resting low keeps both for seconds; a CH32X035 is the
   // other way round - it keeps the link across any idle resting high, and resting low
-  // between frames stopped it attaching at all. Telling the two apart at run time means
-  // provoking the reset on the kind that has it, so the host - which knows the target - says which at attach
-  // (idle_clock, oep-if-debug §3; LinkE does the same per target). The probe keeps no default of its own.
+  // between frames stopped it attaching at all. Attach runs resting high up to the target_id, which every family
+  // answers; chooseRest (OepTarget.cpp) then picks the rest: the host's idle_clock, else the port's channel.{}.rest
+  // setting, else low for a family in the registry's idle_low_family and high otherwise (oep-if-debug §3.1).
   bool setIdleClockLow(bool low) override { park_low_ = low; return true; }
   bool canIdleClockLow() const override { return true; }
   void write(uint8_t address, uint32_t value) override;
