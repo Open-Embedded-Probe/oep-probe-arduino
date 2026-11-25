@@ -1,6 +1,8 @@
 # Changelog / 変更履歴
 
 ## Unreleased
+
+## 0.0.64
 - (EN) Docs follow the current chips and client: ESP32-S3 in the chip lists, ADC pins, USB identities and use cases
   (`EspSoc.h` among the per-chip headers); RP2040 / RP2350 written with `python -m oep_client.rp2040_swd flash` and
   GDB through the gdb server of `python -m oep_client.ide`; capture events written as the reductions (sample, any_high,
